@@ -1,0 +1,16 @@
+[package]
+name = "pcbcraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pcbcraft-ui-egui.workspace = true
+pcbcraft-engine.workspace = true
+pcbcraft-mcp.workspace = true
+pcbcraft-io.workspace = true
+eframe.workspace = true

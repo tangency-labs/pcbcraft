@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+pcbcraft-geom = { path = "crates/geom" }
+pcbcraft-doc = { path = "crates/doc" }
+pcbcraft-rules = { path = "crates/rules" }
+pcbcraft-io = { path = "crates/io" }
+pcbcraft-engine = { path = "crates/engine" }
+pcbcraft-mcp = { path = "crates/mcp" }
+pcbcraft-ui-egui = { path = "crates/ui-egui" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "persistence"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "1aa81a773aa9198a0e4c0daeda954d622475af38" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.release]
+lto = "thin"
+strip = true

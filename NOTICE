@@ -1,0 +1,13 @@
+PCBCraft
+Copyright (c) 2026 PCBCraft contributors.
+
+PCBCraft is licensed under GPL-3.0-or-later. See LICENSE.
+
+The craft-ui dependency is from storytold/craft-libs, revision
+1aa81a773aa9198a0e4c0daeda954d622475af38, and retains its MIT OR Apache-2.0 license.
+Copyright (c) 2026 ArtCraft Team and the craft-libs contributors.
+The ArtCraft name, logo and trademarks are not included in PCBCraft.
+
+All other dependencies retain their own licenses and attribution. Binary bundles
+include THIRD-PARTY-NOTICES.md with dependency license texts. Source dependencies
+are recorded in Cargo.lock; attribution for adapted material is in ATTRIBUTION.md.
