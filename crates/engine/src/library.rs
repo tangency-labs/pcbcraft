@@ -276,16 +276,43 @@ pub fn read_tool(name: &str, args: &Value) -> Result<Value, String> {
         }
         "library.inspect_symbol" => {
             let mut definition = symbol(Path::new(text("path")?), text("name")?)?;
-            definition.raw_source.clear();
-            Ok(json!({"definition":definition,"kind":"symbol","path":text("path")?}))
+            let include_source = args
+                .get("include_source")
+                .map(|v| v.as_bool().ok_or("include_source must be boolean"))
+                .transpose()?
+                .unwrap_or(false);
+            let truncated = include_source && definition.raw_source.len() > 512 * 1024;
+            if !include_source || truncated {
+                definition.raw_source.clear();
+            }
+            Ok(
+                json!({"definition":definition,"kind":"symbol","path":text("path")?,"source_truncated":truncated}),
+            )
         }
         "library.inspect_footprint" => {
             let mut definition = footprint(Path::new(text("path")?))?;
-            definition.raw_source.clear();
-            for pad in &mut definition.pads {
-                pad.raw_source.clear();
+            let include_source = args
+                .get("include_source")
+                .map(|v| v.as_bool().ok_or("include_source must be boolean"))
+                .transpose()?
+                .unwrap_or(false);
+            let truncated = include_source
+                && definition.raw_source.len()
+                    + definition
+                        .pads
+                        .iter()
+                        .map(|p| p.raw_source.len())
+                        .sum::<usize>()
+                    > 512 * 1024;
+            if !include_source || truncated {
+                definition.raw_source.clear();
+                for pad in &mut definition.pads {
+                    pad.raw_source.clear();
+                }
             }
-            Ok(json!({"definition":definition,"kind":"footprint","path":text("path")?}))
+            Ok(
+                json!({"definition":definition,"kind":"footprint","path":text("path")?,"source_truncated":truncated}),
+            )
         }
         _ => Err("unknown library query".into()),
     }

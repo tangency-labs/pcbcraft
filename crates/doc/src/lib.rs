@@ -16,6 +16,17 @@ pub struct Pin {
     pub electrical_type: String,
     #[serde(default)]
     pub direction: Option<f64>,
+    #[serde(default = "first_unit")]
+    pub unit: u32,
+}
+fn first_unit() -> u32 {
+    1
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SymbolUnitPlacement {
+    pub unit: u32,
+    pub position: Point,
+    pub rotation: f64,
 }
 fn passive() -> String {
     "passive".into()
@@ -40,21 +51,69 @@ pub struct Component {
     pub position: Point,
     pub rotation: f64,
     pub pins: Vec<Pin>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub units: Vec<SymbolUnitPlacement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_symbol: Option<LibrarySymbol>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_footprint: Option<LibraryFootprint>,
 }
 impl Component {
+    pub fn unit_placement(&self, unit: u32) -> Option<(Point, f64)> {
+        if unit == self.library_symbol.as_ref().map(|s| s.unit).unwrap_or(1) {
+            Some((self.position, self.rotation))
+        } else {
+            self.units
+                .iter()
+                .find(|u| u.unit == unit)
+                .map(|u| (u.position, u.rotation))
+        }
+    }
+    /// Rendering views share the package ID and physical pin/net identity.
+    pub fn schematic_views(&self) -> Vec<Component> {
+        let mut views = vec![];
+        for unit in std::iter::once(self.library_symbol.as_ref().map(|s| s.unit).unwrap_or(1))
+            .chain(self.units.iter().map(|u| u.unit))
+        {
+            if let Some((position, rotation)) = self.unit_placement(unit) {
+                let mut view = self.clone();
+                view.position = position;
+                view.rotation = rotation;
+                view.pins.retain(|p| p.unit == unit);
+                view.units.clear();
+                if let Some(s) = &mut view.library_symbol {
+                    s.unit = unit;
+                }
+                if !self.units.is_empty() {
+                    let suffix = if unit <= 26 {
+                        char::from_u32(64 + unit)
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| unit.to_string())
+                    } else {
+                        unit.to_string()
+                    };
+                    view.reference = format!("{}{suffix}", self.reference);
+                }
+                views.push(view);
+            }
+        }
+        views
+    }
     /// Local drawing extents used for selection and labels, independent of the renderer.
     pub fn drawing_points(&self) -> Vec<Point> {
-        let mut points: Vec<Point> = self.pins.iter().map(|p| p.offset).collect();
+        let unit = self.library_symbol.as_ref().map(|s| s.unit).unwrap_or(1);
+        let mut points: Vec<Point> = self
+            .pins
+            .iter()
+            .filter(|p| p.unit == unit)
+            .map(|p| p.offset)
+            .collect();
         if let Some(library) = &self.library_symbol {
             for graphic in library
                 .definition
                 .graphics
                 .iter()
-                .filter(|g| g.unit <= 1 && g.body_style <= 1)
+                .filter(|g| (g.unit == 0 || g.unit == unit) && g.body_style <= 1)
             {
                 points.extend(graphic.primitive.path_points());
             }
@@ -64,10 +123,10 @@ impl Component {
         points
     }
     pub fn pin_position(&self, number: &str) -> Option<Point> {
-        self.pins
-            .iter()
-            .find(|p| p.number == number)
-            .map(|p| self.position.offset(p.offset.rotate(-self.rotation)))
+        self.pins.iter().find(|p| p.number == number).and_then(|p| {
+            self.unit_placement(p.unit)
+                .map(|(position, rotation)| position.offset(p.offset.rotate(-rotation)))
+        })
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -97,6 +156,25 @@ pub struct Pad {
     pub geometry: Option<pcbcraft_library::FootprintPad>,
 }
 impl Pad {
+    pub fn drill_outline_points(&self) -> Vec<Point> {
+        let Some(g) = &self.geometry else {
+            return vec![];
+        };
+        let Some(drill) = &g.drill else { return vec![] };
+        let mut hole = g.clone();
+        hole.size = drill.size;
+        hole.shape = "oval".into();
+        hole.roundrect_ratio = None;
+        hole.position = self.offset.offset(drill.offset.rotate(-g.rotation));
+        Pad {
+            number: String::new(),
+            offset: hole.position,
+            diameter: drill.size.x.min(drill.size.y),
+            net: None,
+            geometry: Some(hole),
+        }
+        .outline_points()
+    }
     /// Maximum chord approximation error of the rounded copper outline.
     pub fn outline_error(&self) -> f64 {
         self.geometry
@@ -256,10 +334,46 @@ pub struct Project {
     pub nets: Vec<Net>,
     pub wires: Vec<Wire>,
     pub board: Board,
+    #[serde(default)]
+    pub library: ProjectLibrary,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectLibrary {
+    #[serde(default)]
+    pub notices: Vec<String>,
+    pub symbols: Vec<pcbcraft_library::SymbolDefinition>,
+    pub footprints: Vec<pcbcraft_library::FootprintDefinition>,
+}
+impl ProjectLibrary {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.notices.len() > 256 || self.notices.iter().any(|s| s.len() > 128 * 1024) {
+            return Err("library provenance notice limit exceeded".into());
+        }
+        if self.symbols.len() > 256 || self.footprints.len() > 256 {
+            return Err("project library supports at most 256 symbols and 256 footprints".into());
+        }
+        let mut names = BTreeSet::new();
+        for s in &self.symbols {
+            s.validate().map_err(|e| e.to_string())?;
+            if !names.insert(&s.name) {
+                return Err("duplicate library symbol name".into());
+            }
+        }
+        names.clear();
+        for f in &self.footprints {
+            f.validate().map_err(|e| e.to_string())?;
+            if !names.insert(&f.name) {
+                return Err("duplicate library footprint name".into());
+            }
+        }
+        Ok(())
+    }
 }
 impl Default for Project {
     fn default() -> Self {
         Self {
+            library: ProjectLibrary::default(),
             format: "pcbcraft".into(),
             version: 1,
             name: "Untitled circuit".into(),
@@ -326,6 +440,7 @@ pub fn component_template(
         ["1", "2"]
     };
     Some(Component {
+        units: vec![],
         id,
         reference,
         value: t.value.into(),
@@ -344,6 +459,7 @@ pub fn component_template(
                 net: None,
                 electrical_type: passive(),
                 direction: None,
+                unit: 1,
             })
             .collect(),
     })
@@ -376,7 +492,7 @@ impl Project {
             } else {
                 pin.offset
             };
-            Some(local.rotate(-self.component(r.component)?.rotation))
+            Some(local.rotate(-self.component(r.component)?.unit_placement(pin.unit)?.1))
         };
         let da = direction(&w.from)?;
         let db = direction(&w.to)?;
@@ -400,6 +516,16 @@ impl Project {
             .chain(self.board.cutouts.iter().map(|x| x.id))
     }
     pub fn validate(&self) -> Result<(), String> {
+        self.library.validate()?;
+        if self
+            .components
+            .iter()
+            .map(|c| 1 + c.units.len())
+            .sum::<usize>()
+            > MAX_ITEMS
+        {
+            return Err("schematic unit limit reached (2048)".into());
+        }
         if self.format != "pcbcraft" || self.version != 1 {
             return Err("unsupported project format/version".into());
         }
@@ -452,7 +578,6 @@ impl Project {
                     || c.kind != "library"
                     || symbol.library.len() > 256
                     || !symbol.definition.unsupported.is_empty()
-                    || symbol.definition.pins.iter().any(|p| p.unit > 1)
                 {
                     return Err("invalid or unsupported embedded library symbol".into());
                 }
@@ -460,10 +585,7 @@ impl Project {
                     .definition
                     .pins
                     .iter()
-                    .filter(|p| {
-                        (p.unit == 0 || p.unit == symbol.unit)
-                            && (p.body_style == 0 || p.body_style == 1)
-                    })
+                    .filter(|p| p.body_style <= 1)
                     .collect();
                 if pins.len() != c.pins.len()
                     || pins.iter().any(|p| {
@@ -473,11 +595,29 @@ impl Project {
                                 && pin.offset == p.position
                                 && pin.direction == Some(p.angle)
                                 && pin.electrical_type == p.electrical_type
+                                && pin.unit == p.unit.max(1)
                         })
                     })
                 {
                     return Err("component pins do not match embedded symbol definition".into());
                 }
+                let expected = symbol_units(&symbol.definition)?;
+                let actual: BTreeSet<_> = std::iter::once(1)
+                    .chain(c.units.iter().map(|u| u.unit))
+                    .collect();
+                if expected != actual
+                    || c.units.len() + 1 != actual.len()
+                    || c.units.iter().any(|u| {
+                        u.unit <= 1
+                            || !u.position.valid()
+                            || !u.rotation.is_finite()
+                            || u.rotation.abs() > 360_000.0
+                    })
+                {
+                    return Err("invalid schematic unit placements".into());
+                }
+            } else if !c.units.is_empty() || c.pins.iter().any(|p| p.unit != 1) {
+                return Err("starter symbols have one unit".into());
             }
             if let Some(footprint) = &c.library_footprint {
                 footprint.definition.validate().map_err(|e| e.to_string())?;
@@ -631,9 +771,107 @@ impl Project {
     }
 }
 
+pub fn symbol_units(def: &pcbcraft_library::SymbolDefinition) -> Result<BTreeSet<u32>, String> {
+    let units: BTreeSet<_> = def
+        .pins
+        .iter()
+        .filter(|p| p.body_style <= 1)
+        .map(|p| p.unit.max(1))
+        .chain(
+            def.graphics
+                .iter()
+                .filter(|g| g.body_style <= 1 && g.unit > 0)
+                .map(|g| g.unit),
+        )
+        .collect();
+    if !units.contains(&1) || units.len() > 32 || units.iter().any(|u| *u > 32) {
+        return Err("placement supports 1–32 schematic units, including unit 1".into());
+    }
+    Ok(units)
+}
+pub fn library_component(
+    definition: pcbcraft_library::SymbolDefinition,
+    library: String,
+    id: Id,
+    reference: String,
+    position: Point,
+    value: Option<String>,
+) -> Result<Component, String> {
+    definition.validate().map_err(|e| e.to_string())?;
+    if !definition.unsupported.is_empty() {
+        return Err(format!(
+            "unsupported symbol features: {}",
+            definition.unsupported.join(", ")
+        ));
+    }
+    let unit_ids = symbol_units(&definition)?;
+    let mut numbers = BTreeSet::new();
+    let pins: Vec<_> = definition
+        .pins
+        .iter()
+        .filter(|p| p.body_style <= 1)
+        .map(|p| Pin {
+            number: p.number.clone(),
+            name: p.name.clone(),
+            offset: p.position,
+            net: None,
+            electrical_type: p.electrical_type.clone(),
+            direction: Some(p.angle),
+            unit: p.unit.max(1),
+        })
+        .collect();
+    if pins.is_empty() || pins.len() > 64 || pins.iter().any(|p| !numbers.insert(&p.number)) {
+        return Err("symbol placement requires 1–64 unique physical pin numbers across units; repeated common pins are not supported yet".into());
+    }
+    let extent = pins
+        .iter()
+        .map(|p| p.offset)
+        .chain(
+            definition
+                .graphics
+                .iter()
+                .flat_map(|g| g.primitive.path_points()),
+        )
+        .fold(Point::new(7.0, 5.0), |m, p| {
+            Point::new(m.x.max(p.x.abs()), m.y.max(p.y.abs()))
+        });
+    let units = unit_ids
+        .into_iter()
+        .filter(|u| *u > 1)
+        .enumerate()
+        .map(|(i, unit)| {
+            let index = i + 1;
+            SymbolUnitPlacement {
+                unit,
+                position: position.offset(Point::new(
+                    (index % 3) as f64 * (extent.x * 2.0 + 10.0),
+                    (index / 3) as f64 * (extent.y * 2.0 + 12.0),
+                )),
+                rotation: 0.0,
+            }
+        })
+        .collect();
+    Ok(Component {
+        id,
+        reference,
+        value: value.unwrap_or_else(|| definition.value.clone()),
+        kind: "library".into(),
+        position,
+        rotation: 0.0,
+        pins,
+        units,
+        library_symbol: Some(LibrarySymbol {
+            library,
+            unit: 1,
+            definition,
+        }),
+        library_footprint: None,
+    })
+}
 pub fn validate_footprint_support(
     definition: &pcbcraft_library::FootprintDefinition,
 ) -> Result<(), String> {
+    definition.validate().map_err(|e| e.to_string())?;
     if definition.graphics.iter().any(|g| match g {
         pcbcraft_library::Graphic::Line { layer, .. }
         | pcbcraft_library::Graphic::Rectangle { layer, .. }
@@ -650,18 +888,39 @@ pub fn validate_footprint_support(
             definition.unsupported.join(", ")
         ));
     }
+    if definition.graphics.iter().any(|g| match g {
+        pcbcraft_library::Graphic::Line { layer, .. }
+        | pcbcraft_library::Graphic::Rectangle { layer, .. }
+        | pcbcraft_library::Graphic::Circle { layer, .. }
+        | pcbcraft_library::Graphic::Arc { layer, .. }
+        | pcbcraft_library::Graphic::Polyline { layer, .. }
+        | pcbcraft_library::Graphic::Text { layer, .. } => layer.ends_with(".Cu"),
+    }) {
+        return Err("footprint copper graphics require conductive geometry support; use numbered pads instead".into());
+    }
     let mut numbers = BTreeSet::new();
     for p in &definition.pads {
-        if p.pad_type != "smd"
+        let copper_ok = if p.pad_type == "thru_hole" {
+            p.layers.iter().any(|l| l == "*.Cu")
+                || (p.layers.iter().any(|l| l == "F.Cu") && p.layers.iter().any(|l| l == "B.Cu"))
+        } else {
+            p.layers.iter().any(|l| l == "F.Cu")
+                && !p.layers.iter().any(|l| l == "B.Cu" || l == "*.Cu")
+        };
+        let drill_ok = if p.pad_type == "thru_hole" {
+            drill_inside_pad(p)
+        } else {
+            p.drill.is_none()
+        };
+        if !["smd", "thru_hole"].contains(&p.pad_type.as_str())
             || !["circle", "rect", "roundrect", "oval"].contains(&p.shape.as_str())
             || (p.shape == "circle" && (p.size.x - p.size.y).abs() > 1e-6)
-            || !p.layers.iter().any(|l| l == "F.Cu")
-            || p.layers.iter().any(|l| l == "B.Cu" || l == "*.Cu")
-            || p.drill.is_some()
+            || !copper_ok
+            || !drill_ok
             || p.number.is_empty()
             || !numbers.insert(&p.number)
         {
-            return Err("initial imported footprint placement supports unique numbered front SMD circle/rect/roundrect/oval pads; through-hole, custom pads and back copper are not supported yet".into());
+            return Err("placement supports unique numbered front SMD or plated through-hole circle/rect/roundrect/oval pads with a drill strictly inside the pad; custom pads, unnumbered mechanical holes and back SMD placement are planned".into());
         }
     }
     if definition.pads.is_empty() || definition.pads.len() > 64 {
@@ -670,7 +929,57 @@ pub fn validate_footprint_support(
     Ok(())
 }
 
+fn drill_inside_pad(p: &pcbcraft_library::FootprintPad) -> bool {
+    let Some(drill) = &p.drill else { return false };
+    // Standard circular/oval holes are capsules. A convex pad contains the
+    // whole capsule iff it contains both endpoint discs of that capsule.
+    let radius = drill.size.x.min(drill.size.y) / 2.0;
+    let half_axis = Point::new(
+        (drill.size.x / 2.0 - radius).max(0.0),
+        (drill.size.y / 2.0 - radius).max(0.0),
+    );
+    let corner = match p.shape.as_str() {
+        "circle" | "oval" => p.size.x.min(p.size.y) / 2.0,
+        "roundrect" => p.size.x.min(p.size.y) * p.roundrect_ratio.unwrap_or(0.0),
+        "rect" => 0.0,
+        _ => return false,
+    };
+    let clearance = |point: Point| {
+        let dx = point.x.abs() - (p.size.x / 2.0 - corner);
+        let dy = point.y.abs() - (p.size.y / 2.0 - corner);
+        -(dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - corner)
+    };
+    radius > 0.0
+        && [
+            drill.offset.offset(half_axis),
+            drill.offset.offset(Point::new(-half_axis.x, -half_axis.y)),
+        ]
+        .into_iter()
+        .all(|end| clearance(end) > radius + 1e-6)
+}
+
 fn orthogonal_path(a: Point, b: Point, da: Point, db: Point) -> Vec<Point> {
+    let vertical_a = da.y.abs() > da.x.abs();
+    let vertical_b = db.y.abs() > db.x.abs();
+    if vertical_a != vertical_b {
+        let outward = |direction: Point, vertical: bool| {
+            if vertical {
+                Point::new(0.0, if direction.y >= 0.0 { 3.0 } else { -3.0 })
+            } else {
+                Point::new(if direction.x >= 0.0 { 3.0 } else { -3.0 }, 0.0)
+            }
+        };
+        let start = a.offset(outward(da, vertical_a));
+        let end = b.offset(outward(db, vertical_b));
+        let bend = if vertical_a {
+            Point::new(end.x, start.y)
+        } else {
+            Point::new(start.x, end.y)
+        };
+        let mut points = vec![a, start, bend, end, b];
+        points.dedup_by(|a, b| a.distance(*b) < 1e-9);
+        return points;
+    }
     if da.y.abs() > da.x.abs() && db.y.abs() > db.x.abs() {
         return orthogonal_path(
             Point::new(a.y, a.x),
@@ -707,4 +1016,240 @@ fn orthogonal_path(a: Point, b: Point, da: Point, db: Point) -> Vec<Point> {
         end,
         b,
     ]
+}
+
+#[cfg(test)]
+mod drill_tests {
+    use super::*;
+    #[test]
+    fn native_library_unknown_fields_are_rejected_instead_of_discarded() -> Result<(), String> {
+        assert!(serde_json::from_value::<ProjectLibrary>(serde_json::json!({"symbols":[],"footprints":[],"license_metadata":"must not disappear"})).is_err());
+        let definition = dip()?;
+        let mut value = serde_json::to_value(&definition).map_err(|e| e.to_string())?;
+        value["license_metadata"] = serde_json::json!("must not disappear");
+        assert!(serde_json::from_value::<pcbcraft_library::FootprintDefinition>(value).is_err());
+        for field in ["pad", "drill"] {
+            let mut value = serde_json::to_value(&definition).map_err(|e| e.to_string())?;
+            if field == "pad" {
+                value["pads"][0]["unsupported_future_field"] = serde_json::json!(true);
+            } else {
+                value["pads"][0]["drill"]["unsupported_future_field"] = serde_json::json!(true);
+            }
+            assert!(
+                serde_json::from_value::<pcbcraft_library::FootprintDefinition>(value).is_err()
+            );
+        }
+        let symbol = pcbcraft_library::read_symbols(include_str!(
+            "../../library/tests/fixtures/device.kicad_sym"
+        ))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|s| s.name == "R")
+        .ok_or("missing resistor")?;
+        for path in ["root", "pin", "graphic", "graphic-primitive", "point"] {
+            let mut value = serde_json::to_value(&symbol).map_err(|e| e.to_string())?;
+            match path {
+                "root" => value["unsupported_future_field"] = serde_json::json!(true),
+                "pin" => value["pins"][0]["unsupported_future_field"] = serde_json::json!(true),
+                "point" => {
+                    value["pins"][0]["position"]["unsupported_future_field"] =
+                        serde_json::json!(true)
+                }
+                "graphic-primitive" => {
+                    value["graphics"][0]["primitive"]["Rectangle"]["unsupported_future_field"] =
+                        serde_json::json!(true)
+                }
+                _ => value["graphics"][0]["unsupported_future_field"] = serde_json::json!(true),
+            };
+            assert!(serde_json::from_value::<pcbcraft_library::SymbolDefinition>(value).is_err());
+        }
+        Ok(())
+    }
+    #[test]
+    fn copper_graphics_cannot_bypass_pad_connectivity_checks() -> Result<(), String> {
+        let mut definition = dip()?;
+        validate_footprint_support(&definition)?;
+        definition.graphics.push(pcbcraft_library::Graphic::Line {
+            start: Point::default(),
+            end: Point::new(7.62, 0.0),
+            width: 0.3,
+            layer: "F.Cu".into(),
+        });
+        assert!(
+            validate_footprint_support(&definition).is_err_and(|e| e.contains("copper graphics"))
+        );
+        Ok(())
+    }
+    fn assert_outward(path: &[Point], a: Point, b: Point, da: Point, db: Point) {
+        assert!(path.len() >= 3);
+        assert_eq!(path.first(), Some(&a));
+        assert_eq!(path.last(), Some(&b));
+        let first = Point::new(path[1].x - a.x, path[1].y - a.y);
+        let last = Point::new(path[path.len() - 2].x - b.x, path[path.len() - 2].y - b.y);
+        assert!(
+            first.x * da.x + first.y * da.y > 0.0,
+            "first leg must leave its pin outward"
+        );
+        assert!(
+            last.x * db.x + last.y * db.y > 0.0,
+            "last leg must approach from the outward side"
+        );
+        assert!(path.windows(2).all(
+            |pair| (pair[0].x - pair[1].x).abs() < 1e-8 || (pair[0].y - pair[1].y).abs() < 1e-8
+        ));
+    }
+    #[test]
+    fn mixed_pin_orientations_have_outward_stubs_at_both_ends() {
+        let a = Point::default();
+        let b = Point::new(10.0, 10.0);
+        for vertical in [Point::new(0.0, -1.0), Point::new(0.0, 1.0)] {
+            for horizontal in [Point::new(-1.0, 0.0), Point::new(1.0, 0.0)] {
+                for (da, db) in [(vertical, horizontal), (horizontal, vertical)] {
+                    assert_outward(&orthogonal_path(a, b, da, db), a, b, da, db);
+                }
+            }
+        }
+    }
+    #[test]
+    fn wire_path_uses_rotated_secondary_unit_pin_endpoints_and_directions() -> Result<(), String> {
+        let definition = pcbcraft_library::read_symbols(include_str!(
+            "../../library/tests/fixtures/lm358.kicad_sym"
+        ))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|s| s.name == "LM358")
+        .ok_or("missing LM358")?;
+        let mut c = library_component(
+            definition,
+            "Amplifier_Operational".into(),
+            1,
+            "U1".into(),
+            Point::new(20.0, 20.0),
+            None,
+        )?;
+        c.units
+            .iter_mut()
+            .find(|u| u.unit == 2)
+            .ok_or("missing unit2")?
+            .rotation = 90.0;
+        for pin in &mut c.pins {
+            if ["5", "1"].contains(&pin.number.as_str()) {
+                pin.net = Some(2);
+            }
+        }
+        let mut project = Project::default();
+        project.components.push(c);
+        project.nets.push(Net {
+            id: 2,
+            name: "signal".into(),
+        });
+        let wire = Wire {
+            id: 3,
+            net: 2,
+            from: PinRef {
+                component: 1,
+                pin: "5".into(),
+            },
+            to: PinRef {
+                component: 1,
+                pin: "1".into(),
+            },
+        };
+        project.wires.push(wire.clone());
+        project.validate()?;
+        let a = project
+            .pin_position(&wire.from)
+            .ok_or("missing first point")?;
+        let b = project
+            .pin_position(&wire.to)
+            .ok_or("missing second point")?;
+        assert_outward(
+            &project.wire_path(&wire).ok_or("missing path")?,
+            a,
+            b,
+            Point::new(0.0, 1.0),
+            Point::new(1.0, 0.0),
+        );
+        Ok(())
+    }
+    fn dip() -> Result<pcbcraft_library::FootprintDefinition, String> {
+        pcbcraft_library::read_footprint(include_str!(
+            "../../library/tests/fixtures/DIP-8_W7.62mm.kicad_mod"
+        ))
+        .map_err(|e| e.to_string())
+    }
+    #[test]
+    fn real_dip_and_valid_offset_slots_fit_actual_pad_shapes() -> Result<(), String> {
+        let mut definition = dip()?;
+        validate_footprint_support(&definition)?;
+        let p = &mut definition.pads[0];
+        p.shape = "oval".into();
+        p.size = Point::new(4.0, 2.0);
+        p.roundrect_ratio = None;
+        p.drill = Some(pcbcraft_library::Drill {
+            size: Point::new(1.6, 0.6),
+            offset: Point::new(0.3, 0.2),
+        });
+        validate_footprint_support(&definition)?;
+        let p = &mut definition.pads[0];
+        p.shape = "circle".into();
+        p.size = Point::new(2.0, 2.0);
+        p.drill = Some(pcbcraft_library::Drill {
+            size: Point::new(1.4, 0.2),
+            offset: Point::new(0.1, 0.1),
+        });
+        validate_footprint_support(&definition)?;
+        Ok(())
+    }
+    #[test]
+    fn diagonal_holes_cannot_escape_circle_oval_or_rounded_corners() -> Result<(), String> {
+        for (shape, size, ratio, drill_size, offset) in [
+            (
+                "circle",
+                Point::new(2.0, 2.0),
+                None,
+                Point::new(0.5, 0.5),
+                Point::new(0.6, 0.6),
+            ),
+            (
+                "oval",
+                Point::new(4.0, 2.0),
+                None,
+                Point::new(0.5, 0.5),
+                Point::new(1.6, 0.6),
+            ),
+            (
+                "roundrect",
+                Point::new(2.0, 2.0),
+                Some(0.25),
+                Point::new(0.2, 0.2),
+                Point::new(0.86, 0.86),
+            ),
+        ] {
+            let mut definition = dip()?;
+            let p = &mut definition.pads[0];
+            p.shape = shape.into();
+            p.size = size;
+            p.roundrect_ratio = ratio;
+            p.drill = Some(pcbcraft_library::Drill {
+                size: drill_size,
+                offset,
+            });
+            assert!(
+                validate_footprint_support(&definition).is_err(),
+                "{shape} must reject drill escaping its actual outline"
+            );
+        }
+        let mut definition = dip()?;
+        let p = &mut definition.pads[0];
+        p.shape = "rect".into();
+        p.size = Point::new(2.0, 2.0);
+        p.roundrect_ratio = None;
+        p.drill = Some(pcbcraft_library::Drill {
+            size: Point::new(0.5, 0.5),
+            offset: Point::new(0.6, 0.6),
+        });
+        validate_footprint_support(&definition)?;
+        Ok(())
+    }
 }

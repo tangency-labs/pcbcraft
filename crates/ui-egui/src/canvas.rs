@@ -83,6 +83,44 @@ fn fill_polygon(painter: &egui::Painter, points: &[Pos2], color: Color32, clip: 
     }
 }
 impl App {
+    pub(super) fn select_at(&mut self, pos: Point, zoom: f32) {
+        let id = self.pick_object(pos, zoom);
+        self.select(id);
+        if self.tab == Tab::Schematic
+            && let Some(c) = id.and_then(|id| self.project.component(id))
+            && let Some(view) = c
+                .schematic_views()
+                .into_iter()
+                .filter(|view| {
+                    let local = Point::new(pos.x - view.position.x, pos.y - view.position.y)
+                        .rotate(view.rotation);
+                    let points = view.drawing_points();
+                    let margin = 8.0 / zoom as f64;
+                    let min = points
+                        .iter()
+                        .fold(Point::new(f64::INFINITY, f64::INFINITY), |m, p| {
+                            Point::new(m.x.min(p.x), m.y.min(p.y))
+                        });
+                    let max = points
+                        .iter()
+                        .fold(Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY), |m, p| {
+                            Point::new(m.x.max(p.x), m.y.max(p.y))
+                        });
+                    local.x >= min.x - margin
+                        && local.x <= max.x + margin
+                        && local.y >= min.y - margin
+                        && local.y <= max.y + margin
+                })
+                .min_by(|a, b| {
+                    a.position
+                        .distance(pos)
+                        .total_cmp(&b.position.distance(pos))
+                })
+        {
+            self.selected_unit = view.library_symbol.as_ref().map(|s| s.unit).unwrap_or(1);
+            self.load_properties();
+        }
+    }
     fn paint_graphic(
         &self,
         painter: &egui::Painter,
@@ -193,7 +231,12 @@ impl App {
         let mut visible = self.project.clone();
         if let Some((id, pos)) = self.drag {
             if let Some(c) = visible.components.iter_mut().find(|c| c.id == id) {
-                c.position = pos;
+                if self.selected_unit == 1 {
+                    c.position = pos;
+                } else if let Some(unit) = c.units.iter_mut().find(|u| u.unit == self.selected_unit)
+                {
+                    unit.position = pos;
+                }
             }
             if let Some(f) = visible.board.footprints.iter_mut().find(|f| f.id == id) {
                 f.position = pos;
@@ -225,7 +268,9 @@ impl App {
         let text = match &self.tool {
             Tool::Select => "SELECT",
             Tool::Place(_) => "PLACE SYMBOL · CLICK TO COMMIT",
-            Tool::LibraryPlace(..) => "PLACE KICAD SYMBOL · CLICK TO COMMIT",
+            Tool::LibraryPlace(..) | Tool::CustomPlace(..) => {
+                "PLACE SYMBOL PACKAGE · CLICK TO COMMIT"
+            }
             Tool::Wire(None) => "WIRE · PICK FIRST PIN",
             Tool::Wire(Some(_)) => "WIRE · PICK SECOND PIN",
             Tool::Route(None) => "ROUTE · PICK FIRST PAD",
@@ -250,35 +295,19 @@ impl App {
                         self.symbol(&painter, rect, camera, &c, false, true);
                     }
                 }
-                Tool::LibraryPlace(_, _, definition) => {
-                    let c = Component {
-                        id: 0,
-                        reference: format!("{}?", definition.reference),
-                        value: definition.value.clone(),
-                        kind: "library".into(),
-                        position: snapped,
-                        rotation: 0.0,
-                        pins: definition
-                            .pins
-                            .iter()
-                            .filter(|p| p.unit <= 1 && p.body_style <= 1)
-                            .map(|p| pcbcraft_doc::Pin {
-                                number: p.number.clone(),
-                                name: p.name.clone(),
-                                offset: p.position,
-                                net: None,
-                                electrical_type: p.electrical_type.clone(),
-                                direction: Some(p.angle),
-                            })
-                            .collect(),
-                        library_symbol: Some(pcbcraft_doc::LibrarySymbol {
-                            library: String::new(),
-                            unit: 1,
-                            definition: definition.as_ref().clone(),
-                        }),
-                        library_footprint: None,
-                    };
-                    self.symbol(&painter, rect, camera, &c, false, true);
+                Tool::LibraryPlace(_, _, definition) | Tool::CustomPlace(_, definition) => {
+                    if let Ok(c) = pcbcraft_doc::library_component(
+                        definition.as_ref().clone(),
+                        "preview".into(),
+                        0,
+                        format!("{}?", definition.reference),
+                        snapped,
+                        None,
+                    ) {
+                        for view in c.schematic_views() {
+                            self.symbol(&painter, rect, camera, &view, false, true);
+                        }
+                    }
                 }
                 Tool::Cutout if pcbcraft_geom::positive(self.cutout_radius) => {
                     painter.circle_stroke(
@@ -322,15 +351,15 @@ impl App {
             && matches!(self.tool, Tool::Select)
             && let Some(pos) = cursor
         {
-            let id = self.pick_object(pos, camera.zoom);
-            self.select(id);
+            self.select_at(pos, camera.zoom);
+            let id = self.selected;
             if let Some(id) = id
                 && (self.project.component(id).is_some() || self.project.footprint(id).is_some())
             {
                 let original = self
                     .project
                     .component(id)
-                    .map(|c| c.position)
+                    .and_then(|c| c.unit_placement(self.selected_unit).map(|p| p.0))
                     .or_else(|| self.project.footprint(id).map(|f| f.position))
                     .unwrap_or(pos);
                 self.drag_offset = Point::new(original.x - pos.x, original.y - pos.y);
@@ -345,13 +374,17 @@ impl App {
         if response.drag_stopped_by(egui::PointerButton::Primary)
             && let Some((id, pos)) = self.drag.take()
         {
+            let mut params = json!({"id":id,"position":pos});
+            if self.project.component(id).is_some() {
+                params["unit"] = json!(self.selected_unit);
+            }
             self.run(
                 if self.project.footprint(id).is_some() {
                     "footprint.move"
                 } else {
                     "component.move"
                 },
-                json!({"id":id,"position":pos}),
+                params,
             );
         }
         if response.clicked()
@@ -365,6 +398,7 @@ impl App {
             self.project
                 .components
                 .iter()
+                .flat_map(|c| c.schematic_views())
                 .filter(|c| {
                     let local =
                         Point::new(pos.x - c.position.x, pos.y - c.position.y).rotate(c.rotation);
@@ -438,8 +472,8 @@ impl App {
             } else {
                 self.schematic.zoom
             };
-            if let Some(id) = self.pick_object(pos, zoom) {
-                self.select(Some(id));
+            if self.pick_object(pos, zoom).is_some() {
+                self.select_at(pos, zoom);
             }
         }
     }
@@ -473,7 +507,7 @@ impl App {
     }
     fn canvas_click(&mut self, pos: Point, zoom: f32) {
         match self.tool.clone() {
-            Tool::Select => self.select(self.pick_object(pos, zoom)),
+            Tool::Select => self.select_at(pos, zoom),
             Tool::Place(kind) => {
                 self.run("component.add", json!({"kind":kind,"position":snap(pos)}))
             }
@@ -483,15 +517,23 @@ impl App {
                     json!({"path":path,"symbol":symbol,"position":snap(pos)}),
                 );
             }
+            Tool::CustomPlace(name, _) => self.run(
+                "component.place_custom",
+                json!({"name":name,"position":snap(pos)}),
+            ),
             Tool::Move => {
                 if let Some(id) = self.selected {
+                    let mut params = json!({"id":id,"position":snap(pos)});
+                    if self.project.component(id).is_some() {
+                        params["unit"] = json!(self.selected_unit);
+                    }
                     self.run(
                         if self.project.footprint(id).is_some() {
                             "footprint.move"
                         } else {
                             "component.move"
                         },
-                        json!({"id":id,"position":snap(pos)}),
+                        params,
                     );
                     self.tool = Tool::Select;
                 }
@@ -511,7 +553,7 @@ impl App {
             Tool::Route(start) => {
                 if let Some((id, pad)) = self.pick_pad(pos, zoom) {
                     if let Some((from, from_pad)) = start {
-                        self.run("track.route",json!({"from":{"footprint":from,"pad":from_pad},"to":{"footprint":id,"pad":pad}}));
+                        self.run("track.route",json!({"from":{"footprint":from,"pad":from_pad},"to":{"footprint":id,"pad":pad},"layer":self.route_layer}));
                         self.tool = Tool::Route(None);
                     } else {
                         self.tool = Tool::Route(Some((id, pad)));
@@ -577,8 +619,16 @@ impl App {
                 );
             }
         }
-        for c in &p.components {
-            self.symbol(painter, rect, camera, c, self.selected == Some(c.id), false);
+        for c in p.components.iter().flat_map(|c| c.schematic_views()) {
+            self.symbol(
+                painter,
+                rect,
+                camera,
+                &c,
+                self.selected == Some(c.id)
+                    && self.selected_unit == c.library_symbol.as_ref().map(|s| s.unit).unwrap_or(1),
+                false,
+            );
         }
         if p.components.is_empty() {
             painter.text(
@@ -628,7 +678,7 @@ impl App {
                 .definition
                 .graphics
                 .iter()
-                .filter(|g| g.unit <= 1 && g.body_style <= 1)
+                .filter(|g| (g.unit == 0 || g.unit == library.unit) && g.body_style <= 1)
             {
                 self.paint_graphic(
                     painter,
@@ -639,12 +689,9 @@ impl App {
                     color,
                 );
             }
-            for pin in library
-                .definition
-                .pins
-                .iter()
-                .filter(|p| p.unit <= 1 && p.body_style <= 1)
-            {
+            for pin in library.definition.pins.iter().filter(|p| {
+                (p.unit == 0 && library.unit == 1 || p.unit == library.unit) && p.body_style <= 1
+            }) {
                 let end = pin.position.offset(Point::new(
                     pin.length * pin.angle.to_radians().cos(),
                     -pin.length * pin.angle.to_radians().sin(),
@@ -827,21 +874,26 @@ impl App {
             );
         }
         for f in &p.board.footprints {
-            let center = camera.screen(f.position, rect);
-            let (sine, cosine) = f.rotation.to_radians().sin_cos();
-            let label_offset = if p
-                .component(f.component)
-                .is_some_and(|c| c.library_footprint.is_some())
-            {
-                f.drawing_points(p)
-                    .iter()
-                    .map(|p| p.rotate(-f.rotation).y.abs())
-                    .fold(0.0, f64::max) as f32
-                    * camera.zoom
-                    + 12.0
-            } else {
-                (3.75 * sine.abs() + 1.5 * cosine.abs() + 1.1) as f32 * camera.zoom
-            };
+            let points = f
+                .drawing_points(p)
+                .into_iter()
+                .map(|point| point.rotate(-f.rotation))
+                .collect::<Vec<_>>();
+            let min = points
+                .iter()
+                .fold(Point::new(f64::INFINITY, f64::INFINITY), |m, p| {
+                    Point::new(m.x.min(p.x), m.y.min(p.y))
+                });
+            let max = points
+                .iter()
+                .fold(Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY), |m, p| {
+                    Point::new(m.x.max(p.x), m.y.max(p.y))
+                });
+            let label_x = (min.x + max.x) / 2.0;
+            let reference_at = camera.screen(f.position.offset(Point::new(label_x, min.y)), rect)
+                - Vec2::new(0.0, 12.0);
+            let value_at = camera.screen(f.position.offset(Point::new(label_x, max.y)), rect)
+                + Vec2::new(0.0, 12.0);
             let color = if self.selected == Some(f.id) {
                 self.accent()
             } else {
@@ -886,25 +938,41 @@ impl App {
                         Color32::from_rgb(230, 194, 125),
                         Stroke::NONE,
                     ));
+                    let hole = pad.drill_outline_points();
+                    if !hole.is_empty() {
+                        painter.add(egui::Shape::convex_polygon(
+                            hole.into_iter()
+                                .map(|p| {
+                                    camera.screen(f.position.offset(p.rotate(-f.rotation)), rect)
+                                })
+                                .collect(),
+                            self.surface(),
+                            Stroke::NONE,
+                        ));
+                    }
                     painter.text(
                         center,
                         Align2::CENTER_CENTER,
                         &pad.number,
                         FontId::monospace(10.0),
-                        Color32::from_rgb(48, 44, 32),
+                        if pad.geometry.as_ref().is_some_and(|g| g.drill.is_some()) {
+                            Color32::from_rgb(230, 194, 125)
+                        } else {
+                            Color32::from_rgb(48, 44, 32)
+                        },
                     );
                 }
             }
             if let Some(c) = p.component(f.component) {
                 painter.text(
-                    center - Vec2::new(0.0, label_offset),
+                    reference_at,
                     Align2::CENTER_BOTTOM,
                     &c.reference,
                     FontId::proportional(14.0),
                     color,
                 );
                 painter.text(
-                    center + Vec2::new(0.0, label_offset),
+                    value_at,
                     Align2::CENTER_TOP,
                     &c.value,
                     FontId::proportional(11.0),

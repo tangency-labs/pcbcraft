@@ -1,0 +1,629 @@
+{
+  "format": "pcbcraft-library",
+  "library": {
+    "footprints": [
+      {
+        "description": "8-lead though-hole mounted DIP package, row spacing 7.62mm (300 mils)",
+        "graphics": [
+          {
+            "Line": {
+              "end": {
+                "x": 1.16,
+                "y": 8.95
+              },
+              "layer": "F.SilkS",
+              "start": {
+                "x": 1.16,
+                "y": -1.33
+              },
+              "width": 0.12
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 6.46,
+                "y": 8.95
+              },
+              "layer": "F.SilkS",
+              "start": {
+                "x": 1.16,
+                "y": 8.95
+              },
+              "width": 0.12
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 1.16,
+                "y": -1.33
+              },
+              "layer": "F.SilkS",
+              "start": {
+                "x": 2.81,
+                "y": -1.33
+              },
+              "width": 0.12
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 4.81,
+                "y": -1.33
+              },
+              "layer": "F.SilkS",
+              "start": {
+                "x": 6.46,
+                "y": -1.33
+              },
+              "width": 0.12
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 6.46,
+                "y": -1.33
+              },
+              "layer": "F.SilkS",
+              "start": {
+                "x": 6.46,
+                "y": 8.95
+              },
+              "width": 0.12
+            }
+          },
+          {
+            "Arc": {
+              "end": {
+                "x": 2.81,
+                "y": -1.33
+              },
+              "layer": "F.SilkS",
+              "mid": {
+                "x": 3.81,
+                "y": -0.33
+              },
+              "start": {
+                "x": 4.81,
+                "y": -1.33
+              },
+              "width": 0.12
+            }
+          },
+          {
+            "Rectangle": {
+              "end": {
+                "x": 8.67,
+                "y": 9.14
+              },
+              "fill": "none",
+              "layer": "F.CrtYd",
+              "start": {
+                "x": -1.06,
+                "y": -1.52
+              },
+              "width": 0.05
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 1.635,
+                "y": -1.27
+              },
+              "layer": "F.Fab",
+              "start": {
+                "x": 0.635,
+                "y": -0.27
+              },
+              "width": 0.1
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 0.635,
+                "y": -0.27
+              },
+              "layer": "F.Fab",
+              "start": {
+                "x": 0.635,
+                "y": 8.89
+              },
+              "width": 0.1
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 6.985,
+                "y": -1.27
+              },
+              "layer": "F.Fab",
+              "start": {
+                "x": 1.635,
+                "y": -1.27
+              },
+              "width": 0.1
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 6.985,
+                "y": 8.89
+              },
+              "layer": "F.Fab",
+              "start": {
+                "x": 6.985,
+                "y": -1.27
+              },
+              "width": 0.1
+            }
+          },
+          {
+            "Line": {
+              "end": {
+                "x": 0.635,
+                "y": 8.89
+              },
+              "layer": "F.Fab",
+              "start": {
+                "x": 6.985,
+                "y": 8.89
+              },
+              "width": 0.1
+            }
+          },
+          {
+            "Text": {
+              "angle": 90.0,
+              "layer": "F.Fab",
+              "position": {
+                "x": 3.81,
+                "y": 3.81
+              },
+              "size": {
+                "x": 1.0,
+                "y": 1.0
+              },
+              "text": "${REFERENCE}"
+            }
+          }
+        ],
+        "keywords": "THT DIP DIL PDIP 2.54mm 7.62mm 300mil",
+        "name": "DIP8_Custom",
+        "pads": [
+          {
+            "drill": {
+              "offset": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "size": {
+                "x": 0.8,
+                "y": 0.8
+              }
+            },
+            "layers": [
+              "*.Cu",
+              "*.Mask"
+            ],
+            "number": "1",
+            "pad_type": "thru_hole",
+            "position": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "raw_source": "(pad \"1\" thru_hole roundrect\n\t\t(at 0 0)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t\t(roundrect_rratio 0.15625)\n\t)",
+            "rotation": 0.0,
+            "roundrect_ratio": 0.15625,
+            "shape": "roundrect",
+            "size": {
+              "x": 1.6,
+              "y": 1.6
+            }
+          },
+          {
+            "drill": {
+              "offset": {
+                "x": 0.1,
+                "y": 0.0
+              },
+              "size": {
+                "x": 0.8,
+                "y": 1.0
+              }
+            },
+            "layers": [
+              "*.Cu",
+              "*.Mask"
+            ],
+            "number": "2",
+            "pad_type": "thru_hole",
+            "position": {
+              "x": 0.0,
+              "y": 2.54
+            },
+            "raw_source": "(pad \"2\" thru_hole circle\n\t\t(at 0 2.54)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)",
+            "rotation": 0.0,
+            "roundrect_ratio": null,
+            "shape": "circle",
+            "size": {
+              "x": 1.6,
+              "y": 1.6
+            }
+          },
+          {
+            "drill": {
+              "offset": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "size": {
+                "x": 0.8,
+                "y": 0.8
+              }
+            },
+            "layers": [
+              "*.Cu",
+              "*.Mask"
+            ],
+            "number": "3",
+            "pad_type": "thru_hole",
+            "position": {
+              "x": 0.0,
+              "y": 5.08
+            },
+            "raw_source": "(pad \"3\" thru_hole circle\n\t\t(at 0 5.08)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)",
+            "rotation": 0.0,
+            "roundrect_ratio": null,
+            "shape": "circle",
+            "size": {
+              "x": 1.6,
+              "y": 1.6
+            }
+          },
+          {
+            "drill": {
+              "offset": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "size": {
+                "x": 0.8,
+                "y": 0.8
+              }
+            },
+            "layers": [
+              "*.Cu",
+              "*.Mask"
+            ],
+            "number": "4",
+            "pad_type": "thru_hole",
+            "position": {
+              "x": 0.0,
+              "y": 7.62
+            },
+            "raw_source": "(pad \"4\" thru_hole circle\n\t\t(at 0 7.62)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)",
+            "rotation": 0.0,
+            "roundrect_ratio": null,
+            "shape": "circle",
+            "size": {
+              "x": 1.6,
+              "y": 1.6
+            }
+          },
+          {
+            "drill": {
+              "offset": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "size": {
+                "x": 0.8,
+                "y": 0.8
+              }
+            },
+            "layers": [
+              "*.Cu",
+              "*.Mask"
+            ],
+            "number": "5",
+            "pad_type": "thru_hole",
+            "position": {
+              "x": 7.62,
+              "y": 7.62
+            },
+            "raw_source": "(pad \"5\" thru_hole circle\n\t\t(at 7.62 7.62)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)",
+            "rotation": 0.0,
+            "roundrect_ratio": null,
+            "shape": "circle",
+            "size": {
+              "x": 1.6,
+              "y": 1.6
+            }
+          },
+          {
+            "drill": {
+              "offset": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "size": {
+                "x": 0.8,
+                "y": 0.8
+              }
+            },
+            "layers": [
+              "*.Cu",
+              "*.Mask"
+            ],
+            "number": "6",
+            "pad_type": "thru_hole",
+            "position": {
+              "x": 7.62,
+              "y": 5.08
+            },
+            "raw_source": "(pad \"6\" thru_hole circle\n\t\t(at 7.62 5.08)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)",
+            "rotation": 0.0,
+            "roundrect_ratio": null,
+            "shape": "circle",
+            "size": {
+              "x": 1.6,
+              "y": 1.6
+            }
+          },
+          {
+            "drill": {
+              "offset": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "size": {
+                "x": 0.8,
+                "y": 0.8
+              }
+            },
+            "layers": [
+              "*.Cu",
+              "*.Mask"
+            ],
+            "number": "7",
+            "pad_type": "thru_hole",
+            "position": {
+              "x": 7.62,
+              "y": 2.54
+            },
+            "raw_source": "(pad \"7\" thru_hole circle\n\t\t(at 7.62 2.54)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)",
+            "rotation": 0.0,
+            "roundrect_ratio": null,
+            "shape": "circle",
+            "size": {
+              "x": 1.6,
+              "y": 1.6
+            }
+          },
+          {
+            "drill": {
+              "offset": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "size": {
+                "x": 0.8,
+                "y": 0.8
+              }
+            },
+            "layers": [
+              "*.Cu",
+              "*.Mask"
+            ],
+            "number": "8",
+            "pad_type": "thru_hole",
+            "position": {
+              "x": 7.62,
+              "y": 0.0
+            },
+            "raw_source": "(pad \"8\" thru_hole circle\n\t\t(at 7.62 0)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)",
+            "rotation": 0.0,
+            "roundrect_ratio": null,
+            "shape": "circle",
+            "size": {
+              "x": 1.6,
+              "y": 1.6
+            }
+          }
+        ],
+        "raw_source": "(footprint \"DIP-8_W7.62mm\"\n\t(version 20260206)\n\t(generator \"kicad-footprint-generator\")\n\t(layer \"F.Cu\")\n\t(descr \"8-lead though-hole mounted DIP package, row spacing 7.62mm (300 mils)\")\n\t(tags \"THT DIP DIL PDIP 2.54mm 7.62mm 300mil\")\n\t(property \"Reference\" \"REF**\"\n\t\t(at 3.81 -2.33 0)\n\t\t(layer \"F.SilkS\")\n\t\t(effects\n\t\t\t(font\n\t\t\t\t(size 1 1)\n\t\t\t\t(thickness 0.15)\n\t\t\t)\n\t\t)\n\t)\n\t(property \"Value\" \"DIP-8_W7.62mm\"\n\t\t(at 3.81 9.95 0)\n\t\t(layer \"F.Fab\")\n\t\t(effects\n\t\t\t(font\n\t\t\t\t(size 1 1)\n\t\t\t\t(thickness 0.15)\n\t\t\t)\n\t\t)\n\t)\n\t(property \"KiLib_Generator\" \"package/DIP/legacy\"\n\t\t(at 0 0 0)\n\t\t(layer \"F.SilkS\")\n\t\t(hide yes)\n\t\t(effects\n\t\t\t(font\n\t\t\t\t(size 1 1)\n\t\t\t\t(thickness 0.15)\n\t\t\t)\n\t\t)\n\t)\n\t(attr through_hole)\n\t(duplicate_pad_numbers_are_jumpers no)\n\t(fp_line\n\t\t(start 1.16 -1.33)\n\t\t(end 1.16 8.95)\n\t\t(stroke\n\t\t\t(width 0.12)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.SilkS\")\n\t)\n\t(fp_line\n\t\t(start 1.16 8.95)\n\t\t(end 6.46 8.95)\n\t\t(stroke\n\t\t\t(width 0.12)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.SilkS\")\n\t)\n\t(fp_line\n\t\t(start 2.81 -1.33)\n\t\t(end 1.16 -1.33)\n\t\t(stroke\n\t\t\t(width 0.12)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.SilkS\")\n\t)\n\t(fp_line\n\t\t(start 6.46 -1.33)\n\t\t(end 4.81 -1.33)\n\t\t(stroke\n\t\t\t(width 0.12)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.SilkS\")\n\t)\n\t(fp_line\n\t\t(start 6.46 8.95)\n\t\t(end 6.46 -1.33)\n\t\t(stroke\n\t\t\t(width 0.12)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.SilkS\")\n\t)\n\t(fp_arc\n\t\t(start 4.81 -1.33)\n\t\t(mid 3.81 -0.33)\n\t\t(end 2.81 -1.33)\n\t\t(stroke\n\t\t\t(width 0.12)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.SilkS\")\n\t)\n\t(fp_rect\n\t\t(start -1.06 -1.52)\n\t\t(end 8.67 9.14)\n\t\t(stroke\n\t\t\t(width 0.05)\n\t\t\t(type solid)\n\t\t)\n\t\t(fill no)\n\t\t(layer \"F.CrtYd\")\n\t)\n\t(fp_line\n\t\t(start 0.635 -0.27)\n\t\t(end 1.635 -1.27)\n\t\t(stroke\n\t\t\t(width 0.1)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.Fab\")\n\t)\n\t(fp_line\n\t\t(start 0.635 8.89)\n\t\t(end 0.635 -0.27)\n\t\t(stroke\n\t\t\t(width 0.1)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.Fab\")\n\t)\n\t(fp_line\n\t\t(start 1.635 -1.27)\n\t\t(end 6.985 -1.27)\n\t\t(stroke\n\t\t\t(width 0.1)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.Fab\")\n\t)\n\t(fp_line\n\t\t(start 6.985 -1.27)\n\t\t(end 6.985 8.89)\n\t\t(stroke\n\t\t\t(width 0.1)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.Fab\")\n\t)\n\t(fp_line\n\t\t(start 6.985 8.89)\n\t\t(end 0.635 8.89)\n\t\t(stroke\n\t\t\t(width 0.1)\n\t\t\t(type solid)\n\t\t)\n\t\t(layer \"F.Fab\")\n\t)\n\t(fp_text user \"${REFERENCE}\"\n\t\t(at 3.81 3.81 90)\n\t\t(layer \"F.Fab\")\n\t\t(effects\n\t\t\t(font\n\t\t\t\t(size 1 1)\n\t\t\t\t(thickness 0.15)\n\t\t\t)\n\t\t)\n\t)\n\t(pad \"1\" thru_hole roundrect\n\t\t(at 0 0)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t\t(roundrect_rratio 0.15625)\n\t)\n\t(pad \"2\" thru_hole circle\n\t\t(at 0 2.54)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)\n\t(pad \"3\" thru_hole circle\n\t\t(at 0 5.08)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)\n\t(pad \"4\" thru_hole circle\n\t\t(at 0 7.62)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)\n\t(pad \"5\" thru_hole circle\n\t\t(at 7.62 7.62)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)\n\t(pad \"6\" thru_hole circle\n\t\t(at 7.62 5.08)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)\n\t(pad \"7\" thru_hole circle\n\t\t(at 7.62 2.54)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)\n\t(pad \"8\" thru_hole circle\n\t\t(at 7.62 0)\n\t\t(size 1.6 1.6)\n\t\t(drill 0.8)\n\t\t(layers \"*.Cu\" \"*.Mask\")\n\t\t(remove_unused_layers no)\n\t)\n\t(point\n\t\t(at 3.81 3.81)\n\t\t(size 1.27)\n\t\t(layer \"F.Fab\")\n\t)\n\t(embedded_fonts no)\n\t(model \"${KICAD10_3DMODEL_DIR}/Package_DIP.3dshapes/DIP-8_W7.62mm.step\"\n\t\t(offset\n\t\t\t(xyz 0 0 0)\n\t\t)\n\t\t(scale\n\t\t\t(xyz 1 1 1)\n\t\t)\n\t\t(rotate\n\t\t\t(xyz 0 0 0)\n\t\t)\n\t)\n)",
+        "unsupported": []
+      }
+    ],
+    "notices": [
+      "Modified KiCad LM358 and DIP8 data; KiCad community contributors; CC-BY-SA 4.0 with design-output exception. https://www.kicad.org/libraries/license/\n### KiCad Libraries License\n\nThe KiCad libraries are licensed under the [Creative Commons CC-BY-SA 4.0 License](https://creativecommons.org/licenses/by-sa/4.0/legalcode), with the following exception:\n\n---------\n\n_To the extent that the creation of electronic designs that use 'Licensed Material' can be considered to be 'Adapted Material', then the copyright holder waives article 3 of the license with respect to these designs and any generated files which use data provided as part of the 'Licensed Material'._\n\n---------\n\nYou can read more about KiCad library licensing [here](http://kicad.org/libraries/license).\n\n**What does this mean?**\n\nKiCad libraries are licensed in such a way to ensure free use of library data for commercial, closed, and non-commercial projects without restriction. KiCad does not wish to exert any control over designs produced using the library data, or force users to reveal proprietary information contained in their designs. Neither do we wish to force users to attribute the KiCad libraries _within their design_.\n\nUse of the library data in a project does not (by itself) require that the design or any files generated from the design are licensed under the CC-BY-SA 4.0 License. You are free to use the library data in your own projects without the obligation to share your project files under this or any other license agreement.\n\nHowever, if you wish to redistribute the KiCad libraries, or parts thereof (including in modified form) as a collection then the exception above does not apply. Redistributed library collections must be shared under the same license agreement. Under these circumstances, the libraries must also retain attribution information, including the license documents which are distributed with the library files.\n\n----------------------\n\n**Warranty**\n\nThe KiCad libraries are provided in the hope that they will be useful, but are provided without warranty of any kind, express or implied.\n\nThe KiCad libraries are compiled by the KiCad community - if you find an error in the library data, please help the community and contribute a fix!\n"
+    ],
+    "symbols": [
+      {
+        "description": "User-edited custom dual amplifier",
+        "extends": "LM2904",
+        "footprint": "",
+        "graphics": [
+          {
+            "body_style": 1,
+            "primitive": {
+              "Polyline": {
+                "fill": "background",
+                "layer": "",
+                "points": [
+                  {
+                    "x": -5.08,
+                    "y": -5.08
+                  },
+                  {
+                    "x": 5.08,
+                    "y": -0.0
+                  },
+                  {
+                    "x": -5.08,
+                    "y": 5.08
+                  },
+                  {
+                    "x": -5.08,
+                    "y": -5.08
+                  }
+                ],
+                "width": 0.254
+              }
+            },
+            "unit": 1
+          },
+          {
+            "body_style": 1,
+            "primitive": {
+              "Polyline": {
+                "fill": "background",
+                "layer": "",
+                "points": [
+                  {
+                    "x": -5.08,
+                    "y": -5.08
+                  },
+                  {
+                    "x": 5.08,
+                    "y": -0.0
+                  },
+                  {
+                    "x": -5.08,
+                    "y": 5.08
+                  },
+                  {
+                    "x": -5.08,
+                    "y": -5.08
+                  }
+                ],
+                "width": 0.254
+              }
+            },
+            "unit": 2
+          }
+        ],
+        "keywords": "dual opamp",
+        "name": "DualAmp_Custom",
+        "pins": [
+          {
+            "angle": 180.0,
+            "body_style": 1,
+            "electrical_type": "output",
+            "length": 2.54,
+            "name": "",
+            "number": "1",
+            "position": {
+              "x": 7.62,
+              "y": -0.0
+            },
+            "unit": 1
+          },
+          {
+            "angle": 0.0,
+            "body_style": 1,
+            "electrical_type": "input",
+            "length": 2.54,
+            "name": "-",
+            "number": "2",
+            "position": {
+              "x": -7.62,
+              "y": 2.54
+            },
+            "unit": 1
+          },
+          {
+            "angle": 0.0,
+            "body_style": 1,
+            "electrical_type": "input",
+            "length": 2.54,
+            "name": "+",
+            "number": "3",
+            "position": {
+              "x": -7.62,
+              "y": -2.54
+            },
+            "unit": 1
+          },
+          {
+            "angle": 0.0,
+            "body_style": 1,
+            "electrical_type": "input",
+            "length": 2.54,
+            "name": "+",
+            "number": "5",
+            "position": {
+              "x": -7.62,
+              "y": -2.54
+            },
+            "unit": 2
+          },
+          {
+            "angle": 0.0,
+            "body_style": 1,
+            "electrical_type": "input",
+            "length": 2.54,
+            "name": "-",
+            "number": "6",
+            "position": {
+              "x": -7.62,
+              "y": 2.54
+            },
+            "unit": 2
+          },
+          {
+            "angle": 180.0,
+            "body_style": 1,
+            "electrical_type": "output",
+            "length": 2.54,
+            "name": "",
+            "number": "7",
+            "position": {
+              "x": 7.62,
+              "y": -0.0
+            },
+            "unit": 2
+          },
+          {
+            "angle": 90.0,
+            "body_style": 1,
+            "electrical_type": "power_in",
+            "length": 3.81,
+            "name": "V-",
+            "number": "4",
+            "position": {
+              "x": -2.54,
+              "y": 7.62
+            },
+            "unit": 3
+          },
+          {
+            "angle": 270.0,
+            "body_style": 1,
+            "electrical_type": "power_in",
+            "length": 3.81,
+            "name": "VCC",
+            "number": "8",
+            "position": {
+              "x": -2.54,
+              "y": -7.62
+            },
+            "unit": 3
+          }
+        ],
+        "raw_source": "(symbol \"LM358\"\n\t\t(extends \"LM2904\")\n\t\t(property \"Reference\" \"U\"\n\t\t\t(at 0 5.08 0)\n\t\t\t(show_name no)\n\t\t\t(do_not_autoplace no)\n\t\t\t(effects\n\t\t\t\t(font\n\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t)\n\t\t\t\t(justify left)\n\t\t\t)\n\t\t)\n\t\t(property \"Value\" \"LM358\"\n\t\t\t(at 0 -5.08 0)\n\t\t\t(show_name no)\n\t\t\t(do_not_autoplace no)\n\t\t\t(effects\n\t\t\t\t(font\n\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t)\n\t\t\t\t(justify left)\n\t\t\t)\n\t\t)\n\t\t(property \"Footprint\" \"\"\n\t\t\t(at 0 0 0)\n\t\t\t(show_name no)\n\t\t\t(do_not_autoplace no)\n\t\t\t(hide yes)\n\t\t\t(effects\n\t\t\t\t(font\n\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t)\n\t\t\t)\n\t\t)\n\t\t(property \"Datasheet\" \"http://www.ti.com/lit/ds/symlink/lm2904-n.pdf\"\n\t\t\t(at 0 0 0)\n\t\t\t(show_name no)\n\t\t\t(do_not_autoplace no)\n\t\t\t(hide yes)\n\t\t\t(effects\n\t\t\t\t(font\n\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t)\n\t\t\t)\n\t\t)\n\t\t(property \"Description\" \"Low-Power, Dual Operational Amplifiers, DIP-8/SOIC-8/TO-99-8\"\n\t\t\t(at 0 0 0)\n\t\t\t(show_name no)\n\t\t\t(do_not_autoplace no)\n\t\t\t(hide yes)\n\t\t\t(effects\n\t\t\t\t(font\n\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t)\n\t\t\t)\n\t\t)\n\t\t(property \"ki_keywords\" \"dual opamp\"\n\t\t\t(at 0 0 0)\n\t\t\t(show_name no)\n\t\t\t(do_not_autoplace no)\n\t\t\t(hide yes)\n\t\t\t(effects\n\t\t\t\t(font\n\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t)\n\t\t\t)\n\t\t)\n\t\t(property \"ki_fp_filters\" \"SOIC*3.9x4.9mm*P1.27mm* DIP*W7.62mm* TO*99* OnSemi*Micro8* TSSOP*3x3mm*P0.65mm* TSSOP*4.4x3mm*P0.65mm* MSOP*3x3mm*P0.65mm* SSOP*3.9x4.9mm*P0.635mm* LFCSP*2x2mm*P0.5mm* *SIP* SOIC*5.3x6.2mm*P1.27mm*\"\n\t\t\t(at 0 0 0)\n\t\t\t(show_name no)\n\t\t\t(do_not_autoplace no)\n\t\t\t(hide yes)\n\t\t\t(effects\n\t\t\t\t(font\n\t\t\t\t\t(size 1.27 1.27)\n\t\t\t\t)\n\t\t\t)\n\t\t)\n\t\t(embedded_fonts no)\n\t)",
+        "reference": "U",
+        "unsupported": [],
+        "value": "LM358"
+      }
+    ]
+  },
+  "version": 1
+}

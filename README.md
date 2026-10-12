@@ -19,19 +19,24 @@ board export. The complete EDA roadmap is in [ROADMAP.md](ROADMAP.md).
 - Original resistor, capacitor, LED and two-pin connector symbols; explicit
   logical nets and pin-to-pin orthogonal wire presentations.
 - Background search and geometry previews of installed KiCad symbol/footprint
-  libraries, including inherited definitions. Place supported single-unit symbols,
-  assign matching front SMD footprints, and embed used definitions in the project.
+  libraries, including inherited definitions. Place supported symbols with
+  independently movable schematic units within one physical package, assign
+  matching front SMD or plated through-hole footprints, and embed used definitions.
+- Symbol and footprint editors in the Libraries tab: editable pins, unit membership,
+  pad/drill dimensions, and line/rectangle/circle/arc/polyline/text graphics. Save
+  undoable project-library definitions and reusable `.pcbcraft-lib` collections.
 - Schematic-to-PCB sync retains existing placements and reconciles pad nets.
-- Real circle/rectangle/roundrect/oval front SMD pads, plus generic starter pads;
+- Real circle/rectangle/roundrect/oval front SMD and plated through-hole pads,
+  circular/oval offset drills, plus generic starter pads;
   straight or two-segment orthogonal tracks;
   airwires from actual same-layer copper connectivity.
 - Editable rectangular board width/height and dimensioned circular cutouts,
   exported as Edge.Cuts. Constrained/parametric outline sketches are planned.
 - Initial pin assignment/net-population checks and copper short, clearance,
   board-edge, cutout and unrouted checks with affected object IDs.
-- 19 engine commands, discoverable schemas, atomic batches, stable IDs,
+- 26 engine commands, discoverable schemas, atomic batches, stable IDs,
   revision guards, 32-step undo/redo and validated atomic project saves.
-- 36 MCP tools: every engine command plus library discovery/search/inspection,
+- 44 MCP tools: every engine command plus library discovery/search/inspection,
   design inspection, checks, persistence,
   export and PNG previews. Headless or bridged into the actual running desktop.
 - Rust browser entry point; the shared UI and engine compile to WebAssembly.
@@ -83,12 +88,28 @@ need footprints. The project embeds used geometry, so reopening needs no library
 installation. The desktop discovers Linux, Windows and Ubuntu WSL library folders;
 custom paths and `KICAD10_SYMBOL_DIR` / `KICAD10_FOOTPRINT_DIR` are supported.
 
-Initial placement supports single-unit symbols and unique numbered front SMD pads.
-Multi-unit symbols and through-hole packages can be inspected; their placement,
-library editing, 3D models and general KiCad project import remain planned.
+Multi-unit symbols share one component/reference, physical pin map and footprint;
+each unit can move/rotate independently. Select its drawing or choose the unit in
+Properties. All units, including separate power units, are initially placed.
+Placement supports up to 32 units, 64 unique physical pins, and front SMD/plated
+through-hole circle/rect/roundrect/oval pads. Repeated common pin numbers across
+units, unsupported graphical pin styles, NPTH mechanical holes, back SMD placement,
+3D models, footprint copper graphics and general KiCad project import remain planned.
 Rounded-pad clearance uses sampled outlines with a small conservative error bound;
 connectivity uses inscribed pad bounds and can conservatively flag corner contacts.
 See [library formats, limits and provenance](docs/kicad-libraries.md).
+
+Choose **Edit a copy**, **New symbol**, or **New footprint** inside Libraries to
+author a definition. Edit pins/pads and drawing primitives with a live preview,
+then save to **Project library**. Save/load a `.pcbcraft-lib` collection to reuse
+it elsewhere. Original nodes and attribution notices are retained for imported
+copies; native libraries reject unknown data fields rather than discarding them.
+Library edits do not silently change placed definitions. Reassign a revised
+footprint or place a revised symbol explicitly. KiCad library writing and advanced
+interactive library drawing remain planned.
+
+The portable `examples/dual-amplifier.pcbcraft` demonstrates three LM358 units,
+one edited DIP8 package with an offset oval drill, and front/back routing.
 
 ## Keyboard defaults
 

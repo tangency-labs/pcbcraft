@@ -23,10 +23,14 @@ This checklist records implementation, not an estimated parity percentage.
 - [x] Rectangular outline dimensions and circular cutouts
 - [x] KiCad PCB subset export and external KiCad CLI validation
 - [x] Read/search/preview installed KiCad symbol and footprint libraries
-- [x] Embed placed single-unit symbols and assigned front SMD footprints
+- [x] Embed placed single/multi-unit symbols and assigned front SMD/PTH footprints
 - [x] Actual pad geometry in UI, previews, clearance checks and KiCad export
-- [ ] Editable library symbols/footprints and multi-unit symbol placement
-- [ ] Through-hole/back-side placement and broader library compatibility
+- [x] Native project-library symbol/footprint editors with pins, pads and graphics
+- [x] Multi-unit packages with independently movable schematic units and one footprint
+- [x] Reusable native library collections, attribution, atomic saves and undoable load
+- [x] Plated through-hole pads, circular/oval offset drills, front/back pad bridges
+- [ ] Interactive canvas library drawing and KiCad library writers
+- [ ] Repeated common pins, graphical pin styles, NPTH holes and back SMD placement
 - [ ] Explicit wire vertices, junctions, labels, buses and hierarchy
 - [ ] General KiCad import with unknown-field preservation and round-trip fixtures
 - [ ] Complete pin-type electrical rules and project/net-class rules
@@ -35,7 +39,7 @@ This checklist records implementation, not an estimated parity percentage.
 
 ## M2 — Serious board layout
 
-- [ ] Arbitrary pad shapes, through-hole pads, vias and multilayer stackups
+- [ ] Custom/chamfered pad shapes, vias and multilayer stackups
 - [ ] Interactive 45° routing, obstacle avoidance, shove and track dragging
 - [ ] Differential pairs, length tuning, impedance-aware constraints
 - [ ] Copper zones, thermal reliefs, islands, keepouts, robust polygon operations

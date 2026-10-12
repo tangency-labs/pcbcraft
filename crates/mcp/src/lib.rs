@@ -17,10 +17,11 @@ pub fn tool_list() -> Value {
     let object = |properties: Value, required: &[&str]| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
     let command = json!({"type":"object","properties":{"command":{"type":"string"},"params":{"type":"object"}},"required":["command","params"],"additionalProperties":false});
     let mut tools = vec![
+        json!({"name":"library.save","description":"Atomically save the editable project library to a .pcbcraft-lib collection","inputSchema":object(json!({"path":{"type":"string"}}),&["path"])}),
         json!({"name":"library.catalog","description":"Discover installed KiCad symbol and footprint libraries on the host","inputSchema":object(json!({}),&[])}),
         json!({"name":"library.search","description":"Search a KiCad symbol file or footprint directory without altering the project","inputSchema":object(json!({"path":{"type":"string"},"kind":{"type":"string","enum":["symbol","footprint"]},"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}}),&["path","kind"])}),
-        json!({"name":"library.inspect_symbol","description":"Read resolved symbol pins, graphics, units and supported placement limits","inputSchema":object(json!({"path":{"type":"string"},"name":{"type":"string"}}),&["path","name"])}),
-        json!({"name":"library.inspect_footprint","description":"Read footprint graphics and real pad dimensions, shapes, layers and drills","inputSchema":object(json!({"path":{"type":"string"}}),&["path"])}),
+        json!({"name":"library.inspect_symbol","description":"Read resolved symbol pins, graphics, units; include_source preserves up to 512KiB of original nodes for editing","inputSchema":object(json!({"path":{"type":"string"},"name":{"type":"string"},"include_source":{"type":"boolean"}}),&["path","name"])}),
+        json!({"name":"library.inspect_footprint","description":"Read footprint graphics/pads/drills; include_source preserves up to 512KiB of original nodes","inputSchema":object(json!({"path":{"type":"string"},"include_source":{"type":"boolean"}}),&["path"])}),
         json!({"name":"list_commands","description":"Discover every engine command, input schema and unit convention","inputSchema":object(json!({}),&[])}),
         json!({"name":"inspect_design","description":"Inspect the canonical project, stable IDs, revision, history and truthful capability limits","inputSchema":object(json!({}),&[])}),
         json!({"name":"checks","description":"Run initial ERC/DRC and inspect unrouted airwires; returns scope and affected object IDs","inputSchema":object(json!({}),&[])}),
@@ -83,13 +84,33 @@ fn invoke(session: &SharedSession, name: &str, args: &Value) -> Result<Value, St
         .and_then(|tool| tool.get("inputSchema"))
         .ok_or("unknown tool")?;
     validate_schema(args, schema, "arguments")?;
-    if name.starts_with("library.") {
+    if [
+        "library.catalog",
+        "library.search",
+        "library.inspect_symbol",
+        "library.inspect_footprint",
+    ]
+    .contains(&name)
+    {
         return pcbcraft_engine::library::read_tool(name, args).map(text_result);
     }
     let mut s = session
         .lock()
         .map_err(|_| "session unavailable after internal failure".to_string())?;
     let result = match name {
+        "library.save" => {
+            s.project.library.validate()?;
+            let path = string(args, "path")?;
+            let bytes = serde_json::to_vec_pretty(
+                &json!({"format":"pcbcraft-library","version":1,"library":s.project.library}),
+            )
+            .map_err(|e| e.to_string())?;
+            if bytes.len() as u64 > pcbcraft_io::MAX_FILE_BYTES {
+                return Err("library collection exceeds 8 MiB".into());
+            }
+            pcbcraft_io::atomic_write(Path::new(path), &bytes)?;
+            json!({"path":path})
+        }
         "list_commands" => {
             json!({"commands":pcbcraft_engine::commands(),"units":"millimetres and degrees"})
         }
@@ -157,6 +178,7 @@ fn validate_schema(value: &Value, schema: &Value, path: &str) -> Result<(), Stri
         Some("object") => value.is_object(),
         Some("array") => value.is_array(),
         Some("string") => value.is_string(),
+        Some("boolean") => value.is_boolean(),
         Some("number") => value.is_number(),
         Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
         _ => true,
@@ -430,6 +452,87 @@ pub fn start_bridge(session: SharedSession, address: &str) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_library_save_load_preserves_original_data_and_rejects_unknown_fields()
+    -> Result<(), String> {
+        let session = shared(Session::default());
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../library/tests/fixtures/device.kicad_sym");
+        let inspected = call_tool(
+            &session,
+            "library.inspect_symbol",
+            &json!({"path":path,"name":"R","include_source":true}),
+        );
+        let definition = inspected
+            .pointer("/structuredContent/definition")
+            .cloned()
+            .ok_or("missing definition")?;
+        assert!(
+            !definition
+                .get("raw_source")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .is_empty()
+        );
+        assert_eq!(
+            call_tool(
+                &session,
+                "library.symbol.upsert",
+                &json!({"definition":definition,"notice":"Original fixture data license retained"})
+            )
+            .get("isError"),
+            Some(&json!(false))
+        );
+        let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let file = directory.path().join("parts.pcbcraft-lib");
+        let before = session.lock().map_err(|_| "session unavailable")?.inspect();
+        assert_eq!(
+            call_tool(&session, "library.save", &json!({"path":file})).get("isError"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            session.lock().map_err(|_| "session unavailable")?.inspect(),
+            before,
+            "saving a library does not edit history"
+        );
+        assert_eq!(
+            call_tool(&session, "library.symbol.remove", &json!({"name":"R"})).get("isError"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            call_tool(&session, "library.load", &json!({"path":file})).get("isError"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            session
+                .lock()
+                .map_err(|_| "session unavailable")?
+                .project
+                .library
+                .symbols
+                .first()
+                .map(|s| s.name.as_str()),
+            Some("R")
+        );
+        let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
+        let mut invalid: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        invalid["library"]["future_provenance"] = json!({"unknown":true});
+        std::fs::write(
+            &file,
+            serde_json::to_vec(&invalid).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let before = session.lock().map_err(|_| "session unavailable")?.inspect();
+        assert_eq!(
+            call_tool(&session, "library.load", &json!({"path":file})).get("isError"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            session.lock().map_err(|_| "session unavailable")?.inspect(),
+            before
+        );
+        Ok(())
+    }
     #[test]
     fn library_reads_do_not_lock_or_mutate_the_shared_design() -> Result<(), String> {
         let session = shared(Session::default());

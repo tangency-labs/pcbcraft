@@ -3,6 +3,8 @@ use pcbcraft_library::{FootprintDefinition, SymbolDefinition};
 
 #[derive(Default)]
 pub(super) struct Browser {
+    pub(super) editor: super::authoring::Editor,
+    pub(super) preview_unit: u32,
     pub(super) catalog: Option<Value>,
     pub(super) kind: bool,
     pub(super) path: String,
@@ -10,7 +12,7 @@ pub(super) struct Browser {
     pub(super) results: Option<Value>,
     pub(super) preview: Option<Value>,
     pub(super) pending: Option<std::sync::mpsc::Receiver<(String, Result<Value, String>)>>,
-    error: String,
+    pub(super) error: String,
 }
 impl Browser {
     fn request(&mut self, ctx: &egui::Context, name: &str, args: Value) {
@@ -195,7 +197,7 @@ impl App {
                     if ui.add_enabled(!busy,egui::Button::new(name).selected(self.library.preview.as_ref().and_then(|v|v.pointer("/definition/name")).and_then(Value::as_str)==Some(name))).clicked() {
                         self.library.preview=None;
                         let path=item.get("path").and_then(Value::as_str).unwrap_or(&self.library.path);
-                        let (tool,args)=if self.library.kind {("library.inspect_footprint",json!({"path":path}))} else {("library.inspect_symbol",json!({"path":path,"name":name}))};
+                        let (tool,args)=if self.library.kind {("library.inspect_footprint",json!({"path":path,"include_source":true}))} else {("library.inspect_symbol",json!({"path":path,"name":name,"include_source":true}))};
                         self.library.request(ui.ctx(),tool,args);
                     }
                 }
@@ -203,9 +205,11 @@ impl App {
             let right=&mut cols[1];
             if let Some(preview)=self.library.preview.clone() {
                 let path=preview.get("path").and_then(Value::as_str).unwrap_or("").to_owned();
+                if preview.get("source_truncated").and_then(Value::as_bool)==Some(true) {right.label("Original nodes exceed inline editing limits; the source file is preserved.");}
                 if self.library.kind {
                     if let Some(def)=preview.get("definition").and_then(|v|serde_json::from_value::<FootprintDefinition>(v.clone()).ok()) {
                         right.heading(&def.name);right.label(&def.description);
+                        if right.add_enabled(preview.get("source_truncated").and_then(Value::as_bool)!=Some(true),egui::Button::new("Edit a copy →")).clicked() {let mut copy=def.clone();copy.name.push_str("_custom");self.library.editor.notice=Some(format!("Edited copy of {} from {}. KiCad-derived data credits the KiCad community contributors; custom sources retain their original license. Official collections: https://gitlab.com/kicad/libraries/kicad-symbols and https://gitlab.com/kicad/libraries/kicad-footprints.\n{}",def.name,path,include_str!("../../library/tests/fixtures/LICENSE-kicad-libraries.md")));self.library.editor.draft=Some(super::authoring::Draft::Footprint(copy));self.library.editor.mode=2;}
                         self.library_preview(right,None,Some(&def));
                         right.label(format!("{} pads · {} graphics",def.pads.len(),def.graphics.len()));
                         let supported=pcbcraft_doc::validate_footprint_support(&def);
@@ -219,14 +223,15 @@ impl App {
                     }
                 } else if let Some(def)=preview.get("definition").and_then(|v|serde_json::from_value::<SymbolDefinition>(v.clone()).ok()) {
                     right.heading(&def.name);right.label(&def.description);
+                    if right.add_enabled(preview.get("source_truncated").and_then(Value::as_bool)!=Some(true),egui::Button::new("Edit a copy →")).clicked() {let mut copy=def.clone();copy.name.push_str("_custom");self.library.editor.notice=Some(format!("Edited copy of {} from {}. KiCad-derived data credits the KiCad community contributors; custom sources retain their original license. Official collections: https://gitlab.com/kicad/libraries/kicad-symbols and https://gitlab.com/kicad/libraries/kicad-footprints.\n{}",def.name,path,include_str!("../../library/tests/fixtures/LICENSE-kicad-libraries.md")));self.library.editor.draft=Some(super::authoring::Draft::Symbol(copy));self.library.editor.mode=2;}
                     self.library_preview(right,Some(&def),None);
-                    let supported=def.unsupported.is_empty() && !def.pins.iter().any(|p|p.unit>1) && !def.pins.is_empty() && def.pins.len()<=64;
+                    let supported=pcbcraft_doc::library_component(def.clone(),"preview".into(),0,"preview".into(),Point::default(),None).is_ok();
                     right.label(format!("{} pins · {} units",def.pins.len(),def.pins.iter().map(|p|p.unit).max().unwrap_or(1)));
                     right.label(format!("Suggested footprint: {}",def.footprint));
                     if right.add_enabled(supported,egui::Button::new("Place in schematic →")).clicked() {
                         self.change_tab(Tab::Schematic);self.tool=Tool::LibraryPlace(path,def.name.clone(),Box::new(def));
                     }
-                    if !supported {right.label("Inspection available; multi-unit or unsupported pin/graphic placement is planned.");}
+                    if !supported {right.label("Inspection available; unsupported pin/graphic styles or repeated common pin numbers cannot be placed yet.");}
                 }
             } else {right.label("Choose an entry to preview its real geometry.");}
         });
@@ -235,10 +240,10 @@ impl App {
             "KiCad libraries: CC-BY-SA 4.0 + design exception",
             "https://www.kicad.org/libraries/license/",
         );
-        ui.label("Initial placement: single-unit symbols and matching front SMD footprints. Library editing and through-hole placement are planned.");
+        ui.label("Placement: single/multi-unit symbols, matching front SMD or plated through-hole packages. Use Edit a copy to customize a definition.");
     }
-    fn library_preview(
-        &self,
+    pub(super) fn library_preview(
+        &mut self,
         ui: &mut egui::Ui,
         symbol: Option<&SymbolDefinition>,
         footprint: Option<&FootprintDefinition>,
@@ -247,16 +252,35 @@ impl App {
             ui.allocate_painter(Vec2::new(ui.available_width(), 180.0), egui::Sense::hover());
         let mut paths: Vec<Vec<Point>> = vec![];
         if let Some(s) = symbol {
+            self.library.preview_unit = self.library.preview_unit.max(1);
+            let units = pcbcraft_doc::symbol_units(s).unwrap_or_default();
+            if !units.contains(&self.library.preview_unit) {
+                self.library.preview_unit = 1;
+            }
+            if units.len() > 1 {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Preview unit");
+                    for unit in units {
+                        ui.selectable_value(&mut self.library.preview_unit, unit, unit.to_string());
+                    }
+                });
+            }
             paths.extend(
                 s.graphics
                     .iter()
-                    .filter(|g| g.unit <= 1 && g.body_style <= 1)
+                    .filter(|g| {
+                        (g.unit == 0 || g.unit == self.library.preview_unit) && g.body_style <= 1
+                    })
                     .map(|g| g.primitive.path_points()),
             );
             paths.extend(
                 s.pins
                     .iter()
-                    .filter(|p| p.unit <= 1 && p.body_style <= 1)
+                    .filter(|p| {
+                        (p.unit == 0 && self.library.preview_unit == 1
+                            || p.unit == self.library.preview_unit)
+                            && p.body_style <= 1
+                    })
                     .map(|p| {
                         vec![
                             p.position,
@@ -280,14 +304,41 @@ impl App {
                 }
                 .outline_points()
             }));
+            paths.extend(f.pads.iter().map(|p| {
+                pcbcraft_doc::Pad {
+                    number: p.number.clone(),
+                    offset: p.position,
+                    diameter: p.size.x.min(p.size.y),
+                    net: None,
+                    geometry: Some(p.clone()),
+                }
+                .drill_outline_points()
+            }));
         }
-        let extent = paths.iter().flatten().fold(Point::new(1.0, 1.0), |m, p| {
-            Point::new(m.x.max(p.x.abs()), m.y.max(p.y.abs()))
-        });
+        let min = paths
+            .iter()
+            .flatten()
+            .fold(Point::new(f64::INFINITY, f64::INFINITY), |m, p| {
+                Point::new(m.x.min(p.x), m.y.min(p.y))
+            });
+        let max = paths
+            .iter()
+            .flatten()
+            .fold(Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY), |m, p| {
+                Point::new(m.x.max(p.x), m.y.max(p.y))
+            });
+        let (center, extent) = if min.x.is_finite() && min.y.is_finite() {
+            (
+                Point::new((min.x + max.x) / 2.0, (min.y + max.y) / 2.0),
+                Point::new((max.x - min.x).max(1.0), (max.y - min.y).max(1.0)),
+            )
+        } else {
+            (Point::default(), Point::new(2.0, 2.0))
+        };
         let camera = Camera {
-            center: Point::default(),
-            zoom: ((response.rect.width() - 24.0) / (extent.x as f32 * 2.0))
-                .min(150.0 / (extent.y as f32 * 2.0))
+            center,
+            zoom: ((response.rect.width() - 24.0) / extent.x as f32)
+                .min(150.0 / extent.y as f32)
                 .clamp(0.01, 40.0),
         };
         painter.rect_filled(response.rect, 6.0, self.surface());

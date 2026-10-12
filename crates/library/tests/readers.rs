@@ -63,6 +63,25 @@ fn real_0805_preserves_roundrect_pads_and_layers() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn real_dip8_preserves_through_holes_and_reference_marker() -> Result<(), Box<dyn std::error::Error>>
+{
+    let fp = read_footprint(include_str!("fixtures/DIP-8_W7.62mm.kicad_mod"))?;
+    assert_eq!(fp.pads.len(), 8);
+    assert!(fp.unsupported.is_empty());
+    assert!(fp.pads.iter().all(|p| {
+        p.pad_type == "thru_hole"
+            && p.layers.iter().any(|l| l == "*.Cu")
+            && p.drill
+                .as_ref()
+                .is_some_and(|d| d.size.x == 0.8 && d.size.y == 0.8)
+    }));
+    assert_eq!(fp.pads[0].shape, "roundrect");
+    assert!(fp.raw_source.contains("(point"));
+    assert!(read_footprint("(footprint X (point (at NaN 0) (size 1) (layer F.Fab)))").is_err());
+    Ok(())
+}
+
+#[test]
 #[ignore = "requires installed KiCad 10 libraries in Linux/WSL"]
 fn installed_library_catalogs() -> Result<(), Box<dyn std::error::Error>> {
     for name in ["Device", "Amplifier_Operational"] {

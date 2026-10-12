@@ -29,6 +29,13 @@ size, roundrect ratios, circular/oval drills and drill offsets. Copper pad
 primitives for custom/chamfered shapes are explicitly reported as unsupported.
 Line, rectangle, polygon, circle, arc and text graphics carry their layers.
 The reader does not translate 3D models or execute any file reference.
+KiCad 10 `point` expressions are non-fabricated reference/snapping markers. Their
+positions and sizes are validated and the original expressions remain in raw
+source; they are not converted into copper or exported fabrication artwork.
+This interpretation was checked against KiCad's official
+[PCB_POINT documentation](https://docs.kicad.org/doxygen/classPCB__POINT.html)
+and its [source documentation](https://docs.kicad.org/doxygen/pcb__point_8cpp_source.html)
+on 2026-10-11. No KiCad implementation code was copied or translated.
 
 `Graphic::path_points()` supplies a shared display approximation for the GUI,
 CPU previews and vector export. Lines, rectangles and polylines retain exact
@@ -72,6 +79,7 @@ code. Sources were read from installed Ubuntu packages
 | `device.kicad_sym` | `/usr/share/kicad/symbols/Device.kicad_sym` | Extracted `R` and `LED` nodes into a minimal library wrapper |
 | `lm358.kicad_sym` | `/usr/share/kicad/symbols/Amplifier_Operational.kicad_sym` | Extracted `LM2904` and its derived `LM358` into a minimal wrapper |
 | `R_0805_2012Metric.kicad_mod` | `/usr/share/kicad/footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod` | Unmodified |
+| `DIP-8_W7.62mm.kicad_mod` | `/usr/share/kicad/footprints/Package_DIP.pretty/DIP-8_W7.62mm.kicad_mod` | Unmodified |
 
 Original source SHA-256 checksums:
 
@@ -79,6 +87,7 @@ Original source SHA-256 checksums:
 Device.kicad_sym: f65c9dd13ef986c482165e5c8237ccf4f691bc7321868cf05e01dafbc1326b24
 Amplifier_Operational.kicad_sym: 70d51935f1e2563cf203a3d1b95657f166e140b357d3a8570f70f855a3dcd74e
 R_0805_2012Metric.kicad_mod: f050b6a50cc7e6f86291fb7aa8f87b0d02255e21cfbddf291cdccc87e5889794
+DIP-8_W7.62mm.kicad_mod: 222fb44370968119abbd978176814cc43a71bc32ac2de275d8a3c418c0830fc6
 ```
 
 Upstream collections: [KiCad symbols](https://gitlab.com/kicad/libraries/kicad-symbols)

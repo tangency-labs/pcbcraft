@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub use sexpr::{Error, Limits};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SymbolDefinition {
     pub name: String,
     pub reference: String,
@@ -23,6 +24,7 @@ pub struct SymbolDefinition {
     pub unsupported: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SymbolPin {
     pub number: String,
     pub name: String,
@@ -35,12 +37,14 @@ pub struct SymbolPin {
     pub body_style: u32,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UnitGraphic {
     pub unit: u32,
     pub body_style: u32,
     pub primitive: Graphic,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum Graphic {
     Line {
         start: Point,
@@ -84,6 +88,7 @@ pub enum Graphic {
     },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FootprintDefinition {
     pub name: String,
     pub description: String,
@@ -94,6 +99,7 @@ pub struct FootprintDefinition {
     pub unsupported: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FootprintPad {
     pub number: String,
     pub pad_type: String,
@@ -107,6 +113,7 @@ pub struct FootprintPad {
     pub raw_source: String,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Drill {
     pub size: Point,
     pub offset: Point,

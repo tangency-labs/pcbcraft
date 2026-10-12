@@ -99,7 +99,7 @@ fn run() -> Result<(), String> {
             println!("{}", json!({"path":path,"view":view}));
         }
         "help" | "--help" | "-h" => println!(
-            "PCBCraft — Rust EDA, MCP-first\n\ncommands | inspect | checks | sample | run | export | snapshot | mcp\n\nCommon: --sample or --project FILE\nMCP: pcbcraft-cli mcp [--connect 127.0.0.1:7991]\nDesktop: pcbcraft --sample --control 127.0.0.1:7991\nSee README.md and docs/mcp.md for schemas and examples."
+            "PCBCraft — Rust EDA, MCP-first\n\ncommands | inspect | checks | sample | run | export | snapshot | tool | mcp\n\nCommon: --sample or --project FILE\nTool: pcbcraft-cli tool NAME --args JSON [--save FILE]\nMCP: pcbcraft-cli mcp [--connect 127.0.0.1:7991]\nDesktop: pcbcraft --sample --control 127.0.0.1:7991\nSee README.md and docs/mcp.md for schemas and examples."
         ),
         _ => return Err(format!("unknown action: {action}")),
     }

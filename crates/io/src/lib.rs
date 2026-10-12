@@ -57,6 +57,23 @@ fn quote(value: &str) -> String {
 fn uuid(id: u64, kind: usize) -> String {
     format!("{kind:08x}-0000-4000-8000-{id:012x}")
 }
+fn footprint_bounds(p: &Project, f: &pcbcraft_doc::Footprint) -> (Point, Point) {
+    let points = f.drawing_points(p);
+    let min = points
+        .iter()
+        .fold(Point::new(f64::INFINITY, f64::INFINITY), |bounds, p| {
+            Point::new(bounds.x.min(p.x), bounds.y.min(p.y))
+        });
+    let max = points.iter().fold(
+        Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        |bounds, p| Point::new(bounds.x.max(p.x), bounds.y.max(p.y)),
+    );
+    if min.valid() && max.valid() {
+        (min, max)
+    } else {
+        (Point::new(-3.4, -1.4), Point::new(3.4, 1.4))
+    }
+}
 
 pub fn kicad_board(p: &Project) -> Result<String, String> {
     p.validate()?;
@@ -82,9 +99,28 @@ pub fn kicad_board(p: &Project) -> Result<String, String> {
         let name = c
             .library_footprint
             .as_ref()
-            .map(|l| format!("{}:{}", l.library, l.definition.name))
+            .map(|l| {
+                if l.library == "project" {
+                    format!("pcbcraft_{}", l.definition.name)
+                } else {
+                    format!("{}:{}", l.library, l.definition.name)
+                }
+            })
             .unwrap_or_else(|| format!("pcbcraft_{}", c.kind));
-        s.push_str(&format!(" (footprint {} (layer \"F.Cu\") (uuid {}) (at {} {} {})\n (property \"Reference\" {} (at 0 -2.5 {}) (layer \"F.SilkS\") (effects (font (size 1 1) (thickness 0.15))))\n (property \"Value\" {} (at 0 2.5 {}) (layer \"F.SilkS\") (effects (font (size 1 1) (thickness 0.15))))\n (attr smd)\n",quote(&name),uuid(f.id,1),f.position.x,f.position.y,f.rotation,quote(&c.reference),f.rotation,quote(&c.value),f.rotation));
+        let attr = if f.pads.iter().any(|p| {
+            p.geometry
+                .as_ref()
+                .is_some_and(|g| g.pad_type == "thru_hole")
+        }) {
+            "through_hole"
+        } else {
+            "smd"
+        };
+        let (min, max) = footprint_bounds(p, f);
+        let label_x = (min.x + max.x) / 2.0;
+        let reference_y = min.y - 1.2;
+        let value_y = max.y + 1.2;
+        s.push_str(&format!(" (footprint {} (layer \"F.Cu\") (uuid {}) (at {} {} {})\n (property \"Reference\" {} (at {label_x} {reference_y} {}) (layer \"F.SilkS\") (effects (font (size 1 1) (thickness 0.15))))\n (property \"Value\" {} (at {label_x} {value_y} {}) (layer \"F.SilkS\") (effects (font (size 1 1) (thickness 0.15))))\n (attr {attr})\n",quote(&name),uuid(f.id,1),f.position.x,f.position.y,f.rotation,quote(&c.reference),f.rotation,quote(&c.value),f.rotation));
         if let Some(library) = &c.library_footprint {
             for graphic in &library.definition.graphics {
                 s.push_str(&kicad_graphic(graphic, f.rotation)?);
@@ -94,40 +130,57 @@ pub fn kicad_board(p: &Project) -> Result<String, String> {
         }
         for (i, pad) in f.pads.iter().enumerate() {
             let net = pad.net.map(|n| p.net_name(n)).unwrap_or("");
-            let (shape, size, rotation, layers, ratio) = if let Some(g) = &pad.geometry {
-                if g.pad_type != "smd"
-                    || !matches!(g.shape.as_str(), "circle" | "rect" | "oval" | "roundrect")
-                    || g.drill.is_some()
-                {
-                    return Err(
-                        "KiCad export currently supports front SMD pad geometry only".into(),
+            let (pad_type, shape, size, rotation, layers, ratio, drill) =
+                if let Some(g) = &pad.geometry {
+                    if !matches!(g.pad_type.as_str(), "smd" | "thru_hole")
+                        || !matches!(g.shape.as_str(), "circle" | "rect" | "oval" | "roundrect")
+                        || (g.pad_type == "smd" && g.drill.is_some())
+                        || (g.pad_type == "thru_hole" && g.drill.is_none())
+                    {
+                        return Err(
+                        "KiCad export supports standard SMD or plated through-hole pad geometry"
+                            .into(),
                     );
-                }
-                (
-                    g.shape.as_str(),
-                    g.size,
-                    f.rotation + g.rotation,
-                    g.layers
-                        .iter()
-                        .map(|l| quote(l))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    if g.shape == "roundrect" {
-                        format!(" (roundrect_rratio {})", g.roundrect_ratio.unwrap_or(0.0))
-                    } else {
-                        String::new()
-                    },
-                )
-            } else {
-                (
-                    "circle",
-                    Point::new(pad.diameter, pad.diameter),
-                    f.rotation,
-                    "\"F.Cu\" \"F.Mask\"".into(),
-                    String::new(),
-                )
-            };
-            s.push_str(&format!(" (pad {} smd {shape} (at {} {} {rotation}) (size {} {}) (layers {layers}){ratio} (net {} {}) (uuid {}))\n",quote(&pad.number),pad.offset.x,pad.offset.y,size.x,size.y,ordinal(pad.net),quote(net),uuid(f.id,i+2)));
+                    }
+                    (
+                        g.pad_type.as_str(),
+                        g.shape.as_str(),
+                        g.size,
+                        f.rotation + g.rotation,
+                        g.layers
+                            .iter()
+                            .map(|l| quote(l))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                        if g.shape == "roundrect" {
+                            format!(" (roundrect_rratio {})", g.roundrect_ratio.unwrap_or(0.0))
+                        } else {
+                            String::new()
+                        },
+                        g.drill
+                            .as_ref()
+                            .map(|d| {
+                                let shape = if (d.size.x - d.size.y).abs() < 1e-9 {
+                                    d.size.x.to_string()
+                                } else {
+                                    format!("oval {} {}", d.size.x, d.size.y)
+                                };
+                                format!(" (drill {shape} (offset {} {}))", d.offset.x, d.offset.y)
+                            })
+                            .unwrap_or_default(),
+                    )
+                } else {
+                    (
+                        "smd",
+                        "circle",
+                        Point::new(pad.diameter, pad.diameter),
+                        f.rotation,
+                        "\"F.Cu\" \"F.Mask\"".into(),
+                        String::new(),
+                        String::new(),
+                    )
+                };
+            s.push_str(&format!(" (pad {} {pad_type} {shape} (at {} {} {rotation}) (size {} {}) (layers {layers}){ratio}{drill} (net {} {}) (uuid {}))\n",quote(&pad.number),pad.offset.x,pad.offset.y,size.x,size.y,ordinal(pad.net),quote(net),uuid(f.id,i+2)));
         }
         s.push_str(" )\n");
     }
@@ -164,7 +217,7 @@ fn preview_bounds(p: &Project, view: &str) -> (Point, Point) {
     }
     let mut min = Point::new(f64::INFINITY, f64::INFINITY);
     let mut max = Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for c in &p.components {
+    for c in p.components.iter().flat_map(|c| c.schematic_views()) {
         for point in c.drawing_points() {
             let point = c.position.offset(point.rotate(-c.rotation));
             min.x = min.x.min(point.x);
@@ -232,14 +285,28 @@ pub fn svg(p: &Project, view: &str) -> Result<String, String> {
                     .map(|pos| f.position.offset(pos.rotate(-f.rotation)))
                     .collect::<Vec<_>>();
                 s.push_str(&svg_path(&points, "#e6c27d", 0.0, "#e6c27d"));
+                let drill = pad
+                    .drill_outline_points()
+                    .into_iter()
+                    .map(|pos| f.position.offset(pos.rotate(-f.rotation)))
+                    .collect::<Vec<_>>();
+                if !drill.is_empty() {
+                    s.push_str(&format!(
+                        "<g data-drill=\"{}\">{}</g>",
+                        escape(&pad.number),
+                        svg_path(&drill, "#131c29", 0.0, "#131c29")
+                    ));
+                }
             }
             if let Some(c) = p.component(f.component) {
-                s.push_str(&format!(
-                    "<text x=\"{}\" y=\"{}\" text-anchor=\"middle\">{}</text>",
-                    f.position.x,
-                    f.position.y - 2.0,
-                    escape(&c.reference)
-                ));
+                let (min, max) = footprint_bounds(p, f);
+                let label_x = (min.x + max.x) / 2.0;
+                for (label, y) in [(&c.reference, min.y - 1.2), (&c.value, max.y + 1.2)] {
+                    let point = f
+                        .position
+                        .offset(Point::new(label_x, y).rotate(-f.rotation));
+                    s.push_str(&format!("<text x=\"{}\" y=\"{}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-size=\"1\" transform=\"rotate({} {} {})\">{}</text>",point.x,point.y,-f.rotation,point.x,point.y,escape(label)));
+                }
             }
         }
     } else {
@@ -253,7 +320,7 @@ pub fn svg(p: &Project, view: &str) -> Result<String, String> {
                 s.push_str(&format!("<polyline points=\"{points}\" fill=\"none\" stroke=\"#5ae0bc\" stroke-width=\"0.2\"/>"));
             }
         }
-        for c in &p.components {
+        for c in p.components.iter().flat_map(|c| c.schematic_views()) {
             s.push_str(&format!(
                 "<g transform=\"translate({} {}) rotate({})\">",
                 c.position.x, c.position.y, -c.rotation
@@ -268,7 +335,8 @@ pub fn svg(p: &Project, view: &str) -> Result<String, String> {
                     s.push_str(&svg_graphic(&g.primitive));
                 }
                 for pin in library.definition.pins.iter().filter(|pin| {
-                    (pin.unit == 0 || pin.unit == library.unit) && pin.body_style <= 1
+                    (pin.unit == 0 && library.unit == 1 || pin.unit == library.unit)
+                        && pin.body_style <= 1
                 }) {
                     let angle = pin.angle.to_radians();
                     let end = pin.position.offset(Point::new(
@@ -366,6 +434,12 @@ pub fn preview_png(p: &Project, view: &str) -> Result<Vec<u8>, String> {
                     .map(|pos| to_pixel(f.position.offset(pos.rotate(-f.rotation))))
                     .collect::<Vec<_>>();
                 polygon(&mut image, &points, [230, 194, 125]);
+                let drill = pad
+                    .drill_outline_points()
+                    .into_iter()
+                    .map(|pos| to_pixel(f.position.offset(pos.rotate(-f.rotation))))
+                    .collect::<Vec<_>>();
+                polygon(&mut image, &drill, [19, 28, 41]);
             }
         }
     } else {
@@ -378,7 +452,7 @@ pub fn preview_png(p: &Project, view: &str) -> Result<Vec<u8>, String> {
                 }
             }
         }
-        for c in &p.components {
+        for c in p.components.iter().flat_map(|c| c.schematic_views()) {
             if let Some(library) = &c.library_symbol {
                 for g in library
                     .definition
@@ -394,7 +468,8 @@ pub fn preview_png(p: &Project, view: &str) -> Result<Vec<u8>, String> {
                     );
                 }
                 for pin in library.definition.pins.iter().filter(|pin| {
-                    (pin.unit == 0 || pin.unit == library.unit) && pin.body_style <= 1
+                    (pin.unit == 0 && library.unit == 1 || pin.unit == library.unit)
+                        && pin.body_style <= 1
                 }) {
                     let angle = pin.angle.to_radians();
                     let end = pin.position.offset(Point::new(
@@ -506,6 +581,7 @@ mod tests {
                 net: None,
                 electrical_type: p.electrical_type.clone(),
                 direction: Some(p.angle),
+                unit: p.unit,
             })
             .collect();
         let pads = footprint
@@ -528,6 +604,7 @@ mod tests {
             position: Point::new(20.0, 20.0),
             rotation: 0.0,
             pins,
+            units: vec![],
             library_symbol: Some(pcbcraft_doc::LibrarySymbol {
                 library: "Device".into(),
                 unit: 1,
@@ -579,6 +656,200 @@ mod tests {
         }
         Err("unclosed exported footprint".into())
     }
+    fn real_dip_project() -> Result<Project, String> {
+        let mut project = real_library_project()?;
+        let definition = pcbcraft_library::read_symbols(include_str!(
+            "../../library/tests/fixtures/lm358.kicad_sym"
+        ))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|s| s.name == "LM358")
+        .ok_or("fixture LM358 missing")?;
+        let footprint = pcbcraft_library::read_footprint(include_str!(
+            "../../library/tests/fixtures/DIP-8_W7.62mm.kicad_mod"
+        ))
+        .map_err(|e| e.to_string())?;
+        let c = &mut project.components[0];
+        c.reference = "U1".into();
+        c.value = "LM358".into();
+        c.pins = definition
+            .pins
+            .iter()
+            .filter(|p| p.body_style <= 1)
+            .map(|p| pcbcraft_doc::Pin {
+                number: p.number.clone(),
+                name: p.name.clone(),
+                offset: p.position,
+                net: None,
+                electrical_type: p.electrical_type.clone(),
+                direction: Some(p.angle),
+                unit: p.unit,
+            })
+            .collect();
+        c.library_symbol = Some(pcbcraft_doc::LibrarySymbol {
+            library: "Amplifier_Operational".into(),
+            unit: 1,
+            definition,
+        });
+        c.units = vec![
+            pcbcraft_doc::SymbolUnitPlacement {
+                unit: 2,
+                position: Point::new(40.0, 20.0),
+                rotation: 90.0,
+            },
+            pcbcraft_doc::SymbolUnitPlacement {
+                unit: 3,
+                position: Point::new(60.0, 20.0),
+                rotation: 0.0,
+            },
+        ];
+        project.board.footprints[0].pads = footprint
+            .pads
+            .iter()
+            .map(|p| pcbcraft_doc::Pad {
+                number: p.number.clone(),
+                offset: p.position,
+                diameter: p.size.x.min(p.size.y),
+                net: None,
+                geometry: Some(p.clone()),
+            })
+            .collect();
+        c.library_footprint = Some(pcbcraft_doc::LibraryFootprint {
+            library: "Package_DIP".into(),
+            definition: footprint,
+        });
+        project.validate()?;
+        Ok(project)
+    }
+    #[test]
+    fn through_hole_export_preserves_drills_layers_and_offset_slots() -> Result<(), String> {
+        let mut project = real_dip_project()?;
+        project.board.footprints[0].rotation = 90.0;
+        // A slot with a local offset tests metadata beyond the circular DIP fixture.
+        let slot = pcbcraft_library::Drill {
+            size: Point::new(0.8, 0.5),
+            offset: Point::new(0.1, 0.0),
+        };
+        let c = &mut project.components[0];
+        let source = c.library_footprint.as_mut().ok_or("no footprint")?;
+        source.definition.pads[0].drill = Some(slot.clone());
+        project.board.footprints[0].pads[0].geometry = Some(source.definition.pads[0].clone());
+        let board = kicad_board(&project)?;
+        assert!(board.contains("(attr through_hole)"));
+        assert!(board.contains("(drill oval 0.8 0.5 (offset 0.1 0))"));
+        let exported = pcbcraft_library::read_footprint(extract_footprint(&board)?)
+            .map_err(|e| e.to_string())?;
+        assert_eq!(exported.pads.len(), 8);
+        assert!(
+            exported
+                .pads
+                .iter()
+                .all(|p| p.pad_type == "thru_hole" && p.layers == vec!["*.Cu", "*.Mask"])
+        );
+        assert_eq!(exported.pads[0].drill, Some(slot));
+        assert_eq!(exported.pads[0].rotation, 90.0);
+        Ok(())
+    }
+    #[test]
+    fn dip_reference_and_value_are_outside_actual_footprint_bounds() -> Result<(), String> {
+        let mut project = real_dip_project()?;
+        project.board.footprints[0].rotation = 90.0;
+        let f = &project.board.footprints[0];
+        let (min, max) = footprint_bounds(&project, f);
+        let x = (min.x + max.x) / 2.0;
+        let board = kicad_board(&project)?;
+        assert!(board.contains(&format!(
+            "(property \"Reference\" \"U1\" (at {x} {} 90)",
+            min.y - 1.2
+        )));
+        assert!(board.contains(&format!(
+            "(property \"Value\" \"LM358\" (at {x} {} 90)",
+            max.y + 1.2
+        )));
+        assert!(
+            max.y > 7.62,
+            "DIP8 geometry extends beyond generic 2.5mm value location"
+        );
+        let exported = pcbcraft_library::read_footprint(extract_footprint(&board)?)
+            .map_err(|e| e.to_string())?;
+        let original = project.components[0]
+            .library_footprint
+            .as_ref()
+            .ok_or("missing footprint")?;
+        let mut graphics = original.definition.graphics.clone();
+        for g in &mut graphics {
+            if let pcbcraft_library::Graphic::Text { angle, .. } = g {
+                *angle += 90.0;
+            }
+        }
+        assert_eq!(
+            exported.graphics, graphics,
+            "property placement must not alter library artwork"
+        );
+        Ok(())
+    }
+    #[test]
+    fn all_symbol_units_and_drilled_holes_appear_in_previews() -> Result<(), String> {
+        let project = real_dip_project()?;
+        let views = project.components[0].schematic_views();
+        assert_eq!(views.len(), 3);
+        let schematic = svg(&project, "schematic")?;
+        assert!(schematic.contains("translate(40 20) rotate(-90)"));
+        assert!(schematic.contains("translate(60 20)"));
+        for view in views {
+            assert!(schematic.contains(&format!("{} ·", escape(&view.reference))));
+        }
+        assert!(!preview_png(&project, "schematic")?.is_empty());
+        let pcb = svg(&project, "pcb")?;
+        assert_eq!(pcb.matches("data-drill=").count(), 8);
+        let image = image::load_from_memory(&preview_png(&project, "pcb")?)
+            .map_err(|e| e.to_string())?
+            .to_rgb8();
+        let scale = (880.0 / project.board.width).min(560.0 / project.board.height);
+        let x = (60.0 + 10.0 * scale).round() as u32;
+        let y = (60.0 + 10.0 * scale).round() as u32;
+        assert_eq!(image.get_pixel(x, y).0, [19, 28, 41]);
+        assert_eq!(
+            image.get_pixel(x + (0.65 * scale) as u32, y).0,
+            [230, 194, 125]
+        );
+        Ok(())
+    }
+    #[test]
+    fn shared_physical_pin_is_rendered_only_on_primary_unit() -> Result<(), String> {
+        let mut project = real_library_project()?;
+        let mut definition = project.components[0]
+            .library_symbol
+            .as_ref()
+            .ok_or("no symbol")?
+            .definition
+            .clone();
+        definition.pins[1].unit = 2;
+        let mut common = definition.pins[0].clone();
+        common.number = "C".into();
+        common.name = "Common".into();
+        common.unit = 0;
+        common.position = Point::new(-20.0, 0.0);
+        common.angle = 0.0;
+        definition.pins.push(common);
+        project.components[0] = pcbcraft_doc::library_component(
+            definition,
+            "test".into(),
+            1,
+            "X1".into(),
+            Point::new(20.0, 20.0),
+            None,
+        )?;
+        project.board.footprints.clear();
+        project.validate()?;
+        let schematic = svg(&project, "schematic")?;
+        assert_eq!(
+            schematic.matches(">C</text>").count(),
+            1,
+            "unit0 pin is one physical pin in primary unit, not a ghost pin in every view"
+        );
+        Ok(())
+    }
     #[test]
     fn actual_footprint_export_preserves_geometry_layers_and_rotation() -> Result<(), String> {
         let mut project = real_library_project()?;
@@ -617,6 +888,24 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn project_footprint_export_uses_embedded_name_without_external_nickname() -> Result<(), String>
+    {
+        let mut project = real_library_project()?;
+        let footprint = project.components[0]
+            .library_footprint
+            .as_mut()
+            .ok_or("missing footprint")?;
+        footprint.library = "project".into();
+        footprint.definition.name = "Edited0805".into();
+        let board = kicad_board(&project)?;
+        let exported = pcbcraft_library::read_footprint(extract_footprint(&board)?)
+            .map_err(|e| e.to_string())?;
+        assert_eq!(exported.name, "pcbcraft_Edited0805");
+        assert!(!board.contains("project:Edited0805"));
+        assert_eq!(exported.pads.len(), 2);
+        Ok(())
+    }
+    #[test]
     fn previews_use_actual_symbol_and_non_circular_copper() -> Result<(), String> {
         let project = real_library_project()?;
         let schematic = svg(&project, "schematic")?;
@@ -644,38 +933,72 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[ignore = "requires installed kicad-cli"]
     fn kicad_cli_reads_rotated_real_library_export() -> Result<(), String> {
-        let mut project = real_library_project()?;
-        project.board.footprints[0].rotation = 90.0;
-        let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
-        let board = directory.path().join("library-board.kicad_pcb");
-        std::fs::write(&board, kicad_board(&project)?).map_err(|e| e.to_string())?;
-        let output = std::process::Command::new("kicad-cli")
-            .args([
-                "pcb",
-                "export",
-                "svg",
-                "--mode-single",
-                "--layers",
-                "F.Cu,F.SilkS,F.Fab,F.CrtYd",
-                "--output",
-            ])
-            .arg(directory.path().join("library-board.svg"))
-            .arg(&board)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            return Err(format!(
-                "KiCad rejected export: {} {}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            ));
+        for mut project in [real_library_project()?, real_dip_project()?] {
+            project.board.footprints[0].rotation = 90.0;
+            let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
+            let board = directory.path().join("library-board.kicad_pcb");
+            std::fs::write(&board, kicad_board(&project)?).map_err(|e| e.to_string())?;
+            let output = std::process::Command::new("kicad-cli")
+                .args([
+                    "pcb",
+                    "export",
+                    "svg",
+                    "--mode-single",
+                    "--layers",
+                    "F.Cu,F.SilkS,F.Fab,F.CrtYd",
+                    "--output",
+                ])
+                .arg(directory.path().join("library-board.svg"))
+                .arg(&board)
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "KiCad rejected export: {} {}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            assert!(
+                std::fs::read_dir(directory.path())
+                    .map_err(|e| e.to_string())?
+                    .filter_map(Result::ok)
+                    .any(|entry| entry.path().extension().and_then(|s| s.to_str()) == Some("svg"))
+            );
+            let output = std::process::Command::new("kicad-cli")
+                .args(["pcb", "export", "drill", "--format", "excellon", "--output"])
+                .arg(directory.path())
+                .arg(&board)
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "KiCad rejected drill export: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            if project.board.footprints[0].pads.iter().any(|p| {
+                p.geometry
+                    .as_ref()
+                    .is_some_and(|g| g.pad_type == "thru_hole")
+            }) {
+                let mut positions = 0;
+                for entry in std::fs::read_dir(directory.path()).map_err(|e| e.to_string())? {
+                    let path = entry.map_err(|e| e.to_string())?.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("drl") {
+                        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                        positions += text
+                            .lines()
+                            .filter(|line| line.starts_with('X') && line.contains('Y'))
+                            .count();
+                    }
+                }
+                assert_eq!(
+                    positions, 8,
+                    "DIP8 must export all eight plated drill holes"
+                );
+            }
         }
-        assert!(
-            std::fs::read_dir(directory.path())
-                .map_err(|e| e.to_string())?
-                .filter_map(Result::ok)
-                .any(|entry| entry.path().extension().and_then(|s| s.to_str()) == Some("svg"))
-        );
         Ok(())
     }
     #[test]

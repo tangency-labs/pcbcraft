@@ -78,6 +78,34 @@ embeds the used definitions, and makes assignment undoable. `board.sync` returns
 `unassigned_components` rather than inventing packages for imported symbols.
 These commands also work in atomic batches and the live desktop bridge.
 
+`component.move` and `component.rotate` accept optional `unit` (default 1) for
+independent schematic unit placement. All package pins still use the same
+component ID and physical pin number. `track.route` accepts `layer` (`F.Cu` default
+or `B.Cu`) and requires copper on that layer at both endpoints. Plated through-hole
+pads connect their own front/back copper; two different pads are never bridged.
+
+`library.inspect_symbol` and `library.inspect_footprint` accept `include_source`.
+When true, up to 512 KiB of original nodes are returned for editing; larger source
+nodes report `source_truncated`. The GUI disables copying truncated definitions.
+Original files are never modified by placement or editing.
+
+## Native library authoring
+
+`library.symbol.upsert` / `library.footprint.upsert` accept a full validated
+`definition` DTO and optional attribution `notice`. Inspect a source definition
+with `include_source: true`, or construct one using the fields documented in
+docs/kicad-libraries.md. `library.symbol.remove` / `library.footprint.remove` accept
+`name`. `component.place_custom` accepts `name`, `position`, optional reference/value;
+`footprint.assign_custom` accepts component `id` and footprint `name`.
+
+`library.save {path}` atomically writes a `.pcbcraft-lib` collection without
+changing history. `library.load {path}` validates and replaces the project-library
+collection as one undoable edit. Collections carry `format: "pcbcraft-library"`,
+`version: 1`, and `library` containing symbols, footprints and notices. These
+operations retain original nodes/notices and reject unknown native fields.
+Placed components retain embedded copies when library definitions are edited or
+removed; edits do not silently rewrite existing circuits.
+
 ```sh
 pcbcraft-cli tool library.catalog
 pcbcraft-cli tool library.search --args '{"path":"/usr/share/kicad/symbols/Device.kicad_sym","kind":"symbol","query":"resistor","limit":20}'

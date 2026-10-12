@@ -363,7 +363,14 @@ pub fn read_footprint(source: &str) -> Result<FootprintDefinition, Error> {
         unsupported: Vec::new(),
     };
     for child in &node.children {
-        if child.name() == "pad" {
+        if child.name() == "point" {
+            // KiCad PCB_POINT is a non-fabricated reference/snapping marker.
+            // Retain its exact expression in raw_source, not copper/artwork.
+            point(child, "at", false)?;
+            if num(child.field("size"))? <= 0.0 {
+                return Err(invalid("invalid reference point size"));
+            }
+        } else if child.name() == "pad" {
             let drill = child
                 .child("drill")
                 .map(|d| {

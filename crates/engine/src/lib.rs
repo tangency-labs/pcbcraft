@@ -1,4 +1,5 @@
 //! The single mutation boundary used by UI, CLI and MCP.
+mod authoring;
 pub mod library;
 use pcbcraft_doc::*;
 use pcbcraft_geom::{Point, positive};
@@ -67,7 +68,7 @@ pub fn commands() -> Vec<CommandSpec> {
         ),
         (
             "component.place_library",
-            "Place a supported single-unit KiCad symbol and embed its definition in the project",
+            "Place a KiCad symbol package with independently movable units and embedded definitions",
             schema(
                 json!({"path":{"type":"string"},"symbol":{"type":"string"},"position":point_schema(),"reference":{"type":"string"},"value":{"type":"string"}}),
                 &["path", "symbol", "position"],
@@ -75,7 +76,7 @@ pub fn commands() -> Vec<CommandSpec> {
         ),
         (
             "footprint.assign",
-            "Assign a KiCad front SMD footprint with matching numbered pads to a component",
+            "Assign a KiCad front SMD or plated through-hole footprint with matching physical pins",
             schema(
                 json!({"id":id_schema(),"path":{"type":"string"}}),
                 &["id", "path"],
@@ -85,7 +86,7 @@ pub fn commands() -> Vec<CommandSpec> {
             "component.move",
             "Move a schematic component; connected wire endpoints follow",
             schema(
-                json!({"id":id_schema(),"position":point_schema()}),
+                json!({"id":id_schema(),"position":point_schema(),"unit":{"type":"integer","minimum":1,"maximum":32}}),
                 &["id", "position"],
             ),
         ),
@@ -93,7 +94,7 @@ pub fn commands() -> Vec<CommandSpec> {
             "component.rotate",
             "Set schematic component rotation in degrees",
             schema(
-                json!({"id":id_schema(),"degrees":{"type":"number"}}),
+                json!({"id":id_schema(),"degrees":{"type":"number"},"unit":{"type":"integer","minimum":1,"maximum":32}}),
                 &["id", "degrees"],
             ),
         ),
@@ -181,9 +182,9 @@ pub fn commands() -> Vec<CommandSpec> {
         ),
         (
             "track.route",
-            "Connect two same-net front-layer pads with an orthogonal two-segment route (not shove routing)",
+            "Connect same-net pads on the chosen copper layer with an orthogonal route (not shove routing)",
             schema(
-                json!({"from":schema(json!({"footprint":id_schema(),"pad":{"type":"string"}}),&["footprint","pad"]),"to":schema(json!({"footprint":id_schema(),"pad":{"type":"string"}}),&["footprint","pad"]),"width":{"type":"number","exclusiveMinimum":0}}),
+                json!({"from":schema(json!({"footprint":id_schema(),"pad":{"type":"string"}}),&["footprint","pad"]),"to":schema(json!({"footprint":id_schema(),"pad":{"type":"string"}}),&["footprint","pad"]),"width":{"type":"number","exclusiveMinimum":0},"layer":{"type":"string","enum":["F.Cu","B.Cu"]}}),
                 &["from", "to"],
             ),
         ),
@@ -200,6 +201,7 @@ pub fn commands() -> Vec<CommandSpec> {
             description,
             input_schema,
         })
+        .chain(authoring::commands())
         .collect()
 }
 
@@ -307,10 +309,10 @@ impl Session {
         Ok(json!({"revision":self.revision}))
     }
     pub fn inspect(&self) -> Value {
-        json!({"revision":self.revision,"project":self.project,"history":{"undo":self.undo.len(),"redo":self.redo.len()},"capabilities":{"schematic":"flat explicit pin nets; original built-ins and embedded single-unit KiCad library symbols","pcb":"embedded front SMD circle/rect/roundrect/oval pads; straight/orthogonal tracks, rectangular outline, circular cutouts","checks":"initial pin assignment and conservative copper bounds; not comprehensive ERC/DRC","kicad":"native library reading and limited PCB export; no general project import","routing":"no obstacle avoidance or shove","3d":false}})
+        json!({"revision":self.revision,"project":self.project,"history":{"undo":self.undo.len(),"redo":self.redo.len()},"capabilities":{"schematic":"flat explicit pin nets; embedded multi-unit packages with independent unit placement and one physical pin map","pcb":"front SMD and plated through-hole circle/rect/roundrect/oval pads, circular/oval offset drills; two copper layers, simple tracks, rectangular outline and circular cutouts","library":"native project-library symbol/footprint authoring, reusable .pcbcraft-lib collections, embedded placed copies","checks":"initial pin assignment and conservative copper bounds with same-pad plated layer bridges and drilled-hole contact tests; not comprehensive ERC/DRC","kicad":"native library reading and limited PCB export; no general project import or library writer","routing":"orthogonal routes on chosen copper layer; no obstacle avoidance or shove","3d":false}})
     }
     pub fn checks(&self) -> Value {
-        json!({"revision":self.revision,"erc":pcbcraft_rules::erc(&self.project),"drc":pcbcraft_rules::drc(&self.project),"airwires":pcbcraft_rules::airwires(&self.project),"scope":"Initial checks: pin assignment, net population, capsule tracks, rectangular edge and circular cutout clearance. Imported noncircular pads use sampled convex outlines with conservative chord-error clearance bounds and inscribed connectivity bounds, so conservative false findings are possible. No full pin-type, via, zone or hierarchy checks."})
+        json!({"revision":self.revision,"erc":pcbcraft_rules::erc(&self.project),"drc":pcbcraft_rules::drc(&self.project),"airwires":pcbcraft_rules::airwires(&self.project),"scope":"Initial checks: pin assignment, net population, capsule tracks, rectangular edge and circular cutout clearance. Noncircular pads use sampled convex outlines with conservative chord-error clearance and inscribed connectivity bounds. Plated pads bridge the same physical pad between F.Cu/B.Cu; traces wholly inside circular/oval drills do not contact copper. Conservative false findings remain possible. No comprehensive pin-type, annular-ring manufacturing rules, vias, zones or hierarchy checks."})
     }
     pub fn sample() -> Result<Self, Error> {
         let mut s = Self::default();
@@ -430,17 +432,81 @@ fn component_pads(c: &Component) -> Vec<Pad> {
             .collect()
     }
 }
+fn place_definition(
+    p: &mut Project,
+    next: &mut Id,
+    library: String,
+    definition: pcbcraft_library::SymbolDefinition,
+    position: Point,
+    reference: Option<String>,
+    value: Option<String>,
+) -> Result<Value, Error> {
+    let prefix = if definition.reference.is_empty() {
+        "U"
+    } else {
+        &definition.reference
+    };
+    let reference = reference.unwrap_or_else(|| {
+        let mut n = 1;
+        while p
+            .components
+            .iter()
+            .any(|c| c.reference == format!("{prefix}{n}"))
+        {
+            n += 1;
+        }
+        format!("{prefix}{n}")
+    });
+    let id = allocate(next)?;
+    let component = library_component(definition, library, id, reference, position, value)?;
+    p.components.push(component);
+    Ok(json!({"id":id}))
+}
+fn assign_definition(
+    p: &mut Project,
+    id: Id,
+    library: String,
+    definition: pcbcraft_library::FootprintDefinition,
+) -> Result<Value, Error> {
+    definition
+        .validate()
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    validate_footprint_support(&definition)?;
+    let c = p
+        .components
+        .iter_mut()
+        .find(|c| c.id == id)
+        .ok_or_else(missing)?;
+    let pins: std::collections::BTreeSet<_> = c.pins.iter().map(|p| p.number.as_str()).collect();
+    let pads: std::collections::BTreeSet<_> =
+        definition.pads.iter().map(|p| p.number.as_str()).collect();
+    if pins != pads {
+        return Err(Error::Invalid(
+            "footprint pad numbers must match all physical symbol pins exactly".into(),
+        ));
+    }
+    c.library_footprint = Some(LibraryFootprint {
+        library,
+        definition,
+    });
+    if let Some(f) = p.board.footprints.iter_mut().find(|f| f.component == id) {
+        f.pads = component_pads(c);
+    }
+    Ok(json!({"component":id}))
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Move {
     id: Id,
     position: Point,
+    unit: Option<u32>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Rotate {
     id: Id,
     degrees: f64,
+    unit: Option<u32>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -507,6 +573,8 @@ struct Route {
     to: PadRef,
     #[serde(default = "default_width")]
     width: f64,
+    #[serde(default = "front")]
+    layer: Layer,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -552,9 +620,26 @@ fn assign(p: &mut Project, net: Id, pins: &[PinRef]) -> Result<(), Error> {
     }
     Ok(())
 }
-fn pad(p: &Project, r: &PadRef) -> Result<(Point, Id), Error> {
+fn pad(p: &Project, r: &PadRef, layer: Layer) -> Result<(Point, Id), Error> {
     let f = p.footprint(r.footprint).ok_or_else(missing)?;
     let position = f.pad_position(&r.pad).ok_or_else(missing)?;
+    let pad = f
+        .pads
+        .iter()
+        .find(|pad| pad.number == r.pad)
+        .ok_or_else(missing)?;
+    let on_layer = pad
+        .geometry
+        .as_ref()
+        .map(|g| g.layers.iter().any(|l| l == layer.name() || l == "*.Cu"))
+        .unwrap_or(layer == Layer::Front);
+    if !on_layer {
+        return Err(Error::Invalid(format!(
+            "pad {} has no copper on {}",
+            r.pad,
+            layer.name()
+        )));
+    }
     let net = f
         .pads
         .iter()
@@ -564,6 +649,9 @@ fn pad(p: &Project, r: &PadRef) -> Result<(Point, Id), Error> {
     Ok((position, net))
 }
 fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<Value, Error> {
+    if let Some(result) = authoring::run(p, next, command, params) {
+        return result;
+    }
     match command {
         "project.rename" => {
             let a: Name = parse(params)?;
@@ -603,125 +691,71 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
             let a: PlaceLibrary = parse(params)?;
             let path = std::path::Path::new(&a.path);
             let definition = library::symbol(path, &a.symbol)?;
-            definition
-                .validate()
-                .map_err(|e| Error::Invalid(e.to_string()))?;
-            if !definition.unsupported.is_empty() || definition.pins.iter().any(|p| p.unit > 1) {
-                return Err(Error::Invalid(format!(
-                    "placement currently requires a single-unit symbol with supported graphics and pin styles; multi-unit symbols can be inspected. Unsupported: {}",
-                    definition.unsupported.join(", ")
-                )));
-            }
-            let pins: Vec<Pin> = definition
-                .pins
-                .iter()
-                .filter(|p| p.unit <= 1 && p.body_style <= 1)
-                .map(|p| Pin {
-                    number: p.number.clone(),
-                    name: p.name.clone(),
-                    offset: p.position,
-                    net: None,
-                    electrical_type: p.electrical_type.clone(),
-                    direction: Some(p.angle),
-                })
-                .collect();
-            if pins.is_empty() || pins.len() > 64 {
-                return Err(Error::Invalid("symbol placement requires 1–64 pins".into()));
-            }
-            let prefix = if definition.reference.is_empty() {
-                "U"
-            } else {
-                &definition.reference
-            };
-            let reference = a.reference.unwrap_or_else(|| {
-                let mut n = 1;
-                while p
-                    .components
-                    .iter()
-                    .any(|c| c.reference == format!("{prefix}{n}"))
-                {
-                    n += 1;
-                }
-                format!("{prefix}{n}")
-            });
-            let id = allocate(next)?;
-            p.components.push(Component {
-                id,
-                reference,
-                value: a.value.unwrap_or_else(|| definition.value.clone()),
-                kind: "library".into(),
-                position: a.position,
-                rotation: 0.0,
-                pins,
-                library_symbol: Some(LibrarySymbol {
-                    library: path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("library")
-                        .into(),
-                    unit: 1,
-                    definition,
-                }),
-                library_footprint: None,
-            });
-            Ok(json!({"id":id}))
+            place_definition(
+                p,
+                next,
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("library")
+                    .into(),
+                definition,
+                a.position,
+                a.reference,
+                a.value,
+            )
         }
         "footprint.assign" => {
             let a: AssignFootprint = parse(params)?;
             let path = std::path::Path::new(&a.path);
-            let definition = library::footprint(path)?;
-            definition
-                .validate()
-                .map_err(|e| Error::Invalid(e.to_string()))?;
-            validate_footprint_support(&definition)?;
+            assign_definition(
+                p,
+                a.id,
+                path.parent()
+                    .and_then(|p| p.file_stem())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("library")
+                    .into(),
+                library::footprint(path)?,
+            )
+        }
+        "component.move" => {
+            let a: Move = parse(params)?;
             let c = p
                 .components
                 .iter_mut()
                 .find(|c| c.id == a.id)
                 .ok_or_else(missing)?;
-            let pins: std::collections::BTreeSet<_> =
-                c.pins.iter().map(|p| p.number.as_str()).collect();
-            let pads: std::collections::BTreeSet<_> =
-                definition.pads.iter().map(|p| p.number.as_str()).collect();
-            if pins != pads {
-                return Err(Error::Invalid(
-                    "footprint pad numbers must match every symbol pin exactly".into(),
-                ));
+            if a.unit.unwrap_or(1) == 1 {
+                c.position = a.position;
+            } else {
+                c.units
+                    .iter_mut()
+                    .find(|u| Some(u.unit) == a.unit)
+                    .ok_or_else(missing)?
+                    .position = a.position;
             }
-            c.library_footprint = Some(LibraryFootprint {
-                library: path
-                    .parent()
-                    .and_then(|p| p.file_stem())
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("library")
-                    .into(),
-                definition,
-            });
-            if let Some(f) = p.board.footprints.iter_mut().find(|f| f.component == a.id) {
-                f.pads = component_pads(c);
-            }
-            Ok(json!({"component":a.id}))
-        }
-        "component.move" => {
-            let a: Move = parse(params)?;
-            p.components
-                .iter_mut()
-                .find(|c| c.id == a.id)
-                .ok_or_else(missing)?
-                .position = a.position;
-            Ok(json!({"id":a.id}))
+            Ok(json!({"id":a.id,"unit":a.unit.unwrap_or(1)}))
         }
         "component.rotate" => {
             let a: Rotate = parse(params)?;
             if !a.degrees.is_finite() {
                 return Err(Error::Invalid("rotation must be finite".into()));
             }
-            p.components
+            let c = p
+                .components
                 .iter_mut()
                 .find(|c| c.id == a.id)
-                .ok_or_else(missing)?
-                .rotation = a.degrees.rem_euclid(360.0);
-            Ok(json!({"id":a.id}))
+                .ok_or_else(missing)?;
+            if a.unit.unwrap_or(1) == 1 {
+                c.rotation = a.degrees.rem_euclid(360.0);
+            } else {
+                c.units
+                    .iter_mut()
+                    .find(|u| Some(u.unit) == a.unit)
+                    .ok_or_else(missing)?
+                    .rotation = a.degrees.rem_euclid(360.0);
+            }
+            Ok(json!({"id":a.id,"unit":a.unit.unwrap_or(1)}))
         }
         "component.value" => {
             let a: ValueParams = parse(params)?;
@@ -827,6 +861,11 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
         }
         "footprint.move" => {
             let a: Move = parse(params)?;
+            if a.unit.is_some() {
+                return Err(Error::Invalid(
+                    "PCB footprints do not have schematic units".into(),
+                ));
+            }
             p.board
                 .footprints
                 .iter_mut()
@@ -837,6 +876,11 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
         }
         "footprint.rotate" => {
             let a: Rotate = parse(params)?;
+            if a.unit.is_some() {
+                return Err(Error::Invalid(
+                    "PCB footprints do not have schematic units".into(),
+                ));
+            }
             if !a.degrees.is_finite() {
                 return Err(Error::Invalid("rotation must be finite".into()));
             }
@@ -863,8 +907,8 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
         }
         "track.route" => {
             let a: Route = parse(params)?;
-            let (start, net) = pad(p, &a.from)?;
-            let (end, end_net) = pad(p, &a.to)?;
+            let (start, net) = pad(p, &a.from, a.layer)?;
+            let (end, end_net) = pad(p, &a.to, a.layer)?;
             if net != end_net || start.distance(end) < 1e-6 || !positive(a.width) {
                 return Err(Error::Invalid(
                     "route requires distinct pads on the same net and a valid width".into(),
@@ -882,7 +926,7 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
                         start: from,
                         end: to,
                         width: a.width,
-                        layer: Layer::Front,
+                        layer: a.layer,
                     });
                 }
             }
@@ -988,12 +1032,68 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn multiunit_placement_and_mismatched_footprint_roll_back() -> Result<(), Error> {
+    fn multiunit_package_has_one_footprint_and_independent_unit_history() -> Result<(), Error> {
         let mut s = Session::default();
+        s.execute("component.place_library",json!({"path":library_fixture("lm358.kicad_sym"),"symbol":"LM358","position":{"x":20,"y":15}}),None)?;
+        let c = s.project.component(1).ok_or_else(missing)?;
+        assert_eq!(c.pins.len(), 8);
+        assert_eq!(c.units.len(), 2);
+        assert_eq!(
+            c.schematic_views()
+                .iter()
+                .map(|c| c.reference.as_str())
+                .collect::<Vec<_>>(),
+            vec!["U1A", "U1B", "U1C"]
+        );
+        let first = c.pin_position("1").ok_or_else(missing)?;
+        let second = c.pin_position("5").ok_or_else(missing)?;
+        s.execute(
+            "component.move",
+            json!({"id":1,"unit":2,"position":{"x":50,"y":28}}),
+            None,
+        )?;
+        s.execute(
+            "component.rotate",
+            json!({"id":1,"unit":2,"degrees":90}),
+            None,
+        )?;
+        let c = s.project.component(1).ok_or_else(missing)?;
+        assert_eq!(c.pin_position("1"), Some(first));
+        assert_ne!(c.pin_position("5"), Some(second));
+        s.undo()?;
+        s.undo()?;
+        assert_eq!(
+            s.project.component(1).and_then(|c| c.pin_position("5")),
+            Some(second)
+        );
+        s.redo()?;
+        s.redo()?;
         let before = s.inspect();
-        assert!(s.execute("component.place_library",json!({"path":library_fixture("lm358.kicad_sym"),"symbol":"LM358","position":{"x":20,"y":15}}),None).is_err());
+        assert!(
+            s.execute(
+                "footprint.assign",
+                json!({"id":1,"path":library_fixture("R_0805_2012Metric.kicad_mod")}),
+                None
+            )
+            .is_err()
+        );
         assert_eq!(s.inspect(), before);
-        s.execute("component.place_library",json!({"path":library_fixture("device.kicad_sym"),"symbol":"R","position":{"x":20,"y":15}}),None)?;
+        s.execute(
+            "footprint.assign",
+            json!({"id":1,"path":library_fixture("DIP-8_W7.62mm.kicad_mod")}),
+            None,
+        )?;
+        s.execute("board.sync", json!({}), None)?;
+        assert_eq!(s.project.board.footprints.len(), 1);
+        assert_eq!(
+            s.project.board.footprints.first().map(|f| f.pads.len()),
+            Some(8)
+        );
+        let text = serde_json::to_string(&s.project).map_err(|e| Error::Invalid(e.to_string()))?;
+        let loaded: Project =
+            serde_json::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
+        loaded.validate()?;
+        assert_eq!(loaded, s.project);
         // A project with a corrupted pin map is rejected at the document boundary.
         let mut corrupted = s.project.clone();
         if let Some(pin) = corrupted
@@ -1017,6 +1117,66 @@ mod tests {
         ];
         assert!(s.batch(&batch, None).is_err());
         assert_eq!(s.inspect(), before);
+        Ok(())
+    }
+    #[test]
+    fn editable_library_entries_are_atomic_and_placed_copies_are_stable() -> Result<(), Error> {
+        let mut s = Session::default();
+        let mut symbol = library::symbol(
+            std::path::Path::new(&library_fixture("device.kicad_sym")),
+            "R",
+        )?;
+        symbol.name = "CustomR".into();
+        let footprint = library::footprint(std::path::Path::new(&library_fixture(
+            "R_0805_2012Metric.kicad_mod",
+        )))?;
+        s.batch(&[Command {command:"library.symbol.upsert".into(),params:json!({"definition":symbol,"notice":"KiCad-derived fixture; license retained"})},Command {command:"library.footprint.upsert".into(),params:json!({"definition":footprint})}],None)?;
+        assert_eq!(s.project.library.symbols.len(), 1);
+        assert_eq!(s.project.library.notices.len(), 1);
+        s.undo()?;
+        assert!(s.project.library.symbols.is_empty());
+        s.redo()?;
+        s.execute(
+            "component.place_custom",
+            json!({"name":"CustomR","position":{"x":20,"y":10}}),
+            None,
+        )?;
+        s.execute(
+            "footprint.assign_custom",
+            json!({"id":1,"name":"R_0805_2012Metric"}),
+            None,
+        )?;
+        s.execute("board.sync", json!({}), None)?;
+        let before = s.project.components.clone();
+        symbol.pins.first_mut().ok_or_else(missing)?.position.x += 1.0;
+        s.execute("library.symbol.upsert", json!({"definition":symbol}), None)?;
+        assert_eq!(
+            s.project.components, before,
+            "editing library does not silently change placed circuits"
+        );
+        let saved = s.inspect();
+        let mut invalid = footprint.clone();
+        invalid.pads.first_mut().ok_or_else(missing)?.size.x = -1.0;
+        assert!(
+            s.batch(
+                &[
+                    Command {
+                        command: "library.symbol.remove".into(),
+                        params: json!({"name":"CustomR"})
+                    },
+                    Command {
+                        command: "library.footprint.upsert".into(),
+                        params: json!({"definition":invalid})
+                    }
+                ],
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(s.inspect(), saved);
+        s.execute("library.symbol.remove", json!({"name":"CustomR"}), None)?;
+        assert_eq!(s.project.components, before);
+        s.project.validate()?;
         Ok(())
     }
     #[test]

@@ -1,4 +1,5 @@
 //! One window, shared project, tabbed workspaces. Edits use the engine exclusively.
+mod authoring;
 mod canvas;
 mod library;
 use egui::{Align2, Color32, FontId, Rect, Stroke, Vec2};
@@ -35,6 +36,7 @@ enum Tool {
     Select,
     Place(String),
     LibraryPlace(String, String, Box<pcbcraft_library::SymbolDefinition>),
+    CustomPlace(String, Box<pcbcraft_library::SymbolDefinition>),
     Wire(Option<PinRef>),
     Route(Option<(Id, String)>),
     Move,
@@ -68,6 +70,8 @@ pub struct App {
     tab: Tab,
     tool: Tool,
     selected: Option<Id>,
+    selected_unit: u32,
+    route_layer: pcbcraft_doc::Layer,
     preferences: Preferences,
     appearance: bool,
     palette: bool,
@@ -126,7 +130,16 @@ impl App {
         {
             let _ = current.replace(project);
         }
-        Self::create(session, preferences, capture, tab)
+        let mut app = Self::create(session, preferences, capture, tab);
+        if !app.project.components.is_empty() {
+            let initial = app.tab;
+            app.tab = Tab::Schematic;
+            app.fit();
+            app.tab = Tab::Pcb;
+            app.fit();
+            app.tab = initial;
+        }
+        app
     }
     fn create(
         session: SharedSession,
@@ -140,6 +153,10 @@ impl App {
             .unwrap_or_default();
         let width = project.board.width;
         let height = project.board.height;
+        let library = library::Browser {
+            editor: authoring::initial_editor(tab, &project),
+            ..Default::default()
+        };
         Self {
             session,
             project,
@@ -148,11 +165,15 @@ impl App {
             tab: match tab {
                 Some("pcb") => Tab::Pcb,
                 Some("checks") => Tab::Checks,
-                Some("libraries") => Tab::Libraries,
+                Some("libraries" | "project-library" | "symbol-editor" | "footprint-editor") => {
+                    Tab::Libraries
+                }
                 _ => Tab::Schematic,
             },
             tool: Tool::Select,
             selected: None,
+            selected_unit: 1,
+            route_layer: pcbcraft_doc::Layer::Front,
             preferences,
             appearance: false,
             palette: false,
@@ -181,7 +202,7 @@ impl App {
             command_open: false,
             capture,
             frames: 0,
-            library: library::Browser::default(),
+            library,
         }
     }
     fn refresh(&mut self) {
@@ -230,6 +251,9 @@ impl App {
                     );
                 }
                 if let Some(id) = v.pointer("/result/id").and_then(Value::as_u64) {
+                    if self.selected != Some(id) {
+                        self.selected_unit = 1;
+                    }
                     self.selected = Some(id);
                 }
             }
@@ -288,14 +312,22 @@ impl App {
     }
     fn select(&mut self, id: Option<Id>) {
         self.selected = id;
+        self.selected_unit = 1;
         self.load_properties();
     }
     fn load_properties(&mut self) {
         if let Some(id) = self.selected {
             if let Some(c) = self.project.component(id) {
+                if c.unit_placement(self.selected_unit).is_none() {
+                    self.selected_unit = 1;
+                }
                 self.value = c.value.clone();
-                self.x = c.position.x;
-                self.y = c.position.y;
+                let position = c
+                    .unit_placement(self.selected_unit)
+                    .map(|p| p.0)
+                    .unwrap_or(c.position);
+                self.x = position.x;
+                self.y = position.y;
             } else if let Some(f) = self.project.footprint(id) {
                 self.x = f.position.x;
                 self.y = f.position.y;
@@ -332,7 +364,7 @@ impl App {
             if let Some(c) = self.project.component(id) {
                 self.run(
                     "component.rotate",
-                    json!({"id":id,"degrees":c.rotation+90.0}),
+                    json!({"id":id,"unit":self.selected_unit,"degrees":c.unit_placement(self.selected_unit).map(|p|p.1).unwrap_or(c.rotation)+90.0}),
                 );
             } else if let Some(f) = self.project.footprint(id) {
                 self.run(
@@ -541,6 +573,21 @@ impl App {
                         }
                     }
                     Tab::Pcb => {
+                        egui::ComboBox::from_id_salt("route-layer")
+                            .selected_text(self.route_layer.name())
+                            .width(64.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.route_layer,
+                                    pcbcraft_doc::Layer::Front,
+                                    "F.Cu",
+                                );
+                                ui.selectable_value(
+                                    &mut self.route_layer,
+                                    pcbcraft_doc::Layer::Back,
+                                    "B.Cu",
+                                );
+                            });
                         if ui
                             .selectable_label(matches!(self.tool, Tool::Route(_)), "Route  X")
                             .clicked()
@@ -589,7 +636,12 @@ impl App {
                 f64::NEG_INFINITY,
                 f64::NEG_INFINITY,
             );
-            for c in &self.project.components {
+            for c in self
+                .project
+                .components
+                .iter()
+                .flat_map(|c| c.schematic_views())
+            {
                 for point in c.drawing_points() {
                     let point = c.position.offset(point.rotate(-c.rotation));
                     xmin = xmin.min(point.x - 4.0);
@@ -735,6 +787,25 @@ impl App {
                     });
                     if let Some(c) = c {
                         ui.heading(&c.reference);
+                        if !c.units.is_empty() && self.project.component(id).is_some() {
+                            let before = self.selected_unit;
+                            egui::ComboBox::from_id_salt("selected-symbol-unit")
+                                .selected_text(format!("Unit {}", self.selected_unit))
+                                .show_ui(ui, |ui| {
+                                    for unit in
+                                        std::iter::once(1).chain(c.units.iter().map(|u| u.unit))
+                                    {
+                                        ui.selectable_value(
+                                            &mut self.selected_unit,
+                                            unit,
+                                            format!("Unit {unit}"),
+                                        );
+                                    }
+                                });
+                            if before != self.selected_unit {
+                                self.load_properties();
+                            }
+                        }
                         ui.label(&c.kind);
                         ui.label(
                             egui::RichText::new(format!("Stable ID {id}"))
@@ -756,13 +827,17 @@ impl App {
                             ui.add(egui::DragValue::new(&mut self.y).speed(0.1));
                         });
                         if ui.button("Apply position").clicked() {
+                            let mut params = json!({"id":id,"position":{"x":self.x,"y":self.y}});
+                            if self.project.component(id).is_some() {
+                                params["unit"] = json!(self.selected_unit);
+                            }
                             self.run(
                                 if self.project.footprint(id).is_some() {
                                     "footprint.move"
                                 } else {
                                     "component.move"
                                 },
-                                json!({"id":id,"position":{"x":self.x,"y":self.y}}),
+                                params,
                             );
                         }
                         if ui.button("Rotate 90°  R").clicked() {
@@ -968,7 +1043,7 @@ impl App {
         }
     }
     fn library(&mut self, ui: &mut egui::Ui) {
-        self.kicad_library(ui);
+        self.library_workspaces(ui);
         ui.collapsing("Original starter symbols", |ui| {
             for t in TEMPLATES {
                 egui::Frame::group(ui.style())
@@ -1039,6 +1114,7 @@ impl App {
     fn capture(&mut self, ctx: &egui::Context) {
         self.frames = self.frames.saturating_add(1);
         let library_ready = self.tab != Tab::Libraries
+            || self.library.editor.mode != 0
             || (self.library.catalog.is_some()
                 && (self.library.results.is_some() || self.library.path.is_empty())
                 && self.library.pending.is_none());
@@ -1251,6 +1327,46 @@ mod tests {
         assert_eq!(app.selected, project.components.first().map(|c| c.id));
         let output = frame(&ctx, &mut app, vec![], egui::Modifiers::NONE);
         assert_eq!(output.viewport_output.len(), 1);
+        Ok(())
+    }
+    #[test]
+    fn selecting_units_and_new_placement_preserves_correct_target() -> Result<(), String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../library/tests/fixtures/lm358.kicad_sym")
+            .to_string_lossy()
+            .into_owned();
+        let shared = pcbcraft_mcp::shared(pcbcraft_engine::Session::default());
+        let mut app = App::create(shared, Preferences::default(), None, None);
+        app.refresh();
+        app.run(
+            "component.place_library",
+            json!({"path":path,"symbol":"LM358","position":{"x":20,"y":15}}),
+        );
+        let pos = app
+            .project
+            .component(1)
+            .and_then(|c| c.unit_placement(2))
+            .ok_or("missing unit")?
+            .0;
+        app.select_at(pos, 11.0);
+        assert_eq!(app.selected, Some(1));
+        assert_eq!(app.selected_unit, 2);
+        app.rotate();
+        assert_eq!(
+            app.project
+                .component(1)
+                .and_then(|c| c.unit_placement(2))
+                .map(|p| p.1),
+            Some(90.0)
+        );
+        assert_eq!(app.project.component(1).map(|c| c.rotation), Some(0.0));
+        app.run(
+            "component.add",
+            json!({"kind":"resistor","position":{"x":60,"y":40}}),
+        );
+        assert_eq!(app.selected_unit, 1);
+        app.rotate();
+        assert_eq!(app.project.component(2).map(|c| c.rotation), Some(90.0));
         Ok(())
     }
     #[test]

@@ -8,7 +8,7 @@ fn main() -> eframe::Result {
     };
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "PCBCraft — one-window Rust EDA\n\n--sample | --project FILE\n--control 127.0.0.1:7991\n--tab schematic|pcb|libraries|checks\n--light\n--capture /absolute/path.png"
+            "PCBCraft — one-window Rust EDA\n\n--sample | --project FILE\n--control 127.0.0.1:7991\n--tab schematic|pcb|libraries|project-library|symbol-editor|footprint-editor|checks\n--light\n--capture /absolute/path.png"
         );
         return Ok(());
     }

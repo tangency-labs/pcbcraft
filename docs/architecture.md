@@ -40,9 +40,29 @@ are read directly; used resolved definitions are embedded in projects. Reference
 test fixtures retain the separate KiCad library license. PCB sync reconciles
 assigned footprints and pin nets, skipping unassigned imported components.
 Copper connectivity joins touching same-net tracks and pads, separated by layer.
-Initial clearance checks use capsule tracks and actual convex front SMD outlines
+Plated through-hole pads bridge only their own physical pad across front/back
+copper; a trace entirely within a circular/oval drilled opening is not copper
+contact. Drill containment is checked against the actual rounded pad shape.
+Initial clearance checks use capsule tracks and actual convex SMD/PTH pad outlines
 with bounded chord error. Connectivity uses conservative inscribed pad bounds.
 Library queries run off the GUI thread without locking the project. Arbitrary pad
 shapes, vias, zone fills, hierarchy and comprehensive electrical rules remain future work.
 The initial KiCad writer targets a small documented subset and must be checked with
 KiCad CLI; there is no general KiCad importer yet.
+
+## Packages, units and authoring
+
+One Component owns all physical pins/nets and one board footprint. Its legacy
+position/rotation represents unit 1; secondary SymbolUnitPlacement records provide
+independent unit positions/rotations. Pin.unit selects its placement, so movement
+and rotation update wire endpoints without changing physical pin identity.
+Rendering views carry unit suffixes while retaining the underlying component ID.
+Repeated physical pin numbers across units are rejected in this initial policy.
+
+ProjectLibrary stores editable symbol/footprint DTOs and attribution notices.
+Upsert/remove/load are typed engine transactions; placed definitions remain
+embedded snapshots. The inline editor changes a draft and saves through commands.
+Native collection save is an atomic MCP file operation, not a batch side effect.
+Collections carry format/version plus the project-library data; unknown fields
+are rejected. Original KiCad nodes remain provenance/unknown metadata, not a
+regenerated KiCad library. Lossless library writing is future work.
