@@ -477,8 +477,10 @@ impl App {
             );
         }
         let center = camera.screen(c.position, rect);
+        let (sine, cosine) = c.rotation.to_radians().sin_cos();
+        let label_offset = (5.0 * sine.abs() + 2.0 * cosine.abs() + 1.5) as f32 * camera.zoom;
         painter.text(
-            center - Vec2::new(0.0, 3.5 * camera.zoom),
+            center - Vec2::new(0.0, label_offset),
             Align2::CENTER_BOTTOM,
             &c.reference,
             FontId::proportional(14.0),
@@ -486,7 +488,7 @@ impl App {
         );
         if !ghost {
             painter.text(
-                center + Vec2::new(0.0, 3.4 * camera.zoom),
+                center + Vec2::new(0.0, label_offset),
                 Align2::CENTER_TOP,
                 &c.value,
                 FontId::proportional(12.0),
@@ -555,6 +557,8 @@ impl App {
         }
         for f in &p.board.footprints {
             let center = camera.screen(f.position, rect);
+            let (sine, cosine) = f.rotation.to_radians().sin_cos();
+            let label_offset = (3.75 * sine.abs() + 1.5 * cosine.abs() + 1.1) as f32 * camera.zoom;
             let color = if self.selected == Some(f.id) {
                 self.accent()
             } else {
@@ -592,14 +596,14 @@ impl App {
             }
             if let Some(c) = p.component(f.component) {
                 painter.text(
-                    center - Vec2::new(0.0, 2.6 * camera.zoom),
+                    center - Vec2::new(0.0, label_offset),
                     Align2::CENTER_BOTTOM,
                     &c.reference,
                     FontId::proportional(14.0),
                     color,
                 );
                 painter.text(
-                    center + Vec2::new(0.0, 2.6 * camera.zoom),
+                    center + Vec2::new(0.0, label_offset),
                     Align2::CENTER_TOP,
                     &c.value,
                     FontId::proportional(11.0),
