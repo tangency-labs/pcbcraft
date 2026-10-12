@@ -560,12 +560,19 @@ impl App {
             } else {
                 self.ink().gamma_multiply(0.7)
             };
-            painter.rect_stroke(
-                Rect::from_center_size(center, Vec2::new(7.5 * camera.zoom, 3.0 * camera.zoom)),
-                3.0,
+            let corners = [
+                Point::new(-3.75, -1.5),
+                Point::new(3.75, -1.5),
+                Point::new(3.75, 1.5),
+                Point::new(-3.75, 1.5),
+            ];
+            painter.add(egui::Shape::closed_line(
+                corners
+                    .into_iter()
+                    .map(|point| camera.screen(f.position.offset(point.rotate(-f.rotation)), rect))
+                    .collect(),
                 Stroke::new(1.0, color),
-                egui::StrokeKind::Inside,
-            );
+            ));
             for pad in &f.pads {
                 if let Some(pos) = f.pad_position(&pad.number) {
                     let center = camera.screen(pos, rect);

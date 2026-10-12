@@ -49,11 +49,13 @@ selected from a real component manufacturer's footprint specification.
 ## Builds and visual inspection
 
 - Linux/WSL desktop and CLI build and run.
-- Windows GNU desktop and CLI cross-build; CLI runs natively on Windows.
+- Windows GNU desktop and CLI cross-build; both run natively on Windows.
 - Shared UI, engine and browser entry compile for wasm32-unknown-unknown.
 - Actual desktop screenshots were captured under Xvfb and visually inspected:
   dark schematic, light schematic and routed PCB with circular cutouts. All use
-  a single root window. This is not a browser runtime or native Windows GUI test.
+  a single root window. The packaged native Windows app also rendered and captured
+  the actual dark schematic successfully with DirectX 12 and exited cleanly.
+  Browser runtime behavior has not been tested yet.
 
 The initial routing tool has no obstacle avoidance/shove; initial checks are not
 comprehensive ERC/DRC. Full KiCad import, production libraries, arbitrary pad

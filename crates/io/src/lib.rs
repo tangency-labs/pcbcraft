@@ -159,7 +159,7 @@ pub fn svg(p: &Project, view: &str) -> Result<String, String> {
             }
         }
         for c in &p.components {
-            s.push_str(&format!("<g transform=\"translate({} {}) rotate({})\"><rect x=\"-3\" y=\"-1.5\" width=\"6\" height=\"3\" fill=\"#1e2c40\" stroke=\"#dbe7f2\" stroke-width=\"0.15\"/><path d=\"M -5 0 H -3 M 3 0 H 5\" stroke=\"#dbe7f2\" stroke-width=\"0.2\"/></g><text x=\"{}\" y=\"{}\" text-anchor=\"middle\">{} · {}</text>",c.position.x,c.position.y,c.rotation,c.position.x,c.position.y-3.0,escape(&c.reference),escape(&c.value)));
+            s.push_str(&format!("<g transform=\"translate({} {}) rotate({})\"><rect x=\"-3\" y=\"-1.5\" width=\"6\" height=\"3\" fill=\"#1e2c40\" stroke=\"#dbe7f2\" stroke-width=\"0.15\"/><path d=\"M -5 0 H -3 M 3 0 H 5\" stroke=\"#dbe7f2\" stroke-width=\"0.2\"/></g><text x=\"{}\" y=\"{}\" text-anchor=\"middle\">{} · {}</text>",c.position.x,c.position.y,-c.rotation,c.position.x,c.position.y-3.0,escape(&c.reference),escape(&c.value)));
         }
     }
     s.push_str("</g></svg>");
