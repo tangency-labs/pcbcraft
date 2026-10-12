@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 pcbcraft-geom.workspace = true
+pcbcraft-library.workspace = true
 pcbcraft-doc.workspace = true
 pcbcraft-rules.workspace = true
 pcbcraft-io.workspace = true

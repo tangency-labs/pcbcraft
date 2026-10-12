@@ -25,6 +25,27 @@ fn run() -> Result<(), String> {
         "commands" => println!("{}", json!({"commands":pcbcraft_engine::commands()})),
         "inspect" => println!("{}", session.inspect()),
         "checks" => println!("{}", session.checks()),
+        "tool" => {
+            let name = args
+                .get(1)
+                .ok_or("usage: pcbcraft-cli tool NAME --args JSON")?;
+            let input: Value = serde_json::from_str(option(&args, "--args").unwrap_or("{}"))
+                .map_err(|e| e.to_string())?;
+            let shared = pcbcraft_mcp::shared(session);
+            let result = pcbcraft_mcp::call_tool(&shared, name, &input);
+            if result.get("isError").and_then(Value::as_bool) == Some(true) {
+                return Err(result
+                    .pointer("/content/0/text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool failed")
+                    .into());
+            }
+            if let Some(path) = option(&args, "--save") {
+                let current = shared.lock().map_err(|_| "session unavailable")?;
+                pcbcraft_io::save(&current.project, Path::new(path))?;
+            }
+            println!("{result}");
+        }
         "mcp" => pcbcraft_mcp::serve(
             &mut std::io::stdin().lock(),
             &mut std::io::stdout().lock(),

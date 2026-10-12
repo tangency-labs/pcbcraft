@@ -11,3 +11,8 @@ The ArtCraft name, logo and trademarks are not included in PCBCraft.
 All other dependencies retain their own licenses and attribution. Binary bundles
 include THIRD-PARTY-NOTICES.md with dependency license texts. Source dependencies
 are recorded in Cargo.lock; attribution for adapted material is in ATTRIBUTION.md.
+
+KiCad community symbol/footprint data in test fixtures retains CC-BY-SA 4.0
+with the KiCad design-output exception. Original library license and provenance:
+crates/library/tests/fixtures/LICENSE-kicad-libraries.md and docs/kicad-libraries.md.
+Embedded library artwork in original sample circuits uses that design exception.

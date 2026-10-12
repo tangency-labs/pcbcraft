@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 pcbcraft-geom.workspace = true
 pcbcraft-doc.workspace = true
+pcbcraft-library.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 image.workspace = true

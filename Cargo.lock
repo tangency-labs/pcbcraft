@@ -1762,6 +1762,7 @@ name = "pcbcraft-doc"
 version = "0.1.0"
 dependencies = [
  "pcbcraft-geom",
+ "pcbcraft-library",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1774,6 +1775,7 @@ dependencies = [
  "pcbcraft-doc",
  "pcbcraft-geom",
  "pcbcraft-io",
+ "pcbcraft-library",
  "pcbcraft-rules",
  "serde",
  "serde_json",
@@ -1795,8 +1797,18 @@ dependencies = [
  "image",
  "pcbcraft-doc",
  "pcbcraft-geom",
+ "pcbcraft-library",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pcbcraft-library"
+version = "0.1.0"
+dependencies = [
+ "pcbcraft-geom",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -1816,6 +1828,7 @@ version = "0.1.0"
 dependencies = [
  "pcbcraft-doc",
  "pcbcraft-geom",
+ "pcbcraft-library",
  "serde",
 ]
 
@@ -1830,6 +1843,7 @@ dependencies = [
  "pcbcraft-doc",
  "pcbcraft-engine",
  "pcbcraft-geom",
+ "pcbcraft-library",
  "pcbcraft-mcp",
  "pcbcraft-rules",
  "serde",

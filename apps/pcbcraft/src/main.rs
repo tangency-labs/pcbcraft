@@ -8,7 +8,7 @@ fn main() -> eframe::Result {
     };
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "PCBCraft — one-window Rust EDA\n\n--sample | --project FILE\n--control 127.0.0.1:7991\n--tab schematic|pcb|checks\n--light\n--capture /absolute/path.png"
+            "PCBCraft — one-window Rust EDA\n\n--sample | --project FILE\n--control 127.0.0.1:7991\n--tab schematic|pcb|libraries|checks\n--light\n--capture /absolute/path.png"
         );
         return Ok(());
     }
@@ -41,6 +41,7 @@ fn main() -> eframe::Result {
     let capture = option("--capture");
     let tab = option("--tab");
     let light = args.iter().any(|a| a == "--light");
+    let project_path = option("--project");
     let options = eframe::NativeOptions {
         viewport: egui_viewport(),
         ..Default::default()
@@ -49,13 +50,10 @@ fn main() -> eframe::Result {
         "PCBCraft",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(pcbcraft_ui_egui::App::new(
-                cc,
-                shared,
-                capture,
-                tab.as_deref(),
-                light,
-            )))
+            Ok(Box::new(
+                pcbcraft_ui_egui::App::new(cc, shared, capture, tab.as_deref(), light)
+                    .with_project_path(project_path),
+            ))
         }),
     )
 }

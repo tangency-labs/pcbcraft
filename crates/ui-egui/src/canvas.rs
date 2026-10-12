@@ -6,7 +6,155 @@ use pcbcraft_geom::point_segment;
 fn snap(p: Point) -> Point {
     Point::new((p.x * 2.0).round() / 2.0, (p.y * 2.0).round() / 2.0)
 }
+fn fill_polygon(painter: &egui::Painter, points: &[Pos2], color: Color32, clip: Rect) {
+    let points = if points.first() == points.last() {
+        &points[..points.len().saturating_sub(1)]
+    } else {
+        points
+    };
+    if points.len() < 3 {
+        return;
+    }
+    let mut sign = 0.0_f32;
+    let mut convex = true;
+    for i in 0..points.len() {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        let c = points[(i + 2) % points.len()];
+        let cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+        if cross.abs() > 1e-5 {
+            if sign != 0.0 && sign.signum() != cross.signum() {
+                convex = false;
+                break;
+            }
+            sign = cross;
+        }
+    }
+    if convex {
+        painter.add(egui::Shape::convex_polygon(
+            points.to_vec(),
+            color,
+            Stroke::NONE,
+        ));
+        return;
+    }
+    // epaint fills convex paths only. Concave library artwork uses a clipped
+    // one-pixel scanline fill, preserving the polygon rather than a convex hull.
+    let top = points
+        .iter()
+        .map(|p| p.y)
+        .fold(f32::INFINITY, f32::min)
+        .max(clip.top())
+        .ceil();
+    let bottom = points
+        .iter()
+        .map(|p| p.y)
+        .fold(f32::NEG_INFINITY, f32::max)
+        .min(clip.bottom())
+        .floor();
+    if !top.is_finite() || !bottom.is_finite() || bottom < top {
+        return;
+    }
+    let mut intersections = Vec::new();
+    for row in 0..=((bottom - top) as usize).min(8192) {
+        let y = top + row as f32 + 0.5;
+        intersections.clear();
+        let mut previous = points[points.len() - 1];
+        for current in points {
+            if (current.y > y) != (previous.y > y) {
+                intersections.push(
+                    current.x
+                        + (previous.x - current.x) * (y - current.y) / (previous.y - current.y),
+                );
+            }
+            previous = *current;
+        }
+        intersections.sort_by(f32::total_cmp);
+        for pair in intersections.as_chunks::<2>().0 {
+            let left = pair[0].max(clip.left());
+            let right = pair[1].min(clip.right());
+            if right > left {
+                painter.line_segment(
+                    [Pos2::new(left, y), Pos2::new(right, y)],
+                    Stroke::new(1.0, color),
+                );
+            }
+        }
+    }
+}
 impl App {
+    fn paint_graphic(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        camera: Camera,
+        graphic: &pcbcraft_library::Graphic,
+        transform: (Point, f64),
+        color: Color32,
+    ) {
+        let (origin, rotation) = transform;
+        if let pcbcraft_library::Graphic::Text {
+            position,
+            text,
+            size,
+            angle,
+            ..
+        } = graphic
+        {
+            let center = camera.screen(origin.offset(position.rotate(-rotation)), rect);
+            let galley = painter.layout_no_wrap(
+                text.clone(),
+                FontId::proportional((size.y as f32 * camera.zoom).clamp(6.0, 36.0)),
+                color,
+            );
+            let top_left = Align2::CENTER_CENTER.anchor_size(center, galley.size()).min;
+            painter.add(
+                egui::epaint::TextShape::new(top_left, galley, color).with_angle_and_anchor(
+                    (-angle - rotation).to_radians() as f32,
+                    Align2::CENTER_CENTER,
+                ),
+            );
+        } else {
+            let points = graphic.path_points();
+            if points.len() > 1 {
+                let (width, fill) = match graphic {
+                    pcbcraft_library::Graphic::Line { width, .. }
+                    | pcbcraft_library::Graphic::Arc { width, .. } => (*width, "none"),
+                    pcbcraft_library::Graphic::Rectangle { width, fill, .. }
+                    | pcbcraft_library::Graphic::Circle { width, fill, .. }
+                    | pcbcraft_library::Graphic::Polyline { width, fill, .. } => {
+                        (*width, fill.as_str())
+                    }
+                    _ => (0.15, "none"),
+                };
+                let points = points
+                    .into_iter()
+                    .map(|p| camera.screen(origin.offset(p.rotate(-rotation)), rect))
+                    .collect::<Vec<_>>();
+                if fill != "none" && fill != "no" && points.len() >= 3 {
+                    fill_polygon(
+                        painter,
+                        &points,
+                        if fill == "background" {
+                            self.surface()
+                        } else {
+                            color
+                        },
+                        rect,
+                    );
+                }
+                let stroke = Stroke::new(
+                    ((if width > 0.0 { width } else { 0.15 }) as f32 * camera.zoom).max(0.7),
+                    color,
+                );
+                painter.add(if fill != "none" && fill != "no" {
+                    egui::Shape::closed_line(points, stroke)
+                } else {
+                    egui::Shape::line(points, stroke)
+                });
+            }
+        }
+    }
     pub(super) fn canvas(&mut self, ui: &mut egui::Ui) {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
@@ -77,6 +225,7 @@ impl App {
         let text = match &self.tool {
             Tool::Select => "SELECT",
             Tool::Place(_) => "PLACE SYMBOL · CLICK TO COMMIT",
+            Tool::LibraryPlace(..) => "PLACE KICAD SYMBOL · CLICK TO COMMIT",
             Tool::Wire(None) => "WIRE · PICK FIRST PIN",
             Tool::Wire(Some(_)) => "WIRE · PICK SECOND PIN",
             Tool::Route(None) => "ROUTE · PICK FIRST PAD",
@@ -100,6 +249,36 @@ impl App {
                     {
                         self.symbol(&painter, rect, camera, &c, false, true);
                     }
+                }
+                Tool::LibraryPlace(_, _, definition) => {
+                    let c = Component {
+                        id: 0,
+                        reference: format!("{}?", definition.reference),
+                        value: definition.value.clone(),
+                        kind: "library".into(),
+                        position: snapped,
+                        rotation: 0.0,
+                        pins: definition
+                            .pins
+                            .iter()
+                            .filter(|p| p.unit <= 1 && p.body_style <= 1)
+                            .map(|p| pcbcraft_doc::Pin {
+                                number: p.number.clone(),
+                                name: p.name.clone(),
+                                offset: p.position,
+                                net: None,
+                                electrical_type: p.electrical_type.clone(),
+                                direction: Some(p.angle),
+                            })
+                            .collect(),
+                        library_symbol: Some(pcbcraft_doc::LibrarySymbol {
+                            library: String::new(),
+                            unit: 1,
+                            definition: definition.as_ref().clone(),
+                        }),
+                        library_footprint: None,
+                    };
+                    self.symbol(&painter, rect, camera, &c, false, true);
                 }
                 Tool::Cutout if pcbcraft_geom::positive(self.cutout_radius) => {
                     painter.circle_stroke(
@@ -186,21 +365,53 @@ impl App {
             self.project
                 .components
                 .iter()
+                .filter(|c| {
+                    let local =
+                        Point::new(pos.x - c.position.x, pos.y - c.position.y).rotate(c.rotation);
+                    let points = c.drawing_points();
+                    let margin = 8.0 / zoom as f64;
+                    let min = points
+                        .iter()
+                        .fold(Point::new(f64::INFINITY, f64::INFINITY), |m, p| {
+                            Point::new(m.x.min(p.x), m.y.min(p.y))
+                        });
+                    let max = points
+                        .iter()
+                        .fold(Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY), |m, p| {
+                            Point::new(m.x.max(p.x), m.y.max(p.y))
+                        });
+                    local.x >= min.x - margin
+                        && local.x <= max.x + margin
+                        && local.y >= min.y - margin
+                        && local.y <= max.y + margin
+                })
                 .min_by(|a, b| {
                     a.position
                         .distance(pos)
                         .total_cmp(&b.position.distance(pos))
                 })
-                .filter(|c| c.position.distance(pos) * (zoom as f64) < 35.0)
                 .map(|c| c.id)
         } else {
-            if let Some(f) = self
-                .project
-                .board
-                .footprints
-                .iter()
-                .find(|f| f.position.distance(pos) * (zoom as f64) < 45.0)
-            {
+            if let Some(f) = self.project.board.footprints.iter().find(|f| {
+                let local =
+                    Point::new(pos.x - f.position.x, pos.y - f.position.y).rotate(f.rotation);
+                let points = f.drawing_points(&self.project);
+                let margin = 8.0 / zoom as f64;
+                let min = points
+                    .iter()
+                    .fold(Point::new(f64::INFINITY, f64::INFINITY), |m, p| {
+                        Point::new(m.x.min(p.x), m.y.min(p.y))
+                    });
+                let max = points
+                    .iter()
+                    .fold(Point::new(f64::NEG_INFINITY, f64::NEG_INFINITY), |m, p| {
+                        Point::new(m.x.max(p.x), m.y.max(p.y))
+                    });
+                local.x >= min.x - margin
+                    && local.x <= max.x + margin
+                    && local.y >= min.y - margin
+                    && local.y <= max.y + margin
+            }) {
                 return Some(f.id);
             }
             if let Some(c) = self
@@ -265,6 +476,12 @@ impl App {
             Tool::Select => self.select(self.pick_object(pos, zoom)),
             Tool::Place(kind) => {
                 self.run("component.add", json!({"kind":kind,"position":snap(pos)}))
+            }
+            Tool::LibraryPlace(path, symbol, _) => {
+                self.run(
+                    "component.place_library",
+                    json!({"path":path,"symbol":symbol,"position":snap(pos)}),
+                );
             }
             Tool::Move => {
                 if let Some(id) = self.selected {
@@ -406,50 +623,95 @@ impl App {
                 self.accent().gamma_multiply(0.10),
             );
         }
-        match c.kind.as_str() {
-            "capacitor" => {
-                for x in [-0.7, 0.7] {
-                    painter.line_segment([at(Point::new(x, -2.0)), at(Point::new(x, 2.0))], stroke);
-                }
-                for (a, b) in [(-5.0, -0.7), (0.7, 5.0)] {
-                    painter.line_segment([at(Point::new(a, 0.0)), at(Point::new(b, 0.0))], stroke);
-                }
-            }
-            "led" => {
-                painter.add(egui::Shape::closed_line(
-                    vec![
-                        at(Point::new(-2.0, -2.0)),
-                        at(Point::new(-2.0, 2.0)),
-                        at(Point::new(2.0, 0.0)),
-                    ],
-                    stroke,
-                ));
-                painter.line_segment(
-                    [at(Point::new(2.0, -2.0)), at(Point::new(2.0, 2.0))],
-                    stroke,
+        if let Some(library) = &c.library_symbol {
+            for g in library
+                .definition
+                .graphics
+                .iter()
+                .filter(|g| g.unit <= 1 && g.body_style <= 1)
+            {
+                self.paint_graphic(
+                    painter,
+                    rect,
+                    camera,
+                    &g.primitive,
+                    (c.position, c.rotation),
+                    color,
                 );
-                for (a, b) in [(-5.0, -2.0), (2.0, 5.0)] {
-                    painter.line_segment([at(Point::new(a, 0.0)), at(Point::new(b, 0.0))], stroke);
-                }
-                for x in [0.0, 1.8] {
-                    painter.line_segment(
-                        [at(Point::new(x, -2.5)), at(Point::new(x + 1.3, -3.8))],
-                        Stroke::new(1.2, color),
+            }
+            for pin in library
+                .definition
+                .pins
+                .iter()
+                .filter(|p| p.unit <= 1 && p.body_style <= 1)
+            {
+                let end = pin.position.offset(Point::new(
+                    pin.length * pin.angle.to_radians().cos(),
+                    -pin.length * pin.angle.to_radians().sin(),
+                ));
+                painter.line_segment([at(pin.position), at(end)], stroke);
+                if pin.name != "~" && !pin.name.is_empty() {
+                    painter.text(
+                        at(end) + Vec2::new(3.0, -3.0),
+                        Align2::LEFT_BOTTOM,
+                        &pin.name,
+                        FontId::monospace(10.0),
+                        self.muted(),
                     );
                 }
             }
-            _ => {
-                painter.add(egui::Shape::closed_line(
-                    vec![
-                        at(Point::new(-3.0, -1.5)),
-                        at(Point::new(3.0, -1.5)),
-                        at(Point::new(3.0, 1.5)),
-                        at(Point::new(-3.0, 1.5)),
-                    ],
-                    stroke,
-                ));
-                for (a, b) in [(-5.0, -3.0), (3.0, 5.0)] {
-                    painter.line_segment([at(Point::new(a, 0.0)), at(Point::new(b, 0.0))], stroke);
+        } else {
+            match c.kind.as_str() {
+                "capacitor" => {
+                    for x in [-0.7, 0.7] {
+                        painter.line_segment(
+                            [at(Point::new(x, -2.0)), at(Point::new(x, 2.0))],
+                            stroke,
+                        );
+                    }
+                    for (a, b) in [(-5.0, -0.7), (0.7, 5.0)] {
+                        painter
+                            .line_segment([at(Point::new(a, 0.0)), at(Point::new(b, 0.0))], stroke);
+                    }
+                }
+                "led" => {
+                    painter.add(egui::Shape::closed_line(
+                        vec![
+                            at(Point::new(-2.0, -2.0)),
+                            at(Point::new(-2.0, 2.0)),
+                            at(Point::new(2.0, 0.0)),
+                        ],
+                        stroke,
+                    ));
+                    painter.line_segment(
+                        [at(Point::new(2.0, -2.0)), at(Point::new(2.0, 2.0))],
+                        stroke,
+                    );
+                    for (a, b) in [(-5.0, -2.0), (2.0, 5.0)] {
+                        painter
+                            .line_segment([at(Point::new(a, 0.0)), at(Point::new(b, 0.0))], stroke);
+                    }
+                    for x in [0.0, 1.8] {
+                        painter.line_segment(
+                            [at(Point::new(x, -2.5)), at(Point::new(x + 1.3, -3.8))],
+                            Stroke::new(1.2, color),
+                        );
+                    }
+                }
+                _ => {
+                    painter.add(egui::Shape::closed_line(
+                        vec![
+                            at(Point::new(-3.0, -1.5)),
+                            at(Point::new(3.0, -1.5)),
+                            at(Point::new(3.0, 1.5)),
+                            at(Point::new(-3.0, 1.5)),
+                        ],
+                        stroke,
+                    ));
+                    for (a, b) in [(-5.0, -3.0), (3.0, 5.0)] {
+                        painter
+                            .line_segment([at(Point::new(a, 0.0)), at(Point::new(b, 0.0))], stroke);
+                    }
                 }
             }
         }
@@ -478,7 +740,16 @@ impl App {
         }
         let center = camera.screen(c.position, rect);
         let (sine, cosine) = c.rotation.to_radians().sin_cos();
-        let label_offset = (5.0 * sine.abs() + 2.0 * cosine.abs() + 1.5) as f32 * camera.zoom;
+        let label_offset = if c.library_symbol.is_some() {
+            c.drawing_points()
+                .iter()
+                .map(|p| p.rotate(-c.rotation).y.abs())
+                .fold(0.0, f64::max) as f32
+                * camera.zoom
+                + 14.0
+        } else {
+            (5.0 * sine.abs() + 2.0 * cosine.abs() + 1.5) as f32 * camera.zoom
+        };
         painter.text(
             center - Vec2::new(0.0, label_offset),
             Align2::CENTER_BOTTOM,
@@ -558,7 +829,19 @@ impl App {
         for f in &p.board.footprints {
             let center = camera.screen(f.position, rect);
             let (sine, cosine) = f.rotation.to_radians().sin_cos();
-            let label_offset = (3.75 * sine.abs() + 1.5 * cosine.abs() + 1.1) as f32 * camera.zoom;
+            let label_offset = if p
+                .component(f.component)
+                .is_some_and(|c| c.library_footprint.is_some())
+            {
+                f.drawing_points(p)
+                    .iter()
+                    .map(|p| p.rotate(-f.rotation).y.abs())
+                    .fold(0.0, f64::max) as f32
+                    * camera.zoom
+                    + 12.0
+            } else {
+                (3.75 * sine.abs() + 1.5 * cosine.abs() + 1.1) as f32 * camera.zoom
+            };
             let color = if self.selected == Some(f.id) {
                 self.accent()
             } else {
@@ -570,21 +853,39 @@ impl App {
                 Point::new(3.75, 1.5),
                 Point::new(-3.75, 1.5),
             ];
-            painter.add(egui::Shape::closed_line(
-                corners
-                    .into_iter()
-                    .map(|point| camera.screen(f.position.offset(point.rotate(-f.rotation)), rect))
-                    .collect(),
-                Stroke::new(1.0, color),
-            ));
+            if let Some(library) = p
+                .component(f.component)
+                .and_then(|c| c.library_footprint.as_ref())
+            {
+                for g in &library.definition.graphics {
+                    if matches!(g,pcbcraft_library::Graphic::Text {text,..} if text=="REF**" || text=="%R" || text=="${REFERENCE}" || text=="${VALUE}" || text==&library.definition.name)
+                    {
+                        continue;
+                    }
+                    self.paint_graphic(painter, rect, camera, g, (f.position, f.rotation), color);
+                }
+            } else {
+                painter.add(egui::Shape::closed_line(
+                    corners
+                        .into_iter()
+                        .map(|point| {
+                            camera.screen(f.position.offset(point.rotate(-f.rotation)), rect)
+                        })
+                        .collect(),
+                    Stroke::new(1.0, color),
+                ));
+            }
             for pad in &f.pads {
                 if let Some(pos) = f.pad_position(&pad.number) {
                     let center = camera.screen(pos, rect);
-                    painter.circle_filled(
-                        center,
-                        pad.diameter as f32 / 2.0 * camera.zoom,
+                    painter.add(egui::Shape::convex_polygon(
+                        pad.outline_points()
+                            .into_iter()
+                            .map(|p| camera.screen(f.position.offset(p.rotate(-f.rotation)), rect))
+                            .collect(),
                         Color32::from_rgb(230, 194, 125),
-                    );
+                        Stroke::NONE,
+                    ));
                     painter.text(
                         center,
                         Align2::CENTER_CENTER,
@@ -620,6 +921,80 @@ impl App {
             ),
             FontId::monospace(11.0),
             self.muted(),
+        );
+    }
+}
+
+#[cfg(test)]
+mod library_render_tests {
+    use super::*;
+    #[test]
+    fn bounds_filter_precedes_center_distance_for_large_symbol() -> Result<(), String> {
+        let shared = pcbcraft_mcp::shared(pcbcraft_engine::Session::default());
+        let mut app = App::create(shared, Preferences::default(), None, None);
+        let mut large =
+            pcbcraft_doc::component_template("resistor", 1, "R1".into(), Point::default())
+                .ok_or("missing template")?;
+        large.pins[1].offset = Point::new(10.0, 0.0);
+        let nearby =
+            pcbcraft_doc::component_template("resistor", 2, "R2".into(), Point::new(9.0, 4.0))
+                .ok_or("missing template")?;
+        app.project.components = vec![large, nearby];
+        app.tab = Tab::Schematic;
+        assert_eq!(app.pick_object(Point::new(9.0, 0.0), 10.0), Some(1));
+        Ok(())
+    }
+    #[test]
+    fn library_text_angle_and_filled_graphic_reach_painter() {
+        let shared = pcbcraft_mcp::shared(pcbcraft_engine::Session::default());
+        let app = App::create(shared, Preferences::default(), None, None);
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |root_ui| {
+            egui::CentralPanel::default().show(root_ui, |ui| {
+                let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 500.0));
+                let camera = Camera {
+                    center: Point::default(),
+                    zoom: 10.0,
+                };
+                let text = pcbcraft_library::Graphic::Text {
+                    position: Point::default(),
+                    angle: 30.0,
+                    text: "rotated".into(),
+                    size: Point::new(1.0, 1.0),
+                    layer: String::new(),
+                };
+                app.paint_graphic(
+                    ui.painter(),
+                    rect,
+                    camera,
+                    &text,
+                    (Point::default(), 45.0),
+                    Color32::WHITE,
+                );
+                let body = pcbcraft_library::Graphic::Rectangle {
+                    start: Point::new(-1.0, -1.0),
+                    end: Point::new(1.0, 1.0),
+                    width: 0.2,
+                    fill: "solid".into(),
+                    layer: String::new(),
+                };
+                app.paint_graphic(
+                    ui.painter(),
+                    rect,
+                    camera,
+                    &body,
+                    (Point::default(), 0.0),
+                    Color32::WHITE,
+                );
+            });
+        });
+        output.textures_delta.clear();
+        assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Text(t) if (t.angle-(-75.0_f32).to_radians()).abs()<1e-5)));
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape,egui::Shape::Path(p) if p.fill==Color32::WHITE))
         );
     }
 }

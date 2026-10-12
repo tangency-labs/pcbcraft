@@ -7,7 +7,7 @@ KiCad implementation ports. Rust-only applies to the delivered application.
 | Layer | Crates | Responsibility |
 |---|---|---|
 | L0 | geom | Bounded millimetre geometry and distance operations |
-| L1 | doc | Stable-ID project model, component definitions, pins, nets, pads, tracks |
+| L1 | doc, library | Stable-ID project model; bounded pure Rust library parsers/DTOs |
 | L2 | rules, io | Connectivity and initial checks; native project, KiCad board and SVG export |
 | L3 | engine | Typed command registry, transactions, revisions, undo/redo |
 | L4 | mcp, ui-egui | MCP over stdio / live bridge; thin tabbed Rust UI using craft-ui |
@@ -35,10 +35,14 @@ Properties apply through commands, and checks can select the affected item.
 ## Initial model and limits
 
 Pins use explicit logical nets. Wires are schematic presentations between those pins.
-Built-in original component templates have simple generic SMD footprints; no third-party
-library artwork is bundled. PCB sync reconciles component footprints and pin nets.
+Built-in original templates have generic SMD footprints. Installed KiCad libraries
+are read directly; used resolved definitions are embedded in projects. Reference
+test fixtures retain the separate KiCad library license. PCB sync reconciles
+assigned footprints and pin nets, skipping unassigned imported components.
 Copper connectivity joins touching same-net tracks and pads, separated by layer.
-Initial clearance checks use capsule tracks and circular pad bounds. Arbitrary pad
+Initial clearance checks use capsule tracks and actual convex front SMD outlines
+with bounded chord error. Connectivity uses conservative inscribed pad bounds.
+Library queries run off the GUI thread without locking the project. Arbitrary pad
 shapes, vias, zone fills, hierarchy and comprehensive electrical rules remain future work.
 The initial KiCad writer targets a small documented subset and must be checked with
 KiCad CLI; there is no general KiCad importer yet.

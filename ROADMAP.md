@@ -22,7 +22,11 @@ This checklist records implementation, not an estimated parity percentage.
 - [x] Initial ERC/DRC with affected object references
 - [x] Rectangular outline dimensions and circular cutouts
 - [x] KiCad PCB subset export and external KiCad CLI validation
-- [ ] Custom editable symbols and footprints; real component library integration
+- [x] Read/search/preview installed KiCad symbol and footprint libraries
+- [x] Embed placed single-unit symbols and assigned front SMD footprints
+- [x] Actual pad geometry in UI, previews, clearance checks and KiCad export
+- [ ] Editable library symbols/footprints and multi-unit symbol placement
+- [ ] Through-hole/back-side placement and broader library compatibility
 - [ ] Explicit wire vertices, junctions, labels, buses and hierarchy
 - [ ] General KiCad import with unknown-field preservation and round-trip fixtures
 - [ ] Complete pin-type electrical rules and project/net-class rules

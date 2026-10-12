@@ -1,4 +1,5 @@
 //! The single mutation boundary used by UI, CLI and MCP.
+pub mod library;
 use pcbcraft_doc::*;
 use pcbcraft_geom::{Point, positive};
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,22 @@ pub fn commands() -> Vec<CommandSpec> {
             ),
         ),
         (
+            "component.place_library",
+            "Place a supported single-unit KiCad symbol and embed its definition in the project",
+            schema(
+                json!({"path":{"type":"string"},"symbol":{"type":"string"},"position":point_schema(),"reference":{"type":"string"},"value":{"type":"string"}}),
+                &["path", "symbol", "position"],
+            ),
+        ),
+        (
+            "footprint.assign",
+            "Assign a KiCad front SMD footprint with matching numbered pads to a component",
+            schema(
+                json!({"id":id_schema(),"path":{"type":"string"}}),
+                &["id", "path"],
+            ),
+        ),
+        (
             "component.move",
             "Move a schematic component; connected wire endpoints follow",
             schema(
@@ -111,7 +128,7 @@ pub fn commands() -> Vec<CommandSpec> {
         ),
         (
             "board.sync",
-            "Reconcile schematic components and pin nets into generic PCB footprints; retain placements",
+            "Reconcile schematic components and pin nets into PCB footprints; retain placements and report unassigned library symbols",
             schema(json!({}), &[]),
         ),
         (
@@ -290,10 +307,10 @@ impl Session {
         Ok(json!({"revision":self.revision}))
     }
     pub fn inspect(&self) -> Value {
-        json!({"revision":self.revision,"project":self.project,"history":{"undo":self.undo.len(),"redo":self.redo.len()},"capabilities":{"schematic":"flat, explicit pin nets, original built-in symbols","pcb":"generic circular SMD pads, straight/orthogonal tracks, rectangular outline, circular cutouts","checks":"initial pin assignment and copper checks; not comprehensive ERC/DRC","kicad":"limited PCB export; no general import","routing":"no obstacle avoidance or shove","3d":false}})
+        json!({"revision":self.revision,"project":self.project,"history":{"undo":self.undo.len(),"redo":self.redo.len()},"capabilities":{"schematic":"flat explicit pin nets; original built-ins and embedded single-unit KiCad library symbols","pcb":"embedded front SMD circle/rect/roundrect/oval pads; straight/orthogonal tracks, rectangular outline, circular cutouts","checks":"initial pin assignment and conservative copper bounds; not comprehensive ERC/DRC","kicad":"native library reading and limited PCB export; no general project import","routing":"no obstacle avoidance or shove","3d":false}})
     }
     pub fn checks(&self) -> Value {
-        json!({"revision":self.revision,"erc":pcbcraft_rules::erc(&self.project),"drc":pcbcraft_rules::drc(&self.project),"airwires":pcbcraft_rules::airwires(&self.project),"scope":"Initial checks: pin assignment, net population, circular-pad/capsule copper clearance, rectangular edge and circular cutout clearance, same-layer connectivity. No pin-type, via, zone, hierarchy or arbitrary pad-shape checks."})
+        json!({"revision":self.revision,"erc":pcbcraft_rules::erc(&self.project),"drc":pcbcraft_rules::drc(&self.project),"airwires":pcbcraft_rules::airwires(&self.project),"scope":"Initial checks: pin assignment, net population, capsule tracks, rectangular edge and circular cutout clearance. Imported noncircular pads use sampled convex outlines with conservative chord-error clearance bounds and inscribed connectivity bounds, so conservative false findings are possible. No full pin-type, via, zone or hierarchy checks."})
     }
     pub fn sample() -> Result<Self, Error> {
         let mut s = Self::default();
@@ -365,6 +382,53 @@ struct Add {
     position: Point,
     reference: Option<String>,
     value: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlaceLibrary {
+    path: String,
+    symbol: String,
+    position: Point,
+    reference: Option<String>,
+    value: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssignFootprint {
+    id: Id,
+    path: String,
+}
+fn component_pads(c: &Component) -> Vec<Pad> {
+    if let Some(library) = &c.library_footprint {
+        library
+            .definition
+            .pads
+            .iter()
+            .map(|pad| Pad {
+                number: pad.number.clone(),
+                offset: pad.position,
+                diameter: pad.size.x.min(pad.size.y),
+                net: c
+                    .pins
+                    .iter()
+                    .find(|p| p.number == pad.number)
+                    .and_then(|p| p.net),
+                geometry: Some(pad.clone()),
+            })
+            .collect()
+    } else {
+        c.pins
+            .iter()
+            .enumerate()
+            .map(|(i, pin)| Pad {
+                number: pin.number.clone(),
+                offset: Point::new(if i == 0 { -2.5 } else { 2.5 }, 0.0),
+                diameter: 1.6,
+                net: pin.net,
+                geometry: None,
+            })
+            .collect()
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -535,6 +599,109 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
             p.components.push(c);
             Ok(json!({"id":id}))
         }
+        "component.place_library" => {
+            let a: PlaceLibrary = parse(params)?;
+            let path = std::path::Path::new(&a.path);
+            let definition = library::symbol(path, &a.symbol)?;
+            definition
+                .validate()
+                .map_err(|e| Error::Invalid(e.to_string()))?;
+            if !definition.unsupported.is_empty() || definition.pins.iter().any(|p| p.unit > 1) {
+                return Err(Error::Invalid(format!(
+                    "placement currently requires a single-unit symbol with supported graphics and pin styles; multi-unit symbols can be inspected. Unsupported: {}",
+                    definition.unsupported.join(", ")
+                )));
+            }
+            let pins: Vec<Pin> = definition
+                .pins
+                .iter()
+                .filter(|p| p.unit <= 1 && p.body_style <= 1)
+                .map(|p| Pin {
+                    number: p.number.clone(),
+                    name: p.name.clone(),
+                    offset: p.position,
+                    net: None,
+                    electrical_type: p.electrical_type.clone(),
+                    direction: Some(p.angle),
+                })
+                .collect();
+            if pins.is_empty() || pins.len() > 64 {
+                return Err(Error::Invalid("symbol placement requires 1–64 pins".into()));
+            }
+            let prefix = if definition.reference.is_empty() {
+                "U"
+            } else {
+                &definition.reference
+            };
+            let reference = a.reference.unwrap_or_else(|| {
+                let mut n = 1;
+                while p
+                    .components
+                    .iter()
+                    .any(|c| c.reference == format!("{prefix}{n}"))
+                {
+                    n += 1;
+                }
+                format!("{prefix}{n}")
+            });
+            let id = allocate(next)?;
+            p.components.push(Component {
+                id,
+                reference,
+                value: a.value.unwrap_or_else(|| definition.value.clone()),
+                kind: "library".into(),
+                position: a.position,
+                rotation: 0.0,
+                pins,
+                library_symbol: Some(LibrarySymbol {
+                    library: path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("library")
+                        .into(),
+                    unit: 1,
+                    definition,
+                }),
+                library_footprint: None,
+            });
+            Ok(json!({"id":id}))
+        }
+        "footprint.assign" => {
+            let a: AssignFootprint = parse(params)?;
+            let path = std::path::Path::new(&a.path);
+            let definition = library::footprint(path)?;
+            definition
+                .validate()
+                .map_err(|e| Error::Invalid(e.to_string()))?;
+            validate_footprint_support(&definition)?;
+            let c = p
+                .components
+                .iter_mut()
+                .find(|c| c.id == a.id)
+                .ok_or_else(missing)?;
+            let pins: std::collections::BTreeSet<_> =
+                c.pins.iter().map(|p| p.number.as_str()).collect();
+            let pads: std::collections::BTreeSet<_> =
+                definition.pads.iter().map(|p| p.number.as_str()).collect();
+            if pins != pads {
+                return Err(Error::Invalid(
+                    "footprint pad numbers must match every symbol pin exactly".into(),
+                ));
+            }
+            c.library_footprint = Some(LibraryFootprint {
+                library: path
+                    .parent()
+                    .and_then(|p| p.file_stem())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("library")
+                    .into(),
+                definition,
+            });
+            if let Some(f) = p.board.footprints.iter_mut().find(|f| f.component == a.id) {
+                f.pads = component_pads(c);
+            }
+            Ok(json!({"component":a.id}))
+        }
         "component.move" => {
             let a: Move = parse(params)?;
             p.components
@@ -611,15 +778,14 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
             if params.as_object().is_none_or(|m| !m.is_empty()) {
                 return Err(Error::Invalid("board.sync takes an empty object".into()));
             }
+            let mut skipped = vec![];
             for (index, c) in p.components.iter().enumerate() {
+                if c.library_symbol.is_some() && c.library_footprint.is_none() {
+                    skipped.push(c.id);
+                    continue;
+                }
                 if let Some(f) = p.board.footprints.iter_mut().find(|f| f.component == c.id) {
-                    for pad in &mut f.pads {
-                        pad.net = c
-                            .pins
-                            .iter()
-                            .find(|pin| pin.number == pad.number)
-                            .and_then(|pin| pin.net);
-                    }
+                    f.pads = component_pads(c);
                 } else {
                     let id = allocate(next)?;
                     p.board.footprints.push(Footprint {
@@ -630,22 +796,12 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
                             10.0 + (index / 4) as f64 * 8.0,
                         ),
                         rotation: 0.0,
-                        pads: c
-                            .pins
-                            .iter()
-                            .enumerate()
-                            .map(|(i, pin)| Pad {
-                                number: pin.number.clone(),
-                                offset: Point::new(if i == 0 { -2.5 } else { 2.5 }, 0.0),
-                                diameter: 1.6,
-                                net: pin.net,
-                            })
-                            .collect(),
+                        pads: component_pads(c),
                     });
                 }
             }
             Ok(
-                json!({"footprints":p.board.footprints.iter().map(|f|json!({"id":f.id,"component":f.component})).collect::<Vec<_>>()}),
+                json!({"footprints":p.board.footprints.iter().map(|f|json!({"id":f.id,"component":f.component})).collect::<Vec<_>>(),"unassigned_components":skipped}),
             )
         }
         "board.resize" => {
@@ -765,6 +921,104 @@ fn run(p: &mut Project, next: &mut Id, command: &str, params: &Value) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn library_fixture(name: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../library/tests/fixtures")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+    #[test]
+    fn imported_definitions_survive_roundtrip_and_assignment_is_undoable() -> Result<(), Error> {
+        let mut s = Session::default();
+        s.execute("component.place_library",json!({"path":library_fixture("device.kicad_sym"),"symbol":"R","position":{"x":20,"y":15}}),None)?;
+        s.execute("board.sync", json!({}), None)?;
+        assert!(
+            s.project.board.footprints.is_empty(),
+            "unassigned symbols must not invent a physical package"
+        );
+        s.execute(
+            "footprint.assign",
+            json!({"id":1,"path":library_fixture("R_0805_2012Metric.kicad_mod")}),
+            None,
+        )?;
+        assert!(
+            s.project
+                .component(1)
+                .is_some_and(|c| c.library_footprint.is_some())
+        );
+        s.undo()?;
+        assert!(
+            s.project
+                .component(1)
+                .is_some_and(|c| c.library_footprint.is_none())
+        );
+        s.redo()?;
+        s.execute("board.sync", json!({}), None)?;
+        let f = s.project.board.footprints.first().ok_or_else(missing)?;
+        assert_eq!(f.pads.len(), 2);
+        assert!(
+            f.pads
+                .iter()
+                .all(|p| p.geometry.as_ref().is_some_and(|g| g.shape == "roundrect"))
+        );
+        assert!(
+            f.pads
+                .first()
+                .is_some_and(|p| (p.offset.x + 0.9125).abs() < 1e-6)
+        );
+        let text = serde_json::to_string(&s.project).map_err(|e| Error::Invalid(e.to_string()))?;
+        let loaded: Project =
+            serde_json::from_str(&text).map_err(|e| Error::Invalid(e.to_string()))?;
+        loaded.validate()?;
+        assert_eq!(loaded, s.project);
+        let mut tampered = loaded;
+        if let Some(pad) = tampered
+            .board
+            .footprints
+            .first_mut()
+            .and_then(|f| f.pads.first_mut())
+        {
+            pad.geometry = None;
+        }
+        assert!(
+            tampered.validate().is_err(),
+            "embedded physical geometry must not silently become generic"
+        );
+        Ok(())
+    }
+    #[test]
+    fn multiunit_placement_and_mismatched_footprint_roll_back() -> Result<(), Error> {
+        let mut s = Session::default();
+        let before = s.inspect();
+        assert!(s.execute("component.place_library",json!({"path":library_fixture("lm358.kicad_sym"),"symbol":"LM358","position":{"x":20,"y":15}}),None).is_err());
+        assert_eq!(s.inspect(), before);
+        s.execute("component.place_library",json!({"path":library_fixture("device.kicad_sym"),"symbol":"R","position":{"x":20,"y":15}}),None)?;
+        // A project with a corrupted pin map is rejected at the document boundary.
+        let mut corrupted = s.project.clone();
+        if let Some(pin) = corrupted
+            .components
+            .first_mut()
+            .and_then(|c| c.pins.first_mut())
+        {
+            pin.number = "99".into();
+        }
+        assert!(s.replace(corrupted).is_err());
+        let before = s.inspect();
+        let batch = [
+            Command {
+                command: "project.rename".into(),
+                params: json!({"name":"uncommitted"}),
+            },
+            Command {
+                command: "footprint.assign".into(),
+                params: json!({"id":999,"path":library_fixture("R_0805_2012Metric.kicad_mod")}),
+            },
+        ];
+        assert!(s.batch(&batch, None).is_err());
+        assert_eq!(s.inspect(), before);
+        Ok(())
+    }
     #[test]
     fn auto_net_and_wire_commit_as_one_undo_step() -> Result<(), Error> {
         let mut s = Session::default();

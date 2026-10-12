@@ -12,6 +12,24 @@ pub struct Pin {
     pub name: String,
     pub offset: Point,
     pub net: Option<Id>,
+    #[serde(default = "passive")]
+    pub electrical_type: String,
+    #[serde(default)]
+    pub direction: Option<f64>,
+}
+fn passive() -> String {
+    "passive".into()
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LibrarySymbol {
+    pub library: String,
+    pub unit: u32,
+    pub definition: pcbcraft_library::SymbolDefinition,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LibraryFootprint {
+    pub library: String,
+    pub definition: pcbcraft_library::FootprintDefinition,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Component {
@@ -22,8 +40,29 @@ pub struct Component {
     pub position: Point,
     pub rotation: f64,
     pub pins: Vec<Pin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_symbol: Option<LibrarySymbol>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_footprint: Option<LibraryFootprint>,
 }
 impl Component {
+    /// Local drawing extents used for selection and labels, independent of the renderer.
+    pub fn drawing_points(&self) -> Vec<Point> {
+        let mut points: Vec<Point> = self.pins.iter().map(|p| p.offset).collect();
+        if let Some(library) = &self.library_symbol {
+            for graphic in library
+                .definition
+                .graphics
+                .iter()
+                .filter(|g| g.unit <= 1 && g.body_style <= 1)
+            {
+                points.extend(graphic.primitive.path_points());
+            }
+        } else {
+            points.extend([Point::new(-3.0, -2.0), Point::new(3.0, 2.0)]);
+        }
+        points
+    }
     pub fn pin_position(&self, number: &str) -> Option<Point> {
         self.pins
             .iter()
@@ -54,6 +93,89 @@ pub struct Pad {
     pub offset: Point,
     pub diameter: f64,
     pub net: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<pcbcraft_library::FootprintPad>,
+}
+impl Pad {
+    /// Maximum chord approximation error of the rounded copper outline.
+    pub fn outline_error(&self) -> f64 {
+        self.geometry
+            .as_ref()
+            .map(|p| {
+                let radius = match p.shape.as_str() {
+                    "oval" => p.size.x.min(p.size.y) / 2.0,
+                    "roundrect" => p.size.x.min(p.size.y) * p.roundrect_ratio.unwrap_or(0.0),
+                    _ => 0.0,
+                };
+                radius * (1.0 - (std::f64::consts::PI / 64.0).cos())
+            })
+            .unwrap_or(0.0)
+    }
+    /// Closed convex copper outline in footprint-local coordinates.
+    pub fn outline_points(&self) -> Vec<Point> {
+        let (size, rotation, shape, ratio) = self
+            .geometry
+            .as_ref()
+            .map(|p| {
+                (
+                    p.size,
+                    p.rotation,
+                    p.shape.as_str(),
+                    p.roundrect_ratio.unwrap_or(0.0),
+                )
+            })
+            .unwrap_or((Point::new(self.diameter, self.diameter), 0.0, "circle", 0.0));
+        let hx = size.x / 2.0;
+        let hy = size.y / 2.0;
+        let radius = match shape {
+            "circle" | "oval" => hx.min(hy),
+            "roundrect" => size.x.min(size.y) * ratio,
+            _ => 0.0,
+        };
+        let mut points = vec![];
+        if radius <= 1e-9 {
+            points.extend([
+                Point::new(-hx, -hy),
+                Point::new(hx, -hy),
+                Point::new(hx, hy),
+                Point::new(-hx, hy),
+            ]);
+        } else {
+            for (x, y, start) in [
+                (hx - radius, hy - radius, 0.0),
+                (-hx + radius, hy - radius, 90.0),
+                (-hx + radius, -hy + radius, 180.0),
+                (hx - radius, -hy + radius, 270.0),
+            ] {
+                for i in 0..=16 {
+                    let angle = (start + i as f64 * 90.0 / 16.0).to_radians();
+                    points.push(Point::new(
+                        x + radius * angle.cos(),
+                        y + radius * angle.sin(),
+                    ));
+                }
+            }
+        }
+        if let Some(first) = points.first().copied() {
+            points.push(first);
+        }
+        points
+            .into_iter()
+            .map(|p| self.offset.offset(p.rotate(-rotation)))
+            .collect()
+    }
+    pub fn bounding_radius(&self) -> f64 {
+        self.geometry
+            .as_ref()
+            .map(|p| {
+                if p.shape == "circle" {
+                    p.size.x / 2.0
+                } else {
+                    p.size.x.hypot(p.size.y) / 2.0
+                }
+            })
+            .unwrap_or(self.diameter / 2.0)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Footprint {
@@ -64,6 +186,20 @@ pub struct Footprint {
     pub pads: Vec<Pad>,
 }
 impl Footprint {
+    pub fn drawing_points(&self, project: &Project) -> Vec<Point> {
+        let mut points: Vec<Point> = self.pads.iter().flat_map(|p| p.outline_points()).collect();
+        if let Some(library) = project
+            .component(self.component)
+            .and_then(|c| c.library_footprint.as_ref())
+        {
+            for graphic in &library.definition.graphics {
+                points.extend(graphic.path_points());
+            }
+        } else {
+            points.extend([Point::new(-3.75, -1.5), Point::new(3.75, 1.5)]);
+        }
+        points
+    }
     pub fn pad_position(&self, number: &str) -> Option<Point> {
         self.pads
             .iter()
@@ -196,6 +332,8 @@ pub fn component_template(
         kind: kind.into(),
         position,
         rotation: 0.0,
+        library_symbol: None,
+        library_footprint: None,
         pins: names
             .iter()
             .enumerate()
@@ -204,6 +342,8 @@ pub fn component_template(
                 name: (*n).into(),
                 offset: Point::new(if i == 0 { -5.0 } else { 5.0 }, 0.0),
                 net: None,
+                electrical_type: passive(),
+                direction: None,
             })
             .collect(),
     })
@@ -229,14 +369,17 @@ impl Project {
     pub fn wire_path(&self, w: &Wire) -> Option<Vec<Point>> {
         let a = self.pin_position(&w.from)?;
         let b = self.pin_position(&w.to)?;
-        let da = self
-            .pin(&w.from)?
-            .offset
-            .rotate(-self.component(w.from.component)?.rotation);
-        let db = self
-            .pin(&w.to)?
-            .offset
-            .rotate(-self.component(w.to.component)?.rotation);
+        let direction = |r: &PinRef| -> Option<Point> {
+            let pin = self.pin(r)?;
+            let local = if let Some(angle) = pin.direction {
+                Point::new(-angle.to_radians().cos(), angle.to_radians().sin())
+            } else {
+                pin.offset
+            };
+            Some(local.rotate(-self.component(r.component)?.rotation))
+        };
+        let da = direction(&w.from)?;
+        let db = direction(&w.to)?;
         Some(orthogonal_path(a, b, da, db))
     }
     pub fn net_name(&self, id: Id) -> &str {
@@ -299,9 +442,59 @@ impl Project {
                 || c.reference.is_empty()
                 || c.reference.len() > 64
                 || c.value.len() > 256
-                || !TEMPLATES.iter().any(|t| t.kind == c.kind)
+                || (c.library_symbol.is_none() && !TEMPLATES.iter().any(|t| t.kind == c.kind))
             {
                 return Err("invalid component".into());
+            }
+            if let Some(symbol) = &c.library_symbol {
+                symbol.definition.validate().map_err(|e| e.to_string())?;
+                if symbol.unit != 1
+                    || c.kind != "library"
+                    || symbol.library.len() > 256
+                    || !symbol.definition.unsupported.is_empty()
+                    || symbol.definition.pins.iter().any(|p| p.unit > 1)
+                {
+                    return Err("invalid or unsupported embedded library symbol".into());
+                }
+                let pins: Vec<_> = symbol
+                    .definition
+                    .pins
+                    .iter()
+                    .filter(|p| {
+                        (p.unit == 0 || p.unit == symbol.unit)
+                            && (p.body_style == 0 || p.body_style == 1)
+                    })
+                    .collect();
+                if pins.len() != c.pins.len()
+                    || pins.iter().any(|p| {
+                        !c.pins.iter().any(|pin| {
+                            pin.number == p.number
+                                && pin.name == p.name
+                                && pin.offset == p.position
+                                && pin.direction == Some(p.angle)
+                                && pin.electrical_type == p.electrical_type
+                        })
+                    })
+                {
+                    return Err("component pins do not match embedded symbol definition".into());
+                }
+            }
+            if let Some(footprint) = &c.library_footprint {
+                footprint.definition.validate().map_err(|e| e.to_string())?;
+                validate_footprint_support(&footprint.definition)?;
+                if footprint.library.len() > 256 {
+                    return Err("invalid footprint library name".into());
+                }
+                let pins: BTreeSet<_> = c.pins.iter().map(|p| p.number.as_str()).collect();
+                let pads: BTreeSet<_> = footprint
+                    .definition
+                    .pads
+                    .iter()
+                    .map(|p| p.number.as_str())
+                    .collect();
+                if pins != pads {
+                    return Err("embedded footprint pad numbers do not match symbol pins".into());
+                }
             }
             if c.pins.is_empty() || c.pins.len() > 64 {
                 return Err("invalid pin count".into());
@@ -313,6 +506,9 @@ impl Project {
                     || p.name.len() > 64
                     || !numbers.insert(&p.number)
                     || !p.offset.valid()
+                    || p.direction
+                        .is_some_and(|angle| !angle.is_finite() || angle.abs() > 360_000.0)
+                    || p.electrical_type.len() > 64
                     || p.net.is_some_and(|n| !nets.contains(&n))
                 {
                     return Err("invalid pin or net reference".into());
@@ -348,6 +544,32 @@ impl Project {
                 return Err("invalid footprint".into());
             }
             let mut numbers = BTreeSet::new();
+            if let Some(library) = self
+                .component(f.component)
+                .and_then(|c| c.library_footprint.as_ref())
+            {
+                if f.pads.len() != library.definition.pads.len()
+                    || f.pads.iter().any(|p| {
+                        p.geometry.is_none()
+                            || (p.diameter
+                                - p.geometry
+                                    .as_ref()
+                                    .map(|g| g.size.x.min(g.size.y))
+                                    .unwrap_or(0.0))
+                            .abs()
+                                > 1e-6
+                    })
+                {
+                    return Err("placed footprint pads must retain embedded geometry".into());
+                }
+            } else if self
+                .component(f.component)
+                .is_some_and(|c| c.library_symbol.is_some())
+            {
+                return Err(
+                    "library symbol requires an assigned footprint before PCB placement".into(),
+                );
+            }
             for p in &f.pads {
                 if !numbers.insert(&p.number)
                     || !p.offset.valid()
@@ -360,6 +582,27 @@ impl Project {
                     })
                 {
                     return Err("invalid pad or stale pad net; sync the PCB".into());
+                }
+                if let Some(geometry) = &p.geometry {
+                    if geometry.position != p.offset
+                        || geometry.number != p.number
+                        || !positive(geometry.size.x)
+                        || !positive(geometry.size.y)
+                    {
+                        return Err("pad geometry does not match imported footprint".into());
+                    }
+                    let definition = self
+                        .component(f.component)
+                        .and_then(|c| c.library_footprint.as_ref())
+                        .ok_or("pad geometry requires an embedded footprint definition")?;
+                    if !definition
+                        .definition
+                        .pads
+                        .iter()
+                        .any(|source| source == geometry)
+                    {
+                        return Err("pad geometry is not present in embedded definition".into());
+                    }
                 }
             }
         }
@@ -386,6 +629,45 @@ impl Project {
         }
         Ok(())
     }
+}
+
+pub fn validate_footprint_support(
+    definition: &pcbcraft_library::FootprintDefinition,
+) -> Result<(), String> {
+    if definition.graphics.iter().any(|g| match g {
+        pcbcraft_library::Graphic::Line { layer, .. }
+        | pcbcraft_library::Graphic::Rectangle { layer, .. }
+        | pcbcraft_library::Graphic::Circle { layer, .. }
+        | pcbcraft_library::Graphic::Arc { layer, .. }
+        | pcbcraft_library::Graphic::Polyline { layer, .. }
+        | pcbcraft_library::Graphic::Text { layer, .. } => layer == "Edge.Cuts",
+    }) {
+        return Err("footprint-contained Edge.Cuts require mechanical cut geometry support, which is planned".into());
+    }
+    if !definition.unsupported.is_empty() {
+        return Err(format!(
+            "footprint has unsupported primitives: {}",
+            definition.unsupported.join(", ")
+        ));
+    }
+    let mut numbers = BTreeSet::new();
+    for p in &definition.pads {
+        if p.pad_type != "smd"
+            || !["circle", "rect", "roundrect", "oval"].contains(&p.shape.as_str())
+            || (p.shape == "circle" && (p.size.x - p.size.y).abs() > 1e-6)
+            || !p.layers.iter().any(|l| l == "F.Cu")
+            || p.layers.iter().any(|l| l == "B.Cu" || l == "*.Cu")
+            || p.drill.is_some()
+            || p.number.is_empty()
+            || !numbers.insert(&p.number)
+        {
+            return Err("initial imported footprint placement supports unique numbered front SMD circle/rect/roundrect/oval pads; through-hole, custom pads and back copper are not supported yet".into());
+        }
+    }
+    if definition.pads.is_empty() || definition.pads.len() > 64 {
+        return Err("imported footprint must have 1–64 pads".into());
+    }
+    Ok(())
 }
 
 fn orthogonal_path(a: Point, b: Point, da: Point, db: Point) -> Vec<Point> {

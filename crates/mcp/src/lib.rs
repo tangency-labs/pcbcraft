@@ -17,6 +17,10 @@ pub fn tool_list() -> Value {
     let object = |properties: Value, required: &[&str]| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
     let command = json!({"type":"object","properties":{"command":{"type":"string"},"params":{"type":"object"}},"required":["command","params"],"additionalProperties":false});
     let mut tools = vec![
+        json!({"name":"library.catalog","description":"Discover installed KiCad symbol and footprint libraries on the host","inputSchema":object(json!({}),&[])}),
+        json!({"name":"library.search","description":"Search a KiCad symbol file or footprint directory without altering the project","inputSchema":object(json!({"path":{"type":"string"},"kind":{"type":"string","enum":["symbol","footprint"]},"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100}}),&["path","kind"])}),
+        json!({"name":"library.inspect_symbol","description":"Read resolved symbol pins, graphics, units and supported placement limits","inputSchema":object(json!({"path":{"type":"string"},"name":{"type":"string"}}),&["path","name"])}),
+        json!({"name":"library.inspect_footprint","description":"Read footprint graphics and real pad dimensions, shapes, layers and drills","inputSchema":object(json!({"path":{"type":"string"}}),&["path"])}),
         json!({"name":"list_commands","description":"Discover every engine command, input schema and unit convention","inputSchema":object(json!({}),&[])}),
         json!({"name":"inspect_design","description":"Inspect the canonical project, stable IDs, revision, history and truthful capability limits","inputSchema":object(json!({}),&[])}),
         json!({"name":"checks","description":"Run initial ERC/DRC and inspect unrouted airwires; returns scope and affected object IDs","inputSchema":object(json!({}),&[])}),
@@ -79,6 +83,9 @@ fn invoke(session: &SharedSession, name: &str, args: &Value) -> Result<Value, St
         .and_then(|tool| tool.get("inputSchema"))
         .ok_or("unknown tool")?;
     validate_schema(args, schema, "arguments")?;
+    if name.starts_with("library.") {
+        return pcbcraft_engine::library::read_tool(name, args).map(text_result);
+    }
     let mut s = session
         .lock()
         .map_err(|_| "session unavailable after internal failure".to_string())?;
@@ -170,7 +177,11 @@ fn validate_schema(value: &Value, schema: &Value, path: &str) -> Result<(), Stri
             || schema
                 .get("exclusiveMinimum")
                 .and_then(Value::as_f64)
-                .is_some_and(|min| number <= min))
+                .is_some_and(|min| number <= min)
+            || schema
+                .get("maximum")
+                .and_then(Value::as_f64)
+                .is_some_and(|max| number > max))
     {
         return Err(format!("{path}: below minimum"));
     }
@@ -419,6 +430,35 @@ pub fn start_bridge(session: SharedSession, address: &str) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_reads_do_not_lock_or_mutate_the_shared_design() -> Result<(), String> {
+        let session = shared(Session::default());
+        let locked = session.lock().map_err(|_| "session unavailable")?;
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../library/tests/fixtures/device.kicad_sym");
+        let result = call_tool(
+            &session,
+            "library.inspect_symbol",
+            &json!({"path":path,"name":"R"}),
+        );
+        assert_eq!(result.get("isError"), Some(&json!(false)));
+        assert_eq!(
+            result.pointer("/structuredContent/definition/name"),
+            Some(&json!("R"))
+        );
+        assert_eq!(locked.revision, 0);
+        assert!(locked.project.components.is_empty());
+        assert_eq!(
+            call_tool(
+                &session,
+                "library.search",
+                &json!({"path":path,"kind":"symbol","limit":101})
+            )
+            .get("isError"),
+            Some(&json!(true))
+        );
+        Ok(())
+    }
     #[test]
     fn schemas_reject_bad_arguments_before_mutation() {
         let session = shared(Session::default());

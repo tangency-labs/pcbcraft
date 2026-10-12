@@ -59,3 +59,26 @@ unchanged. New/open/sample replacements are undoable. IDs are not recycled after
 
 `screenshot` renders a headless design preview; it does not capture desktop chrome.
 To capture the actual UI, use the desktop's `--capture /absolute/path.png` option.
+
+## Library workflow
+
+`library.catalog` discovers host folders. `library.search` accepts `path`, `kind`
+(`symbol` or `footprint`), optional `query`, and `limit` (1–100). A symbol path is
+a `.kicad_sym` file; a footprint search path is a `.pretty` directory. Results
+report search and directory-scan truncation. `library.inspect_symbol` accepts
+`path` and `name`; `library.inspect_footprint` accepts a `.kicad_mod` `path`.
+Read tools return resolved geometry and unsupported features without changing or
+locking the project. Symbol catalogs cache two files using length/mtime; restart
+to refresh external replacements deliberately preserving both metadata fields.
+
+`component.place_library` accepts `path`, `symbol`, `position` and optional
+`reference`/`value`. `footprint.assign` accepts component `id` and footprint `path`.
+The engine validates supported placement and exact numbered-pin/pad correspondence,
+embeds the used definitions, and makes assignment undoable. `board.sync` returns
+`unassigned_components` rather than inventing packages for imported symbols.
+These commands also work in atomic batches and the live desktop bridge.
+
+```sh
+pcbcraft-cli tool library.catalog
+pcbcraft-cli tool library.search --args '{"path":"/usr/share/kicad/symbols/Device.kicad_sym","kind":"symbol","query":"resistor","limit":20}'
+```

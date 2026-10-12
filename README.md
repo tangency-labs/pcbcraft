@@ -6,7 +6,7 @@ GPL-3.0-or-later. Inspired by KiCad workflows and the SolidCraft / Craft applica
 architecture. Uses the pinned `craft-ui` library from `storytold/craft-libs`.
 
 **Status: first working foundation, not a KiCad replacement yet.** The current
-vertical slice is a flat schematic → generic PCB → basic routing → checks → KiCad
+vertical slice is a flat schematic → assigned SMD PCB → basic routing → checks → KiCad
 board export. The complete EDA roadmap is in [ROADMAP.md](ROADMAP.md).
 
 ## What works
@@ -18,16 +18,21 @@ board export. The complete EDA roadmap is in [ROADMAP.md](ROADMAP.md).
 - Periodic project recovery and recovery on normal close, using application storage.
 - Original resistor, capacitor, LED and two-pin connector symbols; explicit
   logical nets and pin-to-pin orthogonal wire presentations.
+- Background search and geometry previews of installed KiCad symbol/footprint
+  libraries, including inherited definitions. Place supported single-unit symbols,
+  assign matching front SMD footprints, and embed used definitions in the project.
 - Schematic-to-PCB sync retains existing placements and reconciles pad nets.
-- Generic front-layer circular SMD pads; straight or two-segment orthogonal tracks;
+- Real circle/rectangle/roundrect/oval front SMD pads, plus generic starter pads;
+  straight or two-segment orthogonal tracks;
   airwires from actual same-layer copper connectivity.
 - Editable rectangular board width/height and dimensioned circular cutouts,
   exported as Edge.Cuts. Constrained/parametric outline sketches are planned.
 - Initial pin assignment/net-population checks and copper short, clearance,
   board-edge, cutout and unrouted checks with affected object IDs.
-- 17 engine commands, discoverable schemas, atomic batches, stable IDs,
+- 19 engine commands, discoverable schemas, atomic batches, stable IDs,
   revision guards, 32-step undo/redo and validated atomic project saves.
-- 30 MCP tools: every engine command plus inspection, checks, persistence,
+- 36 MCP tools: every engine command plus library discovery/search/inspection,
+  design inspection, checks, persistence,
   export and PNG previews. Headless or bridged into the actual running desktop.
 - Rust browser entry point; the shared UI and engine compile to WebAssembly.
   Browser host-file open/save/export are not implemented yet.
@@ -67,6 +72,23 @@ the native `.pcbcraft` project or export its board to `.kicad_pcb`.
 The route tool is a simple orthogonal pad-to-pad operation. It does not avoid
 obstacles; inspect its clearance findings. Footprint movement does not drag tracks.
 Wire crossings do not implicitly join logical nets.
+
+## KiCad libraries
+
+Install KiCad's symbol and footprint libraries, then open **Libraries**. Search a
+symbol, preview it and choose **Place in schematic**. Select its placed component,
+choose **Assign footprint in Libraries**, and assign a package whose numbered pads
+match its pins. **Sync to PCB** retains placement and reports symbols that still
+need footprints. The project embeds used geometry, so reopening needs no library
+installation. The desktop discovers Linux, Windows and Ubuntu WSL library folders;
+custom paths and `KICAD10_SYMBOL_DIR` / `KICAD10_FOOTPRINT_DIR` are supported.
+
+Initial placement supports single-unit symbols and unique numbered front SMD pads.
+Multi-unit symbols and through-hole packages can be inspected; their placement,
+library editing, 3D models and general KiCad project import remain planned.
+Rounded-pad clearance uses sampled outlines with a small conservative error bound;
+connectivity uses inscribed pad bounds and can conservatively flag corner contacts.
+See [library formats, limits and provenance](docs/kicad-libraries.md).
 
 ## Keyboard defaults
 
@@ -123,3 +145,5 @@ PCBCraft is licensed under GNU GPL version 3 or later; see [LICENSE](LICENSE).
 Third-party dependencies retain their own licenses and notices. No KiCad source
 implementation has been copied or ported in this initial version. KiCad is an
 independent project; PCBCraft is not affiliated with or endorsed by the KiCad team.
+KiCad library fixtures retain CC-BY-SA 4.0 with the design-output exception; the
+data license is separate from the Rust application's GPL license.

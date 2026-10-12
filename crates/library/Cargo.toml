@@ -1,0 +1,14 @@
+[package]
+name = "pcbcraft-library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+pcbcraft-geom.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

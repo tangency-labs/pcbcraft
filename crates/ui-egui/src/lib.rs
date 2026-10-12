@@ -1,5 +1,6 @@
 //! One window, shared project, tabbed workspaces. Edits use the engine exclusively.
 mod canvas;
+mod library;
 use egui::{Align2, Color32, FontId, Rect, Stroke, Vec2};
 use pcbcraft_doc::{Id, PinRef, Project, TEMPLATES};
 use pcbcraft_geom::Point;
@@ -33,6 +34,7 @@ impl Default for Preferences {
 enum Tool {
     Select,
     Place(String),
+    LibraryPlace(String, String, Box<pcbcraft_library::SymbolDefinition>),
     Wire(Option<PinRef>),
     Route(Option<(Id, String)>),
     Move,
@@ -88,8 +90,16 @@ pub struct App {
     command_open: bool,
     capture: Option<String>,
     frames: u32,
+    library: library::Browser,
 }
 impl App {
+    pub fn with_project_path(mut self, path: Option<String>) -> Self {
+        if let Some(path) = path {
+            self.path = path;
+            self.saved_revision = self.session.lock().ok().map(|s| s.revision);
+        }
+        self
+    }
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         session: SharedSession,
@@ -138,6 +148,7 @@ impl App {
             tab: match tab {
                 Some("pcb") => Tab::Pcb,
                 Some("checks") => Tab::Checks,
+                Some("libraries") => Tab::Libraries,
                 _ => Tab::Schematic,
             },
             tool: Tool::Select,
@@ -170,6 +181,7 @@ impl App {
             command_open: false,
             capture,
             frames: 0,
+            library: library::Browser::default(),
         }
     }
     fn refresh(&mut self) {
@@ -207,6 +219,16 @@ impl App {
         match result {
             Ok(v) => {
                 self.message = format!("{command} · committed");
+                if let Some(skipped) = v
+                    .pointer("/result/unassigned_components")
+                    .and_then(Value::as_array)
+                    && !skipped.is_empty()
+                {
+                    self.message = format!(
+                        "{} library symbols need a footprint assignment in Libraries",
+                        skipped.len()
+                    );
+                }
                 if let Some(id) = v.pointer("/result/id").and_then(Value::as_u64) {
                     self.selected = Some(id);
                 }
@@ -295,7 +317,7 @@ impl App {
                 .find(|f| f.component == c.id)
                 .map(|f| f.id);
         }
-        if tab == Tab::Schematic
+        if (tab == Tab::Schematic || tab == Tab::Libraries)
             && let Some(f) = self.selected.and_then(|id| self.project.footprint(id))
         {
             self.selected = Some(f.component);
@@ -568,10 +590,13 @@ impl App {
                 f64::NEG_INFINITY,
             );
             for c in &self.project.components {
-                xmin = xmin.min(c.position.x - 8.0);
-                xmax = xmax.max(c.position.x + 8.0);
-                ymin = ymin.min(c.position.y - 6.0);
-                ymax = ymax.max(c.position.y + 6.0);
+                for point in c.drawing_points() {
+                    let point = c.position.offset(point.rotate(-c.rotation));
+                    xmin = xmin.min(point.x - 4.0);
+                    xmax = xmax.max(point.x + 4.0);
+                    ymin = ymin.min(point.y - 4.0);
+                    ymax = ymax.max(point.y + 4.0);
+                }
             }
             if xmin.is_finite() {
                 self.schematic.center = Point::new((xmin + xmax) / 2.0, (ymin + ymax) / 2.0);
@@ -595,6 +620,10 @@ impl App {
                 ui.add_space(12.0);
                 if self.palette {
                     ui.label(egui::RichText::new("Add symbol").strong());
+                    if ui.button("Browse KiCad libraries →").clicked() {
+                        self.change_tab(Tab::Libraries);
+                        self.palette = false;
+                    }
                     for t in TEMPLATES {
                         if ui.button(t.label).clicked() {
                             self.change_tab(Tab::Schematic);
@@ -738,6 +767,27 @@ impl App {
                         }
                         if ui.button("Rotate 90°  R").clicked() {
                             self.rotate();
+                        }
+                        ui.label(
+                            c.library_footprint
+                                .as_ref()
+                                .map(|f| format!("Footprint: {}", f.definition.name))
+                                .unwrap_or_else(|| {
+                                    if c.library_symbol.is_some() {
+                                        "Footprint: unassigned".into()
+                                    } else {
+                                        "Footprint: starter package".into()
+                                    }
+                                }),
+                        );
+                        if ui.button("Assign footprint in Libraries →").clicked() {
+                            self.change_tab(Tab::Libraries);
+                            self.library.kind = true;
+                            self.library.pending = None;
+                            self.library.path.clear();
+                            self.library.results = None;
+                            self.library.preview = None;
+                            self.library.query.clear();
                         }
                         ui.add_space(12.0);
                         ui.label("Pin / net");
@@ -918,35 +968,31 @@ impl App {
         }
     }
     fn library(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(30.0);
-        ui.heading("Component library");
-        ui.label(
-            "Original symbols and generic circular SMD footprints for the first working circuit.",
-        );
-        ui.add_space(20.0);
-        for t in TEMPLATES {
-            egui::Frame::group(ui.style())
-                .inner_margin(18.0)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(t.label).size(18.0).strong());
-                            ui.label(format!("{} · {} · 2 pins", t.prefix, t.value));
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Place in schematic >").clicked() {
-                                self.change_tab(Tab::Schematic);
-                                self.tool = Tool::Place(t.kind.into());
-                            }
+        self.kicad_library(ui);
+        ui.collapsing("Original starter symbols", |ui| {
+            for t in TEMPLATES {
+                egui::Frame::group(ui.style())
+                    .inner_margin(18.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new(t.label).size(18.0).strong());
+                                ui.label(format!("{} · {} · 2 pins", t.prefix, t.value));
+                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("Place in schematic >").clicked() {
+                                        self.change_tab(Tab::Schematic);
+                                        self.tool = Tool::Place(t.kind.into());
+                                    }
+                                },
+                            );
                         });
                     });
-                });
-            ui.add_space(10.0);
-        }
-        ui.label(
-            egui::RichText::new("KiCad library import and symbol/footprint editing are planned.")
-                .color(self.muted()),
-        );
+                ui.add_space(10.0);
+            }
+        });
     }
     fn checks_view(&mut self, ui: &mut egui::Ui) {
         ui.add_space(24.0);
@@ -992,7 +1038,11 @@ impl App {
     }
     fn capture(&mut self, ctx: &egui::Context) {
         self.frames = self.frames.saturating_add(1);
-        if self.capture.is_some() && self.frames == 5 {
+        let library_ready = self.tab != Tab::Libraries
+            || (self.library.catalog.is_some()
+                && (self.library.results.is_some() || self.library.path.is_empty())
+                && self.library.pending.is_none());
+        if self.capture.is_some() && self.frames >= 5 && library_ready {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
         if let Some(path) = self.capture.clone() {
@@ -1153,6 +1203,54 @@ mod tests {
         };
         frame(&ctx, &mut app, vec![key(egui::Key::Z, ctrl)], ctrl);
         assert_eq!(app.project.footprint(11).map(|f| f.rotation), Some(0.0));
+        Ok(())
+    }
+    #[test]
+    fn library_placement_uses_shared_engine_and_single_viewport() -> Result<(), String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../library/tests/fixtures/device.kicad_sym")
+            .to_string_lossy()
+            .into_owned();
+        let def = pcbcraft_engine::library::symbol(std::path::Path::new(&path), "R")?;
+        let shared = pcbcraft_mcp::shared(pcbcraft_engine::Session::default());
+        let mut app = App::create(shared.clone(), Preferences::default(), None, None);
+        app.refresh();
+        app.tool = Tool::LibraryPlace(path, "R".into(), Box::new(def));
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut app, vec![], egui::Modifiers::NONE);
+        let pos = egui::Pos2::new(680.0, 360.0);
+        for pressed in [true, false] {
+            frame(
+                &ctx,
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                egui::Modifiers::NONE,
+            );
+        }
+        let project = shared
+            .lock()
+            .map_err(|_| "session unavailable")?
+            .project
+            .clone();
+        assert_eq!(project.components.len(), 1);
+        assert!(
+            project
+                .components
+                .first()
+                .is_some_and(|c| c.library_symbol.is_some())
+        );
+        app.change_tab(Tab::Libraries);
+        assert_eq!(app.selected, project.components.first().map(|c| c.id));
+        let output = frame(&ctx, &mut app, vec![], egui::Modifiers::NONE);
+        assert_eq!(output.viewport_output.len(), 1);
         Ok(())
     }
     #[test]
