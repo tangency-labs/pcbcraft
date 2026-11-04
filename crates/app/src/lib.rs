@@ -265,8 +265,16 @@ impl PcbApp {
 }
 
 impl eframe::App for PcbApp {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
+        let before = self.preferences;
         self.frame(ui);
+        // eframe's own save runs every 30 seconds, too late if the page reloads right after a change.
+        if self.preferences != before
+            && let Some(storage) = frame.storage_mut()
+        {
+            self.save(storage);
+            storage.flush();
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
