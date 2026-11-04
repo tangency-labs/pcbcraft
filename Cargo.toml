@@ -1,0 +1,9 @@
+[package]
+name = "pcbcraft"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Electronics design that feels like KiCad, built for people and agents to work on the same board."
+publish = false
+
+[dependencies]
