@@ -1,0 +1,25 @@
+[package]
+name = "pcbcraft-app"
+description = "The PCBCraft window, shared by the desktop and browser builds"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pcbcraft-chrome = { workspace = true }
+pcbcraft-engine = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { workspace = true, features = ["wayland", "x11"] }
+
+[dev-dependencies]
+egui_kittest = { workspace = true }

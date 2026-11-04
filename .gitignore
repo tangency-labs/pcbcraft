@@ -1,3 +1,4 @@
 /target
+/dist
 # Private notes for the maintainers: never commit.
 /HANDOFF.md

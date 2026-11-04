@@ -1,0 +1,43 @@
+# `cargo deny check`. Run in CI, so a dependency under a license not listed here fails the build.
+# GPL, LGPL and AGPL are not listed and must never be (see AGENTS.md). A package offering one of them
+# only as an alternative, like `Apache-2.0 OR GPL-2.0-only`, passes on its permissive option.
+
+[graph]
+all-features = true
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[licenses.private]
+ignore = true
+
+[advisories]
+unmaintained = "workspace"
+yanked = "warn"
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
