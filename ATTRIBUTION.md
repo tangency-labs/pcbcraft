@@ -16,6 +16,14 @@ PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhe
 | `apps/pcbcraft-web/` | `apps/solidcraft-web/` | Kept the Trunk setup, page layout and web runner start. Dropped offline use, installing, files and URL launch options. |
 | `.github/workflows/`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | same paths | Cut down to what PCBCraft needs. `deny.toml` adds the license allow list. |
 
+The local transport in `crates/craft-control/` follows the first-request token
+and loopback design in SolidCraft's
+[`control_server.rs`](https://github.com/tangency-labs/solidcraft/blob/ffc84dbe2e35af7d2eae302d42953271ef7a72b7/apps/solidcraft/src/control_server.rs)
+and [control protocol](https://github.com/tangency-labs/solidcraft/blob/ffc84dbe2e35af7d2eae302d42953271ef7a72b7/docs/control-protocol.md)
+at `ffc84dbe2e35af7d2eae302d42953271ef7a72b7`, copyright (c) 2026 SolidCraft
+contributors, MIT OR Apache-2.0. The crate reuses PCBCraft's stdio framing
+and leaves token distribution, discovery, and command dispatch to its callers.
+
 ## Adapted from PCBcraft Next
 
 PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apache-2.0. This is the independent prototype.
