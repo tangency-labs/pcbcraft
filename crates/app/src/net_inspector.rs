@@ -57,7 +57,8 @@ impl Snapshot {
 }
 
 impl NetInspector {
-    /// Dock a read-only view next to the schematic. Refresh on revisions, including undo and redo.
+    /// Dock a read-only view next to the schematic. Rebuild the view when the
+    /// project's connectivity snapshot changes. Moving a symbol reuses the view.
     pub(super) fn show(&mut self, ui: &mut Ui, session: &Session) {
         if !self.open {
             return;

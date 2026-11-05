@@ -187,6 +187,22 @@ fn interrupted_publication_keeps_the_previous_file() {
     assert!(fixture.files.dirty(&fixture.session));
 }
 
+/// Editing a shared project preserves the destination's permission bits.
+#[cfg(unix)]
+#[test]
+fn edited_save_preserves_project_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut fixture = Fixture::open();
+    let mode = 0o640;
+    fs::set_permissions(&fixture.path, fs::Permissions::from_mode(mode)).unwrap();
+    move_symbol(&mut fixture.session, "symbol-2", 0, STEP);
+
+    assert!(matches!(fixture.save(|| Ok(())), Some(Update::Message(_))));
+    assert_eq!(fs::metadata(&fixture.path).unwrap().permissions().mode() & 0o777, mode);
+    assert_eq!(positions(&load(&fixture.path).unwrap().snapshot)[0], Point { x_nm: 0, y_nm: STEP });
+}
+
 /// Competing writes from the same baseline leave only the winning session clean.
 #[test]
 fn one_writer_publishes_against_a_shared_baseline() {
