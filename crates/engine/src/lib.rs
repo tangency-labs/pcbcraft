@@ -4,13 +4,13 @@
 //! The menus and the MCP server both call [`Session::execute`] with an id from [`catalog`]; neither
 //! changes the project any other way. This crate knows nothing about windows or transports.
 //!
-//! The schematic supports in-memory resistor placement and explicit pin connections. The file format is still being discussed
+//! The schematic supports in-memory resistor and LED placement and explicit pin connections. The file format is still being discussed
 //! (see `VISION.md`).
 
 pub mod schematic;
 
 use schematic::{
-    MAX_CENTER_NM, MAX_SYMBOLS, Point, ResistorPlacement, Terminal, Wire,
+    MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolKind, SymbolPlacement, Terminal, Wire,
     wiring::{MAX_WIRES, inspect_netlist},
 };
 use serde_json::{Map, Value, json};
@@ -104,10 +104,19 @@ impl Command {
 }
 
 const NAME: Param = Param { name: "name", summary: "The project's name", kind: ParamKind::Name };
+/// Place the built-in 1k resistor on the schematic.
 pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
+/// Place the built-in generic LED on the schematic.
+pub const PLACE_LED: &str = "schematic.place_led";
 /// The command that joins two inspected symbol terminals with an undoable wire.
 pub const CONNECT_PINS: &str = "schematic.connect_pins";
 const EXPECTED_REVISION: Param = Param { name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
+
+const PLACEMENT_PARAMS: &[Param] = &[
+    Param { name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate },
+    Param { name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate },
+    EXPECTED_REVISION,
+];
 
 const CATALOG: &[Command] = &[
     Command { id: "project.new", title: "New Project", summary: "Start a new empty project, replacing the open one. Undoable.", params: &[NAME] },
@@ -116,12 +125,9 @@ const CATALOG: &[Command] = &[
         id: PLACE_RESISTOR,
         title: "Place Resistor",
         summary: "Place a 1k resistor on the open schematic. Undoable.",
-        params: &[
-            Param { name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate },
-            Param { name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate },
-            EXPECTED_REVISION,
-        ],
+        params: PLACEMENT_PARAMS,
     },
+    Command { id: PLACE_LED, title: "Place LED", summary: "Place a generic green LED on the open schematic. Undoable.", params: PLACEMENT_PARAMS },
     Command {
         id: CONNECT_PINS,
         title: "Connect Pins",
@@ -169,14 +175,14 @@ impl std::error::Error for CommandError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
     pub name: String,
-    resistors: Vec<ResistorPlacement>,
+    symbols: Vec<SymbolPlacement>,
     wires: Vec<Wire>,
 }
 
 impl Project {
-    /// Return the schematic's resistor placements in placement order.
-    pub fn resistors(&self) -> &[ResistorPlacement] {
-        &self.resistors
+    /// Return all schematic symbols in placement order.
+    pub fn symbols(&self) -> &[SymbolPlacement] {
+        &self.symbols
     }
 
     /// Return committed wires in placement order.
@@ -186,8 +192,8 @@ impl Project {
 
     /// Resolve a terminal against this snapshot. Placements are ordered by their creation revision.
     pub fn terminal_position(&self, terminal: Terminal) -> Option<Point> {
-        let index = self.resistors.binary_search_by_key(&terminal.symbol, |symbol| symbol.ordinal).ok()?;
-        Some(self.resistors[index].pins()[terminal.pin_index()])
+        let index = self.symbols.binary_search_by_key(&terminal.symbol, |symbol| symbol.ordinal).ok()?;
+        Some(self.symbols[index].pins()[terminal.pin_index()])
     }
 }
 
@@ -214,7 +220,7 @@ impl Session {
     pub fn available(&self, id: &str) -> bool {
         match id {
             "project.new" => true,
-            "project.rename" | PLACE_RESISTOR | CONNECT_PINS => self.project.is_some(),
+            "project.rename" | PLACE_RESISTOR | PLACE_LED | CONNECT_PINS => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -229,9 +235,9 @@ impl Session {
             "project": self.project.as_ref().map(|p| json!({
                 "name": p.name,
                 "schematic": {
-                    "symbols": p.resistors.iter().map(ResistorPlacement::inspect).collect::<Vec<_>>(),
+                    "symbols": p.symbols.iter().map(SymbolPlacement::inspect).collect::<Vec<_>>(),
                     "wires": p.wires.iter().copied().map(Wire::inspect).collect::<Vec<_>>(),
-                    "netlist": inspect_netlist(&p.resistors, &p.wires),
+                    "netlist": inspect_netlist(&p.symbols, &p.wires),
                 },
             })),
             "revision": self.revision,
@@ -246,14 +252,14 @@ impl Session {
         check_params(command, params)?;
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
-                "project.rename" | PLACE_RESISTOR | CONNECT_PINS => "no project is open".to_owned(),
+                "project.rename" | PLACE_RESISTOR | PLACE_LED | CONNECT_PINS => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
             }));
         }
         match id {
-            "project.new" => self.change(Project { name: name_param(params)?, resistors: Vec::new(), wires: Vec::new() }),
+            "project.new" => self.change(Project { name: name_param(params)?, symbols: Vec::new(), wires: Vec::new() }),
             "project.rename" => {
                 let name = name_param(params)?;
                 let mut project = self.open_project()?.clone();
@@ -262,7 +268,8 @@ impl Session {
                     self.change(project);
                 }
             }
-            PLACE_RESISTOR => self.place_resistor(params)?,
+            PLACE_RESISTOR => self.place_symbol(SymbolKind::Resistor, params)?,
+            PLACE_LED => self.place_symbol(SymbolKind::Led, params)?,
             CONNECT_PINS => self.connect_pins(params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
@@ -276,18 +283,20 @@ impl Session {
         self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".to_owned()))
     }
 
-    /// Add a resistor from validated parameters if the caller's revision is still current.
+    /// Add a symbol from validated parameters if the caller's revision is still current.
     /// Use the resulting revision as the identity so undo and a new placement cannot reuse it.
-    fn place_resistor(&mut self, params: &Value) -> Result<(), CommandError> {
+    fn place_symbol(&mut self, kind: SymbolKind, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        if project.resistors.len() >= MAX_SYMBOLS {
+        if project.symbols.len() >= MAX_SYMBOLS {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
+        let reference_number = project.symbols.iter().filter(|symbol| symbol.kind == kind).count() + 1;
         let mut project = project.clone();
-        project.resistors.push(ResistorPlacement {
+        project.symbols.push(SymbolPlacement {
+            kind,
             ordinal: self.revision + 1,
-            reference_number: project.resistors.len() + 1,
+            reference_number,
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
         });
         self.change(project);
@@ -452,13 +461,42 @@ mod tests {
         assert_eq!(&s.inspect()["project"]["schematic"]["symbols"][0], symbol);
         s.execute("edit.undo", &Value::Null).unwrap();
         s.execute("edit.undo", &Value::Null).unwrap();
-        assert!(s.project().unwrap().resistors().is_empty());
+        assert!(s.project().unwrap().symbols().is_empty());
         s.execute("edit.redo", &Value::Null).unwrap();
         assert_eq!(&s.inspect()["project"]["schematic"]["symbols"][0], symbol);
         s.execute("edit.undo", &Value::Null).unwrap();
         let state = s.execute(PLACE_RESISTOR, &place(s.revision())).unwrap();
         assert_ne!(state["project"]["schematic"]["symbols"][0]["id"], symbol["id"]);
         assert!(!s.available("edit.redo"));
+    }
+
+    /// Number each kind independently and preserve LED terminal identities across undo and redo.
+    #[test]
+    fn placing_leds_preserves_resistor_references_and_exposes_polarity() {
+        let mut s = Session::default();
+        s.execute("project.new", &json!({"name": "blinky"})).unwrap();
+        for command in [PLACE_RESISTOR, PLACE_LED, PLACE_RESISTOR, PLACE_LED] {
+            s.execute(command, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": s.revision()})).unwrap();
+        }
+        let inspected = s.inspect();
+        let schematic = &inspected["project"]["schematic"];
+        let symbols = schematic["symbols"].as_array().unwrap();
+        let references: Vec<_> = symbols.iter().map(|symbol| symbol["reference"].as_str().unwrap()).collect();
+        assert_eq!(references, ["R1", "D1", "R2", "D2"]);
+        assert_eq!(symbols[1]["kind"], "led");
+        assert_eq!(symbols[1]["value"], "Green LED");
+        assert_eq!(
+            symbols[1]["pins"],
+            json!([
+                {"number": "1", "name": "Anode", "x_nm": -schematic::PIN_OFFSET_NM, "y_nm": 0},
+                {"number": "2", "name": "Cathode", "x_nm": schematic::PIN_OFFSET_NM, "y_nm": 0},
+            ])
+        );
+        assert_eq!(schematic["netlist"]["unconnected"].as_array().unwrap().len(), 8);
+        let undone = s.execute("edit.undo", &Value::Null).unwrap();
+        assert_eq!(undone["project"]["schematic"]["symbols"].as_array().unwrap().len(), 3);
+        let redone = s.execute("edit.redo", &Value::Null).unwrap();
+        assert_eq!(&redone["project"]["schematic"], schematic);
     }
 
     /// Exercise rejected input against the full inspection snapshot, including the revision and undo state.

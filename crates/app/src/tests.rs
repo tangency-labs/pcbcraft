@@ -143,7 +143,7 @@ fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     let mut harness = harness();
     new_project(&mut harness, "blinky");
     choose(&mut harness, "Place", "Place Resistor");
-    assert!(harness.state().session().project().unwrap().resistors().is_empty());
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
     harness.get_by_label("Place resistor · Esc to cancel");
 
     // A click near the center snaps to the schematic origin.
@@ -155,9 +155,9 @@ fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     click_canvas(&mut harness);
     assert_eq!(harness.state().session().inspect(), session.inspect());
     choose(&mut harness, "Edit", "Undo");
-    assert!(harness.state().session().project().unwrap().resistors().is_empty());
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
     choose(&mut harness, "Edit", "Redo");
-    assert_eq!(harness.state().session().project().unwrap().resistors(), session.project().unwrap().resistors());
+    assert_eq!(harness.state().session().project().unwrap().symbols(), session.project().unwrap().symbols());
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
     harness.key_press(Key::Escape);
     harness.run();
     click_canvas(&mut harness);
-    assert!(harness.state().session().project().unwrap().resistors().is_empty());
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
 
     harness.key_press(Key::A);
     harness.run();
@@ -178,7 +178,7 @@ fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
     harness.get_by_label("Cancel").click();
     harness.run();
     click_canvas(&mut harness);
-    assert!(harness.state().session().project().unwrap().resistors().is_empty());
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
 }
 
 fn click_canvas(harness: &mut Harness<'_, PcbApp>) {
@@ -223,7 +223,7 @@ fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     assert_eq!(harness.state().session().revision(), 1);
     click_canvas_at(&mut harness, panned);
     let schematic = harness.state().session().project().unwrap();
-    assert_eq!(schematic.resistors()[0].position, pcbcraft_engine::schematic::Point { x_nm: 4 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
+    assert_eq!(schematic.symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 4 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
 }
 
 #[test]
@@ -238,16 +238,18 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
     assert_eq!(harness.state().session().revision(), 1);
     choose(&mut harness, "Place", "Place Resistor");
     click_canvas(&mut harness);
-    assert_eq!(harness.state().session().project().unwrap().resistors()[0].position, pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
+    assert_eq!(harness.state().session().project().unwrap().symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
 }
 
-/// Place two resistors through the canvas so their exact terminal positions are known.
+/// Place a resistor and LED through the canvas so their exact terminal positions are known.
 fn wiring_project(harness: &mut Harness<'_, PcbApp>) {
     new_project(harness, "wiring");
     choose(harness, "Place", "Place Resistor");
     click_canvas(harness);
-    choose(harness, "Place", "Place Resistor");
+    choose(harness, "Place", "Place LED");
+    harness.get_by_label("Place LED · Esc to cancel");
     click_canvas_at(harness, egui::pos2(703.2, 414.96));
+    assert_eq!(harness.state().session().project().unwrap().symbols()[1].kind, SymbolKind::Led);
 }
 
 #[test]

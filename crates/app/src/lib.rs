@@ -17,7 +17,7 @@ use pcbcraft_chrome::{
     shell::{self, dim},
     theme,
 };
-use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, Session, command};
+use pcbcraft_engine::{CONNECT_PINS, PLACE_LED, PLACE_RESISTOR, Session, command, schematic::SymbolKind};
 use serde_json::{Value, json};
 
 pub use preferences::{Preferences, ThemeChoice};
@@ -85,10 +85,10 @@ impl PcbApp {
         self.message = self.session.execute(id, params).err().map(|e| e.to_string());
     }
 
-    /// Start a resistor preview at the current project revision.
-    fn begin_placement(&mut self) {
+    /// Start a symbol preview at the current project revision.
+    fn begin_placement(&mut self, kind: SymbolKind) {
         self.message = None;
-        self.tool = Some(Tool::PlaceResistor { revision: self.session.revision() });
+        self.tool = Some(Tool::PlaceSymbol { kind, revision: self.session.revision() });
     }
 
     /// Wait for the first pin at the current project revision.
@@ -148,7 +148,10 @@ impl PcbApp {
             });
             menu::top(ui, "Place", |ui| {
                 if self.command_row(ui, PLACE_RESISTOR, "", "A") {
-                    self.begin_placement();
+                    self.begin_placement(SymbolKind::Resistor);
+                }
+                if self.command_row(ui, PLACE_LED, "", "") {
+                    self.begin_placement(SymbolKind::Led);
                 }
                 if MenuItem::new("Wire").shortcut("W").enabled(self.session.available(CONNECT_PINS)).show(ui) {
                     self.begin_wire();
@@ -179,7 +182,8 @@ impl PcbApp {
                     ui.label(shell::error(message));
                 } else if let Some(tool) = self.tool {
                     ui.label(dim(match tool {
-                        Tool::PlaceResistor { .. } => "Place resistor · Esc to cancel",
+                        Tool::PlaceSymbol { kind: SymbolKind::Resistor, .. } => "Place resistor · Esc to cancel",
+                        Tool::PlaceSymbol { kind: SymbolKind::Led, .. } => "Place LED · Esc to cancel",
                         Tool::Wire { start: None, .. } => "Wire · Click a pin",
                         Tool::Wire { start: Some(_), .. } => "Wire · Click the destination pin",
                     }));
@@ -205,9 +209,9 @@ impl PcbApp {
             None
         });
         match (self.tool, click) {
-            (Some(Tool::PlaceResistor { revision }), Some(Click::Place(point))) => {
+            (Some(Tool::PlaceSymbol { kind, revision }), Some(Click::Place(point))) => {
                 self.tool = None;
-                self.run(PLACE_RESISTOR, &json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
+                self.run(kind.placement_command(), &json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
             (Some(Tool::Wire { revision, start: None }), Some(Click::Pin(pin))) => {
                 self.tool = Some(Tool::Wire { revision, start: Some(pin) });
@@ -237,7 +241,7 @@ impl PcbApp {
                 self.message = None;
             }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_RESISTOR) {
-                self.begin_placement();
+                self.begin_placement(SymbolKind::Resistor);
             }
             if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
                 self.begin_wire();

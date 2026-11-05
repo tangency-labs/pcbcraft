@@ -46,9 +46,9 @@ pub(super) fn preview(
 ) -> Option<Terminal> {
     let tokens = Tokens::get();
     let pins = project
-        .resistors()
+        .symbols()
         .iter()
-        .flat_map(|resistor| resistor.terminals().into_iter().zip(resistor.pins().map(|pin| camera.screen(pin, rect))))
+        .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins().map(|pin| camera.screen(pin, rect))))
         .filter(|(_, pos)| rect.contains(*pos));
     let target = pointer.and_then(|at| nearest_pin(at, pins.clone()));
     if let Some(from) = start.and_then(|pin| project.terminal_position(pin))

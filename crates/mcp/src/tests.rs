@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, Session};
+use pcbcraft_engine::{CONNECT_PINS, PLACE_LED, PLACE_RESISTOR, Session};
 use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
@@ -46,7 +46,7 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
         ("project.new", json!({"name": "blinky"})),
         ("project.rename", json!({"name": "blinky v2"})),
         (PLACE_RESISTOR, json!({"x_nm": 1270000, "y_nm": 0, "expected_revision": 2})),
-        (PLACE_RESISTOR, json!({"x_nm": 25400000, "y_nm": 0, "expected_revision": 3})),
+        (PLACE_LED, json!({"x_nm": 25400000, "y_nm": 0, "expected_revision": 3})),
         (
             CONNECT_PINS,
             json!({"from": {"symbol": "symbol-3", "terminal": "2"}, "to": {"symbol": "symbol-4", "terminal": "1"}, "expected_revision": 4}),
@@ -63,14 +63,17 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), session.inspect());
 }
 
+/// Both symbol commands expose the same required coordinates and revision to MCP.
 #[test]
-fn the_placement_command_exposes_integer_coordinates_to_mcp() {
-    let result = call(&mut server(), "describe_command", json!({"command": PLACE_RESISTOR}));
-    let schema = &body(&result)["params"];
-    assert_eq!(schema["properties"]["x_nm"]["type"], "integer");
-    assert_eq!(schema["properties"]["y_nm"]["type"], "integer");
-    assert_eq!(schema["properties"]["expected_revision"]["minimum"], 0);
-    assert_eq!(schema["required"], json!(["x_nm", "y_nm", "expected_revision"]));
+fn placement_commands_expose_integer_coordinates_to_mcp() {
+    for command in [PLACE_RESISTOR, PLACE_LED] {
+        let result = call(&mut server(), "describe_command", json!({"command": command}));
+        let schema = &body(&result)["params"];
+        assert_eq!(schema["properties"]["x_nm"]["type"], "integer");
+        assert_eq!(schema["properties"]["y_nm"]["type"], "integer");
+        assert_eq!(schema["properties"]["expected_revision"]["minimum"], 0);
+        assert_eq!(schema["required"], json!(["x_nm", "y_nm", "expected_revision"]));
+    }
 }
 
 #[test]
