@@ -28,9 +28,23 @@ pub(super) fn pick(
     camera: &Camera,
     start: Option<Terminal>,
 ) -> Option<Terminal> {
-    let tokens = Tokens::get();
     let clicked = response.clicked_by(PointerButton::Primary);
     let pointer = if clicked { response.interact_pointer_pos() } else { response.hover_pos() };
+    let target = preview(painter, rect, project, camera, start, pointer);
+    response.clone().on_hover_cursor(egui::CursorIcon::Crosshair);
+    target.filter(|_| clicked)
+}
+
+/// Draw pin markers and the unfinished route at the supplied pointer position.
+pub(super) fn preview(
+    painter: &Painter,
+    rect: Rect,
+    project: &Project,
+    camera: &Camera,
+    start: Option<Terminal>,
+    pointer: Option<Pos2>,
+) -> Option<Terminal> {
+    let tokens = Tokens::get();
     let pins = project
         .resistors()
         .iter()
@@ -48,8 +62,7 @@ pub(super) fn pick(
         let color = if active { tokens.accent } else { tokens.canvas_ink };
         paint_pin(painter, pos, color);
     }
-    response.clone().on_hover_cursor(egui::CursorIcon::Crosshair);
-    target.filter(|_| clicked).map(|(pin, _)| pin)
+    target.map(|(pin, _)| pin)
 }
 
 /// Ignore equally close pins so a click cannot silently choose between overlapping terminals.

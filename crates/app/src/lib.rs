@@ -185,7 +185,7 @@ impl PcbApp {
         );
     }
 
-    /// Draw the schematic and send completed placements or wires through the shared command catalog.
+    /// Draw the schematic and send completed edits through the shared command catalog. Cancel only clears the local preview.
     fn canvas(&mut self, ui: &mut Ui) {
         let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
         let click = shell::canvas(ui, |ui| {
@@ -211,6 +211,10 @@ impl PcbApp {
                 if self.message.is_none() {
                     self.tool = None;
                 }
+            }
+            (Some(Tool::Wire { .. }), Some(Click::CancelWire)) => {
+                self.tool = None;
+                self.message = None;
             }
             _ => {}
         }

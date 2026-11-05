@@ -292,3 +292,56 @@ fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
     click_canvas_at(&mut harness, egui::pos2(652.4, 414.96));
     assert_eq!(harness.state().session().inspect(), before);
 }
+
+/// Open the context menu during an active wire draft with a real secondary click.
+fn open_wire_context(harness: &mut Harness<'_, PcbApp>) {
+    let point = egui::pos2(580.0, 380.0);
+    harness.hover_at(point);
+    harness.run();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        harness.run();
+    }
+    harness.get_by_label("Cancel");
+}
+
+#[test]
+fn dismissing_the_wire_menu_over_a_pin_does_not_commit() {
+    let mut harness = harness();
+    wiring_project(&mut harness);
+    harness.key_press(Key::W);
+    harness.run();
+    click_canvas_at(&mut harness, egui::pos2(550.8, 354.0));
+    open_wire_context(&mut harness);
+    let destination = egui::pos2(652.4, 414.96);
+    click_canvas_at(&mut harness, destination);
+    assert!(harness.query_by_label("Cancel").is_none());
+    assert!(harness.state().session().project().unwrap().wires().is_empty());
+    harness.get_by_label("Wire · Click the destination pin");
+    click_canvas_at(&mut harness, destination);
+    assert_eq!(harness.state().session().project().unwrap().wires().len(), 1);
+}
+
+/// Both cancellation paths discard the draft, with no revision or undo change.
+#[test]
+fn the_wire_menu_cancel_button_and_escape_both_discard_the_preview() {
+    let mut harness = harness();
+    wiring_project(&mut harness);
+    let before = harness.state().session().inspect();
+    for escape in [false, true] {
+        harness.key_press(Key::W);
+        harness.run();
+        click_canvas_at(&mut harness, egui::pos2(550.8, 354.0));
+        open_wire_context(&mut harness);
+        if escape {
+            harness.key_press(Key::Escape);
+        } else {
+            harness.get_by_label("Cancel").click();
+        }
+        harness.run();
+        assert!(harness.query_by_label("Cancel").is_none());
+        assert!(harness.query_by_label("Wire · Click the destination pin").is_none());
+        click_canvas_at(&mut harness, egui::pos2(652.4, 414.96));
+        assert_eq!(harness.state().session().inspect(), before);
+    }
+}

@@ -3,8 +3,8 @@ mod wires;
 
 pub(crate) use camera::Camera;
 
-use egui::{Align2, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, pos2};
-use pcbcraft_chrome::{Tokens, theme};
+use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, pos2};
+use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
 use pcbcraft_engine::{
     Project,
     schematic::{MAX_CENTER_NM, PIN_OFFSET_NM, Point, Terminal},
@@ -26,13 +26,14 @@ impl Tool {
     }
 }
 
-/// An exact click target chosen through the current tool.
+/// A placement, pin selection, or cancellation requested through the canvas.
 pub(crate) enum Click {
     Place(Point),
     Pin(Terminal),
+    CancelWire,
 }
 
-/// Draw the schematic and its active preview, returning a target only on a canvas click.
+/// Draw the schematic and active preview, then return any canvas tool action.
 pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, tool: Option<Tool>, input_enabled: bool) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
@@ -54,6 +55,25 @@ pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, tool: Op
             let label = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then_some((reference.as_str(), resistor.value()));
             paint_resistor(&painter, center, [left, right], tokens.text, label);
         }
+    }
+
+    if let Some(Tool::Wire { start: Some(start), .. }) = tool
+        && (input_enabled || response.context_menu_opened())
+        && let Some(popup) = menu::context(&response, |ui| {
+            let cancel = MenuItem::new("Cancel").shortcut("Esc").show(ui);
+            let escape = ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
+            if escape {
+                ui.close();
+            }
+            cancel || escape
+        })
+    {
+        if popup.inner {
+            return Some(Click::CancelWire);
+        }
+        let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
+        wires::preview(&painter, rect, project, camera, Some(start), anchor);
+        return None;
     }
 
     if !input_enabled || response.dragged() {

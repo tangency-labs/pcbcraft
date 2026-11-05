@@ -4,7 +4,7 @@ Electronics design that feels like the tools you already know, built so a person
 
 **Status: just started.** The window, menus, preferences, undo and an MCP server work, on the desktop and in the browser. Create a project, then choose **Place → Place Resistor** or press **A**. The preview snaps to the schematic grid. Click to place it or press **Esc** to cancel. Placements are in memory for now. Scroll over the canvas to zoom, drag with the middle mouse button to pan, or choose **View → Zoom to Fit**. [VISION.md](VISION.md) says what it should be.
 
-Choose **Place → Wire** or press **W**, then click two terminal markers to connect them. Press **Esc** to cancel a preview, or use **Edit → Undo** to remove the last wire.
+Choose **Place → Wire** or press **W**, then click two terminal markers to connect them. Press **Esc** or right-click and choose **Cancel** to discard an in-progress wire. Use **Edit → Undo** to remove the last committed wire.
 
 ## Run it
 
