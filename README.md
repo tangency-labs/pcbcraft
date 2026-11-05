@@ -16,6 +16,11 @@ The browser build needs `rustup target add wasm32-unknown-unknown` and [Trunk](h
 
 To connect an MCP client, point it at `pcbcraft-cli mcp`. Today it runs its own session with no window, so it can't yet see the project open in the app.
 
+An MCP client can use `schematic.connect_pins` to join two terminals from
+`inspect_project`. Describe the command for its input shape, and send the current
+project revision with the two endpoints. Project inspection returns the wires,
+connected terminal groups and unconnected pins.
+
 ## Where things go
 
 | Path | What it is |

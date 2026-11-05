@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use pcbcraft_engine::{PLACE_RESISTOR, Session};
+use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, Session};
 use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
@@ -46,6 +46,11 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
         ("project.new", json!({"name": "blinky"})),
         ("project.rename", json!({"name": "blinky v2"})),
         (PLACE_RESISTOR, json!({"x_nm": 1270000, "y_nm": 0, "expected_revision": 2})),
+        (PLACE_RESISTOR, json!({"x_nm": 25400000, "y_nm": 0, "expected_revision": 3})),
+        (
+            CONNECT_PINS,
+            json!({"from": {"symbol": "symbol-3", "terminal": "2"}, "to": {"symbol": "symbol-4", "terminal": "1"}, "expected_revision": 4}),
+        ),
         ("edit.undo", json!({})),
         ("edit.redo", json!({})),
     ];
@@ -131,4 +136,13 @@ fn an_oversized_line_is_refused_in_bounded_space() {
     let lines: Vec<&str> = text.lines().collect();
     assert!(lines[0].contains("request too large"));
     assert!(lines[1].contains("\"id\":8"));
+}
+
+#[test]
+fn the_wiring_command_describes_exact_terminal_references() {
+    let result = call(&mut server(), "describe_command", json!({"command": CONNECT_PINS}));
+    let schema = &body(&result)["params"];
+    assert_eq!(schema["properties"]["from"]["type"], "object");
+    assert_eq!(schema["properties"]["from"]["required"], json!(["symbol", "terminal"]));
+    assert_eq!(schema["properties"]["to"]["properties"]["terminal"]["enum"], json!(["1", "2"]));
 }
