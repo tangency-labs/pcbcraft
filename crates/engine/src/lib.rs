@@ -206,7 +206,7 @@ impl Session {
             "project.new" => self.change(Project { name: name_param(params)?, resistors: Vec::new() }),
             "project.rename" => {
                 let name = name_param(params)?;
-                let mut project = self.project.clone().expect("project availability was checked");
+                let mut project = self.open_project()?.clone();
                 if project.name != name {
                     project.name = name;
                     self.change(project);
@@ -220,11 +220,15 @@ impl Session {
         Ok(self.inspect())
     }
 
+    fn open_project(&self) -> Result<&Project, CommandError> {
+        self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".to_owned()))
+    }
+
     fn place_resistor(&mut self, params: &Value) -> Result<(), CommandError> {
         if params["expected_revision"].as_u64() != Some(self.revision) {
             return Err(CommandError::Unavailable(format!("project changed, inspect the current revision ({}) and retry", self.revision)));
         }
-        let project = self.project.as_ref().expect("project availability was checked");
+        let project = self.open_project()?;
         if project.resistors.len() >= MAX_SYMBOLS {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
@@ -232,10 +236,7 @@ impl Session {
         project.resistors.push(ResistorPlacement {
             ordinal: self.revision + 1,
             reference_number: project.resistors.len() + 1,
-            position: Point {
-                x_nm: params["x_nm"].as_i64().expect("coordinate was validated"),
-                y_nm: params["y_nm"].as_i64().expect("coordinate was validated"),
-            },
+            position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
         });
         self.change(project);
         Ok(())
