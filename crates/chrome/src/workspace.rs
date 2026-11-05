@@ -139,15 +139,22 @@ pub fn sheet_header(ui: &mut Ui, title: &str) {
 }
 
 /// Dock a card at the right edge of the canvas and keep its body scrollable.
-/// Reserve at most two fifths of the workspace width and return whether Close was clicked.
-pub fn right_card(ui: &mut Ui, id: &'static str, title: &str, add: impl FnOnce(&mut Ui)) -> bool {
+/// Reserve at most two fifths of the workspace width and leave room below the
+/// card for a floating launcher. Return whether Close was clicked.
+pub fn right_card(ui: &mut Ui, id: &'static str, title: &str, bottom_clearance: f32, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     let width = (ui.available_width() * 0.4).min(260.0);
+    let clearance = bottom_clearance.min(ui.available_height() * 0.4);
+    let margin = Margin {
+        right: if bottom_clearance > 0.0 { t.space_12 } else { t.space_8 } as i8,
+        bottom: (t.space_8 + clearance) as i8,
+        ..Margin::same(t.space_8 as i8)
+    };
     Panel::right(id)
         .exact_size(width)
         .resizable(false)
         .show_separator_line(false)
-        .frame(Frame::new().fill(t.canvas).inner_margin(Margin::same(t.space_8 as i8)))
+        .frame(Frame::new().fill(t.canvas).inner_margin(margin))
         .show(ui, |ui| {
             card(t, t.space_8)
                 .show(ui, |ui| {

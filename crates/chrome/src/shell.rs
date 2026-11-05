@@ -37,7 +37,10 @@ pub fn app_bar(
                 })
                 .ui(ui, |ui| {
                     let bar_width = ui.available_width();
-                    let compact = integrated && bar_width < 380.0;
+                    let compact = bar_width < 380.0;
+                    if compact {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                    }
                     brand(ui, t, !compact);
                     home(ui);
                     if !compact {
@@ -52,7 +55,10 @@ pub fn app_bar(
                     let mut right =
                         ui.new_child(UiBuilder::new().id_salt("app_bar_utilities").max_rect(area).layout(Layout::right_to_left(Align::Center)));
                     if integrated {
-                        titlebar::window_controls(&mut right, t);
+                        titlebar::window_controls(&mut right, t, compact);
+                        if compact {
+                            right.add_space(t.space_2);
+                        }
                     }
                     utilities(&mut right, bar_width);
                     let controls_left = right.min_rect().left() - t.space_2;
@@ -61,7 +67,7 @@ pub fn app_bar(
                     let marker_room = if dirty { t.space_6 } else { 0.0 };
                     let drag_room = if integrated { (room - marker_room).clamp(0.0, t.space_12) } else { 0.0 };
                     let title_room = (room - drag_room).min(200.0);
-                    if title_room > t.space_24 {
+                    if !compact && title_room > t.space_24 {
                         project_title(ui, name, dirty, project.is_some(), title_room, t);
                     } else if dirty && title_room >= marker_room {
                         let (rect, _) = ui.allocate_exact_size(vec2(title_room.min(t.space_12), t.control_height), Sense::hover());
@@ -152,12 +158,17 @@ pub fn canvas<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 
 /// A modal dialog with a title. True when it should close: Escape, or a click outside.
 pub fn dialog(ctx: &egui::Context, id: &str, title: &str, add: impl FnOnce(&mut Ui)) -> bool {
+    dialog_width(ctx, id, title, 340.0, add)
+}
+
+/// Draw a modal with a preferred content width bounded by the viewport.
+pub fn dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     let frame = Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(t.space_16 as i8));
     egui::Modal::new(egui::Id::new(id))
         .frame(frame)
         .show(ctx, |ui| {
-            ui.set_width(340.0);
+            ui.set_width(width.min((ctx.content_rect().width() - t.space_16 * 3.0).max(0.0)));
             ui.spacing_mut().item_spacing.y = t.space_8;
             ui.label(RichText::new(title).font(fonts::semibold(t.font_button + 2.0)));
             add(ui);

@@ -7,6 +7,7 @@
 //!
 //! The theme values, font setup and menu rows are adapted from SolidCraft (see `ATTRIBUTION.md`).
 
+pub mod assistant;
 pub mod fonts;
 pub mod home;
 pub mod menu;
