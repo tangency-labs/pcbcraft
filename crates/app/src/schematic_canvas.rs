@@ -42,6 +42,21 @@ pub(crate) enum Click {
     Select(Option<String>),
     /// A row of the selected symbol's context menu.
     Edit(SymbolAction, String),
+    /// A part dragged from the parts browser was released over the canvas at this snapped point.
+    Drop(&'static SymbolDefinition, Point),
+}
+
+/// What the parts browser hands the canvas while a part is dragged.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PartDrag(pub(crate) &'static SymbolDefinition);
+
+/// Draw a part's preview fitted inside `rect`, for the parts browser's thumbnails. Pin names
+/// show once the preview is large enough to read them, as on the canvas.
+pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, rect: Rect, color: egui::Color32) {
+    let bounds = grid_bounds(definition, 0);
+    let step = (rect.width() / bounds.width().max(1.0)).min(rect.height() / bounds.height().max(1.0));
+    let center = rect.center() - bounds.center().to_vec2() * step;
+    paint_symbol(painter, definition, center, step, 0, color, None);
 }
 
 /// What the selected symbol's context menu asks for.
@@ -130,6 +145,22 @@ pub(crate) fn show(
         let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
         wires::preview(&painter, rect, project, camera, Some(start), anchor);
         return None;
+    }
+
+    // A part dragged from the browser previews under the pointer and places where it's released.
+    if let Some(drag) = response.dnd_hover_payload::<PartDrag>()
+        && let Some(pointer) = response.hover_pos()
+    {
+        let point = camera.snap(pointer, rect);
+        if valid_position(point) {
+            paint_symbol(&painter, drag.0, screen(point), grid_step, 0, tokens.accent, None);
+        }
+    }
+    if let Some(drag) = response.dnd_release_payload::<PartDrag>()
+        && let Some(pointer) = response.hover_pos().or_else(|| response.interact_pointer_pos())
+    {
+        let point = camera.snap(pointer, rect);
+        return (input_enabled && valid_position(point)).then_some(Click::Drop(drag.0, point));
     }
 
     if tool.is_none() && (input_enabled || response.context_menu_opened()) {
