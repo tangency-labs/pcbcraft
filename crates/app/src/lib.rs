@@ -4,6 +4,7 @@
 //! catalog, the same ones MCP runs. Preferences belong to the person, not the project, so they live
 //! here and stay out of the command set.
 
+mod net_inspector;
 mod preferences;
 mod schematic_canvas;
 
@@ -55,6 +56,7 @@ pub struct PcbApp {
     session: Session,
     camera: schematic_canvas::Camera,
     preferences: Preferences,
+    net_inspector: net_inspector::NetInspector,
     dialog: Dialog,
     tool: Option<Tool>,
     /// Why the last command failed, until the next one runs.
@@ -110,7 +112,7 @@ impl PcbApp {
         MenuItem::new(&format!("{title}{suffix}")).shortcut(shortcut).enabled(self.session.available(id)).show(ui)
     }
 
-    /// Show engine commands in the menus. Place arms a preview before a canvas click commits it.
+    /// Show commands and view controls. Place arms a preview before a canvas click commits it.
     fn menus(&mut self, ui: &mut Ui) {
         shell::menu_bar(ui, |ui| {
             menu::top(ui, "File", |ui| {
@@ -138,6 +140,10 @@ impl PcbApp {
             menu::top(ui, "View", |ui| {
                 if MenuItem::new("Zoom to Fit").enabled(self.session.project().is_some()).show(ui) {
                     self.camera.request_fit();
+                }
+                let inspector = if self.net_inspector.open { "Hide Net Inspector" } else { "Show Net Inspector" };
+                if MenuItem::new(inspector).show(ui) {
+                    self.net_inspector.open = !self.net_inspector.open;
                 }
             });
             menu::top(ui, "Place", |ui| {
@@ -344,8 +350,13 @@ impl PcbApp {
             self.tool = None;
         }
         self.status(ui);
+        self.net_inspector.show(ui, &self.session);
+        let revision = self.session.revision();
         self.canvas(ui);
         self.dialogs(&ctx);
+        if self.net_inspector.open && revision != self.session.revision() {
+            ctx.request_repaint();
+        }
     }
 }
 
