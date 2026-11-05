@@ -211,7 +211,7 @@ fn narrow_home_stacks_the_navigation_above_the_tiles() {
 }
 
 /// Help under the ? button holds About, Keyboard Shortcuts, Report an Issue and Connect AI
-/// assistants, as SolidCraft's does. File keeps only project actions.
+/// assistants, as SolidCraft's does. File has no connection row, and ends with Preferences.
 #[test]
 fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
     let mut harness = harness();
@@ -220,6 +220,14 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
     assert!(harness.query_by_label("Connect AI assistants…").is_none());
     harness.key_press(Key::Escape);
     harness.run();
+
+    // File ends with Preferences and Keyboard Shortcuts above Quit, as SolidCraft's does.
+    choose(&mut harness, "File", "Preferences…");
+    harness.get_by_label("Interface scale");
+    click(&mut harness, "OK");
+    choose(&mut harness, "File", "Keyboard Shortcuts…");
+    harness.get_by_label("Draw wire");
+    click(&mut harness, "OK");
 
     choose(&mut harness, "Help", "Keyboard Shortcuts");
     assert!(matches!(harness.state().dialog, Dialog::Preferences(_)));

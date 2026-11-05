@@ -227,7 +227,8 @@ impl PcbApp {
 
     /// Show the File commands and route them through the existing project dialogs and file jobs.
     /// Open and save actions are disabled while a file job is in flight. The browser offers
-    /// Download, while desktop Save As opens the encoding chooser.
+    /// Download, while desktop Save As opens the encoding chooser. Preferences and Keyboard
+    /// Shortcuts sit above Quit, as in SolidCraft.
     fn file_menu(&mut self, ui: &mut Ui) {
         let new_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_N) };
         if self.command_row(ui, "project.new", "…", &new_shortcut, MenuIcon::New) {
@@ -259,6 +260,16 @@ impl PcbApp {
         menu::separator(ui);
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
+        }
+
+        // SolidCraft ends File with Preferences and Keyboard Shortcuts, above Quit.
+        menu::separator(ui);
+        let preferences_shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
+        if MenuItem::new("Preferences…").icon(MenuIcon::Settings).shortcut(&preferences_shortcut).show(ui) {
+            self.open_preferences();
+        }
+        if MenuItem::new("Keyboard Shortcuts…").icon(MenuIcon::Keyboard).show(ui) {
+            self.dialog = Dialog::Preferences(preferences::PreferencesWindow::at_shortcuts(self.preferences));
         }
         if !IN_BROWSER {
             let quit_shortcut = ui.ctx().format_shortcut(&COMMAND_Q);
