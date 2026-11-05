@@ -9,7 +9,7 @@ use std::{
 
 use pcbcraft_engine::{
     Project,
-    persistence::{decode, encode, read_bytes},
+    persistence::{Encoding, decode_file, encode_file, read_bytes},
 };
 
 use super::{Outcome, Saved};
@@ -18,6 +18,7 @@ use super::{Outcome, Saved};
 pub(super) struct Target {
     path: PathBuf,
     bytes: Arc<[u8]>,
+    encoding: Encoding,
 }
 
 /// Pick and fully validate a project before making it available to the editor.
@@ -32,14 +33,14 @@ pub(super) fn open() -> Result<Outcome, String> {
 fn load(path: &Path) -> Result<Saved, String> {
     let path = normalize(path)?;
     let bytes = read(&path).map_err(|error| format!("Could not read project: {error}"))?;
-    let snapshot = decode(&bytes)?;
-    Ok(Saved { snapshot, target: Target { path, bytes: bytes.into() } })
+    let (snapshot, encoding) = decode_file(&bytes)?;
+    Ok(Saved { snapshot, target: Target { path, bytes: bytes.into(), encoding } })
 }
 
-/// Publish a snapshot after checking the destination against the last known bytes.
-pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Target)>) -> Result<Outcome, String> {
-    let (path, expected, unchanged) = if let Some((old, target)) = previous {
-        (target.path, Some(target.bytes), Arc::ptr_eq(&old, &snapshot))
+/// Save in the existing file’s encoding, or pick a destination for the requested encoding.
+pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Target)>, encoding: Encoding) -> Result<Outcome, String> {
+    let (path, expected, unchanged, encoding) = if let Some((old, target)) = previous {
+        (target.path, Some(target.bytes), Arc::ptr_eq(&old, &snapshot), target.encoding)
     } else {
         let Some(mut path) = rfd::FileDialog::new().add_filter("PCBCraft project", &["pc"]).set_file_name("project.pc").save_file() else {
             return Ok(Outcome::Cancelled);
@@ -48,9 +49,9 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
             path.set_extension("pc");
         }
         let path = normalize(&path)?;
-        (path, None, false)
+        (path, None, false, encoding)
     };
-    save_at(snapshot, path, expected, unchanged, || Ok(()))
+    save_at(snapshot, path, expected, unchanged, encoding, || Ok(()))
 }
 
 /// Encode and publish the chosen snapshot. The staging callback runs after the
@@ -60,11 +61,13 @@ fn save_at(
     path: PathBuf,
     expected: Option<Arc<[u8]>>,
     unchanged: bool,
+    encoding: Encoding,
     after_staging: impl FnOnce() -> Result<(), String>,
 ) -> Result<Outcome, String> {
-    let bytes = if unchanged { expected.clone().ok_or("Missing saved project baseline")? } else { Arc::from(encode(Arc::clone(&snapshot))?) };
+    let bytes =
+        if unchanged { expected.clone().ok_or("Missing saved project baseline")? } else { Arc::from(encode_file(Arc::clone(&snapshot), encoding)?) };
     publish(&path, expected.as_deref(), &bytes, after_staging)?;
-    Ok(Outcome::Saved(Saved { snapshot, target: Target { path, bytes } }))
+    Ok(Outcome::Saved(Saved { snapshot, target: Target { path, bytes, encoding } }))
 }
 
 /// Canonicalize the parent directory so application instances use the same lock for the destination.

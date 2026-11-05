@@ -6,7 +6,11 @@ use std::{
     sync::{Barrier, mpsc},
 };
 
-use pcbcraft_engine::{MOVE_SYMBOL, Session, persistence::MAX_PROJECT_BYTES, schematic::Point};
+use pcbcraft_engine::{
+    MOVE_SYMBOL, PLACE_FOOTPRINT, Session,
+    persistence::{MAX_PROJECT_BYTES, decode, encode},
+    schematic::Point,
+};
 use serde_json::{Value, json};
 
 use super::*;
@@ -25,11 +29,11 @@ struct Fixture {
 
 impl Fixture {
     /// Save the original fixture and reopen it through the native file completion path.
-    fn open() -> Self {
+    fn open(encoding: Encoding) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("two-resistors.pc");
         let original = decode(TWO_RESISTORS).unwrap();
-        let result = save_at(original, path.clone(), None, false, || Ok(()));
+        let result = save_at(original, path.clone(), None, false, encoding, || Ok(()));
         assert!(matches!(result, Ok(Outcome::Saved(_))));
         let mut session = Session::default();
         let mut files = ProjectFiles::default();
@@ -42,8 +46,14 @@ impl Fixture {
     fn save(&mut self, after_staging: impl FnOnce() -> Result<(), String>) -> Option<Update> {
         let snapshot = self.session.snapshot().unwrap();
         let saved = self.files.saved.as_ref().unwrap();
-        let result =
-            save_at(snapshot.clone(), self.path.clone(), Some(saved.target.bytes.clone()), Arc::ptr_eq(&snapshot, &saved.snapshot), after_staging);
+        let result = save_at(
+            snapshot.clone(),
+            self.path.clone(),
+            Some(saved.target.bytes.clone()),
+            Arc::ptr_eq(&snapshot, &saved.snapshot),
+            saved.target.encoding,
+            after_staging,
+        );
         complete(&mut self.files, &mut self.session, result)
     }
 }
@@ -88,7 +98,7 @@ fn assert_connectivity(schematic: &Value) {
 /// An unchanged save keeps every byte, including formatting from the input file.
 #[test]
 fn two_resistors_round_trip_and_save_without_a_diff() {
-    let mut fixture = Fixture::open();
+    let mut fixture = Fixture::open(Encoding::Json);
     assert_eq!(read(&fixture.path).unwrap(), TWO_RESISTORS);
     let loaded = fixture.session.snapshot().unwrap();
     assert!(loaded.same_document(&decode(TWO_RESISTORS).unwrap()));
@@ -112,14 +122,14 @@ fn two_resistors_round_trip_and_save_without_a_diff() {
     assert!(!fixture.files.dirty(&fixture.session));
 
     let snapshot = fixture.session.snapshot().unwrap();
-    assert!(save_at(snapshot, fixture.path.clone(), None, false, || Ok(())).is_err());
+    assert!(save_at(snapshot, fixture.path.clone(), None, false, Encoding::Json, || Ok(())).is_err());
     assert_eq!(read(&fixture.path).unwrap(), noncanonical);
 }
 
 /// Two independent symbol moves change one record each and merge with Git's normal three-way driver.
 #[test]
 fn independent_placement_edits_merge_and_reopen() {
-    let mut fixture = Fixture::open();
+    let mut fixture = Fixture::open(Encoding::Json);
     let base = fixture.dir.path().join("base.pc");
     let other = fixture.dir.path().join("other.pc");
     fs::write(&base, TWO_RESISTORS).unwrap();
@@ -139,7 +149,7 @@ fn independent_placement_edits_merge_and_reopen() {
     let loaded = load(&other).unwrap();
     branch.open_snapshot(loaded.snapshot);
     move_symbol(&mut branch, "symbol-3", R2_X, STEP);
-    let result = save_at(branch.snapshot().unwrap(), other.clone(), Some(loaded.target.bytes), false, || Ok(()));
+    let result = save_at(branch.snapshot().unwrap(), other.clone(), Some(loaded.target.bytes), false, Encoding::Json, || Ok(()));
     assert!(matches!(result, Ok(Outcome::Saved(_))));
 
     let merge = Command::new("git").arg("merge-file").arg("-p").arg(&fixture.path).arg(&base).arg(&other).output().unwrap();
@@ -154,7 +164,7 @@ fn independent_placement_edits_merge_and_reopen() {
 /// Invalid input never replaces the open project or clears its unsaved edits.
 #[test]
 fn failed_opens_preserve_the_active_project_and_dirty_state() {
-    let mut fixture = Fixture::open();
+    let mut fixture = Fixture::open(Encoding::Json);
     move_symbol(&mut fixture.session, "symbol-2", 0, STEP);
     let before = fixture.session.snapshot().unwrap();
     let revision = fixture.session.revision();
@@ -177,12 +187,20 @@ fn failed_opens_preserve_the_active_project_and_dirty_state() {
 /// Failure after a complete stage leaves the previous file and the current edits intact.
 #[test]
 fn interrupted_publication_keeps_the_previous_file() {
-    let mut fixture = Fixture::open();
+    for encoding in [Encoding::Json, Encoding::Zip] {
+        assert_interrupted_save(encoding);
+    }
+}
+
+/// Exercise the interruption after staging the selected encoding.
+fn assert_interrupted_save(encoding: Encoding) {
+    let mut fixture = Fixture::open(encoding);
+    let original = read(&fixture.path).unwrap();
     move_symbol(&mut fixture.session, "symbol-2", 0, STEP);
     let before = fixture.session.snapshot().unwrap();
     let update = fixture.save(|| Err("simulated failure before publication".to_owned()));
     assert!(matches!(update, Some(Update::Error(message)) if message == "simulated failure before publication"));
-    assert_eq!(read(&fixture.path).unwrap(), TWO_RESISTORS);
+    assert_eq!(read(&fixture.path).unwrap(), original);
     assert!(Arc::ptr_eq(&before, &fixture.session.snapshot().unwrap()));
     assert!(fixture.files.dirty(&fixture.session));
 }
@@ -190,7 +208,14 @@ fn interrupted_publication_keeps_the_previous_file() {
 /// Competing writes from the same baseline leave only the winning session clean.
 #[test]
 fn one_writer_publishes_against_a_shared_baseline() {
-    let mut first = Fixture::open();
+    for encoding in [Encoding::Json, Encoding::Zip] {
+        assert_one_writer(encoding);
+    }
+}
+
+/// Race two writers starting from the same bytes in the selected encoding.
+fn assert_one_writer(encoding: Encoding) {
+    let mut first = Fixture::open(encoding);
     let loaded = load(&first.path).unwrap();
     let mut second = Session::default();
     let mut second_files = ProjectFiles::default();
@@ -203,7 +228,7 @@ fn one_writer_publishes_against_a_shared_baseline() {
     let barrier = Barrier::new(2);
     let run = |snapshot| {
         barrier.wait();
-        save_at(snapshot, first.path.clone(), Some(baseline.clone()), false, || Ok(()))
+        save_at(snapshot, first.path.clone(), Some(baseline.clone()), false, encoding, || Ok(()))
     };
     let (a, b) = std::thread::scope(|scope| {
         let a = scope.spawn(|| run(first_snapshot.clone()));
@@ -217,13 +242,20 @@ fn one_writer_publishes_against_a_shared_baseline() {
     assert_eq!(first.files.dirty(&first.session), !first_won);
     assert_eq!(second_files.dirty(&second), first_won);
     let winner = if first_won { first_snapshot } else { second_snapshot };
-    assert_eq!(read(&first.path).unwrap(), encode(winner).unwrap());
+    assert_eq!(read(&first.path).unwrap(), encode_file(winner, encoding).unwrap());
 }
 
 /// Pause the real worker after staging R1, edit R2, then verify which snapshot reached disk.
 #[test]
 fn a_late_move_is_not_marked_saved() {
-    let mut fixture = Fixture::open();
+    for encoding in [Encoding::Json, Encoding::Zip] {
+        assert_late_move(encoding);
+    }
+}
+
+/// Pause after staging in the selected encoding so a later edit stays dirty.
+fn assert_late_move(encoding: Encoding) {
+    let mut fixture = Fixture::open(encoding);
     move_symbol(&mut fixture.session, "symbol-2", 0, STEP);
     let staged = fixture.session.snapshot().unwrap();
     let baseline = fixture.files.saved.as_ref().unwrap().target.bytes.clone();
@@ -235,7 +267,7 @@ fn a_late_move_is_not_marked_saved() {
         let (ready, wait_ready) = mpsc::sync_channel(0);
         let (release, wait_release) = mpsc::sync_channel(0);
         scope.spawn(move || {
-            let result = save_at(staged, path, Some(baseline), false, || {
+            let result = save_at(staged, path, Some(baseline), false, encoding, || {
                 ready.send(()).map_err(|error| error.to_string())?;
                 wait_release.recv().map_err(|error| error.to_string())
             });
@@ -251,4 +283,89 @@ fn a_late_move_is_not_marked_saved() {
     assert_connectivity(&inspect(reopened));
     assert_eq!(positions(fixture.session.project().unwrap()), [Point { x_nm: 0, y_nm: STEP }, Point { x_nm: R2_X, y_nm: STEP }]);
     assert!(fixture.files.dirty(&fixture.session));
+}
+
+/// Converting in both directions preserves IDs, connections, and explicit pin-to-pad mappings.
+/// Normal Save retains the ZIP encoding and the exact imported bytes until an edit is made.
+#[test]
+fn convert_zip_round_trip_and_keep_the_existing_encoding() {
+    let mut fixture = Fixture::open(Encoding::Json);
+    fixture
+        .session
+        .apply(
+            PLACE_FOOTPRINT,
+            &json!({
+                "symbol":"symbol-2", "definition":"generic-through-hole-2", "pin_1_pad":2,
+                "x_nm":0, "y_nm":0, "expected_revision":fixture.session.revision()
+            }),
+        )
+        .unwrap();
+    let snapshot = fixture.session.snapshot().unwrap();
+    let json_bytes = encode(snapshot.clone()).unwrap();
+    let terminal = snapshot.symbols()[0].terminals()[0];
+    let pad = snapshot.pad_for_terminal(terminal).unwrap();
+
+    let path = fixture.dir.path().join("archive.pc");
+    save_at(snapshot.clone(), path.clone(), None, false, Encoding::Zip, || Ok(())).unwrap();
+    let mut noncanonical = read(&path).unwrap();
+    let comment = b"custom ZIP comment";
+    let len = noncanonical.len();
+    noncanonical[len - 2..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+    noncanonical.extend_from_slice(comment);
+    fs::write(&path, &noncanonical).unwrap();
+    let reopened = load(&path).unwrap();
+    assert_eq!(reopened.target.encoding, Encoding::Zip);
+    assert_connectivity(&inspect(reopened.snapshot.clone()));
+    assert_eq!(reopened.snapshot.pad_for_terminal(terminal), Some(pad));
+    assert_eq!(reopened.snapshot.terminal_for_pad(pad), Some(terminal));
+
+    let plain = fixture.dir.path().join("plain.pc");
+    save_at(reopened.snapshot.clone(), plain.clone(), None, false, Encoding::Json, || Ok(())).unwrap();
+    assert_eq!(read(&plain).unwrap(), json_bytes);
+    let baseline = (reopened.snapshot.clone(), reopened.target);
+    save(reopened.snapshot.clone(), Some(baseline.clone()), Encoding::Json).unwrap();
+    assert_eq!(read(&path).unwrap(), noncanonical);
+
+    fixture.session.open_snapshot(reopened.snapshot);
+    move_symbol(&mut fixture.session, "symbol-2", 0, STEP);
+    save(fixture.session.snapshot().unwrap(), Some(baseline), Encoding::Json).unwrap();
+    let edited = load(&path).unwrap();
+    assert_eq!(edited.target.encoding, Encoding::Zip);
+    assert_eq!(positions(&edited.snapshot)[0], Point { x_nm: 0, y_nm: STEP });
+    assert_connectivity(&inspect(edited.snapshot));
+}
+
+/// ZIP validation failures must not adopt an invalid snapshot or mark edits clean.
+#[test]
+fn failed_zip_opens_preserve_the_active_project_and_dirty_state() {
+    let mut fixture = Fixture::open(Encoding::Zip);
+    let original = read(&fixture.path).unwrap();
+    move_symbol(&mut fixture.session, "symbol-2", 0, STEP);
+    let before = fixture.session.snapshot().unwrap();
+    let revision = fixture.session.revision();
+    let invalid = fixture.dir.path().join("invalid.pc");
+
+    let rename = |name: &[u8], replacement: &[u8]| {
+        let mut changed = original.clone();
+        for index in (0..changed.len() - name.len()).rev() {
+            if &changed[index..index + name.len()] == name {
+                changed[index..index + name.len()].copy_from_slice(replacement);
+            }
+        }
+        changed
+    };
+    for payload in [
+        original[..original.len() - 5].to_vec(),
+        rename(b"project.json", b"../evil.json"),
+        rename(b"project.json", b"foreign.json"),
+        rename(b"project.json", b"project.js0n"),
+        rename(b"pcbcraft-container/1", b"pcbcraft-container/9"),
+    ] {
+        fs::write(&invalid, payload).unwrap();
+        let result = load(&invalid).map(Outcome::Opened);
+        assert!(matches!(complete(&mut fixture.files, &mut fixture.session, result), Some(Update::Error(_))));
+        assert!(Arc::ptr_eq(&before, &fixture.session.snapshot().unwrap()));
+        assert_eq!(fixture.session.revision(), revision);
+        assert!(fixture.files.dirty(&fixture.session));
+    }
 }

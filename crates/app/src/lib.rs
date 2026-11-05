@@ -20,6 +20,7 @@ use pcbcraft_chrome::{
 };
 use pcbcraft_engine::{
     CONNECT_PINS, MOVE_SYMBOL, PLACE_SYMBOL, Session, command,
+    persistence::Encoding,
     schematic::{BUILTIN_SYMBOLS, SymbolDefinition},
 };
 use serde_json::{Value, json};
@@ -56,6 +57,7 @@ enum Dialog {
     },
     ChooseSymbol,
     ConfirmOpen,
+    SaveEncoding,
     Preferences,
     About,
 }
@@ -128,8 +130,8 @@ impl PcbApp {
     }
 
     /// Start a save or download for the current snapshot and report setup failures.
-    fn save_project_file(&mut self, save_as: bool, ctx: &egui::Context) {
-        self.message = self.files.save(&self.session, save_as, ctx).err();
+    fn save_project_file(&mut self, encoding: Option<Encoding>, ctx: &egui::Context) {
+        self.message = self.files.save(&self.session, encoding, ctx).err();
         self.file_notice = None;
     }
 
@@ -152,12 +154,16 @@ impl PcbApp {
                     self.open_project_file(ui.ctx());
                 }
                 let can_save = file_ready && self.session.project().is_some();
-                let save_label = if IN_BROWSER { "Download Project" } else { "Save" };
+                let save_label = if IN_BROWSER { "Download Project…" } else { "Save" };
                 if MenuItem::new(save_label).shortcut(if IN_BROWSER { "" } else { "Ctrl+S" }).enabled(can_save).show(ui) {
-                    self.save_project_file(false, ui.ctx());
+                    if IN_BROWSER {
+                        self.dialog = Dialog::SaveEncoding;
+                    } else {
+                        self.save_project_file(None, ui.ctx());
+                    }
                 }
                 if !IN_BROWSER && MenuItem::new("Save As…").shortcut("Ctrl+Shift+S").enabled(can_save).show(ui) {
-                    self.save_project_file(true, ui.ctx());
+                    self.dialog = Dialog::SaveEncoding;
                 }
                 if self.command_row(ui, "project.rename", "…", "") {
                     self.ask_name("project.rename");
@@ -343,9 +349,9 @@ impl PcbApp {
                 }
                 if self.session.project().is_some() {
                     if pressed(&SAVE_AS) {
-                        self.save_project_file(true, ctx);
+                        self.dialog = Dialog::SaveEncoding;
                     } else if pressed(&COMMAND_S) {
-                        self.save_project_file(false, ctx);
+                        self.save_project_file(None, ctx);
                     }
                 }
             }
@@ -414,6 +420,28 @@ impl PcbApp {
                     self.file_notice = None;
                 } else if !(cancel || closing) {
                     self.dialog = Dialog::ConfirmOpen;
+                }
+            }
+            Dialog::SaveEncoding => {
+                let mut selected = None;
+                let mut cancel = false;
+                let title = if IN_BROWSER { "Download Project" } else { "Save Project As" };
+                let closing = shell::dialog(ctx, "save_encoding", title, |ui| {
+                    ui.label("File format");
+                    ui.horizontal(|ui| {
+                        if ui.button("Plain JSON").clicked() {
+                            selected = Some(Encoding::Json);
+                        }
+                        if ui.button("ZIP archive").clicked() {
+                            selected = Some(Encoding::Zip);
+                        }
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+                if let Some(encoding) = selected {
+                    self.save_project_file(Some(encoding), ctx);
+                } else if !(closing || cancel) {
+                    self.dialog = Dialog::SaveEncoding;
                 }
             }
             Dialog::ChooseSymbol => {

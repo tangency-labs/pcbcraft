@@ -5,8 +5,7 @@ requirements for native projects under version control. Saving an unchanged
 project produces zero diff, and moving one part changes only that part's lines.
 The native `.pc` extension identifies a PCBCraft project. This specification
 defines plain JSON for working files and a ZIP container for sharing. Both encodings carry
-the same project schema. Plain JSON works on the local storage branch. ZIP
-support is specified below for a later implementation.
+the same project schema. The desktop, browser and MCP CLI can open either one.
 
 ## File encodings and save behavior
 
@@ -55,8 +54,9 @@ When that schema supports assets, each bundled asset must match a project
 reference and all required bundled references must resolve before adoption.
 The container does not need to extract anything into the working directory.
 
-The v1 reader accepts ordinary, unencrypted ZIP entries using Store or
-Deflate. It rejects duplicate names, unexpected entries, absolute or
+The v1 reader accepts regular, unencrypted ZIP entries using Store or
+Deflate. ZIP64 and split archives are unsupported. The current project schema
+permits exactly two entries and requires an empty asset list. It rejects duplicate names, unexpected entries, absolute or
 traversal paths, symlinks, and special files. Enforce declared and actual
 uncompressed byte counts while reading, and verify every payload digest
 before using it. Apply these initial limits to the container and the decoded
@@ -156,7 +156,10 @@ with one fixed wire ID. Both symbols use the same pinned definition.
 The plain JSON gate runs in the workspace test suite with the checked-in
 [two-resistor fixture](../crates/app/tests/fixtures/two-resistors.pc) and
 [native storage acceptance tests](../crates/app/src/project_files/native/tests.rs).
-The Git merge case uses the installed `git merge-file` command.
+The Git merge case uses the installed `git merge-file` command. The same native
+suite covers ZIP conversion, rejection before adoption, and publication. The
+[ZIP codec tests](../crates/engine/src/persistence/archive.rs) exercise Deflate,
+manifest size and digest validation, and prohibited entries.
 
 ## ZIP acceptance and later layout decisions
 
@@ -176,9 +179,9 @@ Splitting large projects into a Git-friendly directory, expanding the
 definition capture policy, and setting up migrations for later versions
 remain separate design decisions.
 
-## First implementation
+## Current implementation
 
-The first implementation reads and writes plain UTF-8 JSON tagged
+The current project document is plain UTF-8 JSON tagged
 `pcbcraft-project/1`. The files contain a project ID, name, one sheet with a
 stable ID, and one line per placement and wire. Blank lines between records
 let neighboring edits merge. A wire saves the two symbol IDs and pin numbers.
@@ -204,8 +207,9 @@ outside Git tracking. Cooperating desktop writers check their expected bytes
 under that lock before replacing the file. Save As requires an unused name.
 A separate program that ignores the lock can still race with publication.
 The browser reads the chosen file asynchronously and validates the bounded
-payload before adoption. Download encoding yields between batches on the UI
-thread, and the browser owns the final write.
+payload before adoption. Downloads yield between batches of JSON encoding and
+256 KiB steps of ZIP hashing or copying. The ZIP writer uses Store, so it
+does not compress the snapshot. The browser owns the final write.
 
 The canvas renders typed project snapshots. A symbol drag previews geometry
 and wire endpoints before committing a single shared move command on release.
@@ -227,7 +231,10 @@ preserved the original file bytes and exported an edited snapshot while
 panning. Software-rendered Chromium reported about 33 ms at p95 for animation
 frame intervals, both during export and during pan alone. The 16.7 ms target
 still needs qualification on desktop and hardware-accelerated web. These
-measurements cover the synthetic single-sheet fixture.
+measurements cover the synthetic single-sheet fixture. For the same fixture, ZIP
+packaging of the already encoded JSON took 1.37 ms at p95, and opening the
+ZIP, including JSON validation, took 3.82 ms at p95 in a Linux release run.
+These are engine timings, excluding disk I/O and editor frame time.
 
 ## Design references
 

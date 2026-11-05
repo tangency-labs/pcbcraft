@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use pcbcraft_engine::{Project, Session};
+use pcbcraft_engine::{Project, Session, persistence::Encoding};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
@@ -28,6 +28,8 @@ struct Saved {
     target: native::Target,
     #[cfg(target_arch = "wasm32")]
     bytes: Arc<[u8]>,
+    #[cfg(target_arch = "wasm32")]
+    encoding: Encoding,
 }
 
 #[derive(Debug)]
@@ -93,8 +95,8 @@ impl ProjectFiles {
         Ok(())
     }
 
-    /// Capture an immutable snapshot and start saving it without blocking editor commands.
-    pub(super) fn save(&mut self, session: &Session, save_as: bool, ctx: &egui::Context) -> Result<(), String> {
+    /// Capture an immutable snapshot. An explicit encoding starts a Save As or browser download.
+    pub(super) fn save(&mut self, session: &Session, encoding: Option<Encoding>, ctx: &egui::Context) -> Result<(), String> {
         let snapshot = session.snapshot().ok_or("no project open")?;
         let (send, receive) = mpsc::channel();
         #[cfg(not(target_arch = "wasm32"))]
@@ -102,22 +104,26 @@ impl ProjectFiles {
             let previous = self
                 .saved
                 .as_ref()
-                .filter(|saved| !save_as && saved.snapshot.same_document(&snapshot))
+                .filter(|saved| encoding.is_none() && saved.snapshot.same_document(&snapshot))
                 .map(|saved| (Arc::clone(&saved.snapshot), saved.target.clone()));
             let ctx = ctx.clone();
             std::thread::Builder::new()
                 .name("pcbcraft-save".to_owned())
                 .spawn(move || {
-                    let _ = send.send(native::save(snapshot, previous));
+                    let _ = send.send(native::save(snapshot, previous, encoding.unwrap_or_default()));
                     ctx.request_repaint();
                 })
                 .map_err(|error| format!("Could not start saving the project: {error}"))?;
         }
         #[cfg(target_arch = "wasm32")]
         let download = {
-            let _ = save_as;
-            let unchanged = self.saved.as_ref().filter(|saved| Arc::ptr_eq(&saved.snapshot, &snapshot)).map(|saved| Arc::clone(&saved.bytes));
-            web::Download::new(snapshot, unchanged, send)?
+            let encoding = encoding.unwrap_or_default();
+            let unchanged = self
+                .saved
+                .as_ref()
+                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot))
+                .map(|saved| Arc::clone(&saved.bytes));
+            web::Download::new(snapshot, unchanged, encoding, send)?
         };
         self.job = Some(Job {
             receiver: receive,
