@@ -63,7 +63,7 @@ pub(super) fn pick_file() -> Promise {
 
 /// Validate the bounded picked payload before returning it to the editor.
 pub(super) async fn open(file: Promise) -> Result<Outcome, String> {
-    let data = JsFuture::from(file).await.map_err(|error| format!("Could not open project: {error:?}"))?;
+    let data = JsFuture::from(file).await.map_err(|error| format!("Could not open project: {}", error_message(&error)))?;
     if data.is_null() {
         return Ok(Outcome::Cancelled);
     }
@@ -137,5 +137,17 @@ impl Download {
 
 /// Hand the completed payload to the browser's download UI.
 fn send_download(bytes: &[u8], encoding: Encoding) -> Result<Outcome, String> {
-    download_project(bytes, encoding == Encoding::Zip).map(|()| Outcome::Downloaded).map_err(|error| format!("Could not download project: {error:?}"))
+    download_project(bytes, encoding == Encoding::Zip)
+        .map(|()| Outcome::Downloaded)
+        .map_err(|error| format!("Could not download project: {}", error_message(&error)))
+}
+
+/// Show the browser's error message or string rejection in the status bar.
+fn error_message(error: &JsValue) -> String {
+    error
+        .dyn_ref::<js_sys::Error>()
+        .map(|error| String::from(error.message()))
+        .or_else(|| error.as_string())
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| "Unknown browser error".to_owned())
 }

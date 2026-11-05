@@ -95,7 +95,7 @@ fn existing(path: &Path) -> Result<Option<Vec<u8>>, String> {
 }
 
 /// Serialize writers using a persistent sibling lock. Stage, flush, check the destination again,
-/// then atomically publish. An unchanged file retains its bytes and metadata.
+/// then atomically publish. Preserve Unix permissions on replacement and leave an unchanged file untouched.
 fn publish(path: &Path, expected: Option<&[u8]>, bytes: &[u8], after_staging: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
     let verify = || {
         if existing(path)?.as_deref() != expected {
@@ -128,6 +128,18 @@ fn publish(path: &Path, expected: Option<&[u8]>, bytes: &[u8], after_staging: im
     let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
     staged.write_all(bytes).and_then(|()| staged.as_file().sync_all()).map_err(|error| format!("Could not stage project: {error}"))?;
     after_staging()?;
+    #[cfg(unix)]
+    if expected.is_some() {
+        let metadata = fs::symlink_metadata(path).map_err(|error| format!("Could not read project permissions: {error}"))?;
+        if !metadata.is_file() {
+            return Err("Project destination is no longer a regular file.".to_owned());
+        }
+        staged
+            .as_file()
+            .set_permissions(metadata.permissions())
+            .and_then(|()| staged.as_file().sync_all())
+            .map_err(|error| format!("Could not preserve project permissions: {error}"))?;
+    }
     verify()?;
     if expected.is_some() {
         staged.persist(path).map_err(|error| format!("Could not replace project: {error}"))?;
