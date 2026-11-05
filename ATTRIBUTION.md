@@ -24,6 +24,11 @@ at `ffc84dbe2e35af7d2eae302d42953271ef7a72b7`, copyright (c) 2026 SolidCraft
 contributors, MIT OR Apache-2.0. The crate reuses PCBCraft's stdio framing
 and leaves token distribution, discovery, and command dispatch to its callers.
 
+The desktop live MCP setup follows the explicit per-window connection and
+copyable configuration in PCBcraft Next's `docs/mcp.md` at the revision below.
+PCBCraft's adapter dispatches directly through the shared editor session and
+limits live edits to moving a symbol.
+
 ## Adapted from PCBcraft Next
 
 PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apache-2.0. This is the independent prototype.

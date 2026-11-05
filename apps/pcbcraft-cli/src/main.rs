@@ -3,16 +3,22 @@
 use std::{ffi::OsString, fs::File, path::Path, process::ExitCode};
 
 use pcbcraft_engine::persistence::{decode_file, read_bytes};
-use pcbcraft_mcp::{Headless, Server};
+use pcbcraft_mcp::{
+    Backend, Headless, Server,
+    live::{Remote, TOKEN_ENV},
+};
 
-const USAGE: &str = "Usage: pcbcraft-cli mcp [--project FILE]    Serve MCP on stdin and stdout\n       pcbcraft-cli --version";
+const USAGE: &str = "Usage: pcbcraft-cli mcp [--project FILE | --connect PORT]    Serve MCP on stdin and stdout\n       pcbcraft-cli --version";
 
 /// Dispatch the CLI and report file or server errors on stderr.
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let result = match args.as_slice() {
-        [command] if command == "mcp" => serve(Headless::default()),
-        [command, flag, path] if command == "mcp" && flag == "--project" => load_project(Path::new(path)).and_then(serve),
+        [command] if command == "mcp" => serve(Box::new(Headless::default())),
+        [command, flag, path] if command == "mcp" && flag == "--project" => {
+            load_project(Path::new(path)).and_then(|backend| serve(Box::new(backend)))
+        }
+        [command, flag, port] if command == "mcp" && flag == "--connect" => connect_editor(port).and_then(|backend| serve(Box::new(backend))),
         [flag] if flag == "--version" => {
             println!("pcbcraft-cli {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
@@ -41,7 +47,14 @@ fn load_project(path: &Path) -> Result<Headless, String> {
     result.map_err(|error| format!("could not open {}: {error}", path.display()))
 }
 
-/// Serve one isolated session on stdio.
-fn serve(backend: Headless) -> Result<(), String> {
-    Server::new(Box::new(backend)).serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|error| error.to_string())
+/// Read the explicitly selected port and the credential supplied by the MCP client.
+fn connect_editor(port: &std::ffi::OsStr) -> Result<Remote, String> {
+    let port = port.to_str().and_then(|port| port.parse().ok()).ok_or("--connect requires a local port number")?;
+    let token = std::env::var(TOKEN_ENV).map_err(|_| format!("Set {TOKEN_ENV} from the editor's Local MCP configuration"))?;
+    Remote::new(port, &token)
+}
+
+/// Serve the selected backend on stdio.
+fn serve(backend: Box<dyn Backend>) -> Result<(), String> {
+    Server::new(backend).serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|error| error.to_string())
 }

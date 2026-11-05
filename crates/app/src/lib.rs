@@ -4,6 +4,8 @@
 //! catalog, the same ones MCP runs. Preferences belong to the person, not the project, so they live
 //! here and stay out of the command set.
 
+#[cfg(not(target_arch = "wasm32"))]
+mod live_control;
 mod net_inspector;
 mod preferences;
 mod project_files;
@@ -59,6 +61,11 @@ enum Dialog {
     ChooseSymbol,
     ConfirmOpen,
     SaveEncoding,
+    #[cfg(not(target_arch = "wasm32"))]
+    LocalMcp {
+        error: Option<String>,
+        copied: bool,
+    },
     Preferences,
     About,
 }
@@ -66,6 +73,8 @@ enum Dialog {
 #[derive(Debug, Default)]
 pub struct PcbApp {
     session: Session,
+    #[cfg(not(target_arch = "wasm32"))]
+    live_control: Option<live_control::LiveControl>,
     files: project_files::ProjectFiles,
     file_notice: Option<String>,
     camera: schematic_canvas::Camera,
@@ -178,6 +187,10 @@ impl PcbApp {
         menu::separator(ui);
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if MenuItem::new("Local MCP…").icon(MenuIcon::Settings).show(ui) {
+            self.dialog = Dialog::LocalMcp { error: None, copied: false };
         }
         if !IN_BROWSER {
             let quit_shortcut = ui.ctx().format_shortcut(&COMMAND_Q);
@@ -292,6 +305,10 @@ impl PcbApp {
             },
             |ui| {
                 ui.label(dim(format!("PCBCraft {VERSION}")));
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.live_control.is_some() {
+                    ui.label(dim("Local MCP enabled"));
+                }
             },
         );
     }
@@ -473,6 +490,8 @@ impl PcbApp {
                     self.dialog = Dialog::SaveEncoding;
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::LocalMcp { error, copied } => self.local_mcp_dialog(ctx, error, copied),
             Dialog::ChooseSymbol => {
                 let mut selected = None;
                 let mut cancel = false;
@@ -529,6 +548,64 @@ impl PcbApp {
         }
     }
 
+    /// Enable or revoke a connection for this window and copy its client configuration on request.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn local_mcp_dialog(&mut self, ctx: &egui::Context, mut error: Option<String>, mut copied: bool) {
+        let mut close = false;
+        let dismissed = shell::dialog(ctx, "local_mcp", "Local MCP", |ui| {
+            if let Some(control) = &self.live_control {
+                ui.label("Clients with this configuration can inspect this window and move symbols.");
+                let disable = ui
+                    .horizontal(|ui| {
+                        if ui.button(if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
+                            ctx.copy_text(control.client_configuration());
+                            copied = true;
+                        }
+                        ui.button("Disable connection").clicked()
+                    })
+                    .inner;
+                if disable {
+                    self.live_control = None;
+                    copied = false;
+                }
+            } else {
+                ui.label("Let a local MCP client inspect and move symbols in this editor.");
+                if ui.button("Enable local connection").clicked() {
+                    match live_control::LiveControl::start(ctx) {
+                        Ok(control) => {
+                            self.live_control = Some(control);
+                            error = None;
+                        }
+                        Err(reason) => error = Some(format!("Could not start the local connection: {reason}")),
+                    }
+                }
+            }
+            if let Some(error) = &error {
+                ui.label(shell::error(error.as_str()));
+            }
+            close = ui.button("Close").clicked();
+        });
+        if !(close || dismissed) {
+            self.dialog = Dialog::LocalMcp { error, copied };
+        }
+    }
+
+    /// Apply a live request after completed file jobs and local keyboard shortcuts.
+    /// A successful move advances the same revision used by the canvas and save status.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_live_control(&mut self) {
+        let Some(control) = &self.live_control else { return };
+        let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy();
+        let revision = self.session.revision();
+        if let Err(error) = control.poll(&mut self.session, can_edit) {
+            self.live_control = None;
+            self.message = Some(error);
+        } else if self.session.revision() != revision {
+            self.message = None;
+            self.file_notice = Some("Symbol moved through MCP".to_owned());
+        }
+    }
+
     /// Draw one frame. Drop the preview if another action changed the project or opened a dialog.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
@@ -548,6 +625,8 @@ impl PcbApp {
             }
         }
         self.shortcuts(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_live_control();
         self.app_bar(ui);
         self.ribbon(ui);
         if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {

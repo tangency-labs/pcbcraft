@@ -58,10 +58,16 @@ impl Listener {
         self.0.local_addr().map(|address| address.port())
     }
 
+    /// Make acceptance return `WouldBlock` when no peer is waiting. Accepted streams stay blocking.
+    pub fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
+        self.0.set_nonblocking(enabled)
+    }
+
     /// Wait for a peer and assign its I/O timeout. Authenticate it on a worker before dispatching
     /// requests so a slow peer does not hold up acceptance of other connections.
     pub fn accept(&self, timeout: Duration) -> io::Result<Connection> {
         let (socket, _) = self.0.accept()?;
+        socket.set_nonblocking(false)?;
         Connection::new(socket, timeout)
     }
 }

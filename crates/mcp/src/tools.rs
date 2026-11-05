@@ -32,7 +32,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "list_commands",
             "List commands",
-            "Every command, with its summary and parameters. `filter` keeps those whose id or summary contains it.",
+            "Every available command, with its summary and parameters. `filter` keeps those whose id or summary contains it.",
             json!({"filter": {"type": "string"}}),
             &[],
             Effect::ReadOnly,
@@ -113,7 +113,7 @@ pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
         }),
         "describe_command" => {
             let id = args["command"].as_str().unwrap_or_default();
-            command(id).map(|c| c.to_json()).ok_or_else(|| format!("unknown command `{id}`"))
+            command(id).filter(|_| backend.permits_command(id)).map(|c| c.to_json()).ok_or_else(|| format!("unknown command `{id}`"))
         }
         "execute" => backend.call("engine.execute", json!({"command": args["command"], "params": args["params"], "inspect": args["inspect"]})),
         "cross_probe" => backend.call("project.cross_probe", args.clone()),

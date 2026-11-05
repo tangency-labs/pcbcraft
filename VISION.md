@@ -38,6 +38,14 @@ What interests me is building this from the ground up for humans and agents to w
 
 AI is still pretty bad at the spatial part of PCBs, especially the way KiCad does it. But LLMs can somehow make coherent things in SolidCraft, and I want that for PCBs.
 
+### First live editing milestone
+
+An agent can move a wired symbol in the schematic the user has open. The
+symbol and attached wire update on the canvas, and the edit stays unsaved
+until the user saves. Undo and redo from the editor, then inspect through MCP
+after each step to verify both see the same state. The editor refuses a move
+based on a revision that has since changed.
+
 ## What we fix
 
 Keep what works, then go after the things that have annoyed everyone for years.

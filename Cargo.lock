@@ -2228,6 +2228,7 @@ dependencies = [
 name = "pcbcraft-app"
 version = "0.0.0"
 dependencies = [
+ "craft-control",
  "eframe",
  "egui",
  "egui_kittest",
@@ -2235,6 +2236,7 @@ dependencies = [
  "log",
  "pcbcraft-chrome",
  "pcbcraft-engine",
+ "pcbcraft-mcp",
  "rfd",
  "serde",
  "serde_json",

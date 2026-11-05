@@ -7,6 +7,8 @@
 //! Adapted from SolidCraft's `crates/mcp` (see `ATTRIBUTION.md`).
 
 mod backend;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod live;
 mod server;
 mod tools;
 
