@@ -60,7 +60,8 @@ executable on PATH or **Custom command** to use a compatible executable at
 another location. Both **Add agent…** and **AI settings…** are available
 from the Assistant's agent dropdown.
 
-Install the Codex CLI or Claude Code on your PATH, then choose the agent and
+For an installed agent, put the Codex CLI or Claude Code on your PATH. For a
+custom command, set the executable path in its profile. Choose the agent and
 select **Connect**.
 The header shows **Ready** when PCBcraft can use the agent's saved login.
 If the agent asks you to sign in, choose **Sign in** and complete the browser

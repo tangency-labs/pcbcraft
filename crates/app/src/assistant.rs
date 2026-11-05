@@ -799,6 +799,29 @@ mod tests {
         Ok(())
     }
 
+    /// Clicking the chat blocks placement shortcuts while application shortcuts still work.
+    #[test]
+    fn assistant_focus_keeps_application_shortcuts_available() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = PcbApp::default();
+        app.session.apply("project.new", &json!({"name": "Assistant shortcut fixture"}))?;
+        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        harness.run();
+        click(&mut harness, "Assistant");
+        let point = harness.state().assistant.panel_rect.ok_or("Assistant panel is missing")?.center();
+        harness.drag_at(point);
+        harness.run();
+        harness.drop_at(point);
+        harness.run();
+        assert!(harness.state().assistant.keyboard_active);
+        harness.key_press(egui::Key::A);
+        harness.run();
+        assert!(matches!(harness.state().dialog, crate::Dialog::None));
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
+        harness.run();
+        assert!(matches!(harness.state().dialog, crate::Dialog::Preferences(_)));
+        Ok(())
+    }
+
     /// A profile added from the dropdown survives a restart and connects using its saved executable.
     #[test]
     fn assistant_ai_preferences_add_and_connect_a_saved_agent() -> Result<(), Box<dyn std::error::Error>> {

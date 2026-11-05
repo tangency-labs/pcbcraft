@@ -344,7 +344,7 @@ impl PcbApp {
         }
     }
 
-    /// Route the Assistant shortcut globally and give its chat first claim on editing keys.
+    /// Route the Assistant toggle and report whether its chat owns the canvas keys.
     #[cfg(not(target_arch = "wasm32"))]
     fn assistant_shortcuts(&mut self, ctx: &egui::Context) -> bool {
         if !matches!(self.dialog, Dialog::None) || !self.assistant.enabled() {
@@ -470,9 +470,9 @@ impl PcbApp {
         }
     }
 
-    /// Handle editor keys outside text fields and dialogs. Placement keys apply only while menus are closed.
+    /// Handle app shortcuts outside text fields and dialogs. Assistant focus suppresses canvas tools.
     /// On Home, Escape returns to the workspace and the canvas keys do nothing.
-    fn shortcuts(&mut self, ctx: &egui::Context) {
+    fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool) {
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
             return;
         }
@@ -481,7 +481,7 @@ impl PcbApp {
             if !egui::Popup::is_any_open(ctx) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
                 self.home = false;
             }
-        } else if !egui::Popup::is_any_open(ctx) {
+        } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.tool.take().is_some() {
                 self.message = None;
             }
@@ -784,9 +784,7 @@ impl PcbApp {
         let assistant_keys = self.assistant_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]
         let assistant_keys = false;
-        if !assistant_keys {
-            self.shortcuts(&ctx);
-        }
+        self.shortcuts(&ctx, assistant_keys);
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_live_control();
         self.app_bar(ui);

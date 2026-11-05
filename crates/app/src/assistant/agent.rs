@@ -66,7 +66,7 @@ impl Agent {
 /// Check the provider's own login state or let it open its browser sign-in.
 /// The editor receives only success or failure, without credentials or account details.
 pub(super) fn authenticate(agent: Agent, executable: &OsStr, sign_in: bool, stop: &AtomicBool) -> Result<bool, String> {
-    let mut command = Command::new(executable);
+    let mut command = provider_command(executable);
     command.args(agent.auth_args(sign_in)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     let mut child = spawn(agent, command, stop)?;
     let timeout = if sign_in { Duration::from_secs(300) } else { Duration::from_secs(10) };
@@ -109,7 +109,7 @@ pub(super) fn request(
     stdin.write_all(input.as_bytes()).map_err(io_error)?;
     stdin.rewind().map_err(io_error)?;
 
-    let mut command = Command::new(executable);
+    let mut command = provider_command(executable);
     command.current_dir(run.path()).stdin(stdin).stderr(Stdio::null());
     match agent {
         Agent::Codex => {
@@ -161,8 +161,8 @@ pub(super) fn request(
                     "--output-format",
                     "json",
                     "--json-schema",
-                    SCHEMA,
                 ])
+                .arg(SCHEMA.lines().map(str::trim).collect::<String>())
                 .stdout(File::create(&output).map_err(io_error)?);
         }
     }
@@ -171,6 +171,54 @@ pub(super) fn request(
         return Err(format!("{} could not complete the request. Check sign-in and your connection.", agent.label()));
     }
     read_reply(agent, File::open(output).map_err(io_error)?)
+}
+
+/// Use an explicit Windows launcher path so Rust can recognize npm's batch shims.
+fn provider_command(executable: &OsStr) -> Command {
+    #[cfg(windows)]
+    if let Some(path) = windows_path(executable) {
+        return Command::new(path);
+    }
+    Command::new(executable)
+}
+
+/// Look for bare provider names on PATH in PATHEXT order. Explicit paths go to Rust unchanged.
+#[cfg(windows)]
+fn windows_path(executable: &OsStr) -> Option<std::path::PathBuf> {
+    use std::{
+        env,
+        path::{self, Component, Path},
+    };
+
+    let name = Path::new(executable);
+    let mut components = name.components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        return None;
+    }
+    let path = env::var_os("PATH")?;
+    let path_ext = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
+    let extensions: Vec<_> = path_ext
+        .split(';')
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .filter(|ext| matches!(ext.as_str(), ".com" | ".exe" | ".bat" | ".cmd"))
+        .collect();
+    for directory in env::split_paths(&path) {
+        let candidate = directory.join(name);
+        if name.extension().is_some() {
+            if candidate.is_file() {
+                return path::absolute(candidate).ok();
+            }
+        } else {
+            for extension in &extensions {
+                let candidate = candidate.with_extension(&extension[1..]);
+                if candidate.is_file() {
+                    return path::absolute(candidate).ok();
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Start the direct child without a console window and report a missing executable.
