@@ -50,6 +50,7 @@ enum Dialog {
 #[derive(Debug, Default)]
 pub struct PcbApp {
     session: Session,
+    camera: schematic_canvas::Camera,
     preferences: Preferences,
     dialog: Dialog,
     /// The revision at which the placement preview started.
@@ -125,6 +126,11 @@ impl PcbApp {
                     self.run("edit.redo", &Value::Null);
                 }
             });
+            menu::top(ui, "View", |ui| {
+                if MenuItem::new("Zoom to Fit").enabled(self.session.project().is_some()).show(ui) {
+                    self.camera.request_fit();
+                }
+            });
             menu::top(ui, "Place", |ui| {
                 if self.command_row(ui, PLACE_RESISTOR, "", "A") {
                     self.begin_placement();
@@ -165,10 +171,11 @@ impl PcbApp {
 
     /// Draw the open schematic and submit a snapped click through the shared placement command.
     fn canvas(&mut self, ui: &mut Ui) {
-        let placing = self.placing_resistor.is_some() && !egui::Popup::is_any_open(ui.ctx());
+        let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
+        let placing = self.placing_resistor.is_some() && input_enabled;
         let point = shell::canvas(ui, |ui| {
             if let Some(project) = self.session.project() {
-                return schematic_canvas::show(ui, project, placing);
+                return schematic_canvas::show(ui, project, &mut self.camera, placing, input_enabled);
             }
             let t = Tokens::get();
             ui.centered_and_justified(|ui| {
@@ -241,7 +248,12 @@ impl PcbApp {
                 if submit {
                     // A bad name stays in the dialog to fix, so the person sees why.
                     match self.session.execute(id, &json!({"name": text})) {
-                        Ok(_) => self.message = None,
+                        Ok(_) => {
+                            self.message = None;
+                            if id == "project.new" {
+                                self.camera = schematic_canvas::Camera::default();
+                            }
+                        }
                         Err(e) => {
                             error = Some(e.to_string());
                             self.dialog = Dialog::Name { command: id, text, error, focused };
