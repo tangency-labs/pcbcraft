@@ -62,3 +62,17 @@ fn socket_does_not_wait_for_newline_on_oversized_input() -> io::Result<()> {
     assert!(matches!(peer.receive(4), Err(error) if error.kind() == io::ErrorKind::InvalidData));
     Ok(())
 }
+
+/// An open peer that stalls mid-request produces the same timeout kind on every platform.
+#[test]
+fn stalled_first_request_reports_timed_out() -> io::Result<()> {
+    let listener = Listener::bind(0)?;
+    let token = Token::generate()?;
+    let mut sender = TcpStream::connect((Ipv4Addr::LOCALHOST, listener.port()?))?;
+    sender.write_all(b"{\"id\":")?;
+    let mut peer = listener.accept(Duration::from_millis(100))?;
+
+    let result = peer.authenticate(&token);
+    assert!(matches!(&result, Err(error) if error.kind() == io::ErrorKind::TimedOut), "{result:?}");
+    Ok(())
+}

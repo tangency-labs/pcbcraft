@@ -90,6 +90,7 @@ impl Connection {
     }
 
     /// Authenticate an accepted peer's first request and return it with its token removed.
+    /// A stalled request returns `TimedOut` as in [Self::receive].
     /// A failed check must end the connection before any request reaches the app.
     pub fn authenticate(&mut self, token: &Token) -> io::Result<Value> {
         let mut first = self.receive(AUTH_LIMIT)?.ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "peer closed before authenticating"))?;
@@ -108,6 +109,7 @@ impl Connection {
     }
 
     /// Read one JSON value within the configured timeout or return `None` when the peer closes.
+    /// A stalled frame returns `io::ErrorKind::TimedOut` on every platform.
     /// Drop the connection on error because some of the frame may already have been consumed.
     pub fn receive(&mut self, limit: usize) -> io::Result<Option<Value>> {
         self.reader.get_mut().deadline =
@@ -136,12 +138,16 @@ struct SocketInput {
 
 impl Read for SocketInput {
     /// Use the remaining frame budget for each socket read so partial input cannot renew it.
+    /// Normalize the timeout from this blocking socket to match an expired frame deadline.
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let remaining = self.deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return Err(io::ErrorKind::TimedOut.into());
         }
         self.socket.set_read_timeout(Some(remaining))?;
-        self.socket.read(buffer)
+        match self.socket.read(buffer) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Err(io::ErrorKind::TimedOut.into()),
+            result => result,
+        }
     }
 }
