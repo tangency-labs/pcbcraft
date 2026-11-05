@@ -33,11 +33,22 @@ pub(crate) enum Click {
     CancelWire,
 }
 
-/// Draw the schematic and active preview, then return any canvas tool action.
+/// Draw the schematic and its active preview, and report a requested tool action.
+///
+/// Return `Click::CancelWire` when Cancel or Escape dismisses an in-progress wire
+/// through its context menu. An open wire menu can handle cancellation even
+/// while canvas input is blocked.
+///
+/// With canvas input enabled and no drag in progress, a primary click during
+/// placement returns `Click::Place` at a valid snapped point. In Wire mode, a
+/// primary click that hits a terminal returns `Click::Pin`.
+/// Return `None` for a preview without a valid click, an inactive tool, or
+/// blocked or dragged canvas input when the wire menu did not cancel.
 pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, tool: Option<Tool>, input_enabled: bool) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, "Schematic canvas"));
     camera.navigate(&response, rect, project, input_enabled);
 
     let painter = ui.painter_at(rect);

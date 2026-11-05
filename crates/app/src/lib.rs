@@ -15,7 +15,7 @@ use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use pcbcraft_chrome::{
     MenuItem, Tokens, fonts, menu,
     shell::{self, dim},
-    theme,
+    theme, workspace,
 };
 use pcbcraft_engine::{
     CONNECT_PINS, PLACE_SYMBOL, Session, command,
@@ -142,11 +142,12 @@ impl PcbApp {
                 }
             });
             menu::top(ui, "View", |ui| {
-                if MenuItem::new("Zoom to Fit").enabled(self.session.project().is_some()).show(ui) {
+                let has_project = self.session.project().is_some();
+                if MenuItem::new("Zoom to Fit").enabled(has_project).show(ui) {
                     self.camera.request_fit();
                 }
-                let inspector = if self.net_inspector.open { "Hide Net Inspector" } else { "Show Net Inspector" };
-                if MenuItem::new(inspector).show(ui) {
+                let inspector = if has_project && self.net_inspector.open { "Hide Net Inspector" } else { "Show Net Inspector" };
+                if MenuItem::new(inspector).enabled(has_project).show(ui) {
                     self.net_inspector.open = !self.net_inspector.open;
                 }
             });
@@ -168,6 +169,30 @@ impl PcbApp {
                     self.dialog = Dialog::About;
                 }
             });
+        });
+    }
+
+    /// Expose the same placement, wiring, inspection, and fit actions as the menus.
+    fn ribbon(&mut self, ui: &mut Ui) {
+        use workspace::ToolIcon;
+
+        let has_project = self.session.project().is_some();
+        workspace::ribbon(ui, "Schematic", "Capture", |ui| {
+            let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. }));
+            if workspace::tool(ui, ToolIcon::Symbol, "Symbol", "Add symbol (A)", self.session.available(PLACE_SYMBOL), placing).clicked() {
+                self.dialog = Dialog::ChooseSymbol;
+            }
+            let wiring = matches!(self.tool, Some(Tool::Wire { .. }));
+            if workspace::tool(ui, ToolIcon::Wire, "Wire", "Draw wire (W)", self.session.available(CONNECT_PINS), wiring).clicked() {
+                self.begin_wire();
+            }
+            ui.separator();
+            if workspace::tool(ui, ToolIcon::Nets, "Nets", "Toggle Net Inspector", has_project, has_project && self.net_inspector.open).clicked() {
+                self.net_inspector.open = !self.net_inspector.open;
+            }
+            if workspace::tool(ui, ToolIcon::Fit, "Fit", "Fit schematic", has_project, false).clicked() {
+                self.camera.request_fit();
+            }
         });
     }
 
@@ -369,11 +394,15 @@ impl PcbApp {
         self.sync_style(&ctx);
         self.shortcuts(&ctx);
         self.menus(ui);
+        self.ribbon(ui);
         if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
             self.tool = None;
         }
         self.status(ui);
-        self.net_inspector.show(ui, &self.session);
+        if let Some(project) = self.session.project() {
+            workspace::sheet_header(ui, &format!("{} / Main", project.name));
+            self.net_inspector.show(ui, &self.session);
+        }
         let revision = self.session.revision();
         self.canvas(ui);
         self.dialogs(&ctx);

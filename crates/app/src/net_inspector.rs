@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use egui::{Frame, Margin, Panel, ScrollArea, Ui};
-use pcbcraft_chrome::{Tokens, shell::dim};
+use egui::Ui;
+use pcbcraft_chrome::{shell::dim, workspace};
 use pcbcraft_engine::Session;
 
 #[derive(Debug, Default)]
@@ -84,22 +84,14 @@ impl NetInspector {
             self.revision = Some(session.revision());
         }
 
-        let width = (ui.available_width() * 0.42).min(260.0);
-        let frame = Frame::side_top_panel(ui.style()).inner_margin(Margin::same(Tokens::get().space_8 as i8));
-        Panel::right("net_inspector").exact_size(width).resizable(false).frame(frame).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("Net Inspector");
-                if ui.small_button("Close").clicked() {
-                    self.open = false;
-                }
-            });
-            ui.separator();
+        let close = workspace::right_card(ui, "net_inspector", "Net Inspector", |ui| {
             if let Some(snapshot) = &self.snapshot {
-                ScrollArea::vertical().show(ui, |ui| snapshot.show(ui));
+                snapshot.show(ui);
             } else {
                 ui.label(dim("No project open"));
             }
         });
+        self.open = !close;
     }
 }
 

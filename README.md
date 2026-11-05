@@ -6,6 +6,8 @@ Electronics design that feels like the tools you already know, built so a person
 
 Choose **Place → Wire** or press **W**, then click two terminal markers to connect them. Press **Esc** or right-click and choose **Cancel** to discard an in-progress wire. Use **Edit → Undo** to remove the last committed wire.
 
+The **Capture** ribbon gives you the same Symbol and Wire tools. Use **Nets** to open the Net Inspector beside the schematic, and **Fit** to bring the circuit into view.
+
 ## Run it
 
 ```sh

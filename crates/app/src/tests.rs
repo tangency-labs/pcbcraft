@@ -39,6 +39,26 @@ fn it_opens_with_no_project_and_says_so() {
     assert!(harness.state().session().project().is_none());
 }
 
+/// The inspector never reserves space for the empty workspace, even after undoing project creation.
+#[test]
+fn the_empty_workspace_stays_centered_after_undo_with_the_inspector_open() {
+    let mut harness = harness();
+    let empty = "No project open. Choose File, then New Project.";
+    let original = harness.get_by_label(empty).rect().center();
+    harness.get_by_label("Toggle Net Inspector").click();
+    harness.run();
+    assert!(harness.query_by_label("Close").is_none());
+
+    new_project(&mut harness, "blinky");
+    harness.get_by_label("Toggle Net Inspector").click();
+    harness.run();
+    harness.get_by_label("Close");
+    choose(&mut harness, "Edit", "Undo");
+
+    assert!(harness.query_by_label("Close").is_none());
+    assert_eq!(harness.get_by_label(empty).rect().center(), original);
+}
+
 #[test]
 fn a_person_makes_a_project_through_the_menu() {
     let mut harness = harness();
@@ -198,8 +218,19 @@ fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
 }
 
+/// Locate the actual canvas center after the surrounding workspace panels have laid out.
+fn canvas_center(harness: &Harness<'_, PcbApp>) -> egui::Pos2 {
+    harness.get_by_label("Schematic canvas").rect().center()
+}
+
+/// Click at a known offset from the center of the canvas at the default camera zoom.
+fn click_canvas_offset(harness: &mut Harness<'_, PcbApp>, offset: egui::Vec2) {
+    let point = canvas_center(harness) + offset;
+    click_canvas_at(harness, point);
+}
+
 fn click_canvas(harness: &mut Harness<'_, PcbApp>) {
-    click_canvas_at(harness, egui::pos2(502.0, 354.0));
+    click_canvas_offset(harness, egui::vec2(2.0, 0.0));
 }
 
 /// Send a real pointer click to the canvas at a specified logical position.
@@ -217,7 +248,7 @@ fn click_canvas_at(harness: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
 fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     let mut harness = harness();
     new_project(&mut harness, "navigation");
-    let point = egui::pos2(540.64, 354.0);
+    let point = canvas_center(&harness) + egui::vec2(40.64, 0.0);
     harness.hover_at(point);
     harness.run();
     harness.event(egui::Event::MouseWheel {
@@ -269,7 +300,7 @@ fn wiring_project(harness: &mut Harness<'_, PcbApp>) {
     choose(harness, "Place", "Place Symbol…");
     select_symbol(harness, "LED");
     harness.get_by_label("Place LED · Esc to cancel");
-    click_canvas_at(harness, egui::pos2(703.2, 414.96));
+    click_canvas_offset(harness, egui::vec2(203.2, 60.96));
     assert_eq!(harness.state().session().project().unwrap().symbols()[1].definition.id, "led");
 }
 
@@ -278,10 +309,10 @@ fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
     let mut harness = harness();
     wiring_project(&mut harness);
     choose(&mut harness, "Place", "Wire");
-    click_canvas_at(&mut harness, egui::pos2(550.8, 354.0));
+    click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
     harness.get_by_label("Wire · Click the destination pin");
     assert_eq!(harness.state().session().revision(), 3);
-    click_canvas_at(&mut harness, egui::pos2(652.4, 414.96));
+    click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
 
     let inspected = harness.state().session().inspect();
     let schematic = &inspected["project"]["schematic"];
@@ -300,6 +331,42 @@ fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
     assert_eq!(&harness.state().session().inspect()["project"]["schematic"], schematic);
 }
 
+/// At a compact width, ribbon actions remain reachable and the right card leaves canvas room.
+#[test]
+fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
+    let mut harness = harness();
+    harness.set_size(egui::vec2(400.0, 600.0));
+    harness.run();
+    new_project(&mut harness, "compact");
+
+    for (name, x) in [("Resistor", -81.28), ("LED", 81.28)] {
+        harness.get_by_label("Add symbol (A)").click();
+        harness.run();
+        select_symbol(&mut harness, name);
+        click_canvas_offset(&mut harness, egui::vec2(x, 0.0));
+    }
+    harness.get_by_label("Draw wire (W)").click();
+    harness.run();
+    for x in [-30.48, 30.48] {
+        click_canvas_offset(&mut harness, egui::vec2(x, 0.0));
+    }
+    let wired = harness.state().session().inspect();
+    assert_eq!(wired["project"]["schematic"]["wires"].as_array().unwrap().len(), 1);
+
+    let full_width = harness.get_by_label("Schematic canvas").rect().width();
+    harness.get_by_label("Toggle Net Inspector").click();
+    harness.run();
+    harness.get_by_label("R1.2, D1.1");
+    let canvas = harness.get_by_label("Schematic canvas").rect();
+    let close = harness.get_by_label("Close");
+    assert!(canvas.width() >= 0.6 * full_width - 1.0, "canvas: {canvas:?}");
+    assert!(close.rect().left() >= canvas.right());
+    close.click();
+    harness.run();
+    assert!(harness.query_by_label("R1.2, D1.1").is_none());
+    assert_eq!(harness.state().session().inspect(), wired);
+}
+
 #[test]
 fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
     let mut harness = harness();
@@ -307,18 +374,18 @@ fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
     let before = harness.state().session().inspect();
     harness.key_press(Key::W);
     harness.run();
-    click_canvas_at(&mut harness, egui::pos2(550.8, 354.0));
-    click_canvas_at(&mut harness, egui::pos2(600.0, 390.0));
+    click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
+    click_canvas_offset(&mut harness, egui::vec2(100.0, 36.0));
     harness.get_by_label("Wire · Click the destination pin");
     harness.key_press(Key::Escape);
     harness.run();
-    click_canvas_at(&mut harness, egui::pos2(652.4, 414.96));
+    click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
     assert_eq!(harness.state().session().inspect(), before);
 }
 
 /// Open the context menu during an active wire draft with a real secondary click.
 fn open_wire_context(harness: &mut Harness<'_, PcbApp>) {
-    let point = egui::pos2(580.0, 380.0);
+    let point = canvas_center(harness) + egui::vec2(80.0, 26.0);
     harness.hover_at(point);
     harness.run();
     for pressed in [true, false] {
@@ -334,9 +401,9 @@ fn dismissing_the_wire_menu_over_a_pin_does_not_commit() {
     wiring_project(&mut harness);
     harness.key_press(Key::W);
     harness.run();
-    click_canvas_at(&mut harness, egui::pos2(550.8, 354.0));
+    click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
     open_wire_context(&mut harness);
-    let destination = egui::pos2(652.4, 414.96);
+    let destination = canvas_center(&harness) + egui::vec2(152.4, 60.96);
     click_canvas_at(&mut harness, destination);
     assert!(harness.query_by_label("Cancel").is_none());
     assert!(harness.state().session().project().unwrap().wires().is_empty());
@@ -354,7 +421,7 @@ fn the_wire_menu_cancel_button_and_escape_both_discard_the_preview() {
     for escape in [false, true] {
         harness.key_press(Key::W);
         harness.run();
-        click_canvas_at(&mut harness, egui::pos2(550.8, 354.0));
+        click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
         open_wire_context(&mut harness);
         if escape {
             harness.key_press(Key::Escape);
@@ -364,7 +431,7 @@ fn the_wire_menu_cancel_button_and_escape_both_discard_the_preview() {
         harness.run();
         assert!(harness.query_by_label("Cancel").is_none());
         assert!(harness.query_by_label("Wire · Click the destination pin").is_none());
-        click_canvas_at(&mut harness, egui::pos2(652.4, 414.96));
+        click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
         assert_eq!(harness.state().session().inspect(), before);
     }
 }
