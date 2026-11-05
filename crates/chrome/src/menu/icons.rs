@@ -19,6 +19,12 @@ pub enum MenuIcon {
     Settings,
     Help,
     Bug,
+    /// Preferences pages and the settings search field.
+    Appearance,
+    Navigation,
+    Keyboard,
+    Search,
+    Assistant,
 }
 
 impl MenuIcon {
@@ -118,6 +124,42 @@ impl MenuIcon {
                     line(&[(2.0, y), (14.0, y)], stroke);
                 }
                 painter.rect_filled(rect(4.5, 4.5, 11.5, 13.5), 3, ink);
+            }
+            Self::Appearance => {
+                // A disc, half filled: the light and dark palettes.
+                painter.circle_stroke(center, 6.0 * scale, stroke);
+                filled(&[&[(8.0, 2.0), (10.3, 2.5), (12.2, 3.8), (13.5, 5.7), (14.0, 8.0), (13.5, 10.3), (12.2, 12.2), (10.3, 13.5), (8.0, 14.0)]]);
+            }
+            Self::Navigation => {
+                // Four arrows out from the middle: pan in any direction.
+                line(&[(8.0, 2.0), (8.0, 14.0)], stroke);
+                line(&[(2.0, 8.0), (14.0, 8.0)], stroke);
+                for points in [
+                    [(6.0, 4.0), (8.0, 2.0), (10.0, 4.0)],
+                    [(6.0, 12.0), (8.0, 14.0), (10.0, 12.0)],
+                    [(4.0, 6.0), (2.0, 8.0), (4.0, 10.0)],
+                    [(12.0, 6.0), (14.0, 8.0), (12.0, 10.0)],
+                ] {
+                    line(&points, stroke);
+                }
+            }
+            Self::Keyboard => {
+                painter.rect_stroke(rect(1.5, 4.0, 14.5, 12.5), 2, stroke, StrokeKind::Middle);
+                for x in [4.5, 7.0, 9.5, 12.0] {
+                    painter.circle_filled(at(x, 6.8), 0.6 * scale, ink);
+                }
+                line(&[(5.0, 9.8), (11.0, 9.8)], stroke);
+            }
+            Self::Assistant => {
+                // A speech bubble with a spark: the AI page.
+                painter.rect_stroke(rect(2.0, 3.0, 14.0, 11.5), 3, stroke, StrokeKind::Middle);
+                line(&[(5.0, 11.5), (4.5, 14.0), (8.0, 11.5)], stroke);
+                line(&[(8.0, 5.0), (8.0, 9.5)], accent);
+                line(&[(5.75, 7.25), (10.25, 7.25)], accent);
+            }
+            Self::Search => {
+                painter.circle_stroke(at(7.0, 7.0), 4.3 * scale, stroke);
+                line(&[(10.2, 10.2), (14.0, 14.0)], stroke);
             }
             Self::Help => {
                 painter.circle_stroke(center, 6.2 * scale, stroke);

@@ -6,6 +6,7 @@ use pcbcraft_engine::{
 };
 
 use super::LED_ARROW_TIP_Y;
+use crate::preferences::{Navigation, ScrollAction, ZoomAround};
 
 const MIN_ZOOM: f32 = 0.005;
 const MAX_ZOOM: f32 = 8.0;
@@ -30,6 +31,12 @@ impl Camera {
         self.fit_requested = true;
     }
 
+    /// The current zoom factor, for tests that check navigation.
+    #[cfg(test)]
+    pub(crate) fn zoom(&self) -> f32 {
+        self.zoom
+    }
+
     /// The visible spacing of the underlying placement grid, before coarsening its drawing.
     pub(super) fn grid_step(&self) -> f32 {
         theme::SCHEMATIC_GRID_SPACING * self.zoom
@@ -47,8 +54,10 @@ impl Camera {
         Point { x_nm: relative.x.round() as i64 * GRID_NM, y_nm: relative.y.round() as i64 * GRID_NM }
     }
 
-    /// Apply navigation only when the canvas owns input. Wheel and pinch keep their anchor fixed.
-    pub(super) fn navigate(&mut self, response: &Response, rect: Rect, project: &Project, enabled: bool) {
+    /// Apply navigation only when the canvas owns input, following the person's settings.
+    /// The zoom anchor (the pointer, or the view center) stays fixed while zooming. When
+    /// scrolling pans, Ctrl or ⌘ with the wheel still zooms, and a pinch always zooms.
+    pub(super) fn navigate(&mut self, response: &Response, rect: Rect, project: &Project, enabled: bool, navigation: Navigation) {
         if std::mem::take(&mut self.fit_requested) {
             self.fit(project, rect);
         }
@@ -61,11 +70,16 @@ impl Camera {
         if response.contains_pointer()
             && let Some(pointer) = response.ctx.input(|i| i.pointer.hover_pos())
         {
-            let exponent = response.ctx.input(|input| wheel_exponent(&input.events, rect.height()));
-            if exponent != 0.0 {
-                let before = (pointer - rect.center() - self.offset) / self.zoom;
-                self.zoom = (self.zoom * exponent.clamp(-2.0, 2.0).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
-                self.offset = pointer - rect.center() - before * self.zoom;
+            let Wheel { zoom, pan } = response.ctx.input(|input| wheel(&input.events, rect.height(), navigation));
+            self.offset += pan;
+            if zoom != 0.0 {
+                let anchor = match navigation.zoom_around {
+                    ZoomAround::Pointer => pointer,
+                    ZoomAround::Center => rect.center(),
+                };
+                let before = (anchor - rect.center() - self.offset) / self.zoom;
+                self.zoom = (self.zoom * zoom.clamp(-2.0, 2.0).exp()).clamp(MIN_ZOOM, MAX_ZOOM);
+                self.offset = anchor - rect.center() - before * self.zoom;
             }
         }
         // Keep the view center within reach of the full schematic coordinate range.
@@ -94,21 +108,71 @@ impl Camera {
     }
 }
 
-/// Normalize mouse-wheel units and pinch gestures to a logarithmic zoom delta.
-fn wheel_exponent(events: &[Event], viewport_height: f32) -> f32 {
-    events
-        .iter()
-        .map(|event| match event {
-            Event::MouseWheel { unit, delta, .. } if delta.y.is_finite() => {
+/// This frame's wheel and pinch input: a logarithmic zoom delta and a pan in points.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Wheel {
+    zoom: f32,
+    pan: Vec2,
+}
+
+/// Normalize mouse-wheel units and pinch gestures, then apply the navigation settings.
+/// Speed and direction change wheel zoom only; a pinch follows the fingers.
+fn wheel(events: &[Event], viewport_height: f32, navigation: Navigation) -> Wheel {
+    let direction = if navigation.reverse_zoom { -1.0 } else { 1.0 };
+    let mut out = Wheel::default();
+    for event in events {
+        match event {
+            Event::MouseWheel { unit, delta, modifiers, .. } if delta.is_finite() => {
                 let scale = match unit {
                     MouseWheelUnit::Point => 1.0,
                     MouseWheelUnit::Line => 40.0,
                     MouseWheelUnit::Page => viewport_height,
                 };
-                (delta.y * scale * 0.004).clamp(-1.5, 1.5)
+                if navigation.scroll == ScrollAction::Pan && !modifiers.command {
+                    out.pan += *delta * scale;
+                } else {
+                    out.zoom += (delta.y * scale * 0.004 * navigation.zoom_speed()).clamp(-1.5, 1.5) * direction;
+                }
             }
-            Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => factor.ln().clamp(-1.5, 1.5),
-            _ => 0.0,
-        })
-        .sum()
+            Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => out.zoom += factor.ln().clamp(-1.5, 1.5),
+            _ => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scroll(y: f32, command: bool) -> Event {
+        let modifiers = if command { egui::Modifiers::COMMAND } else { egui::Modifiers::NONE };
+        Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, y), modifiers, phase: egui::TouchPhase::Move }
+    }
+
+    #[test]
+    fn default_navigation_zooms_with_the_wheel() {
+        let input = wheel(&[scroll(50.0, false)], 500.0, Navigation::default());
+        assert!(input.zoom > 0.0);
+        assert_eq!(input.pan, Vec2::ZERO);
+    }
+
+    #[test]
+    fn reverse_and_speed_change_wheel_zoom_but_not_pinch() {
+        let base = wheel(&[scroll(50.0, false)], 500.0, Navigation::default()).zoom;
+        let reversed = Navigation { reverse_zoom: true, ..Navigation::default() };
+        assert_eq!(wheel(&[scroll(50.0, false)], 500.0, reversed).zoom, -base);
+        let fast = Navigation { zoom_speed_percent: 200, ..Navigation::default() };
+        assert!((wheel(&[scroll(50.0, false)], 500.0, fast).zoom - 2.0 * base).abs() < 1e-6);
+        let pinch = [Event::Zoom(1.5)];
+        assert_eq!(wheel(&pinch, 500.0, reversed).zoom, wheel(&pinch, 500.0, Navigation::default()).zoom);
+    }
+
+    #[test]
+    fn panning_scroll_moves_the_view_and_ctrl_still_zooms() {
+        let pan = Navigation { scroll: ScrollAction::Pan, ..Navigation::default() };
+        let moved = wheel(&[scroll(-30.0, false)], 500.0, pan);
+        assert_eq!((moved.zoom, moved.pan), (0.0, vec2(0.0, -30.0)));
+        assert!(wheel(&[scroll(30.0, true)], 500.0, pan).zoom > 0.0);
+    }
 }

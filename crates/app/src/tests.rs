@@ -188,9 +188,9 @@ fn home_rows_reach_the_save_and_preferences_dialogs() {
     let preferences = harness.query_all_by_label("Preferences").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
     preferences.click();
     harness.run();
-    assert!(matches!(harness.state().dialog, Dialog::Preferences(PreferencesPage::Appearance)));
+    assert!(matches!(harness.state().dialog, Dialog::Preferences(_)));
     assert!(harness.state().home);
-    click(&mut harness, "Close");
+    click(&mut harness, "Cancel");
 
     click(&mut harness, "Save As…");
     assert!(!harness.state().home);
@@ -366,12 +366,146 @@ fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
     harness.run();
     assert_eq!(harness.state().preferences().scale_percent, 125);
     assert_eq!(harness.ctx.zoom_factor(), 1.25);
-    harness.get_by_label("Close").click();
-    harness.run();
+    click(&mut harness, "OK");
+    assert!(matches!(harness.state().dialog, Dialog::None));
+    assert_eq!(harness.state().preferences().scale_percent, 125);
     click(&mut harness, "About PCBCraft");
     harness.get_by_label("Close").click();
     harness.run();
     assert!(harness.query_by_label("Close").is_none());
+}
+
+/// Cancel, Esc and the close button put back what was there when Preferences opened, and
+/// Apply moves that point forward.
+#[test]
+fn preferences_cancel_restores_and_apply_keeps() {
+    let mut harness = harness();
+    click(&mut harness, "Preferences");
+    click(&mut harness, "Light");
+    assert_eq!(harness.state().preferences().theme, ThemeChoice::Light);
+    click(&mut harness, "Cancel");
+    assert_eq!(harness.state().preferences().theme, ThemeChoice::Dark);
+    assert_eq!(harness.ctx.global_style().visuals.panel_fill, Tokens::dark().panel);
+
+    click(&mut harness, "Preferences");
+    assert!(harness.get_by_label("Apply").accesskit_node().is_disabled());
+    click(&mut harness, "110%");
+    click(&mut harness, "Apply");
+    click(&mut harness, "Light");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::None));
+    assert_eq!((harness.state().preferences().theme, harness.state().preferences().scale_percent), (ThemeChoice::Dark, 110));
+
+    click(&mut harness, "Preferences");
+    click(&mut harness, "Light");
+    click(&mut harness, "Close Preferences");
+    assert_eq!(harness.state().preferences().theme, ThemeChoice::Dark);
+}
+
+/// Adding an agent from the AI page returns to the same Preferences window, so Cancel there
+/// still puts back changes made before the agent dialog opened.
+#[test]
+fn adding_an_agent_from_preferences_returns_to_the_same_window() {
+    let mut harness = harness();
+    click(&mut harness, "Preferences");
+    click(&mut harness, "Light");
+    click(&mut harness, "AI");
+    harness.get_by_label("Show AI features");
+    click(&mut harness, "Add agent…");
+    assert!(matches!(harness.state().dialog, Dialog::Agent { return_to: Some(_), .. }), "{:?}", harness.state().dialog);
+    click(&mut harness, "Cancel");
+    assert!(matches!(harness.state().dialog, Dialog::Preferences(_)));
+    harness.get_by_label("Show AI features");
+    click(&mut harness, "Cancel");
+    assert!(matches!(harness.state().dialog, Dialog::None));
+    assert_eq!(harness.state().preferences().theme, ThemeChoice::Dark);
+}
+
+/// Restore page defaults resets the open page only.
+#[test]
+fn preferences_restore_defaults_for_the_open_page() {
+    let mut harness = harness();
+    click(&mut harness, "Preferences");
+    click(&mut harness, "Light");
+    click(&mut harness, "Navigation");
+    click(&mut harness, "Reversed");
+    click(&mut harness, "Center of view");
+    assert!(harness.state().preferences().navigation.reverse_zoom);
+    click(&mut harness, "Restore page defaults");
+    assert_eq!(harness.state().preferences().navigation, Navigation::default());
+    assert_eq!(harness.state().preferences().theme, ThemeChoice::Light);
+    click(&mut harness, "Shortcuts");
+    assert!(harness.get_by_label("Restore page defaults").accesskit_node().is_disabled());
+    harness.get_by_label("Draw wire");
+}
+
+/// Search shows matching rows from every page, finds Theme by "dark", and Enter opens the
+/// result's page with the search cleared.
+#[test]
+fn preferences_search_filters_rows_across_pages() {
+    let mut harness = harness();
+    click(&mut harness, "Preferences");
+    let search = |harness: &mut Harness<'_, PcbApp>, text: &str| {
+        harness.get_by_role(egui::accesskit::Role::TextInput).click();
+        harness.run();
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.get_by_role(egui::accesskit::Role::TextInput).type_text(text);
+        harness.run();
+        harness.run();
+    };
+    search(&mut harness, "zoom");
+    harness.get_by_label("Zoom speed");
+    harness.get_by_label("Zoom direction");
+    assert!(harness.query_by_label("Theme").is_none());
+    assert!(harness.query_by_label("Add symbol").is_none());
+
+    search(&mut harness, "dark");
+    harness.get_by_label("Theme");
+    assert!(harness.query_by_label("Zoom speed").is_none());
+
+    search(&mut harness, "wire");
+    harness.get_by_label("Draw wire");
+    harness.key_press(Key::Enter);
+    harness.run();
+    harness.run();
+    assert!(harness.query_by_label("Zoom speed").is_none());
+    assert!(harness.query_all_by_label("Shortcuts").any(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)));
+    harness.get_by_label("Add symbol");
+
+    search(&mut harness, "qqq");
+    harness.get_by_label("No settings match “qqq”");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::Preferences(_)), "Esc clears the search first");
+    harness.get_by_label("Add symbol");
+}
+
+/// With scrolling set to pan, the wheel moves the schematic instead of zooming it.
+#[test]
+fn navigation_preferences_change_what_the_wheel_does() {
+    let mut harness = harness();
+    new_project(&mut harness, "navigation");
+    let wheel = |harness: &mut Harness<'_, PcbApp>, modifiers| {
+        harness.hover_at(canvas_center(harness));
+        harness.run();
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 2.0),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        });
+        harness.run();
+    };
+    wheel(&mut harness, Modifiers::NONE);
+    let zoomed = harness.state().camera.zoom();
+    assert!(zoomed > 1.0);
+
+    harness.state_mut().preferences.navigation.scroll = ScrollAction::Pan;
+    wheel(&mut harness, Modifiers::NONE);
+    assert_eq!(harness.state().camera.zoom(), zoomed);
+    wheel(&mut harness, Modifiers::COMMAND);
+    assert!(harness.state().camera.zoom() > zoomed);
 }
 
 /// Capture placement snaps through the shared engine command and can be undone from the app bar.

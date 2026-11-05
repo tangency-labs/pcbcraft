@@ -11,6 +11,7 @@ pub mod assistant;
 pub mod fonts;
 pub mod home;
 pub mod menu;
+pub mod settings;
 pub mod shell;
 pub mod theme;
 mod titlebar;
