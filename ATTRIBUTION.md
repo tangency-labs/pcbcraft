@@ -22,6 +22,7 @@ PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apach
 
 | PCBCraft file | PCBcraft Next source | What changed |
 |---|---|---|
+| `crates/engine/src/schematic/wiring.rs`, `crates/engine/src/lib.rs` | `src/document.rs`, `src/netlist.rs` | Adapted explicit terminal references and net traversal to the existing command session. This slice supports direct pin links on one schematic. |
 | `crates/engine/src/schematic.rs`, `crates/engine/src/lib.rs` | `src/document.rs`, `src/definitions.rs`, `src/session.rs` | Adapted nanometer coordinates, distinct component and symbol identities, and the procedural resistor definition to the existing session and command history. |
 | `crates/app/src/schematic_canvas.rs` | `src/desktop/canvas.rs` | Adapted the schematic grid and resistor zigzag for the shared desktop and browser canvas. Pin endpoints come from the engine and drawing metrics live in `crates/chrome`. |
 

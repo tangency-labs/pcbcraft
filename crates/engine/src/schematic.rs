@@ -1,11 +1,18 @@
 //! In-memory schematic placement. Positions are nanometers in schematic space.
 
+pub(crate) mod wiring;
+
 use serde_json::{Value, json};
 
 pub const GRID_NM: i64 = 1_270_000;
 pub const PIN_OFFSET_NM: i64 = 5 * GRID_NM;
 pub const MAX_CENTER_NM: i64 = 1_000_000_000 - PIN_OFFSET_NM;
 pub(crate) const MAX_SYMBOLS: usize = 4096;
+
+/// Format the symbol ID used by inspection and command endpoints.
+fn symbol_id(ordinal: u64) -> String {
+    format!("symbol-{ordinal}")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Point {
@@ -42,7 +49,7 @@ impl ResistorPlacement {
         let pin = |number, position: Point| json!({"number": number, "x_nm": position.x_nm, "y_nm": position.y_nm});
         let [left, right] = self.pins();
         json!({
-            "id": format!("symbol-{}", self.ordinal),
+            "id": symbol_id(self.ordinal),
             "component_id": format!("component-{}", self.ordinal),
             "kind": "resistor",
             "reference": self.reference(),
