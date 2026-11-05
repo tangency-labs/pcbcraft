@@ -76,6 +76,21 @@ contributors, MIT OR Apache-2.0. The download arrow points into the tray.
 The history arrows follow the family `flat/undo.svg` and `flat/redo.svg` at
 the same revision.
 
+The Home page follows SolidCraft's start page in `crates/ui-egui/src/home.rs`
+and its surfaces in `crates/ui-egui/src/ui_kit/file_view.rs` at
+`c553365a2197a689e749389a6fbf707a38df9b61`, copyright (c) 2026 SolidCraft
+contributors, MIT OR Apache-2.0. `crates/chrome/src/home.rs` keeps the
+navigation rail, back row, navigation rows, separators, tile grid and action
+tile layout, and the `file_*` sizes come from `assets/styles/ui/palettes.rs`
+at that revision. The `file_*` colours are derived from PCBCraft's palette the
+way SolidCraft's `crates/ui-egui/src/theme_files.rs` fills them in for theme
+files that leave them out, with a deeper hover on the light rail. PCBCraft dropped recent
+designs, samples, recovery, export and thumbnails, stacks the rail above the
+content at narrow widths, and wires the rows to its own project dialogs and
+commands. The house glyph in `crates/chrome/src/menu/icons.rs` is a simplified,
+theme-colored drawing of `assets/icons/ui/design/svg/flat/home.svg` at the same
+revision.
+
 ## Bundled fonts
 
 | File | Source | License |

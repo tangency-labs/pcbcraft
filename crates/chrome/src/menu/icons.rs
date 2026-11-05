@@ -7,6 +7,7 @@ use crate::Tokens;
 /// Glyphs shared by File rows and app bar actions.
 #[derive(Clone, Copy, Debug)]
 pub enum MenuIcon {
+    Home,
     New,
     Open,
     Save,
@@ -24,7 +25,13 @@ impl MenuIcon {
     /// Paint a 16-point glyph. The caller selects brighter ink for active controls or hovered rows
     /// and sets the painter opacity when the action is disabled.
     pub(super) fn paint(self, painter: &Painter, center: Pos2, t: Tokens, hot: bool) {
-        let scale = t.space_16 / 16.0;
+        self.paint_sized(painter, center, t.space_16, t, hot);
+    }
+
+    /// Paint the glyph scaled to `size` points square, with stroke widths scaled to match.
+    /// Ink and opacity follow the same rules as [`Self::paint`].
+    pub(crate) fn paint_sized(self, painter: &Painter, center: Pos2, size: f32, t: Tokens, hot: bool) {
+        let scale = size / 16.0;
         let at = |x, y| center + vec2(x - 8.0, y - 8.0) * scale;
         let rect = |left, top, right, bottom| Rect::from_min_max(at(left, top), at(right, bottom));
         let ink = if hot { t.text } else { t.text_dim };
@@ -33,7 +40,28 @@ impl MenuIcon {
         let line = |points: &[(f32, f32)], stroke| {
             painter.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
         };
+        let filled = |pieces: &[&[(f32, f32)]]| {
+            let mut mesh = egui::Mesh::default();
+            for piece in pieces {
+                let first = mesh.vertices.len() as u32;
+                for &(x, y) in *piece {
+                    mesh.colored_vertex(at(x, y), ink);
+                }
+                for vertex in 1..piece.len() as u32 - 1 {
+                    mesh.add_triangle(first, first + vertex, first + vertex + 1);
+                }
+            }
+            painter.add(Shape::mesh(mesh));
+        };
         match self {
+            Self::Home => {
+                // The roof and the walls either side of the door, so the doorway shows the surface.
+                filled(&[
+                    &[(8.0, 2.2), (13.6, 6.9), (13.6, 8.9), (2.4, 8.9), (2.4, 6.9)],
+                    &[(2.4, 8.9), (6.6, 8.9), (6.6, 13.4), (3.4, 13.4), (2.4, 12.4)],
+                    &[(9.4, 8.9), (13.6, 8.9), (13.6, 12.4), (12.6, 13.4), (9.4, 13.4)],
+                ]);
+            }
             Self::New => {
                 line(&[(8.0, 13.5), (3.0, 13.5), (3.0, 2.0), (8.0, 2.0), (11.0, 5.0), (11.0, 7.5)], stroke);
                 line(&[(8.0, 2.0), (8.0, 5.0), (11.0, 5.0)], stroke);
@@ -54,17 +82,7 @@ impl MenuIcon {
                     &[(10.9, 8.5), (13.5, 8.5), (13.5, 12.0), (10.9, 12.0)],
                     &[(2.5, 12.0), (13.5, 12.0), (12.0, 13.5), (4.0, 13.5)],
                 ];
-                let mut mesh = egui::Mesh::default();
-                for piece in pieces {
-                    let first = mesh.vertices.len() as u32;
-                    for &(x, y) in *piece {
-                        mesh.colored_vertex(at(x, y), ink);
-                    }
-                    for vertex in 1..piece.len() as u32 - 1 {
-                        mesh.add_triangle(first, first + vertex, first + vertex + 1);
-                    }
-                }
-                painter.add(Shape::mesh(mesh));
+                filled(pieces);
             }
             Self::Download => {
                 line(&[(8.0, 2.0), (8.0, 9.5)], accent);

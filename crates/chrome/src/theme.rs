@@ -49,6 +49,20 @@ pub struct Tokens {
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
     pub schematic_wire: Color32,
+    /// Home page: page fill, card surface and border, and secondary text. These and the rail and
+    /// primary tile colours below are derived from the rest of the palette by [`Tokens::with_home`].
+    pub file_background: Color32,
+    pub file_surface: Color32,
+    pub file_border: Color32,
+    pub file_dim: Color32,
+    /// Home page navigation rail and the ink drawn on it.
+    pub file_rail: Color32,
+    pub file_rail_ink: Color32,
+    pub file_rail_hover: Color32,
+    /// The Home page's primary action tile.
+    pub file_primary: Color32,
+    pub file_primary_ink: Color32,
+    pub file_primary_border: Color32,
 
     pub space_2: f32,
     pub space_3: f32,
@@ -63,11 +77,28 @@ pub struct Tokens {
     pub radius_lg: u8,
     pub control_height: f32,
     pub control_radius: u8,
+    /// Home page layout, in logical points.
+    pub file_nav_width: f32,
+    pub file_nav_height: f32,
+    pub file_back_height: f32,
+    pub file_tile_height: f32,
+    pub file_tile_icon: f32,
+    pub file_tile_min_width: f32,
+    pub file_grid_gap: f32,
+    pub file_content_inset_x: f32,
+    pub file_content_inset_y: f32,
+    pub file_section_gap: f32,
     pub font_small: f32,
     pub font_body: f32,
     pub font_label: f32,
     pub font_button: f32,
     pub font_title: f32,
+    /// Home page navigation rows and tile titles.
+    pub font_heading: f32,
+    /// Home page section titles.
+    pub font_intro: f32,
+    /// The Home page title.
+    pub font_start_title: f32,
 }
 
 impl Tokens {
@@ -91,6 +122,17 @@ impl Tokens {
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(194, 201, 211),
             schematic_wire: Color32::from_rgb(20, 112, 75),
+            // Placeholders until `with_home` derives them from the colours above.
+            file_background: Color32::PLACEHOLDER,
+            file_surface: Color32::PLACEHOLDER,
+            file_border: Color32::PLACEHOLDER,
+            file_dim: Color32::PLACEHOLDER,
+            file_rail: Color32::PLACEHOLDER,
+            file_rail_ink: Color32::PLACEHOLDER,
+            file_rail_hover: Color32::PLACEHOLDER,
+            file_primary: Color32::PLACEHOLDER,
+            file_primary_ink: Color32::PLACEHOLDER,
+            file_primary_border: Color32::PLACEHOLDER,
 
             space_2: 2.0,
             space_3: 3.0,
@@ -105,12 +147,26 @@ impl Tokens {
             radius_lg: 12,
             control_height: 28.0,
             control_radius: 6,
+            file_nav_width: 248.0,
+            file_nav_height: 38.0,
+            file_back_height: 40.0,
+            file_tile_height: 84.0,
+            file_tile_icon: 44.0,
+            file_tile_min_width: 240.0,
+            file_grid_gap: 14.0,
+            file_content_inset_x: 40.0,
+            file_content_inset_y: 32.0,
+            file_section_gap: 28.0,
             font_small: 11.0,
             font_body: 12.0,
             font_label: 12.5,
             font_button: 13.0,
             font_title: 22.0,
+            font_heading: 14.0,
+            font_intro: 16.0,
+            font_start_title: 28.0,
         }
+        .with_home(false)
     }
 
     /// The dark palette using the same layout metrics as the light theme.
@@ -133,13 +189,44 @@ impl Tokens {
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
-        t
+        t.with_home(true)
+    }
+
+    /// Derive the Home page colours from the palette, as SolidCraft does for theme files that
+    /// leave them out: the page uses the panel and border colours, the cards lift off the page,
+    /// and the rail is the accent deepened toward the palette's darkest colour. The hover moves
+    /// back toward the accent in dark and deeper in light. The primary tile uses the ribbon tab's
+    /// accent pair.
+    pub const fn with_home(mut self, dark: bool) -> Self {
+        self.file_background = self.panel;
+        self.file_surface = if dark { self.panel_header } else { self.field };
+        self.file_border = self.border;
+        // Captions sit on cards and tinted tiles, so they lean further toward the text than `text_dim`.
+        self.file_dim = mix(self.text_dim, self.text, 0.35);
+        self.file_rail = if dark { mix(self.accent, self.app_bar, 0.45) } else { mix(self.accent, self.text, 0.15) };
+        // The light rail is already near the accent, so its hover deepens instead of brightening.
+        self.file_rail_hover = if dark { mix(self.file_rail, self.accent, 0.25) } else { mix(self.file_rail, self.text, 0.2) };
+        self.file_rail_ink = if dark { self.text } else { self.panel };
+        self.file_primary = self.accent_soft;
+        self.file_primary_ink = self.ribbon_tab_text;
+        self.file_primary_border = self.accent;
+        self
     }
 
     /// The current palette on this thread.
     pub fn get() -> Self {
         if is_dark() { Self::dark() } else { Self::light() }
     }
+}
+
+/// Move `from` the fraction `k` of the way to `to`, channel by channel in gamma space, like
+/// `Color32::lerp_to_gamma`, but usable while building the constant palettes.
+const fn mix(from: Color32, to: Color32, k: f32) -> Color32 {
+    const fn channel(a: u8, b: u8, k: f32) -> u8 {
+        let value = a as f32 + (b as f32 - a as f32) * k;
+        (value + 0.5) as u8
+    }
+    Color32::from_rgb(channel(from.r(), to.r(), k), channel(from.g(), to.g(), k), channel(from.b(), to.b(), k))
 }
 
 pub fn is_dark() -> bool {
@@ -218,6 +305,25 @@ mod tests {
             assert!(contrast(t.text_dim, t.panel) >= 4.5);
             assert!(contrast(t.canvas_ink, t.canvas) >= 3.0);
             assert!(contrast(t.error, t.panel) >= 4.5);
+        }
+    }
+
+    #[test]
+    fn home_page_text_stays_readable_in_both_palettes() {
+        for t in [Tokens::dark(), Tokens::light()] {
+            for (ink, surface) in [
+                (t.file_rail_ink, t.file_rail),
+                (t.file_rail_ink, t.file_rail_hover),
+                (t.file_primary_ink, t.file_primary),
+                (t.text, t.file_surface),
+                (t.text, t.file_background),
+                (t.file_dim, t.file_surface),
+                (t.file_dim, t.file_background),
+                (t.file_dim, t.file_primary),
+                (t.text, t.hover),
+            ] {
+                assert!(contrast(ink, surface) >= 4.5, "{ink:?} on {surface:?}");
+            }
         }
     }
 

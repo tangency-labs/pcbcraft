@@ -4,6 +4,7 @@
 //! catalog, the same ones MCP runs. Preferences belong to the person, not the project, so they live
 //! here and stay out of the command set.
 
+mod home;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
 mod net_inspector;
@@ -33,6 +34,8 @@ pub use preferences::{Preferences, ThemeChoice};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUG_REPORT_URL: &str = "https://github.com/tangency-labs/pcbcraft/issues/new";
 const PREFERENCES_KEY: &str = "pcbcraft.preferences";
+/// App bar width below which About moves to the Home page.
+const COMPACT_APP_BAR: f32 = 380.0;
 
 const COMMAND_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const COMMAND_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
@@ -83,6 +86,8 @@ pub struct PcbApp {
     preferences: Preferences,
     net_inspector: net_inspector::NetInspector,
     dialog: Dialog,
+    /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
+    home: bool,
     tool: Option<Tool>,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
@@ -222,18 +227,20 @@ impl PcbApp {
         }
     }
 
-    /// Show the project's title and unsaved state beside the file and history actions.
+    /// Show the project's title and unsaved state beside the Home, file and history actions.
     /// Undo and Redo dispatch through the same engine commands as their keyboard shortcuts.
-    /// The version and bug report are shown when the app bar has space.
+    /// The version and bug report are shown when the app bar has space, and About from 380 points.
     fn app_bar(&mut self, ui: &mut Ui) {
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut preferences = false;
         let mut about = false;
+        let mut home = false;
         shell::app_bar(
             ui,
             title,
             self.integrated_titlebar,
+            |ui| home = menu::quick_action(ui, MenuIcon::Home, "Home", "", true).clicked(),
             |ui| {
                 menu::file(ui, |ui| self.file_menu(ui));
                 let (save_icon, save_label, save_key) = if IN_BROWSER {
@@ -261,7 +268,10 @@ impl PcbApp {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
                     }
                 }
-                about = menu::quick_action(ui, MenuIcon::Help, "About PCBCraft", "", true).clicked();
+                // Narrow bars leave About to the Home page so Home fits beside the history actions.
+                if width >= COMPACT_APP_BAR {
+                    about = menu::quick_action(ui, MenuIcon::Help, "About PCBCraft", "", true).clicked();
+                }
                 let shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
                 preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", &shortcut, true).clicked();
             },
@@ -270,6 +280,8 @@ impl PcbApp {
             self.dialog = Dialog::Preferences;
         } else if about {
             self.dialog = Dialog::About;
+        } else if home {
+            self.show_home();
         }
     }
 
@@ -387,12 +399,17 @@ impl PcbApp {
     }
 
     /// Handle editor keys outside text fields and dialogs. Placement keys apply only while menus are closed.
+    /// On Home, Escape returns to the workspace and the canvas keys do nothing.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
             return;
         }
         let pressed = |shortcut: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(shortcut));
-        if !egui::Popup::is_any_open(ctx) {
+        if self.home {
+            if !egui::Popup::is_any_open(ctx) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                self.home = false;
+            }
+        } else if !egui::Popup::is_any_open(ctx) {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.tool.take().is_some() {
                 self.message = None;
             }
@@ -465,6 +482,7 @@ impl PcbApp {
                             self.message = None;
                             if id == "project.new" {
                                 self.camera = schematic_canvas::Camera::default();
+                                self.home = false;
                             }
                         }
                         Err(e) => {
@@ -641,6 +659,7 @@ impl PcbApp {
                     self.camera = schematic_canvas::Camera::default();
                     self.camera.request_fit();
                     self.tool = None;
+                    self.home = false;
                     self.dialog = Dialog::None;
                     self.message = None;
                     self.file_notice = Some("Project opened".to_owned());
@@ -653,6 +672,15 @@ impl PcbApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_live_control();
         self.app_bar(ui);
+        if self.home {
+            self.status(ui);
+            self.home_page(ui);
+            if self.integrated_titlebar {
+                shell::resize_window_edges(ui);
+            }
+            self.dialogs(&ctx);
+            return;
+        }
         self.ribbon(ui);
         if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
             self.tool = None;

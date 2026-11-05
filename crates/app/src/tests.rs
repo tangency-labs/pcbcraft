@@ -109,6 +109,107 @@ fn app_bar_brand_aligns_with_the_controls() {
     assert!((center("Preferences") - file).abs() <= 1.0);
 }
 
+/// Open Home from the app bar's house button and wait for the page to draw.
+fn open_home(harness: &mut Harness<'_, PcbApp>) {
+    click(harness, "Home");
+    assert!(harness.state().home);
+}
+
+/// Home replaces the ribbon and canvas without touching the project, and Escape or the back row
+/// return to the same unsaved schematic.
+#[test]
+fn home_hides_the_workspace_and_returns_to_the_same_project() {
+    let mut harness = harness();
+    new_project(&mut harness, "blinky");
+    let revision = harness.state().session().revision();
+    open_home(&mut harness);
+    assert!(harness.query_by_label("Toggle Net Inspector").is_none());
+    assert!(harness.query_all_by_label("Start").any(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)));
+    harness.get_by_label("Unsaved changes");
+
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!harness.state().home);
+    harness.get_by_label("Toggle Net Inspector");
+
+    open_home(&mut harness);
+    click(&mut harness, "Back to blinky");
+    assert!(!harness.state().home);
+    assert_eq!(harness.state().session().revision(), revision);
+    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+}
+
+/// The canvas keys stay with the hidden schematic, and undo still reaches the shared history.
+#[test]
+fn canvas_keys_do_nothing_on_home() {
+    let mut harness = harness();
+    new_project(&mut harness, "blinky");
+    open_home(&mut harness);
+    harness.key_press(Key::A);
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::None));
+    harness.key_press(Key::W);
+    harness.run();
+    assert!(harness.state().tool.is_none());
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert!(harness.state().session().project().is_none());
+    harness.get_by_label("Back to the workspace");
+}
+
+/// The New Project tile runs `project.new` through the name dialog, then shows the new schematic.
+/// Cancelling the dialog leaves Home up.
+#[test]
+fn home_new_project_tile_creates_the_project_and_returns_to_it() {
+    let mut harness = harness();
+    open_home(&mut harness);
+    assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
+    click(&mut harness, "New Project");
+    harness.get_by_label("Cancel").click();
+    harness.run();
+    assert!(harness.state().home);
+
+    click(&mut harness, "New Project");
+    harness.get_by_role(egui::accesskit::Role::TextInput).type_text("blinky");
+    harness.run();
+    click(&mut harness, "OK");
+    assert!(!harness.state().home);
+    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+    harness.get_by_label("Toggle Net Inspector");
+}
+
+/// Save As on Home returns to the workspace with the format chooser, and Preferences opens over Home.
+#[test]
+fn home_rows_reach_the_save_and_preferences_dialogs() {
+    let mut harness = harness();
+    new_project(&mut harness, "blinky");
+    open_home(&mut harness);
+    harness.get_by_label("Open Project");
+    let preferences = harness.query_all_by_label("Preferences").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    preferences.click();
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::Preferences));
+    assert!(harness.state().home);
+    click(&mut harness, "Close");
+
+    click(&mut harness, "Save As…");
+    assert!(!harness.state().home);
+    harness.get_by_label("Plain JSON");
+}
+
+/// At narrow widths the navigation sits above the tiles, and both stay inside the window.
+#[test]
+fn narrow_home_stacks_the_navigation_above_the_tiles() {
+    let mut harness = harness();
+    harness.set_size(egui::vec2(420.0, 700.0));
+    harness.run();
+    open_home(&mut harness);
+    let back = harness.get_by_label("Back to the workspace").rect();
+    let tile = harness.get_by_label("New Project").rect();
+    assert!(back.right() <= 420.0 && tile.right() <= 420.0, "{back:?} {tile:?}");
+    assert!(back.bottom() < tile.top(), "{back:?} should sit above {tile:?}");
+}
+
 /// The full app bar opens the issue form, and the compact bar keeps the window controls accessible.
 #[test]
 fn integrated_titlebar_keeps_window_controls_accessible() {
@@ -164,9 +265,14 @@ fn narrow_app_bar_keeps_the_unsaved_marker() {
     assert!(harness.query_all_by_label(name).all(|node| node.rect().top() > app_bar_bottom));
     let marker = harness.get_by_label("Unsaved changes").rect();
     let preferences = harness.get_by_label("Preferences").rect();
-    let about = harness.get_by_label("About PCBCraft").rect();
     assert!(marker.right() <= preferences.left(), "{marker:?} overlaps {preferences:?}");
-    assert!(about.right() <= width, "{about:?} extends past the window");
+    assert!(preferences.right() <= width, "{preferences:?} extends past the window");
+    // About moves from the narrow bar to the Home rail, which keeps it inside the window.
+    assert!(harness.query_by_label("About PCBCraft").is_none());
+    open_home(&mut harness);
+    assert!(harness.get_by_label("About PCBCraft").rect().right() <= width);
+    harness.key_press(Key::Escape);
+    harness.run();
 
     click(&mut harness, "Undo");
     assert!(harness.query_by_label("Unsaved changes").is_none());

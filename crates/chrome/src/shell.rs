@@ -6,12 +6,20 @@ use crate::{fonts, theme::Tokens, titlebar};
 
 pub use crate::titlebar::resize_window_edges;
 
-/// Lay out the brand, file and history actions, project title, and right-side utilities.
+/// Lay out the brand, Home button, file and history actions, project title, and right-side utilities.
 /// Pass the project name and whether it has unsaved edits, or `None` for the empty workspace.
+/// `home` draws beside the brand, before the separator, and stays at compact widths.
 /// An integrated title bar adds desktop window controls and lets the free space move the window.
 /// The utility callback gets the full bar width to decide which controls fit.
 /// The title shrinks before taking space from the controls and keeps the unsaved marker if it fits.
-pub fn app_bar(ui: &mut Ui, project: Option<(&str, bool)>, integrated: bool, actions: impl FnOnce(&mut Ui), utilities: impl FnOnce(&mut Ui, f32)) {
+pub fn app_bar(
+    ui: &mut Ui,
+    project: Option<(&str, bool)>,
+    integrated: bool,
+    home: impl FnOnce(&mut Ui),
+    actions: impl FnOnce(&mut Ui),
+    utilities: impl FnOnce(&mut Ui, f32),
+) {
     let t = Tokens::get();
     egui::Panel::top("chrome_app_bar")
         .exact_size(t.control_height + t.space_6)
@@ -31,6 +39,7 @@ pub fn app_bar(ui: &mut Ui, project: Option<(&str, bool)>, integrated: bool, act
                     let bar_width = ui.available_width();
                     let compact = integrated && bar_width < 380.0;
                     brand(ui, t, !compact);
+                    home(ui);
                     if !compact {
                         ui.separator();
                     }
