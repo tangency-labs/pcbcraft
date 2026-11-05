@@ -7,13 +7,13 @@ use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense,
 use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
 use pcbcraft_engine::{
     Project,
-    schematic::{MAX_CENTER_NM, Point, SymbolKind, Terminal, pin_positions},
+    schematic::{MAX_CENTER_NM, Point, SymbolDefinition, SymbolKind, Terminal, pin_positions},
 };
 
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Tool {
-    PlaceSymbol { kind: SymbolKind, revision: u64 },
+    PlaceSymbol { definition: &'static SymbolDefinition, revision: u64 },
     Wire { revision: u64, start: Option<Terminal> },
 }
 
@@ -52,7 +52,7 @@ pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, tool: Op
         if rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN)).contains(center) {
             let reference = symbol.reference();
             let label = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then_some((reference.as_str(), symbol.value()));
-            paint_symbol(&painter, symbol.kind, center, symbol.pins().map(screen), tokens.text, label);
+            paint_symbol(&painter, symbol.definition.kind, center, symbol.pins().map(screen), tokens.text, label);
         }
     }
 
@@ -79,7 +79,7 @@ pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, tool: Op
         return None;
     }
     match tool? {
-        Tool::PlaceSymbol { kind, .. } => placement_preview(&painter, rect, response, camera, tokens, kind).map(Click::Place),
+        Tool::PlaceSymbol { definition, .. } => placement_preview(&painter, rect, response, camera, tokens, definition.kind).map(Click::Place),
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start).map(Click::Pin),
     }
 }

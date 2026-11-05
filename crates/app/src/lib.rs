@@ -17,7 +17,10 @@ use pcbcraft_chrome::{
     shell::{self, dim},
     theme,
 };
-use pcbcraft_engine::{CONNECT_PINS, PLACE_LED, PLACE_RESISTOR, Session, command, schematic::SymbolKind};
+use pcbcraft_engine::{
+    CONNECT_PINS, PLACE_SYMBOL, Session, command,
+    schematic::{BUILTIN_SYMBOLS, SymbolDefinition},
+};
 use serde_json::{Value, json};
 
 pub use preferences::{Preferences, ThemeChoice};
@@ -47,6 +50,7 @@ enum Dialog {
         error: Option<String>,
         focused: bool,
     },
+    ChooseSymbol,
     Preferences,
     About,
 }
@@ -86,9 +90,9 @@ impl PcbApp {
     }
 
     /// Start a symbol preview at the current project revision.
-    fn begin_placement(&mut self, kind: SymbolKind) {
+    fn begin_placement(&mut self, definition: &'static SymbolDefinition) {
         self.message = None;
-        self.tool = Some(Tool::PlaceSymbol { kind, revision: self.session.revision() });
+        self.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision() });
     }
 
     /// Wait for the first pin at the current project revision.
@@ -112,7 +116,7 @@ impl PcbApp {
         MenuItem::new(&format!("{title}{suffix}")).shortcut(shortcut).enabled(self.session.available(id)).show(ui)
     }
 
-    /// Show commands and view controls. Place arms a preview before a canvas click commits it.
+    /// Show engine commands and view controls. Symbol placement starts with the built-in picker.
     fn menus(&mut self, ui: &mut Ui) {
         shell::menu_bar(ui, |ui| {
             menu::top(ui, "File", |ui| {
@@ -147,11 +151,8 @@ impl PcbApp {
                 }
             });
             menu::top(ui, "Place", |ui| {
-                if self.command_row(ui, PLACE_RESISTOR, "", "A") {
-                    self.begin_placement(SymbolKind::Resistor);
-                }
-                if self.command_row(ui, PLACE_LED, "", "") {
-                    self.begin_placement(SymbolKind::Led);
+                if self.command_row(ui, PLACE_SYMBOL, "…", "A") {
+                    self.dialog = Dialog::ChooseSymbol;
                 }
                 if MenuItem::new("Wire").shortcut("W").enabled(self.session.available(CONNECT_PINS)).show(ui) {
                     self.begin_wire();
@@ -181,12 +182,11 @@ impl PcbApp {
                 if let Some(message) = message {
                     ui.label(shell::error(message));
                 } else if let Some(tool) = self.tool {
-                    ui.label(dim(match tool {
-                        Tool::PlaceSymbol { kind: SymbolKind::Resistor, .. } => "Place resistor · Esc to cancel",
-                        Tool::PlaceSymbol { kind: SymbolKind::Led, .. } => "Place LED · Esc to cancel",
-                        Tool::Wire { start: None, .. } => "Wire · Click a pin",
-                        Tool::Wire { start: Some(_), .. } => "Wire · Click the destination pin",
-                    }));
+                    ui.label(match tool {
+                        Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · Esc to cancel", definition.name)),
+                        Tool::Wire { start: None, .. } => dim("Wire · Click a pin"),
+                        Tool::Wire { start: Some(_), .. } => dim("Wire · Click the destination pin"),
+                    });
                 }
             },
             |ui| {
@@ -209,9 +209,9 @@ impl PcbApp {
             None
         });
         match (self.tool, click) {
-            (Some(Tool::PlaceSymbol { kind, revision }), Some(Click::Place(point))) => {
+            (Some(Tool::PlaceSymbol { definition, revision }), Some(Click::Place(point))) => {
                 self.tool = None;
-                self.run(kind.placement_command(), &json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
+                self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
             (Some(Tool::Wire { revision, start: None }), Some(Click::Pin(pin))) => {
                 self.tool = Some(Tool::Wire { revision, start: Some(pin) });
@@ -240,8 +240,8 @@ impl PcbApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.tool.take().is_some() {
                 self.message = None;
             }
-            if pressed(&ADD_SYMBOL) && self.session.available(PLACE_RESISTOR) {
-                self.begin_placement(SymbolKind::Resistor);
+            if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
+                self.dialog = Dialog::ChooseSymbol;
             }
             if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
                 self.begin_wire();
@@ -266,6 +266,7 @@ impl PcbApp {
         }
     }
 
+    /// Draw the open dialog and retain it until the person finishes or dismisses it.
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
             Dialog::None => {}
@@ -304,6 +305,24 @@ impl PcbApp {
                     }
                 } else if !(closing || cancel) {
                     self.dialog = Dialog::Name { command: id, text, error, focused };
+                }
+            }
+            Dialog::ChooseSymbol => {
+                let mut selected = None;
+                let mut cancel = false;
+                let closing = shell::dialog(ctx, "symbol_picker", "Place Symbol", |ui| {
+                    let row = [ui.available_width(), Tokens::get().control_height];
+                    for &definition in BUILTIN_SYMBOLS {
+                        if ui.add_sized(row, egui::Button::new(definition.name)).clicked() {
+                            selected = Some(definition);
+                        }
+                    }
+                    cancel = ui.button("Cancel").clicked();
+                });
+                if let Some(definition) = selected {
+                    self.begin_placement(definition);
+                } else if !(closing || cancel) {
+                    self.dialog = Dialog::ChooseSymbol;
                 }
             }
             Dialog::Preferences => {

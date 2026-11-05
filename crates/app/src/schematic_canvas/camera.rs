@@ -79,7 +79,7 @@ impl Camera {
         let mut bounds = Rect::NOTHING;
         for symbol in project.symbols() {
             let [left, right] = symbol.pins().map(|pin| self.screen(pin, rect) - rect.center());
-            let top = match symbol.kind {
+            let top = match symbol.definition.kind {
                 SymbolKind::Resistor => left.y,
                 SymbolKind::Led => left.y + LED_ARROW_TIP_Y * self.grid_step(),
             };

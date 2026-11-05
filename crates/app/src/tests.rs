@@ -19,6 +19,11 @@ fn choose(harness: &mut Harness<'_, PcbApp>, menu: &str, item: &str) {
     harness.run();
 }
 
+fn select_symbol(harness: &mut Harness<'_, PcbApp>, name: &str) {
+    harness.get_by_label(name).click();
+    harness.run();
+}
+
 fn new_project(harness: &mut Harness<'_, PcbApp>, name: &str) {
     choose(harness, "File", "New Project…");
     harness.get_by_role(egui::accesskit::Role::TextInput).type_text(name);
@@ -142,15 +147,16 @@ fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
 fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     let mut harness = harness();
     new_project(&mut harness, "blinky");
-    choose(&mut harness, "Place", "Place Resistor");
+    choose(&mut harness, "Place", "Place Symbol…");
+    select_symbol(&mut harness, "Resistor");
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
-    harness.get_by_label("Place resistor · Esc to cancel");
+    harness.get_by_label("Place Resistor · Esc to cancel");
 
     // A click near the center snaps to the schematic origin.
     click_canvas(&mut harness);
     let mut session = Session::default();
     session.execute("project.new", &json!({"name": "blinky"})).unwrap();
-    session.execute(PLACE_RESISTOR, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1})).unwrap();
+    session.execute(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": 1})).unwrap();
     assert_eq!(harness.state().session().inspect(), session.inspect());
     click_canvas(&mut harness);
     assert_eq!(harness.state().session().inspect(), session.inspect());
@@ -166,7 +172,17 @@ fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
     new_project(&mut harness, "blinky");
     harness.key_press(Key::A);
     harness.run();
-    harness.get_by_label("Place resistor · Esc to cancel");
+    harness.get_by_label("LED");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(harness.query_by_label("LED").is_none());
+    click_canvas(&mut harness);
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
+
+    harness.key_press(Key::A);
+    harness.run();
+    select_symbol(&mut harness, "Resistor");
+    harness.get_by_label("Place Resistor · Esc to cancel");
     harness.key_press(Key::Escape);
     harness.run();
     click_canvas(&mut harness);
@@ -174,6 +190,7 @@ fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
 
     harness.key_press(Key::A);
     harness.run();
+    select_symbol(&mut harness, "Resistor");
     choose(&mut harness, "File", "Rename Project…");
     harness.get_by_label("Cancel").click();
     harness.run();
@@ -212,6 +229,7 @@ fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     harness.run();
     harness.key_press(Key::A);
     harness.run();
+    select_symbol(&mut harness, "Resistor");
     let middle = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
     harness.event(middle(point, true));
     harness.run();
@@ -236,7 +254,8 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
     harness.run();
     choose(&mut harness, "View", "Zoom to Fit");
     assert_eq!(harness.state().session().revision(), 1);
-    choose(&mut harness, "Place", "Place Resistor");
+    choose(&mut harness, "Place", "Place Symbol…");
+    select_symbol(&mut harness, "Resistor");
     click_canvas(&mut harness);
     assert_eq!(harness.state().session().project().unwrap().symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
 }
@@ -244,12 +263,14 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
 /// Place a resistor and LED through the canvas so their exact terminal positions are known.
 fn wiring_project(harness: &mut Harness<'_, PcbApp>) {
     new_project(harness, "wiring");
-    choose(harness, "Place", "Place Resistor");
+    choose(harness, "Place", "Place Symbol…");
+    select_symbol(harness, "Resistor");
     click_canvas(harness);
-    choose(harness, "Place", "Place LED");
+    choose(harness, "Place", "Place Symbol…");
+    select_symbol(harness, "LED");
     harness.get_by_label("Place LED · Esc to cancel");
     click_canvas_at(harness, egui::pos2(703.2, 414.96));
-    assert_eq!(harness.state().session().project().unwrap().symbols()[1].kind, SymbolKind::Led);
+    assert_eq!(harness.state().session().project().unwrap().symbols()[1].definition.id, "led");
 }
 
 #[test]

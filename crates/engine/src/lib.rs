@@ -10,7 +10,7 @@
 pub mod schematic;
 
 use schematic::{
-    MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolKind, SymbolPlacement, Terminal, Wire,
+    BUILTIN_SYMBOLS, MAX_CENTER_NM, MAX_SYMBOLS, Point, RESISTOR, SymbolDefinition, SymbolPlacement, Terminal, Wire, builtin_symbol,
     wiring::{MAX_WIRES, inspect_netlist},
 };
 use serde_json::{Map, Value, json};
@@ -23,6 +23,7 @@ const MAX_NAME: usize = 200;
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
     Name,
+    SymbolDefinition,
     Coordinate,
     Revision,
     Terminal,
@@ -33,6 +34,7 @@ impl ParamKind {
     fn schema(self) -> Value {
         match self {
             Self::Name => json!({"type": "string"}),
+            Self::SymbolDefinition => json!({"type": "string", "enum": BUILTIN_SYMBOLS.iter().map(|definition| definition.id).collect::<Vec<_>>()}),
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
             Self::Revision => json!({"type": "integer", "minimum": 0}),
             Self::Terminal => json!({
@@ -51,10 +53,12 @@ impl ParamKind {
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
             Self::Name if value.is_string() => Ok(()),
+            Self::SymbolDefinition if value.as_str().and_then(builtin_symbol).is_some() => Ok(()),
             Self::Coordinate if value.as_i64().is_some_and(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Revision if value.as_u64().is_some() => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::Name => Err("must be a string"),
+            Self::SymbolDefinition => Err("must identify a built-in symbol definition"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
             Self::Terminal => Err("must identify a symbol and its terminal number (1 or 2)"),
@@ -104,19 +108,16 @@ impl Command {
 }
 
 const NAME: Param = Param { name: "name", summary: "The project's name", kind: ParamKind::Name };
-/// Place the built-in 1k resistor on the schematic.
+/// Compatibility command for callers that placed resistors before the symbol picker.
 pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
-/// Place the built-in generic LED on the schematic.
-pub const PLACE_LED: &str = "schematic.place_led";
+/// Place the specified built-in symbol on the schematic.
+pub const PLACE_SYMBOL: &str = "schematic.place_symbol";
 /// The command that joins two inspected symbol terminals with an undoable wire.
 pub const CONNECT_PINS: &str = "schematic.connect_pins";
 const EXPECTED_REVISION: Param = Param { name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
 
-const PLACEMENT_PARAMS: &[Param] = &[
-    Param { name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate },
-    Param { name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate },
-    EXPECTED_REVISION,
-];
+const SYMBOL_X: Param = Param { name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate };
+const SYMBOL_Y: Param = Param { name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 
 const CATALOG: &[Command] = &[
     Command { id: "project.new", title: "New Project", summary: "Start a new empty project, replacing the open one. Undoable.", params: &[NAME] },
@@ -124,10 +125,20 @@ const CATALOG: &[Command] = &[
     Command {
         id: PLACE_RESISTOR,
         title: "Place Resistor",
-        summary: "Place a 1k resistor on the open schematic. Undoable.",
-        params: PLACEMENT_PARAMS,
+        summary: "Compatibility command for the built-in 1k resistor. Use schematic.place_symbol for new calls. Undoable.",
+        params: &[SYMBOL_X, SYMBOL_Y, EXPECTED_REVISION],
     },
-    Command { id: PLACE_LED, title: "Place LED", summary: "Place a generic green LED on the open schematic. Undoable.", params: PLACEMENT_PARAMS },
+    Command {
+        id: PLACE_SYMBOL,
+        title: "Place Symbol",
+        summary: "Place a built-in symbol on the open schematic. Undoable.",
+        params: &[
+            Param { name: "definition", summary: "ID of the built-in symbol definition", kind: ParamKind::SymbolDefinition },
+            SYMBOL_X,
+            SYMBOL_Y,
+            EXPECTED_REVISION,
+        ],
+    },
     Command {
         id: CONNECT_PINS,
         title: "Connect Pins",
@@ -220,7 +231,7 @@ impl Session {
     pub fn available(&self, id: &str) -> bool {
         match id {
             "project.new" => true,
-            "project.rename" | PLACE_RESISTOR | PLACE_LED | CONNECT_PINS => self.project.is_some(),
+            "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -252,7 +263,7 @@ impl Session {
         check_params(command, params)?;
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
-                "project.rename" | PLACE_RESISTOR | PLACE_LED | CONNECT_PINS => "no project is open".to_owned(),
+                "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -268,8 +279,14 @@ impl Session {
                     self.change(project);
                 }
             }
-            PLACE_RESISTOR => self.place_symbol(SymbolKind::Resistor, params)?,
-            PLACE_LED => self.place_symbol(SymbolKind::Led, params)?,
+            PLACE_RESISTOR => self.place_symbol(&RESISTOR, params)?,
+            PLACE_SYMBOL => {
+                let definition = params["definition"]
+                    .as_str()
+                    .and_then(builtin_symbol)
+                    .ok_or_else(|| CommandError::InvalidParams("unknown built-in symbol definition".to_owned()))?;
+                self.place_symbol(definition, params)?;
+            }
             CONNECT_PINS => self.connect_pins(params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
@@ -285,16 +302,16 @@ impl Session {
 
     /// Add a symbol from validated parameters if the caller's revision is still current.
     /// Use the resulting revision as the identity so undo and a new placement cannot reuse it.
-    fn place_symbol(&mut self, kind: SymbolKind, params: &Value) -> Result<(), CommandError> {
+    fn place_symbol(&mut self, definition: &'static SymbolDefinition, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         if project.symbols.len() >= MAX_SYMBOLS {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
-        let reference_number = project.symbols.iter().filter(|symbol| symbol.kind == kind).count() + 1;
+        let reference_number = project.symbols.iter().filter(|symbol| symbol.definition.reference_prefix == definition.reference_prefix).count() + 1;
         let mut project = project.clone();
         project.symbols.push(SymbolPlacement {
-            kind,
+            definition,
             ordinal: self.revision + 1,
             reference_number,
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
@@ -475,8 +492,8 @@ mod tests {
     fn placing_leds_preserves_resistor_references_and_exposes_polarity() {
         let mut s = Session::default();
         s.execute("project.new", &json!({"name": "blinky"})).unwrap();
-        for command in [PLACE_RESISTOR, PLACE_LED, PLACE_RESISTOR, PLACE_LED] {
-            s.execute(command, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": s.revision()})).unwrap();
+        for definition in ["resistor", "led", "resistor", "led"] {
+            s.execute(PLACE_SYMBOL, &json!({"definition": definition, "x_nm": 0, "y_nm": 0, "expected_revision": s.revision()})).unwrap();
         }
         let inspected = s.inspect();
         let schematic = &inspected["project"]["schematic"];
@@ -484,7 +501,7 @@ mod tests {
         let references: Vec<_> = symbols.iter().map(|symbol| symbol["reference"].as_str().unwrap()).collect();
         assert_eq!(references, ["R1", "D1", "R2", "D2"]);
         assert_eq!(symbols[1]["kind"], "led");
-        assert_eq!(symbols[1]["value"], "Green LED");
+        assert_eq!(symbols[1]["value"], "LED");
         assert_eq!(
             symbols[1]["pins"],
             json!([
@@ -508,6 +525,12 @@ mod tests {
         assert!(s.execute(PLACE_RESISTOR, &valid).is_err());
         s.execute("project.new", &json!({"name": "blinky"})).unwrap();
         let before = s.inspect();
+        for definition in [json!("unknown"), json!(1)] {
+            let params = json!({"definition": definition, "x_nm": 0, "y_nm": 0, "expected_revision": 1});
+            assert!(matches!(s.execute(PLACE_SYMBOL, &params), Err(CommandError::InvalidParams(_))));
+            assert_eq!(s.inspect(), before);
+        }
+        assert!(matches!(s.execute(PLACE_SYMBOL, &valid), Err(CommandError::InvalidParams(_))));
         for params in [
             json!({"x_nm": 0, "y_nm": 0}),
             json!({"x_nm": "0", "y_nm": 0, "expected_revision": 1}),
