@@ -210,7 +210,9 @@ impl Session {
         }
     }
 
-    /// The whole state as JSON: what agents read, and what tests compare.
+    /// Return the current project, revision, and undo and redo availability as JSON.
+    /// The schematic's `wires` list identifies each link by its two terminal references.
+    /// The `netlist` groups terminals joined by those wires and lists terminals with no wire as `unconnected`.
     pub fn inspect(&self) -> Value {
         json!({
             "project": self.project.as_ref().map(|p| json!({
