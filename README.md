@@ -59,6 +59,7 @@ connected terminal groups and unconnected pins.
 |---|---|
 | `crates/engine` | The session and the command set. The schematic and board model goes here. No UI. |
 | `crates/mcp` | The MCP server, a thin layer over the engine's commands. |
+| `crates/craft-control` | Bounded line framing and authenticated local transport. |
 | `crates/app` | The window, shared by desktop and browser. Menus run engine commands. |
 | `crates/chrome` | Theme, fonts, menus, bars and dialogs in the Craft style. Stands in for the shared Craft UI crate. |
 | `apps/` | The desktop, command line and browser programs. They only start things. |

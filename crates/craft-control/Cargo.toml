@@ -1,0 +1,15 @@
+[package]
+name = "craft-control"
+description = "Local control transport and bounded message framing for Craft applications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+getrandom = "=0.4.3"
+serde_json = { workspace = true }
+subtle = { version = "=2.6.1", default-features = false }
