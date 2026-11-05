@@ -14,7 +14,8 @@ use schematic_canvas::{Click, Tool};
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use pcbcraft_chrome::{
-    MenuItem, Tokens, fonts, menu,
+    MenuItem, Tokens, fonts,
+    menu::{self, MenuIcon},
     shell::{self, dim},
     theme, workspace,
 };
@@ -135,86 +136,114 @@ impl PcbApp {
         self.file_notice = None;
     }
 
-    /// A row for an engine command: its title comes from the catalog, its state from the session.
-    /// True when it was clicked.
-    fn command_row(&self, ui: &mut Ui, id: &str, suffix: &str, shortcut: &str) -> bool {
+    /// Draw an engine command's catalog title and use the session to decide whether it is available.
+    /// Return true on activation so the caller can open the command dialog.
+    fn command_row(&self, ui: &mut Ui, id: &str, suffix: &str, shortcut: &str, icon: MenuIcon) -> bool {
         let title = command(id).map_or(id, |c| c.title);
-        MenuItem::new(&format!("{title}{suffix}")).shortcut(shortcut).enabled(self.session.available(id)).show(ui)
+        let label = format!("{title}{suffix}");
+        MenuItem::new(&label).icon(icon).shortcut(shortcut).enabled(self.session.available(id)).show(ui)
     }
 
-    /// Show engine commands and view controls. Symbol placement starts with the built-in picker.
-    fn menus(&mut self, ui: &mut Ui) {
-        shell::menu_bar(ui, |ui| {
-            menu::top(ui, "File", |ui| {
-                if self.command_row(ui, "project.new", "…", if IN_BROWSER { "" } else { "Ctrl+N" }) {
-                    self.ask_name("project.new");
-                }
-                let file_ready = !self.files.busy();
-                if MenuItem::new("Open…").shortcut(if IN_BROWSER { "" } else { "Ctrl+O" }).enabled(file_ready).show(ui) {
-                    self.open_project_file(ui.ctx());
-                }
-                let can_save = file_ready && self.session.project().is_some();
-                let save_label = if IN_BROWSER { "Download Project…" } else { "Save" };
-                if MenuItem::new(save_label).shortcut(if IN_BROWSER { "" } else { "Ctrl+S" }).enabled(can_save).show(ui) {
-                    if IN_BROWSER {
-                        self.dialog = Dialog::SaveEncoding;
-                    } else {
-                        self.save_project_file(None, ui.ctx());
-                    }
-                }
-                if !IN_BROWSER && MenuItem::new("Save As…").shortcut("Ctrl+Shift+S").enabled(can_save).show(ui) {
-                    self.dialog = Dialog::SaveEncoding;
-                }
-                if self.command_row(ui, "project.rename", "…", "") {
-                    self.ask_name("project.rename");
-                }
-                if !IN_BROWSER {
-                    menu::separator(ui);
-                    if MenuItem::new("Quit").shortcut("Ctrl+Q").show(ui) {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
-            });
-            menu::top(ui, "Edit", |ui| {
-                if self.command_row(ui, "edit.undo", "", "Ctrl+Z") {
-                    self.run("edit.undo", &Value::Null);
-                }
-                if self.command_row(ui, "edit.redo", "", "Ctrl+Y") {
-                    self.run("edit.redo", &Value::Null);
-                }
-            });
-            menu::top(ui, "View", |ui| {
-                let has_project = self.session.project().is_some();
-                if MenuItem::new("Zoom to Fit").enabled(has_project).show(ui) {
-                    self.camera.request_fit();
-                }
-                let inspector = if has_project && self.net_inspector.open { "Hide Net Inspector" } else { "Show Net Inspector" };
-                if MenuItem::new(inspector).enabled(has_project).show(ui) {
-                    self.net_inspector.open = !self.net_inspector.open;
-                }
-            });
-            menu::top(ui, "Place", |ui| {
-                if self.command_row(ui, PLACE_SYMBOL, "…", "A") {
-                    self.dialog = Dialog::ChooseSymbol;
-                }
-                if MenuItem::new("Wire").shortcut("W").enabled(self.session.available(CONNECT_PINS)).show(ui) {
-                    self.begin_wire();
-                }
-            });
-            menu::top(ui, "Preferences", |ui| {
-                if MenuItem::new("Preferences…").shortcut("Ctrl+,").show(ui) {
-                    self.dialog = Dialog::Preferences;
-                }
-            });
-            menu::top(ui, "Help", |ui| {
-                if MenuItem::new("About PCBCraft").show(ui) {
-                    self.dialog = Dialog::About;
-                }
-            });
-        });
+    /// Show the File commands and route them through the existing project dialogs and file jobs.
+    /// Open and save actions are disabled while a file job is in flight. The browser offers
+    /// Download, while desktop Save As opens the encoding chooser.
+    fn file_menu(&mut self, ui: &mut Ui) {
+        let new_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_N) };
+        if self.command_row(ui, "project.new", "…", &new_shortcut, MenuIcon::New) {
+            self.ask_name("project.new");
+        }
+        let file_ready = !self.files.busy();
+        let open_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_O) };
+        if MenuItem::new("Open…").icon(MenuIcon::Open).shortcut(&open_shortcut).enabled(file_ready).show(ui) {
+            self.open_project_file(ui.ctx());
+        }
+
+        menu::separator(ui);
+        let can_save = self.can_save_project();
+        if IN_BROWSER {
+            if MenuItem::new("Download Project…").icon(MenuIcon::Download).enabled(can_save).show(ui) {
+                self.primary_save(ui.ctx());
+            }
+        } else {
+            let save_shortcut = ui.ctx().format_shortcut(&COMMAND_S);
+            if MenuItem::new("Save").icon(MenuIcon::Save).shortcut(&save_shortcut).enabled(can_save).show(ui) {
+                self.primary_save(ui.ctx());
+            }
+            let save_as_shortcut = ui.ctx().format_shortcut(&SAVE_AS);
+            if MenuItem::new("Save As…").icon(MenuIcon::Save).shortcut(&save_as_shortcut).enabled(can_save).show(ui) {
+                self.dialog = Dialog::SaveEncoding;
+            }
+        }
+
+        menu::separator(ui);
+        if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
+            self.ask_name("project.rename");
+        }
+        if !IN_BROWSER {
+            let quit_shortcut = ui.ctx().format_shortcut(&COMMAND_Q);
+            if MenuItem::new("Quit").icon(MenuIcon::Close).shortcut(&quit_shortcut).show(ui) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
     }
 
-    /// Expose the same placement, wiring, inspection, and fit actions as the menus.
+    /// Whether the current project can start a save or download.
+    fn can_save_project(&self) -> bool {
+        !self.files.busy() && self.session.project().is_some()
+    }
+
+    /// Save the current desktop file or choose the encoding for a browser download.
+    fn primary_save(&mut self, ctx: &egui::Context) {
+        if IN_BROWSER {
+            self.dialog = Dialog::SaveEncoding;
+        } else {
+            self.save_project_file(None, ctx);
+        }
+    }
+
+    /// Show the project's title and unsaved state beside the file and history actions.
+    /// Undo and Redo dispatch through the same engine commands as their keyboard shortcuts.
+    fn app_bar(&mut self, ui: &mut Ui) {
+        let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
+        let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
+        let mut preferences = false;
+        let mut about = false;
+        shell::app_bar(
+            ui,
+            title,
+            |ui| {
+                menu::file(ui, |ui| self.file_menu(ui));
+                let (save_icon, save_label, save_key) = if IN_BROWSER {
+                    (MenuIcon::Download, "Download Project", String::new())
+                } else {
+                    (MenuIcon::Save, "Save Project", ui.ctx().format_shortcut(&COMMAND_S))
+                };
+                if menu::quick_action(ui, save_icon, save_label, &save_key, self.can_save_project()).clicked() {
+                    self.primary_save(ui.ctx());
+                }
+                for (command, icon, label, key) in
+                    [("edit.undo", MenuIcon::Undo, "Undo", COMMAND_Z), ("edit.redo", MenuIcon::Redo, "Redo", COMMAND_Y)]
+                {
+                    let shortcut = ui.ctx().format_shortcut(&key);
+                    if menu::quick_action(ui, icon, label, &shortcut, self.session.available(command)).clicked() {
+                        self.run(command, &Value::Null);
+                    }
+                }
+            },
+            |ui| {
+                about = menu::quick_action(ui, MenuIcon::Help, "About PCBCraft", "", true).clicked();
+                let shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
+                preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", &shortcut, true).clicked();
+            },
+        );
+        if preferences {
+            self.dialog = Dialog::Preferences;
+        } else if about {
+            self.dialog = Dialog::About;
+        }
+    }
+
+    /// Show placement, wiring, inspection, and fit actions in the Capture ribbon.
     fn ribbon(&mut self, ui: &mut Ui) {
         use workspace::ToolIcon;
 
@@ -519,7 +548,7 @@ impl PcbApp {
             }
         }
         self.shortcuts(&ctx);
-        self.menus(ui);
+        self.app_bar(ui);
         self.ribbon(ui);
         if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
             self.tool = None;

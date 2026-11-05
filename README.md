@@ -2,30 +2,47 @@
 
 Electronics design that feels like the tools you already know, built so a person and an agent can work on the same board, at the same time, with the same commands.
 
-**Status: just started.** The window, menus, preferences, undo and an MCP server work, on the desktop and in the browser. Create a project, then choose **Place → Place Symbol…** or press **A** to pick a resistor or LED. The preview snaps to the schematic grid. Click to place it or press **Esc** to cancel. Scroll over the canvas to zoom, drag with the middle mouse button to pan, or choose **View → Zoom to Fit**. [VISION.md](VISION.md) says what it should be.
+**Status: just started.** Schematic editing works on desktop and in the browser.
+Use **File → New Project…** to start. The app bar shows the project name and an
+unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
+browser). The gear opens **Preferences**. See [VISION.md](VISION.md) for the
+project's direction.
 
-Choose **Place → Wire** or press **W**, then click two terminal markers to connect them. Press **Esc** or right-click and choose **Cancel** to discard an in-progress wire. Use **Edit → Undo** to remove the last committed wire.
+Choose **Capture → Symbol** or press **A** to pick a resistor or LED. Click to
+place it on the schematic grid or press **Esc** to cancel. Choose **Capture → Wire**
+or press **W**, then click two terminal markers to connect them. Press **Esc** or
+right-click and choose **Cancel** to discard an in-progress wire.
 
-The **Capture** ribbon gives you the same Symbol and Wire tools. Use **Nets** to open the Net Inspector beside the schematic, and **Fit** to bring the circuit into view.
+Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
+the circuit into view and **Nets** to open the Net Inspector.
 
-Open a native `.pc` project from **File → Open…**. On desktop, use **Save** or
-**Save As…**. In the browser, use **Download Project…**. Save As and Download
-offer plain JSON for version control and ZIP for sharing. Both use `.pc`;
-desktop Save keeps the existing format. Drag a placed symbol to
-move it and keep its connections. The [native storage notes](docs/native-project-storage.md)
-describe the first schema, file safety and performance checks.
+Open a native `.pc` project from **File → Open…**. On desktop, **Save** keeps the
+open file's format, and **File → Save As…** offers a choice. In the browser, use
+**Download Project…** for the same choice. Both plain JSON and ZIP use `.pc`.
+The [native storage notes](docs/native-project-storage.md) describe the formats,
+file safety and performance checks.
 
 ## Run it
 
+Use Rust 1.95 or later and start in the repository root. To launch the desktop app:
+
 ```sh
-cargo run -p pcbcraft                        # desktop
-cargo run -p pcbcraft-cli -- mcp             # MCP server on stdin and stdout
-cd apps/pcbcraft-web && trunk serve          # browser, at http://127.0.0.1:8781
+cargo run --locked -p pcbcraft
 ```
 
-The browser build needs `rustup target add wasm32-unknown-unknown` and [Trunk](https://trunkrs.dev).
+For the browser, install [Trunk](https://trunkrs.dev) and run:
 
-To connect an MCP client, point it at `pcbcraft-cli mcp`. Pass
+```sh
+rustup target add wasm32-unknown-unknown
+cd apps/pcbcraft-web
+trunk serve --locked
+```
+
+Then open [the local web app](http://127.0.0.1:8781).
+
+To start the MCP server from the repository root, run
+`cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it
+at `pcbcraft-cli mcp`. Pass
 `--project path/to/project.pc` after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to return just the resulting revision. Use `inspect_project` to read
