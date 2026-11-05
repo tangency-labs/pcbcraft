@@ -40,6 +40,25 @@ trunk serve --locked
 
 Then open [the local web app](http://127.0.0.1:8781).
 
+## Live MCP in the desktop editor
+
+Build the desktop and CLI binaries with `cargo build --locked -p pcbcraft -p pcbcraft-cli`.
+Open a project in the desktop app and choose **File → Local MCP… → Enable local
+connection**. Copy the configuration into your MCP client. If `pcbcraft-cli`
+isn't on your PATH, set its command to the full path of the binary in
+`target/debug`. Close the setup dialog before editing. The copied configuration
+grants access to this window until you disable the connection or close the app.
+
+For a quick check, open `crates/app/tests/fixtures/two-resistors.pc`. Use
+`inspect_project` to get R1's symbol ID and the current revision. Call `execute`
+with `schematic.move_symbol` and pass the ID as `symbol`, coordinates as integer
+`x_nm` and `y_nm`, and the inspected revision as `expected_revision`. Move R1 to
+`(0, 5_080_000)` and watch the attached wire follow it. Undo and redo in the
+editor, then inspect again to confirm the position. The edit stays unsaved
+until you save the project.
+
+## Headless MCP
+
 To start the MCP server from the repository root, run
 `cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it
 at `pcbcraft-cli mcp`. Pass

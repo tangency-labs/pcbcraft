@@ -1,12 +1,16 @@
-//! Where tool calls end up. Today that's a session inside this process. A running window is the
-//! next backend: this trait is the seam, so an agent can work on the board a person has open.
+//! Dispatch MCP tools to a headless session or an open desktop editor.
 
 use pcbcraft_engine::{Project, Session, board::Pad, catalog, schematic::Terminal};
 use serde_json::{Value, json};
 
 /// Something that answers `engine.commands`, `engine.execute` and `project.inspect`.
 pub trait Backend {
+    /// Run an engine or project operation and return its result or a tool error.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String>;
+    /// Whether this backend exposes the given command in discovery.
+    fn permits_command(&self, _id: &str) -> bool {
+        true
+    }
     /// Where the commands run, for the client's information.
     fn describe(&self) -> String;
 }
@@ -29,24 +33,29 @@ impl Headless {
 impl Backend for Headless {
     /// Apply the requested command and return either inspection or the resulting revision.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        match method {
-            "engine.commands" => Ok(json!(catalog().iter().map(|c| c.to_json()).collect::<Vec<_>>())),
-            "engine.execute" => {
-                let id = params["command"].as_str().ok_or("missing `command`")?;
-                if params["inspect"].as_bool() == Some(false) {
-                    self.session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())
-                } else {
-                    self.session.execute(id, &params["params"]).map_err(|e| e.to_string())
-                }
-            }
-            "project.inspect" => Ok(self.session.inspect()),
-            "project.cross_probe" => cross_probe(&self.session, &params),
-            _ => Err(format!("unknown method `{method}`")),
-        }
+        call_session(&mut self.session, method, &params)
     }
 
     fn describe(&self) -> String {
         "a headless session in this process, not an open window".to_owned()
+    }
+}
+
+/// Run an operation against the supplied session. Its owner controls execution policy.
+pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, String> {
+    match method {
+        "engine.commands" => Ok(json!(catalog().iter().map(|c| c.to_json()).collect::<Vec<_>>())),
+        "engine.execute" => {
+            let id = params["command"].as_str().ok_or("missing `command`")?;
+            if params["inspect"].as_bool() == Some(false) {
+                session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())
+            } else {
+                session.execute(id, &params["params"]).map_err(|e| e.to_string())
+            }
+        }
+        "project.inspect" => Ok(session.inspect()),
+        "project.cross_probe" => cross_probe(session, params),
+        _ => Err(format!("unknown method `{method}`")),
     }
 }
 

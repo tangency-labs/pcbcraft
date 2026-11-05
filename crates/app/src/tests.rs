@@ -533,3 +533,128 @@ fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
     click(&mut harness, "Undo");
     assert_eq!(harness.state().session().project().unwrap().symbols(), before.symbols());
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+mod live_mcp {
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use pcbcraft_mcp::{
+        PROTOCOL_VERSION, Server,
+        live::{Remote, TOKEN_ENV},
+    };
+
+    use super::*;
+
+    /// Run the MCP request on a separate thread while the real editor handles its frames.
+    fn tool(harness: &mut Harness<'_, PcbApp>, connection: (u16, &str), name: &str, arguments: Value) -> Value {
+        thread::scope(|scope| {
+            let request = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name, "arguments": arguments}});
+            let worker = scope.spawn(move || {
+                let mut server = Server::new(Box::new(Remote::new(connection.0, connection.1).unwrap()));
+                let initialize = server
+                    .handle(json!({
+                        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": PROTOCOL_VERSION}
+                    }))
+                    .unwrap();
+                assert_eq!(initialize["result"]["protocolVersion"], PROTOCOL_VERSION);
+                server.handle(request)
+            });
+            let deadline = Instant::now() + Duration::from_secs(6);
+            while !worker.is_finished() && Instant::now() < deadline {
+                harness.run();
+                thread::sleep(Duration::from_millis(2));
+            }
+            assert!(worker.is_finished(), "MCP call timed out: {name}");
+            worker.join().unwrap().unwrap()["result"].clone()
+        })
+    }
+
+    /// Read the structured tool payload and report an MCP failure if the call was refused.
+    fn payload(result: Value) -> Value {
+        assert_ne!(result["isError"], true, "{result}");
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
+    }
+
+    /// Locate the painted wire in the frame, including the orthogonal path after a pin moves.
+    fn painted_wire(harness: &Harness<'_, PcbApp>) -> Vec<egui::Pos2> {
+        let color = Tokens::get().schematic_wire;
+        harness
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::LineSegment { points, stroke } if stroke.color == color => Some(points.to_vec()),
+                egui::Shape::Path(path) if matches!(path.stroke.color, egui::epaint::ColorMode::Solid(ink) if ink == color) => {
+                    Some(path.points.clone())
+                }
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    /// Move a wired resistor through MCP, verify the canvas and undo history, then revoke access.
+    #[test]
+    fn local_mcp_moves_the_open_schematic_and_shares_undo() {
+        let mut harness = harness();
+        assert!(harness.state().live_control.is_none());
+        wiring_project(&mut harness);
+        click(&mut harness, "Draw wire (W)");
+        click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
+        click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
+        let before_wire = painted_wire(&harness);
+
+        choose(&mut harness, "File", "Local MCP…");
+        click(&mut harness, "Enable local connection");
+        click(&mut harness, "Copy configuration");
+        let config = harness.state().live_control.as_ref().unwrap().client_configuration();
+        let config: Value = serde_json::from_str(&config).unwrap();
+        let settings = &config["mcpServers"]["pcbcraft-live"];
+        let port: u16 = settings["args"][2].as_str().unwrap().parse().unwrap();
+        let token = settings["env"][TOKEN_ENV].as_str().unwrap();
+        assert_eq!(settings["args"], json!(["mcp", "--connect", port.to_string()]));
+        click(&mut harness, "Close");
+
+        let connection = (port, token);
+        let commands = payload(tool(&mut harness, connection, "list_commands", json!({})));
+        assert_eq!(commands.as_array().unwrap().len(), 1);
+        assert_eq!(commands[0]["id"], MOVE_SYMBOL);
+        let before = payload(tool(&mut harness, connection, "inspect_project", json!({})));
+        let from = &before["project"]["schematic"];
+        let request = json!({"command": MOVE_SYMBOL, "params": {
+            "symbol": from["symbols"][0]["id"], "x_nm": 0, "y_nm": 5_080_000, "expected_revision": before["revision"]
+        }});
+        let moved = payload(tool(&mut harness, connection, "execute", request.clone()));
+        let to = &moved["project"]["schematic"];
+        assert_eq!(to["symbols"][0]["y_nm"], 5_080_000);
+        assert_eq!(to["wires"], from["wires"]);
+        let after_wire = painted_wire(&harness);
+        assert_ne!(after_wire, before_wire);
+        assert_eq!(after_wire.last(), before_wire.last());
+        assert!(harness.state().files.dirty(&harness.state().session));
+
+        let stale = tool(&mut harness, connection, "execute", request);
+        assert_eq!(stale["isError"], true);
+        assert!(stale["content"][0]["text"].as_str().unwrap().contains("project changed"));
+        let denied = tool(&mut harness, connection, "execute", json!({"command": "project.new", "params": {"name": "other"}}));
+        assert_eq!(denied["isError"], true);
+        assert_eq!(harness.state().session().inspect(), moved);
+
+        click(&mut harness, "Undo");
+        let undone = payload(tool(&mut harness, connection, "inspect_project", json!({})));
+        assert_eq!(undone["project"], before["project"]);
+        assert_eq!(painted_wire(&harness), before_wire);
+        click(&mut harness, "Redo");
+        let redone = payload(tool(&mut harness, connection, "inspect_project", json!({})));
+        assert_eq!(redone["project"], moved["project"]);
+        assert_eq!(painted_wire(&harness), after_wire);
+
+        choose(&mut harness, "File", "Local MCP…");
+        click(&mut harness, "Disable connection");
+        assert!(harness.state().live_control.is_none());
+        let disconnected = tool(&mut harness, connection, "inspect_project", json!({}));
+        assert_eq!(disconnected["isError"], true);
+    }
+}
