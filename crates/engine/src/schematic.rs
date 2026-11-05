@@ -90,9 +90,59 @@ pub(crate) fn builtin_symbol(id: &str) -> Option<&'static SymbolDefinition> {
     BUILTIN_SYMBOLS.iter().copied().find(|definition| definition.id == id)
 }
 
-/// Return pin 1 (left) and pin 2 (right) for a built-in symbol centered at this point.
-pub fn pin_positions(Point { x_nm, y_nm }: Point) -> [Point; 2] {
-    [Point { x_nm: x_nm - PIN_OFFSET_NM, y_nm }, Point { x_nm: x_nm + PIN_OFFSET_NM, y_nm }]
+/// Return pin 1 and pin 2 for a built-in symbol centered at this point and turned this many
+/// quarter turns counterclockwise. Unturned, pin 1 is on the left and pin 2 on the right.
+pub fn pin_positions(Point { x_nm, y_nm }: Point, turns: u8) -> [Point; 2] {
+    [-PIN_OFFSET_NM, PIN_OFFSET_NM].map(|offset| {
+        let (x, y) = rotate(offset, 0, turns);
+        Point { x_nm: x_nm + x, y_nm: y_nm + y }
+    })
+}
+
+/// Turn an offset from a symbol's center by quarter turns counterclockwise as seen on the
+/// schematic, where y grows downward: one turn takes a pin on the right to the top.
+pub fn rotate(x: i64, y: i64, turns: u8) -> (i64, i64) {
+    match turns % 4 {
+        0 => (x, y),
+        1 => (y, -x),
+        2 => (-x, -y),
+        _ => (-y, x),
+    }
+}
+
+/// Text a person gave a symbol in place of its automatic reference or its definition's value.
+/// `None` keeps the automatic text, so a project that was never edited saves as it always did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Labels {
+    pub(crate) reference: Option<String>,
+    pub(crate) value: Option<String>,
+}
+
+/// Longest edited reference and value, in characters.
+pub(crate) const MAX_REFERENCE: usize = 32;
+pub(crate) const MAX_VALUE: usize = 64;
+
+/// Check edited reference text: 1 to 32 characters, no spaces or control characters.
+/// The command and the file loader share this, so a saved project always reopens.
+pub(crate) fn check_reference(text: &str) -> Result<(), String> {
+    check_text("reference", text, MAX_REFERENCE)?;
+    if text.chars().any(char::is_whitespace) {
+        return Err("a reference can't contain spaces".to_owned());
+    }
+    Ok(())
+}
+
+/// Check edited value text: 1 to 64 characters on one line, without surrounding spaces.
+pub(crate) fn check_value(text: &str) -> Result<(), String> {
+    check_text("value", text, MAX_VALUE)
+}
+
+/// Non-empty, trimmed, at most `limit` characters and free of control characters.
+fn check_text(name: &str, text: &str, limit: usize) -> Result<(), String> {
+    if text.is_empty() || text.trim() != text || text.chars().count() > limit || text.chars().any(char::is_control) {
+        return Err(format!("`{name}` must be 1 to {limit} characters on one line"));
+    }
+    Ok(())
 }
 
 /// A component and its single schematic symbol, with distinct identities.
@@ -104,10 +154,18 @@ pub struct SymbolPlacement {
     pub(crate) ordinal: u64,
     pub(crate) reference_number: usize,
     pub position: Point,
+    /// Quarter turns counterclockwise, 0 to 3.
+    pub(crate) rotation: u8,
 }
 
 impl SymbolPlacement {
-    /// Format the reference from the definition's prefix and the number assigned during placement.
+    /// Quarter turns counterclockwise, 0 to 3.
+    pub fn turns(&self) -> u8 {
+        self.rotation
+    }
+
+    /// The automatic reference: the definition's prefix and the number assigned during placement.
+    /// [`crate::Project::reference`] returns the text shown, which a person may have edited.
     pub fn reference(&self) -> String {
         format!("{}{}", self.definition.reference_prefix, self.reference_number)
     }
@@ -117,7 +175,7 @@ impl SymbolPlacement {
         symbol_id(self.ordinal)
     }
 
-    /// Return the default display value for this built-in symbol.
+    /// Return the definition's default value. [`crate::Project::value`] returns the text shown.
     pub fn value(&self) -> &'static str {
         self.definition.value
     }
@@ -127,13 +185,14 @@ impl SymbolPlacement {
         Terminal::for_symbol(self.ordinal)
     }
 
-    /// Return pin 1 (left) and pin 2 (right) in absolute schematic coordinates.
+    /// Return pin 1 and pin 2 in absolute schematic coordinates, turned with the symbol.
     pub fn pins(&self) -> [Point; 2] {
-        pin_positions(self.position)
+        pin_positions(self.position, self.rotation)
     }
 
-    /// Report the component and symbol IDs alongside numbered pin coordinates and, for LEDs, their polarity.
-    pub(crate) fn inspect(&self) -> Value {
+    /// Report the component and symbol IDs, the reference and value shown, the rotation, and the
+    /// numbered pin coordinates with, for LEDs, their polarity.
+    pub(crate) fn inspect(&self, reference: &str, value: &str) -> Value {
         let pins = ["1", "2"]
             .into_iter()
             .zip(self.pins())
@@ -150,8 +209,9 @@ impl SymbolPlacement {
             "id": symbol_id(self.ordinal),
             "component_id": format!("component-{}", self.ordinal),
             "kind": self.definition.id,
-            "reference": self.reference(),
-            "value": self.value(),
+            "reference": reference,
+            "value": value,
+            "rotation": u16::from(self.rotation) * 90,
             "x_nm": self.position.x_nm,
             "y_nm": self.position.y_nm,
             "pins": pins,

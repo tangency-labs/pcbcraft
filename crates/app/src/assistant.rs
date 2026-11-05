@@ -105,14 +105,14 @@ impl Edit {
             Self::ConnectPins { from, to } => {
                 let label = |address: &Value| {
                     let pin = Terminal::parse(address)?;
-                    Some(format!("{}.{}", project.terminal_symbol(pin)?.reference(), pin.number()))
+                    Some(format!("{}.{}", project.reference(project.terminal_symbol(pin)?), pin.number()))
                 };
                 let summary = format!("Connect {} to {}", label(&from)?, label(&to)?);
                 (CONNECT_PINS, json!({"from": from, "to": to, "expected_revision": revision}), summary)
             }
             Self::MoveSymbol { symbol, x_nm, y_nm } => {
                 let placement = project.symbols().iter().find(|placement| placement.id() == symbol)?;
-                let summary = format!("Move {} to ({x_nm}, {y_nm}) nm", placement.reference());
+                let summary = format!("Move {} to ({x_nm}, {y_nm}) nm", project.reference(placement));
                 (MOVE_SYMBOL, json!({"symbol": symbol, "x_nm": x_nm, "y_nm": y_nm, "expected_revision": revision}), summary)
             }
         };

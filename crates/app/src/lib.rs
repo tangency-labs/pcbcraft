@@ -14,7 +14,7 @@ mod preferences;
 mod project_files;
 mod schematic_canvas;
 
-use schematic_canvas::{Click, Tool};
+use schematic_canvas::{Click, SymbolAction, Tool};
 
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
@@ -25,7 +25,7 @@ use pcbcraft_chrome::{
     theme, workspace,
 };
 use pcbcraft_engine::{
-    CONNECT_PINS, MOVE_SYMBOL, PLACE_SYMBOL, Session, command,
+    CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, SET_SYMBOL_FIELDS, Session, command,
     persistence::Encoding,
     schematic::{BUILTIN_SYMBOLS, SymbolDefinition},
 };
@@ -55,6 +55,8 @@ const COMMAND_N: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Ke
 const COMMAND_Q: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
+const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
+const EDIT_FIELDS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::E);
 const COMMAND_COMMA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 
 /// A browser keeps Ctrl+N and Ctrl+Q for itself, and has no window of ours to quit.
@@ -105,6 +107,14 @@ enum Dialog {
         focused: bool,
     },
     ChooseSymbol,
+    /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
+    EditFields {
+        symbol: String,
+        reference: String,
+        value: String,
+        error: Option<String>,
+        focused: bool,
+    },
     ConfirmOpen,
     SaveEncoding,
     #[cfg(not(target_arch = "wasm32"))]
@@ -139,6 +149,8 @@ pub struct PcbApp {
     /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
     home: bool,
     tool: Option<Tool>,
+    /// The selected symbol's ID. Cleared when the symbol goes away, such as after undo.
+    selected: Option<String>,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
     /// The palette and zoom last applied, so they are set only when they change.
@@ -275,6 +287,35 @@ impl PcbApp {
             let quit_shortcut = ui.ctx().format_shortcut(&COMMAND_Q);
             if MenuItem::new("Quit").icon(MenuIcon::Close).shortcut(&quit_shortcut).show(ui) {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// The selected symbol's shown reference, if it still exists.
+    fn selected_reference(&self) -> Option<String> {
+        let project = self.session.project()?;
+        let id = self.selected.as_deref()?;
+        project.symbols().iter().find(|symbol| symbol.id() == id).map(|symbol| project.reference(symbol))
+    }
+
+    /// Rotate, delete or open Edit Fields for the selected symbol through the shared commands.
+    /// Deleting clears the selection; a failed command shows in the status bar.
+    fn edit_selected(&mut self, action: SymbolAction) {
+        let Some(id) = self.selected.clone() else { return };
+        let revision = self.session.revision();
+        match action {
+            SymbolAction::Rotate => self.run(ROTATE_SYMBOL, &json!({"symbol": id, "expected_revision": revision})),
+            SymbolAction::Delete => {
+                self.run(DELETE_SYMBOL, &json!({"symbol": id, "expected_revision": revision}));
+                if self.message.is_none() {
+                    self.selected = None;
+                }
+            }
+            SymbolAction::EditFields => {
+                let Some(project) = self.session.project() else { return };
+                let Some(symbol) = project.symbols().iter().find(|symbol| symbol.id() == id) else { return };
+                let (reference, value) = (project.reference(symbol), project.value(symbol).to_owned());
+                self.dialog = Dialog::EditFields { symbol: id, reference, value, error: None, focused: false };
             }
         }
     }
@@ -449,6 +490,8 @@ impl PcbApp {
                 ui.label(dim(name));
                 if let Some(message) = message {
                     ui.label(shell::error(message));
+                } else if let (None, Some(reference)) = (self.tool, self.selected_reference()) {
+                    ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = self.tool {
                     ui.label(match tool {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · Esc to cancel", definition.name)),
@@ -476,7 +519,15 @@ impl PcbApp {
         let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
         let click = shell::canvas(ui, |ui| {
             if let Some(project) = self.session.project() {
-                return schematic_canvas::show(ui, project, &mut self.camera, self.tool, input_enabled, self.preferences.navigation);
+                return schematic_canvas::show(
+                    ui,
+                    project,
+                    &mut self.camera,
+                    self.tool,
+                    self.selected.as_deref(),
+                    input_enabled,
+                    self.preferences.navigation,
+                );
             }
             let t = Tokens::get();
             ui.centered_and_justified(|ui| {
@@ -499,7 +550,13 @@ impl PcbApp {
                 }
             }
             (None, Some(Click::Grab(symbol, offset))) => {
+                self.selected = Some(symbol.id());
                 self.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
+            }
+            (None, Some(Click::Select(symbol))) => self.selected = symbol,
+            (None, Some(Click::Edit(action, symbol))) => {
+                self.selected = Some(symbol);
+                self.edit_selected(action);
             }
             (Some(Tool::Move { symbol, revision, .. }), Some(Click::FinishMove(position))) => {
                 self.tool = None;
@@ -532,8 +589,23 @@ impl PcbApp {
                 self.home = false;
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.tool.take().is_some() {
-                self.message = None;
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                // Escape cancels the tool first, then clears the selection.
+                if self.tool.take().is_some() {
+                    self.message = None;
+                } else {
+                    self.selected = None;
+                }
+            }
+            if self.tool.is_none() && self.selected.is_some() {
+                let delete = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace));
+                if pressed(&ROTATE) {
+                    self.edit_selected(SymbolAction::Rotate);
+                } else if pressed(&EDIT_FIELDS) {
+                    self.edit_selected(SymbolAction::EditFields);
+                } else if delete {
+                    self.edit_selected(SymbolAction::Delete);
+                }
             }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
                 self.dialog = Dialog::ChooseSymbol;
@@ -614,6 +686,40 @@ impl PcbApp {
                     }
                 } else if !(closing || cancel) {
                     self.dialog = Dialog::Name { command: id, text, error, focused };
+                }
+            }
+            Dialog::EditFields { symbol, mut reference, mut value, mut error, mut focused } => {
+                let (mut submit, mut cancel) = (false, false);
+                let closing = shell::dialog(ctx, "edit_fields", "Edit Symbol Fields", |ui| {
+                    ui.label("Reference");
+                    let field = ui.add(egui::TextEdit::singleline(&mut reference).desired_width(f32::INFINITY));
+                    if !focused {
+                        field.request_focus();
+                        focused = true;
+                    }
+                    ui.label("Value");
+                    let value_field = ui.add(egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY));
+                    submit = (field.lost_focus() || value_field.lost_focus()) && ui.input(|i| i.key_pressed(Key::Enter));
+                    if let Some(error) = &error {
+                        ui.label(shell::error(error.as_str()));
+                    }
+                    ui.horizontal(|ui| {
+                        submit |= ui.button("OK").clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+                if submit {
+                    // A refused edit stays in the dialog with the reason, like a bad project name.
+                    let params = json!({"symbol": symbol, "reference": reference, "value": value, "expected_revision": self.session.revision()});
+                    match self.session.apply(SET_SYMBOL_FIELDS, &params) {
+                        Ok(_) => self.message = None,
+                        Err(e) => {
+                            error = Some(e.to_string());
+                            self.dialog = Dialog::EditFields { symbol, reference, value, error, focused };
+                        }
+                    }
+                } else if !(closing || cancel) {
+                    self.dialog = Dialog::EditFields { symbol, reference, value, error, focused };
                 }
             }
             Dialog::ConfirmOpen => {
@@ -801,7 +907,13 @@ impl PcbApp {
                     self.home = false;
                     self.dialog = Dialog::None;
                     self.message = None;
-                    self.file_notice = Some("Project opened".to_owned());
+                    self.selected = None;
+                    // A migrated file says so: its next save writes the current format.
+                    let upgraded = self.session.project().and_then(pcbcraft_engine::Project::upgraded_from);
+                    self.file_notice = Some(match upgraded {
+                        Some(version) => format!("Project opened · format {version} will save in the current format"),
+                        None => "Project opened".to_owned(),
+                    });
                 }
                 project_files::Update::Message(text) => self.file_notice = Some(text),
                 project_files::Update::Error(error) => self.message = Some(error),
@@ -811,6 +923,9 @@ impl PcbApp {
         let assistant_keys = self.assistant_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]
         let assistant_keys = false;
+        if self.selected.is_some() && self.selected_reference().is_none() {
+            self.selected = None;
+        }
         self.shortcuts(&ctx, assistant_keys);
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_live_control();
@@ -885,6 +1000,9 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
+    list.push(("Schematic", "Rotate the selected symbol", key(&ROTATE)));
+    list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
+    list.push(("Schematic", "Delete the selected symbol", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));

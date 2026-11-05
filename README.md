@@ -21,6 +21,10 @@ place it on the schematic grid or press **Esc** to cancel. Choose **Capture → 
 or press **W**, then click two terminal markers to connect them. Press **Esc** or
 right-click and choose **Cancel** to discard an in-progress wire.
 
+Click a symbol to select it. Press **R** to rotate it, **E** to edit its
+reference and value, or **Delete** to remove it with its wires; right-click a
+symbol for the same actions, and press **Esc** to clear the selection.
+
 Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
 

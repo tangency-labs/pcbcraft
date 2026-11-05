@@ -787,6 +787,96 @@ fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
 }
 
 /// Open the context menu during an active wire draft with a real secondary click.
+/// Place a resistor at the schematic origin, which sits at the canvas center.
+fn resistor_at_origin(harness: &mut Harness<'_, PcbApp>) {
+    new_project(harness, "edits");
+    let revision = harness.state().session().revision();
+    harness.state_mut().session.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": revision})).unwrap();
+    harness.run();
+}
+
+/// The first symbol's field as project inspection reports it.
+fn first_symbol(harness: &Harness<'_, PcbApp>, field: &str) -> Value {
+    harness.state().session().inspect()["project"]["schematic"]["symbols"][0][field].clone()
+}
+
+/// Click a symbol to select it, then R rotates it, E edits its fields and Delete removes it,
+/// each through the shared commands. Escape clears the selection.
+#[test]
+fn a_selected_symbol_rotates_edits_and_deletes_with_kicad_keys() {
+    let mut harness = harness();
+    resistor_at_origin(&mut harness);
+    click_canvas(&mut harness);
+    assert_eq!(harness.state().selected.as_deref(), Some("symbol-2"));
+    harness.get_by_label("R1 selected · R rotate · E edit fields · Del delete");
+
+    harness.key_press(Key::R);
+    harness.run();
+    assert_eq!(first_symbol(&harness, "rotation"), 90);
+
+    harness.key_press(Key::E);
+    harness.run();
+    let value = harness.get_all_by_role(egui::accesskit::Role::TextInput).nth(1).unwrap();
+    value.click();
+    harness.run();
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    harness.get_all_by_role(egui::accesskit::Role::TextInput).nth(1).unwrap().type_text("4.7k");
+    harness.run();
+    click(&mut harness, "OK");
+    assert_eq!(first_symbol(&harness, "value"), "4.7k");
+    assert!(matches!(harness.state().dialog, Dialog::None));
+
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(harness.state().selected.is_none());
+    click_canvas(&mut harness);
+    harness.key_press(Key::Delete);
+    harness.run();
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
+    assert!(harness.state().selected.is_none());
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!(first_symbol(&harness, "value"), "4.7k");
+}
+
+/// Right-clicking a symbol selects it and offers Rotate, Edit Fields and Delete. A taken
+/// reference stays in the Edit Fields dialog with the reason.
+#[test]
+fn the_symbol_context_menu_rotates_and_edits() {
+    let mut harness = harness();
+    resistor_at_origin(&mut harness);
+    let point = canvas_center(&harness);
+    harness.hover_at(point);
+    harness.run();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        harness.run();
+    }
+    assert_eq!(harness.state().selected.as_deref(), Some("symbol-2"));
+    harness.get_by_label("Delete");
+    click(&mut harness, "Rotate");
+    assert_eq!(first_symbol(&harness, "rotation"), 90);
+
+    let revision = harness.state().session().revision();
+    harness
+        .state_mut()
+        .session
+        .apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 25_400_000, "y_nm": 0, "expected_revision": revision}))
+        .unwrap();
+    harness.state_mut().selected = Some("symbol-2".to_owned());
+    harness.state_mut().edit_selected(SymbolAction::EditFields);
+    harness.run();
+    let reference = harness.get_all_by_role(egui::accesskit::Role::TextInput).next().unwrap();
+    reference.click();
+    harness.run();
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    harness.get_all_by_role(egui::accesskit::Role::TextInput).next().unwrap().type_text("R2");
+    harness.run();
+    click(&mut harness, "OK");
+    harness.get_by_label("another symbol is already R2");
+    assert!(matches!(harness.state().dialog, Dialog::EditFields { .. }));
+}
+
 fn open_wire_context(harness: &mut Harness<'_, PcbApp>) {
     let point = canvas_center(harness) + egui::vec2(80.0, 26.0);
     harness.hover_at(point);

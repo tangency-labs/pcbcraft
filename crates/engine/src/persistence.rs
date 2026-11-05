@@ -73,7 +73,11 @@ pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>,
     }
 }
 
-const FORMAT: &str = "pcbcraft-project/1";
+/// The project format this build writes. Format 2 adds symbol rotation and edited
+/// references and values.
+const FORMAT: &str = "pcbcraft-project/2";
+/// The first project format, which opens through [`migrate_from_1`].
+const FORMAT_1: &str = "pcbcraft-project/1";
 const BUILTIN_REVISION: u32 = 1;
 /// Maximum number of bytes in a plain project document or ZIP project payload.
 pub const MAX_PROJECT_BYTES: usize = 4 * 1024 * 1024;
@@ -111,6 +115,24 @@ struct Placement<'a> {
     reference_number: usize,
     x_nm: i64,
     y_nm: i64,
+    /// Degrees counterclockwise: 0, 90, 180 or 270. Required from format 2; absent in format 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rotation: Option<u16>,
+    /// Edited reference and value, written only when a person changed them (format 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reference: Option<std::borrow::Cow<'a, str>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<std::borrow::Cow<'a, str>>,
+}
+
+/// Bring a format 1 symbol record up to format 2: unrotated, with its automatic reference and
+/// its definition's value. Format 1 had none of format 2's fields, so finding one is an error.
+fn migrate_from_1(record: &mut Placement<'_>) -> Result<(), String> {
+    if record.rotation.is_some() || record.reference.is_some() || record.value.is_some() {
+        return Err(format!("{FORMAT_1} has no symbol rotation, reference or value fields"));
+    }
+    record.rotation = Some(0);
+    Ok(())
 }
 
 #[derive(Deserialize, Serialize)]
@@ -173,6 +195,7 @@ impl Encoder {
     pub fn step(&mut self, records: usize) -> Result<Option<Vec<u8>>, String> {
         for _ in 0..records {
             if let Some(symbol) = self.project.symbols.get(self.symbols) {
+                let labels = self.project.labels.get(&symbol.ordinal);
                 let record = Placement {
                     id: symbol.ordinal,
                     definition: symbol.definition.id.into(),
@@ -180,6 +203,9 @@ impl Encoder {
                     reference_number: symbol.reference_number,
                     x_nm: symbol.position.x_nm,
                     y_nm: symbol.position.y_nm,
+                    rotation: Some(u16::from(symbol.rotation) * 90),
+                    reference: labels.and_then(|labels| labels.reference.as_deref()).map(Into::into),
+                    value: labels.and_then(|labels| labels.value.as_deref()).map(Into::into),
                 };
                 write_record(&mut self.bytes, &record, self.symbols + 1 < self.project.symbols.len())?;
                 self.symbols += 1;
@@ -249,9 +275,11 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         return Err("project exceeds the native file size limit".to_owned());
     }
     let Document { format, id, name, sheet, board } = serde_json::from_slice(bytes).map_err(|error| format!("invalid project JSON: {error}"))?;
-    if format != FORMAT {
-        return Err(format!("unsupported project format {format}"));
-    }
+    let upgraded_from = match format.as_str() {
+        FORMAT => None,
+        FORMAT_1 => Some(1),
+        _ => return Err(format!("unsupported project format {format}")),
+    };
     if id.is_nil() || sheet.id.is_nil() || id == sheet.id {
         return Err("invalid project or sheet identity".to_owned());
     }
@@ -265,7 +293,12 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     let mut ids = BTreeSet::new();
     let mut references = BTreeSet::new();
     let mut symbols = Vec::with_capacity(sheet.symbols.len());
-    for record in sheet.symbols {
+    let mut labels = std::collections::BTreeMap::new();
+    let mut shown = BTreeSet::new();
+    for mut record in sheet.symbols {
+        if upgraded_from == Some(1) {
+            migrate_from_1(&mut record)?;
+        }
         let definition = builtin_symbol(&record.definition)
             .filter(|_| record.definition_revision == BUILTIN_REVISION)
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
@@ -278,12 +311,34 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         if !(-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&record.x_nm) || !(-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&record.y_nm) {
             return Err("symbol position is outside the schematic bounds".to_owned());
         }
-        symbols.push(SymbolPlacement {
+        let rotation = match record.rotation {
+            Some(degrees @ (0 | 90 | 180 | 270)) => (degrees / 90) as u8,
+            Some(_) => return Err("symbol rotation must be 0, 90, 180 or 270 degrees".to_owned()),
+            None => return Err("symbol is missing its rotation".to_owned()),
+        };
+        let symbol = SymbolPlacement {
             definition,
             ordinal: record.id,
             reference_number: record.reference_number,
             position: Point { x_nm: record.x_nm, y_nm: record.y_nm },
-        });
+            rotation,
+        };
+        // Text equal to the automatic reference or default value is the same as no edit.
+        let reference = record.reference.map(String::from).filter(|text| *text != symbol.reference());
+        let value = record.value.map(String::from).filter(|text| text != symbol.value());
+        if let Some(text) = &reference {
+            crate::schematic::check_reference(text)?;
+        }
+        if let Some(text) = &value {
+            crate::schematic::check_value(text)?;
+        }
+        if !shown.insert(reference.clone().unwrap_or_else(|| symbol.reference())) {
+            return Err("two symbols show the same reference".to_owned());
+        }
+        if reference.is_some() || value.is_some() {
+            labels.insert(record.id, crate::schematic::Labels { reference, value });
+        }
+        symbols.push(symbol);
     }
     symbols.sort_unstable_by_key(|symbol| symbol.ordinal);
     let resolve = |endpoint: Endpoint<'_>| {
@@ -327,9 +382,11 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         sheet_id: sheet.id,
         name,
         symbols: Arc::new(symbols),
+        labels: Arc::new(labels),
         wires: Arc::new(wires),
         connectivity: Arc::default(),
         board: Arc::new(layout),
+        upgraded_from,
     }))
 }
 
@@ -398,6 +455,53 @@ mod tests {
         let mut reopened = Session::default();
         reopened.open_snapshot(loaded);
         assert_eq!(reopened.inspect()["project"]["schematic"]["symbols"], symbols);
+    }
+
+    const FORMAT_1_FIXTURE: &[u8] = include_bytes!("../../app/tests/fixtures/two-resistors-format-1.pc");
+    const FORMAT_2_FIXTURE: &[u8] = include_bytes!("../../app/tests/fixtures/two-resistors.pc");
+
+    /// A format 1 project opens through the explicit migration, says it was upgraded, and saves
+    /// as exactly the format 2 fixture. A format 1 file can't carry format 2's fields.
+    #[test]
+    fn format_1_migrates_to_format_2() {
+        let migrated = decode(FORMAT_1_FIXTURE).unwrap();
+        assert_eq!(migrated.upgraded_from(), Some(1));
+        assert!(migrated.symbols().iter().all(|symbol| symbol.turns() == 0));
+        assert_eq!(encode(migrated).unwrap(), FORMAT_2_FIXTURE);
+        let current = decode(FORMAT_2_FIXTURE).unwrap();
+        assert_eq!(current.upgraded_from(), None);
+        assert_eq!(encode(current).unwrap(), FORMAT_2_FIXTURE, "an unchanged format 2 project saves without a diff");
+
+        let original = std::str::from_utf8(FORMAT_1_FIXTURE).unwrap();
+        let forged = original.replacen("\"y_nm\":0}", "\"y_nm\":0,\"rotation\":90}", 1);
+        assert_ne!(forged, original);
+        assert!(decode(forged.as_bytes()).unwrap_err().contains("has no symbol rotation"));
+    }
+
+    /// Rotation and edited text survive a save. Unedited symbols write no reference or value,
+    /// and a file with a bad rotation or two symbols showing one reference is refused.
+    #[test]
+    fn rotation_and_edited_fields_round_trip() {
+        let mut session = fixture();
+        for _ in 0..2 {
+            session.apply(crate::ROTATE_SYMBOL, &json!({"symbol": "symbol-2", "expected_revision": session.revision()})).unwrap();
+        }
+        let fields = json!({"symbol": "symbol-3", "reference": "D7", "value": "Red", "expected_revision": session.revision()});
+        session.apply(crate::SET_SYMBOL_FIELDS, &fields).unwrap();
+        let bytes = encode(session.snapshot().unwrap()).unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert_eq!(text.matches("\"reference\":").count(), 1, "only the edited symbol stores a reference");
+        assert!(text.contains("\"rotation\":180"));
+        let mut reopened = Session::default();
+        reopened.open_snapshot(decode(&bytes).unwrap());
+        assert_eq!(reopened.inspect()["project"], session.inspect()["project"]);
+        let led = &reopened.inspect()["project"]["schematic"]["symbols"][1];
+        assert_eq!((led["reference"].clone(), led["value"].clone()), (json!("D7"), json!("Red")));
+
+        let bad_rotation = text.replace("\"rotation\":180", "\"rotation\":45");
+        assert!(decode(bad_rotation.as_bytes()).unwrap_err().contains("rotation"));
+        let duplicate = text.replace("\"reference\":\"D7\"", "\"reference\":\"R1\"");
+        assert!(decode(duplicate.as_bytes()).unwrap_err().contains("same reference"));
     }
 
     /// Reopen retains IDs and wiring. Moving a symbol edits exactly one record and shares connectivity.

@@ -11,7 +11,7 @@ the same project schema. The desktop, browser and MCP CLI can open either one.
 
 | Encoding | Intended use | Contents |
 | --- | --- | --- |
-| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/1` |
+| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/2` |
 | ZIP `.pc` | Portable copy for sharing or bundling assets | A manifest, the same project document, and any bundled asset bytes |
 
 Open determines the encoding from the file contents. A ZIP signature selects
@@ -182,8 +182,24 @@ remain separate design decisions.
 ## Current implementation
 
 The current project document is plain UTF-8 JSON tagged
-`pcbcraft-project/1`. The files contain a project ID, name, one sheet with a
-stable ID, and one line per placement and wire. Blank lines between records
+`pcbcraft-project/2`. The files contain a project ID, name, one sheet with a
+stable ID, and one line per placement and wire. Each symbol line records its
+`rotation` in degrees counterclockwise (0, 90, 180 or 270). It records
+`reference` and `value` only when a person edited them, so a symbol keeps one
+line and an untouched symbol never gains those fields. An edited reference has
+no spaces and is unique among the shown references; both texts are 1 to 32 or
+64 characters on one line.
+
+### Format 1 migration
+
+Opening a `pcbcraft-project/1` file runs an explicit migration: each symbol
+becomes unrotated with its automatic reference and its definition's value, and
+the editor says the next save writes the current format. That save changes
+the format line and adds `"rotation":0` to every symbol line, once. A format 1
+file that carries a format 2 field is refused. The migration is tested against
+the prior-version fixture `crates/app/tests/fixtures/two-resistors-format-1.pc`,
+which must save as exactly `two-resistors.pc`. Builds that only read format 1
+refuse format 2 files with the unsupported-format error. Blank lines between records
 let neighboring edits merge. A wire saves the two symbol IDs and pin numbers.
 A symbol pins its built-in definition revision. An optional board section
 stores footprint placements and the explicit pin-to-pad mapping. The

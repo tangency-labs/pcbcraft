@@ -29,6 +29,8 @@ const MAX_NAME: usize = 200;
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
     Name,
+    /// Free text for a symbol's reference or value. Its length and characters are checked by the command.
+    Text,
     SymbolDefinition,
     SymbolId,
     FootprintDefinition,
@@ -42,7 +44,7 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
-            Self::Name => json!({"type": "string"}),
+            Self::Name | Self::Text => json!({"type": "string"}),
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
             Self::FootprintDefinition => json!({"type":"string", "enum":[FOOTPRINT_DEFINITION]}),
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
@@ -66,7 +68,7 @@ impl ParamKind {
         match self {
             Self::FootprintDefinition if value.as_str() == Some(FOOTPRINT_DEFINITION) => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
-            Self::Name if value.is_string() => Ok(()),
+            Self::Name | Self::Text if value.is_string() => Ok(()),
             Self::SymbolId if value.as_str().and_then(schematic::parse_symbol_id).is_some() => Ok(()),
             Self::SymbolDefinition if value.as_str().and_then(builtin_symbol).is_some() => Ok(()),
             Self::Coordinate if value.as_i64().is_some_and(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&n)) => Ok(()),
@@ -74,7 +76,7 @@ impl ParamKind {
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition => Err("must identify the built-in footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
-            Self::Name => Err("must be a string"),
+            Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),
             Self::SymbolDefinition => Err("must identify a built-in symbol definition"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
@@ -134,10 +136,17 @@ pub const PLACE_SYMBOL: &str = "schematic.place_symbol";
 pub const CONNECT_PINS: &str = "schematic.connect_pins";
 /// Move an existing symbol without changing its terminals or wiring.
 pub const MOVE_SYMBOL: &str = "schematic.move_symbol";
+/// Turn a symbol a quarter turn counterclockwise.
+pub const ROTATE_SYMBOL: &str = "schematic.rotate_symbol";
+/// Remove a symbol and the wires attached to it.
+pub const DELETE_SYMBOL: &str = "schematic.delete_symbol";
+/// Set a symbol's reference and value text.
+pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 const EXPECTED_REVISION: Param = Param { name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
 
+const SYMBOL: Param = Param { name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId };
 const SYMBOL_X: Param = Param { name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate };
 const SYMBOL_Y: Param = Param { name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 
@@ -179,6 +188,29 @@ const CATALOG: &[Command] = &[
             Param { name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
             SYMBOL_X,
             SYMBOL_Y,
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: ROTATE_SYMBOL,
+        title: "Rotate Symbol",
+        summary: "Turn a symbol 90 degrees counterclockwise. Its wires follow its pins. Undoable.",
+        params: &[SYMBOL, EXPECTED_REVISION],
+    },
+    Command {
+        id: DELETE_SYMBOL,
+        title: "Delete Symbol",
+        summary: "Remove a symbol with the wires attached to it and its footprint. Undoable.",
+        params: &[SYMBOL, EXPECTED_REVISION],
+    },
+    Command {
+        id: SET_SYMBOL_FIELDS,
+        title: "Edit Symbol Fields",
+        summary: "Set the reference and value shown for a symbol. References are unique and have no spaces. Undoable.",
+        params: &[
+            SYMBOL,
+            Param { name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
+            Param { name: "value", summary: "Value text, such as 4.7k", kind: ParamKind::Text },
             EXPECTED_REVISION,
         ],
     },
@@ -236,15 +268,35 @@ pub struct Project {
     id: uuid::Uuid,
     sheet_id: uuid::Uuid,
     symbols: Arc<Vec<SymbolPlacement>>,
+    /// Edited references and values by symbol ordinal. Symbols never edited have no entry.
+    labels: Arc<std::collections::BTreeMap<u64, schematic::Labels>>,
     wires: Arc<Vec<Wire>>,
     connectivity: Arc<OnceLock<Connectivity>>,
     board: Arc<Board>,
+    /// The older format this snapshot was migrated from when it was opened, if any.
+    upgraded_from: Option<u32>,
 }
 
 impl Project {
     /// Return all schematic symbols in placement order.
     pub fn symbols(&self) -> &[SymbolPlacement] {
         &self.symbols
+    }
+
+    /// The reference shown for a symbol: the text a person gave it, or its automatic reference.
+    pub fn reference(&self, symbol: &SymbolPlacement) -> String {
+        self.labels.get(&symbol.ordinal).and_then(|labels| labels.reference.clone()).unwrap_or_else(|| symbol.reference())
+    }
+
+    /// The value shown for a symbol: the text a person gave it, or its definition's value.
+    pub fn value<'a>(&'a self, symbol: &'a SymbolPlacement) -> &'a str {
+        self.labels.get(&symbol.ordinal).and_then(|labels| labels.value.as_deref()).unwrap_or(symbol.value())
+    }
+
+    /// The older project format this was migrated from when it was opened, such as 1. Saving
+    /// writes the current format. `None` for projects made or saved in this format.
+    pub fn upgraded_from(&self) -> Option<u32> {
+        self.upgraded_from
     }
 
     /// Return committed wires in placement order.
@@ -270,7 +322,7 @@ impl Project {
     /// Inspect the schematic in the shared command format, without including the board.
     pub fn inspect_schematic(&self) -> Value {
         json!({
-            "symbols": self.symbols.iter().map(SymbolPlacement::inspect).collect::<Vec<_>>(),
+            "symbols": self.symbols.iter().map(|symbol| symbol.inspect(&self.reference(symbol), self.value(symbol))).collect::<Vec<_>>(),
             "wires": self.wires.iter().copied().map(Wire::inspect).collect::<Vec<_>>(),
             "netlist": self.connectivity().inspect(),
         })
@@ -350,7 +402,8 @@ impl Session {
     pub fn available(&self, id: &str) -> bool {
         match id {
             "project.new" => true,
-            "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | PLACE_FOOTPRINT => self.project.is_some(),
+            "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
+            | PLACE_FOOTPRINT => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -392,7 +445,8 @@ impl Session {
         check_params(command, params)?;
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
-                "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | PLACE_FOOTPRINT => "no project is open".to_owned(),
+                "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
+                | PLACE_FOOTPRINT => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -404,9 +458,11 @@ impl Session {
                 id: fresh_id()?,
                 sheet_id: fresh_id()?,
                 symbols: Arc::default(),
+                labels: Arc::default(),
                 wires: Arc::default(),
                 connectivity: Arc::default(),
                 board: Arc::default(),
+                upgraded_from: None,
             }),
             "project.rename" => {
                 let name = name_param(params)?;
@@ -426,6 +482,9 @@ impl Session {
             }
             CONNECT_PINS => self.connect_pins(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
+            ROTATE_SYMBOL => self.rotate_symbol(params)?,
+            DELETE_SYMBOL => self.delete_symbol(params)?,
+            SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
             PLACE_FOOTPRINT => self.place_footprint(params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
@@ -447,7 +506,7 @@ impl Session {
         if project.symbols.len() >= MAX_SYMBOLS {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
-        let reference_number = project
+        let mut reference_number = project
             .symbols
             .iter()
             .filter(|symbol| symbol.definition.reference_prefix == definition.reference_prefix)
@@ -455,6 +514,11 @@ impl Session {
             .max()
             .unwrap_or_default()
             + 1;
+        // An edited reference may already use the next automatic one, such as R1 renamed to R2.
+        let shown: std::collections::BTreeSet<String> = project.symbols.iter().map(|symbol| project.reference(symbol)).collect();
+        while shown.contains(&format!("{}{reference_number}", definition.reference_prefix)) {
+            reference_number += 1;
+        }
         if reference_number > MAX_REFERENCE_NUMBER {
             return Err(CommandError::Unavailable("no more reference numbers are available for this symbol type".to_owned()));
         }
@@ -464,6 +528,7 @@ impl Session {
             ordinal: self.next_object_id()?,
             reference_number,
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
+            rotation: 0,
         });
         project.connectivity = Arc::default();
         self.change(project);
@@ -485,6 +550,80 @@ impl Session {
             Arc::make_mut(&mut project.symbols)[index].position = position;
             self.change(project);
         }
+        Ok(())
+    }
+
+    /// Find the placed symbol named by the `symbol` parameter.
+    fn symbol_param(project: &Project, params: &Value) -> Result<usize, CommandError> {
+        params["symbol"]
+            .as_str()
+            .and_then(schematic::parse_symbol_id)
+            .and_then(|id| project.symbol_index(id))
+            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))
+    }
+
+    /// Turn a symbol a quarter turn counterclockwise, as KiCad's R does. Its wires follow its pins.
+    fn rotate_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let project = self.open_project()?;
+        let index = Self::symbol_param(project, params)?;
+        let mut project = project.clone();
+        let symbol = &mut Arc::make_mut(&mut project.symbols)[index];
+        symbol.rotation = (symbol.rotation + 1) % 4;
+        self.change(project);
+        Ok(())
+    }
+
+    /// Remove a symbol with its wires, edited text and footprint, as one undo step.
+    fn delete_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let project = self.open_project()?;
+        let index = Self::symbol_param(project, params)?;
+        let ordinal = project.symbols[index].ordinal;
+        let mut project = project.clone();
+        Arc::make_mut(&mut project.symbols).remove(index);
+        Arc::make_mut(&mut project.wires).retain(|wire| wire.terminals.iter().all(|terminal| terminal.symbol != ordinal));
+        if project.labels.contains_key(&ordinal) {
+            Arc::make_mut(&mut project.labels).remove(&ordinal);
+        }
+        Arc::make_mut(&mut project.board).remove_symbol(ordinal);
+        project.connectivity = Arc::default();
+        self.change(project);
+        Ok(())
+    }
+
+    /// Set the reference and value shown for a symbol. Text equal to the automatic reference or
+    /// the definition's value clears the edit. A reference must be unique, both must be
+    /// non-empty single-line text within their length limits, and an unchanged pair is no step.
+    fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let project = self.open_project()?;
+        let index = Self::symbol_param(project, params)?;
+        let symbol = &project.symbols[index];
+        // Surrounding spaces are trimmed here, so a person's stray space isn't an error.
+        let reference = params["reference"].as_str().unwrap_or_default().trim().to_owned();
+        let value = params["value"].as_str().unwrap_or_default().trim().to_owned();
+        schematic::check_reference(&reference).map_err(CommandError::InvalidParams)?;
+        schematic::check_value(&value).map_err(CommandError::InvalidParams)?;
+        if project.symbols.iter().any(|other| other.ordinal != symbol.ordinal && project.reference(other) == reference) {
+            return Err(CommandError::InvalidParams(format!("another symbol is already {reference}")));
+        }
+        let labels = schematic::Labels {
+            reference: (reference != symbol.reference()).then_some(reference),
+            value: (value != symbol.value()).then_some(value),
+        };
+        let ordinal = symbol.ordinal;
+        if project.labels.get(&ordinal).cloned().unwrap_or_default() == labels {
+            return Ok(());
+        }
+        let mut project = project.clone();
+        let table = Arc::make_mut(&mut project.labels);
+        if labels == schematic::Labels::default() {
+            table.remove(&ordinal);
+        } else {
+            table.insert(ordinal, labels);
+        }
+        self.change(project);
         Ok(())
     }
 
@@ -629,6 +768,50 @@ mod tests {
         s.execute("edit.redo", &Value::Null).unwrap();
         assert_eq!(name(&s), Some("a"));
         assert_eq!(s.revision(), 5);
+    }
+
+    /// Rotating turns the pins and the wire follows; deleting removes the symbol with its wires
+    /// and footprint as one undo step; field edits are checked and clear back to the defaults.
+    #[test]
+    fn rotate_delete_and_edit_fields_go_through_the_command_set() {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({"name": "Edits"})).unwrap();
+        for x_nm in [0, 25_400_000] {
+            s.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": x_nm, "y_nm": 0, "expected_revision": s.revision()})).unwrap();
+        }
+        let link = json!({"from": {"symbol": "symbol-2", "terminal": "2"}, "to": {"symbol": "symbol-3", "terminal": "1"}, "expected_revision": s.revision()});
+        s.apply(CONNECT_PINS, &link).unwrap();
+        s.apply(ROTATE_SYMBOL, &json!({"symbol": "symbol-2", "expected_revision": s.revision()})).unwrap();
+        let symbol = &s.inspect()["project"]["schematic"]["symbols"][0];
+        assert_eq!(symbol["rotation"], 90);
+        // A quarter turn counterclockwise takes pin 2 from the right to the top.
+        assert_eq!((symbol["pins"][1]["x_nm"].clone(), symbol["pins"][1]["y_nm"].clone()), (json!(0), json!(-schematic::PIN_OFFSET_NM)));
+        let terminal = s.project().unwrap().wires()[0].terminals()[0];
+        assert_eq!(s.project().unwrap().terminal_position(terminal), Some(Point { x_nm: 0, y_nm: -schematic::PIN_OFFSET_NM }));
+
+        let fields = |s: &mut Session, reference: &str, value: &str| {
+            let params = json!({"symbol": "symbol-3", "reference": reference, "value": value, "expected_revision": s.revision()});
+            s.apply(SET_SYMBOL_FIELDS, &params)
+        };
+        assert!(fields(&mut s, "R1", "1k").is_err(), "R1 is taken");
+        assert!(fields(&mut s, "R 9", "1k").is_err(), "no spaces in a reference");
+        assert!(fields(&mut s, "R9", " ").is_err(), "a value can't be blank");
+        fields(&mut s, " R9 ", "4.7k").unwrap();
+        let revision = s.revision();
+        fields(&mut s, "R9", "4.7k").unwrap();
+        assert_eq!(s.revision(), revision, "an unchanged edit is no step");
+        s.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 50_800_000, "y_nm": 0, "expected_revision": s.revision()})).unwrap();
+        fields(&mut s, "R2", "1k").unwrap();
+        let references: Vec<_> =
+            s.inspect()["project"]["schematic"]["symbols"].as_array().unwrap().iter().map(|symbol| symbol["reference"].clone()).collect();
+        assert_eq!(references, [json!("R1"), json!("R2"), json!("R3")], "a reference back at its default clears the edit");
+
+        let before = s.inspect()["project"].clone();
+        s.apply(DELETE_SYMBOL, &json!({"symbol": "symbol-2", "expected_revision": s.revision()})).unwrap();
+        let project = s.project().unwrap();
+        assert_eq!((project.symbols().len(), project.wires().len()), (2, 0));
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(s.inspect()["project"], before);
     }
 
     #[test]

@@ -131,6 +131,14 @@ impl Board {
         Ok(())
     }
 
+    /// Drop the footprint linked to a deleted symbol, if it has one, and rebuild the index.
+    pub(crate) fn remove_symbol(&mut self, symbol: u64) {
+        if self.by_symbol.remove(&symbol).is_some() {
+            self.footprints.retain(|footprint| footprint.symbol != symbol);
+            self.by_symbol = self.footprints.iter().enumerate().map(|(index, footprint)| (footprint.symbol, index)).collect();
+        }
+    }
+
     /// Find a terminal's corresponding physical pad without scanning the layout.
     pub(crate) fn pad_for(&self, terminal: Terminal) -> Option<Pad> {
         let footprint = self.footprints.get(*self.by_symbol.get(&terminal.symbol)?)?;
