@@ -1,16 +1,39 @@
 mod camera;
+mod wires;
 
 pub(crate) use camera::Camera;
 
-use egui::{Align2, FontId, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui, pos2};
+use egui::{Align2, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, pos2};
 use pcbcraft_chrome::{Tokens, theme};
 use pcbcraft_engine::{
     Project,
-    schematic::{MAX_CENTER_NM, PIN_OFFSET_NM, Point},
+    schematic::{MAX_CENTER_NM, PIN_OFFSET_NM, Point, Terminal},
 };
 
-/// Draw the schematic and preview. Return a snapped point only when the user clicks to place.
-pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, placing: bool, input_enabled: bool) -> Option<Point> {
+/// The active canvas interaction, bound to the revision at which it began.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Tool {
+    PlaceResistor { revision: u64 },
+    Wire { revision: u64, start: Option<Terminal> },
+}
+
+impl Tool {
+    /// Return the revision used to reject stale canvas actions.
+    pub(crate) fn revision(self) -> u64 {
+        match self {
+            Self::PlaceResistor { revision } | Self::Wire { revision, .. } => revision,
+        }
+    }
+}
+
+/// An exact click target chosen through the current tool.
+pub(crate) enum Click {
+    Place(Point),
+    Pin(Terminal),
+}
+
+/// Draw the schematic and its active preview, returning a target only on a canvas click.
+pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, tool: Option<Tool>, input_enabled: bool) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
@@ -22,6 +45,7 @@ pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, placing:
     let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let grid_step = camera.grid_step();
     paint_grid(&painter, rect, origin, tokens, grid_step);
+    wires::paint(&painter, rect, project, camera);
     for resistor in project.resistors() {
         let center = screen(resistor.position);
         if rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN)).contains(center) {
@@ -32,9 +56,18 @@ pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, placing:
         }
     }
 
-    if !placing || response.dragged() {
+    if !input_enabled || response.dragged() {
         return None;
     }
+    match tool? {
+        Tool::PlaceResistor { .. } => placement_preview(&painter, rect, response, camera, tokens).map(Click::Place),
+        Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start).map(Click::Pin),
+    }
+}
+
+/// Draw the resistor on its snapped model point until the user commits or cancels.
+fn placement_preview(painter: &Painter, rect: Rect, response: Response, camera: &Camera, tokens: Tokens) -> Option<Point> {
+    let screen = |point| camera.screen(point, rect);
     let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos())?;
     let point = camera.snap(pointer, rect);
     if !(-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&point.x_nm) || !(-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&point.y_nm) {
@@ -42,7 +75,7 @@ pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, placing:
     }
     let left = Point { x_nm: point.x_nm - PIN_OFFSET_NM, ..point };
     let right = Point { x_nm: point.x_nm + PIN_OFFSET_NM, ..point };
-    paint_resistor(&painter, screen(point), [screen(left), screen(right)], tokens.accent, None);
+    paint_resistor(painter, screen(point), [screen(left), screen(right)], tokens.accent, None);
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
 }
 

@@ -240,3 +240,55 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
     click_canvas(&mut harness);
     assert_eq!(harness.state().session().project().unwrap().resistors()[0].position, pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
 }
+
+/// Place two resistors through the canvas so their exact terminal positions are known.
+fn wiring_project(harness: &mut Harness<'_, PcbApp>) {
+    new_project(harness, "wiring");
+    choose(harness, "Place", "Place Resistor");
+    click_canvas(harness);
+    choose(harness, "Place", "Place Resistor");
+    click_canvas_at(harness, egui::pos2(703.2, 414.96));
+}
+
+#[test]
+fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
+    let mut harness = harness();
+    wiring_project(&mut harness);
+    choose(&mut harness, "Place", "Wire");
+    click_canvas_at(&mut harness, egui::pos2(550.8, 354.0));
+    harness.get_by_label("Wire · Click the destination pin");
+    assert_eq!(harness.state().session().revision(), 3);
+    click_canvas_at(&mut harness, egui::pos2(652.4, 414.96));
+
+    let inspected = harness.state().session().inspect();
+    let schematic = &inspected["project"]["schematic"];
+    assert_eq!(
+        schematic["wires"],
+        json!([{
+            "id": "wire-4",
+            "from": {"symbol": "symbol-2", "terminal": "2"},
+            "to": {"symbol": "symbol-3", "terminal": "1"},
+        }])
+    );
+    assert_eq!(schematic["netlist"]["nets"].as_array().unwrap().len(), 1);
+    choose(&mut harness, "Edit", "Undo");
+    assert!(harness.state().session().project().unwrap().wires().is_empty());
+    choose(&mut harness, "Edit", "Redo");
+    assert_eq!(&harness.state().session().inspect()["project"]["schematic"], schematic);
+}
+
+#[test]
+fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
+    let mut harness = harness();
+    wiring_project(&mut harness);
+    let before = harness.state().session().inspect();
+    harness.key_press(Key::W);
+    harness.run();
+    click_canvas_at(&mut harness, egui::pos2(550.8, 354.0));
+    click_canvas_at(&mut harness, egui::pos2(600.0, 390.0));
+    harness.get_by_label("Wire · Click the destination pin");
+    harness.key_press(Key::Escape);
+    harness.run();
+    click_canvas_at(&mut harness, egui::pos2(652.4, 414.96));
+    assert_eq!(harness.state().session().inspect(), before);
+}

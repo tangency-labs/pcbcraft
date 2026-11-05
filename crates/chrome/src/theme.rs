@@ -22,6 +22,10 @@ pub const SCHEMATIC_MIN_GRID_SPACING: f32 = 5.0;
 /// Space around the contents when fitting the schematic to its viewport.
 pub const SCHEMATIC_FIT_MARGIN: f32 = 28.0;
 pub const SCHEMATIC_SYMBOL_STROKE: f32 = 1.6;
+/// Radius of a terminal marker while the Wire tool is active.
+pub const SCHEMATIC_PIN_RADIUS: f32 = 3.0;
+/// Distance at which the Wire tool snaps to a terminal.
+pub const SCHEMATIC_PIN_HIT_RADIUS: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
@@ -38,6 +42,7 @@ pub struct Tokens {
     pub canvas: Color32,
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
+    pub schematic_wire: Color32,
 
     pub space_2: f32,
     pub space_3: f32,
@@ -74,6 +79,7 @@ impl Tokens {
             canvas: Color32::from_rgb(240, 243, 247),
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(194, 201, 211),
+            schematic_wire: Color32::from_rgb(20, 112, 75),
 
             space_2: 2.0,
             space_3: 3.0,
@@ -110,6 +116,7 @@ impl Tokens {
         t.canvas = Color32::from_rgb(46, 52, 64);
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
+        t.schematic_wire = Color32::from_rgb(111, 210, 160);
         t
     }
 

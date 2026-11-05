@@ -7,6 +7,8 @@
 mod preferences;
 mod schematic_canvas;
 
+use schematic_canvas::{Click, Tool};
+
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use pcbcraft_chrome::{
@@ -14,7 +16,7 @@ use pcbcraft_chrome::{
     shell::{self, dim},
     theme,
 };
-use pcbcraft_engine::{PLACE_RESISTOR, Session, command};
+use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, Session, command};
 use serde_json::{Value, json};
 
 pub use preferences::{Preferences, ThemeChoice};
@@ -27,6 +29,7 @@ const COMMAND_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Ke
 const COMMAND_N: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const COMMAND_Q: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
+const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const COMMAND_COMMA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 
 /// A browser keeps Ctrl+N and Ctrl+Q for itself, and has no window of ours to quit.
@@ -53,8 +56,7 @@ pub struct PcbApp {
     camera: schematic_canvas::Camera,
     preferences: Preferences,
     dialog: Dialog,
-    /// The revision at which the placement preview started.
-    placing_resistor: Option<u64>,
+    tool: Option<Tool>,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
     /// The palette and zoom last applied, so they are set only when they change.
@@ -81,9 +83,16 @@ impl PcbApp {
         self.message = self.session.execute(id, params).err().map(|e| e.to_string());
     }
 
+    /// Start a resistor preview at the current project revision.
     fn begin_placement(&mut self) {
         self.message = None;
-        self.placing_resistor = Some(self.session.revision());
+        self.tool = Some(Tool::PlaceResistor { revision: self.session.revision() });
+    }
+
+    /// Wait for the first pin at the current project revision.
+    fn begin_wire(&mut self) {
+        self.message = None;
+        self.tool = Some(Tool::Wire { revision: self.session.revision(), start: None });
     }
 
     fn ask_name(&mut self, command: &'static str) {
@@ -135,6 +144,9 @@ impl PcbApp {
                 if self.command_row(ui, PLACE_RESISTOR, "", "A") {
                     self.begin_placement();
                 }
+                if MenuItem::new("Wire").shortcut("W").enabled(self.session.available(CONNECT_PINS)).show(ui) {
+                    self.begin_wire();
+                }
             });
             menu::top(ui, "Preferences", |ui| {
                 if MenuItem::new("Preferences…").shortcut("Ctrl+,").show(ui) {
@@ -159,8 +171,12 @@ impl PcbApp {
                 ui.label(dim(name));
                 if let Some(message) = message {
                     ui.label(shell::error(message));
-                } else if self.placing_resistor.is_some() {
-                    ui.label(dim("Place resistor · Esc to cancel"));
+                } else if let Some(tool) = self.tool {
+                    ui.label(dim(match tool {
+                        Tool::PlaceResistor { .. } => "Place resistor · Esc to cancel",
+                        Tool::Wire { start: None, .. } => "Wire · Click a pin",
+                        Tool::Wire { start: Some(_), .. } => "Wire · Click the destination pin",
+                    }));
                 }
             },
             |ui| {
@@ -169,13 +185,12 @@ impl PcbApp {
         );
     }
 
-    /// Draw the open schematic and submit a snapped click through the shared placement command.
+    /// Draw the schematic and send completed placements or wires through the shared command catalog.
     fn canvas(&mut self, ui: &mut Ui) {
         let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
-        let placing = self.placing_resistor.is_some() && input_enabled;
-        let point = shell::canvas(ui, |ui| {
+        let click = shell::canvas(ui, |ui| {
             if let Some(project) = self.session.project() {
-                return schematic_canvas::show(ui, project, &mut self.camera, placing, input_enabled);
+                return schematic_canvas::show(ui, project, &mut self.camera, self.tool, input_enabled);
             }
             let t = Tokens::get();
             ui.centered_and_justified(|ui| {
@@ -183,10 +198,21 @@ impl PcbApp {
             });
             None
         });
-        if let Some(point) = point
-            && let Some(revision) = self.placing_resistor.take()
-        {
-            self.run(PLACE_RESISTOR, &json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
+        match (self.tool, click) {
+            (Some(Tool::PlaceResistor { revision }), Some(Click::Place(point))) => {
+                self.tool = None;
+                self.run(PLACE_RESISTOR, &json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
+            }
+            (Some(Tool::Wire { revision, start: None }), Some(Click::Pin(pin))) => {
+                self.tool = Some(Tool::Wire { revision, start: Some(pin) });
+            }
+            (Some(Tool::Wire { revision, start: Some(from) }), Some(Click::Pin(to))) if from != to => {
+                self.run(CONNECT_PINS, &json!({"from": from.inspect(), "to": to.inspect(), "expected_revision": revision}));
+                if self.message.is_none() {
+                    self.tool = None;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -197,11 +223,14 @@ impl PcbApp {
         }
         let pressed = |shortcut: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(shortcut));
         if !egui::Popup::is_any_open(ctx) {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-                self.placing_resistor = None;
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.tool.take().is_some() {
+                self.message = None;
             }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_RESISTOR) {
                 self.begin_placement();
+            }
+            if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
+                self.begin_wire();
             }
         }
         if pressed(&COMMAND_Z) && self.session.available("edit.undo") {
@@ -307,8 +336,8 @@ impl PcbApp {
         self.sync_style(&ctx);
         self.shortcuts(&ctx);
         self.menus(ui);
-        if self.placing_resistor != Some(self.session.revision()) || !matches!(self.dialog, Dialog::None) {
-            self.placing_resistor = None;
+        if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
+            self.tool = None;
         }
         self.status(ui);
         self.canvas(ui);

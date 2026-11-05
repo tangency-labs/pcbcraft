@@ -10,8 +10,8 @@
 pub mod schematic;
 
 use schematic::{
-    MAX_CENTER_NM, MAX_SYMBOLS, Point, ResistorPlacement,
-    wiring::{MAX_WIRES, Terminal, Wire, inspect_netlist},
+    MAX_CENTER_NM, MAX_SYMBOLS, Point, ResistorPlacement, Terminal, Wire,
+    wiring::{MAX_WIRES, inspect_netlist},
 };
 use serde_json::{Map, Value, json};
 
@@ -178,6 +178,17 @@ impl Project {
     pub fn resistors(&self) -> &[ResistorPlacement] {
         &self.resistors
     }
+
+    /// Return committed wires in placement order.
+    pub fn wires(&self) -> &[Wire] {
+        &self.wires
+    }
+
+    /// Resolve a terminal against this snapshot. Placements are ordered by their creation revision.
+    pub fn terminal_position(&self, terminal: Terminal) -> Option<Point> {
+        let index = self.resistors.binary_search_by_key(&terminal.symbol, |symbol| symbol.ordinal).ok()?;
+        Some(self.resistors[index].pins()[terminal.pin_index()])
+    }
 }
 
 /// The open project and its history. There is one per window or per MCP server.
@@ -289,7 +300,7 @@ impl Session {
         let project = self.open_project()?;
         let endpoint = |name: &str| {
             Terminal::parse(&params[name])
-                .filter(|terminal| project.resistors.iter().any(|symbol| symbol.ordinal == terminal.symbol))
+                .filter(|terminal| project.terminal_position(*terminal).is_some())
                 .ok_or_else(|| CommandError::InvalidParams(format!("`{name}` must reference an existing symbol terminal")))
         };
         let mut terminals = [endpoint("from")?, endpoint("to")?];
