@@ -38,6 +38,15 @@ pub fn top<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> egui:
     response
 }
 
+/// Open a pointer context menu with the same surface and rows as the menu bar.
+pub fn context<R>(response: &Response, add: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
+    egui::Popup::context_menu(response).frame(frame()).show(|ui| {
+        ui.set_min_width(120.0);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        add(ui)
+    })
+}
+
 pub fn separator(ui: &mut Ui) {
     let t = Tokens::get();
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), t.space_8 + 1.0), Sense::hover());

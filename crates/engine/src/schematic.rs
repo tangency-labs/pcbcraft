@@ -2,6 +2,8 @@
 
 pub(crate) mod wiring;
 
+pub use wiring::{Terminal, Wire};
+
 use serde_json::{Value, json};
 
 pub const GRID_NM: i64 = 1_270_000;
@@ -36,6 +38,11 @@ impl ResistorPlacement {
 
     pub fn value(&self) -> &'static str {
         "1k"
+    }
+
+    /// Return the two terminal references in the same order as the pin positions.
+    pub fn terminals(&self) -> [Terminal; 2] {
+        Terminal::for_symbol(self.ordinal)
     }
 
     /// Return pin 1 (left) and pin 2 (right) in absolute schematic coordinates.
