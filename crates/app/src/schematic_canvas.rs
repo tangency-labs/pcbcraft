@@ -179,6 +179,18 @@ fn paint_grid(painter: &Painter, rect: Rect, origin: Pos2, tokens: Tokens, mut s
 }
 
 const LED_ARROW_TIP_Y: f32 = -3.1;
+/// Half the height of the capacitor plates and the connector body, in grid steps.
+const BODY_HALF_HEIGHT: f32 = 1.77;
+
+/// How far above the pin line a symbol's drawing reaches, in grid steps (negative is up).
+/// Fit uses it so the tallest part of each symbol stays in view.
+pub(super) fn top_extent(kind: SymbolKind) -> f32 {
+    match kind {
+        SymbolKind::Resistor => 0.0,
+        SymbolKind::Led => LED_ARROW_TIP_Y,
+        SymbolKind::Capacitor | SymbolKind::Connector => -BODY_HALF_HEIGHT,
+    }
+}
 
 /// Draw the symbol between its engine pin positions. At overview zoom use a simpler outline.
 fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]: [Pos2; 2], color: egui::Color32, label: Option<(&str, &str)>) {
@@ -194,6 +206,18 @@ fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]
             SymbolKind::Led => {
                 line(&[(-5.0, 0.0), (-1.3, 0.0), (-1.3, -1.5), (1.3, 0.0), (-1.3, 1.5), (-1.3, 0.0)]);
                 line(&[(1.3, -1.5), (1.3, 1.5), (1.3, 0.0), (5.0, 0.0)]);
+            }
+            SymbolKind::Capacitor => {
+                line(&[(-5.0, 0.0), (-0.5, 0.0)]);
+                line(&[(-0.5, -BODY_HALF_HEIGHT), (-0.5, BODY_HALF_HEIGHT)]);
+                line(&[(0.5, -BODY_HALF_HEIGHT), (0.5, BODY_HALF_HEIGHT)]);
+                line(&[(0.5, 0.0), (5.0, 0.0)]);
+            }
+            SymbolKind::Connector => {
+                line(&[(-5.0, 0.0), (-2.46, 0.0)]);
+                line(&[(2.46, 0.0), (5.0, 0.0)]);
+                let h = BODY_HALF_HEIGHT;
+                line(&[(-2.46, -h), (2.46, -h), (2.46, h), (-2.46, h), (-2.46, -h)]);
             }
         }
         return;
@@ -214,6 +238,24 @@ fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]
             line(&[(0.0, -2.0), (1.3, LED_ARROW_TIP_Y), (0.8, -3.0)]);
             line(&[(1.1, -1.7), (2.4, -2.8), (1.9, -2.7)]);
             (3.7, 1.8)
+        }
+        // Converted from PCBcraft Next's point drawings, where one grid step is 10.16 points.
+        SymbolKind::Capacitor => {
+            line(&[(-2.5, 0.0), (-0.5, 0.0)]);
+            line(&[(-0.5, -BODY_HALF_HEIGHT), (-0.5, BODY_HALF_HEIGHT)]);
+            line(&[(0.5, -BODY_HALF_HEIGHT), (0.5, BODY_HALF_HEIGHT)]);
+            line(&[(0.5, 0.0), (2.5, 0.0)]);
+            (2.3, 2.3)
+        }
+        SymbolKind::Connector => {
+            let h = BODY_HALF_HEIGHT;
+            line(&[(-2.5, 0.0), (-1.18, 0.0)]);
+            line(&[(1.18, 0.0), (2.5, 0.0)]);
+            line(&[(-2.46, -h), (2.46, -h), (2.46, h), (-2.46, h), (-2.46, -h)]);
+            for x in [-0.89, 0.89] {
+                painter.circle_stroke(xy((x, 0.0)), 0.3 * step, stroke);
+            }
+            (2.3, 2.3)
         }
     };
     if let Some((reference, value)) = label {

@@ -374,6 +374,32 @@ mod tests {
         session
     }
 
+    /// Every built-in definition places through the shared command, numbers its references by
+    /// prefix and survives a save and reopen with its kind, reference and value.
+    #[test]
+    fn every_builtin_symbol_places_and_round_trips() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name": "All parts"})).unwrap();
+        for (index, definition) in crate::schematic::BUILTIN_SYMBOLS.iter().enumerate() {
+            let x_nm = index as i64 * 25_400_000;
+            session
+                .apply(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
+                .unwrap();
+        }
+        let symbols = session.inspect()["project"]["schematic"]["symbols"].clone();
+        let summary: Vec<_> =
+            symbols.as_array().unwrap().iter().map(|symbol| (symbol["kind"].clone(), symbol["reference"].clone(), symbol["value"].clone())).collect();
+        assert_eq!(
+            summary,
+            [("resistor", "R1", "1k"), ("led", "D1", "LED"), ("capacitor", "C1", "100nF"), ("connector", "J1", "Input")]
+                .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
+        );
+        let loaded = decode(&encode(session.snapshot().unwrap()).unwrap()).unwrap();
+        let mut reopened = Session::default();
+        reopened.open_snapshot(loaded);
+        assert_eq!(reopened.inspect()["project"]["schematic"]["symbols"], symbols);
+    }
+
     /// Reopen retains IDs and wiring. Moving a symbol edits exactly one record and shares connectivity.
     #[test]
     fn round_trip_and_one_record_move() {
