@@ -1,11 +1,15 @@
 //! Shared workspace surfaces and tool buttons. Command state stays with the caller.
 
 use egui::{
-    Align, Align2, Color32, FontId, Frame, Label, Layout, Margin, Panel, Pos2, Rect, Response, RichText, ScrollArea, Sense, Shape, Stroke, Ui,
-    WidgetInfo, WidgetType, pos2, vec2,
+    Align, Align2, Color32, CornerRadius, FontId, Frame, Label, Layout, Margin, Panel, Pos2, Rect, Response, RichText, ScrollArea, Sense, Shape,
+    Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2,
 };
 
-use crate::Tokens;
+use crate::{Tokens, fonts};
+
+const RIBBON_HEIGHT: f32 = 117.0;
+const WORKSPACE_WIDTH: f32 = 88.0;
+const RIBBON_TOOL_HEIGHT: f32 = 60.0;
 
 /// The glyphs used by the first set of schematic ribbon actions.
 #[derive(Clone, Copy)]
@@ -20,23 +24,39 @@ pub enum ToolIcon {
 /// the strip, and the actions can scroll horizontally when they exceed the available space.
 pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, add: impl FnOnce(&mut Ui)) {
     let t = Tokens::get();
-    let height = t.control_height * 3.0;
+    let height = RIBBON_HEIGHT;
+    // Let the app bar color show behind the two rounded workspace corners.
+    let top = ui.available_rect_before_wrap();
+    ui.painter().rect_filled(Rect::from_min_size(top.min, vec2(top.width(), f32::from(t.radius_lg))), 0, t.app_bar);
     Panel::top("workspace_ribbon")
         .exact_size(height + 2.0 * t.space_6)
         .resizable(false)
         .show_separator_line(false)
-        .frame(Frame::new().fill(t.canvas).inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)))
+        .frame(
+            Frame::new()
+                .fill(t.canvas)
+                .corner_radius(CornerRadius { nw: t.radius_lg, ne: t.radius_lg, sw: 0, se: 0 })
+                .inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)),
+        )
         .show(ui, |ui| {
             let wide = ui.available_width() >= 480.0;
             ui.horizontal_top(|ui| {
                 if wide {
                     card(t, t.space_8).show(ui, |ui| {
-                        let (rect, _) = ui.allocate_exact_size(vec2(t.control_height * 2.5, height - 2.0 * (t.space_8 + 1.0)), Sense::hover());
+                        let inset = t.space_8 + 1.0;
+                        let (rect, _) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH - 2.0 * inset, height - 2.0 * inset), Sense::hover());
                         let center = rect.center();
                         let p = ui.painter();
-                        p.hline(rect.x_range().shrink(t.space_4), rect.top(), Stroke::new(t.space_2, t.accent));
-                        paint_workspace_icon(p, center - vec2(0.0, t.space_12), t);
-                        p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, FontId::proportional(t.font_body), t.text);
+                        p.hline(rect.x_range(), rect.top() - t.space_6, Stroke::new(t.space_2, t.accent));
+                        paint_workspace_icon(p, center - vec2(0.0, t.space_16), t);
+                        p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, fonts::interface_heading(ui, t.font_button), t.text);
+                        p.text(
+                            center + vec2(0.0, t.space_24 + t.space_8),
+                            Align2::CENTER_CENTER,
+                            "Workspace",
+                            FontId::proportional(t.font_small),
+                            t.text_dim,
+                        );
                     });
                 }
 
@@ -44,13 +64,14 @@ pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, add: impl FnOnce(&mut U
                     ui.vertical(|ui| {
                         ui.set_width(ui.available_width());
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
+                        ui.spacing_mut().item_spacing.y = 1.0;
                         let heading = if wide { group.to_owned() } else { format!("{workspace} / {group}") };
                         Frame::new()
                             .fill(t.accent_soft)
                             .corner_radius(t.radius_sm)
-                            .inner_margin(Margin::symmetric(t.space_6 as i8, t.space_2 as i8))
+                            .inner_margin(Margin::symmetric(t.space_12 as i8, t.space_3 as i8))
                             .show(ui, |ui| {
-                                ui.label(RichText::new(heading).size(t.font_small).color(t.text));
+                                ui.label(RichText::new(heading).font(fonts::interface_heading(ui, t.font_button)).color(t.ribbon_tab_text));
                             });
                         ui.separator();
                         ScrollArea::horizontal().id_salt("ribbon_actions").auto_shrink([false, true]).show(ui, |ui| {
@@ -62,12 +83,24 @@ pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, add: impl FnOnce(&mut U
         });
 }
 
+/// Lay out related tools together with a quiet group label below their buttons.
+pub fn ribbon_group(ui: &mut Ui, title: &str, tool_count: u8, add: impl FnOnce(&mut Ui)) {
+    let t = Tokens::get();
+    let count = f32::from(tool_count);
+    let width = count * (2.0 * t.control_height) + (count - 1.0) * ui.spacing().item_spacing.x;
+    ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.y = t.space_2;
+        ui.horizontal_top(add);
+        ui.label(RichText::new(title).size(t.font_small).color(t.text_dim));
+    });
+}
+
 /// Render one ribbon action with a theme-aware glyph and a keyboard-accessible button.
 /// The longer description labels the control for assistive technology and serves as its tooltip.
 pub fn tool(ui: &mut Ui, icon: ToolIcon, label: &str, description: &str, enabled: bool, active: bool) -> Response {
     let t = Tokens::get();
     ui.add_enabled_ui(enabled, |ui| {
-        let (rect, response) = ui.allocate_exact_size(vec2(2.0 * t.control_height, t.control_height + t.space_12), Sense::click());
+        let (rect, response) = ui.allocate_exact_size(vec2(2.0 * t.control_height, RIBBON_TOOL_HEIGHT), Sense::click());
         response.widget_info(|| WidgetInfo::selected(WidgetType::Button, enabled, active, description));
         if ui.is_rect_visible(rect) {
             let p = ui.painter();
@@ -76,12 +109,12 @@ pub fn tool(ui: &mut Ui, icon: ToolIcon, label: &str, description: &str, enabled
                 p.rect_filled(rect, t.control_radius, fill);
             }
             let icon_color = if enabled { t.accent } else { t.text_dim };
-            paint_icon(p, icon, pos2(rect.center().x, rect.top() + t.space_12), t.space_24, icon_color);
+            paint_icon(p, icon, pos2(rect.center().x, rect.top() + t.space_16), t.space_24, icon_color);
             p.text(
-                pos2(rect.center().x, rect.bottom() - t.space_2),
+                pos2(rect.center().x, rect.bottom() - t.space_8),
                 Align2::CENTER_BOTTOM,
                 label,
-                FontId::proportional(t.font_small),
+                FontId::proportional(t.font_body),
                 if enabled { t.text } else { t.text_dim },
             );
         }

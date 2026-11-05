@@ -1,18 +1,22 @@
 //! The parts of the window around the canvas: app bar, status bar, dialogs.
 
-use egui::{Align, Frame, Label, Layout, Margin, RichText, Sense, Shape, Stroke, Ui, vec2};
+use egui::{Align, Frame, Label, Layout, Margin, RichText, Sense, Shape, Stroke, Ui, UiBuilder, vec2};
 
-use crate::{fonts, theme::Tokens};
+use crate::{fonts, theme::Tokens, titlebar};
 
-/// Lay out the brand, file and history actions, project title, and two right-side utilities.
+pub use crate::titlebar::resize_window_edges;
+
+/// Lay out the brand, file and history actions, project title, and right-side utilities.
 /// Pass the project name and whether it has unsaved edits, or `None` for the empty workspace.
-/// The title shrinks before taking space from the utilities. If only the
-/// compact marker fits, a dirty project still shows its unsaved state.
-pub fn app_bar(ui: &mut Ui, project: Option<(&str, bool)>, actions: impl FnOnce(&mut Ui), utilities: impl FnOnce(&mut Ui)) {
+/// An integrated title bar adds desktop window controls and lets the free space move the window.
+/// The utility callback gets the full bar width to decide which controls fit.
+/// The title shrinks before taking space from the controls and keeps the unsaved marker if it fits.
+pub fn app_bar(ui: &mut Ui, project: Option<(&str, bool)>, integrated: bool, actions: impl FnOnce(&mut Ui), utilities: impl FnOnce(&mut Ui, f32)) {
     let t = Tokens::get();
     egui::Panel::top("chrome_app_bar")
         .exact_size(t.control_height + t.space_6)
         .resizable(false)
+        .show_separator_line(false)
         .frame(Frame::new().fill(t.app_bar).inner_margin(Margin::symmetric(t.space_8 as i8, t.space_2 as i8)))
         .show(ui, |ui| {
             egui::MenuBar::new()
@@ -24,28 +28,48 @@ pub fn app_bar(ui: &mut Ui, project: Option<(&str, bool)>, actions: impl FnOnce(
                     style.spacing.item_spacing.x = t.space_2;
                 })
                 .ui(ui, |ui| {
-                    brand(ui, t);
-                    ui.separator();
+                    let bar_width = ui.available_width();
+                    let compact = integrated && bar_width < 380.0;
+                    brand(ui, t, !compact);
+                    if !compact {
+                        ui.separator();
+                    }
                     actions(ui);
-                    ui.separator();
+                    if !compact {
+                        ui.separator();
+                    }
 
-                    let utility_width = 2.0 * (t.space_24 + t.space_2);
-                    let title_width = (ui.available_width() - utility_width).clamp(0.0, 200.0);
+                    let area = ui.available_rect_before_wrap();
+                    let mut right =
+                        ui.new_child(UiBuilder::new().id_salt("app_bar_utilities").max_rect(area).layout(Layout::right_to_left(Align::Center)));
+                    if integrated {
+                        titlebar::window_controls(&mut right, t);
+                    }
+                    utilities(&mut right, bar_width);
+                    let controls_left = right.min_rect().left() - t.space_2;
                     let (name, dirty) = project.unwrap_or(("No project", false));
-                    if title_width > t.space_24 {
-                        project_title(ui, name, dirty, title_width, t);
-                    } else if dirty && title_width >= t.space_8 {
-                        let (rect, _) = ui.allocate_exact_size(vec2(title_width.min(t.space_12), t.control_height), Sense::hover());
+                    let room = (controls_left - area.left()).max(0.0);
+                    let marker_room = if dirty { t.space_6 } else { 0.0 };
+                    let drag_room = if integrated { (room - marker_room).clamp(0.0, t.space_12) } else { 0.0 };
+                    let title_room = (room - drag_room).min(200.0);
+                    if title_room > t.space_24 {
+                        project_title(ui, name, dirty, project.is_some(), title_room, t);
+                    } else if dirty && title_room >= marker_room {
+                        let (rect, _) = ui.allocate_exact_size(vec2(title_room.min(t.space_12), t.control_height), Sense::hover());
                         unsaved_marker(ui, rect, t);
                     }
-                    ui.with_layout(Layout::right_to_left(Align::Center), utilities);
+                    if integrated {
+                        let mut gap = ui.available_rect_before_wrap();
+                        gap.max.x = controls_left;
+                        titlebar::drag_area(ui, gap);
+                    }
                 });
         });
 }
 
 /// Draw the prototype's routed P mark and product name using the current theme.
 /// Fall back to the default UI font on the first frame, before egui loads the bundled face.
-fn brand(ui: &mut Ui, t: Tokens) {
+fn brand(ui: &mut Ui, t: Tokens, show_name: bool) {
     let size = t.space_16 + t.space_4;
     let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     let at = |x, y| rect.min + vec2(x, y) * (size / 64.0);
@@ -59,24 +83,32 @@ fn brand(ui: &mut Ui, t: Tokens) {
         trace,
     ));
     painter.circle_filled(at(20.0, 44.0), 1.3, t.text);
+    if !show_name {
+        return;
+    }
     ui.add_space(t.space_3);
-    let semibold = fonts::semibold(t.font_button);
-    let font = if ui.fonts(|fonts| fonts.families().contains(&semibold.family)) { semibold } else { egui::FontId::proportional(t.font_button) };
+    let font = fonts::interface_heading(ui, t.font_button);
     ui.label(RichText::new("PCBCraft").font(font).color(t.text));
     ui.add_space(t.space_4);
 }
 
-/// Draw the title of the current project and keep the unsaved marker visible when text truncates.
-fn project_title(ui: &mut Ui, title: &str, dirty: bool, width: f32, t: Tokens) {
+/// Fit the project tab to its title, with space for the unsaved marker even when the text truncates.
+fn project_title(ui: &mut Ui, title: &str, dirty: bool, has_project: bool, room: f32, t: Tokens) {
+    let font = if has_project { fonts::interface_heading(ui, t.font_button) } else { egui::FontId::proportional(t.font_button) };
+    let color = if has_project { t.text } else { t.text_dim };
+    let text_width = ui.painter().layout_no_wrap(title.to_owned(), font.clone(), color).size().x;
+    let width = (text_width + 2.0 * t.space_8 + if dirty { t.space_12 } else { 0.0 }).min(room);
     let (rect, _) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_2), Sense::hover());
-    ui.painter().rect_filled(rect, t.radius_sm, t.panel_header);
+    if has_project {
+        ui.painter().rect_filled(rect, t.radius_sm, t.app_bar_tab);
+    }
     let mut label_rect = rect.shrink2(vec2(t.space_8, 0.0));
     if dirty {
         let marker = egui::Rect::from_center_size(label_rect.right_center() - vec2(t.space_2, 0.0), vec2(t.space_8, rect.height()));
         unsaved_marker(ui, marker, t);
         label_rect.max.x -= t.space_8;
     }
-    ui.put(label_rect, Label::new(RichText::new(title).size(t.font_label).color(t.text)).truncate().halign(Align::Center));
+    ui.put(label_rect, Label::new(RichText::new(title).font(font).color(color)).truncate()).on_hover_text(title);
 }
 
 /// Draw the unsaved indicator and expose its meaning to pointer and assistive technology users.

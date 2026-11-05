@@ -33,6 +33,8 @@ pub const SCHEMATIC_PIN_HIT_RADIUS: f32 = 8.0;
 pub struct Tokens {
     /// Background of the title bar that holds the brand and project actions.
     pub app_bar: Color32,
+    pub app_bar_tab: Color32,
+    pub ribbon_tab_text: Color32,
     pub panel: Color32,
     pub panel_header: Color32,
     pub border: Color32,
@@ -58,6 +60,7 @@ pub struct Tokens {
     pub space_24: f32,
     pub radius_sm: u8,
     pub radius_md: u8,
+    pub radius_lg: u8,
     pub control_height: f32,
     pub control_radius: u8,
     pub font_small: f32,
@@ -72,6 +75,8 @@ impl Tokens {
     pub const fn light() -> Self {
         Self {
             app_bar: Color32::from_rgb(236, 238, 242),
+            app_bar_tab: Color32::from_rgb(220, 226, 235),
+            ribbon_tab_text: Color32::from_rgb(20, 69, 123),
             panel: Color32::from_rgb(250, 251, 252),
             panel_header: Color32::from_rgb(236, 238, 242),
             border: Color32::from_rgb(208, 212, 220),
@@ -97,6 +102,7 @@ impl Tokens {
             space_24: 24.0,
             radius_sm: 4,
             radius_md: 6,
+            radius_lg: 12,
             control_height: 28.0,
             control_radius: 6,
             font_small: 11.0,
@@ -110,7 +116,9 @@ impl Tokens {
     /// The dark palette using the same layout metrics as the light theme.
     pub const fn dark() -> Self {
         let mut t = Self::light();
-        t.app_bar = Color32::from_rgb(33, 36, 42);
+        t.app_bar = Color32::from_rgb(28, 31, 38);
+        t.app_bar_tab = Color32::from_rgb(53, 59, 71);
+        t.ribbon_tab_text = Color32::from_rgb(170, 206, 247);
         t.panel = Color32::from_rgb(39, 43, 52);
         t.panel_header = Color32::from_rgb(47, 52, 62);
         t.border = Color32::from_rgb(63, 69, 82);
@@ -202,10 +210,11 @@ mod tests {
     #[test]
     fn text_stays_readable_in_both_palettes() {
         for t in [Tokens::dark(), Tokens::light()] {
-            for surface in [t.panel, t.panel_header, t.field] {
+            for surface in [t.panel, t.panel_header, t.field, t.app_bar, t.app_bar_tab] {
                 assert!(contrast(t.text, surface) >= 4.5);
             }
             assert!(contrast(t.text, t.accent_soft) >= 4.5);
+            assert!(contrast(t.ribbon_tab_text, t.accent_soft) >= 4.5);
             assert!(contrast(t.text_dim, t.panel) >= 4.5);
             assert!(contrast(t.canvas_ink, t.canvas) >= 3.0);
             assert!(contrast(t.error, t.panel) >= 4.5);

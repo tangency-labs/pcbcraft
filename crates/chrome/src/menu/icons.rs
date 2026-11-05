@@ -17,6 +17,7 @@ pub enum MenuIcon {
     Redo,
     Settings,
     Help,
+    Bug,
 }
 
 impl MenuIcon {
@@ -44,9 +45,26 @@ impl MenuIcon {
                 line(&[(2.0, 12.5), (4.0, 7.0), (15.0, 7.0), (13.0, 12.5), (2.0, 12.5)], stroke);
             }
             Self::Save => {
-                line(&[(2.5, 13.5), (2.5, 2.5), (10.5, 2.5), (13.5, 5.5), (13.5, 13.5), (2.5, 13.5)], stroke);
-                line(&[(6.0, 2.5), (6.0, 6.0), (10.0, 6.0)], stroke);
-                line(&[(5.5, 13.5), (5.5, 9.0), (10.5, 9.0), (10.5, 13.5)], stroke);
+                // The pieces surround the two cutouts, so the disk works on any surface.
+                let pieces: &[&[(f32, f32)]] = &[
+                    &[(4.5, 2.5), (5.5, 2.5), (5.5, 6.0), (2.5, 6.0), (2.5, 4.5)],
+                    &[(9.75, 2.5), (10.5, 2.5), (13.5, 5.5), (13.5, 6.0), (9.75, 6.0)],
+                    &[(2.5, 6.0), (13.5, 6.0), (13.5, 8.5), (2.5, 8.5)],
+                    &[(2.5, 8.5), (5.1, 8.5), (5.1, 12.0), (2.5, 12.0)],
+                    &[(10.9, 8.5), (13.5, 8.5), (13.5, 12.0), (10.9, 12.0)],
+                    &[(2.5, 12.0), (13.5, 12.0), (12.0, 13.5), (4.0, 13.5)],
+                ];
+                let mut mesh = egui::Mesh::default();
+                for piece in pieces {
+                    let first = mesh.vertices.len() as u32;
+                    for &(x, y) in *piece {
+                        mesh.colored_vertex(at(x, y), ink);
+                    }
+                    for vertex in 1..piece.len() as u32 - 1 {
+                        mesh.add_triangle(first, first + vertex, first + vertex + 1);
+                    }
+                }
+                painter.add(Shape::mesh(mesh));
             }
             Self::Download => {
                 line(&[(8.0, 2.0), (8.0, 9.5)], accent);
@@ -75,6 +93,13 @@ impl MenuIcon {
                     let direction = egui::Vec2::angled(f32::from(step as u8) * std::f32::consts::FRAC_PI_4);
                     painter.line_segment([center + direction * (4.7 * scale), center + direction * (6.4 * scale)], stroke);
                 }
+            }
+            Self::Bug => {
+                line(&[(5.0, 2.5), (7.0, 5.0), (9.0, 5.0), (11.0, 2.5)], stroke);
+                for y in [6.0, 9.0, 12.0] {
+                    line(&[(2.0, y), (14.0, y)], stroke);
+                }
+                painter.rect_filled(rect(4.5, 4.5, 11.5, 13.5), 3, ink);
             }
             Self::Help => {
                 painter.circle_stroke(center, 6.2 * scale, stroke);

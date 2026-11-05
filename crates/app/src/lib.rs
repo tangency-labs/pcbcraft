@@ -31,6 +31,7 @@ use serde_json::{Value, json};
 pub use preferences::{Preferences, ThemeChoice};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const BUG_REPORT_URL: &str = "https://github.com/tangency-labs/pcbcraft/issues/new";
 const PREFERENCES_KEY: &str = "pcbcraft.preferences";
 
 const COMMAND_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
@@ -72,6 +73,7 @@ enum Dialog {
 
 #[derive(Debug, Default)]
 pub struct PcbApp {
+    integrated_titlebar: bool,
     session: Session,
     #[cfg(not(target_arch = "wasm32"))]
     live_control: Option<live_control::LiveControl>,
@@ -93,6 +95,12 @@ impl PcbApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
         Self { preferences, ..Self::default() }
+    }
+
+    /// Enable window controls in the app bar when the desktop launcher removes OS decorations.
+    pub fn with_integrated_titlebar(mut self, enabled: bool) -> Self {
+        self.integrated_titlebar = enabled;
+        self
     }
 
     pub fn session(&self) -> &Session {
@@ -216,6 +224,7 @@ impl PcbApp {
 
     /// Show the project's title and unsaved state beside the file and history actions.
     /// Undo and Redo dispatch through the same engine commands as their keyboard shortcuts.
+    /// The version and bug report are shown when the app bar has space.
     fn app_bar(&mut self, ui: &mut Ui) {
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
@@ -224,6 +233,7 @@ impl PcbApp {
         shell::app_bar(
             ui,
             title,
+            self.integrated_titlebar,
             |ui| {
                 menu::file(ui, |ui| self.file_menu(ui));
                 let (save_icon, save_label, save_key) = if IN_BROWSER {
@@ -243,7 +253,14 @@ impl PcbApp {
                     }
                 }
             },
-            |ui| {
+            |ui, width| {
+                if width >= 560.0 {
+                    ui.label(dim(format!("v{VERSION}")));
+                    ui.add_space(Tokens::get().space_8);
+                    if menu::labeled_action(ui, MenuIcon::Bug, "Report a bug").clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
+                    }
+                }
                 about = menu::quick_action(ui, MenuIcon::Help, "About PCBCraft", "", true).clicked();
                 let shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
                 preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", &shortcut, true).clicked();
@@ -262,21 +279,29 @@ impl PcbApp {
 
         let has_project = self.session.project().is_some();
         workspace::ribbon(ui, "Schematic", "Capture", |ui| {
-            let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. }));
-            if workspace::tool(ui, ToolIcon::Symbol, "Symbol", "Add symbol (A)", self.session.available(PLACE_SYMBOL), placing).clicked() {
-                self.dialog = Dialog::ChooseSymbol;
-            }
-            let wiring = matches!(self.tool, Some(Tool::Wire { .. }));
-            if workspace::tool(ui, ToolIcon::Wire, "Wire", "Draw wire (W)", self.session.available(CONNECT_PINS), wiring).clicked() {
-                self.begin_wire();
-            }
+            workspace::ribbon_group(ui, "Place", 1, |ui| {
+                let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. }));
+                if workspace::tool(ui, ToolIcon::Symbol, "Symbol", "Add symbol (A)", self.session.available(PLACE_SYMBOL), placing).clicked() {
+                    self.dialog = Dialog::ChooseSymbol;
+                }
+            });
             ui.separator();
-            if workspace::tool(ui, ToolIcon::Nets, "Nets", "Toggle Net Inspector", has_project, has_project && self.net_inspector.open).clicked() {
-                self.net_inspector.open = !self.net_inspector.open;
-            }
-            if workspace::tool(ui, ToolIcon::Fit, "Fit", "Fit schematic", has_project, false).clicked() {
-                self.camera.request_fit();
-            }
+            workspace::ribbon_group(ui, "Connect", 1, |ui| {
+                let wiring = matches!(self.tool, Some(Tool::Wire { .. }));
+                if workspace::tool(ui, ToolIcon::Wire, "Wire", "Draw wire (W)", self.session.available(CONNECT_PINS), wiring).clicked() {
+                    self.begin_wire();
+                }
+            });
+            ui.separator();
+            workspace::ribbon_group(ui, "View", 2, |ui| {
+                if workspace::tool(ui, ToolIcon::Nets, "Nets", "Toggle Net Inspector", has_project, has_project && self.net_inspector.open).clicked()
+                {
+                    self.net_inspector.open = !self.net_inspector.open;
+                }
+                if workspace::tool(ui, ToolIcon::Fit, "Fit", "Fit schematic", has_project, false).clicked() {
+                    self.camera.request_fit();
+                }
+            });
         });
     }
 
@@ -303,11 +328,10 @@ impl PcbApp {
                     ui.label(dim(notice.as_str()));
                 }
             },
-            |ui| {
-                ui.label(dim(format!("PCBCraft {VERSION}")));
+            |_ui| {
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.live_control.is_some() {
-                    ui.label(dim("Local MCP enabled"));
+                    _ui.label(dim("Local MCP enabled"));
                 }
             },
         );
@@ -526,6 +550,7 @@ impl PcbApp {
                     ui.label(format!("PCBCraft {VERSION}"));
                     ui.label("Electronics design that feels like KiCad, built for people and agents to work on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
+                    ui.hyperlink_to("Report a bug", BUG_REPORT_URL);
                     close = ui.button("Close").clicked();
                 });
                 if !(closing || close) {
@@ -639,6 +664,9 @@ impl PcbApp {
         }
         let revision = self.session.revision();
         self.canvas(ui);
+        if self.integrated_titlebar {
+            shell::resize_window_edges(ui);
+        }
         self.dialogs(&ctx);
         if self.net_inspector.open && revision != self.session.revision() {
             ctx.request_repaint();

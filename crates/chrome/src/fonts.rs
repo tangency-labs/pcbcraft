@@ -31,3 +31,9 @@ pub fn install(ctx: &egui::Context) {
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
 }
+
+/// Use the bundled semibold face once egui has loaded it, with a first-frame fallback.
+pub(crate) fn interface_heading(ui: &egui::Ui, size: f32) -> FontId {
+    let font = semibold(size);
+    if ui.fonts(|fonts| fonts.families().contains(&font.family)) { font } else { FontId::proportional(size) }
+}
