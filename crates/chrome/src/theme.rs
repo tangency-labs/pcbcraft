@@ -49,7 +49,8 @@ pub struct Tokens {
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
     pub schematic_wire: Color32,
-    /// Home page: page fill, card surface and border, and secondary text.
+    /// Home page: page fill, card surface and border, and secondary text. These and the rail and
+    /// primary tile colours below are derived from the rest of the palette by [`Tokens::with_home`].
     pub file_background: Color32,
     pub file_surface: Color32,
     pub file_border: Color32,
@@ -121,16 +122,17 @@ impl Tokens {
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(194, 201, 211),
             schematic_wire: Color32::from_rgb(20, 112, 75),
-            file_background: Color32::from_rgb(247, 249, 251),
-            file_surface: Color32::WHITE,
-            file_border: Color32::from_rgb(224, 229, 236),
-            file_dim: Color32::from_rgb(58, 70, 86),
-            file_rail: Color32::from_rgb(35, 110, 173),
-            file_rail_ink: Color32::WHITE,
-            file_rail_hover: Color32::from_rgb(43, 118, 180),
-            file_primary: Color32::from_rgb(227, 240, 251),
-            file_primary_ink: Color32::from_rgb(26, 80, 127),
-            file_primary_border: Color32::from_rgb(50, 139, 211),
+            // Placeholders until `with_home` derives them from the colours above.
+            file_background: Color32::PLACEHOLDER,
+            file_surface: Color32::PLACEHOLDER,
+            file_border: Color32::PLACEHOLDER,
+            file_dim: Color32::PLACEHOLDER,
+            file_rail: Color32::PLACEHOLDER,
+            file_rail_ink: Color32::PLACEHOLDER,
+            file_rail_hover: Color32::PLACEHOLDER,
+            file_primary: Color32::PLACEHOLDER,
+            file_primary_ink: Color32::PLACEHOLDER,
+            file_primary_border: Color32::PLACEHOLDER,
 
             space_2: 2.0,
             space_3: 3.0,
@@ -164,6 +166,7 @@ impl Tokens {
             font_intro: 16.0,
             font_start_title: 28.0,
         }
+        .with_home(false)
     }
 
     /// The dark palette using the same layout metrics as the light theme.
@@ -186,22 +189,44 @@ impl Tokens {
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
-        t.file_background = Color32::from_rgb(31, 35, 43);
-        t.file_surface = Color32::from_rgb(39, 43, 52);
-        t.file_border = Color32::from_rgb(63, 69, 82);
-        t.file_dim = Color32::from_rgb(180, 187, 200);
-        t.file_rail = Color32::from_rgb(30, 80, 128);
-        t.file_rail_hover = Color32::from_rgb(46, 99, 149);
-        t.file_primary = Color32::from_rgb(27, 48, 72);
-        t.file_primary_ink = Color32::from_rgb(156, 199, 245);
-        t.file_primary_border = Color32::from_rgb(58, 136, 238);
-        t
+        t.with_home(true)
+    }
+
+    /// Derive the Home page colours from the palette, as SolidCraft does for theme files that
+    /// leave them out: the page uses the panel and border colours, the cards lift off the page,
+    /// and the rail is the accent deepened toward the palette's darkest colour. The hover moves
+    /// back toward the accent in dark and deeper in light. The primary tile uses the ribbon tab's
+    /// accent pair.
+    pub const fn with_home(mut self, dark: bool) -> Self {
+        self.file_background = self.panel;
+        self.file_surface = if dark { self.panel_header } else { self.field };
+        self.file_border = self.border;
+        // Captions sit on cards and tinted tiles, so they lean further toward the text than `text_dim`.
+        self.file_dim = mix(self.text_dim, self.text, 0.35);
+        self.file_rail = if dark { mix(self.accent, self.app_bar, 0.45) } else { mix(self.accent, self.text, 0.15) };
+        // The light rail is already near the accent, so its hover deepens instead of brightening.
+        self.file_rail_hover = if dark { mix(self.file_rail, self.accent, 0.25) } else { mix(self.file_rail, self.text, 0.2) };
+        self.file_rail_ink = if dark { self.text } else { self.panel };
+        self.file_primary = self.accent_soft;
+        self.file_primary_ink = self.ribbon_tab_text;
+        self.file_primary_border = self.accent;
+        self
     }
 
     /// The current palette on this thread.
     pub fn get() -> Self {
         if is_dark() { Self::dark() } else { Self::light() }
     }
+}
+
+/// Move `from` the fraction `k` of the way to `to`, channel by channel in gamma space, like
+/// `Color32::lerp_to_gamma`, but usable while building the constant palettes.
+const fn mix(from: Color32, to: Color32, k: f32) -> Color32 {
+    const fn channel(a: u8, b: u8, k: f32) -> u8 {
+        let value = a as f32 + (b as f32 - a as f32) * k;
+        (value + 0.5) as u8
+    }
+    Color32::from_rgb(channel(from.r(), to.r(), k), channel(from.g(), to.g(), k), channel(from.b(), to.b(), k))
 }
 
 pub fn is_dark() -> bool {
