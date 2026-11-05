@@ -66,9 +66,25 @@ impl Listener {
     /// Wait for a peer and assign its I/O timeout. Authenticate it on a worker before dispatching
     /// requests so a slow peer does not hold up acceptance of other connections.
     pub fn accept(&self, timeout: Duration) -> io::Result<Connection> {
-        let (socket, _) = self.0.accept()?;
-        socket.set_nonblocking(false)?;
-        Connection::new(socket, timeout)
+        self.accept_peer()?.configure(timeout)
+    }
+
+    /// Accept a socket without configuring it, so callers can handle socket setup failures
+    /// separately from errors returned by the listener.
+    pub fn accept_peer(&self) -> io::Result<AcceptedPeer> {
+        self.0.accept().map(|(socket, _)| AcceptedPeer(socket))
+    }
+}
+
+/// A peer accepted on loopback whose socket has yet to be configured.
+pub struct AcceptedPeer(TcpStream);
+
+impl AcceptedPeer {
+    /// Set blocking I/O and a timeout on this peer before attempting authentication.
+    /// An error affects only this peer and closes its socket.
+    pub fn configure(self, timeout: Duration) -> io::Result<Connection> {
+        self.0.set_nonblocking(false)?;
+        Connection::new(self.0, timeout)
     }
 }
 
