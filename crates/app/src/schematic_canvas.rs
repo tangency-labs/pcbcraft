@@ -3,6 +3,7 @@ mod wires;
 
 pub(crate) use camera::Camera;
 
+use crate::preferences::Navigation;
 use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec2, pos2, vec2};
 use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
 use pcbcraft_engine::{
@@ -49,13 +50,20 @@ pub(crate) enum Click {
 /// primary click that hits a terminal returns `Click::Pin`.
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
-pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, tool: Option<Tool>, input_enabled: bool) -> Option<Click> {
+pub(crate) fn show(
+    ui: &mut Ui,
+    project: &Project,
+    camera: &mut Camera,
+    tool: Option<Tool>,
+    input_enabled: bool,
+    navigation: Navigation,
+) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, "Schematic canvas"));
     let moving = matches!(tool, Some(Tool::Move { .. }));
-    camera.navigate(&response, rect, project, input_enabled && !moving);
+    camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();

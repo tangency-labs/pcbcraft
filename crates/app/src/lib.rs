@@ -31,7 +31,7 @@ use pcbcraft_engine::{
 };
 use serde_json::{Value, json};
 
-pub use preferences::{Preferences, ThemeChoice};
+pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUG_REPORT_URL: &str = "https://github.com/tangency-labs/pcbcraft/issues/new";
@@ -59,14 +59,6 @@ const COMMAND_COMMA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND
 /// A browser keeps Ctrl+N and Ctrl+Q for itself, and has no window of ours to quit.
 const IN_BROWSER: bool = cfg!(target_arch = "wasm32");
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum PreferencesPage {
-    #[default]
-    Appearance,
-    #[cfg(not(target_arch = "wasm32"))]
-    Ai,
-}
-
 #[derive(Debug, Default)]
 enum Dialog {
     #[default]
@@ -86,11 +78,12 @@ enum Dialog {
         error: Option<String>,
         copied: bool,
     },
-    Preferences(PreferencesPage),
+    Preferences(preferences::PreferencesWindow),
+    /// Add an agent. `return_to` is the Preferences window to go back to, when it opened from there.
     #[cfg(not(target_arch = "wasm32"))]
     Agent {
         form: assistant::AgentForm,
-        return_to_ai: bool,
+        return_to: Option<preferences::PreferencesWindow>,
     },
     About,
 }
@@ -245,6 +238,11 @@ impl PcbApp {
         }
     }
 
+    /// Open Preferences on its first page, remembering the current settings for Cancel.
+    fn open_preferences(&mut self) {
+        self.dialog = Dialog::Preferences(preferences::PreferencesWindow::new(self.preferences));
+    }
+
     /// Whether the current project can start a save or download.
     fn can_save_project(&self) -> bool {
         !self.files.busy() && self.session.project().is_some()
@@ -326,7 +324,7 @@ impl PcbApp {
             self.toggle_assistant(ui.ctx());
         }
         if preferences {
-            self.dialog = Dialog::Preferences(PreferencesPage::default());
+            self.open_preferences();
         } else if about {
             self.dialog = Dialog::About;
         } else if home {
@@ -426,7 +424,7 @@ impl PcbApp {
         let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
         let click = shell::canvas(ui, |ui| {
             if let Some(project) = self.session.project() {
-                return schematic_canvas::show(ui, project, &mut self.camera, self.tool, input_enabled);
+                return schematic_canvas::show(ui, project, &mut self.camera, self.tool, input_enabled, self.preferences.navigation);
             }
             let t = Tokens::get();
             ui.centered_and_justified(|ui| {
@@ -499,7 +497,7 @@ impl PcbApp {
             self.run("edit.redo", &Value::Null);
         }
         if pressed(&COMMAND_COMMA) {
-            self.dialog = Dialog::Preferences(PreferencesPage::default());
+            self.open_preferences();
         }
         if !IN_BROWSER {
             if !self.files.busy() {
@@ -624,54 +622,31 @@ impl PcbApp {
                     self.dialog = Dialog::ChooseSymbol;
                 }
             }
-            Dialog::Preferences(page) => {
+            Dialog::Preferences(mut window) => {
+                let shortcuts = shortcut_list(ctx);
                 #[cfg(not(target_arch = "wasm32"))]
-                let mut page = page;
-                let mut close = false;
-                #[cfg(not(target_arch = "wasm32"))]
-                let mut request = None;
-                let closing = shell::dialog_width(ctx, "preferences_dialog", "Preferences", 490.0, |ui| {
+                let outcome = window.show(ctx, &mut self.preferences, &shortcuts, &mut self.assistant);
+                #[cfg(target_arch = "wasm32")]
+                let outcome = window.show(ctx, &mut self.preferences, &shortcuts);
+                match outcome {
+                    preferences::Outcome::Open => self.dialog = Dialog::Preferences(window),
+                    preferences::Outcome::Closed => ctx.request_repaint(),
                     #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut page, PreferencesPage::Appearance, "Appearance");
-                            ui.selectable_value(&mut page, PreferencesPage::Ai, "AI");
-                        });
-                        ui.separator();
+                    preferences::Outcome::AddAgent(form) => {
+                        self.dialog = Dialog::Agent { form, return_to: Some(window) };
+                        ctx.request_repaint();
                     }
-                    let height = (ui.ctx().content_rect().height() - 140.0).clamp(120.0, 510.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("preferences_page")
-                        .max_height(height)
-                        .min_scrolled_height(height)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| match page {
-                            PreferencesPage::Appearance => self.preferences.show(ui),
-                            #[cfg(not(target_arch = "wasm32"))]
-                            PreferencesPage::Ai => request = self.assistant.settings_page(ui),
-                        });
-                    close = ui.button("Close").clicked();
-                });
-                if closing || close {
-                    ctx.request_repaint();
-                } else {
-                    self.dialog = Dialog::Preferences(page);
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(assistant::SettingsRequest::Add(form)) = request {
-                    self.dialog = Dialog::Agent { form, return_to_ai: true };
-                    ctx.request_repaint();
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
-            Dialog::Agent { mut form, return_to_ai } => {
+            Dialog::Agent { mut form, return_to } => {
                 if self.assistant.agent_dialog(ctx, &mut form) {
-                    if return_to_ai {
-                        self.dialog = Dialog::Preferences(PreferencesPage::Ai);
+                    if let Some(window) = return_to {
+                        self.dialog = Dialog::Preferences(window);
                     }
                     ctx.request_repaint();
                 } else {
-                    self.dialog = Dialog::Agent { form, return_to_ai };
+                    self.dialog = Dialog::Agent { form, return_to };
                 }
             }
             Dialog::About => {
@@ -822,8 +797,8 @@ impl PcbApp {
             self.assistant.show(&ctx, Some(workspace), &mut self.session, can_edit);
             if let Some(request) = self.assistant.take_settings_request() {
                 self.dialog = match request {
-                    assistant::SettingsRequest::Settings => Dialog::Preferences(PreferencesPage::Ai),
-                    assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to_ai: false },
+                    assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
+                    assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
                 };
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 ctx.request_repaint();
@@ -837,6 +812,32 @@ impl PcbApp {
             ctx.request_repaint();
         }
     }
+}
+
+/// The keys the window answers to, as (section, action, keys), for the Shortcuts page.
+/// Browser builds leave out the shortcuts the browser keeps for itself.
+fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String)> {
+    let key = |shortcut: &KeyboardShortcut| ctx.format_shortcut(shortcut);
+    let mut list = Vec::new();
+    if !IN_BROWSER {
+        list.push(("Project", "New project", key(&COMMAND_N)));
+        list.push(("Project", "Open project", key(&COMMAND_O)));
+        list.push(("Project", "Save project", key(&COMMAND_S)));
+        list.push(("Project", "Save project as", key(&SAVE_AS)));
+    }
+    list.push(("Project", "Preferences", key(&COMMAND_COMMA)));
+    if !IN_BROWSER {
+        list.push(("Project", "Quit", key(&COMMAND_Q)));
+    }
+    list.push(("Edit", "Undo", key(&COMMAND_Z)));
+    list.push(("Edit", "Redo", key(&COMMAND_Y)));
+    list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
+    list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
+    list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
+    list.push(("View", "Zoom", "Mouse wheel".to_owned()));
+    list.push(("View", "Pan", "Middle-button drag".to_owned()));
+    list.push(("View", "Back from Home", "Esc".to_owned()));
+    list
 }
 
 impl eframe::App for PcbApp {

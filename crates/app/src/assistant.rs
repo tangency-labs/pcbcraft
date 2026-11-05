@@ -842,7 +842,7 @@ mod tests {
         click(&mut harness, "AI");
         harness.run_steps(3);
         harness.get_by_label("Show AI features");
-        click(&mut harness, "Close");
+        click(&mut harness, "OK");
         harness.step();
         assert!(matches!(harness.state().dialog, crate::Dialog::None), "{:?}", harness.state().dialog);
 
@@ -853,7 +853,7 @@ mod tests {
         click(&mut harness, "AI settings…");
         harness.run_steps(3);
         harness.get_by_label("Show AI features");
-        click(&mut harness, "Close");
+        click(&mut harness, "OK");
         harness.step();
         assert!(matches!(harness.state().dialog, crate::Dialog::None), "{:?}", harness.state().dialog);
 
@@ -886,7 +886,7 @@ mod tests {
         assert_eq!(restored.settings.target(restored.settings.selected).1, "Local Codex");
         assert_eq!(restored.settings.target(restored.settings.selected).2, executable.to_str().ok_or("The fixture path is not UTF-8")?);
 
-        click(&mut harness, "Close");
+        click(&mut harness, "OK");
         harness.step();
         harness.get_by_role(Role::ComboBox).click();
         harness.run();

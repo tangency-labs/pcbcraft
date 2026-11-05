@@ -5,7 +5,11 @@ Electronics design that feels like the tools you already know, built so a person
 **Status: just started.** Schematic editing works on desktop and in the browser.
 Use **File → New Project…** to start. The app bar shows the project name and an
 unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
-browser). The gear opens **Preferences**. The house button beside the brand opens
+browser). The gear (or **Ctrl+,**) opens **Preferences**, with
+pages for Appearance (theme, interface scale), Navigation (whether the wheel
+zooms or pans, zoom direction, speed and anchor), a list of Shortcuts and, on
+the desktop, the AI page for the Assistant.
+Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays
 open with its history while Home is shown. See [VISION.md](VISION.md) for the

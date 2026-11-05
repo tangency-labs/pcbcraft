@@ -109,6 +109,22 @@ commands. The house glyph in `crates/chrome/src/menu/icons.rs` is a simplified,
 theme-colored drawing of `assets/icons/ui/design/svg/flat/home.svg` at the same
 revision.
 
+The Preferences window in `crates/chrome/src/settings.rs` follows SolidCraft's
+paged window and page sidebar in `crates/ui-egui/src/ui_kit/panel.rs`, its
+footer order in `ui_kit/actions.rs`, its settings heading, section and row
+layout in `ui_kit/preferences.rs` and `ui_kit/layout.rs`, and its search in
+`crates/ui-egui/src/prefs_search.rs` at
+`c553365a2197a689e749389a6fbf707a38df9b61`, copyright (c) 2026 SolidCraft
+contributors, MIT OR Apache-2.0. Kept: the sidebar and body geometry, OK and
+Cancel with Apply between them, Restore page defaults, Cancel restoring the
+settings from when the window opened, and search matching a row by its label,
+section, page or keywords at a prefix, a word start or a run of three letters,
+ignoring accents. The `form_*` and `dialog_*` sizes come from
+`assets/styles/ui/palettes.rs`, and their colours are derived from PCBCraft's
+palette. PCBCraft's pages, settings, page glyphs and search glyph are its own,
+and its search counts matches without drawing them, then draws only the rows
+that match.
+
 ## Bundled fonts
 
 | File | Source | License |

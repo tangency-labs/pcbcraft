@@ -63,6 +63,16 @@ pub struct Tokens {
     pub file_primary: Color32,
     pub file_primary_ink: Color32,
     pub file_primary_border: Color32,
+    /// Paged windows such as Preferences: the page body, the sidebar and footer bands, and the
+    /// rules between them. Derived from the palette by [`Tokens::with_dialogs`].
+    pub dialog_body: Color32,
+    pub dialog_footer: Color32,
+    pub dialog_rule: Color32,
+    /// The selected sidebar page and its ink.
+    pub selected_bg: Color32,
+    pub form_primary: Color32,
+    /// Hints and section titles in forms.
+    pub form_dim: Color32,
 
     pub space_2: f32,
     pub space_3: f32,
@@ -88,6 +98,13 @@ pub struct Tokens {
     pub file_content_inset_x: f32,
     pub file_content_inset_y: f32,
     pub file_section_gap: f32,
+    /// Form layout: the label column unit, the gap between rows, the title bar and footer
+    /// heights of a paged window, and the card width its size is measured in.
+    pub form_label_width: f32,
+    pub form_gap_y: f32,
+    pub form_header_height: f32,
+    pub form_footer_height: f32,
+    pub form_card_width: f32,
     pub font_small: f32,
     pub font_body: f32,
     pub font_label: f32,
@@ -99,6 +116,8 @@ pub struct Tokens {
     pub font_intro: f32,
     /// The Home page title.
     pub font_start_title: f32,
+    /// A settings page heading.
+    pub font_page_heading: f32,
 }
 
 impl Tokens {
@@ -133,6 +152,12 @@ impl Tokens {
             file_primary: Color32::PLACEHOLDER,
             file_primary_ink: Color32::PLACEHOLDER,
             file_primary_border: Color32::PLACEHOLDER,
+            dialog_body: Color32::PLACEHOLDER,
+            dialog_footer: Color32::PLACEHOLDER,
+            dialog_rule: Color32::PLACEHOLDER,
+            selected_bg: Color32::PLACEHOLDER,
+            form_primary: Color32::PLACEHOLDER,
+            form_dim: Color32::PLACEHOLDER,
 
             space_2: 2.0,
             space_3: 3.0,
@@ -157,6 +182,11 @@ impl Tokens {
             file_content_inset_x: 40.0,
             file_content_inset_y: 32.0,
             file_section_gap: 28.0,
+            form_label_width: 70.0,
+            form_gap_y: 5.0,
+            form_header_height: 40.0,
+            form_footer_height: 48.0,
+            form_card_width: 264.0,
             font_small: 11.0,
             font_body: 12.0,
             font_label: 12.5,
@@ -165,8 +195,10 @@ impl Tokens {
             font_heading: 14.0,
             font_intro: 16.0,
             font_start_title: 28.0,
+            font_page_heading: 20.0,
         }
         .with_home(false)
+        .with_dialogs(false)
     }
 
     /// The dark palette using the same layout metrics as the light theme.
@@ -189,7 +221,20 @@ impl Tokens {
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
-        t.with_home(true)
+        t.with_home(true).with_dialogs(true)
+    }
+
+    /// Derive the paged window colours from the palette. In dark these land on SolidCraft's own
+    /// dialog values; in light the bands sit between the panel and its header, on a white body.
+    /// Selection uses the same accent pair as menus and the ribbon tab.
+    pub const fn with_dialogs(mut self, dark: bool) -> Self {
+        self.dialog_body = if dark { self.panel } else { self.field };
+        self.dialog_footer = if dark { self.panel_header } else { mix(self.panel, self.panel_header, 0.43) };
+        self.dialog_rule = if dark { self.app_bar_tab } else { mix(self.panel_header, self.border, 0.2) };
+        self.selected_bg = self.accent_soft;
+        self.form_primary = self.ribbon_tab_text;
+        self.form_dim = self.file_dim;
+        self
     }
 
     /// Derive the Home page colours from the palette, as SolidCraft does for theme files that
@@ -321,6 +366,12 @@ mod tests {
                 (t.file_dim, t.file_background),
                 (t.file_dim, t.file_primary),
                 (t.text, t.hover),
+                (t.text, t.dialog_body),
+                (t.text, t.dialog_footer),
+                (t.form_dim, t.dialog_body),
+                (t.form_dim, t.dialog_footer),
+                (t.form_primary, t.selected_bg),
+                (t.text, t.field),
             ] {
                 assert!(contrast(ink, surface) >= 4.5, "{ink:?} on {surface:?}");
             }

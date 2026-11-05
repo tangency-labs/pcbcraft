@@ -5,7 +5,7 @@
 use egui::Ui;
 use pcbcraft_chrome::{home, menu::MenuIcon};
 
-use super::{COMMAND_COMMA, COMMAND_N, COMMAND_O, COMMAND_S, Dialog, IN_BROWSER, PcbApp, PreferencesPage, SAVE_AS};
+use super::{COMMAND_COMMA, COMMAND_N, COMMAND_O, COMMAND_S, Dialog, IN_BROWSER, PcbApp, SAVE_AS};
 
 /// What a Home row or tile asked for, applied after the page is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,7 +119,7 @@ impl PcbApp {
                 self.home = false;
                 self.dialog = Dialog::SaveEncoding;
             }
-            Action::Preferences => self.dialog = Dialog::Preferences(PreferencesPage::default()),
+            Action::Preferences => self.open_preferences(),
             Action::About => self.dialog = Dialog::About,
         }
     }
