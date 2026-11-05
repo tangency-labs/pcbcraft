@@ -22,8 +22,9 @@ fn is_maximized(ui: &Ui) -> bool {
     ui.input(|input| input.viewport().maximized.unwrap_or(false))
 }
 
-/// Add the window controls from right to left. Maximize becomes Restore when the OS reports maximized.
-pub(crate) fn window_controls(ui: &mut Ui, t: Tokens) {
+/// Add the window controls from right to left, using narrower targets in the compact bar.
+/// Maximize becomes Restore when the OS reports maximized.
+pub(crate) fn window_controls(ui: &mut Ui, t: Tokens, compact: bool) {
     let maximized = is_maximized(ui);
     let maximize = if maximized { "Restore window" } else { "Maximize window" };
     for (label, command) in [
@@ -31,7 +32,8 @@ pub(crate) fn window_controls(ui: &mut Ui, t: Tokens) {
         (maximize, ViewportCommand::Maximized(!maximized)),
         ("Minimize window", ViewportCommand::Minimized(true)),
     ] {
-        let (rect, response) = ui.allocate_exact_size(vec2(t.control_height, t.control_height), Sense::click());
+        let width = if compact { t.space_24 } else { t.control_height };
+        let (rect, response) = ui.allocate_exact_size(vec2(width, t.control_height), Sense::click());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
         if response.hovered() || response.has_focus() {
             ui.painter().rect_filled(rect, t.radius_sm, t.hover);

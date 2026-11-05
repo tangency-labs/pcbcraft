@@ -267,6 +267,15 @@ impl Project {
         self.connectivity.get_or_init(|| Connectivity::build(&self.symbols, &self.wires))
     }
 
+    /// Inspect the schematic in the shared command format, without including the board.
+    pub fn inspect_schematic(&self) -> Value {
+        json!({
+            "symbols": self.symbols.iter().map(SymbolPlacement::inspect).collect::<Vec<_>>(),
+            "wires": self.wires.iter().copied().map(Wire::inspect).collect::<Vec<_>>(),
+            "netlist": self.connectivity().inspect(),
+        })
+    }
+
     /// Whether these snapshots belong to the same project, even across revisions.
     pub fn same_document(&self, other: &Self) -> bool {
         self.id == other.id
@@ -355,11 +364,7 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "schematic": {
-                    "symbols": p.symbols.iter().map(SymbolPlacement::inspect).collect::<Vec<_>>(),
-                    "wires": p.wires.iter().copied().map(Wire::inspect).collect::<Vec<_>>(),
-                    "netlist": p.connectivity().inspect(),
-                },
+                "schematic": p.inspect_schematic(),
             });
             if !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"footprints": p.board.footprints().iter().map(Footprint::inspect).collect::<Vec<_>>()});

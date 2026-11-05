@@ -59,7 +59,7 @@ impl Snapshot {
 impl NetInspector {
     /// Dock a read-only view next to the schematic. Rebuild the view when the
     /// project's connectivity snapshot changes. Moving a symbol reuses the view.
-    pub(super) fn show(&mut self, ui: &mut Ui, session: &Session) {
+    pub(super) fn show(&mut self, ui: &mut Ui, session: &Session, bottom_clearance: f32) {
         if !self.open {
             return;
         }
@@ -70,7 +70,7 @@ impl NetInspector {
             self.project = session.snapshot();
         }
 
-        let close = workspace::right_card(ui, "net_inspector", "Net Inspector", |ui| {
+        let close = workspace::right_card(ui, "net_inspector", "Net Inspector", bottom_clearance, |ui| {
             if let Some(snapshot) = &self.snapshot {
                 snapshot.show(ui);
             } else {

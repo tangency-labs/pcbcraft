@@ -188,7 +188,7 @@ fn home_rows_reach_the_save_and_preferences_dialogs() {
     let preferences = harness.query_all_by_label("Preferences").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
     preferences.click();
     harness.run();
-    assert!(matches!(harness.state().dialog, Dialog::Preferences));
+    assert!(matches!(harness.state().dialog, Dialog::Preferences(PreferencesPage::Appearance)));
     assert!(harness.state().home);
     click(&mut harness, "Close");
 

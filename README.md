@@ -43,6 +43,40 @@ trunk serve --locked
 
 Then open [the local web app](http://127.0.0.1:8781).
 
+## Assistant in the desktop editor
+
+Open **Assistant** from the chat icon next to Preferences or press
+**Ctrl+Shift+A** (**Cmd+Shift+A** on Mac). Drag the title to switch sides,
+drag the inside edge to resize, or use **Pop out Assistant** to move the chat
+into its own window. **Dock Assistant** returns it to the workspace.
+Minimize folds the panel into the bottom-right strip. Close hides the panel
+and keeps the conversation available when you reopen it.
+
+Open **Preferences → AI** from Home or the gear in the app bar to test
+sign-in, choose the default agent, and set where and when Assistant opens.
+**Add agent…** saves a named Codex
+or Claude Code profile. Choose **Installed agent** to use the standard
+executable on PATH or **Custom command** to use a compatible executable at
+another location. Both **Add agent…** and **AI settings…** are available
+from the Assistant's agent dropdown.
+
+For an installed agent, put the Codex CLI or Claude Code on your PATH. For a
+custom command, set the executable path in its profile. Choose the agent and
+select **Connect**.
+The header shows **Ready** when PCBcraft can use the agent's saved login.
+If the agent asks you to sign in, choose **Sign in** and complete the browser
+flow. You can also sign in with `codex login` or `claude auth login --claudeai`
+in a terminal, then choose **I've signed in** or **Retry** in PCBcraft.
+
+Open a schematic and ask a question or request a wire or a symbol move.
+**Send** shares the schematic and recent conversation with the selected
+agent. Review the specific edit, then choose **Apply** or **Discard**.
+**Undo** reverts an applied edit. **Stop** cancels a request in progress.
+If the schematic changed since the request, ask again before applying.
+
+PCBcraft remembers the agent choice and reuses the CLI sign-in across
+projects. Switching projects or agents starts a fresh conversation.
+
 ## Live MCP in the desktop editor
 
 Build the desktop and CLI binaries with `cargo build --locked -p pcbcraft -p pcbcraft-cli`.

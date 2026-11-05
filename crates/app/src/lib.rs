@@ -4,6 +4,8 @@
 //! catalog, the same ones MCP runs. Preferences belong to the person, not the project, so they live
 //! here and stay out of the command set.
 
+#[cfg(not(target_arch = "wasm32"))]
+mod assistant;
 mod home;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
@@ -36,6 +38,12 @@ const BUG_REPORT_URL: &str = "https://github.com/tangency-labs/pcbcraft/issues/n
 const PREFERENCES_KEY: &str = "pcbcraft.preferences";
 /// App bar width below which About moves to the Home page.
 const COMPACT_APP_BAR: f32 = 380.0;
+#[cfg(not(target_arch = "wasm32"))]
+const ASSISTANT_AGENT_KEY: &str = "pcbcraft.assistant.agent";
+#[cfg(not(target_arch = "wasm32"))]
+const ASSISTANT_LAYOUT_KEY: &str = "pcbcraft.assistant.layout";
+#[cfg(not(target_arch = "wasm32"))]
+const ASSISTANT_SETTINGS_KEY: &str = "pcbcraft.assistant.settings";
 
 const COMMAND_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const COMMAND_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
@@ -50,6 +58,14 @@ const COMMAND_COMMA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND
 
 /// A browser keeps Ctrl+N and Ctrl+Q for itself, and has no window of ours to quit.
 const IN_BROWSER: bool = cfg!(target_arch = "wasm32");
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PreferencesPage {
+    #[default]
+    Appearance,
+    #[cfg(not(target_arch = "wasm32"))]
+    Ai,
+}
 
 #[derive(Debug, Default)]
 enum Dialog {
@@ -70,13 +86,20 @@ enum Dialog {
         error: Option<String>,
         copied: bool,
     },
-    Preferences,
+    Preferences(PreferencesPage),
+    #[cfg(not(target_arch = "wasm32"))]
+    Agent {
+        form: assistant::AgentForm,
+        return_to_ai: bool,
+    },
     About,
 }
 
 #[derive(Debug, Default)]
 pub struct PcbApp {
     integrated_titlebar: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    assistant: assistant::Assistant,
     session: Session,
     #[cfg(not(target_arch = "wasm32"))]
     live_control: Option<live_control::LiveControl>,
@@ -99,7 +122,16 @@ impl PcbApp {
     /// The app as the desktop and browser builds start it.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
-        Self { preferences, ..Self::default() }
+        Self {
+            preferences,
+            #[cfg(not(target_arch = "wasm32"))]
+            assistant: assistant::Assistant::from_setting(
+                cc.storage.and_then(|s| s.get_string(ASSISTANT_AGENT_KEY)).as_deref(),
+                cc.storage.and_then(|s| s.get_string(ASSISTANT_LAYOUT_KEY)).as_deref(),
+                cc.storage.and_then(|s| s.get_string(ASSISTANT_SETTINGS_KEY)).as_deref(),
+            ),
+            ..Self::default()
+        }
     }
 
     /// Enable window controls in the app bar when the desktop launcher removes OS decorations.
@@ -236,6 +268,14 @@ impl PcbApp {
         let mut preferences = false;
         let mut about = false;
         let mut home = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut assistant_clicked = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let (assistant_open, assistant_ready) = self.assistant.toolbar_state();
+        #[cfg(not(target_arch = "wasm32"))]
+        let assistant_open = assistant_open && !self.home;
+        #[cfg(not(target_arch = "wasm32"))]
+        let assistant_visible = self.assistant.toolbar_visible();
         shell::app_bar(
             ui,
             title,
@@ -274,15 +314,47 @@ impl PcbApp {
                 }
                 let shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
                 preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", &shortcut, true).clicked();
+                #[cfg(not(target_arch = "wasm32"))]
+                if assistant_visible {
+                    let shortcut = ui.ctx().format_shortcut(&assistant::TOGGLE);
+                    assistant_clicked = pcbcraft_chrome::assistant::toolbar(ui, assistant_open, assistant_ready, &shortcut);
+                }
             },
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        if assistant_clicked {
+            self.toggle_assistant(ui.ctx());
+        }
         if preferences {
-            self.dialog = Dialog::Preferences;
+            self.dialog = Dialog::Preferences(PreferencesPage::default());
         } else if about {
             self.dialog = Dialog::About;
         } else if home {
             self.show_home();
         }
+    }
+
+    /// Open the Assistant from Home in the workspace. In the workspace, toggle its visibility.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn toggle_assistant(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.home) {
+            self.assistant.open(ctx);
+        } else {
+            self.assistant.toggle(ctx);
+        }
+    }
+
+    /// Route the Assistant toggle and report whether its chat owns the canvas keys.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn assistant_shortcuts(&mut self, ctx: &egui::Context) -> bool {
+        if !matches!(self.dialog, Dialog::None) || !self.assistant.enabled() {
+            return false;
+        }
+        if ctx.input_mut(|input| input.consume_shortcut(&assistant::TOGGLE)) {
+            self.toggle_assistant(ctx);
+            return true;
+        }
+        !self.home && self.assistant.shortcuts(ctx)
     }
 
     /// Show placement, wiring, inspection, and fit actions in the Capture ribbon.
@@ -398,9 +470,9 @@ impl PcbApp {
         }
     }
 
-    /// Handle editor keys outside text fields and dialogs. Placement keys apply only while menus are closed.
+    /// Handle app shortcuts outside text fields and dialogs. Assistant focus suppresses canvas tools.
     /// On Home, Escape returns to the workspace and the canvas keys do nothing.
-    fn shortcuts(&mut self, ctx: &egui::Context) {
+    fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool) {
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
             return;
         }
@@ -409,7 +481,7 @@ impl PcbApp {
             if !egui::Popup::is_any_open(ctx) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
                 self.home = false;
             }
-        } else if !egui::Popup::is_any_open(ctx) {
+        } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.tool.take().is_some() {
                 self.message = None;
             }
@@ -427,7 +499,7 @@ impl PcbApp {
             self.run("edit.redo", &Value::Null);
         }
         if pressed(&COMMAND_COMMA) {
-            self.dialog = Dialog::Preferences;
+            self.dialog = Dialog::Preferences(PreferencesPage::default());
         }
         if !IN_BROWSER {
             if !self.files.busy() {
@@ -552,14 +624,54 @@ impl PcbApp {
                     self.dialog = Dialog::ChooseSymbol;
                 }
             }
-            Dialog::Preferences => {
+            Dialog::Preferences(page) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let mut page = page;
                 let mut close = false;
-                let closing = shell::dialog(ctx, "preferences_dialog", "Preferences", |ui| {
-                    self.preferences.show(ui);
+                #[cfg(not(target_arch = "wasm32"))]
+                let mut request = None;
+                let closing = shell::dialog_width(ctx, "preferences_dialog", "Preferences", 490.0, |ui| {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut page, PreferencesPage::Appearance, "Appearance");
+                            ui.selectable_value(&mut page, PreferencesPage::Ai, "AI");
+                        });
+                        ui.separator();
+                    }
+                    let height = (ui.ctx().content_rect().height() - 140.0).clamp(120.0, 510.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("preferences_page")
+                        .max_height(height)
+                        .min_scrolled_height(height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| match page {
+                            PreferencesPage::Appearance => self.preferences.show(ui),
+                            #[cfg(not(target_arch = "wasm32"))]
+                            PreferencesPage::Ai => request = self.assistant.settings_page(ui),
+                        });
                     close = ui.button("Close").clicked();
                 });
-                if !(closing || close) {
-                    self.dialog = Dialog::Preferences;
+                if closing || close {
+                    ctx.request_repaint();
+                } else {
+                    self.dialog = Dialog::Preferences(page);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(assistant::SettingsRequest::Add(form)) = request {
+                    self.dialog = Dialog::Agent { form, return_to_ai: true };
+                    ctx.request_repaint();
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::Agent { mut form, return_to_ai } => {
+                if self.assistant.agent_dialog(ctx, &mut form) {
+                    if return_to_ai {
+                        self.dialog = Dialog::Preferences(PreferencesPage::Ai);
+                    }
+                    ctx.request_repaint();
+                } else {
+                    self.dialog = Dialog::Agent { form, return_to_ai };
                 }
             }
             Dialog::About => {
@@ -668,13 +780,19 @@ impl PcbApp {
                 project_files::Update::Error(error) => self.message = Some(error),
             }
         }
-        self.shortcuts(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        let assistant_keys = self.assistant_shortcuts(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        let assistant_keys = false;
+        self.shortcuts(&ctx, assistant_keys);
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_live_control();
         self.app_bar(ui);
         if self.home {
             self.status(ui);
             self.home_page(ui);
+            #[cfg(not(target_arch = "wasm32"))]
+            self.assistant.show(&ctx, None, &mut self.session, false);
             if self.integrated_titlebar {
                 shell::resize_window_edges(ui);
             }
@@ -686,12 +804,31 @@ impl PcbApp {
             self.tool = None;
         }
         self.status(ui);
+        #[cfg(not(target_arch = "wasm32"))]
+        let workspace = ui.available_rect_before_wrap();
         if let Some(project) = self.session.project() {
             workspace::sheet_header(ui, &format!("{} / Main", project.name));
-            self.net_inspector.show(ui, &self.session);
+            #[cfg(not(target_arch = "wasm32"))]
+            let clearance = self.assistant.rail_clearance();
+            #[cfg(target_arch = "wasm32")]
+            let clearance = 0.0;
+            self.net_inspector.show(ui, &self.session, clearance);
         }
         let revision = self.session.revision();
         self.canvas(ui);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy();
+            self.assistant.show(&ctx, Some(workspace), &mut self.session, can_edit);
+            if let Some(request) = self.assistant.take_settings_request() {
+                self.dialog = match request {
+                    assistant::SettingsRequest::Settings => Dialog::Preferences(PreferencesPage::Ai),
+                    assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to_ai: false },
+                };
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                ctx.request_repaint();
+            }
+        }
         if self.integrated_titlebar {
             shell::resize_window_edges(ui);
         }
@@ -706,10 +843,11 @@ impl eframe::App for PcbApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
         let before = self.preferences;
         self.frame(ui);
+        let changed = self.preferences != before;
+        #[cfg(not(target_arch = "wasm32"))]
+        let changed = self.assistant.take_settings_changed() || changed;
         // eframe's own save runs every 30 seconds, too late if the page reloads right after a change.
-        if self.preferences != before
-            && let Some(storage) = frame.storage_mut()
-        {
+        if changed && let Some(storage) = frame.storage_mut() {
             self.save(storage);
             storage.flush();
         }
@@ -717,6 +855,11 @@ impl eframe::App for PcbApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(PREFERENCES_KEY, self.preferences.to_text());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            storage.set_string(ASSISTANT_SETTINGS_KEY, self.assistant.settings_text());
+            storage.set_string(ASSISTANT_LAYOUT_KEY, self.assistant.layout_setting());
+        }
     }
 }
 

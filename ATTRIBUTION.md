@@ -38,6 +38,24 @@ The filled Save and Report a bug glyphs use the shapes from
 `assets/icons/ui/design/svg/flat/save.svg` and `flat/bug_report.svg` at the
 same revision, drawn with the active theme colors.
 
+The in-app Assistant follows SolidCraft's desktop chat workflow from
+`docs/agent-chat.md` at `bd3053f57be8b862abccc4691156e1865138f490`
+(MIT OR Apache-2.0). The header, agent switcher, connection actions,
+dock drag preview, keyboard shortcuts and native pop-out adapt
+`crates/ui-egui/src/agent_chat/panel.rs` at the same revision. The app bar
+entry follows its launcher beside Preferences. The AI preferences page and
+Add agent dialog adapt the availability, agents, panel, and startup sections
+of `crates/ui-egui/src/agent_chat/settings.rs` at that revision. PCBcraft
+profiles use its Codex and Claude Code CLI connections. The status pill, pinned composer and user bubble
+adapt the presentation primitives from `crates/ui-egui/src/ui_kit/assistant.rs` to PCBCraft's theme.
+Copyright (c) 2026 SolidCraft contributors. The bottom-right drawer and explicit Apply and Discard
+follow PCBcraft Next's `docs/assistant.md` at the revision below. The launcher
+draws a simplified, theme-colored version of SolidCraft's
+`assets/icons/ui/design/svg/flat/assistant.svg` at
+`c553365a2197a689e749389a6fbf707a38df9b61` (MIT OR Apache-2.0), as used in
+the PCBcraft Next launcher. The Codex and Claude Code process adapters are
+implemented in PCBCraft.
+
 ## Adapted from PCBcraft Next
 
 PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apache-2.0. This is the independent prototype.

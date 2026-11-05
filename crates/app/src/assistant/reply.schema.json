@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "properties": {
+    "reply": { "type": "string" },
+    "edit": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "enum": ["connect_pins"] },
+            "from": { "$ref": "#/$defs/terminal" },
+            "to": { "$ref": "#/$defs/terminal" }
+          },
+          "required": ["kind", "from", "to"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "enum": ["move_symbol"] },
+            "symbol": { "type": "string" },
+            "x_nm": { "type": "integer" },
+            "y_nm": { "type": "integer" }
+          },
+          "required": ["kind", "symbol", "x_nm", "y_nm"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["reply", "edit"],
+  "additionalProperties": false,
+  "$defs": {
+    "terminal": {
+      "type": "object",
+      "properties": {
+        "symbol": { "type": "string" },
+        "terminal": { "type": "string", "enum": ["1", "2"] }
+      },
+      "required": ["symbol", "terminal"],
+      "additionalProperties": false
+    }
+  }
+}
