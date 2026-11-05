@@ -62,6 +62,21 @@ pub fn quick_action(ui: &mut Ui, icon: MenuIcon, label: &str, shortcut: &str, en
     response.on_hover_text(tooltip)
 }
 
+/// Draw a bordered app bar action with its icon leading the visible label.
+pub fn labeled_action(ui: &mut Ui, icon: MenuIcon, label: &str) -> Response {
+    let t = Tokens::get();
+    let text = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(t.font_label), t.text);
+    let width = t.space_16 + t.space_6 + text.size().x + 2.0 * t.space_8;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_2), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let fill = if response.hovered() || response.has_focus() { t.hover } else { egui::Color32::TRANSPARENT };
+    let painter = ui.painter();
+    painter.rect(rect, t.radius_sm, fill, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+    icon.paint(painter, rect.left_center() + vec2(t.space_8 + t.space_16 / 2.0, 0.0), t, true);
+    painter.galley(pos2(rect.left() + t.space_8 + t.space_16 + t.space_6, rect.center().y - text.size().y / 2.0), text, t.text);
+    response
+}
+
 /// Draw the File trigger and render the fixed-width popup only while it is open.
 /// The inner response contains the popup content's return value when it is shown.
 pub fn file<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {

@@ -11,6 +11,7 @@ pub mod fonts;
 pub mod menu;
 pub mod shell;
 pub mod theme;
+mod titlebar;
 pub mod workspace;
 
 pub use menu::MenuItem;

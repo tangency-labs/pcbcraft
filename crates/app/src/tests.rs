@@ -109,6 +109,45 @@ fn app_bar_brand_aligns_with_the_controls() {
     assert!((center("Preferences") - file).abs() <= 1.0);
 }
 
+/// The full app bar opens the issue form, and the compact bar keeps the window controls accessible.
+#[test]
+fn integrated_titlebar_keeps_window_controls_accessible() {
+    let mut harness = harness();
+    assert!(harness.query_by_label("Maximize window").is_none());
+    harness.state_mut().integrated_titlebar = true;
+    new_project(&mut harness, "Two resistors");
+    let bar_bottom = harness.get_by_label("File").rect().bottom();
+    let title = harness.query_all_by_label("Two resistors").find(|node| node.rect().bottom() <= bar_bottom).unwrap();
+    assert!(title.rect().width() < 120.0);
+    let report = harness.get_by_label("Report a bug");
+    assert!(report.rect().right() < harness.get_by_label(&format!("v{VERSION}")).rect().left());
+    report.click();
+    harness.step();
+    assert!(
+        harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .any(|command| { matches!(command, egui::OutputCommand::OpenUrl(url) if url.url == BUG_REPORT_URL) })
+    );
+
+    harness.set_size(egui::vec2(320.0, 520.0));
+    harness.run();
+
+    let preferences = harness.get_by_label("Preferences").rect();
+    let minimize = harness.get_by_label("Minimize window").rect();
+    let close = harness.get_by_label("Close window").rect();
+    assert!(preferences.right() < minimize.left());
+    assert!(close.right() <= 320.0);
+    assert!(harness.get_by_label("Unsaved changes").rect().right() <= preferences.left());
+
+    harness.get_by_label("Maximize window").click();
+    harness.step();
+    let commands = &harness.output().viewport_output[&egui::ViewportId::ROOT].commands;
+    assert!(commands.contains(&egui::ViewportCommand::Maximized(true)));
+}
+
 /// A dirty project keeps its marker when the title no longer fits beside the utilities.
 #[test]
 fn narrow_app_bar_keeps_the_unsaved_marker() {

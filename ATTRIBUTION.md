@@ -29,6 +29,15 @@ copyable configuration in PCBcraft Next's `docs/mcp.md` at the revision below.
 PCBCraft's adapter dispatches directly through the shared editor session and
 limits live edits to moving a symbol.
 
+The integrated Linux title bar and ribbon dimensions follow SolidCraft's
+`crates/ui-egui/src/titlebar.rs` and `crates/ui-egui/src/toolbar.rs` at
+`796b7c40d380e22f00a0e45a0a48292b1756620d` (MIT OR Apache-2.0,
+copyright (c) 2026 SolidCraft contributors). PCBCraft uses its own compact
+window controls and schematic tool groups.
+The filled Save and Report a bug glyphs use the shapes from
+`assets/icons/ui/design/svg/flat/save.svg` and `flat/bug_report.svg` at the
+same revision, drawn with the active theme colors.
+
 ## Adapted from PCBcraft Next
 
 PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apache-2.0. This is the independent prototype.
