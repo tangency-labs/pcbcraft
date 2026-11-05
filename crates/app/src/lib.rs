@@ -100,6 +100,7 @@ impl PcbApp {
         MenuItem::new(&format!("{title}{suffix}")).shortcut(shortcut).enabled(self.session.available(id)).show(ui)
     }
 
+    /// Show engine commands in the menus. Place arms a preview before a canvas click commits it.
     fn menus(&mut self, ui: &mut Ui) {
         shell::menu_bar(ui, |ui| {
             menu::top(ui, "File", |ui| {
@@ -142,6 +143,7 @@ impl PcbApp {
         });
     }
 
+    /// Show the command error or placement hint alongside the project name.
     fn status(&self, ui: &mut Ui) {
         let name = self.session.project().map_or("No project open", |p| p.name.as_str()).to_owned();
         let message = self.message.clone();
@@ -161,6 +163,7 @@ impl PcbApp {
         );
     }
 
+    /// Draw the open schematic and submit a snapped click through the shared placement command.
     fn canvas(&mut self, ui: &mut Ui) {
         let placing = self.placing_resistor.is_some() && !egui::Popup::is_any_open(ui.ctx());
         let point = shell::canvas(ui, |ui| {
@@ -180,6 +183,7 @@ impl PcbApp {
         }
     }
 
+    /// Handle editor keys outside text fields and dialogs. Placement keys apply only while menus are closed.
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
             return;
@@ -285,7 +289,7 @@ impl PcbApp {
         }
     }
 
-    /// One frame of the whole window.
+    /// Draw one frame. Drop the preview if another action changed the project or opened a dialog.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.sync_style(&ctx);

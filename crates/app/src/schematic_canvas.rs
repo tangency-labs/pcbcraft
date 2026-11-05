@@ -5,6 +5,7 @@ use pcbcraft_engine::{
     schematic::{GRID_NM, MAX_CENTER_NM, PIN_OFFSET_NM, Point},
 };
 
+/// Draw the schematic and preview. Return a snapped point only when the user clicks to place.
 pub(crate) fn show(ui: &mut Ui, project: &Project, placing: bool) -> Option<Point> {
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, if placing { Sense::click() } else { Sense::hover() });
@@ -39,6 +40,7 @@ pub(crate) fn show(ui: &mut Ui, project: &Project, placing: bool) -> Option<Poin
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked().then_some(point)
 }
 
+/// Draw visible grid intersections around the same origin used for snapping.
 fn paint_grid(painter: &Painter, rect: Rect, origin: Pos2, tokens: Tokens) {
     let step = theme::SCHEMATIC_GRID_SPACING;
     let first_x = ((rect.left() - origin.x) / step).ceil() as i32;
@@ -53,6 +55,7 @@ fn paint_grid(painter: &Painter, rect: Rect, origin: Pos2, tokens: Tokens) {
     }
 }
 
+/// Draw the resistor between its engine pin positions. A placement preview omits the labels.
 fn paint_resistor(painter: &Painter, center: Pos2, [left, right]: [Pos2; 2], color: egui::Color32, label: Option<(&str, &str)>) {
     let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color);
     // Zigzag from PCBcraft Next, expressed in grid steps.
