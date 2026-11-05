@@ -49,6 +49,19 @@ pub struct Tokens {
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
     pub schematic_wire: Color32,
+    /// Home page: page fill, card surface and border, and secondary text.
+    pub file_background: Color32,
+    pub file_surface: Color32,
+    pub file_border: Color32,
+    pub file_dim: Color32,
+    /// Home page navigation rail and the ink drawn on it.
+    pub file_rail: Color32,
+    pub file_rail_ink: Color32,
+    pub file_rail_hover: Color32,
+    /// The Home page's primary action tile.
+    pub file_primary: Color32,
+    pub file_primary_ink: Color32,
+    pub file_primary_border: Color32,
 
     pub space_2: f32,
     pub space_3: f32,
@@ -63,11 +76,28 @@ pub struct Tokens {
     pub radius_lg: u8,
     pub control_height: f32,
     pub control_radius: u8,
+    /// Home page layout, in logical points.
+    pub file_nav_width: f32,
+    pub file_nav_height: f32,
+    pub file_back_height: f32,
+    pub file_tile_height: f32,
+    pub file_tile_icon: f32,
+    pub file_tile_min_width: f32,
+    pub file_grid_gap: f32,
+    pub file_content_inset_x: f32,
+    pub file_content_inset_y: f32,
+    pub file_section_gap: f32,
     pub font_small: f32,
     pub font_body: f32,
     pub font_label: f32,
     pub font_button: f32,
     pub font_title: f32,
+    /// Home page navigation rows and tile titles.
+    pub font_heading: f32,
+    /// Home page section titles.
+    pub font_intro: f32,
+    /// The Home page title.
+    pub font_start_title: f32,
 }
 
 impl Tokens {
@@ -91,6 +121,16 @@ impl Tokens {
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(194, 201, 211),
             schematic_wire: Color32::from_rgb(20, 112, 75),
+            file_background: Color32::from_rgb(247, 249, 251),
+            file_surface: Color32::WHITE,
+            file_border: Color32::from_rgb(224, 229, 236),
+            file_dim: Color32::from_rgb(58, 70, 86),
+            file_rail: Color32::from_rgb(35, 110, 173),
+            file_rail_ink: Color32::WHITE,
+            file_rail_hover: Color32::from_rgb(43, 118, 180),
+            file_primary: Color32::from_rgb(227, 240, 251),
+            file_primary_ink: Color32::from_rgb(26, 80, 127),
+            file_primary_border: Color32::from_rgb(50, 139, 211),
 
             space_2: 2.0,
             space_3: 3.0,
@@ -105,11 +145,24 @@ impl Tokens {
             radius_lg: 12,
             control_height: 28.0,
             control_radius: 6,
+            file_nav_width: 248.0,
+            file_nav_height: 38.0,
+            file_back_height: 40.0,
+            file_tile_height: 84.0,
+            file_tile_icon: 44.0,
+            file_tile_min_width: 240.0,
+            file_grid_gap: 14.0,
+            file_content_inset_x: 40.0,
+            file_content_inset_y: 32.0,
+            file_section_gap: 28.0,
             font_small: 11.0,
             font_body: 12.0,
             font_label: 12.5,
             font_button: 13.0,
             font_title: 22.0,
+            font_heading: 14.0,
+            font_intro: 16.0,
+            font_start_title: 28.0,
         }
     }
 
@@ -133,6 +186,15 @@ impl Tokens {
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
+        t.file_background = Color32::from_rgb(31, 35, 43);
+        t.file_surface = Color32::from_rgb(39, 43, 52);
+        t.file_border = Color32::from_rgb(63, 69, 82);
+        t.file_dim = Color32::from_rgb(180, 187, 200);
+        t.file_rail = Color32::from_rgb(30, 80, 128);
+        t.file_rail_hover = Color32::from_rgb(46, 99, 149);
+        t.file_primary = Color32::from_rgb(27, 48, 72);
+        t.file_primary_ink = Color32::from_rgb(156, 199, 245);
+        t.file_primary_border = Color32::from_rgb(58, 136, 238);
         t
     }
 
@@ -218,6 +280,25 @@ mod tests {
             assert!(contrast(t.text_dim, t.panel) >= 4.5);
             assert!(contrast(t.canvas_ink, t.canvas) >= 3.0);
             assert!(contrast(t.error, t.panel) >= 4.5);
+        }
+    }
+
+    #[test]
+    fn home_page_text_stays_readable_in_both_palettes() {
+        for t in [Tokens::dark(), Tokens::light()] {
+            for (ink, surface) in [
+                (t.file_rail_ink, t.file_rail),
+                (t.file_rail_ink, t.file_rail_hover),
+                (t.file_primary_ink, t.file_primary),
+                (t.text, t.file_surface),
+                (t.text, t.file_background),
+                (t.file_dim, t.file_surface),
+                (t.file_dim, t.file_background),
+                (t.file_dim, t.file_primary),
+                (t.text, t.hover),
+            ] {
+                assert!(contrast(ink, surface) >= 4.5, "{ink:?} on {surface:?}");
+            }
         }
     }
 
