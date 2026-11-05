@@ -21,3 +21,13 @@ The project is MIT OR Apache-2.0, so code can move freely between the Craft apps
 - Keep the app's chrome easy to move onto the shared Craft UI crate: colours, sizes, menus and dialogs come from `crates/chrome`, not from styling in the app.
 - Copying from SolidCraft and the other MIT/Apache Craft apps is fine and encouraged. Record it in `ATTRIBUTION.md`.
 - Add or update Rust `///` doc comments for new or changed public APIs and for new or changed functions with branching logic, including private helpers. Describe behavior callers rely on, such as input constraints, errors, or state changes. Review the diff for missing or stale doc comments before opening a PR. CodeRabbit’s [Docstring Coverage check](https://docs.coderabbit.ai/pr-reviews/pre-merge-checks) targets 80% of eligible functions touched by the diff.
+
+## Review failure paths before opening a PR
+
+For changes that introduce or alter blocking I/O, concurrency, or shared state, do a separate review pass after the usual checks. Follow the changed code into its callers and callees, including across crates, and verify the relevant cases:
+
+- Identify what can wait, what else waits behind it, and how timeouts, cancellation, and shutdown release workers or other resources.
+- Trace errors back to the owner. Check whether a failed request affects just that request or can stop a shared service or leave state partially changed.
+- Walk through a stalled or disconnected peer, a full queue, or two overlapping operations where applicable. Add a focused regression test when existing tests miss a concrete failure path.
+
+In the PR description, name the failure paths reviewed and distinguish the ones exercised by tests from the ones checked by reading the code.
