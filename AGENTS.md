@@ -20,3 +20,4 @@ The project is MIT OR Apache-2.0, so code can move freely between the Craft apps
 - Project files stay friendly to Git: a save with no changes gives zero diff, and moving one part changes only that part's lines.
 - Keep the app's chrome easy to move onto the shared Craft UI crate: colours, sizes, menus and dialogs come from `crates/chrome`, not from styling in the app.
 - Copying from SolidCraft and the other MIT/Apache Craft apps is fine and encouraged. Record it in `ATTRIBUTION.md`.
+- Add or update Rust `///` doc comments for new or changed public APIs and for new or changed functions with branching logic, including private helpers. Describe behavior callers rely on, such as input constraints, errors, or state changes. Review the diff for missing or stale doc comments before opening a PR. CodeRabbit’s [Docstring Coverage check](https://docs.coderabbit.ai/pr-reviews/pre-merge-checks) targets 80% of eligible functions touched by the diff.
