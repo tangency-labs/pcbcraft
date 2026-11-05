@@ -9,7 +9,9 @@ Choose **Place → Wire** or press **W**, then click two terminal markers to con
 The **Capture** ribbon gives you the same Symbol and Wire tools. Use **Nets** to open the Net Inspector beside the schematic, and **Fit** to bring the circuit into view.
 
 Open a native `.pc` project from **File → Open…**. On desktop, use **Save** or
-**Save As…**. In the browser, use **Download Project**. Drag a placed symbol to
+**Save As…**. In the browser, use **Download Project…**. Save As and Download
+offer plain JSON for version control and ZIP for sharing. Both use `.pc`;
+desktop Save keeps the existing format. Drag a placed symbol to
 move it and keep its connections. The [native storage notes](docs/native-project-storage.md)
 describe the first schema, file safety and performance checks.
 

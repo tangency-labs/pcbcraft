@@ -7,7 +7,7 @@ use std::{
 
 use pcbcraft_engine::{
     CONNECT_PINS, MOVE_SYMBOL, PLACE_FOOTPRINT, PLACE_SYMBOL, Session,
-    persistence::{decode, encode},
+    persistence::{ArchiveEncoder, Encoding, decode, decode_file, encode, encode_file},
 };
 use serde_json::json;
 
@@ -55,6 +55,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     measure("full MCP inspection", |_| timed(|| Ok(black_box(session.inspect()))))?;
     measure("encode snapshot", |_| timed(|| Ok(black_box(encode(source.clone())?))))?;
     measure("decode and validate", |_| timed(|| Ok(black_box(decode(&bytes)?))))?;
+    let archive = encode_file(source.clone(), Encoding::Zip)?;
+    println!("{} bytes in ZIP", archive.len());
+    measure("package already encoded JSON", |_| {
+        let payload = bytes.clone();
+        timed(|| {
+            let mut archive = ArchiveEncoder::new(payload)?;
+            loop {
+                if let Some(bytes) = archive.step()? {
+                    return Ok(black_box(bytes));
+                }
+            }
+        })
+    })?;
+    measure("unpack and validate project", |_| timed(|| Ok(black_box(decode_file(&archive)?))))?;
     Ok(())
 }
 

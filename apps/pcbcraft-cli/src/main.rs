@@ -2,7 +2,7 @@
 
 use std::{ffi::OsString, fs::File, path::Path, process::ExitCode};
 
-use pcbcraft_engine::persistence::{decode, read_bytes};
+use pcbcraft_engine::persistence::{decode_file, read_bytes};
 use pcbcraft_mcp::{Headless, Server};
 
 const USAGE: &str = "Usage: pcbcraft-cli mcp [--project FILE]    Serve MCP on stdin and stdout\n       pcbcraft-cli --version";
@@ -36,7 +36,7 @@ fn load_project(path: &Path) -> Result<Headless, String> {
     let result = (|| {
         let file = File::open(path).map_err(|error| error.to_string())?;
         let bytes = read_bytes(file).map_err(|error| error.to_string())?;
-        decode(&bytes).map(Headless::with_project)
+        decode_file(&bytes).map(|(project, _)| Headless::with_project(project))
     })();
     result.map_err(|error| format!("could not open {}: {error}", path.display()))
 }

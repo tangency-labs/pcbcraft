@@ -15,9 +15,67 @@ use crate::{
     schematic::{MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolPlacement, Terminal, Wire, builtin_symbol, wiring::MAX_WIRES},
 };
 
+mod archive;
+pub use archive::ArchiveEncoder;
+
+/// Maximum number of bytes in a supported project ZIP.
+pub const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
+
+/// The encoding of a native .pc file, independent of its filename.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Encoding {
+    #[default]
+    Json,
+    Zip,
+}
+
+impl Encoding {
+    /// Detect a ZIP by its header. Both encodings still require format validation.
+    pub fn detect(bytes: &[u8]) -> Self {
+        if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") || bytes.starts_with(b"PK\x07\x08") { Self::Zip } else { Self::Json }
+    }
+
+    /// Return the input size bound before allocating or decoding the file.
+    pub fn input_limit(self) -> usize {
+        match self {
+            Self::Json => MAX_PROJECT_BYTES,
+            Self::Zip => MAX_ARCHIVE_BYTES,
+        }
+    }
+}
+
+/// Read and validate a native project using the encoding detected from its content.
+pub fn decode_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
+    let encoding = Encoding::detect(bytes);
+    if bytes.len() > encoding.input_limit() {
+        return Err("project exceeds the native file size limit".to_owned());
+    }
+    let project = match encoding {
+        Encoding::Json => decode(bytes)?,
+        Encoding::Zip => decode(&archive::unpack(bytes)?)?,
+    };
+    Ok((project, encoding))
+}
+
+/// Encode a project in the requested native file encoding.
+pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>, String> {
+    let bytes = encode(project)?;
+    match encoding {
+        Encoding::Json => Ok(bytes),
+        Encoding::Zip => {
+            let mut encoder = ArchiveEncoder::new(bytes)?;
+            loop {
+                if let Some(bytes) = encoder.step()? {
+                    return Ok(bytes);
+                }
+            }
+        }
+    }
+}
+
 const FORMAT: &str = "pcbcraft-project/1";
 const BUILTIN_REVISION: u32 = 1;
-/// Upper bound for native file bytes before decoding.
+/// Maximum number of bytes in a plain project document or ZIP project payload.
 pub const MAX_PROJECT_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Deserialize)]
@@ -174,10 +232,12 @@ fn write_record(bytes: &mut Vec<u8>, record: &impl Serialize, more: bool) -> Res
 }
 
 /// Read at most one byte past the native file limit, even if the source keeps growing.
-pub fn read_bytes(input: impl Read) -> io::Result<Vec<u8>> {
+pub fn read_bytes(mut input: impl Read) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    input.take((MAX_PROJECT_BYTES + 1) as u64).read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_PROJECT_BYTES {
+    (&mut input).take(4).read_to_end(&mut bytes)?;
+    let limit = Encoding::detect(&bytes).input_limit();
+    input.take((limit + 1 - bytes.len()) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "project exceeds the native file size limit"));
     }
     Ok(bytes)
