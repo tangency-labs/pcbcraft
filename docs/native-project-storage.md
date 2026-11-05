@@ -153,6 +153,11 @@ with one fixed wire ID. Both symbols use the same pinned definition.
    Reopening the saved snapshot should show only the `R1` move, with the
    `R2` move still unsaved in the active session.
 
+The plain JSON gate runs in the workspace test suite with the checked-in
+[two-resistor fixture](../crates/app/tests/fixtures/two-resistors.pc) and
+[native storage acceptance tests](../crates/app/src/project_files/native/tests.rs).
+The Git merge case uses the installed `git merge-file` command.
+
 ## ZIP acceptance and later layout decisions
 
 1. Convert the original resistor fixture from plain JSON to ZIP and back.
