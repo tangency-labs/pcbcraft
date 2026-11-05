@@ -15,7 +15,7 @@ use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use pcbcraft_chrome::{
     MenuItem, Tokens, fonts, menu,
     shell::{self, dim},
-    theme,
+    theme, workspace,
 };
 use pcbcraft_engine::{
     CONNECT_PINS, PLACE_SYMBOL, Session, command,
@@ -168,6 +168,29 @@ impl PcbApp {
                     self.dialog = Dialog::About;
                 }
             });
+        });
+    }
+
+    /// Expose the same placement, wiring, inspection, and fit actions as the menus.
+    fn ribbon(&mut self, ui: &mut Ui) {
+        use workspace::ToolIcon;
+
+        workspace::ribbon(ui, "Schematic", "Capture", |ui| {
+            let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. }));
+            if workspace::tool(ui, ToolIcon::Symbol, "Symbol", "Add symbol (A)", self.session.available(PLACE_SYMBOL), placing).clicked() {
+                self.dialog = Dialog::ChooseSymbol;
+            }
+            let wiring = matches!(self.tool, Some(Tool::Wire { .. }));
+            if workspace::tool(ui, ToolIcon::Wire, "Wire", "Draw wire (W)", self.session.available(CONNECT_PINS), wiring).clicked() {
+                self.begin_wire();
+            }
+            ui.separator();
+            if workspace::tool(ui, ToolIcon::Nets, "Nets", "Toggle Net Inspector", true, self.net_inspector.open).clicked() {
+                self.net_inspector.open = !self.net_inspector.open;
+            }
+            if workspace::tool(ui, ToolIcon::Fit, "Fit", "Fit schematic", self.session.project().is_some(), false).clicked() {
+                self.camera.request_fit();
+            }
         });
     }
 
@@ -369,10 +392,14 @@ impl PcbApp {
         self.sync_style(&ctx);
         self.shortcuts(&ctx);
         self.menus(ui);
+        self.ribbon(ui);
         if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
             self.tool = None;
         }
         self.status(ui);
+        if let Some(project) = self.session.project() {
+            workspace::sheet_header(ui, &format!("{} / Main", project.name));
+        }
         self.net_inspector.show(ui, &self.session);
         let revision = self.session.revision();
         self.canvas(ui);

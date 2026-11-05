@@ -29,6 +29,13 @@ PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apach
 | `crates/app/src/schematic_canvas/camera.rs`, `crates/app/src/schematic_canvas.rs` | `src/desktop/canvas.rs`, `src/desktop/page.rs` | Adapted the viewport transform, pointer-anchored zoom, middle-button pan, and fit behavior to Tangency’s canvas and chrome. |
 | `crates/app/src/schematic_canvas/wires.rs`, `crates/app/src/lib.rs` | `src/desktop/canvas.rs`, `src/desktop/mod.rs`, `src/desktop/wire_geometry.rs` | Adapted pin hit testing, the Wire tool shortcut, the cancelable preview, and a symmetric subset of the orthogonal display routes. Placement dispatches through Tangency’s existing pin-connection command. |
 | `crates/app/src/net_inspector.rs`, `crates/app/src/lib.rs` | `src/desktop/nets.rs` | Adapted the revision-aware connectivity view to Tangency’s existing inspection output. The docked inspector shows connected groups and unconnected pins by symbol reference. |
+| `crates/chrome/src/workspace.rs`, `crates/app/src/lib.rs` | `docs/specs/workspace-ui.md`, `docs/screenshots/schematic.png`, `assets/original/symbol.svg`, `assets/original/wire.svg` | Followed the schematic workspace layout and adapted the original Symbol and Wire paths for theme-colored egui drawing. |
+
+The workspace ribbon and inspector card also reference SolidCraft's
+`crates/ui-egui/src/toolbar.rs` and `crates/ui-egui/src/ui_kit/panel.rs` at
+`c553365a2197a689e749389a6fbf707a38df9b61`, copyright (c) 2026 SolidCraft
+contributors, MIT OR Apache-2.0. PCBCraft implements these controls in its own
+chrome crate with the existing family theme tokens.
 
 ## Bundled fonts
 

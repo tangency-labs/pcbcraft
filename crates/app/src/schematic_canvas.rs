@@ -38,6 +38,7 @@ pub(crate) fn show(ui: &mut Ui, project: &Project, camera: &mut Camera, tool: Op
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, "Schematic canvas"));
     camera.navigate(&response, rect, project, input_enabled);
 
     let painter = ui.painter_at(rect);
