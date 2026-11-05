@@ -1,10 +1,81 @@
-# Native project storage proposal
+# Native project storage specification
 
 [PCBCraft's vision](../VISION.md#how-our-files-should-work) sets two observable
 requirements for native projects under version control. Saving an unchanged
 project produces zero diff, and moving one part changes only that part's lines.
-This proposal defines a first schematic round trip that can test both properties.
-The working format, sharing format and file layout remain open for review.
+The native `.pc` extension identifies a PCBCraft project. This specification
+defines plain JSON for working files and a ZIP container for sharing. Both encodings carry
+the same project schema. Plain JSON works on the local storage branch. ZIP
+support is specified below for a later implementation.
+
+## File encodings and save behavior
+
+| Encoding | Intended use | Contents |
+| --- | --- | --- |
+| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/1` |
+| ZIP `.pc` | Portable copy for sharing or bundling assets | A manifest, the same project document, and any bundled asset bytes |
+
+Open determines the encoding from the file contents. A ZIP signature selects
+the archive reader, which must validate the PCBCraft manifest before accepting
+the project. Other inputs go through the JSON reader, which validates the
+project format tag. A corrupt ZIP or an unrelated ZIP produces a format error
+and leaves the active project intact.
+
+On desktop, **Save** preserves the encoding of the open file. **Save As**
+offers **Plain JSON** and **ZIP archive**, with the same `.pc` extension for
+both. New projects default to plain JSON. The browser offers the same encoding
+choices when downloading and reports a download request. A successful
+download request cannot confirm a durable write.
+
+Converting between encodings preserves project, sheet, component, symbol, wire,
+and footprint identities, along with pinned definitions and connectivity.
+If a project requires assets carried by an archive, conversion to plain JSON
+must keep those assets available under a supported project asset layout or
+fail with a list of the affected dependencies. The first archive reader and
+writer can ship with an empty asset list because schema version 1 has no
+asset references.
+
+## ZIP container version 1
+
+The root entries are `manifest.json` and `project.json`. The manifest is
+UTF-8 JSON. It identifies the container independently of the project schema
+and records the byte length and SHA-256 of each payload. `project.json`
+contains the same versioned JSON the plain reader accepts.
+
+| Manifest field | Meaning |
+| --- | --- |
+| `format` | Exactly `pcbcraft-container/1` |
+| `project` | Object with `size_bytes` and `sha256` for `project.json` |
+| `assets` | Array of objects with `size_bytes` and `sha256`, empty when there are no bundled assets |
+
+A bundled asset is stored at `assets/<sha256>`, using the lowercase
+64-character digest of the exact uncompressed bytes. Write each digest once.
+The project schema owns the asset's role, provenance and license information.
+When that schema supports assets, each bundled asset must match a project
+reference and all required bundled references must resolve before adoption.
+The container does not need to extract anything into the working directory.
+
+The v1 reader accepts ordinary, unencrypted ZIP entries using Store or
+Deflate. It rejects duplicate names, unexpected entries, absolute or
+traversal paths, symlinks, and special files. Enforce declared and actual
+uncompressed byte counts while reading, and verify every payload digest
+before using it. Apply these initial limits to the container and the decoded
+project together.
+
+| Limit | Maximum |
+| --- | --- |
+| Archive file | 64 MiB |
+| Total uncompressed content | 256 MiB |
+| Entries | 1,024 |
+| Manifest | 256 KiB |
+| Project JSON | 4 MiB |
+| Individual asset | 128 MiB |
+
+An unchanged save preserves the original JSON or archive bytes. For a changed
+archive, write manifest and project first, followed by assets in digest
+order. Use fixed archive timestamps and consistent entry metadata. The plain
+encoding remains the Git merge surface, and a ZIP created for sharing can
+be regenerated from the same snapshot.
 
 ## What a project preserves
 
@@ -82,22 +153,30 @@ with one fixed wire ID. Both symbols use the same pinned definition.
    Reopening the saved snapshot should show only the `R1` move, with the
    `R2` move still unsaved in the active session.
 
-## Decisions before implementation
+## ZIP acceptance and later layout decisions
 
-- Choose the text encoding and tracked layout, including record boundaries
-  that allow independent edits to merge. Decide whether a working directory
-  and a ZIP for sharing are both supported and how they relate.
-- Choose the initial schema, limits and migration policy. Agree on how an
-  unchanged supported file retains its bytes and when an explicit rewrite is
-  appropriate.
-- Agree on the definition capture policy and the publication, concurrency
-  and recovery guarantees supported by each platform and layout.
+1. Convert the original resistor fixture from plain JSON to ZIP and back.
+   Confirm that both use `.pc`, load to the same project, and preserve
+   connectivity and footprint mappings. Confirm that Save retains each
+   encoding and that a no-op leaves the original bytes intact.
+2. Reject a foreign ZIP, duplicate entries, unsafe entry names, a mismatched
+   digest, and payloads that exceed declared or allowed bounds. Confirm that
+   each failure leaves the active project and its dirty state intact.
+3. Repeat the interrupted save, competing writer and late edit checks with an
+   archive. Measure packaging and unpacking separately from editor frame time.
+   Keep compression and file IO off the desktop UI thread and bound browser
+   work so the editor can continue responding.
+
+Splitting large projects into a Git-friendly directory, expanding the
+definition capture policy, and setting up migrations for later versions
+remain separate design decisions.
 
 ## First implementation
 
-Native `.pc` files are plain UTF-8 JSON tagged `pcbcraft-project/1`. They
-contain a project ID, name, one sheet with a stable ID, and one line per
-placement and wire, separated by blank lines so neighboring edits can merge. A wire saves the two symbol IDs and pin numbers.
+The first implementation reads and writes plain UTF-8 JSON tagged
+`pcbcraft-project/1`. The files contain a project ID, name, one sheet with a
+stable ID, and one line per placement and wire. Blank lines between records
+let neighboring edits merge. A wire saves the two symbol IDs and pin numbers.
 A symbol pins its built-in definition revision. An optional board section
 stores footprint placements and the explicit pin-to-pad mapping. The
 generic two-pad footprint can be assigned through `pcb.place_footprint`.
