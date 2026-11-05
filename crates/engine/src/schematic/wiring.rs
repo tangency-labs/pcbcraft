@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::{ResistorPlacement, symbol_id};
+use super::{SymbolPlacement, symbol_id};
 
 pub(crate) const MAX_WIRES: usize = 4096;
 
@@ -14,12 +14,12 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Return the numbered terminal pair for a placed resistor.
+    /// Return the numbered terminal pair for a placed symbol.
     pub(super) fn for_symbol(symbol: u64) -> [Self; 2] {
         ["1", "2"].map(|number| Self { symbol, number })
     }
 
-    /// Index the resistor's pin coordinates in terminal-number order.
+    /// Index the symbol's pin coordinates in terminal-number order.
     pub(crate) fn pin_index(self) -> usize {
         usize::from(self.number == "2")
     }
@@ -67,7 +67,7 @@ impl Wire {
 }
 
 /// Derive connected groups and isolated terminals in stable order from explicit wire links.
-pub(crate) fn inspect_netlist(symbols: &[ResistorPlacement], wires: &[Wire]) -> Value {
+pub(crate) fn inspect_netlist(symbols: &[SymbolPlacement], wires: &[Wire]) -> Value {
     let mut adjacency = BTreeMap::<Terminal, Vec<Terminal>>::new();
     for wire in wires {
         let [from, to] = wire.terminals;
@@ -76,7 +76,7 @@ pub(crate) fn inspect_netlist(symbols: &[ResistorPlacement], wires: &[Wire]) -> 
     }
 
     let unconnected: Vec<_> =
-        symbols.iter().flat_map(ResistorPlacement::terminals).filter(|terminal| !adjacency.contains_key(terminal)).map(Terminal::inspect).collect();
+        symbols.iter().flat_map(SymbolPlacement::terminals).filter(|terminal| !adjacency.contains_key(terminal)).map(Terminal::inspect).collect();
 
     let mut nets = Vec::new();
     while let Some((&first, _)) = adjacency.first_key_value() {

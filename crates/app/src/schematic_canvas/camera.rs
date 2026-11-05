@@ -2,8 +2,10 @@ use egui::{Event, MouseWheelUnit, PointerButton, Pos2, Rect, Response, Vec2, pos
 use pcbcraft_chrome::theme;
 use pcbcraft_engine::{
     Project,
-    schematic::{GRID_NM, MAX_CENTER_NM, PIN_OFFSET_NM, Point},
+    schematic::{GRID_NM, MAX_CENTER_NM, PIN_OFFSET_NM, Point, SymbolKind},
 };
+
+use super::LED_ARROW_TIP_Y;
 
 const MIN_ZOOM: f32 = 0.005;
 const MAX_ZOOM: f32 = 8.0;
@@ -75,10 +77,14 @@ impl Camera {
     fn fit(&mut self, project: &Project, rect: Rect) {
         *self = Self::default();
         let mut bounds = Rect::NOTHING;
-        for resistor in project.resistors() {
-            let [left, right] = resistor.pins().map(|pin| self.screen(pin, rect) - rect.center());
-            let symbol = Rect::from_min_max(pos2(left.x, left.y), pos2(right.x, right.y)).expand(theme::SCHEMATIC_FIT_MARGIN);
-            bounds = bounds.union(symbol);
+        for symbol in project.symbols() {
+            let [left, right] = symbol.pins().map(|pin| self.screen(pin, rect) - rect.center());
+            let top = match symbol.definition.kind {
+                SymbolKind::Resistor => left.y,
+                SymbolKind::Led => left.y + LED_ARROW_TIP_Y * self.grid_step(),
+            };
+            let symbol_bounds = Rect::from_min_max(pos2(left.x, top), pos2(right.x, right.y)).expand(theme::SCHEMATIC_FIT_MARGIN);
+            bounds = bounds.union(symbol_bounds);
         }
         if bounds.is_finite() {
             let available = (rect.size() - Vec2::splat(2.0 * theme::SCHEMATIC_FIT_MARGIN)).max(Vec2::splat(1.0));
