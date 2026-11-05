@@ -35,7 +35,7 @@ pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, add: impl FnOnce(&mut U
                         let center = rect.center();
                         let p = ui.painter();
                         p.hline(rect.x_range().shrink(t.space_4), rect.top(), Stroke::new(t.space_2, t.accent));
-                        paint_icon(p, ToolIcon::Symbol, center - vec2(0.0, t.space_8), t.space_24, t.accent);
+                        paint_workspace_icon(p, center - vec2(0.0, t.space_12), t);
                         p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, FontId::proportional(t.font_body), t.text);
                     });
                 }
@@ -143,6 +143,23 @@ fn card(t: Tokens, inset: f32) -> Frame {
     Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(inset as i8))
 }
 
+/// Draw the workspace tile's drawing icon using SolidCraft's geometry and the current palette.
+fn paint_workspace_icon(p: &egui::Painter, center: Pos2, t: Tokens) {
+    let scale = (t.control_height + t.space_2) / 64.0;
+    let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * scale;
+    let rect = |x1, y1, x2, y2| Rect::from_min_max(at(x1, y1), at(x2, y2));
+    let outline = Stroke::new(2.55 * scale, t.field);
+    let accent = Stroke::new(3.0 * scale, t.accent);
+
+    p.rect(rect(10.0, 6.0, 54.0, 58.0), 1, t.text_dim, outline, egui::StrokeKind::Middle);
+    p.rect(rect(17.0, 14.0, 36.0, 30.0), 0, t.panel_header, outline, egui::StrokeKind::Middle);
+    p.rect(rect(33.0, 46.0, 48.0, 53.0), 1, t.accent_soft, outline, egui::StrokeKind::Middle);
+    p.line_segment([at(17.0, 38.0), at(36.0, 38.0)], accent);
+    p.line_segment([at(17.0, 35.0), at(17.0, 41.0)], accent);
+    p.line_segment([at(36.0, 35.0), at(36.0, 41.0)], accent);
+    p.line_segment([at(44.0, 14.0), at(44.0, 30.0)], accent);
+}
+
 /// Draw scalable line art in the current theme's ink. Symbol and Wire use PCBcraft Next's glyph paths.
 fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, color: Color32) {
     let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * (size / 64.0);
@@ -150,9 +167,13 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, color:
     let line = |points: &[(f32, f32)]| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
         ToolIcon::Symbol => {
-            line(&[(4.0, 32.0), (14.0, 32.0), (19.0, 21.0), (27.0, 43.0), (35.0, 21.0), (43.0, 43.0), (49.0, 32.0), (60.0, 32.0)]);
-            line(&[(4.0, 26.0), (4.0, 38.0)]);
-            line(&[(60.0, 26.0), (60.0, 38.0)]);
+            line(&[(21.0, 8.0), (21.0, 56.0), (55.0, 32.0), (21.0, 8.0)]);
+            line(&[(7.0, 22.0), (21.0, 22.0)]);
+            line(&[(7.0, 42.0), (21.0, 42.0)]);
+            line(&[(55.0, 32.0), (62.0, 32.0)]);
+            line(&[(26.0, 22.0), (34.0, 22.0)]);
+            line(&[(30.0, 18.0), (30.0, 26.0)]);
+            line(&[(26.0, 38.0), (34.0, 38.0)]);
         }
         ToolIcon::Wire => {
             line(&[(10.0, 49.0), (28.0, 49.0), (28.0, 15.0), (54.0, 15.0)]);

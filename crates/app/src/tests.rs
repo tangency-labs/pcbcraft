@@ -39,6 +39,26 @@ fn it_opens_with_no_project_and_says_so() {
     assert!(harness.state().session().project().is_none());
 }
 
+/// The inspector never reserves space for the empty workspace, even after undoing project creation.
+#[test]
+fn the_empty_workspace_stays_centered_after_undo_with_the_inspector_open() {
+    let mut harness = harness();
+    let empty = "No project open. Choose File, then New Project.";
+    let original = harness.get_by_label(empty).rect().center();
+    harness.get_by_label("Toggle Net Inspector").click();
+    harness.run();
+    assert!(harness.query_by_label("Close").is_none());
+
+    new_project(&mut harness, "blinky");
+    harness.get_by_label("Toggle Net Inspector").click();
+    harness.run();
+    harness.get_by_label("Close");
+    choose(&mut harness, "Edit", "Undo");
+
+    assert!(harness.query_by_label("Close").is_none());
+    assert_eq!(harness.get_by_label(empty).rect().center(), original);
+}
+
 #[test]
 fn a_person_makes_a_project_through_the_menu() {
     let mut harness = harness();
