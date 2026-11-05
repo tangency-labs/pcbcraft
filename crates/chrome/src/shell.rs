@@ -6,7 +6,8 @@ use crate::{fonts, theme::Tokens};
 
 /// Lay out the brand, file and history actions, project title, and two right-side utilities.
 /// Pass the project name and whether it has unsaved edits, or `None` for the empty workspace.
-/// The title shrinks or drops out before taking space from the utilities.
+/// The title shrinks before taking space from the utilities. If only the
+/// compact marker fits, a dirty project still shows its unsaved state.
 pub fn app_bar(ui: &mut Ui, project: Option<(&str, bool)>, actions: impl FnOnce(&mut Ui), utilities: impl FnOnce(&mut Ui)) {
     let t = Tokens::get();
     egui::Panel::top("chrome_app_bar")
@@ -30,9 +31,12 @@ pub fn app_bar(ui: &mut Ui, project: Option<(&str, bool)>, actions: impl FnOnce(
 
                     let utility_width = 2.0 * (t.space_24 + t.space_2);
                     let title_width = (ui.available_width() - utility_width).clamp(0.0, 200.0);
+                    let (name, dirty) = project.unwrap_or(("No project", false));
                     if title_width > t.space_24 {
-                        let (name, dirty) = project.unwrap_or(("No project", false));
                         project_title(ui, name, dirty, title_width, t);
+                    } else if dirty && title_width >= t.space_8 {
+                        let (rect, _) = ui.allocate_exact_size(vec2(title_width.min(t.space_12), t.control_height), Sense::hover());
+                        unsaved_marker(ui, rect, t);
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), utilities);
                 });
@@ -68,10 +72,20 @@ fn project_title(ui: &mut Ui, title: &str, dirty: bool, width: f32, t: Tokens) {
     ui.painter().rect_filled(rect, t.radius_sm, t.panel_header);
     let mut label_rect = rect.shrink2(vec2(t.space_8, 0.0));
     if dirty {
-        ui.painter().circle_filled(egui::pos2(label_rect.right() - t.space_2, rect.center().y), t.space_2, t.accent);
+        let marker = egui::Rect::from_center_size(label_rect.right_center() - vec2(t.space_2, 0.0), vec2(t.space_8, rect.height()));
+        unsaved_marker(ui, marker, t);
         label_rect.max.x -= t.space_8;
     }
     ui.put(label_rect, Label::new(RichText::new(title).size(t.font_label).color(t.text)).truncate().halign(Align::Center));
+}
+
+/// Draw the unsaved indicator and expose its meaning to pointer and assistive technology users.
+fn unsaved_marker(ui: &mut Ui, rect: egui::Rect, t: Tokens) {
+    const LABEL: &str = "Unsaved changes";
+    ui.painter().circle_filled(rect.center(), t.space_2, t.accent);
+    let response = ui.interact(rect, ui.id().with("unsaved_project"), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, LABEL));
+    response.on_hover_text(LABEL);
 }
 
 /// The status bar along the bottom: left and right ends.

@@ -109,6 +109,30 @@ fn app_bar_brand_aligns_with_the_controls() {
     assert!((center("Preferences") - file).abs() <= 1.0);
 }
 
+/// A dirty project keeps its marker when the title no longer fits beside the utilities.
+#[test]
+fn narrow_app_bar_keeps_the_unsaved_marker() {
+    let mut harness = harness();
+    let name = "Narrow schematic";
+    new_project(&mut harness, name);
+    harness.get_by_label("Unsaved changes");
+
+    // The desktop minimum of 640 pixels leaves 320 logical points at 200% UI scale.
+    let width = 320.0;
+    harness.set_size(egui::vec2(width, 520.0));
+    harness.run();
+    let app_bar_bottom = harness.get_by_label("File").rect().bottom();
+    assert!(harness.query_all_by_label(name).all(|node| node.rect().top() > app_bar_bottom));
+    let marker = harness.get_by_label("Unsaved changes").rect();
+    let preferences = harness.get_by_label("Preferences").rect();
+    let about = harness.get_by_label("About PCBCraft").rect();
+    assert!(marker.right() <= preferences.left(), "{marker:?} overlaps {preferences:?}");
+    assert!(about.right() <= width, "{about:?} extends past the window");
+
+    click(&mut harness, "Undo");
+    assert!(harness.query_by_label("Unsaved changes").is_none());
+}
+
 /// Undo and Redo from the app bar produce the same project state as the engine commands.
 #[test]
 fn app_bar_actions_reach_the_same_state_as_commands_an_agent_runs() {
