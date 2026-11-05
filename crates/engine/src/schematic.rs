@@ -31,11 +31,13 @@ impl ResistorPlacement {
         "1k"
     }
 
+    /// Return pin 1 (left) and pin 2 (right) in absolute schematic coordinates.
     pub fn pins(&self) -> [Point; 2] {
         let Point { x_nm, y_nm } = self.position;
         [Point { x_nm: x_nm - PIN_OFFSET_NM, y_nm }, Point { x_nm: x_nm + PIN_OFFSET_NM, y_nm }]
     }
 
+    /// Report the component and symbol IDs alongside the coordinates a command client can use.
     pub(crate) fn inspect(&self) -> Value {
         let pin = |number, position: Point| json!({"number": number, "x_nm": position.x_nm, "y_nm": position.y_nm});
         let [left, right] = self.pins();

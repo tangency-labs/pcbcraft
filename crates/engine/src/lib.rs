@@ -25,6 +25,7 @@ enum ParamKind {
 }
 
 impl ParamKind {
+    /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
             Self::Name => json!({"type": "string"}),
@@ -33,6 +34,7 @@ impl ParamKind {
         }
     }
 
+    /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
             Self::Name if value.is_string() => Ok(()),
@@ -65,6 +67,7 @@ pub struct Command {
 }
 
 impl Command {
+    /// Describe the command and its required inputs for discovery by MCP clients.
     pub fn to_json(&self) -> Value {
         let params: Map<String, Value> = self
             .params
@@ -142,6 +145,7 @@ pub struct Project {
 }
 
 impl Project {
+    /// Return the schematic's resistor placements in placement order.
     pub fn resistors(&self) -> &[ResistorPlacement] {
         &self.resistors
     }
@@ -224,6 +228,8 @@ impl Session {
         self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".to_owned()))
     }
 
+    /// Add a resistor from validated parameters if the caller's revision is still current.
+    /// Use the resulting revision as the identity so undo and a new placement cannot reuse it.
     fn place_resistor(&mut self, params: &Value) -> Result<(), CommandError> {
         if params["expected_revision"].as_u64() != Some(self.revision) {
             return Err(CommandError::Unavailable(format!("project changed, inspect the current revision ({}) and retry", self.revision)));
@@ -375,6 +381,7 @@ mod tests {
         assert!(!s.available("edit.redo"));
     }
 
+    /// Exercise rejected input against the full inspection snapshot, including the revision and undo state.
     #[test]
     fn invalid_placement_leaves_the_project_and_history_unchanged() {
         let mut s = Session::default();
