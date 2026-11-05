@@ -17,6 +17,9 @@ enum Action {
     SaveAs,
     Preferences,
     About,
+    /// Connect AI assistants, the Help row the narrow app bar gives way to. Desktop only.
+    #[cfg(not(target_arch = "wasm32"))]
+    Connect,
 }
 
 impl PcbApp {
@@ -63,6 +66,8 @@ impl PcbApp {
         let first_app = rows.len();
         rows.push(("home:preferences", "Preferences", ui.ctx().format_shortcut(&COMMAND_COMMA), true, Some(Action::Preferences)));
         rows.push(("home:about", "About PCBCraft", String::new(), true, Some(Action::About)));
+        #[cfg(not(target_arch = "wasm32"))]
+        rows.push(("home:connect", "Connect AI assistants…", String::new(), true, Some(Action::Connect)));
         for (index, (id, label, shortcut, enabled, picked)) in rows.into_iter().enumerate() {
             if index == first_save || index == first_app {
                 home::separator(ui);
@@ -121,6 +126,8 @@ impl PcbApp {
             }
             Action::Preferences => self.open_preferences(),
             Action::About => self.dialog = Dialog::About,
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::Connect => self.dialog = Dialog::LocalMcp { error: None, copied: false },
         }
     }
 }

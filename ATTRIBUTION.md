@@ -109,6 +109,13 @@ commands. The house glyph in `crates/chrome/src/menu/icons.rs` is a simplified,
 theme-colored drawing of `assets/icons/ui/design/svg/flat/home.svg` at the same
 revision.
 
+The Help menu under the ? button (`crates/chrome/src/menu.rs::help`,
+`crates/app/src/lib.rs::help_menu`) follows the rows and order of SolidCraft's
+`crates/ui-egui/src/help.rs` at `c553365a2197a689e749389a6fbf707a38df9b61`
+(MIT OR Apache-2.0, copyright (c) 2026 SolidCraft contributors), keeping the
+rows PCBCraft has: About, Keyboard Shortcuts, Report an Issue and Connect AI
+assistants, which opens PCBCraft's own local connection dialog.
+
 The Preferences window in `crates/chrome/src/settings.rs` follows SolidCraft's
 paged window and page sidebar in `crates/ui-egui/src/ui_kit/panel.rs`, its
 footer order in `ui_kit/actions.rs`, its settings heading, section and row

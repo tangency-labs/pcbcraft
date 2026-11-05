@@ -135,6 +135,7 @@ pub(crate) enum Outcome {
 
 const APPEARANCE: usize = 0;
 const NAVIGATION: usize = 1;
+const SHORTCUTS: usize = 2;
 /// The AI page follows Shortcuts, as SolidCraft's Assistant page does. Desktop only.
 #[cfg(not(target_arch = "wasm32"))]
 const AI: usize = 3;
@@ -154,6 +155,11 @@ impl PreferencesWindow {
     /// Open on Appearance, remembering the current settings for Cancel.
     pub(crate) fn new(preferences: Preferences) -> Self {
         Self { state: WindowState::default(), kept: preferences }
+    }
+
+    /// Open on the Shortcuts page, for Help › Keyboard Shortcuts.
+    pub(crate) fn at_shortcuts(preferences: Preferences) -> Self {
+        Self { state: WindowState { page: SHORTCUTS, query: String::new() }, kept: preferences }
     }
 
     /// Open on the AI page, for the Assistant's own Settings button.

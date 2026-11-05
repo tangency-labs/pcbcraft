@@ -36,7 +36,8 @@ pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAr
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUG_REPORT_URL: &str = "https://github.com/tangency-labs/pcbcraft/issues/new";
 const PREFERENCES_KEY: &str = "pcbcraft.preferences";
-/// App bar width below which About moves to the Home page.
+/// App bar width below which the Help menu gives way, leaving About and Connect AI assistants
+/// to the Home page.
 const COMPACT_APP_BAR: f32 = 380.0;
 #[cfg(not(target_arch = "wasm32"))]
 const ASSISTANT_AGENT_KEY: &str = "pcbcraft.assistant.agent";
@@ -58,6 +59,39 @@ const COMMAND_COMMA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND
 
 /// A browser keeps Ctrl+N and Ctrl+Q for itself, and has no window of ours to quit.
 const IN_BROWSER: bool = cfg!(target_arch = "wasm32");
+
+/// The Help rows, in SolidCraft's order. Returns the row picked this frame.
+/// Connect AI assistants is desktop only: the browser can't host a local connection.
+fn help_menu(ui: &mut Ui) -> Option<Help> {
+    let mut pick = None;
+    if MenuItem::new("About PCBCraft").icon(MenuIcon::Help).show(ui) {
+        pick = Some(Help::About);
+    }
+    if MenuItem::new("Keyboard Shortcuts").icon(MenuIcon::Keyboard).show(ui) {
+        pick = Some(Help::Shortcuts);
+    }
+    if MenuItem::new("Report an Issue…").icon(MenuIcon::Bug).show(ui) {
+        pick = Some(Help::Report);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        menu::separator(ui);
+        if MenuItem::new("Connect AI assistants…").icon(MenuIcon::Assistant).show(ui) {
+            pick = Some(Help::Connect);
+        }
+    }
+    pick
+}
+
+/// A row in the Help menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Help {
+    About,
+    Shortcuts,
+    Report,
+    #[cfg(not(target_arch = "wasm32"))]
+    Connect,
+}
 
 #[derive(Debug, Default)]
 enum Dialog {
@@ -226,10 +260,6 @@ impl PcbApp {
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if MenuItem::new("Local MCP…").icon(MenuIcon::Settings).show(ui) {
-            self.dialog = Dialog::LocalMcp { error: None, copied: false };
-        }
         if !IN_BROWSER {
             let quit_shortcut = ui.ctx().format_shortcut(&COMMAND_Q);
             if MenuItem::new("Quit").icon(MenuIcon::Close).shortcut(&quit_shortcut).show(ui) {
@@ -241,6 +271,17 @@ impl PcbApp {
     /// Open Preferences on its first page, remembering the current settings for Cancel.
     fn open_preferences(&mut self) {
         self.dialog = Dialog::Preferences(preferences::PreferencesWindow::new(self.preferences));
+    }
+
+    /// Run a Help row: a dialog, Preferences on its Shortcuts page, or the issue form.
+    fn help_action(&mut self, ctx: &egui::Context, pick: Help) {
+        match pick {
+            Help::About => self.dialog = Dialog::About,
+            Help::Shortcuts => self.dialog = Dialog::Preferences(preferences::PreferencesWindow::at_shortcuts(self.preferences)),
+            Help::Report => ctx.open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL)),
+            #[cfg(not(target_arch = "wasm32"))]
+            Help::Connect => self.dialog = Dialog::LocalMcp { error: None, copied: false },
+        }
     }
 
     /// Whether the current project can start a save or download.
@@ -264,7 +305,7 @@ impl PcbApp {
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut preferences = false;
-        let mut about = false;
+        let mut help = None;
         let mut home = false;
         #[cfg(not(target_arch = "wasm32"))]
         let mut assistant_clicked = false;
@@ -306,9 +347,9 @@ impl PcbApp {
                         ui.ctx().open_url(egui::OpenUrl::new_tab(BUG_REPORT_URL));
                     }
                 }
-                // Narrow bars leave About to the Home page so Home fits beside the history actions.
+                // Narrow bars leave Help's rows to the Home page so Home fits beside the history actions.
                 if width >= COMPACT_APP_BAR {
-                    about = menu::quick_action(ui, MenuIcon::Help, "About PCBCraft", "", true).clicked();
+                    help = menu::help(ui, help_menu).flatten();
                 }
                 let shortcut = ui.ctx().format_shortcut(&COMMAND_COMMA);
                 preferences = menu::quick_action(ui, MenuIcon::Settings, "Preferences", &shortcut, true).clicked();
@@ -325,8 +366,8 @@ impl PcbApp {
         }
         if preferences {
             self.open_preferences();
-        } else if about {
-            self.dialog = Dialog::About;
+        } else if let Some(pick) = help {
+            self.help_action(ui.ctx(), pick);
         } else if home {
             self.show_home();
         }
@@ -682,7 +723,7 @@ impl PcbApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn local_mcp_dialog(&mut self, ctx: &egui::Context, mut error: Option<String>, mut copied: bool) {
         let mut close = false;
-        let dismissed = shell::dialog(ctx, "local_mcp", "Local MCP", |ui| {
+        let dismissed = shell::dialog(ctx, "local_mcp", "Connect AI assistants", |ui| {
             if let Some(control) = &self.live_control {
                 ui.label("Clients with this configuration can inspect this window and move symbols.");
                 let disable = ui
