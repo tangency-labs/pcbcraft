@@ -182,11 +182,61 @@ fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
 }
 
 fn click_canvas(harness: &mut Harness<'_, PcbApp>) {
-    let point = egui::pos2(502.0, 354.0);
+    click_canvas_at(harness, egui::pos2(502.0, 354.0));
+}
+
+/// Send a real pointer click to the canvas at a specified logical position.
+fn click_canvas_at(harness: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
     harness.hover_at(point);
     harness.run();
     harness.drag_at(point);
     harness.run();
     harness.drop_at(point);
     harness.run();
+}
+
+/// The grid coordinate under the zoom cursor follows the middle-button pan.
+#[test]
+fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
+    let mut harness = harness();
+    new_project(&mut harness, "navigation");
+    let point = egui::pos2(540.64, 354.0);
+    harness.hover_at(point);
+    harness.run();
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 4.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
+    harness.run();
+    harness.key_press(Key::A);
+    harness.run();
+    let middle = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
+    harness.event(middle(point, true));
+    harness.run();
+    let panned = point + egui::vec2(120.0, 65.0);
+    harness.hover_at(panned);
+    harness.run();
+    harness.event(middle(panned, false));
+    harness.run();
+    assert_eq!(harness.state().session().revision(), 1);
+    click_canvas_at(&mut harness, panned);
+    let schematic = harness.state().session().project().unwrap();
+    assert_eq!(schematic.resistors()[0].position, pcbcraft_engine::schematic::Point { x_nm: 4 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
+}
+
+#[test]
+fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
+    let mut harness = harness();
+    new_project(&mut harness, "empty");
+    harness.hover_at(egui::pos2(600.0, 400.0));
+    harness.run();
+    harness.event(egui::Event::Zoom(2.0));
+    harness.run();
+    choose(&mut harness, "View", "Zoom to Fit");
+    assert_eq!(harness.state().session().revision(), 1);
+    choose(&mut harness, "Place", "Place Resistor");
+    click_canvas(&mut harness);
+    assert_eq!(harness.state().session().project().unwrap().resistors()[0].position, pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
 }

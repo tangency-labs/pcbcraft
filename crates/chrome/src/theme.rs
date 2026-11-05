@@ -17,6 +17,10 @@ thread_local! {
 /// Default schematic zoom and drawing weights, in logical points.
 pub const SCHEMATIC_GRID_SPACING: f32 = 10.16;
 pub const SCHEMATIC_GRID_DOT_RADIUS: f32 = 0.75;
+/// Minimum spacing between painted grid dots when zoomed out.
+pub const SCHEMATIC_MIN_GRID_SPACING: f32 = 5.0;
+/// Space around the contents when fitting the schematic to its viewport.
+pub const SCHEMATIC_FIT_MARGIN: f32 = 28.0;
 pub const SCHEMATIC_SYMBOL_STROKE: f32 = 1.6;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
