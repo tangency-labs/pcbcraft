@@ -2,7 +2,7 @@
 
 pub(crate) mod wiring;
 
-pub use wiring::{Terminal, Wire};
+pub use wiring::{Connectivity, Terminal, Wire};
 
 use serde_json::{Value, json};
 
@@ -12,8 +12,15 @@ pub const MAX_CENTER_NM: i64 = 1_000_000_000 - PIN_OFFSET_NM;
 pub(crate) const MAX_SYMBOLS: usize = 4096;
 
 /// Format the symbol ID used by inspection and command endpoints.
-fn symbol_id(ordinal: u64) -> String {
+pub(crate) fn symbol_id(ordinal: u64) -> String {
     format!("symbol-{ordinal}")
+}
+
+/// Parse the stable symbol ID accepted by schematic commands.
+pub(crate) fn parse_symbol_id(id: &str) -> Option<u64> {
+    let digits = id.strip_prefix("symbol-")?;
+    let number = digits.parse::<u64>().ok()?;
+    (number != 0 && !digits.starts_with('0') && digits.bytes().all(|byte| byte.is_ascii_digit())).then_some(number)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +91,11 @@ impl SymbolPlacement {
     /// Format the reference from the definition's prefix and the number assigned during placement.
     pub fn reference(&self) -> String {
         format!("{}{}", self.definition.reference_prefix, self.reference_number)
+    }
+
+    /// Return the identifier shared by command clients and the saved schematic.
+    pub fn id(&self) -> String {
+        symbol_id(self.ordinal)
     }
 
     /// Return the default display value for this built-in symbol.

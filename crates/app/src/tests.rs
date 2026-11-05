@@ -435,3 +435,31 @@ fn the_wire_menu_cancel_button_and_escape_both_discard_the_preview() {
         assert_eq!(harness.state().session().inspect(), before);
     }
 }
+
+/// Drag a wired symbol, keeping the preview outside history and committing one move on release.
+#[test]
+fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
+    let mut harness = harness();
+    wiring_project(&mut harness);
+    choose(&mut harness, "Place", "Wire");
+    click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
+    click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
+    let before = harness.state().session().snapshot().unwrap();
+    let revision = harness.state().session().revision();
+    let start = canvas_center(&harness);
+    let end = start + egui::vec2(0.0, 40.64);
+    harness.drag_at(start);
+    harness.run();
+    harness.hover_at(end);
+    harness.run();
+    assert_eq!(harness.state().session().revision(), revision);
+    harness.drop_at(end);
+    harness.run();
+    let moved = harness.state().session().project().unwrap();
+    assert_eq!(harness.state().session().revision(), revision + 1);
+    assert_eq!(moved.symbols()[0].position.y_nm, 4 * pcbcraft_engine::schematic::GRID_NM);
+    assert!(before.same_connectivity(moved));
+    assert_eq!(before.wires(), moved.wires());
+    choose(&mut harness, "Edit", "Undo");
+    assert_eq!(harness.state().session().project().unwrap().symbols(), before.symbols());
+}

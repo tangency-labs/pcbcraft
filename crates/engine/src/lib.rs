@@ -1,22 +1,28 @@
 //! The session and command set behind PCBCraft.
 //!
 //! One rule shapes this crate: anything a person can do, an agent can do through the same command.
-//! The menus and the MCP server both call [`Session::execute`] with an id from [`catalog`]; neither
-//! changes the project any other way. This crate knows nothing about windows or transports.
-//!
-//! The schematic supports in-memory resistor and LED placement and explicit pin connections. The file format is still being discussed
-//! (see `VISION.md`).
+//! The editor and MCP server use the same catalog through [`Session::apply`].
+//! [`Session::execute`] also includes an inspection result for existing callers.
+//! The native codec snapshots authored data independently of editing history and transport.
 
+pub mod board;
+pub mod persistence;
 pub mod schematic;
+
+use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
+
+use std::sync::{Arc, OnceLock};
 
 use schematic::{
     BUILTIN_SYMBOLS, MAX_CENTER_NM, MAX_SYMBOLS, Point, RESISTOR, SymbolDefinition, SymbolPlacement, Terminal, Wire, builtin_symbol,
-    wiring::{MAX_WIRES, inspect_netlist},
+    wiring::{Connectivity, MAX_WIRES},
 };
 use serde_json::{Map, Value, json};
 
 /// Undo steps kept. The oldest is dropped past this.
 const MAX_HISTORY: usize = 1000;
+const MAX_REFERENCE_NUMBER: usize = 1_000_000;
+const MAX_OBJECT_ID: u64 = i64::MAX as u64;
 /// Longest project name, in characters.
 const MAX_NAME: usize = 200;
 
@@ -24,6 +30,9 @@ const MAX_NAME: usize = 200;
 enum ParamKind {
     Name,
     SymbolDefinition,
+    SymbolId,
+    FootprintDefinition,
+    PadNumber,
     Coordinate,
     Revision,
     Terminal,
@@ -34,6 +43,9 @@ impl ParamKind {
     fn schema(self) -> Value {
         match self {
             Self::Name => json!({"type": "string"}),
+            Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
+            Self::FootprintDefinition => json!({"type":"string", "enum":[FOOTPRINT_DEFINITION]}),
+            Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
             Self::SymbolDefinition => json!({"type": "string", "enum": BUILTIN_SYMBOLS.iter().map(|definition| definition.id).collect::<Vec<_>>()}),
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
             Self::Revision => json!({"type": "integer", "minimum": 0}),
@@ -52,12 +64,18 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::FootprintDefinition if value.as_str() == Some(FOOTPRINT_DEFINITION) => Ok(()),
+            Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::Name if value.is_string() => Ok(()),
+            Self::SymbolId if value.as_str().and_then(schematic::parse_symbol_id).is_some() => Ok(()),
             Self::SymbolDefinition if value.as_str().and_then(builtin_symbol).is_some() => Ok(()),
             Self::Coordinate if value.as_i64().is_some_and(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Revision if value.as_u64().is_some() => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
+            Self::FootprintDefinition => Err("must identify the built-in footprint"),
+            Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name => Err("must be a string"),
+            Self::SymbolId => Err("must identify a placed symbol"),
             Self::SymbolDefinition => Err("must identify a built-in symbol definition"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
@@ -114,6 +132,10 @@ pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
 pub const PLACE_SYMBOL: &str = "schematic.place_symbol";
 /// The command that joins two inspected symbol terminals with an undoable wire.
 pub const CONNECT_PINS: &str = "schematic.connect_pins";
+/// Move an existing symbol without changing its terminals or wiring.
+pub const MOVE_SYMBOL: &str = "schematic.move_symbol";
+/// Assign a pinned generic footprint and record its physical pad mapping.
+pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 const EXPECTED_REVISION: Param = Param { name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
 
 const SYMBOL_X: Param = Param { name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate };
@@ -146,6 +168,30 @@ const CATALOG: &[Command] = &[
         params: &[
             Param { name: "from", summary: "First symbol ID and terminal number from project inspection", kind: ParamKind::Terminal },
             Param { name: "to", summary: "Second symbol ID and terminal number from project inspection", kind: ParamKind::Terminal },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: MOVE_SYMBOL,
+        title: "Move Symbol",
+        summary: "Move an existing symbol and preserve its connections. Undoable.",
+        params: &[
+            Param { name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
+            SYMBOL_X,
+            SYMBOL_Y,
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: PLACE_FOOTPRINT,
+        title: "Place Footprint",
+        summary: "Place the supported two-pad footprint for a schematic component and map its pins. Undoable.",
+        params: &[
+            Param { name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
+            Param { name: "definition", summary: "Pinned built-in footprint definition", kind: ParamKind::FootprintDefinition },
+            Param { name: "pin_1_pad", summary: "Physical pad for schematic pin 1", kind: ParamKind::PadNumber },
+            Param { name: "x_nm", summary: "Footprint center X in nanometers", kind: ParamKind::Coordinate },
+            Param { name: "y_nm", summary: "Footprint center Y in nanometers", kind: ParamKind::Coordinate },
             EXPECTED_REVISION,
         ],
     },
@@ -183,11 +229,16 @@ impl std::fmt::Display for CommandError {
 
 impl std::error::Error for CommandError {}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A typed project snapshot. History and background saves share immutable collections.
+#[derive(Clone, Debug)]
 pub struct Project {
     pub name: String,
-    symbols: Vec<SymbolPlacement>,
-    wires: Vec<Wire>,
+    id: uuid::Uuid,
+    sheet_id: uuid::Uuid,
+    symbols: Arc<Vec<SymbolPlacement>>,
+    wires: Arc<Vec<Wire>>,
+    connectivity: Arc<OnceLock<Connectivity>>,
+    board: Arc<Board>,
 }
 
 impl Project {
@@ -201,26 +252,85 @@ impl Project {
         &self.wires
     }
 
-    /// Resolve a terminal against this snapshot. Placements are ordered by their creation revision.
+    /// Look up a terminal's symbol by its stable ID, without scanning the sheet.
+    pub fn terminal_symbol(&self, terminal: Terminal) -> Option<&SymbolPlacement> {
+        self.symbol_index(terminal.symbol).map(|index| &self.symbols[index])
+    }
+
+    /// Resolve the current coordinates of a terminal in this snapshot.
     pub fn terminal_position(&self, terminal: Terminal) -> Option<Point> {
-        let index = self.symbols.binary_search_by_key(&terminal.symbol, |symbol| symbol.ordinal).ok()?;
-        Some(self.symbols[index].pins()[terminal.pin_index()])
+        Some(self.terminal_symbol(terminal)?.pins()[terminal.pin_index()])
+    }
+
+    /// Return the cached connected groups for this topology. Geometry-only edits share this cache.
+    pub fn connectivity(&self) -> &Connectivity {
+        self.connectivity.get_or_init(|| Connectivity::build(&self.symbols, &self.wires))
+    }
+
+    /// Whether these snapshots belong to the same project, even across revisions.
+    pub fn same_document(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+
+    /// Whether two snapshots share the same terminal groups and pin references.
+    pub fn same_connectivity(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.connectivity, &other.connectivity)
+    }
+
+    /// Find the placed board pad for a schematic terminal, if a footprint is assigned.
+    pub fn pad_for_terminal(&self, terminal: Terminal) -> Option<Pad> {
+        self.board.pad_for(terminal)
+    }
+
+    /// Locate a mapped physical pad in board coordinates.
+    pub fn pad_position(&self, pad: Pad) -> Option<Point> {
+        self.board.pad_position(pad)
+    }
+
+    /// Find the schematic terminal corresponding to a placed board pad.
+    pub fn terminal_for_pad(&self, pad: Pad) -> Option<Terminal> {
+        self.board.terminal_for(pad)
+    }
+
+    /// Find the stable symbol ID in the ID-ordered placement records.
+    fn symbol_index(&self, id: u64) -> Option<usize> {
+        self.symbols.binary_search_by_key(&id, |symbol| symbol.ordinal).ok()
     }
 }
 
 /// The open project and its history. There is one per window or per MCP server.
 #[derive(Debug, Default)]
 pub struct Session {
-    project: Option<Project>,
-    undo: Vec<Option<Project>>,
-    redo: Vec<Option<Project>>,
+    project: Option<Arc<Project>>,
+    undo: Vec<Option<Arc<Project>>>,
+    redo: Vec<Option<Arc<Project>>>,
     /// Goes up with every change, undo and redo included, so it never repeats.
     revision: u64,
 }
 
 impl Session {
     pub fn project(&self) -> Option<&Project> {
-        self.project.as_ref()
+        self.project.as_deref()
+    }
+
+    /// Share the exact current snapshot with a background save without copying model data.
+    pub fn snapshot(&self) -> Option<Arc<Project>> {
+        self.project.clone()
+    }
+
+    /// Adopt a validated project as a new history root. Advance past its highest stored ID
+    /// so old revision checks fail and newly created objects cannot reuse loaded IDs.
+    pub fn open_snapshot(&mut self, project: Arc<Project>) {
+        let highest = project
+            .symbols
+            .last()
+            .map_or(0, |symbol| symbol.ordinal)
+            .max(project.wires.last().map_or(0, |wire| wire.ordinal))
+            .max(project.board.footprints().last().map_or(0, |footprint| footprint.id));
+        self.revision = self.revision.max(highest) + 1;
+        self.project = Some(project);
+        self.undo.clear();
+        self.redo.clear();
     }
 
     pub fn revision(&self) -> u64 {
@@ -231,7 +341,7 @@ impl Session {
     pub fn available(&self, id: &str) -> bool {
         match id {
             "project.new" => true,
-            "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS => self.project.is_some(),
+            "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | PLACE_FOOTPRINT => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -242,15 +352,22 @@ impl Session {
     /// The schematic's `wires` list identifies each link by its two terminal references.
     /// The `netlist` groups terminals joined by those wires and lists terminals with no wire as `unconnected`.
     pub fn inspect(&self) -> Value {
-        json!({
-            "project": self.project.as_ref().map(|p| json!({
+        let project = self.project.as_ref().map(|p| {
+            let mut inspected = json!({
                 "name": p.name,
                 "schematic": {
                     "symbols": p.symbols.iter().map(SymbolPlacement::inspect).collect::<Vec<_>>(),
                     "wires": p.wires.iter().copied().map(Wire::inspect).collect::<Vec<_>>(),
-                    "netlist": inspect_netlist(&p.symbols, &p.wires),
+                    "netlist": p.connectivity().inspect(),
                 },
-            })),
+            });
+            if !p.board.footprints().is_empty() {
+                inspected["board"] = json!({"footprints": p.board.footprints().iter().map(Footprint::inspect).collect::<Vec<_>>()});
+            }
+            inspected
+        });
+        json!({
+            "project": project,
             "revision": self.revision,
             "can_undo": !self.undo.is_empty(),
             "can_redo": !self.redo.is_empty(),
@@ -259,18 +376,33 @@ impl Session {
 
     /// Run a command. On success, answers [`Self::inspect`]. On failure, nothing has changed.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        self.apply(id, params)?;
+        Ok(self.inspect())
+    }
+
+    /// Run the shared command without building an inspection snapshot. Returns the current
+    /// revision, which remains unchanged on a no-op. Failed commands leave the project intact.
+    pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
-                "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS => "no project is open".to_owned(),
+                "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | PLACE_FOOTPRINT => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
             }));
         }
         match id {
-            "project.new" => self.change(Project { name: name_param(params)?, symbols: Vec::new(), wires: Vec::new() }),
+            "project.new" => self.change(Project {
+                name: name_param(params)?,
+                id: fresh_id()?,
+                sheet_id: fresh_id()?,
+                symbols: Arc::default(),
+                wires: Arc::default(),
+                connectivity: Arc::default(),
+                board: Arc::default(),
+            }),
             "project.rename" => {
                 let name = name_param(params)?;
                 let mut project = self.open_project()?.clone();
@@ -288,16 +420,18 @@ impl Session {
                 self.place_symbol(definition, params)?;
             }
             CONNECT_PINS => self.connect_pins(params)?,
+            MOVE_SYMBOL => self.move_symbol(params)?,
+            PLACE_FOOTPRINT => self.place_footprint(params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),
         }
-        Ok(self.inspect())
+        Ok(self.revision)
     }
 
     /// Borrow the current project or report that the command has no target.
     fn open_project(&self) -> Result<&Project, CommandError> {
-        self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".to_owned()))
+        self.project.as_deref().ok_or_else(|| CommandError::Unavailable("no project is open".to_owned()))
     }
 
     /// Add a symbol from validated parameters if the caller's revision is still current.
@@ -308,14 +442,62 @@ impl Session {
         if project.symbols.len() >= MAX_SYMBOLS {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
-        let reference_number = project.symbols.iter().filter(|symbol| symbol.definition.reference_prefix == definition.reference_prefix).count() + 1;
+        let reference_number = project
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.definition.reference_prefix == definition.reference_prefix)
+            .map(|symbol| symbol.reference_number)
+            .max()
+            .unwrap_or_default()
+            + 1;
+        if reference_number > MAX_REFERENCE_NUMBER {
+            return Err(CommandError::Unavailable("no more reference numbers are available for this symbol type".to_owned()));
+        }
         let mut project = project.clone();
-        project.symbols.push(SymbolPlacement {
+        Arc::make_mut(&mut project.symbols).push(SymbolPlacement {
             definition,
-            ordinal: self.revision + 1,
+            ordinal: self.next_object_id()?,
             reference_number,
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
         });
+        project.connectivity = Arc::default();
+        self.change(project);
+        Ok(())
+    }
+
+    /// Move one existing placement at the expected revision, retaining its topology and history.
+    fn move_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let project = self.open_project()?;
+        let index = params["symbol"]
+            .as_str()
+            .and_then(schematic::parse_symbol_id)
+            .and_then(|id| project.symbol_index(id))
+            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
+        let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
+        if project.symbols[index].position != position {
+            let mut project = project.clone();
+            Arc::make_mut(&mut project.symbols)[index].position = position;
+            self.change(project);
+        }
+        Ok(())
+    }
+
+    /// Place one footprint per component and retain the exact terminal-to-pad association.
+    fn place_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
+        self.check_revision(params)?;
+        let project = self.open_project()?;
+        let symbol = params["symbol"]
+            .as_str()
+            .and_then(schematic::parse_symbol_id)
+            .filter(|&id| project.symbol_index(id).is_some())
+            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
+        let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
+        let mut project = project.clone();
+        let pin_1_pad = params["pin_1_pad"].as_u64().unwrap_or_default() as u8;
+        Arc::make_mut(&mut project.board)
+            .append(Footprint::new(self.next_object_id()?, symbol, pin_1_pad, position))
+            .map_err(|error| CommandError::InvalidParams(error.to_owned()))?;
         self.change(project);
         Ok(())
     }
@@ -341,9 +523,18 @@ impl Session {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_WIRES} wires")));
         }
         let mut project = project.clone();
-        project.wires.push(Wire { ordinal: self.revision + 1, terminals });
+        Arc::make_mut(&mut project.wires).push(Wire { ordinal: self.next_object_id()?, terminals });
+        project.connectivity = Arc::default();
         self.change(project);
         Ok(())
+    }
+
+    /// Reserve a bounded stable ID for the next edit.
+    fn next_object_id(&self) -> Result<u64, CommandError> {
+        self.revision
+            .checked_add(1)
+            .filter(|id| *id <= MAX_OBJECT_ID)
+            .ok_or_else(|| CommandError::Unavailable("project has exhausted its object IDs".to_owned()))
     }
 
     /// Reject an edit prepared against a project state that has since changed.
@@ -354,8 +545,9 @@ impl Session {
         Ok(())
     }
 
+    /// Commit a snapshot and bound undo history. New edits clear redo.
     fn change(&mut self, project: Project) {
-        self.undo.push(self.project.replace(project));
+        self.undo.push(self.project.replace(Arc::new(project)));
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
         }
@@ -363,6 +555,7 @@ impl Session {
         self.revision += 1;
     }
 
+    /// Restore an existing snapshot, advancing the revision in either direction.
     fn step(&mut self, forward: bool) {
         let (from, to) = if forward { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
         if let Some(state) = from.pop() {
@@ -370,6 +563,13 @@ impl Session {
             self.revision += 1;
         }
     }
+}
+
+/// Generate a persistent project or sheet ID and report unavailable system entropy.
+fn fresh_id() -> Result<uuid::Uuid, CommandError> {
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes).map_err(|error| CommandError::Unavailable(format!("could not create a project identity: {error}")))?;
+    Ok(uuid::Builder::from_random_bytes(bytes).into_uuid())
 }
 
 /// Params must be an object (or nothing) holding exactly the command's params.

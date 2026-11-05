@@ -2,11 +2,16 @@
 
 Electronics design that feels like the tools you already know, built so a person and an agent can work on the same board, at the same time, with the same commands.
 
-**Status: just started.** The window, menus, preferences, undo and an MCP server work, on the desktop and in the browser. Create a project, then choose **Place → Place Symbol…** or press **A** to pick a resistor or LED. The preview snaps to the schematic grid. Click to place it or press **Esc** to cancel. Placements are in memory for now. Scroll over the canvas to zoom, drag with the middle mouse button to pan, or choose **View → Zoom to Fit**. [VISION.md](VISION.md) says what it should be.
+**Status: just started.** The window, menus, preferences, undo and an MCP server work, on the desktop and in the browser. Create a project, then choose **Place → Place Symbol…** or press **A** to pick a resistor or LED. The preview snaps to the schematic grid. Click to place it or press **Esc** to cancel. Scroll over the canvas to zoom, drag with the middle mouse button to pan, or choose **View → Zoom to Fit**. [VISION.md](VISION.md) says what it should be.
 
 Choose **Place → Wire** or press **W**, then click two terminal markers to connect them. Press **Esc** or right-click and choose **Cancel** to discard an in-progress wire. Use **Edit → Undo** to remove the last committed wire.
 
 The **Capture** ribbon gives you the same Symbol and Wire tools. Use **Nets** to open the Net Inspector beside the schematic, and **Fit** to bring the circuit into view.
+
+Open a native `.pc` project from **File → Open…**. On desktop, use **Save** or
+**Save As…**. In the browser, use **Download Project**. Drag a placed symbol to
+move it and keep its connections. The [native storage notes](docs/native-project-storage.md)
+describe the first schema, file safety and performance checks.
 
 ## Run it
 
@@ -18,7 +23,11 @@ cd apps/pcbcraft-web && trunk serve          # browser, at http://127.0.0.1:8781
 
 The browser build needs `rustup target add wasm32-unknown-unknown` and [Trunk](https://trunkrs.dev).
 
-To connect an MCP client, point it at `pcbcraft-cli mcp`. Today it runs its own session with no window, so it can't yet see the project open in the app.
+To connect an MCP client, point it at `pcbcraft-cli mcp`. Pass
+`--project path/to/project.pc` after `mcp` to start with a saved snapshot. The
+headless session is separate from the app window. Send `inspect: false` with
+`execute` to return just the resulting revision. Use `inspect_project` to read
+the project, or `cross_probe` to look up a linked terminal or pad.
 
 An MCP client can use `schematic.connect_pins` to join two terminals from
 `inspect_project`. Describe the command for its input shape, and send the current

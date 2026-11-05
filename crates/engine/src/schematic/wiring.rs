@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::{SymbolPlacement, symbol_id};
+use super::{SymbolPlacement, parse_symbol_id, symbol_id};
 
 pub(crate) const MAX_WIRES: usize = 4096;
 
@@ -25,11 +25,10 @@ impl Terminal {
     }
 
     /// Read the two required fields and reject IDs that cannot come from project inspection.
-    pub(crate) fn parse(value: &Value) -> Option<Self> {
+    pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
-        let symbol_id = object.get("symbol")?.as_str()?.strip_prefix("symbol-")?;
-        let symbol = symbol_id.parse::<u64>().ok()?;
-        if object.len() != 2 || symbol == 0 || symbol_id != symbol.to_string() {
+        let symbol = parse_symbol_id(object.get("symbol")?.as_str()?)?;
+        if object.len() != 2 {
             return None;
         }
         let number = match object.get("terminal")?.as_str()? {
@@ -38,6 +37,16 @@ impl Terminal {
             _ => return None,
         };
         Some(Self { symbol, number })
+    }
+
+    /// Return the definition's pin number for display and persistence.
+    pub fn number(self) -> &'static str {
+        self.number
+    }
+
+    /// Resolve a stored pin number for a symbol ID.
+    pub(crate) fn from_number(symbol: u64, number: &str) -> Option<Self> {
+        Self::for_symbol(symbol).into_iter().find(|pin| pin.number == number)
     }
 
     /// Publish the terminal reference in the same shape that the command accepts.
@@ -66,29 +75,50 @@ impl Wire {
     }
 }
 
-/// Derive connected groups and isolated terminals in stable order from explicit wire links.
-pub(crate) fn inspect_netlist(symbols: &[SymbolPlacement], wires: &[Wire]) -> Value {
-    let mut adjacency = BTreeMap::<Terminal, Vec<Terminal>>::new();
-    for wire in wires {
-        let [from, to] = wire.terminals;
-        adjacency.entry(from).or_default().push(to);
-        adjacency.entry(to).or_default().push(from);
+/// The typed connectivity of a project snapshot. It is derived from wires and symbols.
+#[derive(Debug)]
+pub struct Connectivity {
+    pub nets: Vec<Vec<Terminal>>,
+    pub unconnected: Vec<Terminal>,
+    by_terminal: BTreeMap<Terminal, usize>,
+}
+
+impl Connectivity {
+    /// Find the connected group for a terminal without walking the schematic.
+    pub fn net_for(&self, terminal: Terminal) -> Option<&[Terminal]> {
+        self.by_terminal.get(&terminal).map(|&index| self.nets[index].as_slice())
     }
 
-    let unconnected: Vec<_> =
-        symbols.iter().flat_map(SymbolPlacement::terminals).filter(|terminal| !adjacency.contains_key(terminal)).map(Terminal::inspect).collect();
+    /// Serialize the same inspection contract used by existing MCP callers.
+    pub(crate) fn inspect(&self) -> Value {
+        let nets: Vec<_> =
+            self.nets.iter().map(|group| json!({"terminals": group.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()})).collect();
+        json!({"nets": nets, "unconnected": self.unconnected.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()})
+    }
 
-    let mut nets = Vec::new();
-    while let Some((&first, _)) = adjacency.first_key_value() {
-        let mut pending = vec![first];
-        let mut group = BTreeSet::new();
-        while let Some(terminal) = pending.pop() {
-            if let Some(neighbors) = adjacency.remove(&terminal) {
-                group.insert(terminal);
-                pending.extend(neighbors);
-            }
+    /// Derive connected groups and isolated terminals in stable order from explicit wire links.
+    pub(crate) fn build(symbols: &[SymbolPlacement], wires: &[Wire]) -> Self {
+        let mut adjacency = BTreeMap::<Terminal, Vec<Terminal>>::new();
+        for wire in wires {
+            let [from, to] = wire.terminals;
+            adjacency.entry(from).or_default().push(to);
+            adjacency.entry(to).or_default().push(from);
         }
-        nets.push(json!({"terminals": group.into_iter().map(Terminal::inspect).collect::<Vec<_>>()}));
+        let unconnected = symbols.iter().flat_map(SymbolPlacement::terminals).filter(|terminal| !adjacency.contains_key(terminal)).collect();
+        let mut nets = Vec::new();
+        let mut by_terminal = BTreeMap::new();
+        while let Some((&first, _)) = adjacency.first_key_value() {
+            let mut pending = vec![first];
+            let mut group = BTreeSet::new();
+            while let Some(terminal) = pending.pop() {
+                if let Some(neighbors) = adjacency.remove(&terminal) {
+                    group.insert(terminal);
+                    pending.extend(neighbors);
+                }
+            }
+            by_terminal.extend(group.iter().map(|&terminal| (terminal, nets.len())));
+            nets.push(group.into_iter().collect());
+        }
+        Self { nets, unconnected, by_terminal }
     }
-    json!({"nets": nets, "unconnected": unconnected})
 }

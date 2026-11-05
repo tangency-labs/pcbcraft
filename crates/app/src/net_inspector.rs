@@ -1,15 +1,15 @@
 //! Present the same committed connectivity that the engine exposes to agents.
 
-use std::collections::HashMap;
+use std::sync::Arc;
 
 use egui::Ui;
 use pcbcraft_chrome::{shell::dim, workspace};
-use pcbcraft_engine::Session;
+use pcbcraft_engine::{Project, Session, schematic::Terminal};
 
 #[derive(Debug, Default)]
 pub(super) struct NetInspector {
     pub open: bool,
-    revision: Option<u64>,
+    project: Option<Arc<Project>>,
     snapshot: Option<Snapshot>,
 }
 
@@ -20,37 +20,20 @@ struct Snapshot {
 }
 
 impl Snapshot {
-    /// Resolve the engine's terminal identities to visible pin references for this revision.
-    /// A closed project has no snapshot. An empty schematic has an empty snapshot.
-    fn read(session: &Session) -> Option<Self> {
-        session.project()?;
-        let inspected = session.inspect();
-        let schematic = &inspected["project"]["schematic"];
-        let references: HashMap<_, _> = schematic["symbols"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|symbol| Some((symbol["id"].as_str()?, symbol["reference"].as_str()?)))
-            .collect();
-
-        let pin_labels = |terminals: &serde_json::Value| {
+    /// Format the typed groups for display using the project's stable terminal IDs.
+    fn read(project: &Project) -> Self {
+        let pin_labels = |terminals: &[Terminal]| {
             terminals
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|pin| {
-                    let reference = references.get(pin["symbol"].as_str()?)?;
-                    Some(format!("{reference}.{}", pin["terminal"].as_str()?))
+                .iter()
+                .filter_map(|&pin| {
+                    let reference = project.terminal_symbol(pin)?.reference();
+                    Some(format!("{reference}.{}", pin.number()))
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-
-        let netlist = &schematic["netlist"];
-        Some(Self {
-            nets: netlist["nets"].as_array().into_iter().flatten().map(|net| pin_labels(&net["terminals"])).collect(),
-            unconnected: pin_labels(&netlist["unconnected"]),
-        })
+        let connectivity = project.connectivity();
+        Self { nets: connectivity.nets.iter().map(|net| pin_labels(net)).collect(), unconnected: pin_labels(&connectivity.unconnected) }
     }
 
     /// List connected groups and isolated pins independently. Net numbers are local to the view.
@@ -74,14 +57,17 @@ impl Snapshot {
 }
 
 impl NetInspector {
-    /// Dock a read-only view next to the schematic. Refresh on revisions, including undo and redo.
+    /// Dock a read-only view next to the schematic. Rebuild the view when the
+    /// project's connectivity snapshot changes. Moving a symbol reuses the view.
     pub(super) fn show(&mut self, ui: &mut Ui, session: &Session) {
         if !self.open {
             return;
         }
-        if self.revision != Some(session.revision()) {
-            self.snapshot = Snapshot::read(session);
-            self.revision = Some(session.revision());
+        if let Some(project) = session.project()
+            && !self.project.as_ref().is_some_and(|previous| previous.same_connectivity(project))
+        {
+            self.snapshot = Some(Snapshot::read(project));
+            self.project = session.snapshot();
         }
 
         let close = workspace::right_card(ui, "net_inspector", "Net Inspector", |ui| {

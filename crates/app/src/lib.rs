@@ -6,6 +6,7 @@
 
 mod net_inspector;
 mod preferences;
+mod project_files;
 mod schematic_canvas;
 
 use schematic_canvas::{Click, Tool};
@@ -18,7 +19,7 @@ use pcbcraft_chrome::{
     theme, workspace,
 };
 use pcbcraft_engine::{
-    CONNECT_PINS, PLACE_SYMBOL, Session, command,
+    CONNECT_PINS, MOVE_SYMBOL, PLACE_SYMBOL, Session, command,
     schematic::{BUILTIN_SYMBOLS, SymbolDefinition},
 };
 use serde_json::{Value, json};
@@ -30,6 +31,9 @@ const PREFERENCES_KEY: &str = "pcbcraft.preferences";
 
 const COMMAND_Z: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const COMMAND_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
+const COMMAND_O: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
+const COMMAND_S: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
+const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::S);
 const COMMAND_N: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const COMMAND_Q: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
@@ -51,6 +55,7 @@ enum Dialog {
         focused: bool,
     },
     ChooseSymbol,
+    ConfirmOpen,
     Preferences,
     About,
 }
@@ -58,6 +63,8 @@ enum Dialog {
 #[derive(Debug, Default)]
 pub struct PcbApp {
     session: Session,
+    files: project_files::ProjectFiles,
+    file_notice: Option<String>,
     camera: schematic_canvas::Camera,
     preferences: Preferences,
     net_inspector: net_inspector::NetInspector,
@@ -86,7 +93,8 @@ impl PcbApp {
 
     /// Run a command for the person at the keyboard. A failure shows in the status bar.
     fn run(&mut self, id: &str, params: &Value) {
-        self.message = self.session.execute(id, params).err().map(|e| e.to_string());
+        self.file_notice = None;
+        self.message = self.session.apply(id, params).err().map(|e| e.to_string());
     }
 
     /// Start a symbol preview at the current project revision.
@@ -109,6 +117,22 @@ impl PcbApp {
         self.dialog = Dialog::Name { command, text, error: None, focused: false };
     }
 
+    /// Protect unsaved edits before opening a file that replaces the current session.
+    fn open_project_file(&mut self, ctx: &egui::Context) {
+        if self.files.dirty(&self.session) {
+            self.dialog = Dialog::ConfirmOpen;
+        } else {
+            self.message = self.files.open(self.session.revision(), ctx).err();
+            self.file_notice = None;
+        }
+    }
+
+    /// Start a save or download for the current snapshot and report setup failures.
+    fn save_project_file(&mut self, save_as: bool, ctx: &egui::Context) {
+        self.message = self.files.save(&self.session, save_as, ctx).err();
+        self.file_notice = None;
+    }
+
     /// A row for an engine command: its title comes from the catalog, its state from the session.
     /// True when it was clicked.
     fn command_row(&self, ui: &mut Ui, id: &str, suffix: &str, shortcut: &str) -> bool {
@@ -122,6 +146,18 @@ impl PcbApp {
             menu::top(ui, "File", |ui| {
                 if self.command_row(ui, "project.new", "…", if IN_BROWSER { "" } else { "Ctrl+N" }) {
                     self.ask_name("project.new");
+                }
+                let file_ready = !self.files.busy();
+                if MenuItem::new("Open…").shortcut(if IN_BROWSER { "" } else { "Ctrl+O" }).enabled(file_ready).show(ui) {
+                    self.open_project_file(ui.ctx());
+                }
+                let can_save = file_ready && self.session.project().is_some();
+                let save_label = if IN_BROWSER { "Download Project" } else { "Save" };
+                if MenuItem::new(save_label).shortcut(if IN_BROWSER { "" } else { "Ctrl+S" }).enabled(can_save).show(ui) {
+                    self.save_project_file(false, ui.ctx());
+                }
+                if !IN_BROWSER && MenuItem::new("Save As…").shortcut("Ctrl+Shift+S").enabled(can_save).show(ui) {
+                    self.save_project_file(true, ui.ctx());
                 }
                 if self.command_row(ui, "project.rename", "…", "") {
                     self.ask_name("project.rename");
@@ -209,9 +245,14 @@ impl PcbApp {
                 } else if let Some(tool) = self.tool {
                     ui.label(match tool {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · Esc to cancel", definition.name)),
+                        Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
                         Tool::Wire { start: None, .. } => dim("Wire · Click a pin"),
                         Tool::Wire { start: Some(_), .. } => dim("Wire · Click the destination pin"),
                     });
+                } else if self.files.busy() {
+                    ui.label(dim("File operation in progress"));
+                } else if let Some(notice) = &self.file_notice {
+                    ui.label(dim(notice.as_str()));
                 }
             },
             |ui| {
@@ -245,6 +286,20 @@ impl PcbApp {
                 self.run(CONNECT_PINS, &json!({"from": from.inspect(), "to": to.inspect(), "expected_revision": revision}));
                 if self.message.is_none() {
                     self.tool = None;
+                }
+            }
+            (None, Some(Click::Grab(symbol, offset))) => {
+                self.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
+            }
+            (Some(Tool::Move { symbol, revision, .. }), Some(Click::FinishMove(position))) => {
+                self.tool = None;
+                if let Some(point) = position {
+                    self.run(
+                        MOVE_SYMBOL,
+                        &json!({
+                            "symbol": symbol.id(), "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision,
+                        }),
+                    );
                 }
             }
             (Some(Tool::Wire { .. }), Some(Click::CancelWire)) => {
@@ -282,6 +337,18 @@ impl PcbApp {
             self.dialog = Dialog::Preferences;
         }
         if !IN_BROWSER {
+            if !self.files.busy() {
+                if pressed(&COMMAND_O) {
+                    self.open_project_file(ctx);
+                }
+                if self.session.project().is_some() {
+                    if pressed(&SAVE_AS) {
+                        self.save_project_file(true, ctx);
+                    } else if pressed(&COMMAND_S) {
+                        self.save_project_file(false, ctx);
+                    }
+                }
+            }
             if pressed(&COMMAND_N) {
                 self.ask_name("project.new");
             }
@@ -316,8 +383,9 @@ impl PcbApp {
                 });
                 if submit {
                     // A bad name stays in the dialog to fix, so the person sees why.
-                    match self.session.execute(id, &json!({"name": text})) {
+                    match self.session.apply(id, &json!({"name": text})) {
                         Ok(_) => {
+                            self.file_notice = None;
                             self.message = None;
                             if id == "project.new" {
                                 self.camera = schematic_canvas::Camera::default();
@@ -330,6 +398,22 @@ impl PcbApp {
                     }
                 } else if !(closing || cancel) {
                     self.dialog = Dialog::Name { command: id, text, error, focused };
+                }
+            }
+            Dialog::ConfirmOpen => {
+                let (mut proceed, mut cancel) = (false, false);
+                let closing = shell::dialog(ctx, "confirm_open", "Open Project", |ui| {
+                    ui.label("Opening another project will discard unsaved changes.");
+                    ui.horizontal(|ui| {
+                        proceed = ui.button("Discard and open…").clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+                if proceed {
+                    self.message = self.files.open(self.session.revision(), ctx).err();
+                    self.file_notice = None;
+                } else if !(cancel || closing) {
+                    self.dialog = Dialog::ConfirmOpen;
                 }
             }
             Dialog::ChooseSymbol => {
@@ -392,6 +476,20 @@ impl PcbApp {
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.sync_style(&ctx);
+        if let Some(update) = self.files.poll(&mut self.session, &ctx) {
+            match update {
+                project_files::Update::Opened => {
+                    self.camera = schematic_canvas::Camera::default();
+                    self.camera.request_fit();
+                    self.tool = None;
+                    self.dialog = Dialog::None;
+                    self.message = None;
+                    self.file_notice = Some("Project opened".to_owned());
+                }
+                project_files::Update::Message(text) => self.file_notice = Some(text),
+                project_files::Update::Error(error) => self.message = Some(error),
+            }
+        }
         self.shortcuts(&ctx);
         self.menus(ui);
         self.ribbon(ui);
