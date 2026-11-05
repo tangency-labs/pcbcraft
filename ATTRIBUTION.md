@@ -40,6 +40,20 @@ chrome crate with the existing family theme tokens. The Schematic tile uses
 the drawing glyph from `assets/icons/ui/design/svg/workspace/ws_drawing.svg`
 at that same revision, rendered with theme colors in `crates/chrome/src/workspace.rs`.
 
+The application bar follows the brand, quick actions and document title in
+PCBcraft Next's `src/desktop/mod.rs` at the revision above. The mark in
+`crates/chrome/src/shell.rs` adapts its original `assets/original/pcbcraft.svg`.
+The right-side utilities follow SolidCraft's `toolbar.rs::app_bar`. The File
+popup follows PCBcraft Next's `src/desktop/controls.rs` and `src/desktop/mod.rs`.
+The glyphs in `crates/chrome/src/menu/icons.rs` are simplified,
+theme-colored drawings based on SolidCraft's `assets/icons/ui/design/svg/`
+masters `model/new.svg`, `model/open.svg`, `flat/save.svg`,
+`flat/export_tray.svg`, `model/rename.svg`, and `flat/close.svg` at
+`c553365a2197a689e749389a6fbf707a38df9b61`, copyright (c) 2026 SolidCraft
+contributors, MIT OR Apache-2.0. The download arrow points into the tray.
+The history arrows follow the family `flat/undo.svg` and `flat/redo.svg` at
+the same revision.
+
 ## Bundled fonts
 
 | File | Source | License |

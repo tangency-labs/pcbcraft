@@ -1,7 +1,10 @@
 //! Drives the real window through its accessibility tree, with clicks and keys, no GPU needed.
 
 use egui::{Key, Modifiers};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use serde_json::{Value, json};
 
 use super::*;
@@ -12,11 +15,16 @@ fn harness<'a>() -> Harness<'a, PcbApp> {
     harness
 }
 
+/// Click the named control and run the frame that handles the action.
+pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    harness.get_by_label(label).click();
+    harness.run();
+}
+
+/// Open the menu before activating its item in a separate frame.
 fn choose(harness: &mut Harness<'_, PcbApp>, menu: &str, item: &str) {
-    harness.get_by_label(menu).click();
-    harness.run();
-    harness.get_by_label(item).click();
-    harness.run();
+    click(harness, menu);
+    click(harness, item);
 }
 
 fn select_symbol(harness: &mut Harness<'_, PcbApp>, name: &str) {
@@ -53,7 +61,7 @@ fn the_empty_workspace_stays_centered_after_undo_with_the_inspector_open() {
     harness.get_by_label("Toggle Net Inspector").click();
     harness.run();
     harness.get_by_label("Close");
-    choose(&mut harness, "Edit", "Undo");
+    click(&mut harness, "Undo");
 
     assert!(harness.query_by_label("Close").is_none());
     assert_eq!(harness.get_by_label(empty).rect().center(), original);
@@ -67,14 +75,47 @@ fn a_person_makes_a_project_through_the_menu() {
     assert!(harness.query_by_role(egui::accesskit::Role::TextInput).is_none());
 }
 
-/// The promise of the whole project: what a person does through the menus is what the same commands
-/// do for an agent.
+/// Save As stays disabled without a project and opens the format chooser once a project exists.
 #[test]
-fn the_menus_reach_the_same_state_as_the_commands_an_agent_runs() {
+fn compact_file_menu_keeps_save_as_accessible() {
+    let mut harness = harness();
+    harness.set_size(egui::vec2(420.0, 520.0));
+    harness.run();
+    harness.get_by_label("File").click();
+    harness.run();
+    let save_as = harness.get_by_label("Save As…");
+    assert!(save_as.accesskit_node().is_disabled());
+    assert!(save_as.rect().right() <= 420.0);
+    save_as.click();
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::None));
+    harness.key_press(Key::Escape);
+    harness.run();
+
+    new_project(&mut harness, "blinky");
+    choose(&mut harness, "File", "Save As…");
+    harness.get_by_label("Plain JSON");
+    harness.get_by_label("ZIP archive");
+}
+
+/// The brand and File trigger share the same centerline as the quick actions.
+#[test]
+fn app_bar_brand_aligns_with_the_controls() {
+    let harness = harness();
+    let center = |label| harness.get_by_label(label).rect().center().y;
+    let file = center("File");
+    assert!((center("PCBCraft") - file).abs() <= 1.0);
+    assert!((center("Save Project") - file).abs() <= 1.0);
+    assert!((center("Preferences") - file).abs() <= 1.0);
+}
+
+/// Undo and Redo from the app bar produce the same project state as the engine commands.
+#[test]
+fn app_bar_actions_reach_the_same_state_as_commands_an_agent_runs() {
     let mut harness = harness();
     new_project(&mut harness, "blinky");
-    choose(&mut harness, "Edit", "Undo");
-    choose(&mut harness, "Edit", "Redo");
+    click(&mut harness, "Undo");
+    click(&mut harness, "Redo");
     let mut session = Session::default();
     session.execute("project.new", &json!({"name": "blinky"})).unwrap();
     session.execute("edit.undo", &Value::Null).unwrap();
@@ -143,10 +184,11 @@ fn typing_ctrl_z_in_a_name_field_does_not_undo_the_project() {
     assert_eq!(harness.state().session().project().unwrap().name, "blinky");
 }
 
+/// The right-side app bar controls reach both dialogs and apply theme and scale changes.
 #[test]
 fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
     let mut harness = harness();
-    choose(&mut harness, "Preferences", "Preferences…");
+    click(&mut harness, "Preferences");
     harness.get_by_label("Light").click();
     harness.run();
     assert_eq!(harness.state().preferences().theme, ThemeChoice::Light);
@@ -157,17 +199,18 @@ fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
     assert_eq!(harness.ctx.zoom_factor(), 1.25);
     harness.get_by_label("Close").click();
     harness.run();
-    choose(&mut harness, "Help", "About PCBCraft");
+    click(&mut harness, "About PCBCraft");
     harness.get_by_label("Close").click();
     harness.run();
     assert!(harness.query_by_label("Close").is_none());
 }
 
+/// Capture placement snaps through the shared engine command and can be undone from the app bar.
 #[test]
 fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     let mut harness = harness();
     new_project(&mut harness, "blinky");
-    choose(&mut harness, "Place", "Place Symbol…");
+    click(&mut harness, "Add symbol (A)");
     select_symbol(&mut harness, "Resistor");
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
     harness.get_by_label("Place Resistor · Esc to cancel");
@@ -180,9 +223,9 @@ fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     assert_eq!(harness.state().session().inspect(), session.inspect());
     click_canvas(&mut harness);
     assert_eq!(harness.state().session().inspect(), session.inspect());
-    choose(&mut harness, "Edit", "Undo");
+    click(&mut harness, "Undo");
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
-    choose(&mut harness, "Edit", "Redo");
+    click(&mut harness, "Redo");
     assert_eq!(harness.state().session().project().unwrap().symbols(), session.project().unwrap().symbols());
 }
 
@@ -275,6 +318,7 @@ fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     assert_eq!(schematic.symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 4 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
 }
 
+/// The Fit action restores the default canvas origin without advancing the project revision.
 #[test]
 fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
     let mut harness = harness();
@@ -283,9 +327,9 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
     harness.run();
     harness.event(egui::Event::Zoom(2.0));
     harness.run();
-    choose(&mut harness, "View", "Zoom to Fit");
+    click(&mut harness, "Fit schematic");
     assert_eq!(harness.state().session().revision(), 1);
-    choose(&mut harness, "Place", "Place Symbol…");
+    click(&mut harness, "Add symbol (A)");
     select_symbol(&mut harness, "Resistor");
     click_canvas(&mut harness);
     assert_eq!(harness.state().session().project().unwrap().symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
@@ -294,21 +338,22 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
 /// Place a resistor and LED through the canvas so their exact terminal positions are known.
 fn wiring_project(harness: &mut Harness<'_, PcbApp>) {
     new_project(harness, "wiring");
-    choose(harness, "Place", "Place Symbol…");
+    click(harness, "Add symbol (A)");
     select_symbol(harness, "Resistor");
     click_canvas(harness);
-    choose(harness, "Place", "Place Symbol…");
+    click(harness, "Add symbol (A)");
     select_symbol(harness, "LED");
     harness.get_by_label("Place LED · Esc to cancel");
     click_canvas_offset(harness, egui::vec2(203.2, 60.96));
     assert_eq!(harness.state().session().project().unwrap().symbols()[1].definition.id, "led");
 }
 
+/// Capture wiring produces a shared connection that the app bar can undo and redo.
 #[test]
 fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
     let mut harness = harness();
     wiring_project(&mut harness);
-    choose(&mut harness, "Place", "Wire");
+    click(&mut harness, "Draw wire (W)");
     click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
     harness.get_by_label("Wire · Click the destination pin");
     assert_eq!(harness.state().session().revision(), 3);
@@ -325,9 +370,9 @@ fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
         }])
     );
     assert_eq!(schematic["netlist"]["nets"].as_array().unwrap().len(), 1);
-    choose(&mut harness, "Edit", "Undo");
+    click(&mut harness, "Undo");
     assert!(harness.state().session().project().unwrap().wires().is_empty());
-    choose(&mut harness, "Edit", "Redo");
+    click(&mut harness, "Redo");
     assert_eq!(&harness.state().session().inspect()["project"]["schematic"], schematic);
 }
 
@@ -437,11 +482,12 @@ fn the_wire_menu_cancel_button_and_escape_both_discard_the_preview() {
 }
 
 /// Drag a wired symbol, keeping the preview outside history and committing one move on release.
+/// A drag preserves the wire and can be reverted with one click on Undo.
 #[test]
 fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
     let mut harness = harness();
     wiring_project(&mut harness);
-    choose(&mut harness, "Place", "Wire");
+    click(&mut harness, "Draw wire (W)");
     click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
     click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
     let before = harness.state().session().snapshot().unwrap();
@@ -460,6 +506,6 @@ fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
     assert_eq!(moved.symbols()[0].position.y_nm, 4 * pcbcraft_engine::schematic::GRID_NM);
     assert!(before.same_connectivity(moved));
     assert_eq!(before.wires(), moved.wires());
-    choose(&mut harness, "Edit", "Undo");
+    click(&mut harness, "Undo");
     assert_eq!(harness.state().session().project().unwrap().symbols(), before.symbols());
 }

@@ -87,16 +87,9 @@ mod tests {
     use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR};
     use serde_json::json;
 
-    use crate::PcbApp;
+    use crate::{PcbApp, tests::click};
 
-    /// Open the real View menu. Choosing an item exercises the shared desktop and browser frame.
-    fn choose(harness: &mut Harness<'_, PcbApp>, menu: &str, item: &str) {
-        harness.get_by_label(menu).click();
-        harness.run();
-        harness.get_by_label(item).click();
-        harness.run();
-    }
-
+    /// The ribbon toggle leaves the project alone while app bar history updates the displayed nets.
     #[test]
     fn net_inspector_tracks_wiring_and_history_without_editing_the_project() {
         let mut app = PcbApp::default();
@@ -106,7 +99,7 @@ mod tests {
         }
         let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
         harness.run();
-        choose(&mut harness, "View", "Show Net Inspector");
+        click(&mut harness, "Toggle Net Inspector");
         harness.get_by_label("No connected nets");
         harness.get_by_label("R1.1, R1.2, R2.1, R2.2");
         assert_eq!(harness.state().session.revision(), 3);
@@ -124,13 +117,13 @@ mod tests {
         harness.get_by_label("R1.2, R2.1");
         harness.get_by_label("R1.1, R2.2");
 
-        choose(&mut harness, "Edit", "Undo");
+        click(&mut harness, "Undo");
         harness.get_by_label("No connected nets");
         harness.get_by_label("R1.1, R1.2, R2.1, R2.2");
-        choose(&mut harness, "Edit", "Redo");
+        click(&mut harness, "Redo");
         harness.get_by_label("R1.2, R2.1");
 
-        choose(&mut harness, "View", "Hide Net Inspector");
+        click(&mut harness, "Toggle Net Inspector");
         assert!(harness.query_by_label("R1.2, R2.1").is_none());
         assert_eq!(harness.state().session.revision(), 6);
     }

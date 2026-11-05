@@ -31,6 +31,8 @@ pub const SCHEMATIC_PIN_HIT_RADIUS: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
+    /// Background of the title bar that holds the brand and project actions.
+    pub app_bar: Color32,
     pub panel: Color32,
     pub panel_header: Color32,
     pub border: Color32,
@@ -66,8 +68,10 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// The light palette and shared spacing for the workspace and its chrome.
     pub const fn light() -> Self {
         Self {
+            app_bar: Color32::from_rgb(236, 238, 242),
             panel: Color32::from_rgb(250, 251, 252),
             panel_header: Color32::from_rgb(236, 238, 242),
             border: Color32::from_rgb(208, 212, 220),
@@ -103,8 +107,10 @@ impl Tokens {
         }
     }
 
+    /// The dark palette using the same layout metrics as the light theme.
     pub const fn dark() -> Self {
         let mut t = Self::light();
+        t.app_bar = Color32::from_rgb(33, 36, 42);
         t.panel = Color32::from_rgb(39, 43, 52);
         t.panel_header = Color32::from_rgb(47, 52, 62);
         t.border = Color32::from_rgb(63, 69, 82);
