@@ -182,7 +182,9 @@ impl PreferencesWindow {
         ];
         #[cfg(not(target_arch = "wasm32"))]
         pages.push(Page { icon: MenuIcon::Assistant, label: "AI", draw: ai_page });
-        let footer = Footer { apply_enabled: *preferences != self.kept, defaults_enabled: matches!(self.state.page, APPEARANCE | NAVIGATION) };
+        // Search results span pages, so there is no single page whose defaults to restore.
+        let defaults_enabled = matches!(self.state.page, APPEARANCE | NAVIGATION) && !settings::searching(&self.state.query);
+        let footer = Footer { apply_enabled: *preferences != self.kept, defaults_enabled };
         let mut data = PageData {
             preferences,
             shortcuts,

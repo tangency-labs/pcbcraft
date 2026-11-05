@@ -213,8 +213,9 @@ fn keyboard(ui: &mut Ui, state: &mut WindowState, field: &Response) -> Option<Hi
     })
 }
 
-/// Whether the text is long enough to search with: one letter would match nearly everything.
-fn searching(query: &str) -> bool {
+/// Whether `query` is long enough to search with: one letter would match nearly everything.
+/// While it is, the window shows results from every page instead of the selected one.
+pub fn searching(query: &str) -> bool {
     query.trim().chars().count() >= 2
 }
 

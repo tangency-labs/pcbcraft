@@ -455,6 +455,7 @@ fn preferences_search_filters_rows_across_pages() {
         harness.run();
     };
     search(&mut harness, "zoom");
+    assert!(harness.get_by_label("Restore page defaults").accesskit_node().is_disabled(), "results span pages");
     harness.get_by_label("Zoom speed");
     harness.get_by_label("Zoom direction");
     assert!(harness.query_by_label("Theme").is_none());
