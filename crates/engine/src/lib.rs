@@ -4,9 +4,12 @@
 //! The menus and the MCP server both call [`Session::execute`] with an id from [`catalog`]; neither
 //! changes the project any other way. This crate knows nothing about windows or transports.
 //!
-//! The project holds only a name so far. The board and schematic model belongs here, as more
-//! commands; the file format is still being discussed (see `VISION.md`), so nothing saves yet.
+//! The schematic supports in-memory resistor placement. The file format is still being discussed
+//! (see `VISION.md`).
 
+pub mod schematic;
+
+use schematic::{MAX_CENTER_NM, MAX_SYMBOLS, Point, ResistorPlacement};
 use serde_json::{Map, Value, json};
 
 /// Undo steps kept. The oldest is dropped past this.
@@ -14,11 +17,40 @@ const MAX_HISTORY: usize = 1000;
 /// Longest project name, in characters.
 const MAX_NAME: usize = 200;
 
-/// A parameter of a command. All are strings for now.
+#[derive(Clone, Copy, Debug)]
+enum ParamKind {
+    Name,
+    Coordinate,
+    Revision,
+}
+
+impl ParamKind {
+    fn schema(self) -> Value {
+        match self {
+            Self::Name => json!({"type": "string"}),
+            Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
+            Self::Revision => json!({"type": "integer", "minimum": 0}),
+        }
+    }
+
+    fn validate(self, value: &Value) -> Result<(), &'static str> {
+        match self {
+            Self::Name if value.is_string() => Ok(()),
+            Self::Coordinate if value.as_i64().is_some_and(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&n)) => Ok(()),
+            Self::Revision if value.as_u64().is_some() => Ok(()),
+            Self::Name => Err("must be a string"),
+            Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
+            Self::Revision => Err("must be a nonnegative integer revision"),
+        }
+    }
+}
+
+/// A parameter of a command.
 #[derive(Clone, Copy, Debug)]
 pub struct Param {
     pub name: &'static str,
     pub summary: &'static str,
+    kind: ParamKind,
 }
 
 /// A command as people and agents see it.
@@ -34,8 +66,15 @@ pub struct Command {
 
 impl Command {
     pub fn to_json(&self) -> Value {
-        let params: Map<String, Value> =
-            self.params.iter().map(|p| (p.name.to_owned(), json!({"type": "string", "description": p.summary}))).collect();
+        let params: Map<String, Value> = self
+            .params
+            .iter()
+            .map(|p| {
+                let mut schema = p.kind.schema();
+                schema["description"] = json!(p.summary);
+                (p.name.to_owned(), schema)
+            })
+            .collect();
         let required: Vec<&str> = self.params.iter().map(|p| p.name).collect();
         json!({
             "id": self.id,
@@ -46,11 +85,22 @@ impl Command {
     }
 }
 
-const NAME: Param = Param { name: "name", summary: "The project's name" };
+const NAME: Param = Param { name: "name", summary: "The project's name", kind: ParamKind::Name };
+pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
 
 const CATALOG: &[Command] = &[
     Command { id: "project.new", title: "New Project", summary: "Start a new empty project, replacing the open one. Undoable.", params: &[NAME] },
     Command { id: "project.rename", title: "Rename Project", summary: "Change the open project's name.", params: &[NAME] },
+    Command {
+        id: PLACE_RESISTOR,
+        title: "Place Resistor",
+        summary: "Place a 1k resistor on the open schematic. Undoable.",
+        params: &[
+            Param { name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate },
+            Param { name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate },
+            Param { name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision },
+        ],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -88,6 +138,13 @@ impl std::error::Error for CommandError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
     pub name: String,
+    resistors: Vec<ResistorPlacement>,
+}
+
+impl Project {
+    pub fn resistors(&self) -> &[ResistorPlacement] {
+        &self.resistors
+    }
 }
 
 /// The open project and its history. There is one per window or per MCP server.
@@ -113,7 +170,7 @@ impl Session {
     pub fn available(&self, id: &str) -> bool {
         match id {
             "project.new" => true,
-            "project.rename" => self.project.is_some(),
+            "project.rename" | PLACE_RESISTOR => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -123,7 +180,10 @@ impl Session {
     /// The whole state as JSON: what agents read, and what tests compare.
     pub fn inspect(&self) -> Value {
         json!({
-            "project": self.project.as_ref().map(|p| json!({"name": p.name})),
+            "project": self.project.as_ref().map(|p| json!({
+                "name": p.name,
+                "schematic": {"symbols": p.resistors.iter().map(ResistorPlacement::inspect).collect::<Vec<_>>()},
+            })),
             "revision": self.revision,
             "can_undo": !self.undo.is_empty(),
             "can_redo": !self.redo.is_empty(),
@@ -136,26 +196,49 @@ impl Session {
         check_params(command, params)?;
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
-                "project.rename" => "no project is open".to_owned(),
+                "project.rename" | PLACE_RESISTOR => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
             }));
         }
         match id {
-            "project.new" => self.change(Project { name: name_param(params)? }),
+            "project.new" => self.change(Project { name: name_param(params)?, resistors: Vec::new() }),
             "project.rename" => {
                 let name = name_param(params)?;
-                if self.project.as_ref().is_some_and(|p| p.name == name) {
-                    return Ok(self.inspect());
+                let mut project = self.project.clone().expect("project availability was checked");
+                if project.name != name {
+                    project.name = name;
+                    self.change(project);
                 }
-                self.change(Project { name });
             }
+            PLACE_RESISTOR => self.place_resistor(params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),
         }
         Ok(self.inspect())
+    }
+
+    fn place_resistor(&mut self, params: &Value) -> Result<(), CommandError> {
+        if params["expected_revision"].as_u64() != Some(self.revision) {
+            return Err(CommandError::Unavailable(format!("project changed, inspect the current revision ({}) and retry", self.revision)));
+        }
+        let project = self.project.as_ref().expect("project availability was checked");
+        if project.resistors.len() >= MAX_SYMBOLS {
+            return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
+        }
+        let mut project = project.clone();
+        project.resistors.push(ResistorPlacement {
+            ordinal: self.revision + 1,
+            reference_number: project.resistors.len() + 1,
+            position: Point {
+                x_nm: params["x_nm"].as_i64().expect("coordinate was validated"),
+                y_nm: params["y_nm"].as_i64().expect("coordinate was validated"),
+            },
+        });
+        self.change(project);
+        Ok(())
     }
 
     fn change(&mut self, project: Project) {
@@ -176,7 +259,7 @@ impl Session {
     }
 }
 
-/// Params must be an object (or nothing) holding exactly the command's params, each a string.
+/// Params must be an object (or nothing) holding exactly the command's params.
 fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
     let empty = Map::new();
     let given = match params {
@@ -188,11 +271,8 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
         return Err(CommandError::InvalidParams(format!("`{}` has no parameter `{extra}`", command.id)));
     }
     for param in command.params {
-        match given.get(param.name) {
-            Some(Value::String(_)) => {}
-            Some(_) => return Err(CommandError::InvalidParams(format!("`{}` must be a string", param.name))),
-            None => return Err(CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name))),
-        }
+        let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
+        param.kind.validate(value).map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
     }
     Ok(())
 }
@@ -269,6 +349,53 @@ mod tests {
         s.execute("project.new", &json!({"name": "a"})).unwrap();
         s.execute("project.rename", &json!({"name": " a "})).unwrap();
         assert_eq!(s.revision(), 1);
+    }
+
+    #[test]
+    fn placing_a_resistor_preserves_position_and_identity_through_history() {
+        let mut s = Session::default();
+        s.execute("project.new", &json!({"name": "blinky"})).unwrap();
+        let place = |revision| json!({"x_nm": 500, "y_nm": -200, "expected_revision": revision});
+        let state = s.execute(PLACE_RESISTOR, &place(1)).unwrap();
+        let symbol = &state["project"]["schematic"]["symbols"][0];
+        assert_ne!(symbol["id"], symbol["component_id"]);
+        assert_eq!(symbol["reference"], "R1");
+        assert_eq!(symbol["pins"][0], json!({"number": "1", "x_nm": 500 - schematic::PIN_OFFSET_NM, "y_nm": -200}));
+        s.execute("project.rename", &json!({"name": "renamed"})).unwrap();
+        assert_eq!(&s.inspect()["project"]["schematic"]["symbols"][0], symbol);
+        s.execute("edit.undo", &Value::Null).unwrap();
+        s.execute("edit.undo", &Value::Null).unwrap();
+        assert!(s.project().unwrap().resistors().is_empty());
+        s.execute("edit.redo", &Value::Null).unwrap();
+        assert_eq!(&s.inspect()["project"]["schematic"]["symbols"][0], symbol);
+        s.execute("edit.undo", &Value::Null).unwrap();
+        let state = s.execute(PLACE_RESISTOR, &place(s.revision())).unwrap();
+        assert_ne!(state["project"]["schematic"]["symbols"][0]["id"], symbol["id"]);
+        assert!(!s.available("edit.redo"));
+    }
+
+    #[test]
+    fn invalid_placement_leaves_the_project_and_history_unchanged() {
+        let mut s = Session::default();
+        assert!(!s.available(PLACE_RESISTOR));
+        let valid = json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1});
+        assert!(s.execute(PLACE_RESISTOR, &valid).is_err());
+        s.execute("project.new", &json!({"name": "blinky"})).unwrap();
+        let before = s.inspect();
+        for params in [
+            json!({"x_nm": 0, "y_nm": 0}),
+            json!({"x_nm": "0", "y_nm": 0, "expected_revision": 1}),
+            json!({"x_nm": 0.25, "y_nm": 0, "expected_revision": 1}),
+            json!({"x_nm": MAX_CENTER_NM + 1, "y_nm": 0, "expected_revision": 1}),
+            json!({"x_nm": 0, "y_nm": -MAX_CENTER_NM - 1, "expected_revision": 1}),
+            json!({"x_nm": 0, "y_nm": 0, "expected_revision": 0}),
+            json!({"x_nm": 0, "y_nm": 0, "expected_revision": -1}),
+            json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1, "extra": "pin"}),
+        ] {
+            assert!(s.execute(PLACE_RESISTOR, &params).is_err(), "{params}");
+            assert_eq!(s.inspect(), before);
+        }
+        s.execute(PLACE_RESISTOR, &valid).unwrap();
     }
 
     #[test]

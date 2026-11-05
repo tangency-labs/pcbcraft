@@ -16,6 +16,14 @@ PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhe
 | `apps/pcbcraft-web/` | `apps/solidcraft-web/` | Kept the Trunk setup, page layout and web runner start. Dropped offline use, installing, files and URL launch options. |
 | `.github/workflows/`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | same paths | Cut down to what PCBCraft needs. `deny.toml` adds the license allow list. |
 
+## Adapted from PCBcraft Next
+
+PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apache-2.0. This is the independent prototype.
+
+| PCBCraft file | PCBcraft Next source | What changed |
+|---|---|---|
+| `crates/engine/src/schematic.rs`, `crates/engine/src/lib.rs` | `src/document.rs`, `src/definitions.rs`, `src/session.rs` | Adapted nanometer coordinates, distinct component and symbol identities, and the procedural resistor definition to the existing session and command history. |
+
 ## Bundled fonts
 
 | File | Source | License |

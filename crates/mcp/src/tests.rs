@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use pcbcraft_engine::Session;
+use pcbcraft_engine::{PLACE_RESISTOR, Session};
 use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
@@ -45,6 +45,7 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
     let steps = [
         ("project.new", json!({"name": "blinky"})),
         ("project.rename", json!({"name": "blinky v2"})),
+        (PLACE_RESISTOR, json!({"x_nm": 1270000, "y_nm": 0, "expected_revision": 2})),
         ("edit.undo", json!({})),
         ("edit.redo", json!({})),
     ];
@@ -55,6 +56,16 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
         assert_eq!(body(&result), session.execute(command, &params).unwrap());
     }
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), session.inspect());
+}
+
+#[test]
+fn the_placement_command_exposes_integer_coordinates_to_mcp() {
+    let result = call(&mut server(), "describe_command", json!({"command": PLACE_RESISTOR}));
+    let schema = &body(&result)["params"];
+    assert_eq!(schema["properties"]["x_nm"]["type"], "integer");
+    assert_eq!(schema["properties"]["y_nm"]["type"], "integer");
+    assert_eq!(schema["properties"]["expected_revision"]["minimum"], 0);
+    assert_eq!(schema["required"], json!(["x_nm", "y_nm", "expected_revision"]));
 }
 
 #[test]
