@@ -18,4 +18,5 @@ The project is MIT OR Apache-2.0, so code can move freely between the Craft apps
 - No file surgery: agents never hand-edit project files to get things done.
 - Same controls as KiCad. New ideas go on top of that base, not in place of it. Don't copy KiCad's icons or artwork.
 - Project files stay friendly to Git: a save with no changes gives zero diff, and moving one part changes only that part's lines.
-- Keep the app's chrome easy to move onto the shared Craft UI crate.
+- Keep the app's chrome easy to move onto the shared Craft UI crate: colours, sizes, menus and dialogs come from `crates/chrome`, not from styling in the app.
+- Copying from SolidCraft and the other MIT/Apache Craft apps is fine and encouraged. Record it in `ATTRIBUTION.md`.
