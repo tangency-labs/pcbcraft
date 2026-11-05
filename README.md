@@ -15,8 +15,9 @@ Search finds any setting; changes show at once, and **Cancel** puts them back. T
 open with its history while Home is shown. See [VISION.md](VISION.md) for the
 project's direction.
 
-Choose **Capture → Symbol** or press **A** to pick a resistor, LED, capacitor or
-two-pin connector. Click to
+Choose **Capture → Symbol** or press **A** to pick a resistor, LED, capacitor,
+two-pin connector, or a module: controller, 4-wire fan connector, regulator or
+analog temperature sensor. Click to
 place it on the schematic grid or press **Esc** to cancel. Choose **Capture → Wire**
 or press **W**, then click two terminal markers to connect them. Press **Esc** or
 right-click and choose **Cancel** to discard an in-progress wire.

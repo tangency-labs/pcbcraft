@@ -733,6 +733,32 @@ fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
 }
 
 /// Open the context menu during an active wire draft with a real secondary click.
+/// The Wire tool reaches module pins by their drawn positions, so a controller's PWM pin
+/// connects to the fan connector's PWM pin through the shared command.
+#[test]
+fn the_wire_tool_connects_module_pins() {
+    let mut harness = harness();
+    new_project(&mut harness, "fan");
+    let grid = pcbcraft_engine::schematic::GRID_NM;
+    for (definition, x_nm) in [("controller-module", 0), ("fan-connector", 40 * grid)] {
+        let revision = harness.state().session().revision();
+        harness
+            .state_mut()
+            .session
+            .apply(PLACE_SYMBOL, &json!({"definition": definition, "x_nm": x_nm, "y_nm": 0, "expected_revision": revision}))
+            .unwrap();
+    }
+    harness.run();
+    let step = pcbcraft_chrome::theme::SCHEMATIC_GRID_SPACING;
+    click(&mut harness, "Draw wire (W)");
+    // Controller pin 5 (PWM) sits at (20, 4) grid steps; fan connector pin 4 (PWM) at (28, 6).
+    click_canvas_offset(&mut harness, egui::vec2(20.0, 4.0) * step);
+    click_canvas_offset(&mut harness, egui::vec2(28.0, 6.0) * step);
+    let wires = harness.state().session().inspect()["project"]["schematic"]["wires"].clone();
+    assert_eq!(wires[0]["from"], json!({"symbol": "symbol-2", "terminal": "5"}));
+    assert_eq!(wires[0]["to"], json!({"symbol": "symbol-3", "terminal": "4"}));
+}
+
 fn open_wire_context(harness: &mut Harness<'_, PcbApp>) {
     let point = canvas_center(harness) + egui::vec2(80.0, 26.0);
     harness.hover_at(point);

@@ -75,8 +75,7 @@ impl Footprint {
 
     /// Map a physical pad back to the source terminal. Pin and pad numbering may differ.
     fn terminal(&self, pad: u8) -> Option<Terminal> {
-        let pin = if pad == self.pin_1_pad { "1" } else { "2" };
-        Terminal::from_number(self.symbol, pin)
+        Some(Terminal::two_pin(self.symbol, pad != self.pin_1_pad))
     }
 
     /// Locate the pad on the pinned two-pad definition's 2.54 mm pitch.

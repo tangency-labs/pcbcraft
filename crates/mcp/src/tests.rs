@@ -77,7 +77,7 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
                 schema["properties"]["definition"],
                 json!({
                     "type": "string",
-                    "enum": ["resistor", "led", "capacitor", "connector"],
+                    "enum": ["resistor", "led", "capacitor", "connector", "controller-module", "fan-connector", "regulator-module", "temperature-sensor"],
                     "description": "ID of the built-in symbol definition",
                 })
             );

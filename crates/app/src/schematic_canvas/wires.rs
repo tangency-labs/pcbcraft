@@ -2,7 +2,7 @@ use egui::{Color32, Painter, PointerButton, Pos2, Rect, Response, Shape, Stroke,
 use pcbcraft_chrome::{Tokens, theme};
 use pcbcraft_engine::{
     Project,
-    schematic::{Point, SymbolPlacement, Terminal, pin_positions},
+    schematic::{Point, SymbolPlacement, Terminal},
 };
 
 use super::Camera;
@@ -10,10 +10,11 @@ use super::Camera;
 /// Paint wire endpoints at their current positions, including an in-progress symbol move.
 pub(super) fn paint(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, moved: Option<(SymbolPlacement, Point)>) {
     let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, Tokens::get().schematic_wire);
-    let preview = moved.map(|(symbol, point)| (symbol.terminals(), pin_positions(point)));
+    let preview = moved.map(|(symbol, point)| (symbol.terminals(), symbol.definition.pin_positions(point)));
     let position = |pin| {
         preview
-            .and_then(|(terminals, points)| terminals.iter().position(|&terminal| terminal == pin).map(|index| points[index]))
+            .as_ref()
+            .and_then(|(terminals, points)| terminals.iter().position(|&terminal| terminal == pin).and_then(|index| points.get(index).copied()))
             .or_else(|| project.terminal_position(pin))
     };
     for wire in project.wires() {
@@ -57,7 +58,7 @@ pub(super) fn preview(
     let pins = project
         .symbols()
         .iter()
-        .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins().map(|pin| camera.screen(pin, rect))))
+        .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins().into_iter().map(|pin| camera.screen(pin, rect))))
         .filter(|(_, pos)| rect.contains(*pos));
     let target = pointer.and_then(|at| nearest_pin(at, pins.clone()));
     if let Some(from) = start.and_then(|pin| project.terminal_position(pin))

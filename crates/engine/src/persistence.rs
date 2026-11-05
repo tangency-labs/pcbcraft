@@ -290,7 +290,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         symbols
             .binary_search_by_key(&endpoint.symbol, |symbol| symbol.ordinal)
             .ok()
-            .and_then(|_| Terminal::from_number(endpoint.symbol, &endpoint.pin))
+            .and_then(|index| Terminal::from_number(endpoint.symbol, symbols[index].definition, &endpoint.pin))
             .ok_or_else(|| format!("wire points to missing pin {} on symbol {}", endpoint.pin, endpoint.symbol))
     };
 
@@ -315,8 +315,12 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         board.footprints.sort_unstable_by_key(|footprint| footprint.id);
         for footprint in board.footprints {
             validate_id(&mut ids, footprint.id)?;
-            if symbols.binary_search_by_key(&footprint.symbol, |symbol| symbol.ordinal).is_err() {
+            let Ok(index) = symbols.binary_search_by_key(&footprint.symbol, |symbol| symbol.ordinal) else {
                 return Err("footprint points to a missing component".to_owned());
+            };
+            if !symbols[index].definition.fits_two_pad_footprint() {
+                let symbol = &symbols[index];
+                return Err(format!("the two-pad footprint can't link to {}, which has {} pins", symbol.reference(), symbol.definition.pins.len()));
             }
             layout.append(footprint).map_err(str::to_owned)?;
         }
@@ -381,7 +385,7 @@ mod tests {
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "All parts"})).unwrap();
         for (index, definition) in crate::schematic::BUILTIN_SYMBOLS.iter().enumerate() {
-            let x_nm = index as i64 * 25_400_000;
+            let x_nm = index as i64 * 63_500_000;
             session
                 .apply(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
                 .unwrap();
@@ -391,13 +395,74 @@ mod tests {
             symbols.as_array().unwrap().iter().map(|symbol| (symbol["kind"].clone(), symbol["reference"].clone(), symbol["value"].clone())).collect();
         assert_eq!(
             summary,
-            [("resistor", "R1", "1k"), ("led", "D1", "LED"), ("capacitor", "C1", "100nF"), ("connector", "J1", "Input")]
-                .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
+            [
+                ("resistor", "R1", "1k"),
+                ("led", "D1", "LED"),
+                ("capacitor", "C1", "100nF"),
+                ("connector", "J1", "Input"),
+                ("controller-module", "U1", "Fan controller"),
+                ("fan-connector", "J2", "12 V PWM fan"),
+                ("regulator-module", "U2", "12 V to 3.3 V"),
+                ("temperature-sensor", "U3", "Analog temperature"),
+            ]
+            .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
         );
         let loaded = decode(&encode(session.snapshot().unwrap()).unwrap()).unwrap();
         let mut reopened = Session::default();
         reopened.open_snapshot(loaded);
         assert_eq!(reopened.inspect()["project"]["schematic"]["symbols"], symbols);
+    }
+
+    /// Module pins wire by number like two-pin parts, carry their names in inspection, survive a
+    /// save, and refuse a pin the definition doesn't have. The two-pad footprint refuses modules.
+    #[test]
+    fn module_pins_wire_by_number_and_refuse_missing_pins() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name": "Fan"})).unwrap();
+        for (definition, x_nm) in [("controller-module", 0), ("fan-connector", 76_200_000)] {
+            session
+                .apply(PLACE_SYMBOL, &json!({"definition": definition, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
+                .unwrap();
+        }
+        let wire = |session: &mut Session, from: &str, to: &str| {
+            session.apply(
+                CONNECT_PINS,
+                &json!({
+                    "from": {"symbol": "symbol-2", "terminal": from},
+                    "to": {"symbol": "symbol-3", "terminal": to},
+                    "expected_revision": session.revision()
+                }),
+            )
+        };
+        wire(&mut session, "5", "4").unwrap();
+        assert!(wire(&mut session, "1", "8").is_err(), "the fan connector has no pin 8");
+        assert!(wire(&mut session, "9", "1").is_err(), "no built-in part has a pin 9");
+        let state = session.inspect();
+        let controller = &state["project"]["schematic"]["symbols"][0];
+        assert_eq!(controller["pins"].as_array().unwrap().len(), 8);
+        assert_eq!(
+            controller["pins"][4],
+            json!({"number": "5", "name": "PWM", "x_nm": 20 * crate::schematic::GRID_NM, "y_nm": 4 * crate::schematic::GRID_NM})
+        );
+        let net = &state["project"]["schematic"]["netlist"]["nets"][0]["terminals"];
+        assert_eq!(net, &json!([{"symbol": "symbol-2", "terminal": "5"}, {"symbol": "symbol-3", "terminal": "4"}]));
+
+        let bytes = encode(session.snapshot().unwrap()).unwrap();
+        let mut reopened = Session::default();
+        reopened.open_snapshot(decode(&bytes).unwrap());
+        assert_eq!(reopened.inspect()["project"], state["project"]);
+
+        let footprint = json!({
+            "symbol": "symbol-2", "definition": "generic-through-hole-2",
+            "pin_1_pad": 1, "x_nm": 0, "y_nm": 0, "expected_revision": session.revision(),
+        });
+        assert!(session.apply(crate::PLACE_FOOTPRINT, &footprint).is_err());
+        let mut forged: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        forged["board"] = json!({"footprints": [{
+            "id": 9, "symbol": 2, "definition": "generic-through-hole-2", "definition_revision": 1, "pin_1_pad": 1, "x_nm": 0, "y_nm": 0
+        }]});
+        let error = decode(&serde_json::to_vec(&forged).unwrap()).unwrap_err();
+        assert!(error.contains("two-pad footprint"), "{error}");
     }
 
     /// Reopen retains IDs and wiring. Moving a symbol edits exactly one record and shares connectivity.

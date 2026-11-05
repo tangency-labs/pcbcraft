@@ -5,7 +5,7 @@ use pcbcraft_engine::{
     schematic::{GRID_NM, MAX_CENTER_NM, PIN_OFFSET_NM, Point},
 };
 
-use super::top_extent;
+use super::grid_bounds;
 use crate::preferences::{Navigation, ScrollAction, ZoomAround};
 
 const MIN_ZOOM: f32 = 0.005;
@@ -92,9 +92,12 @@ impl Camera {
         *self = Self::default();
         let mut bounds = Rect::NOTHING;
         for symbol in project.symbols() {
-            let [left, right] = symbol.pins().map(|pin| self.screen(pin, rect) - rect.center());
-            let top = left.y + top_extent(symbol.definition.kind) * self.grid_step();
-            let symbol_bounds = Rect::from_min_max(pos2(left.x, top), pos2(right.x, right.y)).expand(theme::SCHEMATIC_FIT_MARGIN);
+            let center = self.screen(symbol.position, rect) - rect.center();
+            let extent = grid_bounds(symbol.definition);
+            let step = self.grid_step();
+            let symbol_bounds = Rect::from_min_max(pos2(extent.min.x * step, extent.min.y * step), pos2(extent.max.x * step, extent.max.y * step))
+                .translate(center)
+                .expand(theme::SCHEMATIC_FIT_MARGIN);
             bounds = bounds.union(symbol_bounds);
         }
         if bounds.is_finite() {

@@ -259,7 +259,8 @@ impl Project {
 
     /// Resolve the current coordinates of a terminal in this snapshot.
     pub fn terminal_position(&self, terminal: Terminal) -> Option<Point> {
-        Some(self.terminal_symbol(terminal)?.pins()[terminal.pin_index()])
+        let symbol = self.terminal_symbol(terminal)?;
+        symbol.pins().get(symbol.definition.pin_index(terminal.number())?).copied()
     }
 
     /// Return the cached connected groups for this topology. Geometry-only edits share this cache.
@@ -492,11 +493,19 @@ impl Session {
     fn place_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        let symbol = params["symbol"]
+        let (symbol, index) = params["symbol"]
             .as_str()
             .and_then(schematic::parse_symbol_id)
-            .filter(|&id| project.symbol_index(id).is_some())
+            .and_then(|id| project.symbol_index(id).map(|index| (id, index)))
             .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
+        let definition = project.symbols[index].definition;
+        if !definition.fits_two_pad_footprint() {
+            return Err(CommandError::InvalidParams(format!(
+                "the two-pad footprint can't map {}, which has {} pins",
+                definition.name,
+                definition.pins.len()
+            )));
+        }
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let mut project = project.clone();
         let pin_1_pad = params["pin_1_pad"].as_u64().unwrap_or_default() as u8;

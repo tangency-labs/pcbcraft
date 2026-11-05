@@ -8,7 +8,7 @@ use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense,
 use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
 use pcbcraft_engine::{
     Project,
-    schematic::{MAX_CENTER_NM, Point, SymbolDefinition, SymbolKind, SymbolPlacement, Terminal, pin_positions},
+    schematic::{MAX_CENTER_NM, Point, SymbolDefinition, SymbolKind, SymbolPlacement, Terminal},
 };
 
 /// The active canvas interaction, bound to the revision at which it began.
@@ -82,12 +82,12 @@ pub(crate) fn show(
     wires::paint(&painter, rect, project, camera, moved);
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
-        let position = moved.filter(|(moving, _)| moving.terminals() == symbol.terminals()).map_or(symbol.position, |(_, point)| point);
+        let position = moved.filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| point);
         let center = screen(position);
         if visible.contains(center) {
             let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| symbol.reference());
             let label = reference.as_deref().map(|reference| (reference, symbol.value()));
-            paint_symbol(&painter, symbol.definition.kind, center, pin_positions(position).map(screen), tokens.text, label);
+            paint_symbol(&painter, symbol.definition, center, grid_step, tokens.text, label);
         }
     }
 
@@ -125,7 +125,7 @@ pub(crate) fn show(
         return None;
     }
     match tool? {
-        Tool::PlaceSymbol { definition, .. } => placement_preview(&painter, rect, response, camera, tokens, definition.kind).map(Click::Place),
+        Tool::PlaceSymbol { definition, .. } => placement_preview(&painter, rect, response, camera, tokens, definition).map(Click::Place),
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start).map(Click::Pin),
         Tool::Move { .. } => None,
     }
@@ -133,13 +133,12 @@ pub(crate) fn show(
 
 /// Pick the nearest symbol body under the original press and preserve the grab offset.
 fn grab_symbol(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Click> {
-    let size = vec2(5.0, 4.0) * camera.grid_step();
     let (symbol, center) = project
         .symbols()
         .iter()
         .rev()
         .map(|symbol| (symbol, camera.screen(symbol.position, rect)))
-        .filter(|(_, center)| Rect::from_center_size(*center, size).contains(pointer))
+        .filter(|(symbol, center)| Rect::from_center_size(*center, body_size(symbol.definition) * camera.grid_step()).contains(pointer))
         .min_by(|(_, a), (_, b)| a.distance_sq(pointer).total_cmp(&b.distance_sq(pointer)))?;
     Some(Click::Grab(*symbol, center - pointer))
 }
@@ -150,14 +149,21 @@ fn valid_position(point: Point) -> bool {
 }
 
 /// Draw the pending symbol on its snapped model point until the user commits or cancels.
-fn placement_preview(painter: &Painter, rect: Rect, response: Response, camera: &Camera, tokens: Tokens, kind: SymbolKind) -> Option<Point> {
+fn placement_preview(
+    painter: &Painter,
+    rect: Rect,
+    response: Response,
+    camera: &Camera,
+    tokens: Tokens,
+    definition: &SymbolDefinition,
+) -> Option<Point> {
     let screen = |point| camera.screen(point, rect);
     let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos())?;
     let point = camera.snap(pointer, rect);
     if !valid_position(point) {
         return None;
     }
-    paint_symbol(painter, kind, screen(point), pin_positions(point).map(screen), tokens.accent, None);
+    paint_symbol(painter, definition, screen(point), camera.grid_step(), tokens.accent, None);
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
 }
 
@@ -182,22 +188,72 @@ const LED_ARROW_TIP_Y: f32 = -3.1;
 /// Half the height of the capacitor plates and the connector body, in grid steps.
 const BODY_HALF_HEIGHT: f32 = 1.77;
 
-/// How far above the pin line a symbol's drawing reaches, in grid steps (negative is up).
-/// Fit uses it so the tallest part of each symbol stays in view.
-pub(super) fn top_extent(kind: SymbolKind) -> f32 {
-    match kind {
-        SymbolKind::Resistor => 0.0,
-        SymbolKind::Led => LED_ARROW_TIP_Y,
-        SymbolKind::Capacitor | SymbolKind::Connector => -BODY_HALF_HEIGHT,
+/// The area a symbol's drawing covers around its center, in grid steps: its pins and body,
+/// including the LED's arrows. Fit uses it so every part of each symbol stays in view.
+pub(super) fn grid_bounds(definition: &SymbolDefinition) -> Rect {
+    let body = match definition.kind {
+        SymbolKind::Resistor => Rect::from_min_max(pos2(-5.0, 0.0), pos2(5.0, 0.0)),
+        SymbolKind::Led => Rect::from_min_max(pos2(-5.0, LED_ARROW_TIP_Y), pos2(5.0, 0.0)),
+        SymbolKind::Capacitor | SymbolKind::Connector => Rect::from_min_max(pos2(-5.0, -BODY_HALF_HEIGHT), pos2(5.0, 0.0)),
+        SymbolKind::Module { half_width, half_height } => Rect::from_center_size(Pos2::ZERO, vec2(half_width as f32, half_height as f32) * 2.0),
+    };
+    definition.pins.iter().fold(body, |bounds, pin| bounds.union(Rect::from_pos(pos2(pin.x as f32, pin.y as f32))))
+}
+
+/// The grabbable body of a symbol in grid steps: the module rectangle, or the area around a
+/// two-pin part's drawing.
+fn body_size(definition: &SymbolDefinition) -> Vec2 {
+    match definition.kind {
+        SymbolKind::Module { half_width, half_height } => vec2(half_width as f32, half_height as f32) * 2.0,
+        _ => vec2(5.0, 4.0),
     }
 }
 
-/// Draw the symbol between its engine pin positions. At overview zoom use a simpler outline.
-fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]: [Pos2; 2], color: egui::Color32, label: Option<(&str, &str)>) {
+/// Draw a module: its body, a lead from each pin to the nearest body edge, the pin names just
+/// inside that edge once there is room to read them, and the reference above and value below.
+fn paint_module(
+    painter: &Painter,
+    definition: &SymbolDefinition,
+    xy: impl Fn((f32, f32)) -> Pos2,
+    step: f32,
+    (half_width, half_height): (f32, f32),
+    stroke: Stroke,
+    label: Option<(&str, &str)>,
+) {
+    let t = Tokens::get();
+    let body = Rect::from_min_max(xy((-half_width, -half_height)), xy((half_width, half_height)));
+    painter.rect_stroke(body, 0, stroke, egui::StrokeKind::Middle);
+    let names = step >= theme::SCHEMATIC_DETAIL_GRID_SPACING * 3.0;
+    let font = FontId::proportional((step * 1.3).clamp(t.font_small * 0.8, t.font_button));
+    for pin in definition.pins {
+        let (x, y) = (pin.x as f32, pin.y as f32);
+        let edge = half_width.copysign(x);
+        painter.line_segment([xy((x, y)), xy((edge, y))], stroke);
+        if names && let Some(name) = pin.name {
+            let align = if x < 0.0 { Align2::LEFT_CENTER } else { Align2::RIGHT_CENTER };
+            painter.text(xy((edge - 0.8_f32.copysign(x), y)), align, name, font.clone(), stroke.color);
+        }
+    }
+    if let Some((reference, value)) = label {
+        let font = FontId::proportional(t.font_button);
+        painter.text(body.center_top() - vec2(0.0, t.space_4), Align2::CENTER_BOTTOM, reference, font.clone(), stroke.color);
+        painter.text(body.center_bottom() + vec2(0.0, t.space_4), Align2::CENTER_TOP, value, font, stroke.color);
+    }
+}
+
+/// Draw the symbol around its center, with one grid step of `step` points. A module is a body
+/// with a lead to each pin; the two-pin parts span their pins at ±5 steps. At overview zoom use
+/// a simpler outline and leave out pin names.
+fn paint_symbol(painter: &Painter, definition: &SymbolDefinition, center: Pos2, step: f32, color: egui::Color32, label: Option<(&str, &str)>) {
     let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color);
-    let step = (right.x - left.x) / 10.0;
     let xy = |(x, y)| pos2(center.x + x * step, center.y + y * step);
     let line = |points: &[(f32, f32)]| painter.add(Shape::line(points.iter().copied().map(xy).collect(), stroke));
+    let kind = definition.kind;
+    if let SymbolKind::Module { half_width, half_height } = kind {
+        paint_module(painter, definition, xy, step, (half_width as f32, half_height as f32), stroke, label);
+        return;
+    }
+    let (left, right) = (xy((-5.0, 0.0)), xy((5.0, 0.0)));
     if step < theme::SCHEMATIC_DETAIL_GRID_SPACING {
         match kind {
             SymbolKind::Resistor => {
@@ -219,6 +275,7 @@ fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]
                 let h = BODY_HALF_HEIGHT;
                 line(&[(-2.46, -h), (2.46, -h), (2.46, h), (-2.46, h), (-2.46, -h)]);
             }
+            SymbolKind::Module { .. } => {}
         }
         return;
     }
@@ -257,6 +314,7 @@ fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]
             }
             (2.3, 2.3)
         }
+        SymbolKind::Module { .. } => return,
     };
     if let Some((reference, value)) = label {
         let t = Tokens::get();
