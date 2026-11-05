@@ -159,7 +159,8 @@ fn the_wiring_command_describes_exact_terminal_references() {
     let schema = &body(&result)["params"];
     assert_eq!(schema["properties"]["from"]["type"], "object");
     assert_eq!(schema["properties"]["from"]["required"], json!(["symbol", "terminal"]));
-    assert_eq!(schema["properties"]["to"]["properties"]["terminal"]["enum"], json!(["1", "2"]));
+    // Every pin number a built-in part uses, so a client can address a module's pin 8.
+    assert_eq!(schema["properties"]["to"]["properties"]["terminal"]["enum"], json!(["1", "2", "3", "4", "5", "6", "7", "8"]));
 }
 
 /// Bulk command callers may skip inspection and fetch the project separately.

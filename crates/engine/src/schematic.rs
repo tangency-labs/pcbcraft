@@ -169,6 +169,15 @@ pub(crate) fn builtin_symbol(id: &str) -> Option<&'static SymbolDefinition> {
     BUILTIN_SYMBOLS.iter().copied().find(|definition| definition.id == id)
 }
 
+/// Every pin number some built-in definition uses, once each, in numeric order. The terminal
+/// schema offers these; the command then checks the pin against the symbol's own definition.
+pub fn all_pin_numbers() -> Vec<&'static str> {
+    let mut numbers: Vec<_> = BUILTIN_SYMBOLS.iter().flat_map(|definition| definition.pins).map(|pin| pin.number).collect();
+    numbers.sort_unstable_by_key(|number| (number.len(), *number));
+    numbers.dedup();
+    numbers
+}
+
 /// The pin number as spelled by some built-in definition, so terminals can hold it for the
 /// program's lifetime. Whether a given symbol has that pin is checked against its definition.
 pub(crate) fn known_pin_number(number: &str) -> Option<&'static str> {

@@ -53,7 +53,7 @@ impl ParamKind {
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string", "pattern": "^symbol-[1-9][0-9]*$"},
-                    "terminal": {"type": "string", "enum": ["1", "2"]},
+                    "terminal": {"type": "string", "enum": schematic::all_pin_numbers()},
                 },
                 "required": ["symbol", "terminal"],
                 "additionalProperties": false,
@@ -79,7 +79,7 @@ impl ParamKind {
             Self::SymbolDefinition => Err("must identify a built-in symbol definition"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
-            Self::Terminal => Err("must identify a symbol and its terminal number (1 or 2)"),
+            Self::Terminal => Err("must identify a symbol and one of its pin numbers from project inspection"),
         }
     }
 }
