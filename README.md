@@ -2,7 +2,7 @@
 
 Electronics design that feels like the tools you already know, built so a person and an agent can work on the same board, at the same time, with the same commands.
 
-**Status: just started.** The window, menus, preferences, undo and an MCP server work, on the desktop and in the browser. The command set supports placing and inspecting resistors on an in-memory schematic. [VISION.md](VISION.md) says what it should be.
+**Status: just started.** The window, menus, preferences, undo and an MCP server work, on the desktop and in the browser. Create a project, then choose **Place → Place Resistor** or press **A**. The preview snaps to the schematic grid. Click to place it or press **Esc** to cancel. Placements are in memory for now. [VISION.md](VISION.md) says what it should be.
 
 ## Run it
 
