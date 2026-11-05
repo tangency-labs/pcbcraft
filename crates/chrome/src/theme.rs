@@ -14,6 +14,11 @@ thread_local! {
     static DARK: Cell<bool> = const { Cell::new(true) };
 }
 
+/// Default schematic zoom and drawing weights, in logical points.
+pub const SCHEMATIC_GRID_SPACING: f32 = 10.16;
+pub const SCHEMATIC_GRID_DOT_RADIUS: f32 = 0.75;
+pub const SCHEMATIC_SYMBOL_STROKE: f32 = 1.6;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
     pub panel: Color32,
@@ -28,6 +33,7 @@ pub struct Tokens {
     pub error: Color32,
     pub canvas: Color32,
     pub canvas_ink: Color32,
+    pub canvas_grid: Color32,
 
     pub space_2: f32,
     pub space_3: f32,
@@ -63,6 +69,7 @@ impl Tokens {
             error: Color32::from_rgb(190, 40, 40),
             canvas: Color32::from_rgb(240, 243, 247),
             canvas_ink: Color32::from_rgb(110, 116, 128),
+            canvas_grid: Color32::from_rgb(194, 201, 211),
 
             space_2: 2.0,
             space_3: 3.0,
@@ -98,6 +105,7 @@ impl Tokens {
         t.error = Color32::from_rgb(240, 110, 110);
         t.canvas = Color32::from_rgb(46, 52, 64);
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
+        t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t
     }
 

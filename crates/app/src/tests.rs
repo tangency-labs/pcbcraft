@@ -137,3 +137,56 @@ fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
     harness.run();
     assert!(harness.query_by_label("Close").is_none());
 }
+
+#[test]
+fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
+    let mut harness = harness();
+    new_project(&mut harness, "blinky");
+    choose(&mut harness, "Place", "Place Resistor");
+    assert!(harness.state().session().project().unwrap().resistors().is_empty());
+    harness.get_by_label("Place resistor · Esc to cancel");
+
+    // A click near the center snaps to the schematic origin.
+    click_canvas(&mut harness);
+    let mut session = Session::default();
+    session.execute("project.new", &json!({"name": "blinky"})).unwrap();
+    session.execute(PLACE_RESISTOR, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1})).unwrap();
+    assert_eq!(harness.state().session().inspect(), session.inspect());
+    click_canvas(&mut harness);
+    assert_eq!(harness.state().session().inspect(), session.inspect());
+    choose(&mut harness, "Edit", "Undo");
+    assert!(harness.state().session().project().unwrap().resistors().is_empty());
+    choose(&mut harness, "Edit", "Redo");
+    assert_eq!(harness.state().session().project().unwrap().resistors(), session.project().unwrap().resistors());
+}
+
+#[test]
+fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
+    let mut harness = harness();
+    new_project(&mut harness, "blinky");
+    harness.key_press(Key::A);
+    harness.run();
+    harness.get_by_label("Place resistor · Esc to cancel");
+    harness.key_press(Key::Escape);
+    harness.run();
+    click_canvas(&mut harness);
+    assert!(harness.state().session().project().unwrap().resistors().is_empty());
+
+    harness.key_press(Key::A);
+    harness.run();
+    choose(&mut harness, "File", "Rename Project…");
+    harness.get_by_label("Cancel").click();
+    harness.run();
+    click_canvas(&mut harness);
+    assert!(harness.state().session().project().unwrap().resistors().is_empty());
+}
+
+fn click_canvas(harness: &mut Harness<'_, PcbApp>) {
+    let point = egui::pos2(502.0, 354.0);
+    harness.hover_at(point);
+    harness.run();
+    harness.drag_at(point);
+    harness.run();
+    harness.drop_at(point);
+    harness.run();
+}
