@@ -161,3 +161,35 @@ fn the_wiring_command_describes_exact_terminal_references() {
     assert_eq!(schema["properties"]["from"]["required"], json!(["symbol", "terminal"]));
     assert_eq!(schema["properties"]["to"]["properties"]["terminal"]["enum"], json!(["1", "2"]));
 }
+
+/// Bulk command callers may skip inspection and fetch the project separately.
+#[test]
+fn execute_can_return_only_the_new_revision() {
+    let mut server = server();
+    let result = call(&mut server, "execute", json!({"command":"project.new", "params":{"name":"Lean"}, "inspect":false}));
+    assert_eq!(body(&result), json!({"revision":1}));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({})))["project"]["name"], "Lean");
+}
+
+/// Cross-probing follows the saved pin mapping in either direction.
+#[test]
+fn cross_probe_follows_the_explicit_pin_to_pad_mapping() {
+    let mut server = server();
+    for (command, params) in [
+        ("project.new", json!({"name":"Links"})),
+        (PLACE_SYMBOL, json!({"definition":"led", "x_nm":0, "y_nm":0, "expected_revision":1})),
+        (
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            json!({
+                "symbol":"symbol-2", "definition":"generic-through-hole-2", "pin_1_pad":2, "x_nm":0, "y_nm":0, "expected_revision":2,
+            }),
+        ),
+    ] {
+        let result = call(&mut server, "execute", json!({"command":command, "params":params, "inspect":false}));
+        assert_ne!(result["isError"], true);
+    }
+    let terminal = json!({"symbol":"symbol-2", "terminal":"1"});
+    let pad = json!({"footprint":"footprint-3", "pad":"2"});
+    assert_eq!(body(&call(&mut server, "cross_probe", json!({"terminal":terminal}))), json!({"pad":pad}));
+    assert_eq!(body(&call(&mut server, "cross_probe", json!({"pad":pad}))), json!({"terminal":terminal}));
+}

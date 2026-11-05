@@ -48,10 +48,18 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "execute",
             "Run a command",
-            "Run one command by id, the same one the app's menu runs. Answers the project's state.",
-            json!({"command": {"type": "string"}, "params": {"type": "object"}}),
+            "Run a shared command. Set inspect to false to return only its resulting revision.",
+            json!({"command": {"type": "string"}, "params": {"type": "object"}, "inspect": {"type": "boolean", "default": true}}),
             &["command"],
             Effect::Edits,
+        ),
+        tool(
+            "cross_probe",
+            "Find the linked schematic pin or board pad",
+            "Provide either terminal or pad using the address shown by inspect_project.",
+            json!({"terminal": {"type":"object"}, "pad": {"type":"object"}}),
+            &[],
+            Effect::ReadOnly,
         ),
         tool("inspect_project", "Inspect the project", "The open project and whether undo and redo can run.", json!({}), &[], Effect::ReadOnly),
     ]
@@ -68,6 +76,7 @@ pub(crate) fn check_arguments(name: &str, args: &Value) -> Result<(), String> {
         let fits = match kind {
             "string" => value.is_string(),
             "object" => value.is_object(),
+            "boolean" => value.is_boolean(),
             _ => false,
         };
         if !fits {
@@ -106,7 +115,8 @@ pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
             let id = args["command"].as_str().unwrap_or_default();
             command(id).map(|c| c.to_json()).ok_or_else(|| format!("unknown command `{id}`"))
         }
-        "execute" => backend.call("engine.execute", json!({"command": args["command"], "params": args["params"]})),
+        "execute" => backend.call("engine.execute", json!({"command": args["command"], "params": args["params"], "inspect": args["inspect"]})),
+        "cross_probe" => backend.call("project.cross_probe", args.clone()),
         "inspect_project" => backend.call("project.inspect", json!({})),
         _ => Err(format!("unknown tool `{name}`")),
     };

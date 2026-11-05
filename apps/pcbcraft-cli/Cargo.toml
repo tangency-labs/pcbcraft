@@ -10,4 +10,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+pcbcraft-engine = { workspace = true }
 pcbcraft-mcp = { workspace = true }

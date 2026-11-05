@@ -93,6 +93,58 @@ with one fixed wire ID. Both symbols use the same pinned definition.
 - Agree on the definition capture policy and the publication, concurrency
   and recovery guarantees supported by each platform and layout.
 
+## First implementation
+
+Native `.pc` files are plain UTF-8 JSON tagged `pcbcraft-project/1`. They
+contain a project ID, name, one sheet with a stable ID, and one line per
+placement and wire, separated by blank lines so neighboring edits can merge. A wire saves the two symbol IDs and pin numbers.
+A symbol pins its built-in definition revision. An optional board section
+stores footprint placements and the explicit pin-to-pad mapping. The
+generic two-pad footprint can be assigned through `pcb.place_footprint`.
+The engine builds indexes for pin and pad lookup, which MCP exposes through
+`cross_probe`. Board tracks, vias, layout editing, and reviewed schematic-to-board
+updates need a later schema and editor slice.
+
+Object IDs preserve the current command addresses and are scoped to the
+project. Two Git branches can move different placements independently.
+Concurrent additions from the same ancestor can allocate the same numeric ID
+or reference. The loader rejects a resulting collision so it can be resolved
+explicitly. A future allocator can avoid the ID collision without changing
+how terminals refer to placed symbols.
+
+The decoder rejects unknown fields, invalid connections, unknown definition
+revisions, and files over 4 MiB. Unchanged saves and browser re-downloads
+retain the bytes originally opened. Edited snapshots are written in ID order.
+The desktop uses a sibling advisory `.*.pcbcraft-lock` file, which belongs
+outside Git tracking. Cooperating desktop writers check their expected bytes
+under that lock before replacing the file. Save As requires an unused name.
+A separate program that ignores the lock can still race with publication.
+The browser reads the chosen file asynchronously and validates the bounded
+payload before adoption. Download encoding yields between batches on the UI
+thread, and the browser owns the final write.
+
+The canvas renders typed project snapshots. A symbol drag previews geometry
+and wire endpoints before committing a single shared move command on release.
+Geometry-only moves retain the cached connectivity index. Desktop saves hold
+an immutable snapshot while edits continue. The release benchmark measures
+this supported model, including indexed pin/pad lookup, independently of GPU
+frame timing.
+
+```sh
+cargo run --release --locked -p pcbcraft-engine --example project_perf
+```
+
+Pass an output path after `--` to open the same synthetic fixture in the editor.
+The fixture has one sheet with 2,048 symbols, 2,047 wires, and 2,048 linked
+footprints. In one Linux release run on a Ryzen 9 7950X, the p95 was 0.037 ms
+for a move with cached connectivity, 1.23 ms to encode, and 2.77 ms to decode
+and validate. Full MCP inspection took 60.3 ms at p95. A browser smoke test
+preserved the original file bytes and exported an edited snapshot while
+panning. Software-rendered Chromium reported about 33 ms at p95 for animation
+frame intervals, both during export and during pan alone. The 16.7 ms target
+still needs qualification on desktop and hardware-accelerated web. These
+measurements cover the synthetic single-sheet fixture.
+
 ## Design references
 
 The validation and round-trip requirements draw on independently authored

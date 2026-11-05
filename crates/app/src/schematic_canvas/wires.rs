@@ -1,14 +1,23 @@
 use egui::{Color32, Painter, PointerButton, Pos2, Rect, Response, Shape, Stroke, pos2};
 use pcbcraft_chrome::{Tokens, theme};
-use pcbcraft_engine::{Project, schematic::Terminal};
+use pcbcraft_engine::{
+    Project,
+    schematic::{Point, SymbolPlacement, Terminal, pin_positions},
+};
 
 use super::Camera;
 
-/// Paint committed wires from their model endpoints, without inferring connections from crossings.
-pub(super) fn paint(painter: &Painter, rect: Rect, project: &Project, camera: &Camera) {
+/// Paint wire endpoints at their current positions, including an in-progress symbol move.
+pub(super) fn paint(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, moved: Option<(SymbolPlacement, Point)>) {
     let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, Tokens::get().schematic_wire);
+    let preview = moved.map(|(symbol, point)| (symbol.terminals(), pin_positions(point)));
+    let position = |pin| {
+        preview
+            .and_then(|(terminals, points)| terminals.iter().position(|&terminal| terminal == pin).map(|index| points[index]))
+            .or_else(|| project.terminal_position(pin))
+    };
     for wire in project.wires() {
-        let [Some(from), Some(to)] = wire.terminals().map(|pin| project.terminal_position(pin)) else {
+        let [Some(from), Some(to)] = wire.terminals().map(position) else {
             continue;
         };
         let a = camera.screen(from, rect);
