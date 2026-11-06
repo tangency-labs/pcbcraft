@@ -2238,6 +2238,7 @@ dependencies = [
 name = "pcbcraft-app"
 version = "0.0.0"
 dependencies = [
+ "craft-agents",
  "craft-control",
  "eframe",
  "egui",

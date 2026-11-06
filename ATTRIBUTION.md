@@ -27,6 +27,13 @@ extracts it as a shared library:
 | `agents.rs` | `agent_chat/agents.rs` | Agent settings are an `AgentPrefs` value instead of SolidCraft's window state and preferences; `short_command` moved here from `panel.rs`. |
 | `i18n.rs`, `lib.rs` | `i18n.rs`; `agent_chat/mod.rs` | English messages for the keys these modules use; the model id limits and a small `ControlRequest`. |
 
+The Assistant in `crates/app/src/assistant.rs` and `assistant/` is a lighter rewrite of
+SolidCraft's chat panel, state and gate at the same revision: `chat.rs` follows
+`agent_chat/mod.rs` and `gate.rs` (conversation items, permission questions and holding tool calls
+for Allow, Always allow or Deny under the Ask, Edits and All modes), and `settings.rs` follows
+`agent_chat/settings.rs` (agents found, added and not installed, Test, default and per-agent
+modes). The gate's rules are PCBCraft's own command namespaces, and the UI uses PCBCraft's chrome.
+
 The local transport in `crates/craft-control/` follows the first-request token
 and loopback design in SolidCraft's
 [`control_server.rs`](https://github.com/tangency-labs/solidcraft/blob/ffc84dbe2e35af7d2eae302d42953271ef7a72b7/apps/solidcraft/src/control_server.rs)
@@ -40,13 +47,6 @@ copyable configuration in PCBcraft Next's `docs/mcp.md` at the revision below.
 PCBCraft's adapter dispatches directly through the shared editor session and
 the window's own view and window handlers.
 
-The Assistant's Model and Effort pickers follow the placement of the model and
-reasoning-effort choices in SolidCraft's agent chat header
-(`crates/ui-egui/src/agent_chat/panel.rs` and `settings.rs`) at
-`c553365a2197a689e749389a6fbf707a38df9b61` (MIT OR Apache-2.0, copyright (c)
-2026 SolidCraft contributors). No code was copied: PCBCraft passes the choices
-to the Codex and Claude Code CLIs as their own model and effort flags, and
-reads Codex's suggested models from its local model cache.
 
 The integrated Linux title bar and ribbon dimensions follow SolidCraft's
 `crates/ui-egui/src/titlebar.rs` and `crates/ui-egui/src/toolbar.rs` at

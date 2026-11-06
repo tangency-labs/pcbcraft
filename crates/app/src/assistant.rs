@@ -1,36 +1,41 @@
-//! In-app agent conversation. The agent sees the same command catalog and editor inspection
-//! as a live MCP client and proposes an ordered batch of those commands. The editor owns the
-//! proposal and its revision, and Apply runs it through the live MCP dispatcher.
+//! The in-app Assistant: a chat with a coding agent the person already has (Claude Code, Codex,
+//! OpenCode and others that speak the Agent Client Protocol), as in SolidCraft's agent chat. The
+//! agent reaches the open project through its own live MCP endpoint, so it runs the same commands
+//! as the menus and any MCP client, sharing undo; the permission gate decides which of them wait
+//! for the person. Agents come from `craft-agents` (see `ATTRIBUTION.md`).
 
-mod agent;
-mod options;
+mod chat;
 mod settings;
 
+pub(crate) use chat::{Answer, Approval, Source, Verdict, gate};
 pub(super) use settings::{Form as AgentForm, Request as SettingsRequest};
 
 use std::{
-    ffi::OsStr,
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, TryRecvError},
     },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
 };
 
-use egui::{Align, Context, Layout, Rect, ScrollArea, TextEdit, Ui};
+use craft_agents::{
+    agents::{self, Entry, Mode},
+    backend::TestError,
+    discover::Detection,
+    markdown::{self, Block, Span},
+};
+use egui::{Align, Context, Layout, Rect, RichText, ScrollArea, TextEdit, Ui};
 use pcbcraft_chrome::{Tokens, assistant as chrome, shell::dim};
 use pcbcraft_engine::{Project, Session};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use settings::{Choice, Settings};
-
-const MAX_MESSAGES: usize = 8;
+use chat::{Chat, Item, State};
+use settings::Settings;
 
 pub(super) const TOGGLE: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::A);
 const NEW_CHAT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT), egui::Key::L);
+/// Longest tool input or output shown on its card.
+const MAX_TOOL_DETAIL: usize = 2000;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 enum Visibility {
@@ -54,24 +59,21 @@ pub(super) struct Assistant {
     settings_request: Option<SettingsRequest>,
     settings_changed: bool,
     connect_on_first_frame: bool,
-    test_result: Option<(Choice, Result<bool, String>)>,
-    auth: Option<Result<bool, String>>,
     project: Option<Arc<Project>>,
     draft: String,
-    messages: Vec<Message>,
-    job: Option<Job>,
-    proposal: Option<Proposal>,
-    /// The person pressed Apply; the editor takes the proposal and runs it after drawing.
-    apply_requested: bool,
-    /// The person pressed Send with this agent executable; the editor adds its context.
-    send_requested: Option<String>,
-    /// The commands the pending or last request offered, for checking its proposal.
-    known: Known,
-    /// Suggested models per agent, read once when its picker first shows.
-    models: std::collections::BTreeMap<String, Vec<options::Model>>,
-    /// A model name being typed into the model picker.
-    model_draft: String,
-    notice: Option<String>,
+    chat: Chat,
+    /// Installed agents found by the last search, and the search in progress.
+    detection: Option<Detection>,
+    detecting: Option<Receiver<Detection>>,
+    /// Sign-in results seen when agents connected, by agent id.
+    login_results: HashMap<String, bool>,
+    /// Connection tests running, by agent id, and their results.
+    tests: Vec<(String, Receiver<Result<String, TestError>>)>,
+    test_results: BTreeMap<String, Result<String, String>>,
+    /// Held tool calls the person answered this frame, for the editor to run or refuse.
+    answers: Vec<(Approval, Answer)>,
+    /// The saved model was sent to this connection's agent.
+    model_restored: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -90,137 +92,10 @@ impl WindowSetting {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
-struct Message {
-    role: &'static str,
-    text: String,
-}
-
-/// Most commands one proposal may hold.
-const MAX_STEPS: usize = 16;
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Reply {
-    reply: String,
-    edits: Vec<Step>,
-}
-
-/// One proposed command. `params` is a JSON object written as a string, so strict structured
-/// output (which allows no free-form objects) can still carry any command's parameters.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Step {
-    command: String,
-    params: String,
-}
-
-/// The commands offered to the agent, by ID, with their titles for the review list.
-type Known = std::collections::BTreeMap<String, String>;
-
-/// Read the IDs and titles from a discovery list (`engine.commands`).
-fn known_commands(commands: &Value) -> Known {
-    commands
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|command| Some((command["id"].as_str()?.to_owned(), command["title"].as_str().unwrap_or_default().to_owned())))
-        .collect()
-}
-
-impl Reply {
-    /// Check the steps against the offered commands and parse their parameters, dropping any
-    /// `expected_revision`: the editor supplies the current revision when it applies them.
-    /// Unknown commands, unreadable parameters or too many steps reject the whole proposal.
-    fn prepare(edits: Vec<Step>, known: &Known, revision: u64) -> Result<Option<Proposal>, String> {
-        if edits.is_empty() {
-            return Ok(None);
-        }
-        if edits.len() > MAX_STEPS {
-            return Err(format!("The proposal has more than {MAX_STEPS} steps. Ask for a smaller change."));
-        }
-        let mut steps = Vec::with_capacity(edits.len());
-        let mut summary = Vec::with_capacity(edits.len());
-        for (index, step) in edits.into_iter().enumerate() {
-            let title = known.get(&step.command).ok_or_else(|| format!("The proposal uses an unknown command `{}`. Ask again.", step.command))?;
-            let mut params = match step.params.trim() {
-                "" => Value::Object(Default::default()),
-                text => serde_json::from_str::<Value>(text)
-                    .ok()
-                    .filter(Value::is_object)
-                    .ok_or_else(|| format!("The proposal's parameters for `{}` aren't a JSON object. Ask again.", step.command))?,
-            };
-            if let Some(object) = params.as_object_mut() {
-                object.remove("expected_revision");
-            }
-            summary.push(format!("{}. {title} {params}", index + 1));
-            steps.push((step.command, params));
-        }
-        Ok(Some(Proposal { revision, steps, summary: summary.join("\n") }))
-    }
-}
-
-/// A reviewed batch of shared commands, valid only at the revision it was proposed against.
-#[derive(Debug)]
-pub(super) struct Proposal {
-    pub(super) revision: u64,
-    pub(super) steps: Vec<(String, Value)>,
-    summary: String,
-}
-
-impl Proposal {
-    /// The numbered steps as the review list shows them.
-    pub(super) fn summary(&self) -> String {
-        self.summary.clone()
-    }
-}
-
-#[derive(Debug)]
-struct Job {
-    kind: JobKind,
-    result: Receiver<Result<Outcome, String>>,
-    stop: Arc<AtomicBool>,
-    worker: JoinHandle<()>,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum JobKind {
-    Chat(u64),
-    Check,
-    SignIn,
-    Test(Choice),
-}
-
-#[derive(Debug)]
-enum Outcome {
-    Reply(Reply),
-    Authenticated(bool),
-}
-
-impl Drop for Job {
-    /// Ask the worker to stop and reap its child without blocking the editor.
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-    }
-}
-
-impl Drop for Assistant {
-    /// Give a cancelled worker time to reap the agent before the editor exits.
-    fn drop(&mut self) {
-        if let Some(job) = &self.job {
-            job.stop.store(true, Ordering::Release);
-            let deadline = Instant::now() + Duration::from_millis(250);
-            while !job.worker.is_finished() && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(5));
-            }
-        }
-    }
-}
-
 impl Assistant {
-    /// Restore the saved agent catalog and window layout, including startup preferences.
-    pub(super) fn from_setting(value: Option<&str>, layout: Option<&str>, settings: Option<&str>) -> Self {
-        let settings = Settings::load(settings, value);
+    /// Restore the saved AI settings and window layout, including startup preferences.
+    pub(super) fn from_setting(layout: Option<&str>, settings: Option<&str>) -> Self {
+        let settings = Settings::load(settings);
         let mut assistant = Self::default();
         if settings.show_features && settings.open_at_start {
             assistant.visibility = Visibility::Open;
@@ -241,7 +116,7 @@ impl Assistant {
         serde_json::to_string(&WindowSetting { left: self.dock.left, width: self.dock.width, popped: self.popped, place }).unwrap_or_default()
     }
 
-    /// Serialize agent profiles and AI options without any credentials.
+    /// Serialize the AI settings and added agents without any credentials.
     pub(super) fn settings_text(&self) -> String {
         serde_json::to_string(&self.settings).unwrap_or_default()
     }
@@ -266,26 +141,9 @@ impl Assistant {
         self.enabled() && self.settings.toolbar
     }
 
-    /// Switch agents without carrying the old transcript or proposals into the new one.
-    fn select(&mut self, choice: Choice) {
-        if self.settings.selected != choice {
-            self.settings.selected = choice;
-            self.reset_connection();
-            self.settings_changed = true;
-        }
-    }
-
-    /// Invalidate the old connection when its CLI or profile changes, preserving the draft.
-    fn reset_connection(&mut self) {
-        self.auth = None;
-        self.messages.clear();
-        self.proposal = None;
-        self.notice = None;
-    }
-
-    /// Report whether the view is open and whether its agent has a saved login.
+    /// Report whether the view is open and whether an agent is connected and answering.
     pub(super) fn toolbar_state(&self) -> (bool, bool) {
-        (self.visibility == Visibility::Open, matches!(self.auth, Some(Ok(true))))
+        (self.visibility == Visibility::Open, matches!(self.chat.state, State::Ready | State::Running))
     }
 
     /// Handle chat shortcuts and return whether the conversation owns the editing keys.
@@ -353,22 +211,23 @@ impl Assistant {
         self.panel_rect = None;
     }
 
-    /// Advance jobs and render the conversation. Home passes no workspace and suspends its view.
-    /// The conversation only reads the session; Send and Apply are handed to the editor through
-    /// [`Self::take_send`] and [`Self::take_apply`], which add context and run the commands.
+    /// Advance the agent and render the conversation. Home passes no workspace and suspends its
+    /// view. Held tool calls the person answers are handed to the editor through
+    /// [`Self::take_answers`]; the conversation itself never edits the session.
     pub(super) fn show(&mut self, ctx: &Context, workspace: Option<Rect>, session: &Session, can_edit: bool) {
         self.sync_project(session);
-        self.poll(session);
         if !self.settings.show_features {
             return;
         }
-        if std::mem::take(&mut self.connect_on_first_frame) {
-            let command = self.settings.target(self.settings.selected).2.to_owned();
-            self.start_auth(ctx, false, OsStr::new(&command));
+        if self.visibility != Visibility::Hidden || self.connect_on_first_frame {
+            self.ensure_detection(ctx);
         }
-        if self.proposal.as_ref().is_some_and(|proposal| proposal.revision != session.revision()) {
-            self.proposal = None;
-            self.notice = Some("The schematic changed. Ask again to refresh the proposal.".to_owned());
+        self.poll_jobs();
+        self.chat.poll(self.mode());
+        self.restore_model();
+        if self.connect_on_first_frame && self.detection.is_some() {
+            self.connect_on_first_frame = false;
+            self.connect(ctx);
         }
         let Some(workspace) = workspace else {
             self.release_focus(ctx);
@@ -387,7 +246,8 @@ impl Assistant {
             Visibility::Open if self.popped => self.show_window(ctx, session, can_edit),
             Visibility::Open => {
                 let mut dock = self.dock;
-                let (action, rect) = chrome::drawer(ctx, workspace, &mut dock, self.connection_status(), matches!(self.auth, Some(Ok(true))), |ui| {
+                let ready = matches!(self.chat.state, State::Ready | State::Running);
+                let (action, rect) = chrome::drawer(ctx, workspace, &mut dock, self.connection_status(), ready, |ui| {
                     self.panel(ui, session, can_edit);
                 });
                 self.dock = dock;
@@ -432,7 +292,8 @@ impl Assistant {
                 self.panel_rect = Some(ui.max_rect());
             }
             let status = self.connection_status();
-            chrome::window(ui, status, matches!(self.auth, Some(Ok(true))), |ui| self.panel(ui, session, can_edit))
+            let ready = matches!(self.chat.state, State::Ready | State::Running);
+            chrome::window(ui, status, ready, |ui| self.panel(ui, session, can_edit))
         })
     }
 
@@ -441,12 +302,8 @@ impl Assistant {
         if ctx.input_mut(|input| input.consume_shortcut(&NEW_CHAT)) {
             self.request_new_chat();
         }
-        if let Some(job) = &self.job
-            && matches!(job.kind, JobKind::Chat(_))
-            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
-            job.stop.store(true, Ordering::Release);
-            self.notice = Some("Request stopped.".to_owned());
+        if self.chat.state == State::Running && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.chat.stop();
         }
     }
 
@@ -464,29 +321,22 @@ impl Assistant {
         }
     }
 
-    /// Ask before clearing a conversation, draft, or unapplied proposal.
+    /// Ask before clearing a conversation or draft.
     fn request_new_chat(&mut self) {
-        self.confirm_new = !self.messages.is_empty() || !self.draft.is_empty() || self.proposal.is_some();
+        self.confirm_new = !self.chat.items.is_empty() || !self.draft.is_empty();
         if !self.confirm_new {
-            self.notice = None;
+            self.new_chat();
         }
     }
 
-    /// Clear local conversation data and discard any response from a cancelled request.
+    /// Clear the conversation and draft; a connected agent starts a fresh session.
     fn new_chat(&mut self) {
-        if let Some(job) = &self.job
-            && matches!(job.kind, JobKind::Chat(_))
-        {
-            job.stop.store(true, Ordering::Release);
-        }
         self.draft.clear();
-        self.messages.clear();
-        self.proposal = None;
-        self.notice = None;
+        self.chat.new_conversation();
         self.confirm_new = false;
     }
 
-    /// Clear conversation context on a project switch. Keep app-level agent sign-in.
+    /// Start a fresh conversation on a project switch. The agent stays connected.
     fn sync_project(&mut self, session: &Session) {
         let changed = match (&self.project, session.project()) {
             (Some(previous), Some(current)) => !previous.same_document(current),
@@ -499,139 +349,209 @@ impl Assistant {
         }
     }
 
-    /// The executable the person asked to send with, once. The editor answers with
-    /// [`Self::send`] and its context.
-    pub(super) fn take_send(&mut self) -> Option<String> {
-        self.send_requested.take()
+    /// Look for installed agents once the Assistant or its settings are used. Hidden, it starts
+    /// no programs.
+    fn ensure_detection(&mut self, ctx: &Context) {
+        if self.detection.is_none() && self.detecting.is_none() {
+            self.detect(ctx);
+        }
     }
 
-    /// Start one request using an immutable snapshot and the editor's `context`: its project
-    /// and editor inspection and the `commands` it offers, as live MCP discovery lists them.
-    /// Only a successful start consumes the draft.
-    pub(super) fn send(&mut self, ctx: &Context, session: &Session, executable: &OsStr, context: Value) {
-        let Some(snapshot) = session.snapshot() else { return };
-        let prompt = self.draft.trim().to_owned();
-        if prompt.is_empty() || self.job.is_some() || self.proposal.is_some() || !matches!(self.auth, Some(Ok(true))) {
-            return;
-        }
-        self.known = known_commands(&context["commands"]);
-        let commands: Vec<String> = self.known.keys().cloned().collect();
-        let history = self.messages.clone();
-        let revision = session.revision();
-        let agent = self.settings.target(self.settings.selected).0;
-        let options = self.settings.options(self.settings.selected);
-        let executable = executable.to_owned();
-        let worker_prompt = prompt.clone();
-        if self.start_job(ctx, JobKind::Chat(revision), move |stop| {
-            agent::request(agent, &options, &executable, &snapshot, &context, &commands, &history, &worker_prompt, stop).map(Outcome::Reply)
-        }) {
-            self.draft.clear();
-            self.notice = None;
-            self.add_message("You", prompt);
+    /// Look for installed agents in the background. Detection never signs in or starts a session.
+    fn detect(&mut self, ctx: &Context) {
+        let (send, receive) = mpsc::sync_channel(1);
+        let ctx = ctx.clone();
+        let started = std::thread::Builder::new().name("pcbcraft-agent-detect".to_owned()).spawn(move || {
+            let _ = send.send(craft_agents::discover::detect());
+            ctx.request_repaint();
+        });
+        if started.is_ok() {
+            self.detecting = Some(receive);
         } else {
-            self.notice = Some("Could not start the Assistant.".to_owned());
+            self.detection = Some(Detection::default());
         }
     }
 
-    /// The proposal the person chose to apply, once. The editor runs it and reports back
-    /// through [`Self::applied`].
-    pub(super) fn take_apply(&mut self) -> Option<Proposal> {
-        if std::mem::take(&mut self.apply_requested) { self.proposal.take() } else { None }
-    }
-
-    /// Record how an applied proposal went: how many project edits it made (each undoable),
-    /// or why it stopped.
-    pub(super) fn applied(&mut self, summary: &str, result: Result<usize, String>) {
-        self.notice = Some(match result {
-            Ok(edits) => {
-                self.add_message("Editor", format!("Applied:\n{summary}"));
-                if edits == 0 { "Applied.".to_owned() } else { "Applied. Use Undo to revert.".to_owned() }
+    /// Collect finished detection and connection tests.
+    fn poll_jobs(&mut self) {
+        if let Some(receive) = &self.detecting {
+            match receive.try_recv() {
+                Ok(detection) => {
+                    self.detection = Some(detection);
+                    self.detecting = None;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.detection.get_or_insert_with(Detection::default);
+                    self.detecting = None;
+                }
+                Err(TryRecvError::Empty) => {}
             }
-            Err(error) => {
-                self.add_message("Editor", format!("Not applied: {error}"));
-                error
+        }
+        let mut finished = Vec::new();
+        self.tests.retain(|(id, receive)| match receive.try_recv() {
+            Ok(result) => {
+                finished.push((id.clone(), result));
+                false
             }
+            Err(TryRecvError::Disconnected) => {
+                finished.push((id.clone(), Err(TestError::Other("The test stopped unexpectedly.".to_owned()))));
+                false
+            }
+            Err(TryRecvError::Empty) => true,
         });
-    }
-
-    /// Check the selected agent's login or launch its own browser sign-in.
-    fn start_auth(&mut self, ctx: &Context, sign_in: bool, executable: &OsStr) {
-        let agent = self.settings.target(self.settings.selected).0;
-        let executable = executable.to_owned();
-        let kind = if sign_in { JobKind::SignIn } else { JobKind::Check };
-        if !self.start_job(ctx, kind, move |stop| agent::authenticate(agent, &executable, sign_in, stop).map(Outcome::Authenticated)) {
-            self.auth = Some(Err("Could not start the sign-in process.".to_owned()));
+        for (id, result) in finished {
+            if matches!(result, Err(TestError::AuthRequired)) {
+                self.login_results.insert(id.clone(), false);
+            } else if result.is_ok() {
+                self.login_results.insert(id.clone(), true);
+            }
+            self.test_results.insert(id, result.map_err(|error| error.message().to_owned()));
         }
     }
 
-    /// Start one cancellable worker. While it is active, the same editor cannot start another.
-    fn start_job(&mut self, ctx: &Context, kind: JobKind, run: impl FnOnce(&AtomicBool) -> Result<Outcome, String> + Send + 'static) -> bool {
-        if self.job.is_some() {
-            return false;
-        }
-        let (send, result) = mpsc::sync_channel(1);
-        let stop = Arc::new(AtomicBool::new(false));
-        let worker_stop = Arc::clone(&stop);
-        let worker_ctx = ctx.clone();
-        let worker = thread::Builder::new().name("pcbcraft-assistant".to_owned()).spawn(move || {
-            let _ = send.send(run(&worker_stop));
-            worker_ctx.request_repaint_of(egui::ViewportId::ROOT);
+    /// Start `entry` in the background and check that it answers, without opening the chat.
+    fn test_agent(&mut self, ctx: &Context, entry: &Entry) {
+        let (send, receive) = mpsc::sync_channel(1);
+        let argv = entry.argv.clone();
+        let ctx = ctx.clone();
+        let started = std::thread::Builder::new().name("pcbcraft-agent-test".to_owned()).spawn(move || {
+            let result = tempfile::tempdir()
+                .map_err(|error| TestError::Other(format!("Could not make a working folder: {error}")))
+                .and_then(|dir| craft_agents::acp_client::test_agent(&argv, dir.path()));
+            let _ = send.send(result);
+            ctx.request_repaint();
         });
-        let Ok(worker) = worker else {
-            return false;
-        };
-        self.job = Some(Job { kind, result, stop, worker });
-        true
+        match started {
+            Ok(_) => {
+                self.test_results.remove(&entry.id);
+                self.tests.push((entry.id.clone(), receive));
+            }
+            Err(_) => {
+                self.test_results.insert(entry.id.clone(), Err("Could not start the test.".to_owned()));
+            }
+        }
     }
 
-    /// Consume a finished reply once. Ignore a stopped reply and discard edits from an old revision.
-    fn poll(&mut self, session: &Session) {
-        let Some(job) = &self.job else { return };
-        let result = match job.result.try_recv() {
-            Ok(reply) => reply,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err("The Assistant stopped unexpectedly.".to_owned()),
-        };
-        let kind = job.kind;
-        let stopped = job.stop.load(Ordering::Acquire);
-        self.job = None;
-        if stopped {
+    /// Every agent the chat can use: the installed ones found, then the ones the person added.
+    fn entries(&self) -> Vec<Entry> {
+        let found = self.detection.as_ref().map_or(&[][..], |detection| detection.found.as_slice());
+        agents::entries(&self.settings.agents, found, &self.login_results)
+    }
+
+    /// The agent the next connection uses: the one picked, else the default, else the first.
+    fn current(&self) -> Option<Entry> {
+        agents::current(&self.settings.agents, &self.entries(), self.settings.picked.as_deref())
+    }
+
+    /// The permission mode for the connected (or picked) agent.
+    pub(super) fn mode(&self) -> Mode {
+        let id = self.chat.agent.as_ref().map(|agent| agent.id.clone()).or_else(|| self.current().map(|agent| agent.id));
+        agents::mode_for(&self.settings.agents, id.as_deref().unwrap_or_default())
+    }
+
+    /// Whether the person always allows `command` for the connected agent.
+    pub(super) fn always_allowed(&self, command: &str) -> bool {
+        self.chat.agent.as_ref().is_some_and(|agent| agents::always_allowed(&self.settings.agents, &agent.id, command))
+    }
+
+    /// Remember an "always allow" answer for the connected agent.
+    fn remember(&mut self, command: &str) {
+        if let Some(agent) = self.chat.agent.as_ref().map(|agent| agent.id.clone()) {
+            agents::remember(&mut self.settings.agents, &agent, command);
+            self.settings_changed = true;
+        }
+    }
+
+    /// Connect the current agent.
+    fn connect(&mut self, ctx: &Context) {
+        match self.current() {
+            Some(entry) => {
+                self.model_restored = false;
+                self.chat.connect(ctx, entry);
+            }
+            None => self.chat.push(Item::Notice("No agent is installed. Preferences › AI lists the ones you can install.".to_owned())),
+        }
+    }
+
+    /// Send the model last chosen for this agent once it lists its models.
+    fn restore_model(&mut self) {
+        if self.model_restored || self.chat.state != State::Ready {
             return;
         }
-        match (kind, result) {
-            (JobKind::Chat(revision), Ok(Outcome::Reply(reply))) => {
-                self.add_message(self.settings.target(self.settings.selected).0.label(), reply.reply);
-                if !reply.edits.is_empty() && (session.project().is_none() || session.revision() != revision) {
-                    self.notice = Some("The project changed while the agent worked. Ask again to refresh the proposal.".to_owned());
-                } else {
-                    match Reply::prepare(reply.edits, &self.known, revision) {
-                        Ok(proposal) => self.proposal = proposal,
-                        Err(error) => self.notice = Some(error),
-                    }
-                }
+        self.model_restored = true;
+        let Some(agent) = self.chat.agent.as_ref() else { return };
+        let Some(saved) = self.settings.agents.agent_models.get(&agent.id).cloned() else { return };
+        if let Some(option) = self.chat.config.iter().find(|option| option.category == "model").cloned() {
+            if option.current_value != saved && option.options.iter().any(|choice| choice.value == saved) {
+                self.chat.set_option(&option.id, &saved);
             }
-            (JobKind::Chat(_), Err(error)) => self.notice = Some(error),
-            (JobKind::Check | JobKind::SignIn, Ok(Outcome::Authenticated(signed_in))) => self.auth = Some(Ok(signed_in)),
-            (JobKind::Check | JobKind::SignIn, Err(error)) => self.auth = Some(Err(error)),
-            (JobKind::Test(choice), Ok(Outcome::Authenticated(signed_in))) => self.test_result = Some((choice, Ok(signed_in))),
-            (JobKind::Test(choice), Err(error)) => self.test_result = Some((choice, Err(error))),
-            _ => {}
+        } else if let Some((current, models)) = &self.chat.models
+            && *current != saved
+            && models.iter().any(|model| model.id == saved)
+        {
+            self.chat.set_model(&saved);
         }
     }
 
-    /// Retain only the newest visible messages and include their roles in follow-up requests.
-    fn add_message(&mut self, role: &'static str, text: String) {
-        if self.messages.len() == MAX_MESSAGES {
-            self.messages.remove(0);
+    /// Remember the model chosen for the connected agent, for its next connection.
+    fn remember_model(&mut self, model: &str) {
+        if let Some(agent) = self.chat.agent.as_ref().map(|agent| agent.id.clone()) {
+            self.settings.agents.agent_models.insert(agent, model.to_owned());
+            self.settings_changed = true;
         }
-        self.messages.push(Message { role, text });
     }
 
-    /// Draw replies, a reviewable edit, and the request field inside the workspace drawer.
+    /// Hold a tool call from the chat's endpoint for the person's answer.
+    pub(super) fn hold(&mut self, request: crate::live_control::Request, command: String, detail: String) {
+        self.chat.hold(request, command, detail);
+        if self.visibility != Visibility::Open {
+            self.visibility = Visibility::Open;
+        }
+    }
+
+    /// The chat endpoint's next request, for the editor to gate and run.
+    pub(super) fn take_request(&mut self) -> Option<crate::live_control::Request> {
+        self.chat.take_request()
+    }
+
+    /// Tool calls the person answered, once, for the editor to run or refuse. "Always allow" is
+    /// remembered here.
+    pub(super) fn take_answers(&mut self) -> Vec<(Approval, Answer)> {
+        std::mem::take(&mut self.answers)
+    }
+
+    /// Apply the person's answer to an approval: agent questions go back to the agent, held tool
+    /// calls go to the editor.
+    fn answer(&mut self, id: u64, answer: Answer) {
+        let Some(approval) = self.chat.take_approval(id) else { return };
+        match &approval.source {
+            chat::Source::Agent { key, .. } => {
+                let option = match &answer {
+                    Answer::Option(option) => Some(option.as_str()),
+                    _ => None,
+                };
+                self.chat.answer_agent(*key, option);
+            }
+            chat::Source::Tool { command, .. } => {
+                if answer == Answer::AlwaysAllow {
+                    let command = command.clone();
+                    self.remember(&command);
+                }
+                self.answers.push((approval, answer));
+            }
+        }
+    }
+
+    /// Note an edit the agent made, in the conversation.
+    pub(super) fn note(&mut self, text: String) {
+        self.chat.push(Item::Notice(text));
+    }
+
+    /// Draw the agent row, the conversation, waiting questions and the request field.
     fn panel(&mut self, ui: &mut Ui, session: &Session, can_edit: bool) {
         let t = Tokens::get();
         if self.confirm_new {
-            ui.label("Start a new chat? This clears the conversation, draft, and any unapplied proposal.");
+            ui.label("Start a new chat? This clears the conversation and draft.");
             ui.horizontal(|ui| {
                 if ui.button("Start new chat").clicked() {
                     self.new_chat();
@@ -642,36 +562,20 @@ impl Assistant {
             return;
         }
         self.agent_controls(ui);
-        if self.messages.is_empty() {
+        self.option_pickers(ui);
+        if self.chat.items.is_empty() {
             ui.add_space(t.space_8);
-            ui.label(dim("Sending includes the current schematic and recent conversation."));
+            ui.label(dim("The agent works on the open project through the same commands as the menus. Edits are undoable."));
         }
         chrome::composer(ui, |ui| self.composer(ui, session, can_edit));
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-            if let Some(notice) = &self.notice {
-                ui.label(dim(notice));
-            }
-            if let Some(proposal) = &self.proposal {
-                ui.label(&proposal.summary);
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(can_edit, egui::Button::new("Apply")).clicked() {
-                        self.apply_requested = true;
-                    } else if ui.button("Discard").clicked() {
-                        self.proposal = None;
-                        self.notice = Some("Proposal discarded.".to_owned());
-                    }
-                });
-            }
+            self.approvals(ui);
             ui.separator();
             ScrollArea::vertical().id_salt("assistant_messages").stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
                 ui.vertical(|ui| {
-                    for message in &self.messages {
-                        if message.role == "You" {
-                            chrome::user_bubble(ui, &message.text);
-                        } else {
-                            ui.strong(message.role);
-                            ui.label(&message.text);
-                        }
+                    let agent = self.chat.agent.as_ref().map_or("Agent", |agent| agent.name.as_str()).to_owned();
+                    for item in &self.chat.items {
+                        conversation_item(ui, item, &agent);
                         ui.add_space(t.space_6);
                     }
                 });
@@ -679,32 +583,81 @@ impl Assistant {
         });
     }
 
-    /// Reflect the current worker before the saved-login result in the header.
-    fn connection_status(&self) -> &'static str {
-        match self.job.as_ref().map(|job| job.kind) {
-            Some(JobKind::Check) => "Connecting…",
-            Some(JobKind::SignIn) => "Signing in…",
-            Some(JobKind::Chat(_)) => "Working…",
-            None | Some(JobKind::Test(_)) => match self.auth {
-                None => "Not connected",
-                Some(Ok(true)) => "Ready",
-                Some(Ok(false)) => "Sign-in required",
-                Some(Err(_)) => "Connection failed",
-            },
+    /// Cards for the questions waiting for the person, with their answers.
+    fn approvals(&mut self, ui: &mut Ui) {
+        let mut answered = None;
+        for approval in &self.chat.approvals {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong(&approval.title);
+                if !approval.detail.is_empty() {
+                    ui.label(dim(&approval.detail));
+                }
+                ui.horizontal_wrapped(|ui| match &approval.source {
+                    chat::Source::Tool { .. } => {
+                        if ui.button("Allow").clicked() {
+                            answered = Some((approval.id, Answer::Allow));
+                        }
+                        if ui.button("Always allow").on_hover_text("Allow this command for this agent from now on").clicked() {
+                            answered = Some((approval.id, Answer::AlwaysAllow));
+                        }
+                        if ui.button("Deny").clicked() {
+                            answered = Some((approval.id, Answer::Deny));
+                        }
+                    }
+                    chat::Source::Agent { options, .. } => {
+                        for option in options {
+                            if ui.button(&option.name).clicked() {
+                                answered = Some((approval.id, Answer::Option(option.id.clone())));
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answered = Some((approval.id, Answer::Deny));
+                        }
+                    }
+                });
+            });
+        }
+        if let Some((id, answer)) = answered {
+            self.answer(id, answer);
         }
     }
 
-    /// Pick the agent for this chat, then offer the action for its current connection state.
+    /// The header's status text.
+    fn connection_status(&self) -> &'static str {
+        match self.chat.state {
+            State::Disconnected => "Not connected",
+            State::Connecting => "Connecting…",
+            State::Ready => "Ready",
+            State::Running => "Working…",
+            State::SignIn(_) => "Sign-in required",
+            State::Failed(_) => "Connection failed",
+        }
+    }
+
+    /// Pick the agent, connect or disconnect it, and sign in when it asks.
     fn agent_controls(&mut self, ui: &mut Ui) {
-        let mut selected = self.settings.selected;
-        chrome::agent_switcher(ui, self.settings.target(selected).1, true, |ui| {
-            ui.add_enabled_ui(self.job.is_none(), |ui| {
-                for choice in self.settings.choices() {
-                    ui.selectable_value(&mut selected, choice, self.settings.target(choice).1);
+        let entries = self.entries();
+        let current = self.current();
+        let label = current.as_ref().map_or_else(
+            || if self.detecting.is_some() { "Looking for agents…".to_owned() } else { "No agent found".to_owned() },
+            |entry| entry.name.clone(),
+        );
+        let mut picked = None;
+        let missing: Vec<(&'static str, &'static str)> =
+            self.detection.as_ref().map(|detection| detection.missing.iter().map(|agent| (agent.name, agent.install)).collect()).unwrap_or_default();
+        chrome::agent_switcher(ui, &label, true, |ui| {
+            for entry in &entries {
+                let selected = current.as_ref().is_some_and(|current| current.id == entry.id);
+                if ui.selectable_label(selected, &entry.name).on_hover_text(entry.detail()).clicked() {
+                    picked = Some(entry.id.clone());
                 }
-            });
+            }
+            for (name, install) in &missing {
+                ui.add_enabled(false, egui::Button::selectable(false, format!("{name} (not installed)")))
+                    .on_disabled_hover_text(format!("Install with: {install}"));
+            }
             ui.separator();
-            if ui.add_enabled(self.settings.can_add(), egui::Button::new("Add agent…")).clicked() {
+            if ui.button("Add agent…").clicked() {
                 self.settings_request = Some(SettingsRequest::Add(AgentForm::default()));
                 ui.close();
             }
@@ -713,173 +666,264 @@ impl Assistant {
                 ui.close();
             }
         });
-        self.select(selected);
-        self.option_pickers(ui);
-        let command = self.settings.target(selected).2.to_owned();
-        let executable = OsStr::new(&command);
-        match self.job.as_ref().map(|job| job.kind) {
-            Some(JobKind::SignIn) => {
+        if let Some(id) = picked.filter(|id| current.as_ref().is_none_or(|current| &current.id != id)) {
+            self.settings.picked = Some(id);
+            self.settings_changed = true;
+            if self.chat.connected() {
+                self.chat.disconnect();
+            }
+        }
+        ui.horizontal_wrapped(|ui| {
+            if self.chat.connected() {
+                if ui.button("Disconnect").clicked() {
+                    self.chat.disconnect();
+                }
+            } else {
+                let label = if matches!(self.chat.state, State::Failed(_)) { "Retry" } else { "Connect" };
+                if ui.add_enabled(current.is_some(), egui::Button::new(label)).clicked() {
+                    self.connect(ui.ctx());
+                }
+            }
+            if self.chat.tools == Some(false) {
+                ui.label(dim("No project tools"));
+            }
+        });
+        match self.chat.state.clone() {
+            State::Failed(error) => {
+                ui.label(pcbcraft_chrome::shell::error(error));
+            }
+            State::SignIn(methods) => {
+                ui.label("Sign in to continue.");
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(dim("Complete sign-in in your browser."));
-                    if ui.button("Cancel sign-in").clicked()
-                        && let Some(job) = &self.job
-                    {
-                        job.stop.store(true, Ordering::Release);
-                        self.auth = Some(Ok(false));
+                    for method in methods {
+                        match &method.kind {
+                            craft_agents::acp::AuthKind::Agent => {
+                                if ui.button(&method.name).on_hover_text(&method.description).clicked() {
+                                    self.chat.sign_in(&method.id);
+                                }
+                            }
+                            craft_agents::acp::AuthKind::Terminal { .. } => {
+                                ui.label(dim(format!("{}: sign in from a terminal, then Retry.", method.name)));
+                            }
+                            craft_agents::acp::AuthKind::EnvVar { vars } => {
+                                ui.label(dim(format!("{}: set {} before starting PCBCraft.", method.name, vars.join(", "))));
+                            }
+                        }
                     }
                 });
             }
-            Some(_) => {}
-            None => match &self.auth {
-                Some(Ok(true)) => {
-                    if ui.button("Disconnect").clicked() {
-                        self.auth = None;
-                    }
-                }
-                Some(Ok(false)) => {
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Sign in").clicked() {
-                            self.start_auth(ui.ctx(), true, executable);
-                        } else if ui.button("I've signed in").clicked() {
-                            self.start_auth(ui.ctx(), false, executable);
-                        }
-                    });
-                }
-                None | Some(Err(_)) => {
-                    let label = if self.auth.is_none() { "Connect" } else { "Retry" };
-                    if ui.button(label).clicked() {
-                        self.start_auth(ui.ctx(), false, executable);
-                    }
-                    if let Some(Err(error)) = &self.auth {
-                        ui.label(dim(error));
-                    }
-                }
-            },
+            _ => {}
         }
     }
 
-    /// The selected agent's Model and Effort pickers, as in SolidCraft's chat header. Choices
-    /// apply from the next request and are remembered for that agent; Default passes nothing.
-    /// A typed model is kept only when it is a valid single argument.
+    /// The agent's own options (model, effort, mode) as it lists them, as SolidCraft's chat header
+    /// shows them. A chosen model is remembered for the agent.
     fn option_pickers(&mut self, ui: &mut Ui) {
-        let choice = self.settings.selected;
-        let agent = self.settings.target(choice).0;
-        let models = self.models.entry(agent.executable().to_owned()).or_insert_with(|| options::models(agent)).clone();
-        let mut chosen = self.settings.options(choice);
-        let shown = |value: &str, models: &[options::Model]| {
-            if value.is_empty() {
-                "Default".to_owned()
-            } else {
-                models.iter().find(|model| model.id == value).map_or(value.to_owned(), |model| model.label.clone())
-            }
-        };
-        let idle = self.job.is_none();
+        let idle = self.chat.state == State::Ready;
+        let mut chosen: Option<(String, String, bool)> = None;
+        let mut model = None;
+        let mut mode = None;
         ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(idle, |ui| {
-                let hint = format!("Passed to {} from the next request. Default uses the agent's own default.", agent.label());
-                egui::ComboBox::from_id_salt("assistant_model")
-                    .selected_text(format!("Model: {}", shown(&chosen.model, &models)))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut chosen.model, String::new(), "Default");
-                        for model in &models {
-                            ui.selectable_value(&mut chosen.model, model.id.clone(), &model.label).on_hover_text(&model.id);
-                        }
-                        ui.separator();
-                        let field =
-                            ui.add(TextEdit::singleline(&mut self.model_draft).hint_text("Other model…").desired_width(160.0).char_limit(128));
-                        if field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                            let typed = self.model_draft.trim().to_owned();
-                            if !typed.is_empty() && options::valid_model(&typed) {
-                                chosen.model = typed;
-                                self.model_draft.clear();
-                                ui.close();
+                if self.chat.config.is_empty() {
+                    if let Some((current, models)) = &self.chat.models {
+                        let shown = models.iter().find(|m| &m.id == current).map_or(current.as_str(), |m| m.name.as_str());
+                        egui::ComboBox::from_id_salt("assistant_model").selected_text(format!("Model: {shown}")).show_ui(ui, |ui| {
+                            for m in models {
+                                if ui.selectable_label(&m.id == current, &m.name).on_hover_text(&m.description).clicked() {
+                                    model = Some(m.id.clone());
+                                }
                             }
-                        }
-                        if !options::valid_model(self.model_draft.trim()) {
-                            ui.label(dim("Use letters, digits and . _ : / [ ] -"));
-                        }
-                    })
-                    .response
-                    .on_hover_text(&hint);
-                let efforts = options::efforts(agent, &chosen.model, &models);
-                egui::ComboBox::from_id_salt("assistant_effort")
-                    .selected_text(format!("Effort: {}", if chosen.effort.is_empty() { "Default" } else { &chosen.effort }))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut chosen.effort, String::new(), "Default");
-                        for effort in efforts {
-                            ui.selectable_value(&mut chosen.effort, effort.clone(), effort);
-                        }
-                    })
-                    .response
-                    .on_hover_text(&hint);
+                        });
+                    }
+                    if let Some((current, modes)) = &self.chat.modes {
+                        let shown = modes.iter().find(|(id, _)| id == current).map_or(current.as_str(), |(_, name)| name.as_str());
+                        egui::ComboBox::from_id_salt("assistant_mode").selected_text(format!("Mode: {shown}")).show_ui(ui, |ui| {
+                            for (id, name) in modes {
+                                if ui.selectable_label(id == current, name).clicked() {
+                                    mode = Some(id.clone());
+                                }
+                            }
+                        });
+                    }
+                }
+                for option in &self.chat.config {
+                    let shown = option
+                        .options
+                        .iter()
+                        .find(|choice| choice.value == option.current_value)
+                        .map_or(option.current_value.as_str(), |choice| choice.name.as_str());
+                    egui::ComboBox::from_id_salt(("assistant_option", &option.id)).selected_text(format!("{}: {shown}", option.name)).show_ui(
+                        ui,
+                        |ui| {
+                            for choice in &option.options {
+                                let row = ui.selectable_label(choice.value == option.current_value, &choice.name);
+                                if row.on_hover_text(&choice.description).clicked() {
+                                    chosen = Some((option.id.clone(), choice.value.clone(), option.category == "model"));
+                                }
+                            }
+                        },
+                    );
+                }
             });
         });
-        if chosen != self.settings.options(choice) {
-            self.settings.set_options(choice, chosen);
-            self.settings_changed = true;
+        if let Some((id, value, is_model)) = chosen {
+            self.chat.set_option(&id, &value);
+            if is_model {
+                self.remember_model(&value);
+            }
+        }
+        if let Some(value) = model {
+            self.chat.set_model(&value);
+            self.remember_model(&value);
+        }
+        if let Some(value) = mode {
+            self.chat.set_mode(&value);
         }
     }
 
     /// Keep the prompt above its Send or Stop action. Long drafts scroll inside the input.
     fn composer(&mut self, ui: &mut Ui, session: &Session, can_edit: bool) {
-        let can_send =
-            session.project().is_some() && can_edit && self.job.is_none() && self.proposal.is_none() && matches!(self.auth, Some(Ok(true)));
-        let busy = matches!(self.job.as_ref().map(|job| job.kind), Some(JobKind::Chat(_)));
+        let running = self.chat.state == State::Running;
+        let can_send = session.project().is_some() && can_edit && self.chat.state == State::Ready && !self.draft.trim().is_empty();
         let draft_id = egui::Id::new("assistant_draft_input");
-        let can_send = can_send && !self.draft.trim().is_empty();
         let enter = can_send
             && ui.memory(|memory| memory.has_focus(draft_id))
             && ui.input_mut(|input| input.modifiers == egui::Modifiers::NONE && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         ScrollArea::vertical().id_salt("assistant_draft").max_height(96.0).auto_shrink([false, true]).show(ui, |ui| {
             ui.add_enabled(
-                session.project().is_some() && self.proposal.is_none() && !busy,
+                session.project().is_some(),
                 TextEdit::multiline(&mut self.draft)
                     .id(draft_id)
-                    .hint_text("Ask about the schematic or request a change…")
+                    .hint_text("Ask about the project or request a change…")
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
-                    .char_limit(2048),
+                    .char_limit(8192),
             );
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if let Some(job) = &self.job
-                && busy
-            {
-                let stopping = job.stop.load(Ordering::Acquire);
-                if ui.add_enabled(!stopping, egui::Button::new("Stop")).clicked() {
-                    job.stop.store(true, Ordering::Release);
-                    self.notice = Some("Request stopped.".to_owned());
+            if running {
+                if ui.button("Stop").clicked() {
+                    self.chat.stop();
                 }
                 ui.spinner();
             } else if ui.add_enabled(can_send, egui::Button::new("Send")).on_hover_text("Send (Enter)").clicked() || enter {
-                self.send_requested = Some(self.settings.target(self.settings.selected).2.to_owned());
+                let text = self.draft.trim().to_owned();
+                if self.chat.send(&text) {
+                    self.draft.clear();
+                }
             }
             if session.project().is_none() {
                 ui.label(dim("Open or create a project to start."));
+            } else if !self.chat.connected() {
+                ui.label(dim("Connect an agent to start."));
             }
         });
     }
 }
 
-#[cfg(all(test, unix))]
-mod tests {
-    use std::{
-        fs,
-        os::unix::fs::PermissionsExt as _,
-        time::{Duration, Instant},
-    };
+/// One conversation item: the person's message, the agent's reply or thought, a tool call card,
+/// its plan, or a notice.
+fn conversation_item(ui: &mut Ui, item: &Item, agent: &str) {
+    match item {
+        Item::User(text) => chrome::user_bubble(ui, text),
+        Item::Agent { thought: false, text } => {
+            ui.strong(agent);
+            markdown_view(ui, text);
+        }
+        Item::Agent { thought: true, text } => {
+            ui.label(dim(text.chars().take(MAX_TOOL_DETAIL).collect::<String>()));
+        }
+        Item::Tool { id, title, status, input, output } => {
+            let status = match status {
+                Some(craft_agents::acp::ToolStatus::Completed) => "Done",
+                Some(craft_agents::acp::ToolStatus::Failed) => "Failed",
+                Some(craft_agents::acp::ToolStatus::InProgress) => "Running",
+                Some(craft_agents::acp::ToolStatus::Pending) | None => "Waiting",
+            };
+            egui::CollapsingHeader::new(format!("{title} · {status}")).id_salt(("assistant_tool", id)).show(ui, |ui| {
+                if let Some(input) = input {
+                    ui.monospace(input.to_string().chars().take(MAX_TOOL_DETAIL).collect::<String>());
+                }
+                if let Some(output) = output {
+                    ui.label(dim(output.chars().take(MAX_TOOL_DETAIL).collect::<String>()));
+                }
+            });
+        }
+        Item::Plan(entries) => {
+            ui.strong("Plan");
+            for (text, status) in entries {
+                let mark = match status.as_str() {
+                    "completed" => "[x]",
+                    "in_progress" => "[>]",
+                    _ => "[ ]",
+                };
+                ui.label(format!("{mark} {text}"));
+            }
+        }
+        Item::Notice(text) => {
+            ui.label(dim(text));
+        }
+    }
+}
 
+/// An agent's Markdown reply: paragraphs, headings, lists, quotes, code and links.
+fn markdown_view(ui: &mut Ui, text: &str) {
+    for block in markdown::parse(text) {
+        match block {
+            Block::Paragraph(spans) => spans_view(ui, &spans),
+            Block::Heading { spans, .. } => {
+                ui.strong(markdown::plain(&spans));
+            }
+            Block::Code { text, .. } | Block::Pre(text) => {
+                egui::Frame::group(ui.style()).show(ui, |ui| ui.monospace(text));
+            }
+            Block::List { ordered, start, items } => {
+                for (index, item) in items.iter().enumerate() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(if ordered { format!("{}.", start.saturating_add(index as u64)) } else { "•".to_owned() });
+                        spans_view(ui, item);
+                    });
+                }
+            }
+            Block::Quote(spans) => {
+                ui.label(dim(markdown::plain(&spans)));
+            }
+            Block::Rule => {
+                ui.separator();
+            }
+        }
+    }
+}
+
+/// Inline Markdown in one wrapped line: bold, italic, code and links.
+fn spans_view(ui: &mut Ui, spans: &[Span]) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        for span in spans {
+            match span {
+                Span::Text(text) => ui.label(text),
+                Span::Bold(text) => ui.label(RichText::new(text).strong()),
+                Span::Italic(text) => ui.label(RichText::new(text).italics()),
+                Span::Code(text) => ui.label(RichText::new(text).code()),
+                Span::Link { label, url } => ui.hyperlink_to(label, url),
+            };
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
     use egui_kittest::{
         Harness,
         kittest::{NodeT, Queryable},
     };
-    use pcbcraft_engine::PLACE_RESISTOR;
 
     use crate::{PcbApp, tests::click};
 
     use serde_json::json;
 
-    use super::{agent::Agent, *};
+    use super::*;
 
     /// Moving, folding, or hiding the Assistant retains its draft and never starts an agent.
     #[test]
@@ -932,7 +976,7 @@ mod tests {
         harness.key_press_modifiers(TOGGLE.modifiers, TOGGLE.logical_key);
         harness.run();
         assert_eq!(harness.state().assistant.draft, "Explain this schematic");
-        assert!(harness.state().assistant.job.is_none());
+        assert!(!harness.state().assistant.chat.connected());
         click(&mut harness, "New chat");
         click(&mut harness, "Keep chat");
         assert_eq!(harness.state().assistant.draft, "Explain this schematic");
@@ -941,7 +985,7 @@ mod tests {
         assert!(harness.state().assistant.draft.is_empty());
 
         let assistant = &harness.state().assistant;
-        let saved = Assistant::from_setting(None, Some(&assistant.layout_setting()), None);
+        let saved = Assistant::from_setting(Some(&assistant.layout_setting()), None);
         assert_eq!(saved.dock.left, assistant.dock.left);
         assert_eq!(saved.dock.width, assistant.dock.width);
         assert_eq!(saved.visibility, Visibility::Hidden);
@@ -980,250 +1024,216 @@ mod tests {
         assert!(matches!(harness.state().dialog, crate::Dialog::Preferences(_)));
         Ok(())
     }
+}
 
-    /// A profile added from the dropdown survives a restart and connects using its saved executable.
-    #[test]
-    fn assistant_ai_preferences_add_and_connect_a_saved_agent() -> Result<(), Box<dyn std::error::Error>> {
-        use egui::accesskit::Role;
+#[cfg(test)]
+mod chat_tests {
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+        thread,
+        time::{Duration, Instant},
+    };
 
-        let fixture = tempfile::tempdir()?;
-        let executable = fixture.path().join("test codex");
-        fs::write(&executable, "#!/bin/sh\ntest \"$*\" = \"login status\"\n")?;
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
+    use craft_agents::{
+        agents::{Entry, Kind},
+        backend::{ChatBackend, Event, PermissionOption, PromptPart},
+    };
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_mcp::{Backend, live::Remote};
+    use serde_json::{Value, json};
 
-        let mut harness =
-            Harness::builder().with_size(egui::vec2(1280.0, 900.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), PcbApp::default());
-        harness.run();
-        click(&mut harness, "Home");
-        harness.query_all_by_label("Preferences").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).ok_or("Missing Home preferences")?.click();
-        harness.run_steps(3);
-        assert!(harness.state().home);
-        click(&mut harness, "AI");
-        harness.run_steps(3);
-        harness.get_by_label("Show AI features");
-        click(&mut harness, "OK");
-        harness.step();
-        assert!(matches!(harness.state().dialog, crate::Dialog::None), "{:?}", harness.state().dialog);
+    use crate::{PcbApp, tests::click};
 
-        click(&mut harness, "Assistant");
-        assert_eq!(harness.state().assistant.visibility, Visibility::Open);
-        agent_switcher(&harness)?.click();
-        harness.run();
-        click(&mut harness, "AI settings…");
-        harness.run_steps(3);
-        harness.get_by_label("Show AI features");
-        click(&mut harness, "OK");
-        harness.step();
-        assert!(matches!(harness.state().dialog, crate::Dialog::None), "{:?}", harness.state().dialog);
+    use super::*;
 
-        agent_switcher(&harness)?.click();
-        harness.run();
-        click(&mut harness, "Add agent…");
-        harness.run_steps(3);
-        click(&mut harness, "Custom command");
-        harness.run_steps(3);
-        for (label, value) in [("Name", "Local Codex"), ("Agent command", executable.to_str().ok_or("The fixture path is not UTF-8")?)] {
-            harness.get_by_role_and_label(Role::TextInput, label).click();
-            harness.run();
-            harness.get_by_role_and_label(Role::TextInput, label).type_text(value);
-            harness.run();
-        }
-        click(&mut harness, "Add");
-        harness.run_steps(3);
-        harness.step();
-        assert!(matches!(harness.state().dialog, crate::Dialog::None), "{:?}", harness.state().dialog);
-
-        agent_switcher(&harness)?.click();
-        harness.run();
-        click(&mut harness, "AI settings…");
-        harness.run_steps(3);
-        harness.get_by_label("Local Codex");
-        harness.get_all_by_label("Make default").last().ok_or("Missing default action")?.click();
-        harness.run();
-        let settings = harness.state().assistant.settings_text();
-        let restored = Assistant::from_setting(None, None, Some(&settings));
-        assert_eq!(restored.settings.target(restored.settings.selected).1, "Local Codex");
-        assert_eq!(restored.settings.target(restored.settings.selected).2, executable.to_str().ok_or("The fixture path is not UTF-8")?);
-
-        click(&mut harness, "OK");
-        harness.step();
-        agent_switcher(&harness)?.click();
-        harness.run();
-        click(&mut harness, "Local Codex");
-        harness.get_by_role_and_label(Role::Button, "Connect").click();
-        harness.run();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while harness.state().assistant.job.is_some() && Instant::now() < deadline {
-            harness.step();
-            thread::sleep(Duration::from_millis(5));
-        }
-        harness.run();
-        harness.get_by_label("Ready");
-        Ok(())
+    /// What the scripted agent was told, and the events it will report next.
+    #[derive(Default)]
+    struct Script {
+        events: VecDeque<Event>,
+        prompts: Vec<String>,
+        answers: Vec<(u64, Option<String>)>,
     }
 
-    /// The agent switcher: the first combo box in the agent row, ahead of Model and Effort.
-    fn agent_switcher<'h>(harness: &'h Harness<'_, PcbApp>) -> Result<egui_kittest::Node<'h>, &'static str> {
-        harness.query_all_by_role(egui::accesskit::Role::ComboBox).next().ok_or("Missing the agent switcher")
-    }
+    /// A backend that reports scripted events and records what the chat sends it.
+    struct Fake(Arc<Mutex<Script>>);
 
-    /// Both provider flows start from sign-in, then apply a reviewed edit through shared history.
-    #[test]
-    fn assistant_proposal_requires_apply_and_respects_revision() -> Result<(), Box<dyn std::error::Error>> {
-        for agent in [Agent::Codex, Agent::Claude] {
-            exercise_provider(agent)?;
+    impl ChatBackend for Fake {
+        fn poll(&mut self) -> Vec<Event> {
+            self.0.lock().map(|mut script| script.events.drain(..).collect()).unwrap_or_default()
         }
-        Ok(())
-    }
-
-    /// Exercise each CLI's auth flags and reply format, then reject a reply from a stale revision.
-    fn exercise_provider(agent: Agent) -> Result<(), Box<dyn std::error::Error>> {
-        let fixture = tempfile::tempdir()?;
-        let executable = fixture.path().join(agent.executable());
-        fs::write(
-            &executable,
-            r#"#!/bin/sh
-case "${0##*/}:$*" in
-    'codex:login status'|'claude:auth status') exit 1 ;;
-    'codex:login'|'claude:auth login --claudeai') exit 0 ;;
-esac
-all="$*"
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --output-last-message) shift; output="$1" ;;
-    esac
-    shift
-done
-prompt=$(cat)
-case "$all" in 'exec -m gpt-test -c model_reasoning_effort="high" '*|'--model sonnet --effort high '*) ;; *) exit 1 ;; esac
-case "$prompt" in *'"request":"Connect the resistors"'*) ;; *) exit 1 ;; esac
-case "$prompt" in *'"reference":"R1"'*'"reference":"R2"'*) ;; *) exit 1 ;; esac
-case "$prompt" in *'"id":"schematic.delete_wire"'*'"id":"view.split"'*) ;; *) exit 1 ;; esac
-case "$prompt" in *'"focused_view":0'*) ;; *) exit 1 ;; esac
-reply='{"reply":"I propose connecting the resistors.\\n\\nThen splitting the view.","edits":[{"command":"schematic.connect_pins","params":"{\"from\":{\"symbol\":\"symbol-2\",\"terminal\":\"2\"},\"to\":{\"symbol\":\"symbol-3\",\"terminal\":\"1\"},\"expected_revision\":99}"},{"command":"view.split","params":"{\"view\":0,\"split\":true}"}]}'
-case "${0##*/}" in
-    codex) printf '%s' "$reply" > "$output" ;;
-    claude) printf '{"is_error":false,"structured_output":%s}' "$reply" ;;
-esac
-"#,
-        )?;
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
-
-        let mut app = PcbApp::default();
-        app.assistant.settings.selected = Choice::BuiltIn(agent);
-        app.session.apply("project.new", &json!({"name": "assistant fixture"}))?;
-        for (x, revision) in [(0, 1), (20_000_000, 2)] {
-            app.session.apply(PLACE_RESISTOR, &json!({"x_nm": x, "y_nm": 0, "expected_revision": revision}))?;
-        }
-        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
-        harness.run();
-        click(&mut harness, "Assistant");
-        harness.get_by_label("Minimize Assistant");
-        harness.get_by_label("Not connected");
-        harness.get_by_role_and_label(egui::accesskit::Role::Button, "Connect");
-        let ctx = harness.ctx.clone();
-        let start = |app: &mut PcbApp| {
-            app.assistant.draft = "Connect the resistors".to_owned();
-            let context = app.agent_context(&ctx);
-            app.assistant.send(&ctx, &app.session, executable.as_os_str(), context);
-        };
-        let wait = |harness: &mut Harness<'_, PcbApp>| {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while harness.state().assistant.job.is_some() && Instant::now() < deadline {
-                harness.step();
-                thread::sleep(Duration::from_millis(5));
+        fn prompt(&mut self, parts: &[PromptPart]) {
+            if let (Ok(mut script), [PromptPart::Text(text)]) = (self.0.lock(), parts) {
+                script.prompts.push(text.clone());
             }
-            assert!(harness.state().assistant.job.is_none());
-            harness.run();
-        };
-
-        let model = if agent == Agent::Codex { "gpt-test" } else { "sonnet" };
-        let chosen = options::AgentOptions { model: model.to_owned(), effort: "high".to_owned() };
-        harness.state_mut().assistant.settings.set_options(Choice::BuiltIn(agent), chosen.clone());
-        let restored = Assistant::from_setting(None, None, Some(&harness.state().assistant.settings_text()));
-        assert_eq!(restored.settings.options(Choice::BuiltIn(agent)), chosen, "choices survive a restart");
-        harness.state_mut().assistant.start_auth(&ctx, false, executable.as_os_str());
-        wait(&mut harness);
-        harness.get_by_label("Sign in");
-        harness.get_by_label("I've signed in");
-        harness.state_mut().assistant.start_auth(&ctx, true, executable.as_os_str());
-        wait(&mut harness);
-        harness.get_by_label("Ready");
-        assert!(harness.query_by_label("I've signed in").is_none());
-        assert!(harness.query_by_role_and_label(egui::accesskit::Role::Button, "Connect").is_none());
-
-        start(harness.state_mut());
-        wait(&mut harness);
-        assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(0));
-        let proposal =
-            harness.state().assistant.proposal.as_ref().ok_or_else(|| format!("Missing proposal: {:?}", harness.state().assistant.notice))?;
-        let commands: Vec<&str> = proposal.steps.iter().map(|(command, _)| command.as_str()).collect();
-        assert_eq!(commands, ["schematic.connect_pins", "view.split"]);
-        assert!(proposal.steps[0].1.get("expected_revision").is_none(), "the editor supplies the revision");
-        assert!(proposal.summary.starts_with("1. Connect Pins {"), "{}", proposal.summary);
-        assert!(proposal.summary.contains("\n2. Split {"), "{}", proposal.summary);
-        harness.get_by_label("I propose connecting the resistors.\n\nThen splitting the view.");
-        click(&mut harness, "Apply");
-        assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(1));
-        assert!(harness.state().views.is_split(), "window commands run through the same dispatcher");
-        harness.get_by_label("Applied. Use Undo to revert.");
-        click(&mut harness, "Undo");
-        assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(0));
-
-        start(harness.state_mut());
-        harness.state_mut().session.apply("project.rename", &json!({"name": "changed while waiting"}))?;
-        wait(&mut harness);
-        harness.get_by_label("The project changed while the agent worked. Ask again to refresh the proposal.");
-        assert!(harness.query_by_label("Apply").is_none());
-        assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(0));
-        Ok(())
-    }
-
-    /// A failing step undoes the project edits of the steps before it, names the step, and
-    /// leaves the history as it was; a stale proposal runs nothing.
-    #[test]
-    fn a_failing_step_undoes_the_earlier_project_edits() -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = PcbApp::default();
-        app.session.apply("project.new", &json!({"name": "batch"}))?;
-        for (x, revision) in [(0, 1), (20_000_000, 2)] {
-            app.session.apply(PLACE_RESISTOR, &json!({"x_nm": x, "y_nm": 0, "expected_revision": revision}))?;
         }
-        app.views.sync(&app.session);
-        let before = app.session.inspect();
-        let ctx = egui::Context::default();
-        let connect = json!({"from": {"symbol": "symbol-2", "terminal": "2"}, "to": {"symbol": "symbol-3", "terminal": "1"}});
-        let steps = vec![
-            ("schematic.connect_pins".to_owned(), connect.clone()),
-            ("schematic.rotate_symbol".to_owned(), json!({"symbol": "symbol-2"})),
-            ("schematic.delete_wire".to_owned(), json!({"wire": "wire-99"})),
-        ];
-        let error = app.run_agent_steps(&ctx, before["revision"].as_u64().ok_or("revision")?, &steps).unwrap_err();
-        assert!(error.starts_with("Step 3 (schematic.delete_wire) failed:"), "{error}");
-        assert!(error.ends_with("The project edits from earlier steps were undone."), "{error}");
-        app.assistant.applied("1. Delete Wire", Err(error.clone()));
-        let shown = app.assistant.messages.last().ok_or("no message")?;
-        assert_eq!((shown.role, shown.text.as_str()), ("Editor", format!("Not applied: {error}").as_str()), "the conversation says it failed");
-        assert_eq!(app.session.inspect()["project"], before["project"]);
-        assert_eq!(app.session.inspect()["can_undo"], before["can_undo"]);
+        fn cancel(&mut self) {}
+        fn new_session(&mut self) {}
+        fn answer_permission(&mut self, key: u64, option: Option<&str>) {
+            if let Ok(mut script) = self.0.lock() {
+                script.answers.push((key, option.map(str::to_owned)));
+            }
+        }
+        fn authenticate(&mut self, _method: &str) {}
+        fn shutdown(&mut self, _wait: bool) {}
+    }
 
-        let stale = app.run_agent_steps(&ctx, 1, &steps[..1]).unwrap_err();
-        assert!(stale.contains("project changed"), "{stale}");
-        let revision = app.session.revision();
-        assert_eq!(app.run_agent_steps(&ctx, revision, &steps[..2]), Ok(2));
+    fn entry() -> Entry {
+        Entry {
+            id: "fake".to_owned(),
+            name: "Fake agent".to_owned(),
+            kind: Kind::Acp,
+            argv: vec!["fake".to_owned()],
+            version: None,
+            login: "",
+            found: false,
+            base_url: String::new(),
+            model: String::new(),
+            key: false,
+            request_timeout_s: 60,
+            reasoning_effort: String::new(),
+            problem: None,
+            install: "",
+        }
+    }
+
+    fn option(id: &str, kind: &str) -> PermissionOption {
+        PermissionOption { id: id.to_owned(), name: id.to_owned(), kind: kind.to_owned() }
+    }
+
+    /// The window, the scripted agent and the chat endpoint's port and credential.
+    type Fixture = (Harness<'static, PcbApp>, Arc<Mutex<Script>>, (u16, String));
+
+    /// A project with two wired resistors, the Assistant open and the scripted agent ready.
+    fn harness_with_agent() -> Result<Fixture, Box<dyn std::error::Error>> {
+        let mut app = PcbApp::default();
+        app.session.apply("project.new", &json!({"name": "chat"}))?;
+        for (x, revision) in [(0, 1), (20_000_000, 2)] {
+            app.session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm": x, "y_nm": 0, "expected_revision": revision}))?;
+        }
+        app.session.apply(
+            pcbcraft_engine::CONNECT_PINS,
+            &json!({"from": {"symbol": "symbol-2", "terminal": "2"}, "to": {"symbol": "symbol-3", "terminal": "1"}, "expected_revision": 3}),
+        )?;
+        app.assistant.detection = Some(Default::default());
+        let script = Arc::new(Mutex::new(Script::default()));
+        let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        harness.run();
+        click(&mut harness, "Assistant");
+        let ctx = harness.ctx.clone();
+        let endpoint = harness.state_mut().assistant.chat.attach_with_endpoint(&ctx, Box::new(Fake(Arc::clone(&script))), entry());
+        script.lock().map_err(|_| "poisoned")?.events.push_back(Event::Ready { agent: "Fake 1.0".to_owned(), images: false });
+        harness.run();
+        Ok((harness, script, endpoint))
+    }
+
+    fn push(script: &Arc<Mutex<Script>>, event: Event) {
+        if let Ok(mut script) = script.lock() {
+            script.events.push_back(event);
+        }
+    }
+
+    /// Run `command` from another thread as the agent's bridge would, while the window runs; when
+    /// `answer` is given, press it once the approval card shows.
+    fn call(
+        harness: &mut Harness<'_, PcbApp>,
+        endpoint: &(u16, String),
+        command: &str,
+        params: Value,
+        answer: Option<&str>,
+    ) -> Result<Value, String> {
+        thread::scope(|scope| {
+            let request = json!({"command": command, "params": params, "inspect": false});
+            let worker = scope.spawn(move || {
+                let mut remote = Remote::new(endpoint.0, &endpoint.1)?.with_wait(30);
+                remote.call("engine.execute", request)
+            });
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut answered = answer.is_none();
+            while !worker.is_finished() && Instant::now() < deadline {
+                harness.run();
+                if !answered
+                    && let Some(answer) = answer
+                    && harness.query_by_label(answer).is_some()
+                {
+                    click(harness, answer);
+                    answered = true;
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            assert!(worker.is_finished(), "the chat endpoint did not answer {command}");
+            worker.join().unwrap_or_else(|_| Err("worker panicked".to_owned()))
+        })
+    }
+
+    /// Replies stream into the conversation as Markdown; the agent's questions about PCBCraft's
+    /// tools are allowed for it (the gate checks those calls), others wait for the person.
+    #[test]
+    fn the_chat_streams_replies_and_asks_only_about_the_agents_own_tools() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, script, _) = harness_with_agent()?;
+        harness.get_by_label("Ready");
+        harness.state_mut().assistant.draft = "Delete the wire".to_owned();
+        harness.run();
+        harness.get_by_label("Send").click();
+        harness.run_steps(2);
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.prompts, ["Delete the wire"]);
+        harness.get_by_label("Delete the wire");
+        push(&script, Event::Text { thought: false, text: "Deleting **wire-4**".to_owned() });
+        push(
+            &script,
+            Event::Permission {
+                key: 7,
+                title: "mcp__pcbcraft-app__execute".to_owned(),
+                kind: Some("other".to_owned()),
+                options: vec![option("ok", "allow_once"), option("no", "reject_once")],
+            },
+        );
+        push(
+            &script,
+            Event::Permission {
+                key: 8,
+                title: "Run rm -rf".to_owned(),
+                kind: Some("execute".to_owned()),
+                options: vec![option("ok", "allow_once"), option("no", "reject_once")],
+            },
+        );
+        harness.run_steps(2);
+        harness.get_by_label("wire-4");
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.answers, [(7, Some("ok".to_owned()))]);
+        harness.get_by_label("Run rm -rf");
+        harness.get_by_label("no").click();
+        harness.run_steps(2);
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.answers.last(), Some(&(8, Some("no".to_owned()))));
+        push(&script, Event::TurnEnded { reason: "end_turn".to_owned() });
+        harness.run();
+        assert_eq!(harness.state().assistant.chat.state, State::Ready);
         Ok(())
     }
 
-    /// Saved model and effort choices that could read as flags load as the defaults, and
-    /// choices for removed agents are forgotten.
+    /// Under Edits a project edit runs at once and shares undo; saving waits and a denial reaches
+    /// the agent. Under Ask a view command waits for Allow, and Always allow is remembered.
     #[test]
-    fn saved_agent_options_are_sanitized() {
-        let saved = r#"{"options":[
-            {"choice":{"BuiltIn":"Claude"},"model":"--dangerously-skip-permissions","effort":"high"},
-            {"choice":{"Profile":7},"model":"opus","effort":"max"}
-        ]}"#;
-        let restored = Assistant::from_setting(None, None, Some(saved));
-        let claude = restored.settings.options(Choice::BuiltIn(Agent::Claude));
-        assert_eq!((claude.model.as_str(), claude.effort.as_str()), ("", "high"));
-        assert_eq!(restored.settings.options(Choice::Profile(7)), options::AgentOptions::default());
+    fn the_gate_holds_tool_calls_for_the_person() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, _script, endpoint) = harness_with_agent()?;
+        let revision = harness.state().session.revision();
+        let deleted = call(&mut harness, &endpoint, pcbcraft_engine::DELETE_WIRE, json!({"wire": "wire-4", "expected_revision": revision}), None)?;
+        assert_eq!(deleted["revision"], revision + 1);
+        harness.get_by_label("Edited: Delete Wire. Undo reverts it.");
+        click(&mut harness, "Undo");
+        assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(1));
+
+        let denied = call(&mut harness, &endpoint, "file.save", json!({}), Some("Deny")).unwrap_err();
+        assert!(denied.contains("denied `file.save`"), "{denied}");
+        assert!(harness.state().assistant.chat.approvals.is_empty());
+
+        harness.state_mut().assistant.settings.agents.ai_permissions = craft_agents::agents::Mode::Ask;
+        let fit = json!({"view": 0});
+        call(&mut harness, &endpoint, "view.fit", fit.clone(), Some("Allow"))?;
+        call(&mut harness, &endpoint, "view.fit", fit.clone(), Some("Always allow"))?;
+        assert!(harness.state().assistant.always_allowed("view.fit"));
+        call(&mut harness, &endpoint, "view.fit", fit, None)?;
+        let inspected = call(&mut harness, &endpoint, "edit.undo", Value::Null, Some("Allow"));
+        assert!(inspected.is_ok() || inspected.is_err_and(|error| error.contains("nothing to undo")));
+        Ok(())
     }
 }

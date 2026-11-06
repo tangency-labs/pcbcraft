@@ -63,8 +63,6 @@ const RECENT_PROJECTS_KEY: &str = "pcbcraft.recent_projects";
 /// to the Home page.
 const COMPACT_APP_BAR: f32 = 380.0;
 #[cfg(not(target_arch = "wasm32"))]
-const ASSISTANT_AGENT_KEY: &str = "pcbcraft.assistant.agent";
-#[cfg(not(target_arch = "wasm32"))]
 const ASSISTANT_LAYOUT_KEY: &str = "pcbcraft.assistant.layout";
 #[cfg(not(target_arch = "wasm32"))]
 const ASSISTANT_SETTINGS_KEY: &str = "pcbcraft.assistant.settings";
@@ -266,7 +264,6 @@ impl PcbApp {
             files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
             #[cfg(not(target_arch = "wasm32"))]
             assistant: assistant::Assistant::from_setting(
-                cc.storage.and_then(|s| s.get_string(ASSISTANT_AGENT_KEY)).as_deref(),
                 cc.storage.and_then(|s| s.get_string(ASSISTANT_LAYOUT_KEY)).as_deref(),
                 cc.storage.and_then(|s| s.get_string(ASSISTANT_SETTINGS_KEY)).as_deref(),
             ),
@@ -1722,14 +1719,7 @@ impl PcbApp {
             if main {
                 let can_edit = workspace.is_some() && matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
                 self.assistant.show(&ctx, workspace, &self.session, can_edit);
-                if let Some(proposal) = self.assistant.take_apply() {
-                    let result = self.run_agent_steps(&ctx, proposal.revision, &proposal.steps);
-                    self.assistant.applied(&proposal.summary(), result);
-                }
-                if let Some(executable) = self.assistant.take_send() {
-                    let context = self.agent_context(&ctx);
-                    self.assistant.send(&ctx, &self.session, std::ffi::OsStr::new(&executable), context);
-                }
+                self.serve_chat(&ctx);
                 if let Some(request) = self.assistant.take_settings_request() {
                     self.dialog = match request {
                         assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),

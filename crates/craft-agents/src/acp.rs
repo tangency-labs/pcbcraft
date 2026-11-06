@@ -187,6 +187,10 @@ pub struct McpBridge {
 
 /// The environment variable PCBCraft's CLI reads the live endpoint's credential from.
 pub const TOKEN_ENV: &str = "PCBCRAFT_CONTROL_TOKEN";
+/// The environment variable telling PCBCraft's CLI how long to wait for each reply.
+pub const WAIT_ENV: &str = "PCBCRAFT_CONTROL_WAIT_S";
+/// How long a tool call may wait for the person to allow it, in seconds.
+pub const BRIDGE_WAIT_S: u64 = 600;
 
 impl std::fmt::Debug for McpBridge {
     /// Name the bridge without its credential.
@@ -201,7 +205,7 @@ impl McpBridge {
             "name": BRIDGE_NAME,
             "command": self.cli.to_string_lossy(),
             "args": ["mcp", "--connect", self.port.to_string()],
-            "env": [{"name": TOKEN_ENV, "value": self.token}],
+            "env": [{"name": TOKEN_ENV, "value": self.token}, {"name": WAIT_ENV, "value": BRIDGE_WAIT_S.to_string()}],
         })
     }
 
@@ -778,7 +782,8 @@ mod tests {
         let s = &p["mcpServers"][0];
         assert_eq!(s["name"], BRIDGE_NAME);
         assert_eq!(s["args"], json!(["mcp", "--connect", "41234"]));
-        assert_eq!(s["env"], json!([{"name": TOKEN_ENV, "value": "secret-value"}]), "the credential goes only in the environment");
+        assert_eq!(s["env"][0], json!({"name": TOKEN_ENV, "value": "secret-value"}), "the credential goes only in the environment");
+        assert_eq!(s["env"][1], json!({"name": WAIT_ENV, "value": "600"}), "tool calls may wait for approval");
         assert!(!s["args"].to_string().contains("secret-value") && !format!("{b:?}").contains("secret-value"));
         let text = p.to_string();
         assert!(!text.contains("allow-any-path"), "{text}");

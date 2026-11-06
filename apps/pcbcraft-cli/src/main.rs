@@ -4,7 +4,7 @@ use std::{ffi::OsString, path::Path, process::ExitCode};
 
 use pcbcraft_mcp::{
     Backend, Headless, Server,
-    live::{Remote, TOKEN_ENV},
+    live::{Remote, TOKEN_ENV, WAIT_ENV},
 };
 
 const USAGE: &str =
@@ -43,11 +43,16 @@ fn load_project(path: &Path) -> Result<Headless, String> {
     result.map_err(|error| format!("could not open {}: {error}", path.display()))
 }
 
-/// Read the explicitly selected port and the credential supplied by the MCP client.
+/// Read the explicitly selected port and the credential supplied by the MCP client, and the
+/// optional reply wait an approving endpoint asks for. An unreadable wait keeps the default.
 fn connect_editor(port: &std::ffi::OsStr) -> Result<Remote, String> {
     let port = port.to_str().and_then(|port| port.parse().ok()).ok_or("--connect requires a local port number")?;
     let token = std::env::var(TOKEN_ENV).map_err(|_| format!("Set {TOKEN_ENV} from the editor's Local MCP configuration"))?;
-    Remote::new(port, &token)
+    let remote = Remote::new(port, &token)?;
+    Ok(match std::env::var(WAIT_ENV).ok().and_then(|wait| wait.trim().parse().ok()) {
+        Some(seconds) => remote.with_wait(seconds),
+        None => remote,
+    })
 }
 
 /// Serve the selected backend on stdio.

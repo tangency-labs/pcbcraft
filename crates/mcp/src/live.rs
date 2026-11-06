@@ -11,6 +11,11 @@ use crate::backend::{Backend, call_session, is_window_command};
 
 /// Environment variable used by the desktop configuration and the MCP CLI.
 pub const TOKEN_ENV: &str = "PCBCRAFT_CONTROL_TOKEN";
+/// Optional environment variable: seconds to wait for the editor's reply, for an endpoint that
+/// may hold a request for the person's approval (the in-app chat's). Defaults to five seconds.
+pub const WAIT_ENV: &str = "PCBCRAFT_CONTROL_WAIT_S";
+/// The longest reply wait [`WAIT_ENV`] may ask for.
+pub const MAX_WAIT: Duration = Duration::from_secs(900);
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REPLY_BYTES: usize = 16 << 20;
@@ -19,6 +24,7 @@ const MAX_REPLY_BYTES: usize = 16 << 20;
 pub struct Remote {
     port: u16,
     token: Token,
+    wait: Duration,
 }
 
 impl Remote {
@@ -27,7 +33,14 @@ impl Remote {
         if port == 0 {
             return Err("the editor port must be nonzero".to_owned());
         }
-        Ok(Self { port, token: Token::parse(token).map_err(|error| error.to_string())? })
+        Ok(Self { port, token: Token::parse(token).map_err(|error| error.to_string())?, wait: TIMEOUT })
+    }
+
+    /// Wait up to `seconds` (at least the default five, at most [`MAX_WAIT`]) for each reply, for
+    /// an editor endpoint that holds requests until the person approves them.
+    pub fn with_wait(mut self, seconds: u64) -> Self {
+        self.wait = Duration::from_secs(seconds).clamp(TIMEOUT, MAX_WAIT);
+        self
     }
 }
 
@@ -35,7 +48,7 @@ impl Backend for Remote {
     /// Open one authenticated connection per call. Never retry a call after a lost reply.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let request = json!({"method": method, "params": params});
-        let mut peer = Connection::connect(self.port, &self.token, request, TIMEOUT)
+        let mut peer = Connection::connect(self.port, &self.token, request, self.wait)
             .map_err(|error| format!("Could not send request to the PCBCraft editor on port {}: {error}", self.port))?;
         let lost_reply = || "No reply from the PCBCraft editor. Check the connection and inspect the project before retrying an edit.".to_owned();
         let reply = peer.receive(MAX_REPLY_BYTES).map_err(|error| format!("{} ({error})", lost_reply()))?.ok_or_else(lost_reply)?;

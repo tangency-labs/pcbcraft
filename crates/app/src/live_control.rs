@@ -45,6 +45,11 @@ impl Request {
         &self.body
     }
 
+    /// Whether the peer has given up waiting, so an answer would be dropped.
+    pub(super) fn expired(&self) -> bool {
+        Instant::now() >= self.deadline
+    }
+
     /// Send the editor's answer. A peer that has already given up is ignored.
     pub(super) fn answer(self, result: Result<Value, String>) {
         let _ = self.reply.try_send(match result {
@@ -64,6 +69,13 @@ impl std::fmt::Debug for LiveControl {
 impl LiveControl {
     /// Bind a fresh loopback endpoint and start the socket worker after explicit opt-in.
     pub(super) fn start(ctx: &egui::Context) -> io::Result<Self> {
+        Self::start_with_wait(ctx, EDITOR_TIMEOUT)
+    }
+
+    /// Like [`Self::start`], but each request may wait up to `wait` for the editor: long enough
+    /// for the in-app chat to hold one until the person allows or denies it. The peer gives up
+    /// at the same time, so a late answer is dropped.
+    pub(super) fn start_with_wait(ctx: &egui::Context, wait: Duration) -> io::Result<Self> {
         let listener = Listener::bind(0)?;
         listener.set_nonblocking(true)?;
         let port = listener.port()?;
@@ -74,11 +86,21 @@ impl LiveControl {
         let worker_token = Arc::clone(&token);
         let worker_stop = Arc::clone(&stop);
         let worker = thread::Builder::new().name("pcbcraft-live-mcp".to_owned()).spawn(move || {
-            listen(listener, &worker_token, &worker_stop, &send, &ctx);
+            listen(listener, &worker_token, &worker_stop, &send, &ctx, wait);
             drop(send);
             ctx.request_repaint();
         })?;
         Ok(Self { port, token, requests, stop, worker: worker.thread().clone() })
+    }
+
+    /// The endpoint's port, for a bridge the app configures itself.
+    pub(super) fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// The endpoint's credential, for a bridge the app configures itself. Never log it.
+    pub(super) fn secret(&self) -> &str {
+        self.token.secret()
     }
 
     /// Build a configuration for clients that accept an `mcpServers` object.
@@ -116,50 +138,51 @@ impl LiveControl {
 }
 
 impl PcbApp {
-    /// What an in-app agent is told, exactly as a live MCP client would see it: the project and
-    /// editor inspection and the command discovery list.
-    pub(super) fn agent_context(&mut self, ctx: &egui::Context) -> Value {
-        let mut editor = LiveEditor { app: self, ctx };
-        let discover =
-            |method: &str, editor: &mut LiveEditor<'_>| call_editor(editor, &json!({"method": method, "params": {}})).unwrap_or(Value::Null);
-        json!({
-            "project": discover("project.inspect", &mut editor),
-            "editor": discover("editor.inspect", &mut editor),
-            "commands": discover("engine.commands", &mut editor),
-        })
+    /// Serve the in-app chat's endpoint on the editor thread: run the tool calls the person
+    /// answered, then gate the next request. Reading and allowed commands run through the same
+    /// dispatcher as live MCP, with its refusals; the rest wait in the chat for Allow or Deny.
+    /// A project edit is noted in the conversation and the status bar.
+    pub(super) fn serve_chat(&mut self, ctx: &egui::Context) {
+        for (approval, answer) in self.assistant.take_answers() {
+            let crate::assistant::Source::Tool { request, command } = approval.source else { continue };
+            if answer == crate::assistant::Answer::Deny {
+                request.answer(Err(format!("The person denied `{command}`. Ask them before trying again.")));
+            } else {
+                self.run_chat_request(ctx, request);
+            }
+        }
+        let Some(request) = self.assistant.take_request() else { return };
+        let method = request.body()["method"].as_str().unwrap_or_default().to_owned();
+        let command = request.body()["params"]["command"].as_str().map(str::to_owned);
+        let verdict = crate::assistant::gate(self.assistant.mode(), &method, command.as_deref(), |command| self.assistant.always_allowed(command));
+        match (verdict, command) {
+            (crate::assistant::Verdict::Ask, Some(command)) if !request.expired() => {
+                let params = request.body()["params"]["params"].to_string();
+                let detail = if params == "null" { String::new() } else { params.chars().take(300).collect() };
+                self.assistant.hold(request, command, detail);
+                self.repaint_editors(ctx);
+            }
+            _ => self.run_chat_request(ctx, request),
+        }
     }
 
-    /// Run reviewed agent steps in order through the live MCP dispatcher, with the same refusals.
-    /// Steps were proposed against `revision`; each project command receives the revision
-    /// current when it runs, which is safe because nothing else runs between steps on this thread.
-    /// Returns how many project edits were made. If a step fails, the project edits made by
-    /// earlier steps are undone and the error names the step; window changes stay.
-    pub(super) fn run_agent_steps(&mut self, ctx: &egui::Context, revision: u64, steps: &[(String, Value)]) -> Result<usize, String> {
+    /// Run one chat request through the live dispatcher and answer it. An expired request is
+    /// dropped unrun: its caller has already given up.
+    fn run_chat_request(&mut self, ctx: &egui::Context, request: Request) {
+        if request.expired() {
+            return;
+        }
+        let revision = self.session.revision();
+        let result = call_editor(&mut LiveEditor { app: self, ctx }, request.body());
         if self.session.revision() != revision {
-            return Err("The project changed. Ask again to refresh the proposal.".to_owned());
+            self.views.sync(&self.session);
+            let title = request.body()["params"]["command"].as_str().and_then(pcbcraft_engine::command).map_or("Edit", |command| command.title);
+            self.message = None;
+            self.file_notice = Some(format!("{title} by the Assistant"));
+            self.assistant.note(format!("Edited: {title}. Undo reverts it."));
         }
-        let mut edits = 0;
-        for (index, (command, params)) in steps.iter().enumerate() {
-            let mut params = params.clone();
-            if pcbcraft_engine::command(command).is_some_and(|known| known.params.iter().any(|param| param.name == "expected_revision")) {
-                params["expected_revision"] = json!(self.session.revision());
-            }
-            let before = self.session.revision();
-            let request = json!({"method": "engine.execute", "params": {"command": command, "params": params, "inspect": false}});
-            let result = call_editor(&mut LiveEditor { app: self, ctx }, &request);
-            edits += usize::from(self.session.revision() != before);
-            if let Err(error) = result {
-                for _ in 0..edits {
-                    let _ = self.session.apply("edit.undo", &Value::Null);
-                }
-                self.views.sync(&self.session);
-                let undone = if edits == 0 { "" } else { " The project edits from earlier steps were undone." };
-                return Err(format!("Step {} ({command}) failed: {error}.{undone}", index + 1));
-            }
-        }
-        self.views.sync(&self.session);
+        request.answer(result);
         self.repaint_editors(ctx);
-        Ok(edits)
     }
 }
 
@@ -211,7 +234,7 @@ impl Drop for LiveControl {
 
 /// Accept peers independently of authentication and replies. At capacity, leave new peers
 /// in the OS backlog until a worker finishes. Close the listener before waiting for workers.
-fn listen(listener: Listener, token: &Token, stop: &AtomicBool, send: &SyncSender<Request>, ctx: &egui::Context) {
+fn listen(listener: Listener, token: &Token, stop: &AtomicBool, send: &SyncSender<Request>, ctx: &egui::Context, wait: Duration) {
     thread::scope(|scope| {
         let mut workers: Vec<ScopedJoinHandle<'_, ()>> = Vec::with_capacity(MAX_PEERS);
         while !stop.load(Ordering::Acquire) {
@@ -231,7 +254,7 @@ fn listen(listener: Listener, token: &Token, stop: &AtomicBool, send: &SyncSende
                     _ => break,
                 },
             };
-            match thread::Builder::new().spawn_scoped(scope, move || serve_peer(peer, token, stop, send, ctx)) {
+            match thread::Builder::new().spawn_scoped(scope, move || serve_peer(peer, token, stop, send, ctx, wait)) {
                 Ok(worker) => workers.push(worker),
                 Err(_) => thread::park_timeout(ACCEPT_POLL),
             }
@@ -244,7 +267,7 @@ fn listen(listener: Listener, token: &Token, stop: &AtomicBool, send: &SyncSende
 
 /// Configure and authenticate one peer before submitting its request to the editor.
 /// Failed authentication or I/O closes only this peer. A full editor queue gets a busy reply.
-fn serve_peer(peer: AcceptedPeer, token: &Token, stop: &AtomicBool, send: &SyncSender<Request>, ctx: &egui::Context) {
+fn serve_peer(peer: AcceptedPeer, token: &Token, stop: &AtomicBool, send: &SyncSender<Request>, ctx: &egui::Context, wait: Duration) {
     let Ok(mut peer) = peer.configure(IO_TIMEOUT) else {
         return;
     };
@@ -255,7 +278,7 @@ fn serve_peer(peer: AcceptedPeer, token: &Token, stop: &AtomicBool, send: &SyncS
         return;
     }
     let (reply, response) = mpsc::sync_channel(1);
-    let deadline = Instant::now() + EDITOR_TIMEOUT;
+    let deadline = Instant::now() + wait;
     if send.try_send(Request { body, deadline, reply }).is_err() {
         let _ = peer.send(&json!({"error": "The PCBCraft editor is busy"}));
         return;

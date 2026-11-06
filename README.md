@@ -276,43 +276,35 @@ into its own window. **Dock Assistant** returns it to the workspace.
 Minimize folds the panel into the bottom-right strip. Close hides the panel
 and keeps the conversation available when you reopen it.
 
-Open **Preferences → AI** from Home or the gear in the app bar to test
-sign-in, choose the default agent, and set where and when Assistant opens.
-**Add agent…** saves a named Codex
-or Claude Code profile. Choose **Installed agent** to use the standard
-executable on PATH or **Custom command** to use a compatible executable at
-another location. Both **Add agent…** and **AI settings…** are available
-from the Assistant's agent dropdown.
+The Assistant talks to a coding agent you already have, over the
+[Agent Client Protocol](https://agentclientprotocol.com) (ACP), as SolidCraft's agent chat does.
+PCBCraft finds installed agents by itself: Claude Code (through
+`npm install -g @agentclientprotocol/claude-agent-acp`), Codex
+(`npm install -g @agentclientprotocol/codex-acp`), Gemini CLI, OpenCode, GitHub Copilot CLI,
+Grok and Antigravity. Agents that aren't installed are listed with their install command. Pick an
+agent in the dropdown and choose **Connect**; if it needs a sign-in, its own sign-in methods
+appear. The agent's own options, such as its model, reasoning effort and mode, appear under the
+dropdown when it lists them, and the chosen model is remembered for that agent.
 
-Under the agent dropdown, **Model** and **Effort** choose what the next request
-runs with, remembered for each agent. **Default** leaves the agent's own
-default; Codex runs without your `config.toml`, so its default is Codex's
-built-in one. Claude Code offers its `fable`, `opus`, `sonnet` and `haiku`
-aliases and Codex lists the models in its local model cache; type any other
-model name under **Other model…**. The AI page shows each agent's choices.
+The agent works on the open project through its own live MCP connection, which PCBCraft starts
+for the chat and revokes when it disconnects. It runs the same commands as the menus and any MCP
+client (see [Live MCP](#live-mcp-in-the-desktop-editor)), so every edit shows at once and is one
+**Undo**; the conversation notes each edit. Its own shell and file tools are turned off where
+the agent allows it. `pcbcraft-cli` must be beside the PCBCraft program (as in `target/debug`)
+for the agent to reach the project.
 
-For an installed agent, put the Codex CLI or Claude Code on your PATH. For a
-custom command, set the executable path in its profile. Choose the agent and
-select **Connect**.
-The header shows **Ready** when PCBcraft can use the agent's saved login.
-If the agent asks you to sign in, choose **Sign in** and complete the browser
-flow. You can also sign in with `codex login` or `claude auth login --claudeai`
-in a terminal, then choose **I've signed in** or **Retry** in PCBcraft.
+The permission mode decides what the agent may do without asking. **Auto-allow project edits**
+(the default, as in SolidCraft) runs project and view commands at once, while saving, starting
+a new project and closing windows wait for **Allow**, **Always allow** or **Deny** in the chat.
+**Ask every time** asks before any command; **Allow everything** asks before none. Reading the
+project always runs. Questions the agent asks about its own tools appear in the chat too.
+**Stop** (or **Esc** in the chat) ends the answer and denies anything waiting.
 
-Open a project and ask a question or request a change. The Assistant has the
-same commands as a live MCP client: every project command, plus the window
-commands for views, windows, panels, preferences and Home (see
-[Live MCP](#live-mcp-in-the-desktop-editor)). **Send** shares the project, the
-editor's windows and views, the command list and recent conversation with the
-selected agent. It proposes a numbered list of commands; review it, then choose
-**Apply** or **Discard**. Apply runs the steps in order through the same
-dispatcher as live MCP. If a step fails, the project edits of the earlier steps
-are undone and the Assistant names the step. Each project edit is one **Undo**.
-**Stop** cancels a request in progress. If the project changed since the
-request, ask again before applying.
-
-PCBcraft remembers the agent choice and reuses the CLI sign-in across
-projects. Switching projects or agents starts a fresh conversation.
+Open **Preferences → AI** from Home or the gear in the app bar to set the permission mode for all
+agents or one, choose the default agent, **Test** that an agent starts and answers, forget its
+**Always allow** answers, **Refresh** the installed agents, and set where and when the Assistant
+opens. **Add agent…** adds another ACP agent by its command line, which runs without a shell.
+Model endpoints (OpenAI- or Anthropic-compatible, such as Ollama) are not offered yet.
 
 ## Live MCP in the desktop editor
 
