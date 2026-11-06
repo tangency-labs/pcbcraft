@@ -35,6 +35,7 @@ pub enum ToolIcon {
     Fit,
     Browser,
     SplitView,
+    Settings,
 }
 
 /// The glyph at the start of a Browser row: a container or one of the ribbon's own glyphs.
@@ -810,6 +811,13 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
                 line(&corner, s);
             }
             p.rect_filled(Rect::from_min_max(at(24.0, 24.0), at(40.0, 40.0)), (2.0 * size / 64.0) as u8, ink);
+        }
+        ToolIcon::Settings => {
+            let mut painter = p.clone();
+            if !enabled {
+                painter.set_opacity(0.33);
+            }
+            crate::menu::MenuIcon::Settings.paint_sized(&painter, center, size, t, false);
         }
         ToolIcon::Browser => paint_folder(p, center, size, ink),
         ToolIcon::SplitView => {

@@ -4,9 +4,10 @@ use egui::{Rect, Ui};
 use pcbcraft_chrome::{editor, shell, workspace};
 use pcbcraft_engine::{Session, selection::Selection};
 
-use crate::{Dialog, PcbApp, SchematicView, Tool, ViewId, schematic_canvas};
+use crate::{Dialog, PcbApp, SchematicView, Tool, ViewId, ViewInput, preferences::SelectionFollow, schematic_canvas};
 
-/// The two views retain their identities and navigation when hidden or focused. Only the
+/// The two views retain their identities when hidden or focused. Opening a split seeds the
+/// other camera from the active view; subsequent navigation is independent. Only the
 /// active view can issue edits; moving it between slots does not reconstruct either view.
 #[derive(Debug)]
 pub(super) struct EditorViews {
@@ -17,6 +18,16 @@ pub(super) struct EditorViews {
     rects: [(ViewId, Rect); 2],
     /// Last explicit selection intent. Focus changes alone never replace it.
     selection_source: Option<ViewId>,
+    pending_reveal: Option<PendingReveal>,
+}
+
+/// A single navigation request tied to both live view addresses and the policy at selection.
+/// It is consumed once, after the target host has supplied its current usable canvas area.
+#[derive(Debug)]
+struct PendingReveal {
+    source: ViewInput,
+    target: ViewInput,
+    policy: SelectionFollow,
 }
 
 impl Default for EditorViews {
@@ -28,6 +39,7 @@ impl Default for EditorViews {
             ratio: 0.5,
             rects: [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)],
             selection_source: None,
+            pending_reveal: None,
         }
     }
 }
@@ -39,14 +51,43 @@ impl EditorViews {
         let other_changed = self.other.sync(session);
         if active_changed || other_changed {
             self.selection_source = None;
+            self.pending_reveal = None;
         }
     }
 
     /// Record a deliberate selection or clear in the active view. The receiving view keeps
     /// its edit selection; rendering the projection never becomes another selection intent.
-    pub(super) fn select(&mut self, selection: Selection) {
+    fn select(&mut self, selection: Selection, session: &Session, policy: SelectionFollow) {
         self.active.selection = selection;
         self.selection_source = Some(self.active.id());
+        self.pending_reveal = None;
+        if self.split
+            && !self.active.selection.is_empty()
+            && policy.allows(self.active.id() == ViewId(0))
+            && self.active.shares_sheet(&self.other, session)
+            && let (Some(source), Some(target)) = (self.active.input(session), self.other.input(session))
+        {
+            self.pending_reveal = Some(PendingReveal { source, target, policy });
+        }
+    }
+
+    /// Consume navigation only for the receiving view, using its current host geometry. Focus,
+    /// revisions, rebinding, or preference changes invalidate delayed requests; painting a
+    /// highlight never produces another request or repeatedly overrides manual navigation.
+    fn reveal_for(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) {
+        if id != self.other.id() {
+            return;
+        }
+        if let Some(pending) = self.pending_reveal.take()
+            && self.split
+            && pending.policy == policy
+            && self.active.accepts(pending.source, session)
+            && self.other.accepts(pending.target, session)
+            && self.active.shares_sheet(&self.other, session)
+            && let Some(project) = session.project()
+        {
+            self.other.camera.reveal_selection(project, &self.active.selection);
+        }
     }
 
     /// Project the latest selection into another visible view of the same sheet. Resolve
@@ -68,6 +109,7 @@ impl EditorViews {
 
     /// Cancel previews in every view when a modal or Home takes over input.
     pub(super) fn cancel_gestures(&mut self) {
+        self.pending_reveal = None;
         self.active.cancel_gesture();
         self.other.cancel_gesture();
     }
@@ -75,6 +117,7 @@ impl EditorViews {
     /// Suspend editor input while Home replaces the panes. Returning to the workspace retains
     /// navigation and selection, but cannot revive events captured before it was hidden.
     pub(super) fn suspend(&mut self) {
+        self.pending_reveal = None;
         self.active.release_input();
         self.other.release_input();
     }
@@ -85,18 +128,24 @@ impl EditorViews {
         if !self.split || id != self.other.id() {
             return false;
         }
+        self.pending_reveal = None;
         self.active.release_input();
         self.other.release_input();
         std::mem::swap(&mut self.active, &mut self.other);
         true
     }
 
-    /// Hide or restore the other view without changing either camera or selection. Layout
-    /// transitions invalidate gestures and old pane hit regions, but never touch the session.
+    /// Open the other view at the active camera, preserving both edit selections. Hiding keeps
+    /// the active view. Layout transitions invalidate gestures and pending reveals without
+    /// touching the session; reopening deliberately seeds navigation again.
     fn set_split(&mut self, split: bool) {
         if self.split != split {
+            self.pending_reveal = None;
             self.active.release_input();
             self.other.release_input();
+            if split {
+                self.other.camera = self.active.camera.fork_navigation();
+            }
             self.split = split;
             self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
         }
@@ -104,6 +153,11 @@ impl EditorViews {
 }
 
 impl PcbApp {
+    /// Route explicit selection through the coordinator with the current follow policy.
+    pub(super) fn select(&mut self, selection: Selection) {
+        self.views.select(selection, &self.session, self.preferences.selection_follow);
+    }
+
     /// Apply the presentation action from the View ribbon. A modal owns input until it closes.
     pub(super) fn split_editors(&mut self, ctx: &egui::Context, split: bool) {
         if self.session.project().is_none() || !matches!(self.dialog, Dialog::None) {
@@ -182,9 +236,13 @@ impl PcbApp {
                     }
                     self.canvas(ui);
                 } else {
+                    self.views.other.camera.set_uncovered(canvas, uncovered);
+                    // A context-menu action in the earlier pane can open a modal this frame.
+                    if matches!(self.dialog, Dialog::None) {
+                        self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
+                    }
                     let highlight = self.views.highlight_for(id, &self.session);
                     let view = &mut self.views.other;
-                    view.camera.set_uncovered(canvas, uncovered);
                     ui.push_id(view.widget_id(), |ui| {
                         shell::canvas(ui, |ui| {
                             if let Some(project) = self.session.project() {
@@ -205,6 +263,10 @@ impl PcbApp {
                     });
                 }
             });
+        }
+        if self.views.pending_reveal.is_some() {
+            // A selection in the later-painted pane must wake the earlier target host.
+            ui.ctx().request_repaint();
         }
     }
 

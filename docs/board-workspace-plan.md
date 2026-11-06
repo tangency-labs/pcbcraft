@@ -18,7 +18,10 @@ document. This is the first host for exercising view ownership; board rendering,
 detached editor windows and schematic-to-board cross-probing remain
 unimplemented. Selection highlighting between two views of the same schematic
 is implemented, using separate paint state from each view's edit selection.
-Presentation actions are not exposed through live MCP yet.
+Opening a split seeds the other camera from the active view. View settings now
+provide optional selection following in both directions or either stable role
+direction, preserving zoom and focus. Presentation actions are not exposed through
+live MCP yet.
 
 ## Existing foundation
 
@@ -106,10 +109,14 @@ missing or unsupported mappings explicitly. General mappings cannot be inferred
 from the current hard-coded two-pad case or matching pin and pad numbers.
 
 A user selection projects highlights into counterpart views without changing
-their focus or cameras. Reveal counterpart explicitly navigates to the object
-and its sheet; automatic following can be a later preference. Only the focused
-view's actual edit selection receives destructive commands. Receiving a
-highlight must not emit another selection event.
+their focus. By default cameras stay put; **View → Settings** allows both views
+to follow selections, only secondary to follow primary, or the reverse. These
+roles remain stable across focus changes. Following pans only when the selected
+bounds extend outside the usable canvas, preserving zoom; an oversized group is
+centered without zooming out. A reveal is consumed once, and subsequent manual
+navigation does not trigger another. Reveal counterpart across sheets remains
+planned. Only the focused view’s actual edit selection receives destructive
+commands. Receiving a highlight must not emit another selection event.
 
 For the current same-sheet views, the latest explicit selection supplies the
 counterpart highlight, with amber ink distinguishing it from local blue edit
@@ -117,7 +124,13 @@ selection. Focus changes retain the source without emitting a selection event.
 Both view bindings must match the current project opening and sheet; deletion
 prunes the live source selection, and reopening resets it. This handles symbols
 and wire identities on one sheet, without claiming board correspondence or
-project-wide net identity.
+project-wide net identity. Pending navigation captures both view input addresses
+and the policy at selection. Revision changes, reopening, focus changes, modal
+input, Home, a collapsed split, and changed preferences discard it. Target host
+geometry is supplied before consuming the request, so selection coordination
+does not depend on native-window coordinates. A native host still needs window
+lifecycle/input routing and a PCB target still needs component/pad correspondence
+and its own geometry adapter.
 
 Distinguish unassigned footprints, assigned but unplaced footprints, unresolved
 mappings and targets removed since selection. Represent one-to-many matches or
@@ -178,7 +191,7 @@ board. This is a behavior fixture, not a validated electrical reference design.
 
 - Place, move and rotate a footprint through shared engine commands. Each completed gesture is one undo step; cancellation makes no edit.
 - Switch workspaces, split schematic and board, detach either editor, and return it. Preserve independent cameras and the same open project throughout.
-- Select a component, pin, footprint and pad from either side. Highlight the exact counterpart without focus theft, camera jumps or selection loops; Reveal counterpart navigates explicitly.
+- Select a component, pin, footprint and pad from either side. Highlight the exact counterpart without focus theft or selection loops; cameras stay put by default, with optional directed selection following that preserves zoom. Reveal counterpart navigates explicitly.
 - Rename a reference and change placement without breaking correspondence. Exercise an unassigned component and reject an incompatible mapping without partial mutation.
 - Undo and redo from either editor, then inspect through live MCP. Both views and MCP report the same revision and electrical state.
 - Add and remove a schematic part. Preview board consequences, reject a stale preview, apply the current preview once, and undo it once. Unchanged footprints keep their placement.

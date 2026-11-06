@@ -84,11 +84,18 @@ keeps its own camera and selection, including box and modifier selections, while
 redo and saving use the same project. Changing panes cancels unfinished gestures.
 Selecting symbols or wires highlights their counterparts in the other pane in
 amber; blue remains that pane's own edit selection. Highlights follow the latest
-selection, including Browser picks and box selections, without changing cameras
-or focus. Switching tabs alone keeps the highlight; Delete acts only on the
-focused pane's own selection. Clearing the source selection clears its highlight.
+selection, including Browser picks and box selections, without changing focus.
+**View → Settings → Follow selection** controls automatic panning: highlight only
+(the default), both views, secondary follows primary, or primary follows secondary.
+Following reveals out-of-view items once per selection while keeping zoom; it
+does not repeatedly override manual panning. Primary is the left/top pane and
+secondary the right/bottom pane, regardless of focus. Switching tabs alone keeps
+the highlight; Delete acts only on the focused pane’s own selection. Clearing the
+source selection clears its highlight.
 Drag the divider to resize the panes; narrow windows stack them vertically.
-Turning Split off keeps the active view and retains the hidden view for later.
+Opening Split copies the active view’s current zoom and position into the other
+pane. Turning Split off keeps the active view; reopening copies its camera again
+while retaining each view’s separate edit selection.
 The arrangement lasts for the app session and does not change project files.
 Detached editor windows and schematic-to-board cross-probing remain planned.
 

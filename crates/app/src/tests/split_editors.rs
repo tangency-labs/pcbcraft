@@ -207,7 +207,7 @@ fn returning_to_a_pane_does_not_revive_its_wire_gesture() {
     assert_eq!(app.session.inspect(), before);
 }
 
-/// Collapsing a split retains the active pane and the hidden pane's navigation/selection. A
+/// Collapsing a split retains the active pane and both edit selections. A
 /// narrow viewport stacks panes and dragging the divider cannot make them overlap or escape.
 #[test]
 fn split_layout_preserves_views_and_fits_narrow_windows() {
@@ -511,4 +511,205 @@ fn box_selection_and_atomic_group_edits_work_in_each_pane() {
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         }
     }
+}
+
+/// Every split starts from the focused view's displayed transform, including when the original
+/// pane is being restored. Splitting never adds a project edit or copies edit selection.
+#[test]
+fn opening_and_reopening_a_split_copies_the_active_camera() {
+    let mut h = split_harness();
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    for source in [0, 1] {
+        focus_tab(&mut h, source as usize);
+        click(&mut h, "Split editor views");
+        let single = h.get_by_label("Schematic canvas").rect();
+        h.hover_at(single.center());
+        h.run();
+        h.event(egui::Event::Zoom(1.5));
+        h.run();
+        h.state_mut().views.active.camera.center_on(Point { x_nm: 25_400_000, y_nm: -12_700_000 });
+        h.run();
+        let zoom = h.state().views.active.camera.zoom();
+        let offset = h.state().views.active.camera.screen(origin, single) - single.center();
+        let snapshot = h.state().session.snapshot().unwrap();
+        click(&mut h, "Split editor views");
+        for id in [0, 1] {
+            assert_eq!(view(&h, id).camera.zoom(), zoom);
+            let rect = canvas(&h, id);
+            assert!((view(&h, id).camera.screen(origin, rect) - rect.center() - offset).length() < 0.01);
+        }
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// Follow directions use stable roles rather than focus. A new selection reveals once, keeps
+/// zoom and edit authority, and does not pull the receiver back after subsequent manual panning.
+#[test]
+fn selection_follow_respects_direction_and_never_locks_the_camera() {
+    use preferences::SelectionFollow::*;
+    for (policy, allowed) in
+        [(Off, [false, false]), (Both, [true, true]), (SecondaryFollowsPrimary, [true, false]), (PrimaryFollowsSecondary, [false, true])]
+    {
+        for source in [0, 1] {
+            let mut h = split_harness();
+            focus_tab(&mut h, (1 - source) as usize);
+            h.hover_at(canvas(&h, 1 - source).center());
+            h.run();
+            h.event(egui::Event::Zoom(1.5));
+            h.run();
+            focus_tab(&mut h, source as usize);
+            h.state_mut().preferences.selection_follow = policy;
+            let far = Point { x_nm: 1_270_000_000, y_nm: 0 };
+            h.state_mut().views.other.camera.center_on(far);
+            h.run();
+            let target = 1 - source;
+            let rect = canvas(&h, target);
+            let origin = Point { x_nm: 0, y_nm: 0 };
+            let before = view(&h, target).camera.screen(origin, rect);
+            let zoom = view(&h, target).camera.zoom();
+            let snapshot = h.state().session.snapshot().unwrap();
+            click_point(&mut h, source, origin);
+            let after = view(&h, target).camera.screen(origin, rect);
+            assert_eq!(rect.contains(after), allowed[source as usize], "{policy:?}, source {source}");
+            assert_eq!(view(&h, target).camera.zoom(), zoom);
+            assert_eq!(h.state().views.active.id(), ViewId(source));
+            assert!(view(&h, target).selection.is_empty());
+            assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+            // An already visible counterpart stays exactly where it is.
+            click_point(&mut h, source, origin);
+            assert_eq!(view(&h, target).camera.screen(origin, rect), after);
+            h.state_mut().views.other.camera.center_on(far);
+            h.run();
+            h.run();
+            assert_eq!(view(&h, target).camera.screen(origin, rect), before);
+            // Selecting that same part deliberately is a fresh navigation request.
+            click_point(&mut h, source, origin);
+            assert_eq!(rect.contains(view(&h, target).camera.screen(origin, rect)), allowed[source as usize]);
+        }
+    }
+}
+
+/// A reveal deferred until the next target paint cannot survive an edit, reopening, modal,
+/// policy change, clear, an expired input epoch, Home suspension or a collapsed split.
+#[test]
+fn delayed_selection_reveals_are_discarded_when_their_context_changes() {
+    for case in 0..8 {
+        let mut h = split_harness();
+        focus_tab(&mut h, 1);
+        let target = canvas(&h, 0);
+        let origin = Point { x_nm: 0, y_nm: 0 };
+        h.state_mut().preferences.selection_follow = preferences::SelectionFollow::Both;
+        h.state_mut().views.other.camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
+        h.run();
+        let before = view(&h, 0).camera.screen(origin, target);
+        let app = h.state_mut();
+        let source = app.views.active.input(&app.session).unwrap();
+        app.view_click(source, Click::Select(Some("symbol-2".to_owned())));
+        match case {
+            0 => {
+                let revision = app.session.revision();
+                app.session.apply(MOVE_SYMBOL, &json!({"symbol":"symbol-2","x_nm":2_540_000,"y_nm":0,"expected_revision":revision})).unwrap();
+            }
+            1 => app.session.open_snapshot(app.session.snapshot().unwrap()),
+            2 => app.dialog = Dialog::Preferences(preferences::PreferencesWindow::new(app.preferences)),
+            3 => app.preferences.selection_follow = preferences::SelectionFollow::Off,
+            4 => app.select(Selection::default()),
+            5 => {
+                // A focus departure invalidates the captured address even if the view is active again.
+                app.views.active.release_input();
+                app.views.other.release_input();
+            }
+            6 => app.views.suspend(),
+            _ => app.split_editors(&egui::Context::default(), false),
+        }
+        h.run();
+        if case == 1 {
+            assert!(view(&h, 0).selection.is_empty());
+            assert!(view(&h, 0).camera.screen(origin, target).distance(target.center()) < 0.01);
+        } else {
+            assert_eq!(view(&h, 0).camera.screen(origin, target), before, "case {case}");
+        }
+    }
+}
+
+/// The View shortcut opens the persisted preference, with working Cancel, Apply, page defaults
+/// and search. Changing a preference does not retroactively navigate an existing highlight.
+#[test]
+fn view_settings_support_cancel_apply_defaults_and_search() {
+    use preferences::SelectionFollow;
+    let mut h = split_harness();
+    click(&mut h, "View settings");
+    click(&mut h, "Follow selection mode");
+    click(&mut h, "Secondary follows primary");
+    assert_eq!(h.state().preferences.selection_follow, SelectionFollow::SecondaryFollowsPrimary);
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().preferences.selection_follow, SelectionFollow::Off);
+    click(&mut h, "View settings");
+    click(&mut h, "Follow selection mode");
+    click(&mut h, "Both views");
+    click(&mut h, "Apply");
+    click(&mut h, "Restore page defaults");
+    assert_eq!(h.state().preferences.selection_follow, SelectionFollow::Off);
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().preferences.selection_follow, SelectionFollow::Both);
+    click(&mut h, "Preferences");
+    h.get_by_role(egui::accesskit::Role::TextInput).click();
+    h.run();
+    h.get_by_role(egui::accesskit::Role::TextInput).type_text("follow");
+    h.run();
+    h.get_by_label("Follow selection mode");
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.query_all_by_label("Views").any(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)));
+}
+
+/// Browser picks reveal complete wire paths in a stacked layout, inside the region left clear
+/// by panels. The receiver still owns neither the Browser pick nor the edit selection.
+#[test]
+fn browser_follow_reveals_wire_bounds_in_the_uncovered_target() {
+    let mut h = split_harness();
+    h.set_size(egui::vec2(700.0, 850.0));
+    h.state_mut().run(
+        pcbcraft_engine::DRAW_WIRE,
+        &json!({"from":{"symbol":"symbol-2","terminal":"2"},"to":{"x_nm":25_400_000,"y_nm":0},"bends":[],"expected_revision":2}),
+    );
+    h.run();
+    focus_tab(&mut h, 0);
+    h.state_mut().preferences.selection_follow = preferences::SelectionFollow::SecondaryFollowsPrimary;
+    h.state_mut().views.other.camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
+    click(&mut h, "Toggle Browser");
+    click(&mut h, "Expand Nets");
+    click(&mut h, "Net 1");
+    let project = h.state().session.project().unwrap();
+    let rect = canvas(&h, 1);
+    let uncovered = workspace::catalog::uncovered(rect, &[h.state().browser.rect(), h.state().parts.rect()]);
+    for point in project.wire_path(&project.wires()[0]) {
+        assert!(uncovered.contains(view(&h, 1).camera.screen(point, rect)));
+    }
+    assert!(view(&h, 1).selection.is_empty());
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+}
+
+/// Opening a modal from the earlier canvas must block a reveal before the later canvas paints,
+/// not merely at the beginning of the next frame.
+#[test]
+fn context_menu_modal_blocks_same_frame_follow() {
+    let mut h = split_harness();
+    h.state_mut().preferences.selection_follow = preferences::SelectionFollow::Both;
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let point = view(&h, 0).camera.screen(origin, canvas(&h, 0));
+    h.hover_at(point);
+    h.run();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    h.state_mut().views.other.camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
+    let rect = canvas(&h, 1);
+    let before = view(&h, 1).camera.screen(origin, rect);
+    click(&mut h, "Edit Fields…");
+    assert!(matches!(h.state().dialog, Dialog::EditFields { .. }));
+    assert_eq!(view(&h, 1).camera.screen(origin, rect), before);
+    click(&mut h, "Cancel");
+    assert_eq!(view(&h, 1).camera.screen(origin, rect), before);
 }
