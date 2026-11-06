@@ -3,6 +3,7 @@
 //! proposal and its revision, and Apply runs it through the live MCP dispatcher.
 
 mod agent;
+mod options;
 mod settings;
 
 pub(super) use settings::{Form as AgentForm, Request as SettingsRequest};
@@ -66,6 +67,10 @@ pub(super) struct Assistant {
     send_requested: Option<String>,
     /// The commands the pending or last request offered, for checking its proposal.
     known: Known,
+    /// Suggested models per agent, read once when its picker first shows.
+    models: std::collections::BTreeMap<String, Vec<options::Model>>,
+    /// A model name being typed into the model picker.
+    model_draft: String,
     notice: Option<String>,
 }
 
@@ -514,10 +519,11 @@ impl Assistant {
         let history = self.messages.clone();
         let revision = session.revision();
         let agent = self.settings.target(self.settings.selected).0;
+        let options = self.settings.options(self.settings.selected);
         let executable = executable.to_owned();
         let worker_prompt = prompt.clone();
         if self.start_job(ctx, JobKind::Chat(revision), move |stop| {
-            agent::request(agent, &executable, &snapshot, &context, &commands, &history, &worker_prompt, stop).map(Outcome::Reply)
+            agent::request(agent, &options, &executable, &snapshot, &context, &commands, &history, &worker_prompt, stop).map(Outcome::Reply)
         }) {
             self.draft.clear();
             self.notice = None;
@@ -705,6 +711,7 @@ impl Assistant {
             }
         });
         self.select(selected);
+        self.option_pickers(ui);
         let command = self.settings.target(selected).2.to_owned();
         let executable = OsStr::new(&command);
         match self.job.as_ref().map(|job| job.kind) {
@@ -745,6 +752,68 @@ impl Assistant {
                     }
                 }
             },
+        }
+    }
+
+    /// The selected agent's Model and Effort pickers, as in SolidCraft's chat header. Choices
+    /// apply from the next request and are remembered for that agent; Default passes nothing.
+    /// A typed model is kept only when it is a valid single argument.
+    fn option_pickers(&mut self, ui: &mut Ui) {
+        let choice = self.settings.selected;
+        let agent = self.settings.target(choice).0;
+        let models = self.models.entry(agent.executable().to_owned()).or_insert_with(|| options::models(agent)).clone();
+        let mut chosen = self.settings.options(choice);
+        let shown = |value: &str, models: &[options::Model]| {
+            if value.is_empty() {
+                "Default".to_owned()
+            } else {
+                models.iter().find(|model| model.id == value).map_or(value.to_owned(), |model| model.label.clone())
+            }
+        };
+        let idle = self.job.is_none();
+        ui.horizontal_wrapped(|ui| {
+            ui.add_enabled_ui(idle, |ui| {
+                let hint = format!("Passed to {} from the next request. Default uses the agent's own default.", agent.label());
+                egui::ComboBox::from_id_salt("assistant_model")
+                    .selected_text(format!("Model: {}", shown(&chosen.model, &models)))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut chosen.model, String::new(), "Default");
+                        for model in &models {
+                            ui.selectable_value(&mut chosen.model, model.id.clone(), &model.label).on_hover_text(&model.id);
+                        }
+                        ui.separator();
+                        let field =
+                            ui.add(TextEdit::singleline(&mut self.model_draft).hint_text("Other model…").desired_width(160.0).char_limit(128));
+                        if field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                            let typed = self.model_draft.trim().to_owned();
+                            if !typed.is_empty() && options::valid_model(&typed) {
+                                chosen.model = typed;
+                                self.model_draft.clear();
+                                ui.close();
+                            }
+                        }
+                        if !options::valid_model(self.model_draft.trim()) {
+                            ui.label(dim("Use letters, digits and . _ : / [ ] -"));
+                        }
+                    })
+                    .response
+                    .on_hover_text(&hint);
+                let efforts = options::efforts(agent, &chosen.model, &models);
+                egui::ComboBox::from_id_salt("assistant_effort")
+                    .selected_text(format!("Effort: {}", if chosen.effort.is_empty() { "Default" } else { &chosen.effort }))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut chosen.effort, String::new(), "Default");
+                        for effort in efforts {
+                            ui.selectable_value(&mut chosen.effort, effort.clone(), effort);
+                        }
+                    })
+                    .response
+                    .on_hover_text(&hint);
+            });
+        });
+        if chosen != self.settings.options(choice) {
+            self.settings.set_options(choice, chosen);
+            self.settings_changed = true;
         }
     }
 
@@ -935,7 +1004,7 @@ mod tests {
 
         click(&mut harness, "Assistant");
         assert_eq!(harness.state().assistant.visibility, Visibility::Open);
-        harness.get_by_role(Role::ComboBox).click();
+        agent_switcher(&harness)?.click();
         harness.run();
         click(&mut harness, "AI settings…");
         harness.run_steps(3);
@@ -944,7 +1013,7 @@ mod tests {
         harness.step();
         assert!(matches!(harness.state().dialog, crate::Dialog::None), "{:?}", harness.state().dialog);
 
-        harness.get_by_role(Role::ComboBox).click();
+        agent_switcher(&harness)?.click();
         harness.run();
         click(&mut harness, "Add agent…");
         harness.run_steps(3);
@@ -961,7 +1030,7 @@ mod tests {
         harness.step();
         assert!(matches!(harness.state().dialog, crate::Dialog::None), "{:?}", harness.state().dialog);
 
-        harness.get_by_role(Role::ComboBox).click();
+        agent_switcher(&harness)?.click();
         harness.run();
         click(&mut harness, "AI settings…");
         harness.run_steps(3);
@@ -975,7 +1044,7 @@ mod tests {
 
         click(&mut harness, "OK");
         harness.step();
-        harness.get_by_role(Role::ComboBox).click();
+        agent_switcher(&harness)?.click();
         harness.run();
         click(&mut harness, "Local Codex");
         harness.get_by_role_and_label(Role::Button, "Connect").click();
@@ -988,6 +1057,11 @@ mod tests {
         harness.run();
         harness.get_by_label("Ready");
         Ok(())
+    }
+
+    /// The agent switcher: the first combo box in the agent row, ahead of Model and Effort.
+    fn agent_switcher<'h>(harness: &'h Harness<'_, PcbApp>) -> Result<egui_kittest::Node<'h>, &'static str> {
+        harness.query_all_by_role(egui::accesskit::Role::ComboBox).next().ok_or("Missing the agent switcher")
     }
 
     /// Both provider flows start from sign-in, then apply a reviewed edit through shared history.
@@ -1010,6 +1084,7 @@ case "${0##*/}:$*" in
     'codex:login status'|'claude:auth status') exit 1 ;;
     'codex:login'|'claude:auth login --claudeai') exit 0 ;;
 esac
+all="$*"
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --output-last-message) shift; output="$1" ;;
@@ -1017,6 +1092,7 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 prompt=$(cat)
+case "$all" in 'exec -m gpt-test -c model_reasoning_effort="high" '*|'--model sonnet --effort high '*) ;; *) exit 1 ;; esac
 case "$prompt" in *'"request":"Connect the resistors"'*) ;; *) exit 1 ;; esac
 case "$prompt" in *'"reference":"R1"'*'"reference":"R2"'*) ;; *) exit 1 ;; esac
 case "$prompt" in *'"id":"schematic.delete_wire"'*'"id":"view.split"'*) ;; *) exit 1 ;; esac
@@ -1058,6 +1134,11 @@ esac
             harness.run();
         };
 
+        let model = if agent == Agent::Codex { "gpt-test" } else { "sonnet" };
+        let chosen = options::AgentOptions { model: model.to_owned(), effort: "high".to_owned() };
+        harness.state_mut().assistant.settings.set_options(Choice::BuiltIn(agent), chosen.clone());
+        let restored = Assistant::from_setting(None, None, Some(&harness.state().assistant.settings_text()));
+        assert_eq!(restored.settings.options(Choice::BuiltIn(agent)), chosen, "choices survive a restart");
         harness.state_mut().assistant.start_auth(&ctx, false, executable.as_os_str());
         wait(&mut harness);
         harness.get_by_label("Sign in");
@@ -1071,7 +1152,8 @@ esac
         start(harness.state_mut());
         wait(&mut harness);
         assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(0));
-        let proposal = harness.state().assistant.proposal.as_ref().ok_or_else(|| format!("Missing proposal: {:?}", harness.state().assistant.notice))?;
+        let proposal =
+            harness.state().assistant.proposal.as_ref().ok_or_else(|| format!("Missing proposal: {:?}", harness.state().assistant.notice))?;
         let commands: Vec<&str> = proposal.steps.iter().map(|(command, _)| command.as_str()).collect();
         assert_eq!(commands, ["schematic.connect_pins", "view.split"]);
         assert!(proposal.steps[0].1.get("expected_revision").is_none(), "the editor supplies the revision");
@@ -1123,5 +1205,19 @@ esac
         let revision = app.session.revision();
         assert_eq!(app.run_agent_steps(&ctx, revision, &steps[..2]), Ok(2));
         Ok(())
+    }
+
+    /// Saved model and effort choices that could read as flags load as the defaults, and
+    /// choices for removed agents are forgotten.
+    #[test]
+    fn saved_agent_options_are_sanitized() {
+        let saved = r#"{"options":[
+            {"choice":{"BuiltIn":"Claude"},"model":"--dangerously-skip-permissions","effort":"high"},
+            {"choice":{"Profile":7},"model":"opus","effort":"max"}
+        ]}"#;
+        let restored = Assistant::from_setting(None, None, Some(saved));
+        let claude = restored.settings.options(Choice::BuiltIn(Agent::Claude));
+        assert_eq!((claude.model.as_str(), claude.effort.as_str()), ("", "high"));
+        assert_eq!(restored.settings.options(Choice::Profile(7)), options::AgentOptions::default());
     }
 }

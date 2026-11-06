@@ -284,6 +284,13 @@ executable on PATH or **Custom command** to use a compatible executable at
 another location. Both **Add agent…** and **AI settings…** are available
 from the Assistant's agent dropdown.
 
+Under the agent dropdown, **Model** and **Effort** choose what the next request
+runs with, remembered for each agent. **Default** leaves the agent's own
+default; Codex runs without your `config.toml`, so its default is Codex's
+built-in one. Claude Code offers its `fable`, `opus`, `sonnet` and `haiku`
+aliases and Codex lists the models in its local model cache; type any other
+model name under **Other model…**. The AI page shows each agent's choices.
+
 For an installed agent, put the Codex CLI or Claude Code on your PATH. For a
 custom command, set the executable path in its profile. Choose the agent and
 select **Connect**.

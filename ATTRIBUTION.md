@@ -27,7 +27,15 @@ and leaves token distribution, discovery, and command dispatch to its callers.
 The desktop live MCP setup follows the explicit per-window connection and
 copyable configuration in PCBcraft Next's `docs/mcp.md` at the revision below.
 PCBCraft's adapter dispatches directly through the shared editor session and
-limits live edits to moving a symbol.
+the window's own view and window handlers.
+
+The Assistant's Model and Effort pickers follow the placement of the model and
+reasoning-effort choices in SolidCraft's agent chat header
+(`crates/ui-egui/src/agent_chat/panel.rs` and `settings.rs`) at
+`c553365a2197a689e749389a6fbf707a38df9b61` (MIT OR Apache-2.0, copyright (c)
+2026 SolidCraft contributors). No code was copied: PCBCraft passes the choices
+to the Codex and Claude Code CLIs as their own model and effort flags, and
+reads Codex's suggested models from its local model cache.
 
 The integrated Linux title bar and ribbon dimensions follow SolidCraft's
 `crates/ui-egui/src/titlebar.rs` and `crates/ui-egui/src/toolbar.rs` at

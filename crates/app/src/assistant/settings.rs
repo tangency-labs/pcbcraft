@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     Assistant, JobKind, Outcome, Visibility,
     agent::{self, Agent},
+    options::AgentOptions,
 };
 
 const MAX_PROFILES: u32 = 32;
@@ -50,6 +51,16 @@ pub(super) struct Settings {
     pub selected: Choice,
     default_agent: Option<Choice>,
     profiles: Vec<Profile>,
+    /// Each agent's chosen model and effort; agents not listed use their defaults.
+    options: Vec<ChoiceOptions>,
+}
+
+/// One agent's saved model and effort.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ChoiceOptions {
+    choice: Choice,
+    #[serde(flatten)]
+    options: AgentOptions,
 }
 
 impl Default for Settings {
@@ -62,6 +73,7 @@ impl Default for Settings {
             selected: Choice::default(),
             default_agent: None,
             profiles: Vec::new(),
+            options: Vec::new(),
         }
     }
 }
@@ -78,6 +90,12 @@ impl Settings {
             let Some(seen) = seen.get_mut(profile.id as usize) else { return false };
             valid_command(&profile.command) && !profile.name.trim().is_empty() && !std::mem::replace(seen, true)
         });
+        let options = std::mem::take(&mut settings.options);
+        for saved in options {
+            if settings.exists(saved.choice) && settings.options(saved.choice) == AgentOptions::default() {
+                settings.set_options(saved.choice, saved.options.sanitized());
+            }
+        }
         settings.default_agent = settings.default_agent.filter(|choice| settings.exists(*choice));
         settings.selected = settings.default_agent.unwrap_or(settings.selected);
         if !settings.exists(settings.selected) {
@@ -103,6 +121,19 @@ impl Settings {
             Choice::Profile(_) => self.profile(choice).map_or((Agent::Codex, Agent::Codex.label(), Agent::Codex.executable()), |profile| {
                 (profile.agent, profile.name.as_str(), profile.command.as_str())
             }),
+        }
+    }
+
+    /// The model and effort `choice` runs with; defaults when none were chosen.
+    pub(super) fn options(&self, choice: Choice) -> AgentOptions {
+        self.options.iter().find(|saved| saved.choice == choice).map(|saved| saved.options.clone()).unwrap_or_default()
+    }
+
+    /// Remember `choice`'s model and effort. Choosing both defaults forgets the entry.
+    pub(super) fn set_options(&mut self, choice: Choice, options: AgentOptions) {
+        self.options.retain(|saved| saved.choice != choice);
+        if options != AgentOptions::default() {
+            self.options.push(ChoiceOptions { choice, options });
         }
     }
 
@@ -213,7 +244,9 @@ impl Assistant {
         let (agent, name, command) = self.settings.target(choice);
         let name = name.to_owned();
         ui.label(egui::RichText::new(&name).strong());
-        ui.label(dim(format!("{} · {command}", agent.label())));
+        let options = self.settings.options(choice);
+        let shown = |value: &str| if value.is_empty() { "Default".to_owned() } else { value.to_owned() };
+        ui.label(dim(format!("{} · {command} · Model {} · Effort {}", agent.label(), shown(&options.model), shown(&options.effort))));
         ui.horizontal_wrapped(|ui| {
             if ui.add_enabled(self.job.is_none(), egui::Button::new("Test")).on_hover_text(format!("Check sign-in for {name}")).clicked() {
                 self.test_agent(ui.ctx(), choice);
@@ -237,6 +270,7 @@ impl Assistant {
                 }
                 if ui.add_enabled(self.job.is_none(), egui::Button::new("Remove")).clicked() {
                     self.settings.profiles.retain(|profile| Choice::Profile(profile.id) != choice);
+                    self.settings.set_options(choice, AgentOptions::default());
                     if self.settings.default_agent == Some(choice) {
                         self.settings.default_agent = None;
                     }

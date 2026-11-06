@@ -13,7 +13,7 @@ use std::{
 use pcbcraft_engine::Project;
 use serde_json::{Value, json};
 
-use super::{Message, Reply};
+use super::{Message, Reply, options::AgentOptions};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_OUTPUT_BYTES: u64 = 32 * 1024;
@@ -106,9 +106,11 @@ fn reply_schema(commands: &[String]) -> Value {
 /// Ask the selected agent to answer from the editor's `context` (project and editor inspection
 /// and the offered `commands`, as live MCP discovery lists them) and its saved CLI sign-in.
 /// The subprocess has no tools and can only return a proposal. Only the editor can apply it.
+/// `options` choose the model and effort; empty ones leave the agent's defaults.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn request(
     agent: Agent,
+    options: &AgentOptions,
     executable: &OsStr,
     project: &Project,
     context: &Value,
@@ -150,8 +152,9 @@ pub(super) fn request(
         Agent::Codex => {
             fs::write(&schema, &schema_text).map_err(io_error)?;
             command
+                .arg("exec")
+                .args(options.cli_args(agent))
                 .args([
-                    "exec",
                     "--skip-git-repo-check",
                     "--ignore-user-config",
                     "--ephemeral",
@@ -183,6 +186,7 @@ pub(super) fn request(
         }
         Agent::Claude => {
             command
+                .args(options.cli_args(agent))
                 .args([
                     "--print",
                     "--safe-mode",
