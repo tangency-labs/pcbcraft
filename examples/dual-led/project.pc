@@ -1,0 +1,24 @@
+{
+  "format": "pcbcraft-project/5",
+  "id": "c8746800-e4e3-4ecf-81f4-7fe3ee1ea87b",
+  "name": "Dual LED · editing demo",
+  "sheets": [{"id":"58892b91-f098-48f9-b176-e5087ac1201e","name":"Schematic","file":"sheets/58892b91-f098-48f9-b176-e5087ac1201e.json"}],
+  "components": [
+    {"id":2,"library":"starter","definition":"connector","definition_revision":2,"reference_number":1,"reference":"J1","value":"Input"}
+
+    ,
+    {"id":3,"library":"starter","definition":"resistor","definition_revision":2,"reference_number":1,"reference":"R1","value":"1k"}
+
+    ,
+    {"id":4,"library":"starter","definition":"led","definition_revision":2,"reference_number":1,"reference":"D1","value":"Green"}
+
+    ,
+    {"id":6,"library":"starter","definition":"resistor","definition_revision":2,"reference_number":2,"reference":"R2","value":"1k"}
+
+    ,
+    {"id":7,"library":"starter","definition":"led","definition_revision":2,"reference_number":2,"reference":"D2","value":"Amber"}
+
+    ,
+    {"id":9,"library":"starter","definition":"capacitor","definition_revision":2,"reference_number":1,"reference":"C1","value":"100nF"}
+  ]
+}

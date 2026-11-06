@@ -1,0 +1,70 @@
+{
+  "format": "pcbcraft-sheet/1",
+  "id": "58892b91-f098-48f9-b176-e5087ac1201e",
+  "symbols": [
+    {"id":2,"component":2,"unit":"main","x_nm":0,"y_nm":-22860000,"rotation":0}
+
+    ,
+    {"id":3,"component":3,"unit":"main","x_nm":-8890000,"y_nm":-7620000,"rotation":0}
+
+    ,
+    {"id":4,"component":4,"unit":"main","x_nm":8890000,"y_nm":-7620000,"rotation":0}
+
+    ,
+    {"id":6,"component":6,"unit":"main","x_nm":-8890000,"y_nm":7620000,"rotation":0}
+
+    ,
+    {"id":7,"component":7,"unit":"main","x_nm":8890000,"y_nm":7620000,"rotation":0}
+
+    ,
+    {"id":9,"component":9,"unit":"main","x_nm":0,"y_nm":22860000,"rotation":0}
+  ],
+  "junctions": [
+    {"id":10,"x_nm":-22860000,"y_nm":-7620000}
+
+    ,
+    {"id":12,"x_nm":22860000,"y_nm":-7620000}
+
+    ,
+    {"id":17,"x_nm":-22860000,"y_nm":7620000}
+
+    ,
+    {"id":19,"x_nm":22860000,"y_nm":7620000}
+  ],
+  "wires": [
+    {"id":11,"from":{"symbol":2,"pin":"1"},"to":{"junction":10},"bends":[{"x_nm":-22860000,"y_nm":-22860000}]}
+
+    ,
+    {"id":13,"from":{"symbol":2,"pin":"2"},"to":{"junction":12},"bends":[{"x_nm":22860000,"y_nm":-22860000}]}
+
+    ,
+    {"id":14,"from":{"junction":10},"to":{"symbol":3,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":15,"from":{"symbol":3,"pin":"2"},"to":{"symbol":4,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":16,"from":{"symbol":4,"pin":"2"},"to":{"junction":12},"bends":[]}
+
+    ,
+    {"id":18,"from":{"junction":10},"to":{"junction":17},"bends":[]}
+
+    ,
+    {"id":20,"from":{"junction":12},"to":{"junction":19},"bends":[]}
+
+    ,
+    {"id":21,"from":{"junction":17},"to":{"symbol":6,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":22,"from":{"symbol":6,"pin":"2"},"to":{"symbol":7,"pin":"1"},"bends":[]}
+
+    ,
+    {"id":23,"from":{"symbol":7,"pin":"2"},"to":{"junction":19},"bends":[]}
+
+    ,
+    {"id":24,"from":{"junction":17},"to":{"symbol":9,"pin":"1"},"bends":[{"x_nm":-22860000,"y_nm":22860000}]}
+
+    ,
+    {"id":25,"from":{"symbol":9,"pin":"2"},"to":{"junction":19},"bends":[{"x_nm":22860000,"y_nm":22860000}]}
+  ]
+}
