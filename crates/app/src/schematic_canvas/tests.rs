@@ -10,7 +10,7 @@ fn rotated_led_labels_clear_the_drawing() {
     session.execute("project.new", &json!({"name": "LED labels"})).unwrap();
     session.execute("schematic.place_symbol", &json!({"definition": "led", "x_nm": 0, "y_nm": 0, "expected_revision": session.revision()})).unwrap();
     let project = session.snapshot().unwrap();
-    let definition = project.symbols()[0].definition;
+    let definition = project.symbols()[0].definition.clone();
     let ctx = egui::Context::default();
     pcbcraft_chrome::fonts::install(&ctx);
 
@@ -18,7 +18,7 @@ fn rotated_led_labels_clear_the_drawing() {
         for turns in 0..4 {
             ctx.begin_pass(egui::RawInput::default());
             let painter = ctx.layer_painter(egui::LayerId::background());
-            paint_symbol(&painter, definition, pos2(250.0, 250.0), step, turns, egui::Color32::WHITE, Some(("D1", "LED")));
+            paint_symbol(&painter, &definition, pos2(250.0, 250.0), step, turns, egui::Color32::WHITE, Some(("D1", "LED")));
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
             let drawing = output

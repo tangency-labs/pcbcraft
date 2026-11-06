@@ -7,9 +7,12 @@
 //! The starter library in `libraries/starter` is embedded at build time, so the desktop and
 //! browser builds offer the same parts without reading the file system.
 
-use std::{collections::BTreeSet, sync::LazyLock};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, LazyLock},
+};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::schematic::{
@@ -43,8 +46,8 @@ pub struct Library {
     pub id: String,
     pub name: String,
     pub license: String,
-    symbols: Vec<SymbolDefinition>,
-    revisions: Vec<SymbolDefinition>,
+    symbols: Vec<Arc<SymbolDefinition>>,
+    revisions: Vec<Arc<SymbolDefinition>>,
     problems: Vec<String>,
 }
 
@@ -71,11 +74,13 @@ impl Library {
             }
         };
         let mut ids = BTreeSet::new();
-        let mut symbols: Vec<SymbolDefinition> = Vec::with_capacity(files.len());
+        let mut symbols: Vec<Arc<SymbolDefinition>> = Vec::with_capacity(files.len());
         let mut revisions = Vec::new();
         for (file, text) in files {
             match parse_symbol(text) {
                 Ok(mut symbol) if ids.insert((symbol.id.clone(), symbol.revision)) => {
+                    symbol.library.clone_from(&id);
+                    let mut symbol = Arc::new(symbol);
                     if let Some(current) = symbols.iter_mut().find(|current| current.id == symbol.id) {
                         if symbol.revision > current.revision {
                             std::mem::swap(current, &mut symbol);
@@ -93,17 +98,17 @@ impl Library {
     }
 
     /// The latest revision of each loaded symbol, ordered by the first file for that ID.
-    pub fn symbols(&self) -> &[SymbolDefinition] {
+    pub fn symbols(&self) -> &[Arc<SymbolDefinition>] {
         &self.symbols
     }
 
     /// The latest loaded revision of exactly this ID, for new placements.
-    pub fn symbol(&self, id: &str) -> Option<&SymbolDefinition> {
+    pub fn symbol(&self, id: &str) -> Option<&Arc<SymbolDefinition>> {
         self.symbols.iter().find(|symbol| symbol.id == id)
     }
 
     /// Resolve the exact revision pinned in a project without upgrading its geometry.
-    pub fn symbol_revision(&self, id: &str, revision: u32) -> Option<&SymbolDefinition> {
+    pub fn symbol_revision(&self, id: &str, revision: u32) -> Option<&Arc<SymbolDefinition>> {
         self.symbols.iter().chain(&self.revisions).find(|symbol| symbol.id == id && symbol.revision == revision)
     }
 
@@ -125,7 +130,8 @@ struct ManifestFile {
 
 /// Read a library manifest after checking its format, ID, name and license text.
 fn parse_manifest(text: &str) -> Result<ManifestFile, String> {
-    let manifest: ManifestFile = serde_json::from_value(versioned(text, LIBRARY_FORMAT, "library")?).map_err(|error| error.to_string())?;
+    let value: Value = serde_json::from_str(text).map_err(|error| format!("invalid library JSON: {error}"))?;
+    let manifest: ManifestFile = serde_json::from_value(versioned(value, LIBRARY_FORMAT, "library")?).map_err(|error| error.to_string())?;
     check_id(&manifest.id)?;
     check_text("name", &manifest.name, 64)?;
     check_text("license", &manifest.license, 128)?;
@@ -188,7 +194,14 @@ struct PinFile {
 /// center on each axis and apart from each other. Drawings have at most 256 strokes within
 /// 12.7 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
-    let file: SymbolFile = serde_json::from_value(versioned(text, SYMBOL_FORMAT, "symbol")?).map_err(|error| error.to_string())?;
+    let value: Value = serde_json::from_str(text).map_err(|error| format!("invalid symbol JSON: {error}"))?;
+    parse_symbol_value(value)
+}
+
+/// [`parse_symbol`] for a symbol already read as JSON, such as a project's saved copy. The
+/// definition's `library` is left empty for the caller to fill in.
+fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
+    let file: SymbolFile = serde_json::from_value(versioned(value, SYMBOL_FORMAT, "symbol")?).map_err(|error| error.to_string())?;
     check_id(&file.id)?;
     if file.revision == 0 {
         return Err("`revision` must be 1 or more".to_owned());
@@ -243,6 +256,7 @@ pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
     }
     let drawing = unit.drawing.into_iter().map(shape).collect::<Result<Vec<_>, _>>()?;
     Ok(SymbolDefinition {
+        library: String::new(),
         id: file.id,
         name: file.name,
         revision: file.revision,
@@ -256,31 +270,113 @@ pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
 
 /// Pin numbers are 1 to 8 ASCII letters, digits, `+`, `-` or `_`, such as `1`, `A3` or `VCC`.
 fn check_pin_number(number: &str) -> Result<(), String> {
-    let valid = (1..=8).contains(&number.len()) && number.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'_'));
-    if valid { Ok(()) } else { Err(format!("terminal ID {number:?} must be 1 to 8 letters, digits, +, - or _")) }
+    match crate::schematic::PinNumber::new(number) {
+        Some(_) => Ok(()),
+        None => Err(format!("terminal ID {number:?} must be 1 to 8 letters, digits, +, - or _")),
+    }
 }
 
-/// The pin number as spelled by any retained starter library revision, borrowed for the program's
-/// lifetime so terminals can hold it. Whether a given symbol has that pin is checked against
-/// its own definition.
-pub(crate) fn pin_number(number: &str) -> Option<&'static str> {
-    starter().symbols.iter().chain(&starter().revisions).flat_map(|symbol| &symbol.pins).map(|pin| pin.number.as_str()).find(|known| *known == number)
+/// Read a project's saved copy of a symbol: the symbol file's fields plus the `library` it came
+/// from. A copy identical to any retained starter revision shares that definition; any other copy
+/// lives only as long as the projects and edits that use it. Fails on any symbol file rule or a
+/// bad library ID.
+pub(crate) fn read_saved_copy(value: Value) -> Result<Arc<SymbolDefinition>, String> {
+    let Value::Object(mut fields) = value else {
+        return Err("a saved symbol definition must be a JSON object".to_owned());
+    };
+    let library = match fields.remove("library") {
+        Some(Value::String(library)) => library,
+        _ => return Err("a saved symbol definition needs its `library` ID".to_owned()),
+    };
+    check_id(&library).map_err(|error| format!("library {error}"))?;
+    let mut definition = parse_symbol_value(Value::Object(fields))?;
+    definition.library = library;
+    let starter = starter();
+    Ok(starter.symbols.iter().chain(&starter.revisions).find(|known| ***known == definition).cloned().unwrap_or_else(|| Arc::new(definition)))
 }
 
-/// Every pin number the retained starter library revisions use, once each, shortest first and then in text order,
-/// so `"2"` comes before `"10"`. The terminal schema offers these.
-pub fn all_pin_numbers() -> Vec<&'static str> {
-    let mut numbers: Vec<_> =
-        starter().symbols.iter().chain(&starter().revisions).flat_map(|symbol| &symbol.pins).map(|pin| pin.number.as_str()).collect();
-    numbers.sort_unstable_by_key(|number| (number.len(), *number));
-    numbers.dedup();
-    numbers
+/// The saved form of a symbol in a project: its library ID, then the same fields as its
+/// symbol file, so [`read_saved_copy`] reads it back to an equal definition.
+pub(crate) fn saved_copy(definition: &SymbolDefinition) -> impl Serialize + '_ {
+    let point = |point: &Point| [point.x_nm, point.y_nm];
+    SavedSymbol {
+        library: &definition.library,
+        format: SYMBOL_FORMAT,
+        id: &definition.id,
+        revision: definition.revision,
+        name: &definition.name,
+        reference_prefix: &definition.reference_prefix,
+        default_value: &definition.value,
+        terminals: definition
+            .pins
+            .iter()
+            .map(|pin| SavedTerminal { id: &pin.number, name: pin.name.as_deref(), electrical_type: pin.electrical_type })
+            .collect(),
+        units: [SavedUnit {
+            id: &definition.unit,
+            drawing: definition
+                .drawing
+                .iter()
+                .map(|shape| match shape {
+                    Shape::Line(from, to) => SavedShape::Line { from_nm: point(from), to_nm: point(to) },
+                    Shape::Polyline(points) => SavedShape::Polyline { points_nm: points.iter().map(point).collect() },
+                    Shape::Rect(min, max) => SavedShape::Rect { min_nm: point(min), max_nm: point(max) },
+                    Shape::Circle(center, radius) => SavedShape::Circle { center_nm: point(center), radius_nm: *radius },
+                    Shape::Text(at, text, align) => SavedShape::Text { at_nm: point(at), text, align: *align },
+                })
+                .collect(),
+            pins: definition.pins.iter().map(|pin| SavedPin { terminal: &pin.number, at_nm: point(&pin.offset) }).collect(),
+        }],
+    }
+}
+
+#[derive(Serialize)]
+struct SavedSymbol<'a> {
+    library: &'a str,
+    format: &'static str,
+    id: &'a str,
+    revision: u32,
+    name: &'a str,
+    reference_prefix: &'a str,
+    default_value: &'a str,
+    terminals: Vec<SavedTerminal<'a>>,
+    units: [SavedUnit<'a>; 1],
+}
+
+#[derive(Serialize)]
+struct SavedTerminal<'a> {
+    id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    electrical_type: ElectricalType,
+}
+
+#[derive(Serialize)]
+struct SavedUnit<'a> {
+    id: &'a str,
+    drawing: Vec<SavedShape<'a>>,
+    pins: Vec<SavedPin<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SavedShape<'a> {
+    Line { from_nm: [i64; 2], to_nm: [i64; 2] },
+    Polyline { points_nm: Vec<[i64; 2]> },
+    Rect { min_nm: [i64; 2], max_nm: [i64; 2] },
+    Circle { center_nm: [i64; 2], radius_nm: i64 },
+    Text { at_nm: [i64; 2], text: &'a str, align: TextAlign },
+}
+
+#[derive(Serialize)]
+struct SavedPin<'a> {
+    terminal: &'a str,
+    at_nm: [i64; 2],
 }
 
 /// Parse JSON and check its `format` before the strict read, so an older or newer file reports
 /// its version instead of a field error.
-fn versioned(text: &str, format: &str, what: &str) -> Result<Value, String> {
-    let value: Value = serde_json::from_str(text).map_err(|error| format!("invalid {what} JSON: {error}"))?;
+fn versioned(value: Value, format: &str, what: &str) -> Result<Value, String> {
     match value.get("format").and_then(Value::as_str) {
         Some(found) if found == format => Ok(value),
         Some(found) => Err(format!("unsupported {what} format {found}")),
@@ -430,9 +526,23 @@ mod tests {
         assert!(header.drawing.iter().any(|shape| matches!(shape, Shape::Text(_, text, TextAlign::Middle) if text == "4")));
         assert!(!header.fits_two_pad_footprint());
         assert!(starter().symbol("resistor").unwrap().fits_two_pad_footprint());
-        assert_eq!(all_pin_numbers(), ["1", "2", "3", "4"]);
-        assert_eq!(pin_number("3"), Some("3"));
-        assert_eq!(pin_number("99"), None);
+    }
+
+    /// Every starter symbol saves as a copy that reads back to the same shared starter
+    /// definition. A copy that differs is its own definition, freed once nothing uses it.
+    #[test]
+    fn saved_copies_read_back_to_the_same_definition() {
+        for symbol in starter().symbols() {
+            let copy = read_saved_copy(serde_json::to_value(saved_copy(symbol)).unwrap()).unwrap();
+            assert!(Arc::ptr_eq(&copy, symbol), "{}", symbol.id);
+        }
+        let mut changed = serde_json::to_value(saved_copy(starter().symbol("led").unwrap())).unwrap();
+        changed["name"] = json!("LED, as saved");
+        let copy = read_saved_copy(changed).unwrap();
+        assert_eq!((copy.library.as_str(), copy.name.as_str()), ("starter", "LED, as saved"));
+        let weak = Arc::downgrade(&copy);
+        drop(copy);
+        assert!(weak.upgrade().is_none(), "nothing keeps a copy alive once it is dropped");
     }
 
     /// Extreme coordinates report a file error without preventing later valid files from loading.

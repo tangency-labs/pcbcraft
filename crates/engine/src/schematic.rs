@@ -2,7 +2,9 @@
 
 pub(crate) mod wiring;
 
-pub use wiring::{Connectivity, Terminal, Wire, WireEndpoint, orthogonal_path};
+pub use wiring::{Connectivity, PinNumber, Terminal, Wire, WireEndpoint, orthogonal_path};
+
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -35,7 +37,7 @@ pub struct Point {
 }
 
 /// How a terminal behaves electrically, as its symbol library declares it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ElectricalType {
     Passive,
@@ -78,7 +80,7 @@ pub enum Shape {
 }
 
 /// Which part of a text label sits on its anchor point, before rotation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextAlign {
     /// The text starts at the anchor and runs right.
@@ -103,6 +105,9 @@ pub struct PinDefinition {
 /// describes only the schematic symbol; layout footprints are separate definitions.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SymbolDefinition {
+    /// The ID of the library this definition came from, such as `starter`. Projects save it with
+    /// their copy of the definition.
+    pub library: String,
     /// Stable ID accepted by the shared placement command and saved in project files.
     pub id: String,
     /// Label shown in the parts browser.
@@ -169,8 +174,8 @@ impl SymbolDefinition {
 }
 
 /// Resolve an exact definition ID in the starter library without falling back to another symbol.
-pub(crate) fn library_symbol(id: &str) -> Option<&'static SymbolDefinition> {
-    crate::library::starter().symbol(id)
+pub(crate) fn library_symbol(id: &str) -> Option<Arc<SymbolDefinition>> {
+    crate::library::starter().symbol(id).cloned()
 }
 
 /// Turn an offset from a symbol's center by quarter turns counterclockwise as seen on the
@@ -188,7 +193,7 @@ pub fn rotate(x: i64, y: i64, turns: u8) -> (i64, i64) {
 /// The component owns the definition, designator and value; footprints link to its ID.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Component {
-    pub definition: &'static SymbolDefinition,
+    pub definition: Arc<SymbolDefinition>,
     pub(crate) ordinal: u64,
     pub(crate) reference_number: usize,
     pub(crate) reference: String,
@@ -247,13 +252,13 @@ fn check_text(name: &str, text: &str, limit: usize) -> Result<(), String> {
 
 /// A placed schematic unit referencing a component. The resolved drawing is a cache;
 /// only the component ID, unit ID, placement ID and geometry are saved here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolPlacement {
-    /// Drawing resolved from the owning component, never separately serialized.
-    pub definition: &'static SymbolDefinition,
+    /// Drawing resolved from the owning component and shared with it, never separately serialized.
+    pub definition: Arc<SymbolDefinition>,
     pub(crate) ordinal: u64,
     pub(crate) component: u64,
-    pub unit: &'static str,
+    pub unit: String,
     pub position: Point,
     /// Quarter turns counterclockwise, 0 to 3.
     pub(crate) rotation: u8,
@@ -277,7 +282,7 @@ impl SymbolPlacement {
 
     /// Return the terminal references in the same order as the pin positions.
     pub fn terminals(&self) -> Vec<Terminal> {
-        Terminal::for_symbol(self.ordinal, self.definition)
+        Terminal::for_symbol(self.ordinal, &self.definition)
     }
 
     /// Return every pin in absolute schematic coordinates, turned with the symbol, in the

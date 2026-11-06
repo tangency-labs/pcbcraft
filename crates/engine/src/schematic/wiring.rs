@@ -6,46 +6,74 @@ use super::{SymbolDefinition, SymbolPlacement, parse_symbol_id, symbol_id};
 
 pub(crate) const MAX_WIRES: usize = 4096;
 
+/// A pin number as libraries spell it: 1 to 8 ASCII letters, digits, `+`, `-` or `_`, such as
+/// `1`, `A3` or `VCC`. It is stored inline, so terminals are small, copyable and own their
+/// number instead of borrowing it from a definition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PinNumber {
+    bytes: [u8; 8],
+    len: u8,
+}
+
+impl PinNumber {
+    /// The pin number for this text, or `None` when it breaks the spelling rule above.
+    pub fn new(text: &str) -> Option<Self> {
+        let valid = (1..=8).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'_'));
+        if !valid {
+            return None;
+        }
+        let mut bytes = [0; 8];
+        bytes[..text.len()].copy_from_slice(text.as_bytes());
+        Some(Self { bytes, len: text.len() as u8 })
+    }
+
+    /// The number as text.
+    pub fn as_str(&self) -> &str {
+        // Only validated ASCII is ever stored, so this always succeeds.
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or_default()
+    }
+}
+
 /// An exact terminal on a symbol. Coincident coordinates never establish a connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Terminal {
     pub(crate) symbol: u64,
-    number: &'static str,
+    number: PinNumber,
 }
 
 impl Terminal {
     /// Return a placed symbol's terminals, one per pin of its definition, in pin order.
-    pub(super) fn for_symbol(symbol: u64, definition: &'static SymbolDefinition) -> Vec<Self> {
-        definition.pins.iter().map(|pin| Self { symbol, number: pin.number.as_str() }).collect()
+    pub(super) fn for_symbol(symbol: u64, definition: &SymbolDefinition) -> Vec<Self> {
+        definition.pins.iter().filter_map(|pin| Some(Self { symbol, number: PinNumber::new(&pin.number)? })).collect()
     }
 
     /// Read the two required fields and reject IDs that cannot come from project inspection.
-    /// The pin number must be one some library symbol uses; whether this symbol has that pin is
-    /// checked against the project, as [`crate::Project::terminal_position`] does.
+    /// The pin number must be well formed; whether this symbol has that pin is checked against
+    /// the project, as [`crate::Project::terminal_position`] does.
     pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
         let symbol = parse_symbol_id(object.get("symbol")?.as_str()?)?;
         if object.len() != 2 {
             return None;
         }
-        let number = crate::library::pin_number(object.get("terminal")?.as_str()?)?;
+        let number = PinNumber::new(object.get("terminal")?.as_str()?)?;
         Some(Self { symbol, number })
     }
 
     /// Return the definition's pin number for display and persistence.
-    pub fn number(self) -> &'static str {
-        self.number
+    pub fn number(&self) -> &str {
+        self.number.as_str()
     }
 
     /// Resolve a stored pin number on a placed symbol, or `None` when its definition has no such pin.
-    pub(crate) fn from_number(symbol: u64, definition: &'static SymbolDefinition, number: &str) -> Option<Self> {
-        let pin = definition.pins.iter().find(|pin| pin.number == number)?;
-        Some(Self { symbol, number: pin.number.as_str() })
+    pub(crate) fn from_number(symbol: u64, definition: &SymbolDefinition, number: &str) -> Option<Self> {
+        definition.pins.iter().find(|pin| pin.number == number)?;
+        Some(Self { symbol, number: PinNumber::new(number)? })
     }
 
     /// Publish the terminal reference in the same shape that the command accepts.
     pub fn inspect(self) -> Value {
-        json!({"symbol": symbol_id(self.symbol), "terminal": self.number})
+        json!({"symbol": symbol_id(self.symbol), "terminal": self.number.as_str()})
     }
 }
 

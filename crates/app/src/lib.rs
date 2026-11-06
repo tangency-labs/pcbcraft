@@ -4,6 +4,8 @@
 //! catalog, the same ones MCP runs. Preferences belong to the person, not the project, so they live
 //! here and stay out of the command set.
 
+use std::sync::Arc;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
 mod home;
@@ -233,7 +235,7 @@ impl PcbApp {
     }
 
     /// Start a symbol preview at the current project revision.
-    fn begin_placement(&mut self, definition: &'static SymbolDefinition) {
+    fn begin_placement(&mut self, definition: Arc<SymbolDefinition>) {
         self.message = None;
         self.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
     }
@@ -532,9 +534,9 @@ impl PcbApp {
                 ui.label(dim(name));
                 if let Some(message) = message {
                     ui.label(shell::error(message));
-                } else if let (None, Some(reference)) = (self.tool, self.selected_reference()) {
+                } else if let (None, Some(reference)) = (&self.tool, self.selected_reference()) {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
-                } else if let Some(tool) = self.tool {
+                } else if let Some(tool) = &self.tool {
                     ui.label(match tool {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
@@ -583,7 +585,7 @@ impl PcbApp {
                     ui,
                     project,
                     &mut self.camera,
-                    self.tool,
+                    self.tool.clone(),
                     self.selected.as_deref(),
                     input_enabled,
                     self.preferences.navigation,
@@ -598,7 +600,7 @@ impl PcbApp {
             None
         });
         self.wire_draft.finish_requested = false;
-        match (self.tool, click) {
+        match (self.tool.clone(), click) {
             (Some(Tool::PlaceSymbol { definition, revision, turns }), Some(Click::Place(point))) => {
                 self.tool = None;
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}));
@@ -1042,7 +1044,7 @@ impl PcbApp {
             return;
         }
         self.ribbon(ui);
-        if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
+        if self.tool.as_ref().is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
             self.tool = None;
         }
         if egui::DragAndDrop::payload::<PartDrag>(&ctx).is_some_and(|drag| drag.revision != self.session.revision()) {
@@ -1067,11 +1069,11 @@ impl PcbApp {
             let clearance = self.assistant.rail_clearance();
             #[cfg(target_arch = "wasm32")]
             let clearance = 0.0;
-            let placing = match self.tool {
-                Some(Tool::PlaceSymbol { definition, .. }) => Some(definition),
+            let placing = match &self.tool {
+                Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
                 _ => None,
             };
-            if let Some(definition) = self.parts.show(ui, placing, self.session.revision()) {
+            if let Some(definition) = self.parts.show(ui, placing.as_ref(), self.session.revision()) {
                 self.begin_placement(definition);
             }
             self.net_inspector.show(ui, &self.session, clearance);

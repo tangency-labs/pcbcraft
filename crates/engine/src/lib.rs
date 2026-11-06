@@ -72,7 +72,7 @@ impl ParamKind {
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string", "pattern": "^symbol-[1-9][0-9]*$"},
-                    "terminal": {"type": "string", "enum": library::all_pin_numbers()},
+                    "terminal": {"type": "string", "pattern": "^[A-Za-z0-9+_-]{1,8}$"},
                 },
                 "required": ["symbol", "terminal"],
                 "additionalProperties": false,
@@ -328,7 +328,7 @@ pub struct Project {
     /// Logical components own their definition, reference and value.
     components: Arc<BTreeMap<u64, Component>>,
     /// Derived index of each placed component unit to its symbol ID.
-    units: Arc<BTreeMap<(u64, &'static str), u64>>,
+    units: Arc<BTreeMap<(u64, String), u64>>,
     wires: Arc<Vec<Wire>>,
     junctions: Arc<BTreeMap<u64, Point>>,
     connectivity: Arc<OnceLock<Connectivity>>,
@@ -365,8 +365,8 @@ impl Project {
 
     /// Resolve a component pin through the unit-placement index. Only one unit is supported today.
     pub(crate) fn component_terminal(&self, component: u64, pin: &str) -> Option<Terminal> {
-        let definition = self.components.get(&component)?.definition;
-        let symbol = self.units.get(&(component, definition.unit_id()))?;
+        let definition = &self.components.get(&component)?.definition;
+        let symbol = self.units.get(&(component, definition.unit_id().to_owned()))?;
         Terminal::from_number(*symbol, definition, pin)
     }
 
@@ -594,12 +594,17 @@ impl Session {
 
     /// Add a symbol from validated parameters if the caller's revision is still current.
     /// Use the resulting revision as the identity so undo and a new placement cannot reuse it.
-    fn place_symbol(&mut self, definition: &'static SymbolDefinition, params: &Value) -> Result<(), CommandError> {
+    fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         if project.symbols.len() >= MAX_SYMBOLS {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
+        // A project keeps one copy per library, ID and revision: reuse the one it already saves.
+        let same = |saved: &&Arc<SymbolDefinition>| {
+            (&saved.library, &saved.id, saved.revision()) == (&definition.library, &definition.id, definition.revision())
+        };
+        let definition = project.components.values().map(|component| &component.definition).find(same).cloned().unwrap_or(definition);
         let mut reference_number = project
             .components
             .values()
@@ -619,19 +624,19 @@ impl Session {
         let ordinal = self.next_object_id()?;
         let component = Component {
             ordinal,
-            definition,
+            definition: definition.clone(),
             reference_number,
             reference: format!("{}{reference_number}", definition.reference_prefix),
             value: definition.default_value().to_owned(),
         };
         let mut project = project.clone();
         Arc::make_mut(&mut project.components).insert(ordinal, component);
-        Arc::make_mut(&mut project.units).insert((ordinal, definition.unit_id()), ordinal);
+        Arc::make_mut(&mut project.units).insert((ordinal, definition.unit_id().to_owned()), ordinal);
         Arc::make_mut(&mut project.symbols).push(SymbolPlacement {
+            unit: definition.unit_id().to_owned(),
             definition,
             ordinal,
             component: ordinal,
-            unit: definition.unit_id(),
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
             rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
         });
@@ -685,13 +690,13 @@ impl Session {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
-        let symbol = project.symbols[index];
+        let symbol = project.symbols[index].clone();
         let ordinal = symbol.ordinal;
         let mut project = project.clone();
         Arc::make_mut(&mut project.symbols).remove(index);
         Arc::make_mut(&mut project.wires).retain(|wire| wire.terminals().iter().all(|terminal| terminal.symbol != ordinal));
         project.prune_junctions();
-        Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit));
+        Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
         if !project.symbols.iter().any(|other| other.component == symbol.component) {
             Arc::make_mut(&mut project.components).remove(&symbol.component);
             Arc::make_mut(&mut project.board).remove_component(symbol.component);
@@ -994,7 +999,7 @@ mod tests {
     fn placement_preserves_the_library_unit_identity() {
         let mut file: Value = serde_json::from_str(include_str!("../../../libraries/starter/symbols/resistor.json")).unwrap();
         file["units"][0]["id"] = json!("body");
-        let definition = Box::leak(Box::new(library::parse_symbol(&file.to_string()).unwrap()));
+        let definition = Arc::new(library::parse_symbol(&file.to_string()).unwrap());
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "Unit identity"})).unwrap();
         session.place_symbol(definition, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": session.revision()})).unwrap();

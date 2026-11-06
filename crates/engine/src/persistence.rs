@@ -73,11 +73,15 @@ pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>,
     }
 }
 
-/// Format 2 separates component fields from unit geometry and links footprints to components.
-const FORMAT: &str = "pcbcraft-project/2";
-/// Format 3 adds explicit free endpoint identities and authored wire bends.
+/// Format 4 keeps a full copy of every symbol definition the project uses, with the library it
+/// came from, so a project opens without that library. It keeps format 3's wire geometry.
+const FORMAT: &str = "pcbcraft-project/4";
+/// Format 3 added free wire endpoints, junctions and authored bends; it opens through
+/// [`migrate_to_4`].
 const FORMAT_3: &str = "pcbcraft-project/3";
-/// The first project format, which opens through [`migrate_from_1`].
+/// Format 2 separated component fields from unit geometry; it opens through [`migrate_to_4`].
+const FORMAT_2: &str = "pcbcraft-project/2";
+/// The first project format, which opens through [`migrate_from_1`] and then [`migrate_to_4`].
 const FORMAT_1: &str = "pcbcraft-project/1";
 /// Maximum number of bytes in a plain project document or ZIP project payload.
 pub const MAX_PROJECT_BYTES: usize = 4 * 1024 * 1024;
@@ -88,9 +92,36 @@ struct Document {
     format: String,
     id: Uuid,
     name: String,
+    /// One saved copy per definition the components use: a symbol file plus its `library`.
+    symbol_definitions: Vec<serde_json::Value>,
     components: Vec<ComponentRecord<'static>>,
     sheet: Sheet,
     board: Option<BoardRecords>,
+}
+
+/// A format 2 or 3 document, which named starter definitions without saving copies; read only
+/// to migrate it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Document2 {
+    format: String,
+    id: Uuid,
+    name: String,
+    components: Vec<ComponentRecord2>,
+    sheet: Sheet,
+    board: Option<BoardRecords>,
+}
+
+/// A format 2 or 3 component, which named a starter library definition without saving a copy.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComponentRecord2 {
+    id: u64,
+    definition: String,
+    definition_revision: u32,
+    reference_number: usize,
+    reference: String,
+    value: String,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +145,8 @@ struct BoardRecords {
 #[serde(deny_unknown_fields)]
 struct ComponentRecord<'a> {
     id: u64,
+    /// With `definition` and `definition_revision`, names one of the project's saved copies.
+    library: std::borrow::Cow<'a, str>,
     definition: std::borrow::Cow<'a, str>,
     definition_revision: u32,
     reference_number: usize,
@@ -183,7 +216,7 @@ struct LegacyFootprint {
 /// Explicitly split each format 1 placement into a component and its unrotated unit.
 /// The strict legacy schema refuses newer fields, and all converted records undergo the
 /// current validator before adoption. IDs, wires and footprint associations are retained.
-fn migrate_from_1(legacy: LegacyDocument) -> Result<Document, String> {
+fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
     if legacy.format != FORMAT_1 {
         return Err(format!("unsupported project format {}", legacy.format));
     }
@@ -201,18 +234,18 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document, String> {
         let definition = crate::library::starter()
             .symbol_revision(&record.definition, record.definition_revision)
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
-        components.push(ComponentRecord {
+        components.push(ComponentRecord2 {
             id: record.id,
-            definition: record.definition.into(),
+            definition: record.definition,
             definition_revision: record.definition_revision,
             reference_number: record.reference_number,
-            reference: format!("{}{}", definition.reference_prefix, record.reference_number).into(),
-            value: definition.default_value().into(),
+            reference: format!("{}{}", definition.reference_prefix, record.reference_number),
+            value: definition.default_value().to_owned(),
         });
         symbols.push(Placement {
             id: record.id,
             component: record.id,
-            unit: definition.unit_id().into(),
+            unit: definition.unit_id().to_owned().into(),
             x_nm: record.x_nm,
             y_nm: record.y_nm,
             rotation: 0,
@@ -233,8 +266,8 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document, String> {
             })
             .collect(),
     });
-    Ok(Document {
-        format: FORMAT.to_owned(),
+    Ok(Document2 {
+        format: FORMAT_2.to_owned(),
         id: legacy.id,
         name: legacy.name,
         components,
@@ -247,6 +280,56 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document, String> {
 /// This keeps old format tags from accepting newer fields by spelling their value as null.
 fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
+}
+
+/// Explicitly bring a format 2 or 3 document up to format 4: each component's named starter
+/// library definition must exist at its saved revision, and the document gains one saved copy
+/// per definition used, tagged with the starter library's ID. Format 2 may not carry format 3's
+/// wire geometry. Everything else is carried over and then checked by the current validator.
+fn migrate_to_4(document: Document2) -> Result<Document, String> {
+    if document.format != FORMAT_2 && document.format != FORMAT_3 {
+        return Err(format!("unsupported project format {}", document.format));
+    }
+    let sheet = &document.sheet;
+    let geometry = sheet.junctions.is_some()
+        || sheet
+            .wires
+            .iter()
+            .any(|wire| wire.bends.is_some() || !matches!(wire.from, Endpoint::Pin { .. }) || !matches!(wire.to, Endpoint::Pin { .. }));
+    if document.format == FORMAT_2 && geometry {
+        return Err("format 2 cannot contain authored wire geometry".to_owned());
+    }
+    let mut used = BTreeMap::new();
+    let mut components = Vec::with_capacity(document.components.len());
+    for record in document.components {
+        let definition = crate::library::starter()
+            .symbol_revision(&record.definition, record.definition_revision)
+            .cloned()
+            .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
+        components.push(ComponentRecord {
+            id: record.id,
+            library: definition.library.clone().into(),
+            definition: record.definition.into(),
+            definition_revision: record.definition_revision,
+            reference_number: record.reference_number,
+            reference: record.reference.into(),
+            value: record.value.into(),
+        });
+        used.insert((definition.id.clone(), definition.revision()), definition);
+    }
+    let symbol_definitions = used
+        .into_values()
+        .map(|definition| serde_json::to_value(crate::library::saved_copy(&definition)).map_err(|error| error.to_string()))
+        .collect::<Result<_, _>>()?;
+    Ok(Document {
+        format: FORMAT.to_owned(),
+        id: document.id,
+        name: document.name,
+        symbol_definitions,
+        components,
+        sheet: document.sheet,
+        board: document.board,
+    })
 }
 
 /// Stored wire geometry is absent on legacy auto-routed pin links.
@@ -279,7 +362,7 @@ impl From<WireEndpoint> for Endpoint<'static> {
     /// Preserve electrical identity independently of route geometry.
     fn from(endpoint: WireEndpoint) -> Self {
         match endpoint {
-            WireEndpoint::Terminal(terminal) => Self::Pin { symbol: terminal.symbol, pin: terminal.number().into() },
+            WireEndpoint::Terminal(terminal) => Self::Pin { symbol: terminal.symbol, pin: terminal.number().to_owned().into() },
             WireEndpoint::Junction(junction) => Self::Junction { junction },
         }
     }
@@ -299,6 +382,11 @@ pub fn encode(project: Arc<Project>) -> Result<Vec<u8>, String> {
 pub struct Encoder {
     project: Arc<Project>,
     bytes: Vec<u8>,
+    /// The distinct definitions the components use, sorted by library, ID and revision. Filled
+    /// on the first step so starting a save never walks the schematic.
+    definitions: Option<Vec<Arc<crate::schematic::SymbolDefinition>>>,
+    written_definitions: usize,
+    writing_components: bool,
     components: u64,
     writing_symbols: bool,
     symbols: usize,
@@ -311,16 +399,18 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    /// Start a native document, using format 3 when authored routes or junctions require it.
+    /// Start a native document in the current format without walking the schematic.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
-        let format = if !project.junctions.is_empty() || project.wires.iter().any(|wire| wire.bends.is_some()) { FORMAT_3 } else { FORMAT };
         let mut bytes = Vec::new();
-        write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {name},\n  \"components\": [\n", project.id)
+        write!(bytes, "{{\n  \"format\": \"{FORMAT}\",\n  \"id\": \"{}\",\n  \"name\": {name},\n  \"symbol_definitions\": [\n", project.id)
             .map_err(|error| error.to_string())?;
         Ok(Self {
             project,
             bytes,
+            definitions: None,
+            written_definitions: 0,
+            writing_components: false,
             components: 0,
             writing_symbols: false,
             symbols: 0,
@@ -335,12 +425,30 @@ impl Encoder {
 
     /// Write up to the given number of records. Callers stop on the first completed document.
     pub fn step(&mut self, records: usize) -> Result<Option<Vec<u8>>, String> {
+        let project = &self.project;
+        let definitions = self.definitions.get_or_insert_with(|| {
+            let mut used: Vec<_> = project.components.values().map(|component| component.definition.clone()).collect();
+            used.sort_unstable_by(|a, b| (&a.library, &a.id, a.revision()).cmp(&(&b.library, &b.id, b.revision())));
+            used.dedup_by(|a, b| (&a.library, &a.id, a.revision()) == (&b.library, &b.id, b.revision()));
+            used
+        });
         for _ in 0..records {
+            if let Some(definition) = definitions.get(self.written_definitions) {
+                let more = self.written_definitions + 1 < definitions.len();
+                write_record(&mut self.bytes, &crate::library::saved_copy(definition), more)?;
+                self.written_definitions += 1;
+                continue;
+            }
+            if !self.writing_components {
+                self.bytes.extend_from_slice(b"    ],\n  \"components\": [\n");
+                self.writing_components = true;
+            }
             if let Some((&id, component)) =
                 self.project.components.range((std::ops::Bound::Excluded(self.components), std::ops::Bound::Unbounded)).next()
             {
                 let record = ComponentRecord {
                     id,
+                    library: component.definition.library.as_str().into(),
                     definition: component.definition.id.as_str().into(),
                     definition_revision: component.definition.revision(),
                     reference_number: component.reference_number,
@@ -361,7 +469,7 @@ impl Encoder {
                 let record = Placement {
                     id: symbol.ordinal,
                     component: symbol.component,
-                    unit: symbol.unit.into(),
+                    unit: symbol.unit.as_str().into(),
                     x_nm: symbol.position.x_nm,
                     y_nm: symbol.position.y_nm,
                     rotation: u16::from(symbol.rotation) * 90,
@@ -454,22 +562,21 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     }
     let header: Header = serde_json::from_slice(bytes).map_err(|error| format!("invalid project JSON: {error}"))?;
     let (document, upgraded_from) = match header.format.as_str() {
-        FORMAT | FORMAT_3 => (serde_json::from_slice::<Document>(bytes).map_err(|error| format!("invalid project JSON: {error}"))?, None),
+        FORMAT => (serde_json::from_slice::<Document>(bytes).map_err(|error| format!("invalid project JSON: {error}"))?, None),
+        FORMAT_2 | FORMAT_3 => {
+            let version = if header.format == FORMAT_2 { 2 } else { 3 };
+            let document = serde_json::from_slice(bytes).map_err(|error| format!("invalid format {version} project: {error}"))?;
+            (migrate_to_4(document)?, Some(version))
+        }
         FORMAT_1 => {
             let legacy = serde_json::from_slice(bytes).map_err(|error| format!("invalid format 1 project: {error}"))?;
-            (migrate_from_1(legacy)?, Some(1))
+            (migrate_to_4(migrate_from_1(legacy)?)?, Some(1))
         }
         format => return Err(format!("unsupported project format {format}")),
     };
-    let Document { format, id, name, components: records, sheet, board } = document;
-    if format == FORMAT
-        && (sheet.junctions.is_some()
-            || sheet
-                .wires
-                .iter()
-                .any(|wire| wire.bends.is_some() || !matches!(wire.from, Endpoint::Pin { .. }) || !matches!(wire.to, Endpoint::Pin { .. })))
-    {
-        return Err("format 2 cannot contain authored wire geometry".to_owned());
+    let Document { format, id, name, symbol_definitions, components: records, sheet, board } = document;
+    if format != FORMAT {
+        return Err(format!("unsupported project format {format}"));
     }
     if id.is_nil() || sheet.id.is_nil() || id == sheet.id {
         return Err("invalid project or sheet identity".to_owned());
@@ -480,6 +587,20 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     if records.len() > MAX_SYMBOLS || sheet.symbols.len() > MAX_SYMBOLS || sheet.wires.len() > MAX_WIRES {
         return Err("project exceeds the symbol or wire limit".to_owned());
     }
+    if symbol_definitions.len() > records.len() {
+        return Err("project saves more symbol definitions than it has components".to_owned());
+    }
+
+    // Components resolve their definitions only from the project's own saved copies.
+    let mut saved = BTreeMap::new();
+    for value in symbol_definitions {
+        let definition = crate::library::read_saved_copy(value).map_err(|error| format!("invalid saved symbol definition: {error}"))?;
+        let key = (definition.library.clone(), definition.id.clone(), definition.revision());
+        if saved.contains_key(&key) {
+            return Err(format!("symbol {} revision {} from library {} is saved twice", key.1, key.2, key.0));
+        }
+        saved.insert(key, (definition, false));
+    }
 
     // Components have their own ID namespace. Placement/wire/footprint IDs retain the old namespace.
     let mut component_ids = BTreeSet::new();
@@ -488,11 +609,17 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     let mut components = BTreeMap::new();
     for record in records {
         validate_id(&mut component_ids, record.id)?;
-        let definition = crate::library::starter()
-            .symbol_revision(&record.definition, record.definition_revision)
-            .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
+        let (definition, used) =
+            saved.get_mut(&(record.library.to_string(), record.definition.to_string(), record.definition_revision)).ok_or_else(|| {
+                format!(
+                    "component {} uses symbol {} revision {}, which the project doesn't save",
+                    record.id, record.definition, record.definition_revision
+                )
+            })?;
+        *used = true;
+        let definition = definition.clone();
         if !(1..=MAX_REFERENCE_NUMBER).contains(&record.reference_number)
-            || !references.insert((definition.reference_prefix(), record.reference_number))
+            || !references.insert((definition.reference_prefix().to_owned(), record.reference_number))
         {
             return Err("invalid or duplicate component reference number".to_owned());
         }
@@ -512,6 +639,9 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
             },
         );
     }
+    if let Some(((library, id, revision), _)) = saved.iter().find(|(_, (_, used))| !used) {
+        return Err(format!("symbol {id} revision {revision} from library {library} is saved but no component uses it"));
+    }
     let mut ids = BTreeSet::new();
     let mut symbols = Vec::with_capacity(sheet.symbols.len());
     let mut units = BTreeMap::new();
@@ -522,7 +652,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         if record.unit != unit {
             return Err(format!("unavailable unit {} on component {}", record.unit, record.component));
         }
-        if units.insert((record.component, unit), record.id).is_some() {
+        if units.insert((record.component, unit.to_owned()), record.id).is_some() {
             return Err("component unit is placed more than once".to_owned());
         }
         if !(-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&record.x_nm) || !(-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&record.y_nm) {
@@ -533,10 +663,10 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
             _ => return Err("symbol rotation must be 0, 90, 180 or 270 degrees".to_owned()),
         };
         symbols.push(SymbolPlacement {
-            definition: component.definition,
+            definition: component.definition.clone(),
             ordinal: record.id,
             component: record.component,
-            unit,
+            unit: unit.to_owned(),
             position: Point { x_nm: record.x_nm, y_nm: record.y_nm },
             rotation,
         });
@@ -562,7 +692,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         Endpoint::Pin { symbol, pin } => symbols
             .binary_search_by_key(&symbol, |placed| placed.ordinal)
             .ok()
-            .and_then(|index| Terminal::from_number(symbol, symbols[index].definition, &pin))
+            .and_then(|index| Terminal::from_number(symbol, &symbols[index].definition, &pin))
             .map(WireEndpoint::Terminal)
             .ok_or_else(|| format!("wire points to missing pin {pin} on symbol {symbol}")),
         Endpoint::Junction { junction } => junctions
@@ -761,19 +891,38 @@ mod tests {
     }
 
     const FORMAT_1_FIXTURE: &[u8] = include_bytes!("../../app/tests/fixtures/two-resistors-format-1.pc");
-    const FORMAT_2_FIXTURE: &[u8] = include_bytes!("../../app/tests/fixtures/two-resistors.pc");
+    const FORMAT_2_FIXTURE: &[u8] = include_bytes!("../../app/tests/fixtures/two-resistors-format-2.pc");
+    const CURRENT_FIXTURE: &[u8] = include_bytes!("../../app/tests/fixtures/two-resistors.pc");
 
-    /// A format 1 project opens through the explicit migration, says it was upgraded, and saves
-    /// as exactly the format 2 fixture. A format 1 file can't carry format 2's fields.
+    /// Format 1 and format 2 projects open through the explicit migrations, say which format
+    /// they came from, and save as exactly the current fixture. An unchanged current project
+    /// saves without a diff. A format 1 file can't carry later fields.
     #[test]
-    fn format_1_migrates_to_format_2() {
-        let migrated = decode(FORMAT_1_FIXTURE).unwrap();
-        assert_eq!(migrated.upgraded_from(), Some(1));
-        assert!(migrated.symbols().iter().all(|symbol| symbol.turns() == 0));
-        assert_eq!(encode(migrated).unwrap(), FORMAT_2_FIXTURE);
-        let current = decode(FORMAT_2_FIXTURE).unwrap();
+    fn older_formats_migrate_to_the_current_format() {
+        for (bytes, version) in [(FORMAT_1_FIXTURE, 1), (FORMAT_2_FIXTURE, 2)] {
+            let migrated = decode(bytes).unwrap();
+            assert_eq!(migrated.upgraded_from(), Some(version));
+            assert!(migrated.symbols().iter().all(|symbol| symbol.turns() == 0));
+            assert_eq!(encode(migrated).unwrap(), CURRENT_FIXTURE, "format {version}");
+        }
+        let current = decode(CURRENT_FIXTURE).unwrap();
         assert_eq!(current.upgraded_from(), None);
-        assert_eq!(encode(current).unwrap(), FORMAT_2_FIXTURE, "an unchanged format 2 project saves without a diff");
+        assert_eq!(encode(current).unwrap(), CURRENT_FIXTURE, "an unchanged current project saves without a diff");
+        // A format 3 file keeps its authored wire geometry through the migration.
+        let mut format_3: serde_json::Value = serde_json::from_slice(FORMAT_2_FIXTURE).unwrap();
+        format_3["format"] = json!("pcbcraft-project/3");
+        format_3["sheet"]["wires"][0]["bends"] = json!([{"x_nm": 12_700_000, "y_nm": 0}]);
+        let migrated = decode(&serde_json::to_vec(&format_3).unwrap()).unwrap();
+        assert_eq!(migrated.upgraded_from(), Some(3));
+        let saved: serde_json::Value = serde_json::from_slice(&encode(migrated).unwrap()).unwrap();
+        assert_eq!(saved["format"], "pcbcraft-project/4");
+        assert_eq!(saved["sheet"]["wires"][0]["bends"], json!([{"x_nm": 12_700_000, "y_nm": 0}]));
+        assert_eq!(saved["symbol_definitions"].as_array().unwrap().len(), 1);
+        format_3["format"] = json!("pcbcraft-project/2");
+        assert!(decode(&serde_json::to_vec(&format_3).unwrap()).unwrap_err().contains("format 2 cannot contain authored wire geometry"));
+
+        let forged = std::str::from_utf8(FORMAT_2_FIXTURE).unwrap().replacen("\"id\":2,", "\"id\":2,\"library\":\"starter\",", 1);
+        assert!(decode(forged.as_bytes()).unwrap_err().contains("unknown field `library`"), "format 2 has no library field");
 
         let original = std::str::from_utf8(FORMAT_1_FIXTURE).unwrap();
         let forged = original.replacen("\"y_nm\":0}", "\"y_nm\":0,\"rotation\":90}", 1);
@@ -793,6 +942,102 @@ mod tests {
             junctions["sheet"]["junctions"] = serde_json::Value::Null;
             assert!(decode(&serde_json::to_vec(&junctions).unwrap()).is_err());
         }
+    }
+
+    /// A project opens from its own saved copies: a copy that differs from the starter library,
+    /// or comes from a library this build doesn't have, opens and saves back byte for byte.
+    /// Placing another part with the same library, ID and revision reuses the project's copy.
+    #[test]
+    fn projects_open_from_their_saved_symbol_copies() {
+        let mut document: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
+        // Save the copy at the starter library's current revision, so new placements match it.
+        let current = crate::library::starter().symbol("resistor").unwrap().revision();
+        document["symbol_definitions"][0]["revision"] = json!(current);
+        for component in document["components"].as_array_mut().unwrap() {
+            component["definition_revision"] = json!(current);
+        }
+        document["symbol_definitions"][0]["name"] = json!("Resistor, as saved");
+        let project = decode(&serde_json::to_vec(&document).unwrap()).unwrap();
+        assert!(project.components().all(|component| component.definition.name == "Resistor, as saved"));
+        let saved = encode(project).unwrap();
+        assert!(std::str::from_utf8(&saved).unwrap().contains("Resistor, as saved"));
+        assert_eq!(encode(decode(&saved).unwrap()).unwrap(), saved, "the saved copy round-trips byte for byte");
+
+        let mut session = Session::default();
+        session.open_snapshot(decode(&saved).unwrap());
+        let place = json!({"definition": "resistor", "x_nm": 50_800_000, "y_nm": 0, "expected_revision": session.revision()});
+        session.apply(PLACE_SYMBOL, &place).unwrap();
+        let names: Vec<_> = session.project().unwrap().components().map(|component| component.definition.name.as_str()).collect();
+        assert_eq!(names, ["Resistor, as saved"; 3]);
+        let text = String::from_utf8(encode(session.snapshot().unwrap()).unwrap()).unwrap();
+        assert_eq!(text.matches("\"format\":\"pcbcraft-symbol/1\"").count(), 1, "one saved copy for all three resistors");
+
+        // An older saved revision stays as it is, and a new placement saves the current one beside it.
+        let mut session = Session::default();
+        session.open_snapshot(decode(CURRENT_FIXTURE).unwrap());
+        let place = json!({"definition": "resistor", "x_nm": 50_800_000, "y_nm": 0, "expected_revision": session.revision()});
+        session.apply(PLACE_SYMBOL, &place).unwrap();
+        let revisions: Vec<_> = session.project().unwrap().components().map(|component| component.definition.revision()).collect();
+        assert_eq!(revisions, [1, 1, current]);
+        let text = String::from_utf8(encode(session.snapshot().unwrap()).unwrap()).unwrap();
+        assert_eq!(text.matches("\"format\":\"pcbcraft-symbol/1\"").count(), 2, "both revisions are saved");
+
+        document["symbol_definitions"][0]["library"] = json!("team-passives");
+        for component in document["components"].as_array_mut().unwrap() {
+            component["library"] = json!("team-passives");
+        }
+        let team = decode(&serde_json::to_vec(&document).unwrap()).unwrap();
+        assert!(team.components().all(|component| component.definition.library == "team-passives"));
+        let team_bytes = encode(team.clone()).unwrap();
+        assert_eq!(encode(decode(&team_bytes).unwrap()).unwrap(), team_bytes);
+
+        // Closing a project frees copies only it used: nothing outlives the session and its history.
+        let mut session = Session::default();
+        session.open_snapshot(team);
+        let place = json!({"definition": "resistor", "x_nm": 50_800_000, "y_nm": 0, "expected_revision": session.revision()});
+        session.apply(PLACE_SYMBOL, &place).unwrap();
+        let weak = std::sync::Arc::downgrade(&session.project().unwrap().components().next().unwrap().definition);
+        drop(session);
+        assert!(weak.upgrade().is_none(), "the team-passives copy is freed with the last project using it");
+    }
+
+    /// Saved copies must match the components exactly: each component's copy is saved once,
+    /// every saved copy is used, and each copy passes the symbol file rules with its library ID.
+    #[test]
+    fn saved_symbol_copies_are_checked() {
+        let valid: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
+        let error = |edit: &dyn Fn(&mut serde_json::Value)| {
+            let mut document = valid.clone();
+            edit(&mut document);
+            decode(&serde_json::to_vec(&document).unwrap()).unwrap_err()
+        };
+        assert!(error(&|d| d["components"][0]["definition_revision"] = json!(2)).contains("doesn't save"));
+        assert!(error(&|d| d["components"][0]["library"] = json!("other")).contains("doesn't save"));
+        let copies = |d: &mut serde_json::Value| d["symbol_definitions"].as_array_mut().unwrap().clone();
+        assert!(
+            error(&|d| {
+                let copy = copies(d)[0].clone();
+                d["symbol_definitions"].as_array_mut().unwrap().push(copy);
+            })
+            .contains("saved twice")
+        );
+        assert!(
+            error(&|d| {
+                let mut copy = copies(d)[0].clone();
+                copy["id"] = json!("spare");
+                d["symbol_definitions"].as_array_mut().unwrap().push(copy);
+            })
+            .contains("no component uses it")
+        );
+        assert!(error(&|d| d["symbol_definitions"][0]["terminals"] = json!([])).contains("invalid saved symbol definition"));
+        assert!(error(&|d| d["symbol_definitions"][0]["footprint"] = json!("0805")).contains("unknown field"));
+        assert!(
+            error(&|d| {
+                d["symbol_definitions"][0].as_object_mut().unwrap().remove("library");
+            })
+            .contains("`library`")
+        );
+        assert!(error(&|d| d["symbol_definitions"][0]["library"] = json!("Bad Library")).contains("library ID"));
     }
 
     /// Component fields and unit rotation survive a save, while invalid rotations and
@@ -899,7 +1144,7 @@ mod tests {
     /// wire/pad addresses, geometry, undo/redo and last-unit deletion follow explicit ownership.
     #[test]
     fn independent_component_identity_survives_edit_history_and_board_links() {
-        let mut document: serde_json::Value = serde_json::from_slice(FORMAT_2_FIXTURE).unwrap();
+        let mut document: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
         document["components"][0]["id"] = json!(1001);
         document["sheet"]["symbols"][0]["component"] = json!(1001);
         let mut session = Session::default();
@@ -988,7 +1233,7 @@ mod tests {
     /// Reject dangling ownership, duplicate unit placements and mixed schemas before adoption.
     #[test]
     fn rejects_invalid_component_unit_relationships() {
-        let valid: serde_json::Value = serde_json::from_slice(FORMAT_2_FIXTURE).unwrap();
+        let valid: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
         for (path, value) in [
             ("/components/1/id", json!(2)),
             ("/components/1/reference", json!("R1")),

@@ -206,7 +206,7 @@ fn failed_opens_preserve_the_active_project_and_dirty_state() {
     let invalid = fixture.dir.path().join("invalid.pc");
     let original = std::str::from_utf8(TWO_RESISTORS).unwrap();
     for payload in [
-        original.replace("pcbcraft-project/2", "pcbcraft-project/999").into_bytes(),
+        original.replace("pcbcraft-project/4", "pcbcraft-project/999").into_bytes(),
         vec![b' '; MAX_PROJECT_BYTES + 1],
         original.replace("\"component\":2", "\"component\":999").into_bytes(),
         original.replace("\"unit\":\"main\"", "\"unit\":\"unknown\"").into_bytes(),
