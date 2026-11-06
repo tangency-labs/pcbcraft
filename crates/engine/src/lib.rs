@@ -9,6 +9,7 @@ pub mod board;
 pub mod library;
 pub mod persistence;
 pub mod schematic;
+pub mod selection;
 pub mod wire;
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
@@ -41,18 +42,24 @@ enum ParamKind {
     FootprintDefinition,
     PadNumber,
     Coordinate,
+    Displacement,
     Revision,
     Terminal,
     Rotation,
     WireAnchor,
     WireBends,
     WireId,
+    Selection,
 }
 
 impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::Selection => json!({"type":"object", "properties": {
+                "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
+                "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()}
+            }, "required":["symbols","wires"], "additionalProperties":false}),
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
             Self::FootprintDefinition => json!({"type":"string", "enum":[FOOTPRINT_DEFINITION]}),
@@ -60,6 +67,7 @@ impl ParamKind {
             Self::SymbolDefinition => {
                 json!({"type": "string", "enum": library::starter().symbols().iter().map(|definition| definition.id.as_str()).collect::<Vec<_>>()})
             }
+            Self::Displacement => json!({"type": "integer", "minimum": -2 * MAX_CENTER_NM, "maximum": 2 * MAX_CENTER_NM}),
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
             Self::WireId => json!({"type": "string", "pattern": "^wire-[1-9][0-9]*$"}),
             Self::WireAnchor => json!({"oneOf": [ParamKind::Terminal.schema(), {
@@ -83,24 +91,28 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition if value.as_str() == Some(FOOTPRINT_DEFINITION) => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::Name | Self::Text if value.is_string() => Ok(()),
             Self::SymbolId if value.as_str().and_then(schematic::parse_symbol_id).is_some() => Ok(()),
             Self::SymbolDefinition if value.as_str().and_then(library_symbol).is_some() => Ok(()),
             Self::Coordinate if value.as_i64().is_some_and(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&n)) => Ok(()),
+            Self::Displacement if value.as_i64().is_some_and(|n| (-2 * MAX_CENTER_NM..=2 * MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Revision if value.as_u64().is_some() => Ok(()),
             Self::WireId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "wire-")).is_some() => Ok(()),
             Self::WireAnchor if wire::Anchor::parse(value).is_some() => Ok(()),
             Self::WireBends if wire::parse_bends(value).is_some() => Ok(()),
             Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
+            Self::Selection => Err("must contain bounded unique symbol and wire ID lists"),
             Self::FootprintDefinition => Err("must identify the built-in footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),
             Self::SymbolDefinition => Err("must identify a symbol in the starter library"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
+            Self::Displacement => Err("must be a whole displacement within twice the schematic coordinate bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
             Self::WireId => Err("must identify a wire"),
             Self::WireAnchor => Err("must identify a terminal, junction or bounded free point"),
@@ -182,6 +194,12 @@ pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 const EXPECTED_REVISION: Param =
     Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
+
+/// Move a group of symbols and wire routes as one revision and undo step.
+pub const MOVE_ITEMS: &str = "schematic.move_items";
+/// Delete a group and its incident connections as one revision and undo step.
+pub const DELETE_ITEMS: &str = "schematic.delete_items";
+const ITEMS: Param = Param { required: true, name: "items", summary: "Symbol and wire IDs from project inspection", kind: ParamKind::Selection };
 
 const SYMBOL: Param = Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId };
 const SYMBOL_X: Param =
@@ -283,6 +301,23 @@ const CATALOG: &[Command] = &[
             Param { required: true, name: "y_nm", summary: "Footprint center Y in nanometers", kind: ParamKind::Coordinate },
             EXPECTED_REVISION,
         ],
+    },
+    Command {
+        id: MOVE_ITEMS,
+        title: "Move Selected Items",
+        summary: "Move symbols and wire routes together; preserve connections. One undoable edit.",
+        params: &[
+            ITEMS,
+            Param { required: true, name: "dx_nm", summary: "Horizontal displacement in nanometers", kind: ParamKind::Displacement },
+            Param { required: true, name: "dy_nm", summary: "Vertical displacement in nanometers", kind: ParamKind::Displacement },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: DELETE_ITEMS,
+        title: "Delete Selected Items",
+        summary: "Remove symbols, selected and incident wires, and unused components/footprints. One undoable edit.",
+        params: &[ITEMS, EXPECTED_REVISION],
     },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
@@ -513,7 +548,7 @@ impl Session {
         match id {
             "project.new" => true,
             "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE => self.project.is_some(),
+            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -561,7 +596,7 @@ impl Session {
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
                 "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-                | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE => "no project is open".to_owned(),
+                | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | MOVE_ITEMS | DELETE_ITEMS => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -606,6 +641,8 @@ impl Session {
             DRAW_WIRE => self.draw_wire(params)?,
             DELETE_WIRE => self.delete_wire(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
+            MOVE_ITEMS => self.move_items(params)?,
+            DELETE_ITEMS => self.delete_items(params)?,
             ROTATE_SYMBOL => self.rotate_symbol(params)?,
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,

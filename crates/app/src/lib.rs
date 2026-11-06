@@ -32,6 +32,7 @@ use pcbcraft_chrome::{
     shell::{self, dim},
     theme, workspace,
 };
+use pcbcraft_engine::selection::Selection;
 use pcbcraft_engine::{
     CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, SET_SYMBOL_FIELDS, Session, command, schematic::SymbolDefinition,
 };
@@ -363,7 +364,7 @@ impl PcbApp {
     /// The selected symbol's shown reference, if it still exists.
     fn selected_reference(&self) -> Option<String> {
         let project = self.session.project()?;
-        let id = self.views.active.selected.as_deref()?;
+        let id = self.views.active.selection.single_symbol()?;
         project.symbols().iter().find(|symbol| symbol.id() == id).map(|symbol| project.reference(symbol))
     }
 
@@ -371,14 +372,14 @@ impl PcbApp {
     /// Deleting clears the selection; a failed command shows in the status bar.
     fn edit_selected(&mut self, action: SymbolAction) {
         self.views.sync(&self.session);
-        let Some(id) = self.views.active.selected.clone() else { return };
+        let Some(id) = self.views.active.selection.single_symbol().map(str::to_owned) else { return };
         let revision = self.session.revision();
         match action {
             SymbolAction::Rotate => self.run(ROTATE_SYMBOL, &json!({"symbol": id, "expected_revision": revision})),
             SymbolAction::Delete => {
                 self.run(DELETE_SYMBOL, &json!({"symbol": id, "expected_revision": revision}));
                 if self.message.is_none() {
-                    self.views.active.selected = None;
+                    self.views.active.selection = Selection::default();
                 }
             }
             SymbolAction::EditFields => {
@@ -388,6 +389,14 @@ impl PcbApp {
                 let Some(source) = self.views.active.input(&self.session) else { return };
                 self.dialog = Dialog::EditFields { source, symbol: id, reference, value, error: None, focused: false };
             }
+        }
+    }
+
+    /// Delete the complete selection through the shared atomic command; failures retain it.
+    fn delete_selection(&mut self) {
+        self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.views.active.selection,"expected_revision":self.session.revision()}));
+        if self.message.is_none() {
+            self.views.active.selection = Selection::default();
         }
     }
 
@@ -675,13 +684,7 @@ impl PcbApp {
         if self.home || !matches!(self.dialog, Dialog::None) || !self.views.active.accepts(source, &self.session) {
             return;
         }
-        if pick.wire {
-            self.views.active.selected = None;
-            self.views.active.selected_wire = Some(pick.id);
-        } else {
-            self.views.active.selected = Some(pick.id);
-            self.views.active.selected_wire = None;
-        }
+        self.views.active.selection = if pick.wire { Selection::one_wire(pick.id) } else { Selection::one_symbol(pick.id) };
         self.views.active.camera.center_on(pick.at);
     }
 
@@ -695,16 +698,20 @@ impl PcbApp {
                 ui.label(dim(name));
                 if let Some(message) = message {
                     ui.label(shell::error(message));
+                } else if self.views.active.tool.is_none() && self.views.active.selection.len() > 1 {
+                    ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.tool, self.selected_reference()) {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.tool {
                     ui.label(match tool {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
+                        Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
+                        Tool::BoxSelect { .. } => dim("Select items · Esc to cancel"),
                         Tool::Wire { start: None, .. } => dim("Wire · Click a start point"),
                         Tool::Wire { start: Some(_), .. } => dim("Wire · Click corners · Enter finish · Space flip · Esc cancel"),
                     });
-                } else if self.views.active.selected_wire.is_some() {
+                } else if self.views.active.selection.single_wire().is_some() {
                     ui.label(dim("Wire selected · Del delete"));
                 } else if self.files.busy() {
                     ui.label(dim("File operation in progress"));
@@ -736,7 +743,7 @@ impl PcbApp {
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
-                    if std::mem::take(&mut self.views.active.rotate_requested) && input_enabled {
+                    if std::mem::take(&mut self.views.active.rotate_requested) && input_enabled && self.views.active.selection.len() <= 1 {
                         let rect = ui.available_rect_before_wrap();
                         let hovered = self.session.project().and_then(|project| {
                             let pointer = ui.input(|input| input.pointer.hover_pos())?;
@@ -745,9 +752,8 @@ impl PcbApp {
                                 .flatten()
                                 .map(|(symbol, _)| symbol.id())
                         });
-                        if let Some(symbol) = hovered.or_else(|| self.views.active.selected.clone()) {
-                            self.views.active.selected = Some(symbol);
-                            self.views.active.selected_wire = None;
+                        if let Some(symbol) = hovered.or_else(|| self.views.active.selection.single_symbol().map(str::to_owned)) {
+                            self.views.active.selection = Selection::one_symbol(symbol);
                             self.edit_selected(SymbolAction::Rotate);
                         }
                     }
@@ -757,11 +763,10 @@ impl PcbApp {
                             project,
                             &mut self.views.active.camera,
                             self.views.active.tool.clone(),
-                            self.views.active.selected.as_deref(),
+                            &self.views.active.selection,
                             input_enabled,
                             self.preferences.navigation,
                             &self.views.active.wire_draft,
-                            self.views.active.selected_wire.as_deref(),
                             label,
                         );
                     }
@@ -813,18 +818,30 @@ impl PcbApp {
                 }
             }
             (None, Click::Grab(symbol, offset)) => {
-                self.views.active.selected = Some(symbol.id());
-                self.views.active.selected_wire = None;
+                self.views.active.selection = Selection::one_symbol(symbol.id());
                 self.views.active.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
             }
+            (None, Click::StartBox(drag)) => {
+                self.views.active.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
+            }
+            (None | Some(Tool::BoxSelect { .. }), Click::SelectItems(items)) => {
+                self.views.active.tool = None;
+                self.views.active.selection = items;
+            }
             (None, Click::Select(symbol)) => {
-                self.views.active.selected = symbol;
-                self.views.active.selected_wire = None;
+                self.views.active.selection = symbol.map(Selection::one_symbol).unwrap_or_default();
             }
-            (None, Click::SelectWire(wire)) => {
-                self.views.active.selected = None;
-                self.views.active.selected_wire = Some(wire);
+            (None, Click::GrabItems(items, origin)) => {
+                self.views.active.selection = items.clone();
+                self.views.active.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
             }
+            (Some(Tool::MoveItems { items, revision, .. }), Click::FinishItems(delta)) => {
+                self.views.active.tool = None;
+                if let Some(delta) = delta {
+                    self.run(pcbcraft_engine::MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"expected_revision":revision}));
+                }
+            }
+            (None, Click::DeleteItems) => self.delete_selection(),
             (_, Click::Drop(PartDrag { definition, source: drag_source }, point)) => {
                 if !self.views.active.accepts(drag_source, &self.session) {
                     return;
@@ -834,8 +851,7 @@ impl PcbApp {
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
             (None, Click::Edit(action, symbol)) => {
-                self.views.active.selected = Some(symbol);
-                self.views.active.selected_wire = None;
+                self.views.active.selection = Selection::one_symbol(symbol);
                 self.edit_selected(action);
             }
             (Some(Tool::Move { symbol, revision, .. }), Click::FinishMove(position)) => {
@@ -883,8 +899,7 @@ impl PcbApp {
                 if self.views.active.tool.take().is_some() {
                     self.message = None;
                 } else {
-                    self.views.active.selected = None;
-                    self.views.active.selected_wire = None;
+                    self.views.active.selection = Selection::default();
                 }
             }
             if let Some(Tool::Wire { start, .. }) = &mut self.views.active.tool {
@@ -897,11 +912,10 @@ impl PcbApp {
                 self.views.active.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
             }
             if self.views.active.tool.is_none()
-                && self.views.active.selected_wire.is_some()
+                && !self.views.active.selection.is_empty()
                 && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace))
-                && let Some(wire) = self.views.active.selected_wire.take()
             {
-                self.run(pcbcraft_engine::DELETE_WIRE, &json!({"wire": wire, "expected_revision": self.session.revision()}));
+                self.delete_selection();
             }
             if pressed(&ROTATE) {
                 if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.tool {
@@ -910,13 +924,8 @@ impl PcbApp {
                     self.views.active.rotate_requested = true;
                 }
             }
-            if self.views.active.tool.is_none() && self.views.active.selected.is_some() {
-                let delete = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace));
-                if pressed(&EDIT_FIELDS) {
-                    self.edit_selected(SymbolAction::EditFields);
-                } else if delete {
-                    self.edit_selected(SymbolAction::Delete);
-                }
+            if self.views.active.tool.is_none() && self.views.active.selection.single_symbol().is_some() && pressed(&EDIT_FIELDS) {
+                self.edit_selected(SymbolAction::EditFields);
             }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
                 self.parts.focus_search();

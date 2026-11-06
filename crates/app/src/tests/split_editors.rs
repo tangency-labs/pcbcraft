@@ -44,8 +44,8 @@ fn split_views_keep_navigation_and_selection_but_share_undo() {
     assert!(canvas(&h, 0).right() < canvas(&h, 1).left());
     click_point(&mut h, 1, Point { x_nm: 0, y_nm: 0 });
     assert_eq!(h.state().views.active.id(), ViewId(1));
-    assert_eq!(view(&h, 1).selected.as_deref(), Some("symbol-2"));
-    assert!(view(&h, 0).selected.is_none());
+    assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
+    assert!(view(&h, 0).selection.single_symbol().is_none());
     h.hover_at(canvas(&h, 1).center());
     h.run();
     h.event(egui::Event::MouseWheel {
@@ -69,8 +69,8 @@ fn split_views_keep_navigation_and_selection_but_share_undo() {
     h.key_press(Key::Delete);
     h.run();
     assert!(h.state().session.project().unwrap().symbols().is_empty());
-    assert!(view(&h, 0).selected.is_none());
-    assert!(view(&h, 1).selected.is_none());
+    assert!(view(&h, 0).selection.single_symbol().is_none());
+    assert!(view(&h, 1).selection.single_symbol().is_none());
     click(&mut h, "Schematic 1");
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
@@ -100,7 +100,7 @@ fn returning_to_a_pane_does_not_revive_its_wire_gesture() {
     let app = h.state_mut();
     assert!(!app.views.active.accepts(source, &app.session));
     app.view_click(source, Click::Select(Some("symbol-2".to_owned())));
-    assert!(app.views.active.selected.is_none());
+    assert!(app.views.active.selection.single_symbol().is_none());
     assert_eq!(app.session.inspect(), before);
 }
 
@@ -115,7 +115,7 @@ fn split_layout_preserves_views_and_fits_narrow_windows() {
     h.get_by_label("Schematic canvas");
     assert_eq!(h.state().views.active.id(), ViewId(1));
     click(&mut h, "Split editor views");
-    assert_eq!(view(&h, 1).selected.as_deref(), Some("symbol-2"));
+    assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
     h.set_size(egui::vec2(640.0, 800.0));
     h.run();
     assert!(canvas(&h, 0).bottom() < canvas(&h, 1).top());
@@ -158,7 +158,7 @@ fn modal_and_replacement_keep_both_views_on_the_current_project() {
     let reopened = h.state().session.inspect();
     h.run();
     for id in [0, 1] {
-        assert!(view(&h, id).selected.is_none());
+        assert!(view(&h, id).selection.single_symbol().is_none());
     }
     h.key_press(Key::Delete);
     h.run();
@@ -214,8 +214,8 @@ fn browser_and_home_preserve_view_identity_and_project_state() {
     click(&mut h, "Toggle Browser");
     click(&mut h, "Expand Symbols");
     click(&mut h, "R1  1k");
-    assert_eq!(view(&h, 1).selected.as_deref(), Some("symbol-2"));
-    assert!(view(&h, 0).selected.is_none());
+    assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
+    assert!(view(&h, 0).selection.single_symbol().is_none());
     assert_eq!(view(&h, 0).camera.screen(origin, canvas(&h, 0)), first_origin);
     let source = h.state().views.active.input(&h.state().session).unwrap();
     open_home(&mut h);
@@ -223,7 +223,7 @@ fn browser_and_home_preserve_view_identity_and_project_state() {
     h.run();
     assert!(h.state().views.split);
     assert_eq!(h.state().views.active.id(), ViewId(1));
-    assert_eq!(view(&h, 1).selected.as_deref(), Some("symbol-2"));
+    assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
     assert!(!h.state().views.active.accepts(source, &h.state().session));
     assert_eq!(h.state().session.inspect(), before);
 }

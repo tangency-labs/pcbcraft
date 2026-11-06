@@ -1,7 +1,7 @@
 //! Schematic view state and input addresses. A view borrows the project session; it never owns
 //! a document copy, file lifecycle or undo history.
 
-use pcbcraft_engine::{Session, SheetTarget};
+use pcbcraft_engine::{Session, SheetTarget, selection::Selection};
 
 use crate::schematic_canvas::{Camera, Draft, Tool};
 
@@ -44,8 +44,7 @@ pub(super) struct SchematicView {
     binding: Option<Binding>,
     input_epoch: u64,
     pub(super) camera: Camera,
-    pub(super) selected: Option<String>,
-    pub(super) selected_wire: Option<String>,
+    pub(super) selection: Selection,
     pub(super) tool: Option<Tool>,
     pub(super) wire_draft: Draft,
     pub(super) rotate_requested: bool,
@@ -65,8 +64,7 @@ impl SchematicView {
             binding: None,
             input_epoch: 0,
             camera: Camera::default(),
-            selected: None,
-            selected_wire: None,
+            selection: Selection::default(),
             tool: None,
             wire_draft: Draft::default(),
             rotate_requested: false,
@@ -127,16 +125,10 @@ impl SchematicView {
         if !matches!(self.tool, Some(Tool::Wire { .. })) {
             self.wire_draft = Draft::default();
         }
-        if self
-            .selected
-            .as_ref()
-            .is_some_and(|id| !session.project().is_some_and(|project| project.symbols().iter().any(|symbol| symbol.id() == *id)))
-        {
-            self.selected = None;
-        }
-        if self.selected_wire.as_ref().is_some_and(|id| !session.project().is_some_and(|project| project.wires().iter().any(|wire| wire.id() == *id)))
-        {
-            self.selected_wire = None;
+        if let Some(project) = session.project() {
+            self.selection.retain(project);
+        } else {
+            self.selection = Selection::default();
         }
         changed
     }

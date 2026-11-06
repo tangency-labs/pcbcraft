@@ -141,11 +141,10 @@ impl PcbApp {
                                     project,
                                     &mut view.camera,
                                     None,
-                                    view.selected.as_deref(),
+                                    &view.selection,
                                     false,
                                     self.preferences.navigation,
                                     &view.wire_draft,
-                                    view.selected_wire.as_deref(),
                                     if id == ViewId(0) { "Schematic canvas 1" } else { "Schematic canvas 2" },
                                 );
                             }
@@ -169,8 +168,7 @@ impl PcbApp {
             self.net_inspector.show(ui, &self.session, clearance);
             let canvas = ui.available_rect_before_wrap();
             let browser_area = self.parts.browser_area(canvas);
-            let pick =
-                self.browser.show(ui, browser_area, &self.session, self.views.active.selected.as_deref(), self.views.active.selected_wire.as_deref());
+            let pick = self.browser.show(ui, browser_area, &self.session, &self.views.active.selection);
             let placing = match &self.views.active.tool {
                 Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
                 _ => None,

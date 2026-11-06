@@ -54,7 +54,7 @@ pub(super) fn paint(
     project: &Project,
     camera: &Camera,
     moved: Option<(SymbolPlacement, Point)>,
-    selected: Option<&str>,
+    selected: &std::collections::BTreeSet<String>,
 ) {
     let tokens = Tokens::get();
     let preview = moved.map(|(symbol, point)| (symbol.terminals(), symbol.definition.pin_positions(point, symbol.turns())));
@@ -72,7 +72,7 @@ pub(super) fn paint(
         let [Some(from), Some(to)] = wire.endpoints().map(position) else {
             continue;
         };
-        let color = if selected == Some(wire.id().as_str()) { tokens.accent } else { tokens.schematic_wire };
+        let color = if selected.contains(&wire.id()) { tokens.accent } else { tokens.schematic_wire };
         paint_route(painter, rect, camera, pcbcraft_engine::wire::wire_path(wire, from, to), color);
     }
     for (_, point) in project.junctions() {

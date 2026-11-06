@@ -24,9 +24,9 @@ fn navigation_and_selection_belong_to_the_view() {
         modifiers: Modifiers::NONE,
     });
     harness.run();
-    assert_eq!(harness.state().views.active.selected.as_deref(), Some("symbol-2"));
+    assert_eq!(harness.state().views.active.selection.single_symbol(), Some("symbol-2"));
     assert!(harness.state().views.active.camera.zoom() > 1.0);
-    assert!(other.selected.is_none());
+    assert!(other.selection.single_symbol().is_none());
     assert_eq!(other.camera.zoom(), 1.0);
     assert_eq!(harness.state().session.inspect(), inspected);
     assert!(Arc::ptr_eq(&snapshot, &harness.state().session.snapshot().unwrap()));
@@ -55,7 +55,7 @@ fn stale_and_foreign_view_input_cannot_replace_current_interactions() {
         app.view_click(source, Click::Select(Some("symbol-2".to_owned())));
         app.view_click(source, Click::Edit(SymbolAction::Delete, "symbol-2".to_owned()));
         app.show_pick(source, project_browser::Pick { id: "symbol-2".to_owned(), wire: false, at: Point { x_nm: 25_400_000, y_nm: 0 } });
-        assert!(app.views.active.selected.is_none());
+        assert!(app.views.active.selection.single_symbol().is_none());
         assert_eq!(app.views.active.camera.screen(origin, rect), before_camera);
         app.begin_wire();
         let current = app.views.active.input(&app.session).unwrap();
@@ -88,7 +88,7 @@ fn reopening_during_a_move_does_not_move_the_reopened_symbol() {
     harness.run();
     assert_eq!(harness.state().session.inspect(), reopened);
     assert!(harness.state().views.active.tool.is_none());
-    assert!(harness.state().views.active.selected.is_none());
+    assert!(harness.state().views.active.selection.single_symbol().is_none());
 }
 
 /// The fields dialog retains its starting revision and cannot overwrite an intervening edit or

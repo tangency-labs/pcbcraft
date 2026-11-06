@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 mod camera;
+mod selection;
 mod wires;
+pub(crate) use selection::BoxDrag;
 
 #[cfg(test)]
 mod tests;
@@ -16,6 +18,7 @@ use pcbcraft_engine::wire::Anchor;
 use pcbcraft_engine::{
     Project,
     schematic::{GRID_NM, MAX_CENTER_NM, Point, Shape, SymbolDefinition, SymbolPlacement, TextAlign},
+    selection::Selection,
 };
 
 /// The active canvas interaction, bound to the revision at which it began.
@@ -23,6 +26,8 @@ use pcbcraft_engine::{
 pub(crate) enum Tool {
     PlaceSymbol { definition: Arc<SymbolDefinition>, revision: u64, turns: u8 },
     Wire { revision: u64, start: Option<Anchor> },
+    BoxSelect { drag: BoxDrag, revision: u64 },
+    MoveItems { items: Selection, origin: Point, revision: u64 },
     Move { symbol: SymbolPlacement, offset: Vec2, revision: u64 },
 }
 
@@ -30,16 +35,24 @@ impl Tool {
     /// Return the revision used to reject stale canvas actions.
     pub(crate) fn revision(&self) -> u64 {
         match self {
-            Self::PlaceSymbol { revision, .. } | Self::Wire { revision, .. } | Self::Move { revision, .. } => *revision,
+            Self::PlaceSymbol { revision, .. }
+            | Self::Wire { revision, .. }
+            | Self::Move { revision, .. }
+            | Self::BoxSelect { revision, .. }
+            | Self::MoveItems { revision, .. } => *revision,
         }
     }
 }
 
-/// A placement, pin selection, or cancellation requested through the canvas.
+/// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
     Place(Point),
+    StartBox(BoxDrag),
+    SelectItems(Selection),
+    GrabItems(Selection, Point),
+    FinishItems(Option<Point>),
+    DeleteItems,
     WirePoint(Anchor, bool),
-    SelectWire(String),
     CancelWire,
     Grab(SymbolPlacement, Vec2),
     FinishMove(Option<Point>),
@@ -78,8 +91,8 @@ pub(crate) enum SymbolAction {
 }
 
 /// Draw the schematic and its active preview, and report a requested tool action.
-/// A primary drag with no active tool grabs the nearest symbol body. The move
-/// preview ends on release, with no destination if released outside the canvas.
+/// A primary drag grabs a symbol or selected group; empty-space and secondary drags draw
+/// selection boxes. Move previews end on release, with no edit outside the canvas or after focus loss.
 ///
 /// Return `Click::CancelWire` when Cancel or Escape dismisses an in-progress wire
 /// through its context menu. An open wire menu can handle cancellation even
@@ -94,30 +107,43 @@ pub(crate) enum SymbolAction {
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
 ///
-/// With no tool, a primary click returns `Click::Select` for the symbol under it, or `None` in
-/// it for empty canvas. Wire strokes return `Click::SelectWire` when no symbol is hit. A secondary click selects the symbol under it and opens its menu; a row
-/// picked there returns `Click::Edit`. `selected` is drawn in the accent colour.
-/// `label` identifies the canvas in accessibility output, distinguishing simultaneous views.
+/// With no tool, a primary click returns `Click::SelectItems` for a symbol or wire, or clears
+/// selection on empty canvas. Shift/Ctrl combine those hits with the previous selection. A secondary click selects the symbol under it and opens its menu; a row
+/// picked there returns `Click::Edit`. `selected` items are drawn in the accent colour. Both mouse buttons can start a box;
+/// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
+/// preview the same bounded transformation used by the engine and commit only on valid release.
+/// `label` distinguishes simultaneously visible canvases in accessibility output.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
     project: &Project,
     camera: &mut Camera,
     tool: Option<Tool>,
-    selected: Option<&str>,
+    selected: &Selection,
     input_enabled: bool,
     navigation: Navigation,
     draft: &Draft,
-    selected_wire: Option<&str>,
     label: &str,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
-    let moving = matches!(tool, Some(Tool::Move { .. }));
+    let moving = matches!(tool, Some(Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. }));
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
+    let group_delta = match &tool {
+        Some(Tool::MoveItems { origin, .. }) => response.interact_pointer_pos().map(|pointer| {
+            let point = camera.snap(pointer, rect);
+            Point { x_nm: point.x_nm - origin.x_nm, y_nm: point.y_nm - origin.y_nm }
+        }),
+        _ => None,
+    };
+    let group_preview = match (&tool, group_delta) {
+        (Some(Tool::MoveItems { items, .. }), Some(delta)) => items.moved(project, delta).ok(),
+        _ => None,
+    };
+    let project = group_preview.as_ref().unwrap_or(project);
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();
     let screen = |point| camera.screen(point, rect);
@@ -132,7 +158,7 @@ pub(crate) fn show(
             .filter(|(_, point)| valid_position(*point)),
         _ => None,
     };
-    wires::paint(&painter, rect, project, camera, moved.clone(), selected_wire);
+    wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires);
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
@@ -140,7 +166,7 @@ pub(crate) fn show(
         if visible.contains(center) {
             let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
             let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
-            let color = if selected == Some(symbol.id().as_str()) { tokens.accent } else { tokens.text };
+            let color = if selected.symbols.contains(&symbol.id()) { tokens.accent } else { tokens.text };
             paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
         }
     }
@@ -186,14 +212,75 @@ pub(crate) fn show(
         return (input_enabled && valid_position(point)).then(|| Click::Drop(PartDrag::clone(&drag), point));
     }
 
+    // Handle active rectangles before context menus: a secondary drag consumes its release.
+    let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
+    if let Some(Tool::BoxSelect { drag, .. }) = &tool {
+        if lost_focus {
+            return Some(Click::SelectItems(drag.base.clone()));
+        }
+        let pointer = response.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
+        if let Some(pointer) = pointer {
+            let hits = selection::boxed(project, camera, rect, drag.start, pointer);
+            pcbcraft_chrome::selection::marquee(&painter, Rect::from_two_pos(drag.start, pointer), pointer.x < drag.start.x, hits.len());
+            if ui.input(|i| i.pointer.button_released(drag.button)) {
+                let valid = input_enabled && response.contains_pointer();
+                return Some(Click::SelectItems(if valid { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
+            }
+        }
+        return None;
+    }
+    if matches!(tool, Some(Tool::MoveItems { .. })) {
+        if lost_focus {
+            return Some(Click::FinishItems(None));
+        }
+        if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+            return Some(Click::FinishItems(group_delta.filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some())));
+        }
+        return None;
+    }
+    if input_enabled
+        && !lost_focus
+        && tool.is_none()
+        && egui::DragAndDrop::payload::<PartDrag>(ui.ctx()).is_none()
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        && (response.drag_started_by(egui::PointerButton::Primary) || response.drag_started_by(egui::PointerButton::Secondary))
+    {
+        let right = response.drag_started_by(egui::PointerButton::Secondary);
+        let modifiers = ui.input(|i| i.modifiers);
+        let hit = selection::at(project, camera, rect, origin);
+        if right || hit.is_empty() || modifiers.shift || modifiers.ctrl {
+            return Some(Click::StartBox(BoxDrag {
+                start: origin,
+                base: selected.clone(),
+                add: modifiers.shift,
+                toggle: modifiers.ctrl,
+                button: if right { egui::PointerButton::Secondary } else { egui::PointerButton::Primary },
+            }));
+        }
+        if (hit.symbols.is_subset(&selected.symbols) && hit.wires.is_subset(&selected.wires) && selected.len() > 1) || !hit.wires.is_empty() {
+            let items = if hit.symbols.is_subset(&selected.symbols) && hit.wires.is_subset(&selected.wires) { selected.clone() } else { hit };
+            return Some(Click::GrabItems(items, camera.snap(origin, rect)));
+        }
+        return grab_symbol(project, camera, rect, origin);
+    }
+
     if tool.is_none() && (input_enabled || response.context_menu_opened()) {
         // A right-click names its symbol this frame; afterwards the menu follows the selection.
         let pressed = response.secondary_clicked().then(|| response.interact_pointer_pos()).flatten();
         let target = match pressed {
             Some(pointer) => symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id()),
-            None => selected.map(str::to_owned),
+            None => selected.single_symbol().map(str::to_owned),
         };
+        let group = selected.len() > 1
+            && (pressed.is_none()
+                || pressed.is_some_and(|p| {
+                    let hit = selection::at(project, camera, rect, p);
+                    !hit.is_empty() && hit.symbols.is_subset(&selected.symbols) && hit.wires.is_subset(&selected.wires)
+                }));
         let picked = menu::context(&response, |ui| {
+            if group {
+                return MenuItem::new("Delete selected items").shortcut("Del").show(ui).then_some(Click::DeleteItems);
+            }
             let Some(id) = target.clone() else {
                 ui.close();
                 return None;
@@ -205,7 +292,7 @@ pub(crate) fn show(
         if let Some(click) = picked.and_then(|shown| shown.inner) {
             return Some(click);
         }
-        if pressed.is_some() {
+        if pressed.is_some() && !group {
             return Some(Click::Select(target));
         }
     }
@@ -213,26 +300,15 @@ pub(crate) fn show(
     if moving && response.drag_stopped_by(egui::PointerButton::Primary) {
         return Some(Click::FinishMove(moved.map(|(_, point)| point).filter(|_| input_enabled)));
     }
-    if input_enabled
-        && tool.is_none()
-        && response.drag_started_by(egui::PointerButton::Primary)
-        && let Some(pointer) = ui.input(|input| input.pointer.press_origin())
-    {
-        return grab_symbol(project, camera, rect, pointer);
-    }
 
     if !input_enabled || response.dragged() {
         return None;
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
-        let symbol = symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id());
-        if symbol.is_none()
-            && let Some(wire) = wires::at(project, camera, rect, pointer)
-        {
-            return Some(Click::SelectWire(wire));
-        }
-        return Some(Click::Select(symbol));
+        let hit = selection::at(project, camera, rect, pointer);
+        let modifiers = ui.input(|i| i.modifiers);
+        return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl)));
     }
     match tool? {
         Tool::PlaceSymbol { definition, turns, .. } => {
@@ -241,7 +317,7 @@ pub(crate) fn show(
         Tool::Wire { start, .. } => {
             wires::pick(&painter, rect, &response, project, camera, start, draft).map(|(anchor, finish)| Click::WirePoint(anchor, finish))
         }
-        Tool::Move { .. } => None,
+        Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } => None,
     }
 }
 

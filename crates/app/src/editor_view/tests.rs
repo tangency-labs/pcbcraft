@@ -24,10 +24,10 @@ fn views_share_history_but_keep_local_interactions() {
     let widget = first.widget_id();
     assert!(!second.accepts(source, &session));
     assert_ne!(widget, second.widget_id());
-    first.selected = Some("symbol-2".to_owned());
+    first.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
     first.tool = Some(Tool::Wire { revision: session.revision(), start: None });
     first.wire_draft.horizontal_first = false;
-    assert!(second.selected.is_none());
+    assert!(second.selection.single_symbol().is_none());
     assert!(second.tool.is_none());
     assert!(second.wire_draft.horizontal_first);
 
@@ -37,7 +37,7 @@ fn views_share_history_but_keep_local_interactions() {
     assert!(!second.sync(&session));
     assert!(first.tool.is_none());
     assert!(first.wire_draft.horizontal_first);
-    assert_eq!(first.selected.as_deref(), Some("symbol-2"));
+    assert_eq!(first.selection.single_symbol(), Some("symbol-2"));
     assert_eq!(first.widget_id(), widget);
     let after_edit = second.input(&session).unwrap();
     session.apply("edit.undo", &Value::Null).unwrap();
@@ -61,13 +61,13 @@ fn replacement_and_reopening_reset_the_view_without_editing_the_project() {
     view.sync(&session);
     let source = view.input(&session).unwrap();
     let widget = view.widget_id();
-    view.selected = Some("symbol-2".to_owned());
+    view.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
     view.tool = Some(Tool::Wire { revision: session.revision(), start: None });
     session.open_snapshot(snapshot);
     assert!(view.input(&session).is_none(), "An unrefreshed binding must reject input");
     assert!(view.sync(&session));
     assert_eq!(view.id(), ViewId(7));
-    assert!(view.selected.is_none());
+    assert!(view.selection.single_symbol().is_none());
     assert!(view.tool.is_none());
     assert!(!view.accepts(source, &session));
     assert_ne!(view.widget_id(), widget);
@@ -99,10 +99,10 @@ fn undo_prunes_selection_and_unbinds_an_absent_project() {
     let mut view = SchematicView::default();
     view.sync(&session);
     let target = session.project().unwrap().sheet_target();
-    view.selected = Some("symbol-2".to_owned());
+    view.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(!view.sync(&session));
-    assert!(view.selected.is_none());
+    assert!(view.selection.single_symbol().is_none());
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(view.sync(&session));
     assert!(view.input(&session).is_none());

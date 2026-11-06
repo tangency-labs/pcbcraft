@@ -12,6 +12,7 @@ pub mod editor;
 pub mod fonts;
 pub mod home;
 pub mod menu;
+pub mod selection;
 pub mod settings;
 pub mod shell;
 pub mod theme;

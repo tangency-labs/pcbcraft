@@ -1143,7 +1143,7 @@ fn a_selected_symbol_rotates_edits_and_deletes_with_kicad_keys() {
     let mut harness = harness();
     resistor_at_origin(&mut harness);
     click_canvas(&mut harness);
-    assert_eq!(harness.state().views.active.selected.as_deref(), Some("symbol-2"));
+    assert_eq!(harness.state().views.active.selection.single_symbol(), Some("symbol-2"));
     harness.get_by_label("R1 selected · R rotate · E edit fields · Del delete");
 
     harness.key_press(Key::R);
@@ -1164,12 +1164,12 @@ fn a_selected_symbol_rotates_edits_and_deletes_with_kicad_keys() {
 
     harness.key_press(Key::Escape);
     harness.run();
-    assert!(harness.state().views.active.selected.is_none());
+    assert!(harness.state().views.active.selection.is_empty());
     click_canvas(&mut harness);
     harness.key_press(Key::Delete);
     harness.run();
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
-    assert!(harness.state().views.active.selected.is_none());
+    assert!(harness.state().views.active.selection.is_empty());
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert_eq!(first_symbol(&harness, "value"), "4.7k");
@@ -1188,7 +1188,7 @@ fn the_symbol_context_menu_rotates_and_edits() {
         harness.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
         harness.run();
     }
-    assert_eq!(harness.state().views.active.selected.as_deref(), Some("symbol-2"));
+    assert_eq!(harness.state().views.active.selection.single_symbol(), Some("symbol-2"));
     harness.get_by_label("Delete");
     click(&mut harness, "Rotate");
     assert_eq!(first_symbol(&harness, "rotation"), 90);
@@ -1199,7 +1199,7 @@ fn the_symbol_context_menu_rotates_and_edits() {
         .session
         .apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 25_400_000, "y_nm": 0, "expected_revision": revision}))
         .unwrap();
-    harness.state_mut().views.active.selected = Some("symbol-2".to_owned());
+    harness.state_mut().views.active.selection = Selection::one_symbol("symbol-2".to_owned());
     harness.state_mut().edit_selected(SymbolAction::EditFields);
     harness.run();
     let reference = harness.get_by_label("Reference");
@@ -1484,7 +1484,7 @@ fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
     let reopened = pcbcraft_engine::persistence::decode(&bytes).unwrap();
     assert_eq!(reopened.inspect_schematic(), before.inspect_schematic());
     click_canvas_offset(&mut harness, egui::vec2(-101.6, 0.0));
-    assert!(harness.state().views.active.selected_wire.is_some());
+    assert!(harness.state().views.active.selection.single_wire().is_some());
     harness.key_press(Key::Delete);
     harness.run();
     assert!(harness.state().session().project().unwrap().wires().is_empty());

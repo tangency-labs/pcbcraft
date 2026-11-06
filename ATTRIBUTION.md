@@ -216,3 +216,15 @@ The Parts collapse control uses the chevron and accessible naming of the
 collapsing card header in Next's `src/desktop/panels.rs` at the same revision.
 Applying that control to the Parts card, preserving its search/view/position,
 and expanding it on **A** are upstream additions.
+
+## Box selection and group editing
+
+The drag-selection behavior in `crates/app/src/schematic_canvas/selection.rs`,
+its integration in `crates/app/src/lib.rs` and `project_browser.rs`, and the
+marquee painter in `crates/chrome/src/selection.rs` adapt PCBcraft Next's
+`src/desktop/interaction.rs`, `canvas.rs` and `docs/selection-and-text.md` at
+`568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0). Both mouse buttons,
+window/crossing direction, modifier selection, solid/dashed outlines and hit counts
+follow that reference. Hit testing uses upstream symbol bodies and actual wire
+paths. `crates/engine/src/selection.rs` implements new atomic group commands over
+upstream snapshots; it does not reuse Next's session or document model.
