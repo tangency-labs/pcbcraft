@@ -196,6 +196,134 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
     }
 }
 
+/// Deliver native pointer input without waiting for a pending file worker to stop repainting.
+/// Inspect the release frame so one-shot viewport commands have not already been consumed.
+fn window_click(h: &mut Harness<'_, PcbApp>, peer: Option<&Rc<RefCell<Peer>>>, pos: Pos2) {
+    h.input_mut().focused = peer.is_none();
+    if let Some(peer) = peer {
+        peer.borrow_mut().focused = true;
+    }
+    h.run_steps(3);
+    let mut send = |event| {
+        if let Some(peer) = peer {
+            peer.borrow_mut().events.push(event);
+        } else {
+            h.input_mut().events.push(event);
+        }
+        h.step();
+    };
+    send(Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        send(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+}
+
+/// Home, a dialog in the main host and a queued project replacement block child editing and
+/// project actions, but its integrated titlebar must still control that native window.
+#[test]
+fn disabled_editors_keep_native_window_controls_available() {
+    for blocked_by in ["home", "dialog", "pending"] {
+        let (mut h, peer) = multi_window();
+        h.state_mut().integrated_titlebar = true;
+        detach(&mut h);
+        match blocked_by {
+            "home" => h.state_mut().show_home(),
+            "dialog" => h.state_mut().dialog = Dialog::About,
+            _ => {
+                h.state_mut().files.use_stand_in();
+                h.key_press_modifiers(Modifiers::COMMAND, Key::N);
+                h.run();
+                h.get_by_label("Save").click();
+                h.run_steps(3);
+                assert_eq!(h.state().waiting, Some(unsaved::Waiting::ForSave(unsaved::Then::New)));
+            }
+        }
+        h.run_steps(3);
+        let before = h.state().session.inspect();
+        let home = h.state().home;
+        let dialog = std::mem::discriminant(&h.state().dialog);
+        let waiting = h.state().waiting;
+        for label in ["Home", "Preferences", "Undo", "Save Project", "Schematic canvas"] {
+            let pos = child_rect(&peer, label).center();
+            window_click(&mut h, Some(&peer), pos);
+            assert_eq!(h.state().home, home, "{blocked_by}: {label}");
+            assert_eq!(std::mem::discriminant(&h.state().dialog), dialog, "{blocked_by}: {label}");
+            assert_eq!(h.state().waiting, waiting, "{blocked_by}: {label}");
+            assert_eq!(h.state().session.inspect(), before, "{blocked_by}: {label}");
+        }
+        for pressed in [true, false] {
+            peer.borrow_mut().events.push(Event::Key { key: Key::R, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+        }
+        assert_eq!(h.state().session.inspect(), before, "{blocked_by}: rotate shortcut");
+        for (label, command) in [
+            ("Minimize window", ViewportCommand::Minimized(true)),
+            ("Maximize window", ViewportCommand::Maximized(true)),
+            ("Close window", ViewportCommand::Close),
+        ] {
+            let pos = child_rect(&peer, label).center();
+            window_click(&mut h, Some(&peer), pos);
+            assert!(h.output().viewport_output[&editor_windows::viewport(HostId(1))].commands.contains(&command), "{blocked_by}: {label}");
+            assert!(!h.output().viewport_output[&ViewportId::ROOT].commands.contains(&command));
+            assert_eq!(h.state().waiting, waiting);
+        }
+        peer.borrow_mut().close = true;
+        h.run_steps(3);
+        assert_eq!(h.state().views.hosts.len(), 1);
+        assert!(!h.state().close_allowed);
+        assert_eq!(h.state().session.inspect(), before);
+        assert_eq!(h.state().waiting, waiting);
+    }
+}
+
+/// A pending Quit leaves native controls available in the main host, including after promotion.
+/// Titlebar clicks must not dismiss the wait modal or bypass its save/close decision.
+#[test]
+fn native_controls_above_the_wait_dialog_preserve_the_pending_close() {
+    let (mut h, peer) = multi_window();
+    h.state_mut().integrated_titlebar = true;
+    h.state_mut().files.use_stand_in();
+    detach(&mut h);
+    let labels = ["Minimize window", "Maximize window", "Close window"];
+    let positions = labels.map(|label| h.get_by_label(label).rect().center());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    let ctx = h.ctx.clone();
+    h.state_mut().begin_project_close(&ctx);
+    h.run_steps(3);
+    let before = h.state().session.inspect();
+    for host in [HostId::ROOT, HostId(1)] {
+        for (index, command) in [ViewportCommand::Minimized(true), ViewportCommand::Maximized(true), ViewportCommand::Close].into_iter().enumerate() {
+            let child = (host != HostId::ROOT).then_some(&peer);
+            let pos = child.map_or(positions[index], |peer| child_rect(peer, labels[index]).center());
+            window_click(&mut h, child, pos);
+            assert!(h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command), "{host:?}: {}", labels[index]);
+            assert_eq!(h.state().waiting, Some(unsaved::Waiting::ToDecide(unsaved::Then::Close)));
+            assert!(h.state().files.stand_in_waiting());
+            assert!(!h.state().close_allowed);
+        }
+        if host == HostId::ROOT {
+            h.input_mut().viewports.entry(ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        } else {
+            peer.borrow_mut().close = true;
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().views.main, HostId(1));
+        assert_eq!(h.state().views.hosts.len(), 1);
+        assert_eq!(h.state().waiting, Some(unsaved::Waiting::ToDecide(unsaved::Then::Close)));
+        assert!(!h.state().close_allowed);
+        assert_eq!(h.state().session.inspect(), before);
+    }
+    let cancel = child_rect(&peer, "Cancel close").center();
+    window_click(&mut h, Some(&peer), cancel);
+    assert_eq!(h.state().waiting, None, "the modal's own controls remain usable");
+    assert!(h.state().files.stand_in_waiting());
+    h.state_mut().files.end_stand_in(Some("Disk full"));
+    h.run();
+    assert!(!h.state().close_allowed);
+    assert_eq!(h.state().session.inspect(), before);
+}
+
 /// Either split view can detach, then close or explicitly dock from its native host. Close keeps
 /// the root alone; Dock restores the split. All transitions preserve navigation and project
 /// bytes while invalidating callbacks captured before the transition. Child Close never prompts to save.
@@ -366,16 +494,19 @@ fn close_root(h: &mut Harness<'_, PcbApp>) {
     h.run();
 }
 
-/// Root close uses one decision; cancel preserves both windows and discard permits root exit.
-/// Closing only the child never asks to save or changes the electrical history.
+/// Explicit Quit uses one decision even with several windows; Cancel preserves them all.
 #[test]
 fn closing_the_project_prompts_once_and_cancel_keeps_both_editors() {
     let (mut h, peer) = multi_window();
     detach(&mut h);
     let before = h.state().session.inspect();
+    let ctx = h.ctx.clone();
+    h.state_mut().request_project_close(&ctx);
     close_root(&mut h);
     h.get_by_label("Save");
     child_key(&mut h, &peer, Key::R, Modifiers::NONE);
+    let ctx = h.ctx.clone();
+    h.state_mut().request_project_close(&ctx);
     close_root(&mut h);
     assert_eq!(h.state().session.inspect(), before);
     focus(&mut h, &peer, false);
@@ -383,6 +514,8 @@ fn closing_the_project_prompts_once_and_cancel_keeps_both_editors() {
     assert!(!h.state().project_action_pending());
     assert!(!h.state().views.detached_hosts().is_empty());
     assert!(!h.output().viewport_output[&ViewportId::ROOT].commands.contains(&ViewportCommand::Close));
+    let ctx = h.ctx.clone();
+    h.state_mut().request_project_close(&ctx);
     close_root(&mut h);
     h.get_by_label("Don't Save").click();
     h.step();
@@ -693,7 +826,7 @@ fn selection_follow_fans_out_across_hosts_without_focus_or_selection_transfer() 
         let before = h.state().session.inspect();
         h.state_mut().views.bind(source);
         h.state_mut().select(Selection::one_symbol("symbol-2".to_owned()));
-        h.state_mut().views.bind_root();
+        h.state_mut().views.bind_main();
         h.run();
         for (host, id) in [(HostId::ROOT, primary), (HostId(1), first), (HostId(2), second)].into_iter().filter(|(_, id)| *id != source) {
             let rect = if host == HostId::ROOT {
@@ -796,7 +929,7 @@ fn docking_prunes_a_parked_primary_before_directional_following() {
     h.state_mut().views.host = child;
     h.state_mut().views.bind(docked);
     h.state_mut().split_editors(&ctx, false);
-    h.state_mut().views.bind_root();
+    h.state_mut().views.bind_main();
     h.state_mut().views.dock_view(docked);
     h.run();
     assert!(h.state().views.view(ViewId(0)).is_none());
@@ -809,10 +942,143 @@ fn docking_prunes_a_parked_primary_before_directional_following() {
         h.state_mut().views.view_mut(target).unwrap().camera.center_on(far);
         h.state_mut().views.bind(source);
         h.state_mut().select(Selection::one_symbol("symbol-2".to_owned()));
-        h.state_mut().views.bind_root();
+        h.state_mut().views.bind_main();
         h.run();
         let rect = h.get_by_label(&format!("Schematic canvas {}", target.0 + 1)).rect();
         assert!(rect.contains(h.state().views.view(target).unwrap().camera.screen(origin, rect)), "{policy:?}");
         assert_eq!(h.state().session.inspect(), before);
     }
+}
+
+/// The original native window can disappear while two editors keep their native IDs, layouts,
+/// cameras and selections. Project dialogs and shared edit/history continue in the survivor.
+#[test]
+fn closing_the_original_window_promotes_a_survivor_without_rehosting_its_views() {
+    let (mut h, peers) = many_windows();
+    click(&mut h, "View");
+    click(&mut h, "Open another editor window");
+    click(&mut h, "Open another editor window");
+    let first = peers.borrow()[&editor_windows::viewport(HostId(1))].clone();
+    let second = peers.borrow()[&editor_windows::viewport(HostId(2))].clone();
+    focus_host(&mut h, &peers, HostId(1));
+    let tab = child_rect(&first, "View").center();
+    child_click_at(&mut h, &first, tab);
+    let split = child_rect(&first, "Split editor views").center();
+    child_click_at(&mut h, &first, split);
+    let panes = h.state().views.hosts[&HostId(1)].layout.views();
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let cameras: Vec<_> = panes.iter().map(|id| h.state().views.view(*id).unwrap().camera.screen(origin, Rect::ZERO)).collect();
+    let before = h.state().session.inspect();
+    close_root(&mut h);
+    assert_eq!(h.state().views.main, HostId(1));
+    assert!(!h.state().views.hosts.contains_key(&HostId::ROOT));
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.inspect(), before);
+    assert_eq!(h.state().views.hosts[&HostId(1)].layout.views(), panes);
+    for (id, position) in panes.iter().zip(cameras) {
+        assert_eq!(h.state().views.view(*id).unwrap().camera.screen(origin, Rect::ZERO), position);
+    }
+    child_rect(&first, "Detach active editor view");
+    let view = h.state().views.hosts[&HostId(2)].focused;
+    let at = h.state().views.view(view).unwrap().camera.screen(origin, child_rect(&second, "Schematic canvas"));
+    focus_host(&mut h, &peers, HostId(2));
+    child_click_at(&mut h, &second, at);
+    child_key(&mut h, &second, Key::R, Modifiers::NONE);
+    assert_eq!(h.state().session.revision(), before["revision"].as_u64().unwrap() + 1);
+    focus_host(&mut h, &peers, HostId(1));
+    child_key(&mut h, &first, Key::Z, Modifiers::COMMAND);
+    assert_eq!(h.state().session.project().unwrap().symbols()[0].turns(), 0);
+    child_key(&mut h, &first, Key::Comma, Modifiers::COMMAND);
+    child_rect(&first, "Preferences");
+    assert!(matches!(h.state().dialog, Dialog::Preferences(_)));
+}
+
+/// Closing the new main window can promote again; only the last editor asks to save. Cancel,
+/// failed saves and repeated Close keep that same native window available for recovery.
+#[test]
+fn the_last_surviving_window_owns_save_cancel_and_failure_recovery() {
+    let (mut h, peers) = many_windows();
+    h.state_mut().files.use_stand_in();
+    click(&mut h, "View");
+    click(&mut h, "Open another editor window");
+    click(&mut h, "Open another editor window");
+    let first = peers.borrow()[&editor_windows::viewport(HostId(1))].clone();
+    let last = peers.borrow()[&editor_windows::viewport(HostId(2))].clone();
+    close_root(&mut h);
+    first.borrow_mut().close = true;
+    h.run();
+    assert_eq!(h.state().views.main, HostId(2));
+    assert_eq!(h.state().views.hosts.len(), 1);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    last.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::SaveChanges(unsaved::Then::Close)));
+    assert!(!h.state().close_allowed);
+    focus_host(&mut h, &peers, HostId(2));
+    let cancel = child_rect(&last, "Cancel").center();
+    child_click_at(&mut h, &last, cancel);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    last.borrow_mut().close = true;
+    h.run();
+    let save = child_rect(&last, "Save").center();
+    // A pending stand-in save repaints until the test supplies its result.
+    for pressed in [true, false] {
+        last.borrow_mut().events.push(Event::PointerMoved(save));
+        last.borrow_mut().events.push(Event::PointerButton { pos: save, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    }
+    assert!(h.state().files.stand_in_waiting());
+    last.borrow_mut().close = true;
+    h.run_steps(3);
+    assert_eq!(h.state().waiting, Some(unsaved::Waiting::ForSave(unsaved::Then::Close)));
+    h.state_mut().files.end_stand_in(Some("Disk full"));
+    h.run();
+    assert!(!h.state().close_allowed);
+    assert_eq!(h.state().views.main, HostId(2));
+    assert_eq!(h.state().message.as_deref(), Some("Disk full"));
+    last.borrow_mut().close = true;
+    h.run();
+    let discard = child_rect(&last, "Don't Save").center();
+    child_click_at(&mut h, &last, discard);
+    assert!(h.state().close_allowed);
+}
+
+/// Closing the original window during a save leaves the worker alive. The last window can
+/// cancel a pending close, receive the save result, and subsequently close without another prompt.
+#[test]
+fn a_pending_save_survives_original_window_close_and_cancel_from_the_last_window() {
+    let (mut h, peer) = multi_window();
+    let dir = tempfile::tempdir().unwrap();
+    h.state_mut().files.use_stand_in();
+    detach(&mut h);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    assert!(h.state().files.busy());
+    h.input_mut().viewports.entry(ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+    h.run_steps(3);
+    assert_eq!(h.state().views.main, HostId(1));
+    assert!(h.state().files.busy());
+    assert_eq!(h.state().waiting, None, "closing one of several windows does not request shutdown");
+    peer.borrow_mut().close = true;
+    h.run_steps(3);
+    assert_eq!(h.state().waiting, Some(unsaved::Waiting::ToDecide(unsaved::Then::Close)));
+    let cancel = child_rect(&peer, "Cancel close").center();
+    peer.borrow_mut().focused = true;
+    h.input_mut().focused = false;
+    for pressed in [true, false] {
+        peer.borrow_mut().events.push(Event::PointerMoved(cancel));
+        peer.borrow_mut().events.push(Event::PointerButton { pos: cancel, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+    }
+    assert_eq!(h.state().waiting, None);
+    assert!(h.state().files.stand_in_waiting());
+    h.state_mut().files.finish_stand_in(dir.path().join("surviving-window"));
+    h.run();
+    assert!(!h.state().close_allowed);
+    assert!(!h.state().files.dirty(&h.state().session));
+    assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(h.state().close_allowed);
+    assert!(matches!(h.state().dialog, Dialog::None));
 }

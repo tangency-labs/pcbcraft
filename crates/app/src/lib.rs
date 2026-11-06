@@ -534,7 +534,8 @@ impl PcbApp {
     /// Show the project's title and unsaved state beside the Home, file and history actions.
     /// Undo and Redo dispatch through the same engine commands as their keyboard shortcuts.
     /// The version and bug report are shown when the app bar has space, and About from 380 points.
-    fn app_bar(&mut self, ui: &mut Ui) {
+    /// Disabling application actions leaves the integrated native window controls available.
+    fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut preferences = false;
@@ -552,6 +553,7 @@ impl PcbApp {
             ui,
             title,
             self.integrated_titlebar,
+            actions_enabled,
             |ui| home = menu::quick_action(ui, MenuIcon::Home, "Home", "", true).clicked(),
             |ui| {
                 menu::file(ui, |ui| self.file_menu(ui));
@@ -729,8 +731,8 @@ impl PcbApp {
         if !IN_BROWSER {
             editors.push(RibbonTool {
                 icon: ToolIcon::EditorWindow,
-                label: if self.views.host != editor_layout::HostId::ROOT { "Dock" } else { "Detach" },
-                description: if self.views.host != editor_layout::HostId::ROOT { "Dock editor view" } else { "Detach active editor view" },
+                label: if self.views.host != self.views.main { "Dock" } else { "Detach" },
+                description: if self.views.host != self.views.main { "Dock editor view" } else { "Detach active editor view" },
                 shortcut: "",
                 enabled: has_project,
                 active: false,
@@ -1414,15 +1416,13 @@ impl PcbApp {
         }
     }
 
-    /// Draw one frame. Cancel canvas tools when another action changes the project or opens a
-    /// dialog, and discard browser drags when their starting project revision becomes stale.
+    /// Poll the shared project exactly once through the framework root, even after its native
+    /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
         self.sync_style(&ctx);
-        self.pointer = self.pointer_next.take();
         self.handle_close_request(&ctx);
-        self.editor_window_focus(&ctx);
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {
@@ -1442,73 +1442,96 @@ impl PcbApp {
         self.finish_waiting(&ctx);
         #[cfg(target_arch = "wasm32")]
         self.warn_before_leaving();
-        #[cfg(not(target_arch = "wasm32"))]
-        let assistant_keys = self.assistant_shortcuts(&ctx);
-        #[cfg(target_arch = "wasm32")]
-        let assistant_keys = false;
         self.views.sync(&self.session);
-        self.editor_pointer_focus(&ctx);
-        self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_live_control();
-        if self.project_action_pending() {
-            ui.disable();
+        if self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
+            self.editor_host_frame(ui, self.integrated_titlebar);
         }
-        self.app_bar(ui);
-        if self.home {
-            self.status(ui);
-            self.home_page(ui);
-            #[cfg(not(target_arch = "wasm32"))]
-            self.assistant.show(&ctx, None, &mut self.session, false);
-            if self.integrated_titlebar {
-                shell::resize_window_edges(ui);
-            }
-            self.project_dialogs(&ctx);
-            #[cfg(not(target_arch = "wasm32"))]
-            self.detached_editor(&ctx);
-            self.finish_view_actions(&ctx);
-            if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home) {
-                self.repaint_editors(&ctx);
-            }
-            return;
-        }
-        self.ribbon(ui);
-        self.views.sync(&self.session);
-        if !matches!(self.dialog, Dialog::None) {
-            self.views.cancel_gestures();
-        }
-        if egui::DragAndDrop::payload::<PartDrag>(&ctx).is_some_and(|drag| !self.views.active.accepts(drag.source, &self.session)) {
-            egui::DragAndDrop::clear_payload(&ctx);
-        }
-        self.status(ui);
-        let workspace = ui.available_rect_before_wrap();
-        let revision = self.session.revision();
-        self.editor_workspace(ui, workspace);
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
-            self.assistant.show(&ctx, Some(workspace), &mut self.session, can_edit);
-            if let Some(request) = self.assistant.take_settings_request() {
-                self.dialog = match request {
-                    assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
-                    assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
-                };
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                ctx.request_repaint();
-            }
-        }
-        if self.integrated_titlebar {
-            shell::resize_window_edges(ui);
-        }
-        self.project_dialogs(&ctx);
-        self.views.sync(&self.session);
         #[cfg(not(target_arch = "wasm32"))]
         self.detached_editor(&ctx);
         self.finish_view_actions(&ctx);
-        if revision != self.session.revision()
-            || before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home)
-        {
+        if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home) {
             self.repaint_editors(&ctx);
+        }
+    }
+
+    /// Draw the same editor in any visible window. Project dialogs, Home and the assistant
+    /// belong to the current main host, whose native identity can survive the original window.
+    /// Blocked project actions disable editor controls, while native window interactions remain
+    /// enabled above project dialogs and still route Close through the shared lifecycle policy.
+    fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
+        let ctx = ui.ctx().clone();
+        let main = self.views.host == self.views.main;
+        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
+        let had_dialog = !matches!(self.dialog, Dialog::None);
+        let was_home = self.home;
+        self.pointer = self.pointer_next.take();
+        self.editor_window_focus(&ctx);
+        self.views.sync(&self.session);
+        self.editor_pointer_focus(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        let assistant_keys = main && self.assistant_shortcuts(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        let assistant_keys = false;
+        if main || (!self.home && !had_dialog) {
+            self.shortcuts(&ctx, assistant_keys, self.views.active.id());
+        }
+        let integrated = std::mem::replace(&mut self.integrated_titlebar, integrated_titlebar);
+        let enabled = !self.project_action_pending() && (main || (!self.home && !had_dialog));
+        self.app_bar(ui, enabled);
+        ui.add_enabled_ui(enabled, |ui| {
+            let workspace = if self.home && main {
+                self.status(ui);
+                self.home_page(ui);
+                None
+            } else {
+                self.ribbon(ui);
+                self.views.sync(&self.session);
+                if !matches!(self.dialog, Dialog::None) {
+                    self.views.cancel_gestures();
+                }
+                if egui::DragAndDrop::payload::<PartDrag>(&ctx).is_some_and(|drag| !self.views.active.accepts(drag.source, &self.session)) {
+                    egui::DragAndDrop::clear_payload(&ctx);
+                }
+                self.status(ui);
+                let workspace = ui.available_rect_before_wrap();
+                self.editor_workspace(ui, workspace);
+                Some(workspace)
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            if main {
+                let can_edit = workspace.is_some() && matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
+                self.assistant.show(&ctx, workspace, &mut self.session, can_edit);
+                if let Some(request) = self.assistant.take_settings_request() {
+                    self.dialog = match request {
+                        assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
+                        assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
+                    };
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    ctx.request_repaint();
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = workspace;
+        });
+        self.integrated_titlebar = integrated;
+        if main {
+            self.project_dialogs(&ctx);
+        } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {
+            ctx.send_viewport_cmd_to(editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+        }
+        if integrated_titlebar {
+            shell::resize_window_edges(ui);
+        }
+        self.views.sync(&self.session);
+        if ctx.viewport_id() != egui::ViewportId::ROOT && self.pointer != self.pointer_next {
+            ctx.request_repaint();
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+        }
+        if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home) {
+            self.repaint_editors(&ctx);
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
     }
 }

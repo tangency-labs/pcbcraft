@@ -21,6 +21,7 @@ pub(super) struct EditorViews {
     rest: BTreeMap<ViewId, SchematicView>,
     pub(super) hosts: BTreeMap<HostId, ViewHost>,
     pub(super) host: HostId,
+    pub(super) main: HostId,
     next_view: u64,
     next_host: u64,
     primary: ViewId,
@@ -45,6 +46,7 @@ impl Default for EditorViews {
             rest: BTreeMap::from([(ViewId(1), SchematicView::new(ViewId(1)))]),
             hosts: BTreeMap::from([(HostId::ROOT, root)]),
             host: HostId::ROOT,
+            main: HostId::ROOT,
             next_view: 2,
             next_host: 1,
             primary: ViewId(0),
@@ -163,12 +165,12 @@ impl EditorViews {
     /// behind, while a sole native view already has the requested placement and stays put.
     pub(super) fn detach_view(&mut self, id: ViewId) -> Option<HostId> {
         let source = self.owner(id)?;
-        if source != HostId::ROOT && !self.hosts.get(&source)?.split() {
+        if source != self.main && !self.hosts.get(&source)?.split() {
             return Some(source);
         }
         let host = HostId(self.next_host);
         let next = self.next_host.checked_add(1)?;
-        if source == HostId::ROOT && !self.hosts.get(&source)?.split() {
+        if source == self.main && !self.hosts.get(&source)?.split() {
             // Leave one view behind without reopening the host's previously collapsed layout.
             let parked = self.hosts.get_mut(&source)?.parked.pop();
             let replacement = if let Some(parked) = parked {
@@ -190,18 +192,18 @@ impl EditorViews {
         self.next_host = next;
         self.hosts.insert(host, ViewHost::new(id));
         self.suspend();
-        self.bind_root();
+        self.bind_main();
         Some(host)
     }
 
     /// Explicitly dock one native view beside the primary host's focused pane. Existing panes
     /// and other windows stay in place; an emptied source host and its parked views are pruned.
     pub(super) fn dock_view(&mut self, id: ViewId) {
-        let Some(source) = self.owner(id).filter(|host| *host != HostId::ROOT) else {
+        let Some(source) = self.owner(id).filter(|host| *host != self.main) else {
             return;
         };
         self.unplace(source, id);
-        if let Some(root) = self.hosts.get_mut(&HostId::ROOT) {
+        if let Some(root) = self.hosts.get_mut(&self.main) {
             root.layout.insert(root.focused, id);
             if let Some(collapsed) = &mut root.collapsed {
                 collapsed.insert(root.focused, id);
@@ -210,26 +212,31 @@ impl EditorViews {
             root.rects.clear();
         }
         self.suspend();
-        self.bind_root();
+        self.bind_main();
         self.prune_closed();
     }
 
-    /// Restore the primary render slot after a synchronous child callback or layout action.
-    pub(super) fn bind_root(&mut self) {
-        self.host = HostId::ROOT;
-        if let Some(root) = self.hosts.get(&HostId::ROOT) {
+    /// Restore the current main host's render slot, including after the original window closes.
+    pub(super) fn bind_main(&mut self) {
+        self.host = self.main;
+        if let Some(root) = self.hosts.get(&self.main) {
             self.bind(root.focused);
         }
     }
 
-    /// Dismiss one secondary host and its views without reconstructing another host's layout.
+    /// Dismiss any host while another survives, promoting a survivor without changing its layout.
     /// Removed IDs are never reused, so stale dialogs and delayed input cannot address a new view.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn close_host(&mut self, host: HostId) {
-        if host == HostId::ROOT {
+        if !self.hosts.contains_key(&host) || self.hosts.len() == 1 {
             return;
         }
-        self.bind_root();
+        if host == self.main
+            && let Some(next) = self.hosts.keys().copied().find(|id| *id != host)
+        {
+            self.main = next;
+        }
+        self.bind_main();
         if let Some(layout) = self.hosts.remove(&host) {
             for id in layout.layout.views().into_iter().chain(layout.parked) {
                 self.rest.remove(&id);
@@ -243,11 +250,11 @@ impl EditorViews {
         let Some(host) = self.owner(id) else {
             return;
         };
-        if host == HostId::ROOT && !self.hosts.get(&host).is_some_and(ViewHost::split) {
+        if host == self.main && !self.hosts.get(&host).is_some_and(ViewHost::split) {
             return;
         }
         self.unplace(host, id);
-        self.bind_root();
+        self.bind_main();
         self.rest.remove(&id);
         self.prune_closed();
     }
@@ -516,7 +523,7 @@ impl PcbApp {
             Vec::new()
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let assistant = if self.views.host != HostId::ROOT { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
+        let assistant = if self.views.host != self.views.main { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
         #[cfg(target_arch = "wasm32")]
         let assistant = {
             let _ = workspace;
@@ -533,7 +540,7 @@ impl PcbApp {
                 if self.views.is_split()
                     && let Some(path) = view.sheet_path(&self.session)
                 {
-                    let (clicked, action) = editor::sheet_tab(ui, &path, active, !crate::IN_BROWSER, self.views.host != HostId::ROOT);
+                    let (clicked, action) = editor::sheet_tab(ui, &path, active, !crate::IN_BROWSER, self.views.host != self.views.main);
                     if clicked {
                         self.activate_editor(ui.ctx(), id);
                     }
@@ -620,7 +627,7 @@ impl PcbApp {
     fn editor_panels(&mut self, ui: &mut Ui) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
         let source = self.views.active.input(&self.session)?;
         #[cfg(not(target_arch = "wasm32"))]
-        let clearance = if self.views.host != HostId::ROOT { 0.0 } else { self.assistant.rail_clearance() };
+        let clearance = if self.views.host != self.views.main { 0.0 } else { self.assistant.rail_clearance() };
         #[cfg(target_arch = "wasm32")]
         let clearance = 0.0;
         self.net_inspector.show(ui, &self.session, clearance);
