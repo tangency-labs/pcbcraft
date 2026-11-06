@@ -210,6 +210,60 @@ fn narrow_home_stacks_the_navigation_above_the_tiles() {
     assert!(back.bottom() < tile.top(), "{back:?} should sit above {tile:?}");
 }
 
+/// Help under the ? button holds About, Keyboard Shortcuts, Report an Issue and Connect AI
+/// assistants, as SolidCraft's does. File has no connection row, and ends with Preferences.
+#[test]
+fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
+    let mut harness = harness();
+    click(&mut harness, "File");
+    assert!(harness.query_by_label("Local MCP…").is_none());
+    assert!(harness.query_by_label("Connect AI assistants…").is_none());
+    harness.key_press(Key::Escape);
+    harness.run();
+
+    // File ends with Preferences and Keyboard Shortcuts above Quit, as SolidCraft's does.
+    choose(&mut harness, "File", "Preferences…");
+    harness.get_by_label("Interface scale");
+    click(&mut harness, "OK");
+    choose(&mut harness, "File", "Keyboard Shortcuts…");
+    harness.get_by_label("Draw wire");
+    click(&mut harness, "OK");
+
+    choose(&mut harness, "Help", "Keyboard Shortcuts");
+    assert!(matches!(harness.state().dialog, Dialog::Preferences(_)));
+    harness.get_by_label("Draw wire");
+    click(&mut harness, "OK");
+
+    click(&mut harness, "Help");
+    harness.get_by_label("Report an Issue…").click();
+    harness.step();
+    assert!(
+        harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::OutputCommand::OpenUrl(url) if url.url == BUG_REPORT_URL))
+    );
+
+    choose(&mut harness, "Help", "Connect AI assistants…");
+    assert!(matches!(harness.state().dialog, Dialog::LocalMcp { .. }));
+    harness.get_by_label("Enable local connection");
+}
+
+/// Below 380 points the ? button gives way, and Home's rail still reaches the same rows.
+#[test]
+fn narrow_bars_reach_help_rows_from_home() {
+    let mut harness = harness();
+    harness.set_size(egui::vec2(320.0, 640.0));
+    harness.run();
+    assert!(harness.query_by_label("Help").is_none());
+    open_home(&mut harness);
+    harness.get_by_label("About PCBCraft");
+    click(&mut harness, "Connect AI assistants…");
+    assert!(matches!(harness.state().dialog, Dialog::LocalMcp { .. }));
+}
+
 /// The full app bar opens the issue form, and the compact bar keeps the window controls accessible.
 #[test]
 fn integrated_titlebar_keeps_window_controls_accessible() {
@@ -369,7 +423,7 @@ fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
     click(&mut harness, "OK");
     assert!(matches!(harness.state().dialog, Dialog::None));
     assert_eq!(harness.state().preferences().scale_percent, 125);
-    click(&mut harness, "About PCBCraft");
+    choose(&mut harness, "Help", "About PCBCraft");
     harness.get_by_label("Close").click();
     harness.run();
     assert!(harness.query_by_label("Close").is_none());
@@ -886,7 +940,7 @@ mod live_mcp {
         click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
         let before_wire = painted_wire(&harness);
 
-        choose(&mut harness, "File", "Local MCP…");
+        choose(&mut harness, "Help", "Connect AI assistants…");
         click(&mut harness, "Enable local connection");
         click(&mut harness, "Copy configuration");
         let config = harness.state().live_control.as_ref().unwrap().client_configuration();
@@ -931,7 +985,7 @@ mod live_mcp {
         assert_eq!(redone["project"], moved["project"]);
         assert_eq!(painted_wire(&harness), after_wire);
 
-        choose(&mut harness, "File", "Local MCP…");
+        choose(&mut harness, "Help", "Connect AI assistants…");
         click(&mut harness, "Disable connection");
         assert!(harness.state().live_control.is_none());
         let disconnected = tool(&mut harness, connection, "inspect_project", json!({}));

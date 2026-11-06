@@ -87,6 +87,24 @@ pub fn file<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerRespon
     })
 }
 
+/// Draw the ? button and, while it is open, the Help menu under it, on the same surface and rows
+/// as File. Returns the content's value while the menu shows. Picking a row closes it.
+pub fn help<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let t = Tokens::get();
+    let response = quick_action(ui, MenuIcon::Help, "Help", "", true);
+    // A fixed width, as File has: menu rows fill whatever width they are given. The ? button sits
+    // at the right of the bar, so the menu hangs from its right edge.
+    egui::Popup::menu(&response)
+        .frame(frame())
+        .align(egui::RectAlign::BOTTOM_END)
+        .show(|ui| {
+            ui.set_width(t.control_height * 8.0);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui)
+        })
+        .map(|shown| shown.inner)
+}
+
 /// Open a pointer context menu with the same surface and rows as the menu bar.
 pub fn context<R>(response: &Response, add: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
     egui::Popup::context_menu(response).frame(frame()).show(|ui| {

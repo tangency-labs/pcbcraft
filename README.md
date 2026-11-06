@@ -84,8 +84,8 @@ projects. Switching projects or agents starts a fresh conversation.
 ## Live MCP in the desktop editor
 
 Build the desktop and CLI binaries with `cargo build --locked -p pcbcraft -p pcbcraft-cli`.
-Open a project in the desktop app and choose **File → Local MCP… → Enable local
-connection**. Copy the configuration into your MCP client. If `pcbcraft-cli`
+Open a project in the desktop app and choose **Help (?) → Connect AI assistants…
+→ Enable local connection**. In a narrow window, use the same row on **Home**. Copy the configuration into your MCP client. If `pcbcraft-cli`
 isn't on your PATH, set its command to the full path of the binary in
 `target/debug`. Close the setup dialog before editing. The copied configuration
 grants access to this window until you disable the connection or close the app.
