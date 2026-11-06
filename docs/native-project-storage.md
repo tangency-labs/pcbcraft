@@ -68,6 +68,10 @@ sides; the profile has a UUID and front-to-back `strata`. Copper strata referenc
 catalog layer UUIDs, while dielectric strata own UUIDs and optional material
 names. Profile, layer and dielectric IDs must be non-nil and mutually unique.
 Catalog order is canonical UUID order; physical order belongs only to strata.
+The material name is descriptive text only: this version has no structured
+FR-4 product identity, Tg, core/prepreg role or multi-ply construction. The
+[material proposal](pcb-representation.md#materials-core-and-prepreg) records
+those next requirements and the need for an explicit schema migration.
 
 The current uniform rigid profile alternates copper and dielectric, with front
 and back copper at its ends and every catalog copper layer appearing once.

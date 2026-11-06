@@ -68,7 +68,9 @@ a layer's purpose under existing geometry requires the same validation.
 
 Represent the stackup as an ordered construction of copper and dielectric
 strata. Copper strata reference layer IDs. Dielectric strata have their own IDs,
-optional material information and thickness. A stackup profile has a stable ID;
+optional material information and thickness. The current implementation stores
+only a material-name string; structured material properties and core/prepreg
+construction are proposed below. A stackup profile has a stable ID;
 the first board has one uniform rigid profile. Region assignments and additional
 profiles are a later extension for flex/rigid-flex, not an inferred capability
 of the initial model.
@@ -104,6 +106,75 @@ When extending a board, preserve its outer layer IDs and any surviving dielectri
 or copper identities. Rename Ground to Reference without changing references.
 Inserting a copper layer is an explicit topology change, with consequences for
 pad stacks and vias reviewed before applying it to a populated board.
+
+### Materials, core and prepreg
+
+Core/prepreg construction and substrate properties belong in the foundation
+before a material-aware setup UI or impedance calculation relies on it. The
+current `material` string is a human label with no inferred electrical or thermal
+properties. It cannot yet represent a qualified FR-4 product, Tg, a core versus
+prepreg choice, or several prepreg plies within one dielectric gap. Those remain
+implementation work, not capabilities supplied by naming a layer `FR-4`.
+
+The proposed contract separates three responsibilities:
+
+| Record | Responsibility |
+| --- | --- |
+| Pinned material definition | Stable identity/revision, material family or classification such as FR-4, optional manufacturer/product, source revision and reported properties |
+| Dielectric construction | Core or prepreg role, referenced material definition, glass construction and resin content when specified, and ordered plies where needed |
+| Board stackup instance | Stable gap identity and location between copper layers, chosen construction and specified finished dielectric thickness/tolerance |
+
+FR-4 does not select a single product or assign a Tg. Material properties need
+their own typed records: Tg with a temperature unit, measurement method and
+source; later Dk/Df with frequency and relevant test conditions, and thermal
+expansion with direction and temperature interval. A reported typical value
+must remain distinct from a guaranteed minimum or a design requirement. Isola's
+[370HR datasheet, revision E](https://www.isola-group.com/wp-content/uploads/data-sheets/370hr-laminate-prepreg.pdf)
+illustrates these distinctions by reporting a typical Tg of 180 °C by DSC,
+frequency-specific Dk/Df values and separate thermal properties. These are
+documentation examples, not bundled material defaults or a product qualification.
+
+Keep properties optional and retain their provenance when projects reopen
+offline. A family label must never manufacture missing values. A board-wide
+requirement such as a minimum Tg belongs to the rule/requirements model and is
+checked against applicable material records with compatible measurement methods;
+it is not substituted for each selected material's reported value. Tg alone
+must not be treated as a permitted operating temperature or a reflow approval.
+
+The physical representation must accommodate a core construction and a bond
+region with multiple prepreg plies without inserting fictitious copper layers.
+For example, a proposed four-copper-layer construction could read
+`copper / prepreg group / copper / core / copper / prepreg group / copper`, with
+each prepreg group retaining its ordered plies. This is an example, not a required
+four-layer recipe or an inferred manufacturing capability. Glass style and resin
+content belong to the specified construction; Isola's [laminate and prepreg
+manufacturing overview](https://www.isola-group.com/wp-content/uploads/Understanding-Laminate-Prepreg-Manufacturing.pdf)
+shows why ply construction must remain distinguishable even at a given thickness.
+
+Use finished dielectric separation for board geometry, while retaining raw or
+nominal ply specifications separately. Do not add unpressed prepreg thicknesses
+and claim that the sum predicts the finished gap. Keep copper thickness in its
+copper records, so selecting a copper-clad core cannot count the foil twice.
+Unknown construction or finished thickness stays unknown until specified; any
+later estimate needs an explicit calculation and provenance. Lengths still obey
+#75's canonical-nanometer contract, while temperature and dimensionless material
+properties use their own units and validation.
+
+Implement this in a dedicated material module consumed by stackup validation,
+the eventual property resolver and setup commands. Extend the dielectric gap
+with a versioned construction/ply representation rather than flattening several
+plies into a label or relaxing validation to accept unknown required semantics.
+The current alternating copper/dielectric format can describe an unresolved gap,
+but cannot save the construction proposed here. Migration must preserve its ID,
+label and thickness without guessing a material product, Tg or core/prepreg role.
+
+Acceptance for that slice includes a core and a multi-ply prepreg group with
+different material references, an FR-4 label with unknown Tg, differing Tg test
+methods, independent changes to material requirements and selected products,
+rejection of invalid references/dimensions, and offline save/reopen plus undo.
+Changing a material must invalidate affected derived results without changing
+electrical net identity. Confirm the construction schema and thickness/tolerance
+ownership before implementing those tests and the public format.
 
 ## Footprints, parts and pad stacks
 
@@ -244,7 +315,8 @@ yet. General footprint layer bindings are also absent; the first slice must
 conservatively reject topology changes on populated boards rather than infer a
 reassignment from the hard-coded two-pad footprint.
 
-Follow with shared unit parsing/numeric setup UI (#75/#76), the net-identity and
+Follow with the structured material/core/prepreg contract and its bounded model
+implementation (#76), then shared unit parsing/numeric setup UI (#75/#76), the net-identity and
 rule-resolution contract (#77 with #42), pinned footprints/assignments (#92),
 then the board canvas and mixed workspace/cross-probing acceptance (#54/#64/#65).
 Review the accepted-board baseline and pending removals under #55 before exposing
@@ -270,5 +342,6 @@ are inputs to this slice.
 
 Before their implementation, settle net split/merge identity, rule precedence
 and exceptions, accepted-board baseline storage, material-property provenance,
-finished-thickness semantics and the scope of per-layer pad stacks. These are
+core/prepreg construction and ply schema, finished-thickness/tolerance semantics
+and the scope of per-layer pad stacks. These are
 explicit follow-up decisions rather than promises made by the initial format.
