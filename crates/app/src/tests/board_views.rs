@@ -61,7 +61,7 @@ fn switching_workspaces_restores_navigation_and_rejects_stale_schematic_input() 
 fn mixed_panes_highlight_both_ways_without_granting_schematic_edit_authority() {
     let mut h = board_harness();
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout — Open beside");
+    click(&mut h, "Open PCB layout beside current view");
     h.get_by_label("Schematic canvas 1");
     h.get_by_label("PCB canvas 3");
     assert_eq!(h.state().views.view(ViewId(0)).unwrap().workspace, Workspace::Schematic);
@@ -97,7 +97,7 @@ fn mixed_follow_uses_destination_geometry_and_keeps_zoom() {
     for policy in [SelectionFollow::Off, SelectionFollow::Both, SelectionFollow::SecondaryFollowsPrimary, SelectionFollow::PrimaryFollowsSecondary] {
         let mut h = board_harness();
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout — Open beside");
+        click(&mut h, "Open PCB layout beside current view");
         h.state_mut().preferences.selection_follow = policy;
         h.state_mut().views.view_mut(ViewId(2)).unwrap().camera.center_on(Point { x_nm: 1_000_000_000, y_nm: 0 });
         h.run();
@@ -170,7 +170,7 @@ fn board_browser_properties_and_layers_share_stable_addresses() {
     h.run();
     assert_eq!(h.get_by_label("Show layer Signal top").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
     click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout — Open beside");
+    click(&mut h, "Open PCB layout beside current view");
     let original = h.state().views.view(ViewId(0)).unwrap();
     let duplicate = h.state().views.view(ViewId(2)).unwrap();
     let point = Point { x_nm: 0, y_nm: 0 };
@@ -237,11 +237,55 @@ fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     h.run();
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
     click(&mut h, "Choose workspace");
-    h.get_by_label("PCB layout — Open beside").focus();
+    let card = h.get_by_label("PCB layout").rect();
+    for label in ["Open PCB layout beside current view", "Open PCB layout in new window"] {
+        let icon = h.get_by_label(label).rect();
+        assert!(icon.top() >= card.top() && icon.bottom() <= card.bottom());
+        assert!(icon.left() >= card.right());
+    }
+    assert!(h.query_by_label("Open beside").is_none());
+    assert!(h.query_by_label("New window").is_none());
+    h.get_by_label("Open PCB layout beside current view").focus();
     h.run();
     h.key_press(Key::Enter);
     h.run();
     h.get_by_label("Schematic canvas 1");
     h.get_by_label("PCB canvas 3");
     assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Either mixed pane closes through its own tab button with either workspace's panels visible,
+/// including stacked panes in narrow windows. The survivor retains its camera and session,
+/// and returning to one view removes the extra pane header.
+#[test]
+fn mixed_pane_close_buttons_preserve_the_surviving_view() {
+    for size in [egui::vec2(1400.0, 900.0), egui::vec2(760.0, 600.0)] {
+        for focused in [ViewId(0), ViewId(2)] {
+            for closed in [ViewId(0), ViewId(2)] {
+                let mut h = board_harness();
+                h.state_mut().browser.open = true;
+                h.set_size(size);
+                click(&mut h, "Choose workspace");
+                click(&mut h, "Open PCB layout beside current view");
+                let path = h.state().views.view(focused).unwrap().sheet_path(&h.state().session).unwrap();
+                click(&mut h, &path);
+                assert_eq!(h.state().views.active.id(), focused);
+                let remaining = if closed == ViewId(0) { ViewId(2) } else { ViewId(0) };
+                let origin = Point { x_nm: 0, y_nm: 0 };
+                h.state_mut().views.view_mut(remaining).unwrap().camera.center_on(Point { x_nm: 10_000_000, y_nm: 5_000_000 });
+                h.run();
+                let camera = h.state().views.view(remaining).unwrap().camera.screen(origin, egui::Rect::ZERO);
+                let before = h.state().session.inspect();
+                let path = h.state().views.view(closed).unwrap().sheet_path(&h.state().session).unwrap();
+                click(&mut h, &format!("Close view {path}"));
+                assert!(h.state().views.view(closed).is_none());
+                assert_eq!(h.state().views.active.id(), remaining);
+                assert!(!h.state().views.is_split());
+                assert_eq!(h.state().views.active.camera.screen(origin, egui::Rect::ZERO), camera);
+                assert_eq!(h.state().session.inspect(), before);
+                let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
+                assert!(h.query_by_label(&format!("Close view {path}")).is_none());
+            }
+        }
+    }
 }

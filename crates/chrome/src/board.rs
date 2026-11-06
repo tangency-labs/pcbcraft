@@ -62,9 +62,9 @@ pub fn layer_swatch(ui: &mut egui::Ui, color: Color32) {
     ui.painter().circle_filled(rect.center(), size / 2.0, color);
 }
 
-/// Reserve a bounded upper-left Browser above Layers, leaving each card room to scroll.
+/// Reserve a bounded upper-left Browser above Layers, keeping its header visible in short areas.
 pub fn browser_bottom(area: Rect) -> f32 {
-    area.top() + (area.height() * 0.36).min(210.0)
+    area.top() + (area.height() * 0.36).min(210.0).max(crate::workspace::floating_card_min_height()).min(area.height())
 }
 
 /// Paint the board's own canvas and subdued line grid, independently of schematic/background

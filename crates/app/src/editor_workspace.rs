@@ -590,8 +590,15 @@ impl PcbApp {
             self.canvas(ui);
             return;
         }
-        let board_panel = (self.views.active.workspace == Workspace::Board).then(|| self.board_panels(ui));
-        let mut pick = if board_panel.is_none() { self.editor_panels(ui) } else { None };
+        let board = self.views.active.workspace == Workspace::Board;
+        if !board {
+            #[cfg(not(target_arch = "wasm32"))]
+            let clearance = if self.views.host != self.views.main { 0.0 } else { self.assistant.rail_clearance() };
+            #[cfg(target_arch = "wasm32")]
+            let clearance = 0.0;
+            self.net_inspector.show(ui, &self.session, clearance);
+        }
+        let area = ui.available_rect_before_wrap();
         let panes = if let Some(host) = self.views.hosts.get_mut(&self.views.host) {
             let panes = host.layout.panes(ui);
             host.rects = panes.clone();
@@ -599,6 +606,9 @@ impl PcbApp {
         } else {
             Vec::new()
         };
+        let area = editor::panel_area(area, &panes.iter().map(|(_, rect)| *rect).collect::<Vec<_>>(), ui.spacing().item_spacing.y);
+        let board_panel = board.then(|| self.board_panels(ui, area));
+        let mut pick = if board { None } else { self.editor_panels(ui, area) };
         #[cfg(not(target_arch = "wasm32"))]
         let assistant = if self.views.host != self.views.main { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
         #[cfg(target_arch = "wasm32")]
@@ -730,21 +740,11 @@ impl PcbApp {
         }
     }
 
-    /// Draw shared panels once against the workspace bounds, reserving tab clearance only
-    /// while split. Return a Browser pick with its originating view address so centering
-    /// can use that pane's actual uncovered canvas.
-    fn editor_panels(&mut self, ui: &mut Ui) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
+    /// Draw shared floating panels inside the host's header-free area. Return a Browser pick
+    /// with its originating view address so centering can use that pane's actual uncovered canvas.
+    fn editor_panels(&mut self, ui: &mut Ui, area: Rect) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
         let source = self.views.active.input(&self.session)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let clearance = if self.views.host != self.views.main { 0.0 } else { self.assistant.rail_clearance() };
-        #[cfg(target_arch = "wasm32")]
-        let clearance = 0.0;
-        self.net_inspector.show(ui, &self.session, clearance);
-        let mut area = ui.available_rect_before_wrap();
-        if self.views.is_split() {
-            area.min.y = (area.min.y + editor::tab_height() + ui.spacing().item_spacing.y).min(area.max.y);
-        }
-        let pick = self.browser.show(ui, self.parts.browser_area(area), &self.session, &self.views.active.schematic.selection);
+        let pick = self.browser.show(ui, self.parts.browser_area(area).intersect(area), &self.session, &self.views.active.schematic.selection);
         let placing = match &self.views.active.schematic.tool {
             Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
             _ => None,

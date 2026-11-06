@@ -141,7 +141,7 @@ pub struct WorkspacePick {
 /// horizontally when they exceed the available space.
 ///
 /// The workspace tile returns a workspace/placement request. Picking the current row closes
-/// the picker; its Open beside and New window actions still create another view.
+/// the picker; the split and window icons within its card create another view.
 pub fn ribbon(
     ui: &mut Ui,
     workspace: &str,
@@ -298,7 +298,7 @@ fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32,
     let mut choices = Vec::new();
     ScrollArea::vertical().id_salt("workspace_rows").max_height((height - 116.0).max(60.0)).show(ui, |ui| {
         for (index, entry) in workspaces.entries.iter().enumerate() {
-            let response = workspace_row(ui, entry, width);
+            let (response, actions) = workspace_row(ui, entry, width, workspaces.native_windows);
             if entry.tabs.is_some() && response.clicked() {
                 if !entry.current {
                     picked = Some(WorkspacePick { index, placement: Placement::Here });
@@ -307,23 +307,13 @@ fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32,
             }
             if entry.tabs.is_some() {
                 choices.push((WorkspacePick { index, placement: Placement::Here }, response));
-                ui.horizontal(|ui| {
-                    for (placement, label, available) in
-                        [(Placement::Beside, "Open beside", true), (Placement::Window, "New window", workspaces.native_windows)]
-                    {
-                        if !available {
-                            continue;
-                        }
-                        let button = ui.small_button(label);
-                        button.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("{} — {}", entry.title, label)));
-                        if button.clicked() {
-                            picked = Some(WorkspacePick { index, placement });
-                            ui.close();
-                        }
-                        choices.push((WorkspacePick { index, placement }, button));
+                for (placement, button) in actions {
+                    if button.clicked() {
+                        picked = Some(WorkspacePick { index, placement });
+                        ui.close();
                     }
-                });
-                ui.add_space(t.space_6);
+                    choices.push((WorkspacePick { index, placement }, button));
+                }
             }
         }
     });
@@ -359,14 +349,20 @@ fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32,
 
 /// Draw one workspace row, as SolidCraft's picker does: an accent bar, the icon tile, the title
 /// with its Current or Planned badge, the description, and the tabs for available workspaces.
-/// Planned rows are dimmed, only respond to hover, and report themselves disabled.
-fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32) -> Response {
+/// Planned rows are dimmed, only respond to hover, and report themselves disabled. Available
+/// rows reserve separate hit targets for in-card split/window icons; those never activate the row.
+fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -> (Response, Vec<(Placement, Response)>) {
     let t = Tokens::get();
     let available = entry.tabs.is_some();
     let accent = if available { t.accent } else { t.text_dim };
     let soft = t.panel.lerp_to_gamma(accent, 0.10);
     let row_height = if available { t.space_24 * 3.0 } else { t.space_24 * 2.0 + t.space_12 };
-    let (rect, response) = ui.allocate_exact_size(vec2(width, row_height), if available { Sense::click() } else { Sense::hover() });
+    let (rect, allocated) = ui.allocate_exact_size(vec2(width, row_height), Sense::hover());
+    let action_count = if available { if native { 2 } else { 1 } } else { 0 };
+    let action_width = action_count as f32 * (t.space_24 + t.space_4);
+    let text_right = rect.right() - t.space_8 - action_width;
+    let body = Rect::from_min_max(rect.min, pos2(text_right, rect.bottom()));
+    let response = ui.interact(body, allocated.id.with("workspace"), if available { Sense::click() } else { Sense::hover() });
     response.widget_info(|| WidgetInfo::selected(WidgetType::Button, available, entry.current, entry.title));
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     if entry.current || (available && (response.hovered() || response.has_focus())) {
@@ -402,7 +398,7 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32) -> Response {
     painter.galley(badge_rect.min + vec2(t.space_6, t.space_3 / 2.0), badge, badge_ink);
     let line = |text: &str, y: f32| {
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), FontId::proportional(t.font_body), ink);
-        job.wrap.max_width = (rect.right() - x - t.space_6).max(0.0);
+        job.wrap.max_width = (text_right - x - t.space_6).max(0.0);
         job.wrap.max_rows = 1;
         job.wrap.break_anywhere = false;
         painter.galley(pos2(x, y), painter.layout_job(job), ink);
@@ -414,7 +410,30 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32) -> Response {
     if available && response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    response
+    let mut actions = Vec::new();
+    if available {
+        for (index, (placement, icon, label)) in [
+            (Placement::Beside, ToolIcon::SplitView, format!("Open {} beside current view", entry.title)),
+            (Placement::Window, ToolIcon::EditorWindow, format!("Open {} in new window", entry.title)),
+        ]
+        .into_iter()
+        .take(action_count)
+        .enumerate()
+        {
+            let target = Rect::from_min_size(
+                pos2(text_right + t.space_4 + index as f32 * (t.space_24 + t.space_4), rect.center().y - t.space_12),
+                vec2(t.space_24, t.space_24),
+            );
+            let action = ui.interact(target, allocated.id.with(index), Sense::click());
+            action.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &label));
+            if action.hovered() || action.has_focus() {
+                painter.rect_filled(target, t.control_radius, t.hover);
+            }
+            paint_icon(&painter, icon, target.center(), t.space_16, t, true);
+            actions.push((placement, action.on_hover_text(label)));
+        }
+    }
+    (response, actions)
 }
 
 /// Draw one ribbon tab as PCBcraft Next does: a quiet 22 point button in regular text, with the
@@ -713,7 +732,14 @@ pub fn floating_card_with_id(ui: &Ui, id: egui::Id, title: &str, area: Rect, col
     floating_card_aligned(ui, id, title, area, collapsed, false, add)
 }
 
+/// Minimum area height needed for a floating card's header, frame and edge clearance.
+pub(crate) fn floating_card_min_height() -> f32 {
+    FLOATING_HEADER + floating_frame().total_margin().sum().y + 2.0 * FLOATING_GAP
+}
+
 /// Anchor a workspace card to either canvas edge, retaining shared dimensions and collapse behavior.
+/// Short areas omit the body, or the entire card when its header cannot fit, without changing
+/// the caller's collapse preference. The body scrolls within the available height.
 #[allow(clippy::too_many_arguments)]
 pub fn floating_card_aligned(
     ui: &Ui,
@@ -726,8 +752,11 @@ pub fn floating_card_aligned(
 ) -> (Rect, bool) {
     let t = Tokens::get();
     let width = (area.width() * 0.4).min(260.0);
-    let height = (area.height() - 2.0 * FLOATING_GAP).max(FLOATING_HEADER + 2.0 * FLOATING_MARGIN);
-    let body_height = (height - 2.0 * (FLOATING_MARGIN + 1.0) - FLOATING_HEADER - t.space_8).max(TREE_ROW_HEIGHT);
+    if area.height() < floating_card_min_height() {
+        return (Rect::NOTHING, false);
+    }
+    let height = area.height() - 2.0 * FLOATING_GAP;
+    let body_height = (height - 2.0 * (FLOATING_MARGIN + 1.0) - FLOATING_HEADER - t.space_8).max(0.0);
     let frame = floating_frame();
     let shown = egui::Area::new(id)
         .enabled(ui.is_enabled())
@@ -743,9 +772,9 @@ pub fn floating_card_aligned(
                     ui.set_width(width - 2.0 * (FLOATING_MARGIN + 1.0));
                     ui.spacing_mut().item_spacing.y = t.space_2;
                     let toggle = card_header(ui, title, collapsed).clicked();
-                    if !collapsed {
+                    if !collapsed && body_height > 0.0 {
                         ui.separator();
-                        ScrollArea::vertical().max_height(body_height).auto_shrink([false, true]).show(ui, add);
+                        ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, true]).show(ui, add);
                     }
                     toggle
                 })

@@ -5,9 +5,9 @@ use pcbcraft_chrome::{board, units, workspace};
 use pcbcraft_engine::board::setup::{BoardSetup, Layer, LayerPurpose, Side, Stratum};
 
 impl PcbApp {
-    /// Render the focused board's contextual panels once per host, with shared edge anchors.
+    /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
     /// Browsing explicitly selects and centers a placement; layer and collapse changes are local.
-    pub(super) fn board_panels(&mut self, ui: &mut Ui) -> [Rect; 3] {
+    pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> [Rect; 3] {
         let Some(project) = self.session.project() else {
             return [Rect::NOTHING; 3];
         };
@@ -16,10 +16,6 @@ impl PcbApp {
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
             return [Rect::NOTHING; 3];
         };
-        let mut area = ui.available_rect_before_wrap();
-        if self.views.hosts.get(&self.views.host).is_some_and(|host| host.split()) {
-            area.min.y += pcbcraft_chrome::editor::tab_height() + ui.spacing().item_spacing.y;
-        }
         let host = Id::new(("board_panels", self.views.host));
         let mut browser_area = area;
         browser_area.max.y = board::browser_bottom(area);
@@ -49,7 +45,9 @@ impl PcbApp {
             state.browser_collapsed = !state.browser_collapsed;
         }
         let mut layers_area = area;
-        layers_area.min.y = browser.max.y;
+        if browser.is_finite() {
+            layers_area.min.y = browser.max.y;
+        }
         let (layers, collapse) = workspace::floating_card_with_id(ui, host.with("layers"), "Layers", layers_area, state.layers_collapsed, |ui| {
             if let Some(setup) = target.setup() {
                 layer_groups(ui, setup, state, Id::new((view_id, target.target)));

@@ -112,6 +112,12 @@ A component without a placed unit is still refused.
 
 ## Git behavior
 
+The planned [named arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
+restore document views, panes and windows from per-project user-local state.
+They do not add layout or camera records to these electrical file formats.
+Automatic editor-layout restoration is not implemented yet; an explicit portable
+arrangement export would be a separate format and feature.
+
 Commit the working folder. Each editable record has a stable ordering and its
 own line; separator commas occupy separate lines so appending a record does not
 rewrite the preceding record. Saved symbol files have one line per terminal,

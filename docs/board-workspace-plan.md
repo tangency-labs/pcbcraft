@@ -71,6 +71,7 @@ the opposite side of the board.
 | --- | --- |
 | Open project session | Authoritative schematic and board data, components, definitions and mappings, revision, document commands, undo and redo |
 | Project controller | Save and dirty state, project replacement and close decisions, live MCP attachment and coordinated selection |
+| Named arrangement (planned) | Remembered window/pane/tab configuration and view presentation state for this project |
 | View registry | Views addressed by stable runtime IDs, independent of their workspace target or host |
 | Editor view | Stable runtime view ID, schematic or PCB target, camera, active layer, visibility and selection filters, local tool draft |
 | Window | Stable host ID, pane layout, focused view, ribbon and panels anchored to that window |
@@ -82,12 +83,141 @@ different sessions; two views of this project use the same authority. View
 layout and navigation stay outside tracked electrical documents and electrical
 undo history.
 
+### Named arrangements and reopening a project
+
+Following the November 6 UI discussion, named arrangements are part of the
+workspace direction, including restoration when a project reopens. This changes
+the earlier recommendation to keep only document tabs: top tabs have a separate
+purpose when they select remembered arrangements. The current implementation
+still has a project-title pill and one view per pane; arrangement tabs, tab
+groups and editor-layout persistence are not implemented. App storage currently
+retains preferences and the Assistant's layout only.
+
+The proposed relationship is:
+
+| UI location | Meaning | Example |
+| --- | --- | --- |
+| Plain project title and dirty indicator | The shared project, independent of the active arrangement | Controller |
+| Top tabs | Named arrangements of that project's views | Design, Routing, Review |
+| Tabs within a pane | Views of specific documents, with sheet paths or board names | Main, Power › Regulators, Controller PCB |
+| Workspace picker | Editor type and placement for a document view | Schematic here, PCB beside, PCB in a new window |
+
+Names such as Design or Routing are user labels, not fixed editor modes. An
+arrangement can mix schematic sheets, boards and future provider-backed views.
+A board is a peer document to a schematic, not a subview owned by that schematic.
+Two views of the same document can have independent cameras while sharing its
+data, undo history and correspondence. Multiple boards use their distinct board
+IDs; neither an arrangement nor a tab implies a second project session.
+
+The proposed arrangement scope is the whole project working setup, including
+its detached windows. Selecting an arrangement explicitly restores that setup;
+ordinary pane focus and document-tab clicks never switch arrangements or
+reconfigure other windows. Each window keeps its own focused pane, ribbon and
+panels, and shows the same active arrangement identity. The existing independent
+window-close behavior remains in effect within the active arrangement. This
+scope should be demonstrated in the UI before implementing arrangement switching,
+because changing arrangements can intentionally affect more than one window.
+
+Within an arrangement, a pane owns an ordered group of document-view tabs and
+one active tab. Clicking a tab activates its view in that pane. Its **×** closes
+that view, without deleting the document or closing another view of it. Removing
+the last tab from a secondary pane collapses that pane; the last window retains
+the existing project-level close decision. New, Duplicate and Rename arrangement
+actions manage arrangements separately from document-view close controls.
+Switching arrangements does not discard project edits or prompt to save them.
+An arrangement remembers its latest state automatically; Duplicate creates a
+separate starting layout over the same project data. Whether arrangement removal
+uses a separate menu action or a top-tab close control remains a UI detail to
+review, rather than reusing the lower **×** without a clear meaning.
+
+An arrangement snapshot should capture the following presentation state:
+
+- Stable arrangement identity, name, ordering and the last active arrangement.
+- Window membership, pane splits and ratios, tab ordering, active tabs and focus.
+- Stable document targets, including project, sheet or board identity, rather
+  than display names or runtime view IDs.
+- Per-view world-space camera position and zoom, grid state, active layer,
+  visible layers and applicable filters or view orientation.
+- Per-window panel visibility, collapse and placement, together with usable
+  desktop window bounds and display hints.
+
+The distinction between current and future editor capabilities still applies:
+record only state a provider actually supports. In-progress tool gestures,
+preview edits, modal dialogs, transient highlights, pending cross-probe requests,
+transport handles and electrical undo history do not belong in this snapshot.
+The project remains the authority for authored content; an arrangement cannot
+restore an older version of a board or resurrect deleted geometry.
+
+Use a versioned per-project record in user-local app storage for automatic
+restoration. The project UUID identifies the design, while a local location or
+copy discriminator keeps two checkouts of that UUID from overwriting one
+another's arrangements. Paths are location hints, not document identities.
+Unsaved projects keep their arrangement in memory; a successful first Save
+associates it with the saved project. A successful Save As copies the current
+arrangements to the destination's local record without deleting the original's
+record. Cancelled or failed saves do not rebind either record. Portable,
+explicitly exported arrangements can be added separately; automatic window and
+camera updates must not rewrite `project.pc`, board or sheet files, change their
+format versions, or create electrical undo entries. The exact local key and
+schema need a bounded implementation review before adoption.
+
+Keep the last successfully stored record until its replacement is written.
+A layout-storage failure must leave editing usable and report that arrangement
+changes were not retained, independently of whether the electrical project saved.
+
+Save the outgoing arrangement before activation and checkpoint settled layout
+changes during use, with a final flush on an accepted project close or switch.
+Capture the working setup before native windows are torn down so shutdown does
+not replace it with an empty arrangement. A cancelled close keeps the current
+setup active. Restore only after the corresponding project has loaded and been
+validated; a failed Open leaves the existing project and its arrangement intact.
+An arrangement change must respect the owner of an open modal or project
+transition. Prepare and validate the replacement before retiring its old hosts;
+this is not a last-window project close. Activation failure must leave a usable
+arrangement and the shared project intact.
+Use fresh runtime host/view identities and invalidate old input when activating
+an arrangement. The persistent arrangement and document identities must not
+authorize a delayed gesture or request from a previous activation.
+
+Restoration must tolerate changed circumstances. Clamp window bounds to available
+displays and keep controls reachable after monitor or scale changes. Keep a
+missing document or unavailable provider identifiable instead of silently
+opening a different sheet, board or plugin view; permit closing or replacing
+that unavailable view. If no usable view remains, offer the ordinary document
+chooser. Invalid local state must not prevent opening a valid project, and an
+unsupported newer record must not be overwritten by a fallback layout. A
+provider's optional state needs a namespaced, versioned, bounded payload, with
+unknown state preserved until the user explicitly removes that view. Restoring
+layout state must not install or grant capabilities to plugins.
+
+Browser restoration uses the same arrangement concepts within one browser tab,
+without assuming automatic file access or permission to create other windows.
+After the user reopens the project, unsupported detached hosts need an explicit
+in-tab fallback that retains their document views and does not destroy the saved
+desktop placement. Cross-device sharing and browser-tab coordination remain
+separate from remembering a project's local arrangements.
+
+The next view-management slice should establish arrangement and tab-group
+ownership before adding storage, then prove the complete reopen flow through the
+shared presentation handlers. These handlers also serve live MCP under #61;
+headless sessions must not claim to have restored native windows. Acceptance
+includes switching two differently named mixed-workspace arrangements, reopening
+the last active arrangement, duplicate document views with independent cameras,
+multiple native windows, a removed monitor, missing documents/providers,
+malformed or newer local state, failed and cancelled Open/Save, stale queued
+input, and unchanged electrical bytes, revision and undo history. Native window
+restoration needs actual desktop qualification in addition to state and UI tests.
+
 ### Workspace selection and placement
+
+The controls below describe the current inspection implementation. The named
+arrangement design above adds tab groups and restoration; it does not require
+splitting before opening a different workspace or a detached window.
 
 The workspace picker should be the common entry point for changing what a view
 shows and where it opens. Selecting **PCB layout** switches the focused view in
-place. The same workspace row should offer **Open beside** and desktop-only
-**Open in new window** as explicit alternatives, so either arrangement is
+place. Each available workspace card contains a split icon and a desktop-only window
+icon, with tooltips naming the target and placement, so either arrangement is
 available directly from a single schematic view. Opening a board in another host
 must leave the current schematic visible without briefly splitting or switching
 it as an intermediate step. These choices now work for the inspection canvas;
@@ -136,7 +266,8 @@ Interaction tests exercise a main split with two detached windows, a split insid
 one of those windows, docking into an existing split, shared edits/history,
 highlight/follow fan-out, and closing one host without collapsing another.
 Whole split arrangements survive a Split off/on cycle. Native platform
-qualification remains separate from those input/render-callback tests.
+qualification remains separate from those input/render-callback tests. This is
+runtime retention, not the named-arrangement or reopen persistence planned above.
 
 The [representation foundation](pcb-representation.md) defines layer identity,
 physical stackup, units and the proposed shared net/rule contracts before the
@@ -302,6 +433,7 @@ board. This is a behavior fixture, not a validated electrical reference design.
 
 - Place, move and rotate a footprint through shared engine commands. Each completed gesture is one undo step; cancellation makes no edit.
 - Switch workspaces, split schematic and board, and open at least two additional native editor windows without moving the existing views. Exercise a split inside a detached window, another view of the same board, explicit Detach/Dock, and secondary Close without an implicit split elsewhere. Preserve independent cameras and the same open project throughout.
+- Name and switch arrangements, then close and reopen the project. Restore the last active arrangement's document tabs, splits, independent cameras, panels and supported windows from user-local state without changing electrical files. Exercise unavailable documents/providers and a changed monitor configuration without losing the saved arrangement.
 - Select a component, pin, footprint and pad from either side. Highlight the exact counterpart without focus theft or selection loops; cameras stay put by default, with optional directed selection following that preserves zoom. Reveal counterpart navigates explicitly.
 - Rename a reference and change placement without breaking correspondence. Exercise an unassigned component and reject an incompatible mapping without partial mutation.
 - Undo and redo from either editor, then inspect through live MCP. Both views and MCP report the same revision and electrical state.

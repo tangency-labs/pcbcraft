@@ -98,6 +98,11 @@ Right-click a sheet tab to open beside it or close that pane. Closing a detached
 window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
+Editor panes and detached windows are not restored after reopening a project yet.
+[Named arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
+are planned to remember these views, their cameras and the active arrangement;
+the current title-bar project label is not an arrangement tab.
+
 Close the original window while another editor remains: the surviving window
 keeps its views and takes over project dialogs. Closing the last editor window
 prompts for unsaved changes; **Cancel** keeps that window open. **File → Quit**
@@ -118,10 +123,12 @@ upload the generated `board-inspection.pc.zip` in the browser. The example has a
 resistor, a two-pin connector, two connections and two generic footprint
 placements. It is an inspection fixture, not a fabrication-ready board.
 
-Click the workspace tile and choose **PCB layout** to switch the focused pane,
-or choose **Open beside** under PCB layout to keep the schematic visible. On
-desktop, **New window** under that row opens the board directly in another native
-window; repeat it to open another. Select a symbol or a footprint marker and
+Click the workspace tile and choose **PCB layout** to switch the focused pane.
+To keep the schematic visible, click the split icon inside the PCB layout card
+(tooltip: **Open PCB layout beside current view**). On desktop, the adjacent
+window icon opens the board directly in another native window; repeat it to open
+another. Each split pane has an **×** beside its document title that closes only
+that view and leaves the other views in place. Select a symbol or a footprint marker and
 check the counterpart's amber highlight. Each view keeps its own edit selection,
 zoom and position, with optional panning under **View → Settings**.
 

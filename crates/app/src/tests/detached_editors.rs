@@ -1094,7 +1094,7 @@ fn board_windows_open_directly_and_share_counterpart_highlights() {
     let before = h.state().session.inspect();
     for _ in 0..2 {
         click(&mut h, "Choose workspace");
-        click(&mut h, "PCB layout — New window");
+        click(&mut h, "Open PCB layout in new window");
         h.get_by_label("Schematic canvas");
         assert!(!h.state().views.is_split());
     }
