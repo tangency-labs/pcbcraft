@@ -1,30 +1,34 @@
-//! Two schematic views over one session, hosted in a split or separate native windows.
+//! Independently addressed editor views over one session, placed in per-window layouts.
+
+use std::collections::BTreeMap;
 
 use egui::{Rect, Ui};
 use pcbcraft_chrome::{editor, grid, shell, workspace};
 use pcbcraft_engine::{Session, selection::Selection};
 
-use crate::{Dialog, PcbApp, SchematicView, Tool, ViewId, ViewInput, preferences::SelectionFollow, schematic_canvas};
+use crate::{
+    Dialog, PcbApp, SchematicView, Tool, ViewId, ViewInput,
+    editor_layout::{HostId, Layout, ViewHost},
+    preferences::SelectionFollow,
+    schematic_canvas,
+};
 
-/// The two views retain their identities when hidden or focused. Opening a split seeds the
-/// other camera from the active view; subsequent navigation is independent. Only the
-/// active view can issue edits; moving it between slots does not reconstruct either view.
+/// The active field is a temporary render/edit slot, not a second project or global focus.
+/// Binding exchanges a registry entry with that slot; each host retains its own focus/layout.
 #[derive(Debug)]
 pub(super) struct EditorViews {
     pub(super) active: SchematicView,
-    pub(super) other: SchematicView,
-    pub(super) split: bool,
-    /// The view hosted by the secondary native window, if any. The other stays in the root.
-    pub(super) detached: Option<ViewId>,
-    ratio: f32,
-    rects: [(ViewId, Rect); 2],
-    /// Last explicit selection intent. Focus changes alone never replace it.
+    rest: BTreeMap<ViewId, SchematicView>,
+    pub(super) hosts: BTreeMap<HostId, ViewHost>,
+    pub(super) host: HostId,
+    next_view: u64,
+    next_host: u64,
+    primary: ViewId,
     selection_source: Option<ViewId>,
-    pending_reveal: Option<PendingReveal>,
+    pending_reveal: BTreeMap<ViewId, PendingReveal>,
 }
 
-/// A single navigation request tied to both live view addresses and the policy at selection.
-/// It is consumed once, after the target host has supplied its current usable canvas area.
+/// A reveal addresses one live recipient and expires on input/revision or policy changes.
 #[derive(Debug)]
 struct PendingReveal {
     source: ViewInput,
@@ -34,199 +38,394 @@ struct PendingReveal {
 
 impl Default for EditorViews {
     fn default() -> Self {
+        let mut root = ViewHost::new(ViewId(0));
+        root.parked.push(ViewId(1));
         Self {
             active: SchematicView::new(ViewId(0)),
-            other: SchematicView::new(ViewId(1)),
-            split: false,
-            detached: None,
-            ratio: 0.5,
-            rects: [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)],
+            rest: BTreeMap::from([(ViewId(1), SchematicView::new(ViewId(1)))]),
+            hosts: BTreeMap::from([(HostId::ROOT, root)]),
+            host: HostId::ROOT,
+            next_view: 2,
+            next_host: 1,
+            primary: ViewId(0),
             selection_source: None,
-            pending_reveal: None,
+            pending_reveal: BTreeMap::new(),
         }
     }
 }
 
 impl EditorViews {
-    /// Whether both views are visible, regardless of their window arrangement.
-    pub(super) fn both_visible(&self) -> bool {
-        self.split || self.detached.is_some()
+    /// The non-active view in the existing two-view test fixtures.
+    #[cfg(test)]
+    pub(super) fn other_mut(&mut self) -> &mut SchematicView {
+        self.rest.values_mut().next().unwrap()
     }
 
-    /// Borrow a view by stable identity, without changing input ownership.
+    /// Borrow a live or parked view without changing its host or focus.
     pub(super) fn view(&self, id: ViewId) -> Option<&SchematicView> {
-        if self.active.id() == id {
-            Some(&self.active)
-        } else if self.other.id() == id {
-            Some(&self.other)
-        } else {
-            None
-        }
+        if self.active.id() == id { Some(&self.active) } else { self.rest.get(&id) }
     }
 
-    /// Bind the render slot to an existing view without generating a focus/selection event.
-    /// Native hosts restore the previous slot afterwards; the session is never swapped.
+    /// Mutably address a view; closed or unknown IDs cannot fall back to another view.
+    pub(super) fn view_mut(&mut self, id: ViewId) -> Option<&mut SchematicView> {
+        if self.active.id() == id { Some(&mut self.active) } else { self.rest.get_mut(&id) }
+    }
+
+    /// Visit every view, including hidden panes, for shared-project invalidation and preferences.
+    pub(super) fn all_mut(&mut self) -> impl Iterator<Item = &mut SchematicView> {
+        std::iter::once(&mut self.active).chain(self.rest.values_mut())
+    }
+
+    /// Bind only the render slot. Unknown IDs leave it unchanged and cannot authorize input.
     pub(super) fn bind(&mut self, id: ViewId) {
-        if self.other.id() == id {
-            std::mem::swap(&mut self.active, &mut self.other);
+        if let Some(view) = self.rest.remove(&id) {
+            let previous = std::mem::replace(&mut self.active, view);
+            self.rest.insert(previous.id(), previous);
         }
     }
 
-    /// Move the current view to a native host. If necessary, seed a second view first; an
-    /// existing split retains both cameras and selections. Old host input becomes invalid.
-    pub(super) fn detach(&mut self) {
-        if self.detached.is_some() {
-            return;
-        }
-        if !self.split {
-            self.other.camera = self.active.camera.fork_navigation();
+    /// Resolve placement independently of a view's workspace/document target.
+    pub(super) fn owner(&self, id: ViewId) -> Option<HostId> {
+        self.hosts.iter().find_map(|(host, layout)| layout.layout.views().contains(&id).then_some(*host))
+    }
+
+    /// Whether the current render host has a visible split.
+    pub(super) fn is_split(&self) -> bool {
+        self.hosts.get(&self.host).is_some_and(ViewHost::split)
+    }
+
+    /// Expose stable native hosts; opening another does not move any existing view.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn detached_hosts(&self) -> Vec<HostId> {
+        self.hosts.keys().copied().filter(|id| *id != HostId::ROOT).collect()
+    }
+
+    /// Allocate a distinct input identity and copy only the source's target and navigation.
+    fn duplicate(&mut self, source: ViewId) -> Option<ViewId> {
+        let id = ViewId(self.next_view);
+        let next = self.next_view.checked_add(1)?;
+        let view = self.view_mut(source)?.fork(id);
+        self.next_view = next;
+        self.rest.insert(id, view);
+        Some(id)
+    }
+
+    /// Create another view beside the addressed view, preserving the rest of its host layout.
+    pub(super) fn open_beside(&mut self, source: ViewId) -> Option<ViewId> {
+        let host = self.owner(source)?;
+        let id = self.duplicate(source)?;
+        if let Some(layout) = self.hosts.get_mut(&host) {
+            layout.layout.insert(source, id);
+            if let Some(collapsed) = &mut layout.collapsed {
+                collapsed.insert(source, id);
+            }
+            layout.rects.clear();
         }
         self.suspend();
-        self.detached = Some(self.active.id());
-        self.split = false;
-        self.bind(self.other.id());
-        self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
+        Some(id)
     }
 
-    /// Return the detached view to a visible split, retaining both cameras and selections.
-    /// The returned view receives focus, but no stale native-window gesture can survive.
-    pub(super) fn redock(&mut self) {
-        if let Some(id) = self.detached.take() {
-            self.suspend();
-            self.bind(id);
-            self.split = true;
-            self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
-        }
+    /// Open another view in its own native host without moving or focusing existing views.
+    pub(super) fn open_window(&mut self, source: ViewId) -> Option<HostId> {
+        self.owner(source)?;
+        let host = HostId(self.next_host);
+        let next = self.next_host.checked_add(1)?;
+        let id = self.duplicate(source)?;
+        self.next_host = next;
+        self.hosts.insert(host, ViewHost::new(id));
+        self.suspend();
+        Some(host)
     }
 
-    /// Dismiss the detached host while keeping the remaining view in place. The hidden view
-    /// retains its navigation and selection, but old gestures and pending reveals expire.
-    /// Closing a view never changes the project or implicitly opens a split.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn close_detached(&mut self) {
-        if let Some(id) = self.detached.take() {
-            self.suspend();
-            if self.active.id() == id {
-                self.bind(self.other.id());
+    /// Remove a placement and collapse only its branch. The caller retains or removes the view.
+    fn unplace(&mut self, host: HostId, id: ViewId) {
+        if let Some(mut layout) = self.hosts.remove(&host) {
+            layout.collapsed = layout.collapsed.take().and_then(|tree| tree.remove(id));
+            if let Some(remaining) = layout.layout.remove(id) {
+                layout.layout = remaining;
+                if layout.focused == id
+                    && let Some(first) = layout.layout.views().first()
+                {
+                    layout.focused = *first;
+                }
+                layout.rects.clear();
+                self.hosts.insert(host, layout);
+            } else {
+                // Parked panes belong to this host and are discarded when its last leaf moves.
+                for parked in layout.parked {
+                    self.rest.remove(&parked);
+                }
             }
-            self.split = false;
-            self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
         }
     }
 
-    /// Give both views the same snap spacing, as at startup from the remembered preference.
-    /// An out-of-range spacing leaves both unchanged.
-    pub(super) fn set_grid_everywhere(&mut self, spacing_nm: i64) {
-        self.active.camera.set_snap_nm(spacing_nm);
-        self.other.camera.set_snap_nm(spacing_nm);
+    /// Move a view to a new native host. A sole primary view leaves a new view of its document
+    /// behind, while a sole native view already has the requested placement and stays put.
+    pub(super) fn detach_view(&mut self, id: ViewId) -> Option<HostId> {
+        let source = self.owner(id)?;
+        if source != HostId::ROOT && !self.hosts.get(&source)?.split() {
+            return Some(source);
+        }
+        let host = HostId(self.next_host);
+        let next = self.next_host.checked_add(1)?;
+        if source == HostId::ROOT && !self.hosts.get(&source)?.split() {
+            // Leave one view behind without reopening the host's previously collapsed layout.
+            let parked = self.hosts.get_mut(&source)?.parked.pop();
+            let replacement = if let Some(parked) = parked {
+                let camera = self.view_mut(id)?.camera.fork_navigation();
+                self.view_mut(parked)?.camera = camera;
+                parked
+            } else {
+                self.duplicate(id)?
+            };
+            if let Some(root) = self.hosts.get_mut(&source) {
+                root.layout = Layout::View(replacement);
+                root.focused = replacement;
+                root.rects.clear();
+                root.collapsed = root.collapsed.take().and_then(|layout| layout.remove(id));
+            }
+        } else {
+            self.unplace(source, id);
+        }
+        self.next_host = next;
+        self.hosts.insert(host, ViewHost::new(id));
+        self.suspend();
+        self.bind_root();
+        Some(host)
     }
 
-    /// Synchronize both views, including the hidden one, after every project change.
-    pub(super) fn sync(&mut self, session: &Session) {
-        let active_changed = self.active.sync(session);
-        let other_changed = self.other.sync(session);
-        if active_changed || other_changed {
+    /// Explicitly dock one native view beside the primary host's focused pane. Existing panes
+    /// and other windows stay in place; an emptied source host and its parked views are pruned.
+    pub(super) fn dock_view(&mut self, id: ViewId) {
+        let Some(source) = self.owner(id).filter(|host| *host != HostId::ROOT) else {
+            return;
+        };
+        self.unplace(source, id);
+        if let Some(root) = self.hosts.get_mut(&HostId::ROOT) {
+            root.layout.insert(root.focused, id);
+            if let Some(collapsed) = &mut root.collapsed {
+                collapsed.insert(root.focused, id);
+            }
+            root.focused = id;
+            root.rects.clear();
+        }
+        self.suspend();
+        self.bind_root();
+        self.prune_closed();
+    }
+
+    /// Restore the primary render slot after a synchronous child callback or layout action.
+    pub(super) fn bind_root(&mut self) {
+        self.host = HostId::ROOT;
+        if let Some(root) = self.hosts.get(&HostId::ROOT) {
+            self.bind(root.focused);
+        }
+    }
+
+    /// Dismiss one secondary host and its views without reconstructing another host's layout.
+    /// Removed IDs are never reused, so stale dialogs and delayed input cannot address a new view.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn close_host(&mut self, host: HostId) {
+        if host == HostId::ROOT {
+            return;
+        }
+        self.bind_root();
+        if let Some(layout) = self.hosts.remove(&host) {
+            for id in layout.layout.views().into_iter().chain(layout.parked) {
+                self.rest.remove(&id);
+            }
+            self.prune_closed();
+        }
+    }
+
+    /// Close one pane, except the last primary pane. Other placements and navigation survive.
+    pub(super) fn close_view(&mut self, id: ViewId) {
+        let Some(host) = self.owner(id) else {
+            return;
+        };
+        if host == HostId::ROOT && !self.hosts.get(&host).is_some_and(ViewHost::split) {
+            return;
+        }
+        self.unplace(host, id);
+        self.bind_root();
+        self.rest.remove(&id);
+        self.prune_closed();
+    }
+
+    /// Remove selection/navigation references to closed views and choose a surviving primary
+    /// role if necessary. Focus changes never change this role.
+    fn prune_closed(&mut self) {
+        let live: std::collections::BTreeSet<_> = std::iter::once(self.active.id()).chain(self.rest.keys().copied()).collect();
+        self.pending_reveal.retain(|_, pending| live.contains(&pending.source.view()) && live.contains(&pending.target.view()));
+        if self.selection_source.is_some_and(|id| self.view(id).is_none()) {
             self.selection_source = None;
-            self.pending_reveal = None;
+        }
+        if self.view(self.primary).is_none() {
+            self.primary = self.active.id();
         }
     }
 
-    /// Record a deliberate selection or clear in the active view. The receiving view keeps
-    /// its edit selection; rendering the projection never becomes another selection intent.
+    /// Set startup grid spacing for all views; invalid spacing leaves every camera unchanged.
+    pub(super) fn set_grid_everywhere(&mut self, spacing_nm: i64) {
+        for view in self.all_mut() {
+            view.camera.set_snap_nm(spacing_nm);
+        }
+    }
+
+    /// Synchronize every visible and parked view with the authoritative project opening.
+    pub(super) fn sync(&mut self, session: &Session) {
+        let mut changed = false;
+        for view in self.all_mut() {
+            changed |= view.sync(session);
+        }
+        if changed {
+            self.selection_source = None;
+            self.pending_reveal.clear();
+        }
+    }
+
+    /// Record one selection intent and queue an independent reveal for each compatible target.
+    /// Highlights never replace another view's edit selection or emit a second intent.
     fn select(&mut self, selection: Selection, session: &Session, policy: SelectionFollow) {
         self.active.selection = selection;
         self.selection_source = Some(self.active.id());
-        self.pending_reveal = None;
-        if self.both_visible()
-            && !self.active.selection.is_empty()
-            && policy.allows(self.active.id() == ViewId(0))
-            && self.active.shares_sheet(&self.other, session)
-            && let (Some(source), Some(target)) = (self.active.input(session), self.other.input(session))
-        {
-            self.pending_reveal = Some(PendingReveal { source, target, policy });
-        }
-    }
-
-    /// Consume navigation only for the receiving view, using its current host geometry. Focus,
-    /// revisions, rebinding, or preference changes invalidate delayed requests; painting a
-    /// highlight never produces another request or repeatedly overrides manual navigation.
-    fn reveal_for(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) {
-        if !self.pending_reveal.as_ref().is_some_and(|pending| pending.target.view() == id) {
+        self.pending_reveal.clear();
+        if self.active.selection.is_empty() {
             return;
         }
-        if let Some(pending) = self.pending_reveal.take()
-            && self.both_visible()
-            && pending.policy == policy
-            && self.view(pending.source.view()).is_some_and(|view| view.accepts(pending.source, session))
-            && self.view(id).is_some_and(|view| view.accepts(pending.target, session))
-            && self.active.shares_sheet(&self.other, session)
-            && let Some(project) = session.project()
-        {
-            let selection = if self.active.id() == id { self.other.selection.clone() } else { self.active.selection.clone() };
-            let target = if self.active.id() == id { &mut self.active } else { &mut self.other };
-            target.camera.reveal_selection(project, &selection);
+        let Some(source) = self.active.input(session) else {
+            return;
+        };
+        for id in self.hosts.values().flat_map(|host| host.layout.views()) {
+            let allowed = match policy {
+                SelectionFollow::Off => false,
+                SelectionFollow::Both => true,
+                SelectionFollow::SecondaryFollowsPrimary => source.view() == self.primary,
+                SelectionFollow::PrimaryFollowsSecondary => id == self.primary,
+            };
+            if id != source.view()
+                && allowed
+                && let Some(view) = self.view(id).filter(|view| self.active.shares_sheet(view, session))
+                && let Some(target) = view.input(session)
+            {
+                self.pending_reveal.insert(id, PendingReveal { source, target, policy });
+            }
         }
     }
 
-    /// Project the latest selection into another visible view of the same sheet. Resolve
-    /// against live, pruned view state so deletion, undo and reopening cannot retain stale IDs.
-    /// Focus and cameras are unaffected, and the source view never receives its own projection.
-    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
-        if !self.both_visible() {
-            return Selection::default();
+    /// Consume this target's reveal once, after its host supplies canvas geometry. Closed,
+    /// rebound or revision-stale addresses and changed policies discard the pending request.
+    fn reveal_for(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) {
+        let Some(pending) = self.pending_reveal.remove(&id) else {
+            return;
+        };
+        if pending.policy != policy || self.owner(id).is_none() || self.owner(pending.source.view()).is_none() {
+            return;
         }
-        let (source, target) = if self.selection_source == Some(self.active.id()) && id == self.other.id() {
-            (&self.active, &self.other)
-        } else if self.selection_source == Some(self.other.id()) && id == self.active.id() {
-            (&self.other, &self.active)
-        } else {
+        let Some(source) = self.view(pending.source.view()).filter(|view| view.accepts(pending.source, session)) else {
+            return;
+        };
+        let Some(target) = self.view(id).filter(|view| view.accepts(pending.target, session) && view.shares_sheet(source, session)) else {
+            return;
+        };
+        let selection = source.selection.clone();
+        let target = target.id();
+        if let Some(project) = session.project()
+            && let Some(view) = self.view_mut(target)
+        {
+            view.camera.reveal_selection(project, &selection);
+        }
+    }
+
+    /// Project a live source selection into any compatible visible target without edit authority.
+    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
+        let Some(source_id) = self.selection_source.filter(|source| *source != id) else {
             return Selection::default();
         };
-        if source.shares_sheet(target, session) { source.selection.clone() } else { Selection::default() }
+        if self.owner(id).is_none() || self.owner(source_id).is_none() {
+            return Selection::default();
+        }
+        match (self.view(source_id), self.view(id)) {
+            (Some(source), Some(target)) if source.shares_sheet(target, session) => source.selection.clone(),
+            _ => Selection::default(),
+        }
     }
 
-    /// Cancel previews in every view when a modal or Home takes over input.
+    /// Cancel every local preview when a modal or Home takes input ownership.
     pub(super) fn cancel_gestures(&mut self) {
-        self.pending_reveal = None;
-        self.active.cancel_gesture();
-        self.other.cancel_gesture();
+        self.pending_reveal.clear();
+        for view in self.all_mut() {
+            view.cancel_gesture();
+        }
     }
 
-    /// Suspend editor input while Home replaces the panes. Returning to the workspace retains
-    /// navigation and selection, but cannot revive events captured before it was hidden.
+    /// Invalidate captured input across focus, layout and project transitions without editing.
     pub(super) fn suspend(&mut self) {
-        self.pending_reveal = None;
-        self.active.release_input();
-        self.other.release_input();
+        self.pending_reveal.clear();
+        for view in self.all_mut() {
+            view.release_input();
+        }
     }
 
-    /// Change focus only to the visible other view. Invalidate old input before exchanging the
-    /// slots, so leaving and returning to a view cannot revive an earlier gesture.
+    /// Change only the current host's focused pane. Other hosts keep their focus and panels.
     fn activate(&mut self, id: ViewId) -> bool {
-        if !self.split || id != self.other.id() {
+        if id == self.active.id() || self.owner(id) != Some(self.host) {
             return false;
         }
-        self.pending_reveal = None;
-        self.active.release_input();
-        self.other.release_input();
-        std::mem::swap(&mut self.active, &mut self.other);
+        self.suspend();
+        if let Some(host) = self.hosts.get_mut(&self.host) {
+            host.focused = id;
+        }
+        self.bind(id);
         true
     }
 
-    /// Open the other view at the active camera, preserving both edit selections. Hiding keeps
-    /// the active view. Layout transitions invalidate gestures and pending reveals without
-    /// touching the session; reopening deliberately seeds navigation again.
+    /// Toggle a split within this host only. Collapsing parks its other views; reopening seeds
+    /// the restored panes from the active camera, retaining their separate edit selections.
     fn set_split(&mut self, split: bool) {
-        if self.split != split {
-            self.pending_reveal = None;
-            self.active.release_input();
-            self.other.release_input();
-            if split {
-                self.other.camera = self.active.camera.fork_navigation();
-            }
-            self.split = split;
-            self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
+        if split == self.is_split() {
+            return;
         }
+        let source = self.active.id();
+        if split {
+            let collapsed = self.hosts.get_mut(&self.host).and_then(|host| host.collapsed.take());
+            if let Some(layout) = collapsed.filter(|layout| layout.views().len() > 1) {
+                for id in layout.views().into_iter().filter(|id| *id != source) {
+                    let camera = self.active.camera.fork_navigation();
+                    if let Some(view) = self.view_mut(id) {
+                        view.camera = camera;
+                    }
+                }
+                if let Some(host) = self.hosts.get_mut(&self.host) {
+                    host.layout = layout;
+                    host.parked.clear();
+                }
+            } else {
+                let parked = self.hosts.get_mut(&self.host).and_then(|host| host.parked.pop());
+                if let Some(id) = parked {
+                    let camera = self.active.camera.fork_navigation();
+                    if let Some(view) = self.view_mut(id) {
+                        view.camera = camera;
+                    }
+                    if let Some(host) = self.hosts.get_mut(&self.host) {
+                        host.layout = Layout::View(id.min(source));
+                        host.layout.insert(id.min(source), id.max(source));
+                    }
+                } else {
+                    self.open_beside(source);
+                }
+            }
+        } else if let Some(host) = self.hosts.get_mut(&self.host) {
+            let layout = std::mem::replace(&mut host.layout, Layout::View(source));
+            let remembered = host.collapsed.take().unwrap_or(layout);
+            host.parked = remembered.views().into_iter().filter(|id| *id != source).collect();
+            host.collapsed = Some(remembered);
+        }
+        if let Some(host) = self.hosts.get_mut(&self.host) {
+            host.focused = source;
+            host.rects.clear();
+        }
+        self.suspend();
     }
 }
 
@@ -246,11 +445,12 @@ impl PcbApp {
 
     /// Change one view's snap spacing and remember it for the next start. This is presentation
     /// only: the project, its revision, its unsaved state and undo history stay as they are,
-    /// nothing moves, and the other view keeps its own spacing. An in-progress gesture is left
+    /// nothing moves, and other views keep their own spacing. An in-progress gesture is left
     /// alone; its next snapped point follows the new spacing. Out-of-range values are ignored.
     pub(super) fn set_view_grid(&mut self, id: ViewId, spacing_nm: i64) {
-        let view = if self.views.active.id() == id { &mut self.views.active } else { &mut self.views.other };
-        if view.camera.set_snap_nm(spacing_nm) {
+        if let Some(view) = self.views.view_mut(id)
+            && view.camera.set_snap_nm(spacing_nm)
+        {
             self.preferences.schematic_grid_nm = spacing_nm;
         }
     }
@@ -265,7 +465,7 @@ impl PcbApp {
 
     /// Apply the presentation action from the View ribbon. A modal owns input until it closes.
     pub(super) fn split_editors(&mut self, ctx: &egui::Context, split: bool) {
-        if self.session.project().is_none() || !matches!(self.dialog, Dialog::None) || self.views.detached.is_some() {
+        if self.session.project().is_none() || !matches!(self.dialog, Dialog::None) {
             return;
         }
         self.views.set_split(split);
@@ -287,13 +487,13 @@ impl PcbApp {
     /// Resolve a new pointer press before consuming keyboard input. A held drag crossing the
     /// divider keeps its original owner; popups and modals do not transfer editor focus.
     pub(super) fn editor_pointer_focus(&mut self, ctx: &egui::Context) {
-        if !self.views.split || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
+        if !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
             return;
         }
         let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
         if let Some(pointer) = pressed
             && !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background)
-            && let Some((id, _)) = self.views.rects.iter().find(|(_, rect)| rect.contains(pointer))
+            && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))
         {
             self.activate_editor(ctx, *id);
         }
@@ -308,15 +508,15 @@ impl PcbApp {
             return;
         }
         let mut pick = self.editor_panels(ui);
-        let panes = if self.views.split {
-            let panes = editor::split(ui, &mut self.views.ratio);
-            self.views.rects = [(ViewId(0), panes[0]), (ViewId(1), panes[1])];
-            self.views.rects.to_vec()
+        let panes = if let Some(host) = self.views.hosts.get_mut(&self.views.host) {
+            let panes = host.layout.panes(ui);
+            host.rects = panes.clone();
+            panes
         } else {
-            vec![(self.views.active.id(), ui.available_rect_before_wrap())]
+            Vec::new()
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let assistant = if self.windows.rendering_secondary { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
+        let assistant = if self.views.host != HostId::ROOT { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
         #[cfg(target_arch = "wasm32")]
         let assistant = {
             let _ = workspace;
@@ -327,12 +527,28 @@ impl PcbApp {
             ui.scope_builder(egui::UiBuilder::new().id_salt(("editor_pane", id)).max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
-                let view = if active { &self.views.active } else { &self.views.other };
-                if self.views.split
+                let Some(view) = self.views.view(id) else {
+                    return;
+                };
+                if self.views.is_split()
                     && let Some(path) = view.sheet_path(&self.session)
-                    && editor::sheet_tab(ui, &path, active)
                 {
-                    self.activate_editor(ui.ctx(), id);
+                    let (clicked, action) = editor::sheet_tab(ui, &path, active, !crate::IN_BROWSER, self.views.host != HostId::ROOT);
+                    if clicked {
+                        self.activate_editor(ui.ctx(), id);
+                    }
+                    if let Some(action) = action {
+                        use crate::editor_windows::ViewAction;
+                        use editor::PaneAction;
+                        let action = match action {
+                            PaneAction::OpenBeside => ViewAction::OpenBeside,
+                            PaneAction::OpenWindow => ViewAction::OpenWindow,
+                            PaneAction::Detach => ViewAction::Detach,
+                            PaneAction::Dock => ViewAction::Dock,
+                            PaneAction::Close => ViewAction::Close,
+                        };
+                        self.queue_view_action(ui.ctx(), id, action);
+                    }
                 }
                 let canvas = ui.available_rect_before_wrap();
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);
@@ -346,13 +562,18 @@ impl PcbApp {
                     }
                     self.canvas(ui);
                 } else {
-                    self.views.other.camera.set_uncovered(canvas, uncovered);
+                    if let Some(view) = self.views.view_mut(id) {
+                        view.camera.set_uncovered(canvas, uncovered);
+                    }
                     // A context-menu action in the earlier pane can open a modal this frame.
                     if matches!(self.dialog, Dialog::None) {
                         self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
                     }
                     let highlight = self.views.highlight_for(id, &self.session);
-                    let view = &mut self.views.other;
+                    let label = format!("Schematic canvas {}", id.0 + 1);
+                    let Some(view) = self.views.view_mut(id) else {
+                        return;
+                    };
                     ui.push_id(view.widget_id(), |ui| {
                         shell::canvas(ui, |ui| {
                             if let Some(project) = self.session.project() {
@@ -374,20 +595,20 @@ impl PcbApp {
                                     self.preferences.navigation,
                                     self.preferences.grid_opacity_percent,
                                     &view.wire_draft,
-                                    if id == ViewId(0) { "Schematic canvas 1" } else { "Schematic canvas 2" },
+                                    &label,
                                 );
                             }
                         });
                     });
                 }
-                if !self.views.split
+                if !self.views.is_split()
                     && let Some(path) = self.views.active.sheet_path(&self.session)
                 {
                     workspace::sheet_heading(ui.painter(), canvas, self.browser.rect(), &path, "1 / 1");
                 }
             });
         }
-        if self.views.pending_reveal.is_some() {
+        if !self.views.pending_reveal.is_empty() {
             // A selection in the later-painted pane must wake the earlier target host.
             self.repaint_editors(ui.ctx());
         }
@@ -399,12 +620,12 @@ impl PcbApp {
     fn editor_panels(&mut self, ui: &mut Ui) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
         let source = self.views.active.input(&self.session)?;
         #[cfg(not(target_arch = "wasm32"))]
-        let clearance = if self.windows.rendering_secondary { 0.0 } else { self.assistant.rail_clearance() };
+        let clearance = if self.views.host != HostId::ROOT { 0.0 } else { self.assistant.rail_clearance() };
         #[cfg(target_arch = "wasm32")]
         let clearance = 0.0;
         self.net_inspector.show(ui, &self.session, clearance);
         let mut area = ui.available_rect_before_wrap();
-        if self.views.split {
+        if self.views.is_split() {
             area.min.y = (area.min.y + editor::tab_height() + ui.spacing().item_spacing.y).min(area.max.y);
         }
         let pick = self.browser.show(ui, self.parts.browser_area(area), &self.session, &self.views.active.selection);

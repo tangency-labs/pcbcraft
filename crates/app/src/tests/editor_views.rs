@@ -118,7 +118,7 @@ fn stale_field_dialogs_cannot_edit_the_current_project() {
         click(&mut harness, "OK");
         assert_eq!(harness.state().session.inspect(), before);
         assert!(matches!(harness.state().dialog, Dialog::None));
-        assert_eq!(harness.state().message.as_deref(), Some("Project changed; reopen the symbol fields to edit the current revision."));
+        assert_eq!(harness.state().message.as_deref(), Some("View or project changed; reopen the symbol fields to continue editing."));
     }
 }
 

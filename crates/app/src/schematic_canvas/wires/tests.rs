@@ -143,7 +143,7 @@ fn split_harness(narrow: bool) -> Harness<'static, PcbApp> {
 /// Resolve the stable pane identity even after it has exchanged focus slots.
 fn view<'a>(h: &'a Harness<'_, PcbApp>, id: u64) -> &'a crate::SchematicView {
     let views = &h.state().views;
-    if views.active.id() == crate::ViewId(id) { &views.active } else { &views.other }
+    views.view(crate::ViewId(id)).unwrap()
 }
 
 /// The actual canvas bounds for one visible pane.

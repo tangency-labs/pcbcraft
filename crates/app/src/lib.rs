@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
+mod editor_layout;
 mod editor_view;
 mod editor_windows;
 mod editor_workspace;
@@ -711,8 +712,8 @@ impl PcbApp {
                 label: "Split",
                 description: "Split editor views",
                 shortcut: "",
-                enabled: has_project && self.views.detached.is_none(),
-                active: self.views.split,
+                enabled: has_project,
+                active: self.views.is_split(),
                 toggle: true,
             },
             RibbonTool {
@@ -728,8 +729,17 @@ impl PcbApp {
         if !IN_BROWSER {
             editors.push(RibbonTool {
                 icon: ToolIcon::EditorWindow,
-                label: if self.views.detached.is_some() { "Dock" } else { "Detach" },
-                description: if self.views.detached.is_some() { "Dock editor view" } else { "Detach active editor view" },
+                label: if self.views.host != editor_layout::HostId::ROOT { "Dock" } else { "Detach" },
+                description: if self.views.host != editor_layout::HostId::ROOT { "Dock editor view" } else { "Detach active editor view" },
+                shortcut: "",
+                enabled: has_project,
+                active: false,
+                toggle: false,
+            });
+            editors.push(RibbonTool {
+                icon: ToolIcon::EditorWindow,
+                label: "New window",
+                description: "Open another editor window",
                 shortcut: "",
                 enabled: has_project,
                 active: false,
@@ -737,9 +747,10 @@ impl PcbApp {
             });
         }
         match workspace::ribbon_group(ui, "Editors", &editors) {
-            Some(0) => self.split_editors(ui.ctx(), !self.views.split),
+            Some(0) => self.split_editors(ui.ctx(), !self.views.is_split()),
             Some(1) => self.dialog = Dialog::Preferences(preferences::PreferencesWindow::at_views(self.preferences)),
             Some(2) => self.toggle_editor_window(ui.ctx()),
+            Some(3) => self.open_editor_window(ui.ctx()),
             _ => {}
         }
     }
@@ -887,13 +898,7 @@ impl PcbApp {
     /// Draw the schematic and send completed edits through the shared command catalog using each
     /// gesture's starting revision to reject stale actions. Cancel only clears the local preview.
     fn canvas(&mut self, ui: &mut Ui) {
-        let label = if !self.views.split {
-            "Schematic canvas"
-        } else if self.views.active.id() == ViewId(0) {
-            "Schematic canvas 1"
-        } else {
-            "Schematic canvas 2"
-        };
+        let label = if self.views.is_split() { format!("Schematic canvas {}", self.views.active.id().0 + 1) } else { "Schematic canvas".to_owned() };
         let source = self.views.active.input(&self.session);
         // Web wheel events reach the canvas before it gains keyboard focus. Native windows
         // still require OS focus so an inactive host cannot act on canvas input.
@@ -941,7 +946,7 @@ impl PcbApp {
                             self.preferences.navigation,
                             self.preferences.grid_opacity_percent,
                             &self.views.active.wire_draft,
-                            label,
+                            &label,
                         );
                     }
                     let t = Tokens::get();
@@ -1236,7 +1241,7 @@ impl PcbApp {
                 if submit {
                     // Stale dialogs close with a status message; validation errors stay editable.
                     if !self.views.active.accepts(source, &self.session) {
-                        self.message = Some("Project changed; reopen the symbol fields to edit the current revision.".to_owned());
+                        self.message = Some("View or project changed; reopen the symbol fields to continue editing.".to_owned());
                         return;
                     }
                     let params = json!({"symbol": symbol, "reference": reference, "value": value, "expected_revision": source.revision});
@@ -1422,8 +1427,9 @@ impl PcbApp {
             match update {
                 project_files::Update::Opened => {
                     self.views.sync(&self.session);
-                    self.views.active.camera.request_fit();
-                    self.views.other.camera.request_fit();
+                    for view in self.views.all_mut() {
+                        view.camera.request_fit();
+                    }
                     self.home = false;
                     self.dialog = Dialog::None;
                     self.message = None;
@@ -1460,6 +1466,7 @@ impl PcbApp {
             self.project_dialogs(&ctx);
             #[cfg(not(target_arch = "wasm32"))]
             self.detached_editor(&ctx);
+            self.finish_view_actions(&ctx);
             if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home) {
                 self.repaint_editors(&ctx);
             }
@@ -1497,6 +1504,7 @@ impl PcbApp {
         self.views.sync(&self.session);
         #[cfg(not(target_arch = "wasm32"))]
         self.detached_editor(&ctx);
+        self.finish_view_actions(&ctx);
         if revision != self.session.revision()
             || before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home)
         {

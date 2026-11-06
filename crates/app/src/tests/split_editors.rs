@@ -18,7 +18,7 @@ fn split_harness<'a>() -> Harness<'a, PcbApp> {
 /// Resolve a view by identity rather than by the slot currently holding keyboard focus.
 fn view<'a>(h: &'a Harness<'_, PcbApp>, id: u64) -> &'a SchematicView {
     let views = &h.state().views;
-    if views.active.id() == ViewId(id) { &views.active } else { &views.other }
+    views.view(ViewId(id)).unwrap()
 }
 
 /// The canvas rectangle keeps its identity when focus moves between panes.
@@ -131,7 +131,7 @@ fn browser_highlights_prune_deleted_targets_and_reset_on_reopen() {
     let app = h.state_mut();
     app.view_click(source, Click::SelectItems(Selection::one_symbol("symbol-2".to_owned())));
     assert!(app.views.active.selection.is_empty());
-    assert!(app.views.other.selection.is_empty());
+    assert!(app.views.view(ViewId(0)).unwrap().selection.is_empty());
     assert!(app.views.highlight_for(ViewId(0), &app.session).is_empty());
 }
 
@@ -380,7 +380,7 @@ fn browser_and_home_preserve_view_identity_and_project_state() {
     open_home(&mut h);
     h.key_press(Key::Escape);
     h.run();
-    assert!(h.state().views.split);
+    assert!(h.state().views.is_split());
     assert_eq!(h.state().views.active.id(), ViewId(1));
     assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
     assert!(!h.state().views.active.accepts(source, &h.state().session));
@@ -395,7 +395,7 @@ fn an_overlay_does_not_activate_the_pane_under_its_text_field() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
         move |ui, app: &mut PcbApp| {
             app.frame(ui);
-            if app.views.split {
+            if app.views.is_split() {
                 egui::Window::new("Overlay").fixed_pos(egui::pos2(950.0, 380.0)).show(ui.ctx(), |ui| {
                     let label = ui.label("Overlay input");
                     ui.text_edit_singleline(&mut text).labelled_by(label.id);
@@ -616,7 +616,7 @@ fn selection_follow_respects_direction_and_never_locks_the_camera() {
             focus_tab(&mut h, source as usize);
             h.state_mut().preferences.selection_follow = policy;
             let far = Point { x_nm: 1_270_000_000, y_nm: 0 };
-            h.state_mut().views.other.camera.center_on(far);
+            h.state_mut().views.other_mut().camera.center_on(far);
             h.run();
             let target = 1 - source;
             let rect = canvas(&h, target);
@@ -634,7 +634,7 @@ fn selection_follow_respects_direction_and_never_locks_the_camera() {
             // An already visible counterpart stays exactly where it is.
             click_point(&mut h, source, origin);
             assert_eq!(view(&h, target).camera.screen(origin, rect), after);
-            h.state_mut().views.other.camera.center_on(far);
+            h.state_mut().views.other_mut().camera.center_on(far);
             h.run();
             h.run();
             assert_eq!(view(&h, target).camera.screen(origin, rect), before);
@@ -655,7 +655,7 @@ fn delayed_selection_reveals_are_discarded_when_their_context_changes() {
         let target = canvas(&h, 0);
         let origin = Point { x_nm: 0, y_nm: 0 };
         h.state_mut().preferences.selection_follow = preferences::SelectionFollow::Both;
-        h.state_mut().views.other.camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
+        h.state_mut().views.other_mut().camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
         h.run();
         let before = view(&h, 0).camera.screen(origin, target);
         let app = h.state_mut();
@@ -673,7 +673,7 @@ fn delayed_selection_reveals_are_discarded_when_their_context_changes() {
             5 => {
                 // A focus departure invalidates the captured address even if the view is active again.
                 app.views.active.release_input();
-                app.views.other.release_input();
+                app.views.other_mut().release_input();
             }
             6 => app.views.suspend(),
             _ => app.split_editors(&egui::Context::default(), false),
@@ -696,13 +696,13 @@ fn view_settings_support_cancel_apply_defaults_and_search() {
     let mut h = split_harness();
     click(&mut h, "View settings");
     click(&mut h, "Follow selection mode");
-    click(&mut h, "Secondary follows primary");
+    click(&mut h, "Other views follow primary");
     assert_eq!(h.state().preferences.selection_follow, SelectionFollow::SecondaryFollowsPrimary);
     click(&mut h, "Cancel");
     assert_eq!(h.state().preferences.selection_follow, SelectionFollow::Off);
     click(&mut h, "View settings");
     click(&mut h, "Follow selection mode");
-    click(&mut h, "Both views");
+    click(&mut h, "All views");
     click(&mut h, "Apply");
     click(&mut h, "Restore page defaults");
     assert_eq!(h.state().preferences.selection_follow, SelectionFollow::Off);
@@ -732,7 +732,7 @@ fn browser_follow_reveals_wire_bounds_in_the_uncovered_target() {
     h.run();
     focus_tab(&mut h, 0);
     h.state_mut().preferences.selection_follow = preferences::SelectionFollow::SecondaryFollowsPrimary;
-    h.state_mut().views.other.camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
+    h.state_mut().views.other_mut().camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
     click(&mut h, "Toggle Browser");
     click(&mut h, "Expand Nets");
     click(&mut h, "Net 1");
@@ -760,7 +760,7 @@ fn context_menu_modal_blocks_same_frame_follow() {
         h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
         h.run();
     }
-    h.state_mut().views.other.camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
+    h.state_mut().views.other_mut().camera.center_on(Point { x_nm: 1_270_000_000, y_nm: 0 });
     let rect = canvas(&h, 1);
     let before = view(&h, 1).camera.screen(origin, rect);
     click(&mut h, "Edit Fields…");

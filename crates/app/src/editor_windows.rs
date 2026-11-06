@@ -1,25 +1,32 @@
-//! Native hosts for the existing views. There is still exactly one session, file controller,
-//! live connection and assistant, all owned by PcbApp on the UI thread.
+//! Native hosts borrow one application/session synchronously. Each host keeps its own panels.
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::BTreeMap;
 
 use egui::{Context, ViewportCommand, ViewportId};
 
-use crate::{Dialog, IN_BROWSER, PcbApp};
+use crate::{Dialog, IN_BROWSER, PcbApp, ViewInput, editor_layout::HostId};
 
-/// Window presentation is separate from electrical data and editor camera/selection state.
+/// Window presentation and queued view actions never own project data, files or services.
 #[derive(Debug, Default)]
 pub(super) struct EditorWindows {
-    pub(super) rendering_secondary: bool,
     focused: Option<ViewportId>,
     #[cfg(not(target_arch = "wasm32"))]
-    secondary: Panels,
-    #[cfg(not(target_arch = "wasm32"))]
-    placed: bool,
-    #[cfg(not(target_arch = "wasm32"))]
-    placement: Option<(egui::Pos2, egui::Vec2)>,
-    pub(super) dock_requested: bool,
+    secondary: BTreeMap<HostId, Panels>,
+    pending: Vec<(ViewInput, ViewAction)>,
 }
 
-/// Each native window retains its own stationary contextual panels and ribbon tab.
+/// Presentation actions address an existing view, independently of its current render slot.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ViewAction {
+    OpenWindow,
+    Detach,
+    Dock,
+    OpenBeside,
+    Close,
+}
+
+/// Stationary contextual controls belong to one host even as its focused pane changes.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Default)]
 struct Panels {
@@ -29,49 +36,82 @@ struct Panels {
     ribbon: usize,
     pointer: Option<pcbcraft_engine::schematic::Point>,
     pointer_next: Option<pcbcraft_engine::schematic::Point>,
+    placed: bool,
 }
 
-/// Stable native host identity, independent of which schematic view it currently contains.
-pub(super) fn viewport() -> ViewportId {
-    ViewportId::from_hash_of("pcbcraft_editor")
+/// A viewport's identity belongs to its host, independently of the views displayed inside it.
+pub(super) fn viewport(host: HostId) -> ViewportId {
+    if host == HostId::ROOT { ViewportId::ROOT } else { ViewportId::from_hash_of(("pcbcraft_editor", host)) }
 }
 
 impl PcbApp {
-    /// Wake every editor after a shared edit or selection change, including a covered window.
+    /// Repaint every visible editor after a shared edit or selection intent.
     pub(super) fn repaint_editors(&self, ctx: &Context) {
-        ctx.request_repaint_of(ViewportId::ROOT);
-        if self.views.detached.is_some() {
-            ctx.request_repaint_of(viewport());
+        for host in self.views.hosts.keys() {
+            ctx.request_repaint_of(viewport(*host));
         }
     }
 
-    /// Move the addressed view between native and split hosts without an electrical command.
-    /// A modal owns input; browser builds leave native hosting unavailable.
-    pub(super) fn toggle_editor_window(&mut self, ctx: &Context) {
-        if IN_BROWSER || self.session.project().is_none() || !matches!(self.dialog, Dialog::None) {
+    /// Capture the view's current input address. Modal, pending-project and browser restrictions
+    /// apply to every caller; actions execute after all render slots have returned to the root.
+    pub(super) fn queue_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
+        if self.home
+            || self.project_action_pending()
+            || !matches!(self.dialog, Dialog::None)
+            || (IN_BROWSER && matches!(action, ViewAction::OpenWindow | ViewAction::Detach | ViewAction::Dock))
+        {
             return;
         }
-        if self.views.detached.is_some() {
-            self.windows.dock_requested = true;
-            if !self.windows.rendering_secondary {
-                self.finish_redock(ctx);
-            }
-        } else {
-            self.views.detach();
-            self.parts.release_focus(ctx);
-            egui::DragAndDrop::clear_payload(ctx);
+        if self.views.owner(id).is_some()
+            && let Some(source) = self.views.view(id).and_then(|view| view.input(&self.session))
+        {
+            self.windows.pending.push((source, action));
+            ctx.request_repaint_of(ViewportId::ROOT);
         }
-        self.repaint_editors(ctx);
     }
 
-    /// Finish an explicit Dock after the child has returned its render slot and panels.
-    /// No save prompt is needed: the view returns to the same still-open project.
-    pub(super) fn finish_redock(&mut self, ctx: &Context) {
-        if std::mem::take(&mut self.windows.dock_requested) {
-            self.views.redock();
+    /// Detach the primary host's focused view, or explicitly dock the current native pane.
+    /// Neither operation targets an arbitrary companion window.
+    pub(super) fn toggle_editor_window(&mut self, ctx: &Context) {
+        let action = if self.views.host == HostId::ROOT { ViewAction::Detach } else { ViewAction::Dock };
+        self.queue_view_action(ctx, self.views.active.id(), action);
+    }
+
+    /// Create another native view directly, with no intermediate split or movement of a view.
+    pub(super) fn open_editor_window(&mut self, ctx: &Context) {
+        self.queue_view_action(ctx, self.views.active.id(), ViewAction::OpenWindow);
+    }
+
+    /// Apply queued layout actions after every child has restored the root's slots and panels.
+    /// A closed/rebound view or an intervening edit/layout action invalidates its captured input.
+    pub(super) fn finish_view_actions(&mut self, ctx: &Context) {
+        for (source, action) in std::mem::take(&mut self.windows.pending) {
+            if self.home
+                || self.project_action_pending()
+                || !matches!(self.dialog, Dialog::None)
+                || !self.views.view(source.view()).is_some_and(|view| view.accepts(source, &self.session))
+            {
+                continue;
+            }
+            match action {
+                ViewAction::OpenWindow => {
+                    self.views.open_window(source.view());
+                }
+                ViewAction::Detach => {
+                    self.views.detach_view(source.view());
+                }
+                ViewAction::Dock => {
+                    self.views.dock_view(source.view());
+                    ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
+                }
+                ViewAction::OpenBeside => {
+                    self.views.open_beside(source.view());
+                }
+                ViewAction::Close => self.views.close_view(source.view()),
+            }
+            self.parts.release_focus(ctx);
             egui::DragAndDrop::clear_payload(ctx);
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
-            ctx.request_repaint_of(ViewportId::ROOT);
+            self.repaint_editors(ctx);
         }
     }
 
@@ -139,69 +179,54 @@ impl PcbApp {
         }
     }
 
-    /// Render a secondary native viewport by borrowing this same PcbApp. Window-local panels
-    /// and the view slot are exchanged only for this synchronous callback, then restored.
-    /// Closing the child dismisses its view without changing the root layout; only Dock opens
-    /// a split. The browser never invokes this host. Native windows use the primary host's
-    /// decoration policy; embedded fallback windows keep their own frame.
+    /// Render each native host once, borrowing the same application and restoring its root
+    /// render slot afterwards. A child Close discards only that host's views and panel state.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn detached_editor(&mut self, ctx: &Context) {
-        let Some(id) = self.views.detached else {
-            self.windows.placed = false;
-            return;
-        };
-        let path = self.views.view(id).and_then(|view| view.sheet_path(&self.session)).unwrap_or_else(|| "Schematic".to_owned());
-        let integrated_titlebar = self.integrated_titlebar;
-        let mut builder = egui::ViewportBuilder::default()
-            .with_title(format!("{path} — PCBCraft"))
-            .with_decorations(!integrated_titlebar)
-            .with_min_inner_size([480.0, 400.0]);
-        if !self.windows.placed {
-            builder = match self.windows.placement {
-                Some((position, size)) => builder.with_position(position).with_inner_size(size),
-                None => builder.with_inner_size([1100.0, 760.0]),
+        self.windows.secondary.retain(|host, _| self.views.hosts.contains_key(host));
+        for host in self.views.detached_hosts() {
+            let Some(id) = self.views.hosts.get(&host).map(|host| host.focused) else {
+                continue;
             };
-            self.windows.placed = true;
-        }
-        ctx.show_viewport_immediate(viewport(), builder, |ui, class| {
-            if class != egui::ViewportClass::EmbeddedWindow {
-                let (outer, inner, close) = ui.ctx().input(|input| {
-                    let viewport = input.viewport();
-                    (viewport.outer_rect, viewport.inner_rect, viewport.close_requested())
-                });
-                if let Some((outer, inner)) = outer.zip(inner) {
-                    self.windows.placement = Some((outer.min, inner.size()));
-                }
-                if close {
-                    // This callback has not exchanged view slots or panels yet, so the root
-                    // still owns the active slot. Closing must not take the Dock path below.
-                    self.views.close_detached();
+            let path = self.views.view(id).and_then(|view| view.sheet_path(&self.session)).unwrap_or_else(|| "Schematic".to_owned());
+            let integrated_titlebar = self.integrated_titlebar;
+            let panels = self.windows.secondary.entry(host).or_default();
+            let mut builder = egui::ViewportBuilder::default()
+                .with_title(format!("{path} — PCBCraft"))
+                .with_decorations(!integrated_titlebar)
+                .with_min_inner_size([480.0, 400.0]);
+            if !panels.placed {
+                builder = builder.with_inner_size([1100.0, 760.0]);
+                panels.placed = true;
+            }
+            ctx.show_viewport_immediate(viewport(host), builder, |ui, class| {
+                if class != egui::ViewportClass::EmbeddedWindow && ui.ctx().input(|input| input.viewport().close_requested()) {
+                    self.views.close_host(host);
                     egui::DragAndDrop::clear_payload(ui.ctx());
-                    ui.ctx().request_repaint_of(ViewportId::ROOT);
+                    self.repaint_editors(ui.ctx());
                     return;
                 }
-            }
-            let root_view = self.views.active.id();
-            self.views.bind(id);
-            self.swap_editor_panels();
-            self.windows.rendering_secondary = true;
-            ui.push_id(viewport(), |ui| self.secondary_editor_frame(ui, integrated_titlebar && class != egui::ViewportClass::EmbeddedWindow));
-            self.windows.rendering_secondary = false;
-            self.swap_editor_panels();
-            self.views.bind(root_view);
-        });
-        self.finish_redock(ctx);
+                self.views.host = host;
+                self.views.bind(id);
+                self.swap_editor_panels(host);
+                ui.push_id(viewport(host), |ui| self.secondary_editor_frame(ui, integrated_titlebar && class != egui::ViewportClass::EmbeddedWindow));
+                self.swap_editor_panels(host);
+                self.views.bind_root();
+            });
+        }
+        self.windows.secondary.retain(|host, _| self.views.hosts.contains_key(host));
     }
 
-    /// Exchange only window presentation; session, saving, dialogs and services remain shared.
+    /// Exchange only this host's panels; project, files, dialogs and services stay shared.
     #[cfg(not(target_arch = "wasm32"))]
-    fn swap_editor_panels(&mut self) {
-        std::mem::swap(&mut self.browser, &mut self.windows.secondary.browser);
-        std::mem::swap(&mut self.parts, &mut self.windows.secondary.parts);
-        std::mem::swap(&mut self.net_inspector, &mut self.windows.secondary.nets);
-        std::mem::swap(&mut self.ribbon_tab, &mut self.windows.secondary.ribbon);
-        std::mem::swap(&mut self.pointer, &mut self.windows.secondary.pointer);
-        std::mem::swap(&mut self.pointer_next, &mut self.windows.secondary.pointer_next);
+    fn swap_editor_panels(&mut self, host: HostId) {
+        let panels = self.windows.secondary.entry(host).or_default();
+        std::mem::swap(&mut self.browser, &mut panels.browser);
+        std::mem::swap(&mut self.parts, &mut panels.parts);
+        std::mem::swap(&mut self.net_inspector, &mut panels.nets);
+        std::mem::swap(&mut self.ribbon_tab, &mut panels.ribbon);
+        std::mem::swap(&mut self.pointer, &mut panels.pointer);
+        std::mem::swap(&mut self.pointer_next, &mut panels.pointer_next);
     }
 
     /// Route child-window input to its bound view, then draw the same editing controls. Global
@@ -216,6 +241,7 @@ impl PcbApp {
         let was_home = self.home;
         self.editor_window_focus(&ctx);
         self.views.sync(&self.session);
+        self.editor_pointer_focus(&ctx);
         let enabled = !self.home && !had_dialog && !self.project_action_pending();
         if enabled && ctx.input(|input| input.focused) {
             self.shortcuts(&ctx, false, self.views.active.id());

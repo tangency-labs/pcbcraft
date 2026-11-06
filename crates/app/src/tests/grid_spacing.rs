@@ -247,7 +247,7 @@ fn each_pane_keeps_its_own_grid() {
     click(&mut h, "Split editor views");
     let spacing = |h: &Harness<'_, PcbApp>, id: u64| {
         let views = &h.state().views;
-        let view = if views.active.id() == ViewId(id) { &views.active } else { &views.other };
+        let view = views.view(ViewId(id)).unwrap();
         view.camera.snap_nm() / MIL
     };
     assert_eq!((spacing(&h, 0), spacing(&h, 1)), (25, 25));
@@ -286,9 +286,9 @@ fn each_pane_keeps_its_own_grid() {
 fn startup_seeds_both_panes_from_the_preference() {
     let mut views = EditorViews::default();
     views.set_grid_everywhere(Preferences::parse("{\"schematic_grid_nm\":635000}").schematic_grid_nm);
-    assert_eq!((views.active.camera.snap_nm(), views.other.camera.snap_nm()), (635_000, 635_000));
+    assert_eq!((views.active.camera.snap_nm(), views.view(ViewId(1)).unwrap().camera.snap_nm()), (635_000, 635_000));
     views.set_grid_everywhere(Preferences::parse("{\"schematic_grid_nm\":0}").schematic_grid_nm);
-    assert_eq!((views.active.camera.snap_nm(), views.other.camera.snap_nm()), (GRID_NM, GRID_NM));
+    assert_eq!((views.active.camera.snap_nm(), views.view(ViewId(1)).unwrap().camera.snap_nm()), (GRID_NM, GRID_NM));
     views.set_grid_everywhere(-5);
     assert_eq!(views.active.camera.snap_nm(), GRID_NM);
 }

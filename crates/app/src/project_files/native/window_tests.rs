@@ -16,7 +16,7 @@ fn app() -> PcbApp {
     app.session.apply("project.new", &json!({"name":"Windows"})).unwrap();
     app.session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":app.session.revision()})).unwrap();
     app.views.sync(&app.session);
-    app.views.detach();
+    app.views.detach_view(app.views.active.id());
     app
 }
 
@@ -54,7 +54,7 @@ fn close_waits_for_current_save_and_keeps_failed_or_cancelled_saves_open() {
         finish(&mut app, result);
         assert_eq!(app.close_allowed, !later_edit);
         assert_eq!(app.files.dirty(&app.session), later_edit);
-        assert!(app.views.detached.is_some());
+        assert!(!app.views.detached_hosts().is_empty());
         assert!(matches!(app.dialog, Dialog::None));
     }
     for result in [Ok(Outcome::Cancelled), Err("disk full".to_owned())] {
@@ -66,7 +66,7 @@ fn close_waits_for_current_save_and_keeps_failed_or_cancelled_saves_open() {
         assert!(matches!(app.dialog, Dialog::None));
         assert!(!app.close_allowed);
         assert_eq!(app.waiting, None);
-        assert!(app.views.detached.is_some());
+        assert!(!app.views.detached_hosts().is_empty());
     }
     let mut app = app();
     let (send, receiver) = mpsc::channel();
@@ -101,7 +101,7 @@ fn close_during_a_file_job_waits_and_reopen_rebinds_both_views() {
     assert!(app.close_allowed);
 
     let old = app.views.active.input(&app.session).unwrap();
-    let detached = app.views.detached.unwrap();
+    let detached = app.views.hosts[&app.views.detached_hosts()[0]].focused;
     let other_old = app.views.view(detached).unwrap().input(&app.session).unwrap();
     let loaded = load(&root).unwrap();
     assert_eq!(encode_file(loaded.snapshot.clone(), Encoding::Json).unwrap(), encode_file(app.session.snapshot().unwrap(), Encoding::Json).unwrap());
@@ -130,7 +130,7 @@ fn waiting_for_a_file_job_allows_canceling_close_without_abandoning_the_job() {
     h.step();
     assert!(!h.state().project_action_pending());
     assert!(h.state().files.busy());
-    assert!(h.state().views.detached.is_some());
+    assert!(!h.state().views.detached_hosts().is_empty());
     send.send(Ok(Outcome::Cancelled)).unwrap();
     h.run();
     assert!(!h.state().files.busy());
