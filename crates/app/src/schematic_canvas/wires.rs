@@ -50,11 +50,13 @@ impl Draft {
     }
 }
 
-/// A reshape grabbed on the selected wire: what moves, the model point grabbed, and the snapped
+/// A reshape grabbed on a wire: what moves, the model point grabbed, and the snapped
 /// pointer at the press. The grabbed point moves by the snapped pointer's travel, so a wire off
 /// the grid stays off it by the same amount, as group moves do.
 #[derive(Clone, Debug)]
 pub(crate) struct ReshapeDrag {
+    /// The wire used to grab the handle, including junctions shared by several routes.
+    pub(crate) wire: String,
     pub(crate) edit: Reshape,
     pub(crate) grabbed: Point,
     /// For a segment, whether its leg runs horizontally, so it moves only vertically.
@@ -78,7 +80,7 @@ impl ReshapeDrag {
     }
 }
 
-/// What a press at `pointer` grabs on the selected wire `wire`: one of its free ends or
+/// What a press at `pointer` grabs on `wire`: one of its free ends or
 /// junctions, then an interior corner, then a leg, each within the pin hit radius (the wire
 /// stroke radius for legs). Pins can't be dragged off their parts, so terminal ends grab
 /// nothing. `origin` is the snapped press point. `None` when nothing of that wire is there.
@@ -86,7 +88,7 @@ pub(super) fn reshape_at(project: &Project, camera: &Camera, rect: Rect, wire: &
     let found = project.wires().iter().find(|candidate| candidate.id() == wire)?;
     let route = project.wire_path(found);
     let near = |point: Point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS;
-    let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| ReshapeDrag { edit, grabbed, horizontal, origin };
+    let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| ReshapeDrag { wire: wire.to_owned(), edit, grabbed, horizontal, origin };
     for end in found.endpoints() {
         if let WireEndpoint::Junction(id) = end
             && let Some(point) = project.endpoint_position(end)
@@ -201,12 +203,48 @@ pub(crate) struct LegTarget {
 }
 
 impl LegTarget {
+    /// Rebind a segment after a successful reshape by its new model point. Ambiguous or
+    /// collapsed targets return None, so selection can clear without widening Delete's scope.
+    pub(crate) fn at_model(project: &Project, wire: &str, at: Point, revision: u64) -> Option<Self> {
+        let found = project.wires().iter().find(|candidate| candidate.id() == wire)?;
+        let route = project.wire_path(found);
+        let contains = |a: Point, b: Point| {
+            let between = |a: i64, b: i64, at: i64| a.min(b) < at && at < a.max(b);
+            (a.x_nm == b.x_nm && at.x_nm == a.x_nm && between(a.y_nm, b.y_nm, at.y_nm))
+                || (a.y_nm == b.y_nm && at.y_nm == a.y_nm && between(a.x_nm, b.x_nm, at.x_nm))
+        };
+        let mut hits = route.windows(2).enumerate().filter(|(_, pair)| contains(pair[0], pair[1]));
+        let leg = hits.next()?.0;
+        if hits.next().is_some() || route.contains(&at) {
+            return None;
+        }
+        Some(Self { wire: wire.to_owned(), route, leg, split: Some(at), revision })
+    }
+
+    /// Whether this captured leg slides vertically rather than horizontally.
+    pub(crate) fn horizontal(&self) -> bool {
+        self.route[self.leg].y_nm == self.route[self.leg + 1].y_nm
+    }
     /// A point strictly inside the leg, naming it for Break and Delete Segment. Legs join grid points, so
     /// their midpoint is a whole number of nanometers.
     pub(crate) fn inside(&self) -> Point {
         let (a, b) = (self.route[self.leg], self.route[self.leg + 1]);
         Point { x_nm: a.x_nm + (b.x_nm - a.x_nm) / 2, y_nm: a.y_nm + (b.y_nm - a.y_nm) / 2 }
     }
+}
+
+/// Paint only the selected leg, optionally displaced by a validated slide preview. The rest
+/// of the route keeps its ordinary ink so Delete's scope is visible before it is pressed.
+pub(super) fn paint_selected_leg(painter: &Painter, rect: Rect, camera: &Camera, leg: &LegTarget, offset_nm: i64) {
+    let points = leg.route[leg.leg..=leg.leg + 1]
+        .iter()
+        .map(
+            |point| {
+                if leg.horizontal() { Point { y_nm: point.y_nm + offset_nm, ..*point } } else { Point { x_nm: point.x_nm + offset_nm, ..*point } }
+            },
+        )
+        .collect();
+    paint_stroke(painter, rect, camera, points, Stroke::new(2.0 * theme::SCHEMATIC_SYMBOL_STROKE, Tokens::get().accent));
 }
 
 /// Find the wire leg nearest the pointer, within the wire hit radius, and the grid point on it
@@ -255,6 +293,7 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
     let leg = target.route[target.leg..=target.leg + 1].to_vec();
     match hovered {
         Some(super::WireAction::Delete) => paint_route(painter, rect, camera, target.route.clone(), tokens.error),
+        Some(super::WireAction::SelectWire) => paint_route(painter, rect, camera, target.route.clone(), tokens.accent),
         Some(super::WireAction::DeleteSegment) => paint_route(painter, rect, camera, leg, tokens.error),
         Some(super::WireAction::Slice) => {
             if let Some(point) = target.split {
