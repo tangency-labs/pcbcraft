@@ -150,3 +150,30 @@ fn the_status_bar_fits_the_readout_at_narrow_widths() {
     }
     assert!(shown.right() <= grid.left() && grid.right() <= unit.left(), "{shown:?} {grid:?} {unit:?}");
 }
+
+/// With the editor split, the readout follows the pointer over either pane, each read through its
+/// own camera, whichever pane has focus.
+#[test]
+fn the_readout_follows_the_pointer_in_both_split_panes() {
+    let mut h = harness();
+    h.set_size(egui::vec2(1400.0, 900.0));
+    new_project(&mut h);
+    h.state_mut().browser.open = false;
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+    for pane in ["Schematic canvas 1", "Schematic canvas 2"] {
+        h.hover_at(h.get_by_label(pane).rect().center());
+        h.run();
+        assert_eq!(readout(&h).as_deref(), Some("X 0.00  Y 0.00"), "{pane}");
+    }
+    // Move only the unfocused pane's view, so its own camera, not the focused one, decides the point.
+    let target = pcbcraft_engine::schematic::Point { x_nm: 200 * grid::NM_PER_MIL, y_nm: -100 * grid::NM_PER_MIL };
+    h.state_mut().views.other.camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 500 * grid::NM_PER_MIL, y_nm: 0 });
+    h.run();
+    let at = h.state().views.other.camera.screen(target, h.get_by_label("Schematic canvas 2").rect());
+    h.hover_at(at);
+    h.run();
+    assert_eq!(readout(&h).as_deref(), Some("X 200.00  Y -100.00"));
+    assert_eq!(h.state().views.active.id(), ViewId(0), "hovering doesn't move focus");
+}

@@ -884,12 +884,10 @@ impl PcbApp {
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
-                    let rect = ui.available_rect_before_wrap();
                     if self.session.project().is_some()
-                        && ui.rect_contains_pointer(rect)
-                        && let Some(pointer) = ui.input(|input| input.pointer.hover_pos())
+                        && let Some(point) = pointer_on_canvas(ui, &self.views.active.camera)
                     {
-                        self.pointer_next = Some(self.views.active.camera.snap(pointer, rect));
+                        self.pointer_next = Some(point);
                     }
                     if std::mem::take(&mut self.views.active.rotate_requested) && input_enabled && self.views.active.selection.len() <= 1 {
                         let rect = ui.available_rect_before_wrap();
@@ -1469,6 +1467,15 @@ impl PcbApp {
             ctx.request_repaint();
         }
     }
+}
+
+/// The grid point under the pointer when it is over this canvas and not over a panel floating on
+/// it, snapped by the pane's own camera as a click there would be. Call it before drawing the
+/// canvas, while `ui` still has the canvas's whole rectangle available.
+fn pointer_on_canvas(ui: &Ui, camera: &schematic_canvas::Camera) -> Option<pcbcraft_engine::schematic::Point> {
+    let rect = ui.available_rect_before_wrap();
+    let pointer = ui.input(|input| input.pointer.hover_pos())?;
+    ui.rect_contains_pointer(rect).then(|| camera.snap(pointer, rect))
 }
 
 /// The keys the window answers to, as (section, action, keys), for the Shortcuts page.
