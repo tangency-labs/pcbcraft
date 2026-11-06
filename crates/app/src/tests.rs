@@ -1515,7 +1515,8 @@ fn placement_and_hover_rotation_use_one_shared_edit_each() {
 }
 
 /// Empty-space routes freeze corners locally, support backtracking/elbow flips, and commit once.
-/// Selection and Delete remove the edge; one undo restores its geometry and endpoint identities.
+/// Explicit whole-wire selection and Delete remove the edge; one undo restores its geometry
+/// and endpoint identities, while a plain click remains a segment selection.
 #[test]
 fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
     let mut harness = harness();
@@ -1545,6 +1546,13 @@ fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
     assert_eq!(reopened.inspect_schematic(), before.inspect_schematic());
     click_canvas_offset(&mut harness, egui::vec2(-101.6, 0.0));
     assert!(harness.state().views.active.selection.single_wire().is_some());
+    let pos = canvas_center(&harness) + egui::vec2(-101.6, 0.0);
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        harness.run();
+    }
+    click(&mut harness, "Select Wire");
+    assert!(harness.state().views.active.selected_leg.is_none());
     harness.key_press(Key::Delete);
     harness.run();
     assert!(harness.state().session().project().unwrap().wires().is_empty());

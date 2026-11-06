@@ -3,7 +3,7 @@
 
 use pcbcraft_engine::{Session, SheetTarget, selection::Selection};
 
-use crate::schematic_canvas::{Camera, Draft, Tool};
+use crate::schematic_canvas::{Camera, Draft, LegTarget, Tool};
 
 #[cfg(test)]
 mod tests;
@@ -45,6 +45,8 @@ pub(super) struct SchematicView {
     input_epoch: u64,
     pub(super) camera: Camera,
     pub(super) selection: Selection,
+    /// A sub-selection of the sole selected wire, valid only at its captured revision.
+    pub(super) selected_leg: Option<LegTarget>,
     pub(super) tool: Option<Tool>,
     pub(super) wire_draft: Draft,
     pub(super) rotate_requested: bool,
@@ -65,6 +67,7 @@ impl SchematicView {
             input_epoch: 0,
             camera: Camera::default(),
             selection: Selection::default(),
+            selected_leg: None,
             tool: None,
             wire_draft: Draft::default(),
             rotate_requested: false,
@@ -135,6 +138,11 @@ impl SchematicView {
         }
         if self.tool.as_ref().is_some_and(|tool| tool.revision() != session.revision()) {
             self.cancel_gesture();
+        }
+        if self.selected_leg.as_ref().is_some_and(|leg| leg.revision != session.revision()) {
+            // A stale segment must never silently widen into whole-wire Delete authority.
+            self.selected_leg = None;
+            self.selection = Selection::default();
         }
         if !matches!(self.tool, Some(Tool::Wire { .. })) {
             self.wire_draft = Draft::default();

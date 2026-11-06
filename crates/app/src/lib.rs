@@ -394,10 +394,17 @@ impl PcbApp {
 
     /// Run a wire menu row through the shared commands at the revision the menu opened on, so an
     /// edit made meanwhile (by an agent, say) makes it fail visibly instead of hitting the wrong
-    /// leg. A successful edit clears the selection, whose wire may no longer exist.
+    /// leg. A successful edit clears the selection, whose wire may no longer exist. Select Wire
+    /// only widens the local selection and is ignored if its captured revision is stale.
     fn edit_wire(&mut self, action: schematic_canvas::WireAction, leg: &schematic_canvas::LegTarget) {
         use schematic_canvas::WireAction;
         let (command, at) = match action {
+            WireAction::SelectWire => {
+                if leg.revision == self.session.revision() {
+                    self.select(Selection::one_wire(leg.wire.clone()));
+                }
+                return;
+            }
             WireAction::Slice => match leg.split {
                 Some(point) => (pcbcraft_engine::SLICE_WIRE, Some(point)),
                 None => return,
@@ -416,8 +423,13 @@ impl PcbApp {
         }
     }
 
-    /// Delete the complete selection through the shared atomic command; failures retain it.
+    /// Delete the selected segment, or the complete item selection when there is no segment.
+    /// Both paths use revision-checked shared commands; failures retain the valid selection.
     fn delete_selection(&mut self) {
+        if let Some(leg) = self.views.active.selected_leg.clone() {
+            self.edit_wire(schematic_canvas::WireAction::DeleteSegment, &leg);
+            return;
+        }
         self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.views.active.selection,"expected_revision":self.session.revision()}));
         if self.message.is_none() {
             self.select(Selection::default());
@@ -744,10 +756,13 @@ impl PcbApp {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
                         Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
+                        Tool::MoveSegment { .. } => dim("Drag wire segment · Esc to cancel"),
                         Tool::BoxSelect { .. } => dim("Select items · Esc to cancel"),
                         Tool::Wire { start: None, .. } => dim("Wire · Click a start point"),
                         Tool::Wire { start: Some(_), .. } => dim("Wire · Click corners · Enter finish · Space flip · Esc cancel"),
                     });
+                } else if self.views.active.selected_leg.is_some() {
+                    ui.label(dim("Wire segment selected · Del delete"));
                 } else if self.views.active.selection.single_wire().is_some() {
                     ui.label(dim("Wire selected · Del delete"));
                 } else if self.files.busy() {
@@ -803,6 +818,7 @@ impl PcbApp {
                             &mut self.views.active.camera,
                             self.views.active.tool.clone(),
                             &self.views.active.selection,
+                            self.views.active.selected_leg.as_ref(),
                             &highlight,
                             input_enabled,
                             self.preferences.navigation,
@@ -873,6 +889,20 @@ impl PcbApp {
             }
             (None, Click::Select(symbol)) => {
                 self.select(symbol.map(Selection::one_symbol).unwrap_or_default());
+            }
+            (None, Click::SelectLeg(leg)) => self.select_leg(leg),
+            (None, Click::GrabSegment(leg, origin)) => {
+                self.select_leg(leg.clone());
+                self.views.active.tool = Some(Tool::MoveSegment { leg, origin });
+            }
+            (Some(Tool::MoveSegment { leg, .. }), Click::FinishSegment(offset)) => {
+                self.views.active.tool = None;
+                if let Some(offset) = offset {
+                    self.run(
+                        pcbcraft_engine::MOVE_WIRE_SEGMENT,
+                        &json!({"wire":leg.wire,"at":leg.inside(),"offset_nm":offset,"expected_revision":leg.revision}),
+                    );
+                }
             }
             (None, Click::GrabItems(items, origin)) => {
                 self.select(items.clone());
@@ -1358,9 +1388,10 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
+    list.push(("Schematic", "Drag wire segment", "G".to_owned()));
     list.push(("Schematic", "Rotate the selected symbol", key(&ROTATE)));
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
-    list.push(("Schematic", "Delete the selected symbol", "Del".to_owned()));
+    list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));

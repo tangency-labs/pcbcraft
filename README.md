@@ -47,14 +47,23 @@ Choose **Capture → Wire** or press **W**, then click a pin, an existing wire e
 or empty grid space to start. Click to add corners, **Space** to flip the current
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
 to finish, or press **Enter** or double-click to finish on empty space. **Esc** or
-right-click → **Cancel** discards the draft. Click a completed wire and press **Delete**
-to remove it. Crossings stay disconnected. Right-click a wire for the same edits as KiCad:
+right-click → **Cancel** discards the draft. Click a completed wire segment to select it;
+only that segment turns blue, and **Delete** removes it. Drag a segment perpendicular to its
+direction to adjust alignment, or hover it and press **G**, then click to finish. Attached pins
+and junctions stay fixed while the adjoining legs adjust. **Esc** cancels the preview.
+Right-click → **Select Wire** selects the whole route for dragging or deletion; box and
+modifier selections continue to select whole wires. Crossings stay disconnected.
+Right-click a wire for these edits:
 **Slice** splits it at the grid point under the pointer and keeps it connected, so a new wire
 can start from the slice point. **Break** separates the leg under the pointer from the legs beside it. **Delete Segment** removes just that leg, and **Delete Wire** the whole
 route. Hovering a row previews what it changes. An unconnected wire end shows a small square, a
 point where three or more wires meet shows a dot, and two wires meeting end to end read as one
 line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
 `schematic.delete_wire_segment` with a point on the wire.
+`schematic.move_wire_segment` takes `wire`, `at`, `offset_nm` and `expected_revision`;
+positive offsets slide vertical segments right or horizontal segments down. It uses the same
+geometry as the canvas preview and commits one undo step. These commands are available in
+headless MCP; the live desktop connection still exposes only symbol movement.
 
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
 **E** edits its reference and value and **Delete** removes it with its wires.

@@ -191,6 +191,8 @@ pub const DELETE_WIRE: &str = "schematic.delete_wire";
 pub const SLICE_WIRE: &str = "schematic.slice_wire";
 /// Separate one straight leg of a wire from the legs beside it, leaving free ends at the gaps.
 pub const BREAK_WIRE: &str = "schematic.break_wire";
+/// Slide one straight leg perpendicular to itself while preserving its electrical anchors.
+pub const MOVE_WIRE_SEGMENT: &str = "schematic.move_wire_segment";
 /// Remove one straight leg of a wire, leaving the rest of its route with free ends.
 pub const DELETE_WIRE_SEGMENT: &str = "schematic.delete_wire_segment";
 /// Move an existing symbol without changing its terminals or wiring.
@@ -274,6 +276,22 @@ const CATALOG: &[Command] = &[
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: MOVE_WIRE_SEGMENT,
+        title: "Drag Wire Segment",
+        summary: "Slide one wire leg perpendicular to itself, preserving electrical anchors and adjusting adjacent legs. Undoable.",
+        params: &[
+            WIRE,
+            Param { required: true, name: "at", summary: "Point strictly inside one leg of the wire route", kind: ParamKind::Point },
+            Param {
+                required: true,
+                name: "offset_nm",
+                summary: "Perpendicular displacement: positive right for vertical legs, down for horizontal legs",
+                kind: ParamKind::Displacement,
+            },
             EXPECTED_REVISION,
         ],
     },
@@ -590,9 +608,8 @@ impl Session {
         match id {
             "project.new" => true,
             "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_ITEMS | DELETE_ITEMS => {
-                self.project.is_some()
-            }
+            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT | MOVE_ITEMS
+            | DELETE_ITEMS => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -640,9 +657,8 @@ impl Session {
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
                 "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-                | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_ITEMS | DELETE_ITEMS => {
-                    "no project is open".to_owned()
-                }
+                | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT | MOVE_ITEMS
+                | DELETE_ITEMS => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -689,6 +705,7 @@ impl Session {
             SLICE_WIRE => self.slice_wire(params)?,
             BREAK_WIRE => self.break_wire(params)?,
             DELETE_WIRE_SEGMENT => self.delete_wire_segment(params)?,
+            MOVE_WIRE_SEGMENT => self.move_wire_segment(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
             MOVE_ITEMS => self.move_items(params)?,
             DELETE_ITEMS => self.delete_items(params)?,

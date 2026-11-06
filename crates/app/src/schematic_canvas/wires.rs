@@ -125,12 +125,30 @@ pub(crate) struct LegTarget {
 }
 
 impl LegTarget {
+    /// Whether this captured leg slides vertically rather than horizontally.
+    pub(crate) fn horizontal(&self) -> bool {
+        self.route[self.leg].y_nm == self.route[self.leg + 1].y_nm
+    }
     /// A point strictly inside the leg, naming it for Break and Delete Segment. Legs join grid points, so
     /// their midpoint is a whole number of nanometers.
     pub(crate) fn inside(&self) -> Point {
         let (a, b) = (self.route[self.leg], self.route[self.leg + 1]);
         Point { x_nm: a.x_nm + (b.x_nm - a.x_nm) / 2, y_nm: a.y_nm + (b.y_nm - a.y_nm) / 2 }
     }
+}
+
+/// Paint only the selected leg, optionally displaced by a validated slide preview. The rest
+/// of the route keeps its ordinary ink so Delete's scope is visible before it is pressed.
+pub(super) fn paint_selected_leg(painter: &Painter, rect: Rect, camera: &Camera, leg: &LegTarget, offset_nm: i64) {
+    let points = leg.route[leg.leg..=leg.leg + 1]
+        .iter()
+        .map(
+            |point| {
+                if leg.horizontal() { Point { y_nm: point.y_nm + offset_nm, ..*point } } else { Point { x_nm: point.x_nm + offset_nm, ..*point } }
+            },
+        )
+        .collect();
+    paint_stroke(painter, rect, camera, points, Stroke::new(2.0 * theme::SCHEMATIC_SYMBOL_STROKE, Tokens::get().accent));
 }
 
 /// Find the wire leg nearest the pointer, within the wire hit radius, and the grid point on it
@@ -179,6 +197,7 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
     let leg = target.route[target.leg..=target.leg + 1].to_vec();
     match hovered {
         Some(super::WireAction::Delete) => paint_route(painter, rect, camera, target.route.clone(), tokens.error),
+        Some(super::WireAction::SelectWire) => paint_route(painter, rect, camera, target.route.clone(), tokens.accent),
         Some(super::WireAction::DeleteSegment) => paint_route(painter, rect, camera, leg, tokens.error),
         Some(super::WireAction::Slice) => {
             if let Some(point) = target.split {

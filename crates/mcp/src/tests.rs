@@ -245,6 +245,38 @@ fn mcp_draws_free_routes_to_multi_pin_symbols() {
     assert_eq!(deleted["project"]["schematic"]["junctions"], json!([]));
 }
 
+/// MCP discovers and executes a segment slide through the shared engine, with the same geometry,
+/// history and revision rejection as the canvas. No UI-specific edit path is required.
+#[test]
+fn mcp_slides_wire_segments_and_rejects_stale_retries() {
+    let mut server = server();
+    let command = pcbcraft_engine::MOVE_WIRE_SEGMENT;
+    let description = body(&call(&mut server, "describe_command", json!({"command":command})));
+    assert_eq!(description["params"]["required"], json!(["wire", "at", "offset_nm", "expected_revision"]));
+    body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Slide"}})));
+    let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
+    let drawn = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DRAW_WIRE,
+        "params":{"from":point(0,0),"to":point(8,6),"bends":[point(8,0)],"expected_revision":1}}),
+    ));
+    let wire = &drawn["project"]["schematic"]["wires"][0]["id"];
+    let request = json!({"command":command,"params":{"wire":wire,"at":point(8,3),"offset_nm":2_540_000,"expected_revision":drawn["revision"]}});
+    let moved = body(&call(&mut server, "execute", request.clone()));
+    let route = &moved["project"]["schematic"]["wires"][0];
+    assert_eq!(route["bends"], json!([point(10, 0), point(10, 6)]));
+    assert_eq!(route["from"], drawn["project"]["schematic"]["wires"][0]["from"]);
+    assert_eq!(route["to"], drawn["project"]["schematic"]["wires"][0]["to"]);
+    assert_eq!(moved["project"]["schematic"]["netlist"], drawn["project"]["schematic"]["netlist"]);
+    let stale = call(&mut server, "execute", request);
+    assert_eq!(stale["isError"], true);
+    let inspected = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(inspected, moved);
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"], drawn["project"]);
+}
+
 /// MCP discovers the wire slice, break and segment deletion through the shared catalog and runs
 /// them: a slice keeps the route connected through a new junction, and deleting a leg leaves
 /// free ends.
