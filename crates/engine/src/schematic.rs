@@ -100,6 +100,11 @@ impl SymbolDefinition {
     pub(crate) fn default_value(&self) -> &str {
         self.value
     }
+
+    /// The letter automatic references start with, such as R for a resistor.
+    pub fn reference_prefix(&self) -> char {
+        self.reference_prefix
+    }
 }
 
 /// Resolve an exact built-in definition ID without falling back to another symbol.

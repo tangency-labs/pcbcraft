@@ -142,6 +142,17 @@ pub fn sheet_header(ui: &mut Ui, title: &str) {
 /// Reserve at most two fifths of the workspace width and leave room below the
 /// card for a floating launcher. Return whether Close was clicked.
 pub fn right_card(ui: &mut Ui, id: &'static str, title: &str, bottom_clearance: f32, add: impl FnOnce(&mut Ui)) -> bool {
+    docked_card(ui, Panel::right(id), title, bottom_clearance, add)
+}
+
+/// Dock a card at the left edge of the canvas, as the parts browser is, with the same frame,
+/// width limit and Close button as [`right_card`]. Return whether Close was clicked.
+pub fn left_card(ui: &mut Ui, id: &'static str, title: &str, add: impl FnOnce(&mut Ui)) -> bool {
+    docked_card(ui, Panel::left(id), title, 0.0, add)
+}
+
+/// The docked card both sides share: a titled card with Close over a scrolling body.
+fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     let width = (ui.available_width() * 0.4).min(260.0);
     let clearance = bottom_clearance.min(ui.available_height() * 0.4);
@@ -150,7 +161,7 @@ pub fn right_card(ui: &mut Ui, id: &'static str, title: &str, bottom_clearance: 
         bottom: (t.space_8 + clearance) as i8,
         ..Margin::same(t.space_8 as i8)
     };
-    Panel::right(id)
+    panel
         .exact_size(width)
         .resizable(false)
         .show_separator_line(false)

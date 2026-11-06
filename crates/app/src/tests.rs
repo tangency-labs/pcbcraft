@@ -742,10 +742,14 @@ fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
     harness.run();
     new_project(&mut harness, "compact");
 
+    // In a narrow window the parts list scrolls, so search for each part and press Enter.
     for (name, x) in [("Resistor", -81.28), ("LED", 81.28)] {
         harness.get_by_label("Add symbol (A)").click();
         harness.run();
-        select_symbol(&mut harness, name);
+        harness.get_by_role(egui::accesskit::Role::TextInput).type_text(name);
+        harness.run();
+        harness.key_press(Key::Enter);
+        harness.run();
         click_canvas_offset(&mut harness, egui::vec2(x, 0.0));
     }
     harness.get_by_label("Draw wire (W)").click();
@@ -786,7 +790,153 @@ fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
     assert_eq!(harness.state().session().inspect(), before);
 }
 
-/// Open the context menu during an active wire draft with a real secondary click.
+/// The parts browser opens from A with its search focused, filters as you type, places the
+/// first match on Enter, and keeps the old click-to-place flow. Escape closes it.
+#[test]
+fn the_parts_browser_searches_and_places_parts() {
+    let mut harness = harness();
+    new_project(&mut harness, "parts");
+    harness.key_press(Key::A);
+    harness.run();
+    assert!(harness.state().parts.open);
+    harness.get_by_label("2-pin connector");
+    harness.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
+    harness.run();
+    assert!(harness.query_by_label("Resistor").is_none());
+    harness.get_by_label("Capacitor");
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(!harness.state().parts.open);
+    harness.get_by_label("Place Capacitor · Esc to cancel");
+    click_canvas(&mut harness);
+    assert_eq!(first_symbol(&harness, "kind"), "capacitor");
+
+    harness.key_press(Key::A);
+    harness.run();
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!harness.state().parts.open, "Escape in the search closes the browser");
+    assert!(harness.state().tool.is_none());
+}
+
+/// Escape closes the browser after changing its view, before cancelling an active placement.
+#[test]
+fn escape_closes_the_browser_after_search_loses_focus() {
+    let mut harness = harness();
+    new_project(&mut harness, "parts");
+    harness.key_press(Key::A);
+    harness.run();
+    click(&mut harness, "Capacitor");
+    harness.key_press(Key::A);
+    harness.run();
+    click(&mut harness, "List");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!harness.state().parts.open);
+    assert!(harness.state().tool.is_some(), "Closing the browser must not cancel placement");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(harness.state().tool.is_none());
+}
+
+/// Popups, dialogs and Home handle Escape before the open parts browser does.
+#[test]
+fn the_browser_leaves_escape_to_overlays_and_home() {
+    let mut harness = harness();
+    new_project(&mut harness, "parts");
+    harness.key_press(Key::A);
+    harness.run();
+    click(&mut harness, "File");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(harness.query_by_label("New Project…").is_none());
+    assert!(harness.state().parts.open);
+
+    click(&mut harness, "Preferences");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::None));
+    assert!(harness.state().parts.open);
+
+    click(&mut harness, "Home");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!harness.state().home);
+    assert!(harness.state().parts.open);
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!harness.state().parts.open);
+}
+
+/// Dragging a part previews it on the snapped grid before release, places it through the shared
+/// command, and leaves the browser open for the next one.
+#[test]
+fn dragging_a_part_onto_the_sheet_places_it() {
+    let mut harness = harness();
+    new_project(&mut harness, "drag");
+    harness.key_press(Key::A);
+    harness.run();
+    let from = harness.get_by_label("Capacitor").rect().center();
+    let to = canvas_center(&harness) + egui::vec2(52.0, 3.0);
+    harness.event(egui::Event::PointerMoved(from));
+    harness.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    harness.run();
+    for step in 1..=6 {
+        harness.event(egui::Event::PointerMoved(from + (to - from) * (step as f32 / 6.0)));
+        harness.run();
+    }
+    let canvas = harness.get_by_label("Schematic canvas").rect();
+    let preview = harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::LineSegment { points, stroke }
+                if stroke.color == Tokens::get().accent && points.iter().all(|point| canvas.contains(*point)) =>
+            {
+                Some(egui::Rect::from_two_pos(points[0], points[1]))
+            }
+            _ => None,
+        })
+        .reduce(|a, b| a.union(b))
+        .expect("The dragged part must have a visible preview before release");
+    let snapped = canvas.center() + egui::vec2(50.8, 0.0);
+    assert!(preview.center().distance(snapped) < 0.1, "The preview must snap to the placement grid: {preview:?}");
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
+    harness.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    harness.run();
+    assert_eq!(first_symbol(&harness, "kind"), "capacitor");
+    assert_eq!(first_symbol(&harness, "x_nm"), 5 * pcbcraft_engine::schematic::GRID_NM);
+    assert_eq!(first_symbol(&harness, "y_nm"), 0);
+    assert!(harness.state().parts.open);
+}
+
+/// An edit during a browser drag invalidates that gesture without reverting the intervening edit.
+#[test]
+fn an_intervening_edit_cancels_a_browser_drag() {
+    let mut harness = harness();
+    resistor_at_origin(&mut harness);
+    harness.key_press(Key::A);
+    harness.run();
+    let from = harness.get_by_label("Capacitor").rect().center();
+    let to = canvas_center(&harness) + egui::vec2(50.8, 0.0);
+    harness.drag_at(from);
+    harness.run();
+    harness.hover_at(from + egui::vec2(8.0, 0.0));
+    harness.run();
+    harness.hover_at(to);
+    harness.run();
+
+    let revision = harness.state().session().revision();
+    let params = json!({"symbol": "symbol-2", "x_nm": 0, "y_nm": 1_270_000, "expected_revision": revision});
+    harness.state_mut().session.apply(MOVE_SYMBOL, &params).unwrap();
+    let after_edit = harness.state().session().inspect();
+    harness.run();
+    harness.drop_at(to);
+    harness.run();
+    assert_eq!(harness.state().session().inspect(), after_edit, "A stale browser drag must not place a symbol");
+}
+
 /// Place a resistor at the schematic origin, which sits at the canvas center.
 fn resistor_at_origin(harness: &mut Harness<'_, PcbApp>) {
     new_project(harness, "edits");

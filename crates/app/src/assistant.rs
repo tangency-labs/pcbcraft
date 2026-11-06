@@ -799,13 +799,16 @@ mod tests {
         Ok(())
     }
 
-    /// Clicking the chat blocks placement shortcuts while application shortcuts still work.
+    /// Clicking the chat blocks placement and browser Escape shortcuts while application shortcuts still work.
     #[test]
     fn assistant_focus_keeps_application_shortcuts_available() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = PcbApp::default();
         app.session.apply("project.new", &json!({"name": "Assistant shortcut fixture"}))?;
         let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
         harness.run();
+        harness.key_press(egui::Key::A);
+        harness.run();
+        assert!(harness.state().parts.open);
         click(&mut harness, "Assistant");
         let point = harness.state().assistant.panel_rect.ok_or("Assistant panel is missing")?.center();
         harness.drag_at(point);
@@ -813,6 +816,9 @@ mod tests {
         harness.drop_at(point);
         harness.run();
         assert!(harness.state().assistant.keyboard_active);
+        harness.key_press(egui::Key::Escape);
+        harness.run();
+        assert!(harness.state().parts.open, "The assistant owns Escape while its conversation has focus");
         harness.key_press(egui::Key::A);
         harness.run();
         assert!(matches!(harness.state().dialog, crate::Dialog::None));

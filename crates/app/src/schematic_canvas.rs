@@ -42,6 +42,24 @@ pub(crate) enum Click {
     Select(Option<String>),
     /// A row of the selected symbol's context menu.
     Edit(SymbolAction, String),
+    /// A part dragged from the parts browser was released over the canvas at this snapped point.
+    Drop(PartDrag, Point),
+}
+
+/// A browser drag bound to the project revision at which the gesture began.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PartDrag {
+    pub(crate) definition: &'static SymbolDefinition,
+    pub(crate) revision: u64,
+}
+
+/// Draw a part's preview fitted inside `rect`, for the parts browser's thumbnails. The symbol
+/// is drawn unrotated and without labels.
+pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, rect: Rect, color: egui::Color32) {
+    let bounds = grid_bounds(definition, 0);
+    let step = (rect.width() / bounds.width().max(1.0)).min(rect.height() / bounds.height().max(1.0));
+    let center = rect.center() - bounds.center().to_vec2() * step;
+    paint_symbol(painter, definition, center, step, 0, color, None);
 }
 
 /// What the selected symbol's context menu asks for.
@@ -63,6 +81,8 @@ pub(crate) enum SymbolAction {
 /// With canvas input enabled and no drag in progress, a primary click during
 /// placement returns `Click::Place` at a valid snapped point. In Wire mode, a
 /// primary click that hits a terminal returns `Click::Pin`.
+/// A browser part dragged over the canvas previews at the snapped pointer position; releasing
+/// it returns `Click::Drop`. Blocked input or an out-of-bounds position suppresses both.
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
 ///
@@ -130,6 +150,28 @@ pub(crate) fn show(
         let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
         wires::preview(&painter, rect, project, camera, Some(start), anchor);
         return None;
+    }
+
+    // A part dragged from the browser previews under the pointer and places where it's released.
+    // hover_pos is absent while another widget owns the drag. Read the pointer directly and
+    // transform it into this canvas layer, matching the coordinates used by camera snapping.
+    let drag_pointer = ui
+        .input(|i| i.pointer.hover_pos())
+        .map(|pointer| ui.ctx().layer_transform_from_global(response.layer_id).map_or(pointer, |from_global| from_global * pointer));
+    if input_enabled
+        && let Some(drag) = response.dnd_hover_payload::<PartDrag>()
+        && let Some(pointer) = drag_pointer
+    {
+        let point = camera.snap(pointer, rect);
+        if valid_position(point) {
+            paint_symbol(&painter, drag.definition, screen(point), grid_step, 0, tokens.accent, None);
+        }
+    }
+    if let Some(drag) = response.dnd_release_payload::<PartDrag>()
+        && let Some(pointer) = drag_pointer
+    {
+        let point = camera.snap(pointer, rect);
+        return (input_enabled && valid_position(point)).then_some(Click::Drop(*drag, point));
     }
 
     if tool.is_none() && (input_enabled || response.context_menu_opened()) {

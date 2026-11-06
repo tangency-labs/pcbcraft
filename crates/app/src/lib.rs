@@ -10,11 +10,12 @@ mod home;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
 mod net_inspector;
+mod parts_browser;
 mod preferences;
 mod project_files;
 mod schematic_canvas;
 
-use schematic_canvas::{Click, SymbolAction, Tool};
+use schematic_canvas::{Click, PartDrag, SymbolAction, Tool};
 
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
@@ -25,9 +26,8 @@ use pcbcraft_chrome::{
     theme, workspace,
 };
 use pcbcraft_engine::{
-    CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, SET_SYMBOL_FIELDS, Session, command,
-    persistence::Encoding,
-    schematic::{BUILTIN_SYMBOLS, SymbolDefinition},
+    CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, SET_SYMBOL_FIELDS, Session, command, persistence::Encoding,
+    schematic::SymbolDefinition,
 };
 use serde_json::{Value, json};
 
@@ -106,7 +106,6 @@ enum Dialog {
         error: Option<String>,
         focused: bool,
     },
-    ChooseSymbol,
     /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
     EditFields {
         symbol: String,
@@ -145,6 +144,7 @@ pub struct PcbApp {
     camera: schematic_canvas::Camera,
     preferences: Preferences,
     net_inspector: net_inspector::NetInspector,
+    parts: parts_browser::PartsBrowser,
     dialog: Dialog,
     /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
     home: bool,
@@ -455,9 +455,9 @@ impl PcbApp {
         let has_project = self.session.project().is_some();
         workspace::ribbon(ui, "Schematic", "Capture", |ui| {
             workspace::ribbon_group(ui, "Place", 1, |ui| {
-                let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. }));
+                let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. })) || self.parts.open;
                 if workspace::tool(ui, ToolIcon::Symbol, "Symbol", "Add symbol (A)", self.session.available(PLACE_SYMBOL), placing).clicked() {
-                    self.dialog = Dialog::ChooseSymbol;
+                    self.parts.open_and_focus();
                 }
             });
             ui.separator();
@@ -514,7 +514,8 @@ impl PcbApp {
         );
     }
 
-    /// Draw the schematic and send completed edits through the shared command catalog. Cancel only clears the local preview.
+    /// Draw the schematic and send completed edits through the shared command catalog using each
+    /// gesture's starting revision to reject stale actions. Cancel only clears the local preview.
     fn canvas(&mut self, ui: &mut Ui) {
         let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
         let click = shell::canvas(ui, |ui| {
@@ -554,6 +555,10 @@ impl PcbApp {
                 self.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
             }
             (None, Some(Click::Select(symbol))) => self.selected = symbol,
+            (_, Some(Click::Drop(PartDrag { definition, revision }, point))) => {
+                self.tool = None;
+                self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
+            }
             (None, Some(Click::Edit(action, symbol))) => {
                 self.selected = Some(symbol);
                 self.edit_selected(action);
@@ -578,8 +583,12 @@ impl PcbApp {
     }
 
     /// Handle app shortcuts outside text fields and dialogs. Assistant focus suppresses canvas tools.
-    /// On Home, Escape returns to the workspace and the canvas keys do nothing.
+    /// On Home, Escape returns to the workspace and the canvas keys do nothing. In the workspace,
+    /// Escape closes the parts browser before cancelling a tool, after overlays have priority.
     fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool) {
+        if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.parts.take_escape(ctx) {
+            return;
+        }
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
             return;
         }
@@ -608,7 +617,7 @@ impl PcbApp {
                 }
             }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
-                self.dialog = Dialog::ChooseSymbol;
+                self.parts.open_and_focus();
             }
             if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
                 self.begin_wire();
@@ -762,24 +771,6 @@ impl PcbApp {
             }
             #[cfg(not(target_arch = "wasm32"))]
             Dialog::LocalMcp { error, copied } => self.local_mcp_dialog(ctx, error, copied),
-            Dialog::ChooseSymbol => {
-                let mut selected = None;
-                let mut cancel = false;
-                let closing = shell::dialog(ctx, "symbol_picker", "Place Symbol", |ui| {
-                    let row = [ui.available_width(), Tokens::get().control_height];
-                    for &definition in BUILTIN_SYMBOLS {
-                        if ui.add_sized(row, egui::Button::new(definition.name)).clicked() {
-                            selected = Some(definition);
-                        }
-                    }
-                    cancel = ui.button("Cancel").clicked();
-                });
-                if let Some(definition) = selected {
-                    self.begin_placement(definition);
-                } else if !(closing || cancel) {
-                    self.dialog = Dialog::ChooseSymbol;
-                }
-            }
             Dialog::Preferences(mut window) => {
                 let shortcuts = shortcut_list(ctx);
                 #[cfg(not(target_arch = "wasm32"))]
@@ -894,7 +885,8 @@ impl PcbApp {
         }
     }
 
-    /// Draw one frame. Drop the preview if another action changed the project or opened a dialog.
+    /// Draw one frame. Cancel canvas tools when another action changes the project or opens a
+    /// dialog, and discard browser drags when their starting project revision becomes stale.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.sync_style(&ctx);
@@ -945,6 +937,9 @@ impl PcbApp {
         if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
             self.tool = None;
         }
+        if egui::DragAndDrop::payload::<PartDrag>(&ctx).is_some_and(|drag| drag.revision != self.session.revision()) {
+            egui::DragAndDrop::clear_payload(&ctx);
+        }
         self.status(ui);
         #[cfg(not(target_arch = "wasm32"))]
         let workspace = ui.available_rect_before_wrap();
@@ -954,6 +949,13 @@ impl PcbApp {
             let clearance = self.assistant.rail_clearance();
             #[cfg(target_arch = "wasm32")]
             let clearance = 0.0;
+            let placing = match self.tool {
+                Some(Tool::PlaceSymbol { definition, .. }) => Some(definition),
+                _ => None,
+            };
+            if let Some(definition) = self.parts.show(ui, placing, self.session.revision()) {
+                self.begin_placement(definition);
+            }
             self.net_inspector.show(ui, &self.session, clearance);
         }
         let revision = self.session.revision();
