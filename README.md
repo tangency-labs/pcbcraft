@@ -179,6 +179,10 @@ counterclockwise degrees, defaulting to 0.
 
 To add a feature: add a command to `crates/engine/src/lib.rs`, then call it from a menu or tool. MCP's `list_commands` and `execute` pick it up on their own.
 
+The [PCB workspace plan](docs/board-workspace-plan.md) describes the proposed
+first board milestone, including split and detached editor views, cross-probing,
+footprint mapping and reviewed schematic-to-board updates.
+
 ## Checks
 
 ```sh
