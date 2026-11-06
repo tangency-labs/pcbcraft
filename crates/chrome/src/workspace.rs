@@ -119,7 +119,7 @@ fn workspace_tile(ui: &mut Ui, workspace: &str, height: f32) -> Response {
         p.rect_filled(rect.expand(inset - 1.0), t.radius_md, t.hover);
     }
     p.hline(rect.x_range(), rect.top() - t.space_6, Stroke::new(t.space_2, t.accent));
-    paint_workspace_icon(p, center - vec2(0.0, t.space_16), t.control_height + t.space_2, t, true);
+    paint_workspace_glyph(p, WorkspaceIcon::Schematic, center - vec2(0.0, t.space_16), t.control_height + t.space_2, t, true);
     p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, fonts::interface_heading(ui, t.font_button), t.text);
     let caption = p.layout_no_wrap("Workspace".to_owned(), FontId::proportional(t.font_small), t.text_dim);
     let caret = t.space_4 + t.space_3;
@@ -231,8 +231,7 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32) -> Response {
     let title = painter.layout_no_wrap(entry.title.to_owned(), fonts::interface_heading(ui, t.font_heading), ink);
     let badge_x = x + title.size().x + t.space_8 + 1.0;
     painter.galley(pos2(x, y - title.size().y / 2.0), title, ink);
-    // The Current badge uses the ribbon tab's accent pair, which keeps small text readable.
-    let (badge_fill, badge_ink) = if entry.current { (t.accent_soft, t.ribbon_tab_text) } else { (soft, accent) };
+    let (badge_fill, badge_ink) = if entry.current { (t.badge, t.badge_ink) } else { (soft, accent) };
     let label = if entry.current {
         "Current"
     } else if available {
@@ -361,73 +360,72 @@ fn card(t: Tokens, inset: f32) -> Frame {
     Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(inset as i8))
 }
 
-/// Draw a workspace's icon, `size` points square, in the current palette. Planned workspaces
-/// (`available` false) draw in the dimmed ink. The schematic sheet uses SolidCraft's geometry;
-/// the board, render and simulation glyphs are new line art on the same 64-unit grid.
+/// Draw a workspace's icon, `size` points square, in the theme's icon colour roles. Planned
+/// workspaces (`available` false) keep their colours at about a third of their strength, as
+/// PCBcraft Next fades them. Geometry follows the 64-unit artwork: SolidCraft's schematic
+/// sheet and render sphere, and PCBcraft Next's original board and simulation glyphs.
 fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, size: f32, t: Tokens, available: bool) {
-    if icon == WorkspaceIcon::Schematic {
-        paint_workspace_icon(p, center, size, t, available);
-        return;
-    }
+    let fade = |color: Color32| if available { color } else { color.gamma_multiply(0.35) };
+    let [ink, face_1, face_2, face_3, active_1, active_2, active_3] =
+        [t.icon_ink, t.icon_face_1, t.icon_face_2, t.icon_face_3, t.icon_active_1, t.icon_active_2, t.icon_active_3].map(fade);
     let scale = size / 64.0;
-    let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * scale;
-    let ink = if available { t.text } else { t.text_dim.gamma_multiply(0.7) };
-    let accent = if available { t.accent } else { t.text_dim.gamma_multiply(0.7) };
-    let stroke = Stroke::new(3.0 * scale, ink);
-    let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
-    match icon {
-        WorkspaceIcon::Schematic => {}
-        WorkspaceIcon::Layout => {
-            p.rect_stroke(Rect::from_min_max(at(8.0, 10.0), at(56.0, 54.0)), 2, stroke, egui::StrokeKind::Middle);
-            p.rect_filled(Rect::from_min_max(at(22.0, 22.0), at(40.0, 40.0)), 1, accent);
-            for y in [26.0, 31.0, 36.0] {
-                line(&[(16.0, y), (22.0, y)], stroke);
-                line(&[(40.0, y), (48.0, y)], stroke);
-            }
-            line(&[(48.0, 31.0), (48.0, 46.0), (30.0, 46.0)], Stroke::new(2.0 * scale, accent));
-        }
-        WorkspaceIcon::Render => {
-            p.circle_stroke(at(30.0, 36.0), 18.0 * scale, stroke);
-            p.circle_filled(at(24.0, 30.0), 4.0 * scale, accent);
-            let sparkle = Stroke::new(2.5 * scale, accent);
-            line(&[(50.0, 8.0), (50.0, 20.0)], sparkle);
-            line(&[(44.0, 14.0), (56.0, 14.0)], sparkle);
-        }
-        WorkspaceIcon::Simulate => {
-            line(&[(10.0, 10.0), (10.0, 54.0), (56.0, 54.0)], stroke);
-            let wave: Vec<(f32, f32)> = (0..=24)
-                .map(|k| {
-                    let x = 14.0 + k as f32 * 1.75;
-                    (x, 32.0 - 14.0 * ((k as f32 / 24.0) * std::f32::consts::TAU).sin())
-                })
-                .collect();
-            line(&wave, Stroke::new(3.0 * scale, accent));
-        }
-    }
-}
-
-/// Draw the schematic workspace's sheet icon, `size` points square, using SolidCraft's geometry
-/// and the current palette, dimmed when `available` is false.
-fn paint_workspace_icon(p: &egui::Painter, center: Pos2, size: f32, t: Tokens, available: bool) {
-    let scale = size / 64.0;
-    let t = if available {
-        t
-    } else {
-        let dim = t.text_dim.gamma_multiply(0.7);
-        Tokens { accent: dim, field: dim, text_dim: t.panel_header, accent_soft: t.panel_header, ..t }
-    };
     let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * scale;
     let rect = |x1, y1, x2, y2| Rect::from_min_max(at(x1, y1), at(x2, y2));
-    let outline = Stroke::new(2.55 * scale, t.field);
-    let accent = Stroke::new(3.0 * scale, t.accent);
-
-    p.rect(rect(10.0, 6.0, 54.0, 58.0), 1, t.text_dim, outline, egui::StrokeKind::Middle);
-    p.rect(rect(17.0, 14.0, 36.0, 30.0), 0, t.panel_header, outline, egui::StrokeKind::Middle);
-    p.rect(rect(33.0, 46.0, 48.0, 53.0), 1, t.accent_soft, outline, egui::StrokeKind::Middle);
-    p.line_segment([at(17.0, 38.0), at(36.0, 38.0)], accent);
-    p.line_segment([at(17.0, 35.0), at(17.0, 41.0)], accent);
-    p.line_segment([at(36.0, 35.0), at(36.0, 41.0)], accent);
-    p.line_segment([at(44.0, 14.0), at(44.0, 30.0)], accent);
+    let stroke = |width: f32, color| Stroke::new(width * scale, color);
+    let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
+    match icon {
+        WorkspaceIcon::Schematic => {
+            let outline = stroke(2.55, ink);
+            let accent = stroke(3.0, active_2);
+            p.rect(rect(10.0, 6.0, 54.0, 58.0), 2, face_1, outline, egui::StrokeKind::Middle);
+            p.rect(rect(17.0, 14.0, 36.0, 30.0), 0, face_2, outline, egui::StrokeKind::Middle);
+            p.rect(rect(33.0, 46.0, 48.0, 53.0), 1, active_1, stroke(2.2, ink), egui::StrokeKind::Middle);
+            line(&[(17.0, 38.0), (36.0, 38.0)], accent);
+            line(&[(17.0, 35.0), (17.0, 41.0)], accent);
+            line(&[(36.0, 35.0), (36.0, 41.0)], accent);
+            line(&[(44.0, 14.0), (44.0, 30.0)], accent);
+        }
+        WorkspaceIcon::Layout => {
+            p.rect(rect(8.0, 9.0, 56.0, 55.0), 3, active_3, stroke(2.5, ink), egui::StrokeKind::Middle);
+            let trace = stroke(2.5, active_1);
+            line(&[(16.0, 23.0), (27.0, 23.0), (27.0, 39.0), (48.0, 39.0)], trace);
+            line(&[(16.0, 44.0), (23.0, 44.0), (23.0, 17.0), (48.0, 17.0)], trace);
+            p.rect(rect(31.0, 24.0, 44.0, 37.0), 1, ink, stroke(2.0, face_3), egui::StrokeKind::Middle);
+            for (x, y) in [(16.0, 23.0), (48.0, 39.0), (16.0, 44.0), (48.0, 17.0)] {
+                p.circle(at(x, y), 3.0 * scale, face_1, stroke(1.5, ink));
+            }
+        }
+        WorkspaceIcon::Render => {
+            // Shaded faces stacked toward the light, inside the sphere's outline.
+            p.circle_filled(at(28.0, 38.0), 21.0 * scale, face_3);
+            p.circle_filled(at(25.5, 35.0), 17.5 * scale, face_2);
+            p.circle_filled(at(22.5, 31.5), 12.0 * scale, face_1);
+            p.circle_filled(at(19.0, 27.0), 4.0 * scale, active_2);
+            p.circle_stroke(at(28.0, 38.0), 21.0 * scale, stroke(2.55, ink));
+            let spark = [(50.0, 5.0), (52.8, 11.2), (59.0, 14.0), (52.8, 16.8), (50.0, 23.0), (47.2, 16.8), (41.0, 14.0), (47.2, 11.2)];
+            for pair in spark.windows(2).chain(std::iter::once(&[spark[7], spark[0]][..])) {
+                if let [(x1, y1), (x2, y2)] = pair {
+                    p.add(Shape::convex_polygon(vec![at(50.0, 14.0), at(*x1, *y1), at(*x2, *y2)], active_3, Stroke::NONE));
+                }
+            }
+        }
+        WorkspaceIcon::Simulate => {
+            line(&[(9.0, 9.0), (9.0, 55.0), (57.0, 55.0)], stroke(3.0, face_3));
+            // Two cubic arcs through the axis line, then a short rise.
+            let cubic = |a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)| {
+                (0..=12).map(move |k| {
+                    let u = k as f32 / 12.0;
+                    let v = 1.0 - u;
+                    let mix = |a: f32, b: f32, c: f32, d: f32| v * v * v * a + 3.0 * v * v * u * b + 3.0 * v * u * u * c + u * u * u * d;
+                    (mix(a.0, b.0, c.0, d.0), mix(a.1, b.1, c.1, d.1))
+                })
+            };
+            let mut wave: Vec<(f32, f32)> = cubic((12.0, 34.0), (18.0, 6.0), (24.0, 6.0), (30.0, 34.0)).collect();
+            wave.extend(cubic((30.0, 34.0), (36.0, 62.0), (42.0, 62.0), (48.0, 34.0)).skip(1));
+            wave.push((54.0, 16.0));
+            line(&wave, stroke(4.0, active_3));
+        }
+    }
 }
 
 /// Draw scalable line art in the current theme's ink. Symbol and Wire use PCBcraft Next's glyph paths.

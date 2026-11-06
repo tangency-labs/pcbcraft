@@ -152,6 +152,12 @@ The workspace picker on the ribbon's workspace tile (`crates/chrome/src/workspac
 heights, accent bar, icon tile, badges and footer. The tile's caret, the entries'
 wording and the keyboard handling follow PCBcraft Next's `src/desktop/workspace.rs`
 at `568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0), itself adapted
-from the same SolidCraft revision. The PCB layout, 3D render and simulate glyphs
-are new drawings. The Current badge uses the ribbon tab's colour pair for
-readable small text.
+from the same SolidCraft revision. The workspace icons are drawn with the theme's
+icon colour roles (`icon_ink`, `icon_face_*`, `icon_active_*` in
+`crates/chrome/src/theme.rs`), whose light and dark values come from SolidCraft's
+icon palette as carried in PCBcraft Next's `assets/family/icon-palette.toml`. The
+schematic sheet and render sphere follow SolidCraft's `workspace-schematic.svg`
+and `workspace-render.svg` from the same file set; the PCB layout and simulation
+glyphs follow PCBcraft Next's original `assets/original/workspace-layout.svg` and
+`simulate.svg`. The Current badge uses the Home rail's accent pair, which keeps
+its small text readable.
