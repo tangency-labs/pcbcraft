@@ -240,8 +240,11 @@ fn split_layout_preserves_views_and_fits_narrow_windows() {
 
 /// One view uses the canvas breadcrumb without reserving a tab row. Opening a split adds
 /// headers and their panel clearance; closing either active pane restores the original area.
+/// The breadcrumb stays 12 points past Browser's right edge, or inside the canvas's left
+/// edge when Browser is hidden; its source text identifies the heading even when elided.
 #[test]
 fn single_view_reclaims_the_header_and_panel_clearance() {
+    let breadcrumb_gap = 12.0;
     for size in [egui::vec2(1400.0, 900.0), egui::vec2(800.0, 800.0)] {
         let mut h = harness();
         h.set_size(size);
@@ -257,7 +260,8 @@ fn single_view_reclaims_the_header_and_panel_clearance() {
         assert!(
             h.output().shapes.iter().any(|shape| matches!(
                 &shape.shape, egui::Shape::Text(text) if text.galley.job.text == path
-                    && single.contains(text.pos) && text.pos.x > browser.right()
+                    && single.contains(text.pos)
+                    && (text.pos.x - (browser.right() + breadcrumb_gap)).abs() < 1.0
             )),
             "the breadcrumb belongs on the canvas beside Browser"
         );
@@ -281,7 +285,8 @@ fn single_view_reclaims_the_header_and_panel_clearance() {
         assert!(
             h.output().shapes.iter().any(|shape| matches!(
                 &shape.shape, egui::Shape::Text(text) if text.galley.job.text == path
-                    && single.contains(text.pos) && text.pos.x < browser.right()
+                    && single.contains(text.pos)
+                    && (text.pos.x - (single.left() + breadcrumb_gap)).abs() < 1.0
             )),
             "hiding Browser moves the breadcrumb into the freed space"
         );
