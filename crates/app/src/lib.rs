@@ -895,8 +895,10 @@ impl PcbApp {
             "Schematic canvas 2"
         };
         let source = self.views.active.input(&self.session);
+        // Web wheel events reach the canvas before it gains keyboard focus. Native windows
+        // still require OS focus so an inactive host cannot act on canvas input.
         let input_enabled = ui.is_enabled()
-            && ui.input(|input| input.focused)
+            && (IN_BROWSER || ui.input(|input| input.focused))
             && !self.home
             && !self.project_action_pending()
             && matches!(self.dialog, Dialog::None)

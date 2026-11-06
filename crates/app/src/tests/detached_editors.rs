@@ -13,10 +13,31 @@ struct Peer {
     focused: bool,
     close: bool,
     events: Vec<Event>,
+    root: Option<egui::accesskit::NodeId>,
     nodes: BTreeMap<egui::accesskit::NodeId, egui::accesskit::Node>,
     output: egui::FullOutput,
     frames: usize,
     decorations: Option<bool>,
+}
+
+impl Peer {
+    /// Apply incremental changes, retaining unchanged descendants but dropping removed controls.
+    fn update_tree(&mut self, update: &egui::accesskit::TreeUpdate) {
+        if let Some(tree) = &update.tree {
+            self.root = Some(tree.root);
+        }
+        self.nodes.extend(update.nodes.iter().cloned());
+        let mut pending: Vec<_> = self.root.into_iter().collect();
+        let mut live = std::collections::BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if live.insert(id)
+                && let Some(node) = self.nodes.get(&id)
+            {
+                pending.extend(node.children());
+            }
+        }
+        self.nodes.retain(|id, _| live.contains(id));
+    }
 }
 
 /// Use egui's native viewport callback with separate input and output, not an embedded window.
@@ -51,7 +72,7 @@ fn multi_window() -> (Harness<'static, PcbApp>, Rc<RefCell<Peer>>) {
         output.textures_delta.clear();
         let mut peer = state.borrow_mut();
         if let Some(update) = &output.platform_output.accesskit_update {
-            peer.nodes.extend(update.nodes.iter().cloned());
+            peer.update_tree(update);
         }
         peer.output = output;
         peer.frames += 1;
@@ -159,7 +180,7 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
 
 /// Either split view can detach, then close or explicitly dock from either host. Close keeps
 /// the root alone; Dock restores the split. All transitions preserve navigation and project
-/// bytes while invalidating callbacks captured before the transition.
+/// bytes while invalidating callbacks captured before the transition. Child Close never prompts to save.
 #[test]
 fn detach_close_and_dock_preserve_views_without_copying_the_project() {
     #[derive(Debug, PartialEq)]
