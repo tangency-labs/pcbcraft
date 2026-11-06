@@ -42,7 +42,8 @@ Open [the local app](http://127.0.0.1:8781) and upload
 `crates/app/tests/fixtures/split/two-resistors.pc.zip`. The browser needs the
 archive, because uploading `project.pc` alone does not include its companion
 documents. To begin an empty design on either platform, choose **New Project**
-on Home, enter a name and confirm **OK**.
+on Home. It opens an editable **Untitled** schematic at once. On the desktop, the
+first **Save** asks for a project folder, and the project takes that folder's name.
 
 ## Make an edit and keep it
 

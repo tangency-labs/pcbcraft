@@ -55,7 +55,7 @@ fn startup_home_enters_the_workspace_only_after_a_successful_open() {
         app.files.job = Some(Job { receiver, revision: app.session.revision() });
         // A pending file job deliberately keeps repainting while waiting for its worker.
         harness.step();
-        harness.get_by_label("New Project");
+        harness.get_by_label("Open Project");
         assert!(harness.state().session().project().is_none());
         let opened = matches!(&result, Ok(Outcome::Opened(_)));
         send.send(result).unwrap();
@@ -487,7 +487,7 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     assert!(loaded.target.open_notice().contains("without a manifest"));
     let documents = loaded.target.documents.clone().unwrap();
     let outcome = save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
-    let Outcome::Saved(saved) = outcome else { panic!("expected saved project") };
+    let Outcome::Saved(saved, _) = outcome else { panic!("expected saved project") };
     assert!(saved.target.added_manifest());
     let reopened = load(&path).unwrap();
     assert!(!reopened.target.needs_manifest);
@@ -546,4 +546,93 @@ fn recovery_allows_the_bounded_union_of_old_and_new_documents() {
     let stop = format!("published:{new_library}");
     assert!(folder::save(&root, Some(&before), &after, &mut |phase| if phase == stop { Err("crash".to_owned()) } else { Ok(()) }).is_err());
     assert_eq!(folder::load(&root).unwrap(), after);
+}
+
+/// Start an Untitled project with one placed part, as New Project does before any save.
+fn untitled() -> Session {
+    let mut s = Session::default();
+    s.apply("project.new", &serde_json::Value::Null).unwrap();
+    apply(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
+    s
+}
+
+/// A first save names an Untitled project after its folder or archive, in the saved file and in
+/// the open session, without a new revision or undo step. Undo keeps the name, and the project
+/// is clean once its saved snapshot is current again.
+#[test]
+fn first_save_names_an_untitled_project_after_its_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    for (format, chosen, file) in
+        [(SaveFormat::Folder, "blinky", "blinky"), (SaveFormat::Archive, "board", "board.pc.zip"), (SaveFormat::Archive, "led.pc.zip", "led.pc.zip")]
+    {
+        let mut s = untitled();
+        let mut files = ProjectFiles::default();
+        assert!(files.dirty(&s));
+        let (revision, depth) = (s.revision(), s.inspect()["can_undo"].clone());
+        let result = save_new(s.snapshot().unwrap(), None, format, dir.path().join(chosen));
+        assert!(matches!(complete(&mut files, &mut s, result), Some(Update::Message(text)) if text == "Project saved"));
+        let name = file.strip_suffix(".pc.zip").unwrap_or(file);
+        assert_eq!(s.project().unwrap().name, name);
+        assert_eq!((s.revision(), s.inspect()["can_undo"].clone()), (revision, depth));
+        assert!(!files.dirty(&s), "taking the file's name is part of the save");
+        assert_eq!(pcbcraft_storage::open(&dir.path().join(file)).unwrap().name, name);
+        s.apply("edit.undo", &serde_json::Value::Null).unwrap();
+        assert_eq!(s.project().unwrap().name, name, "undo doesn't bring Untitled back");
+        s.apply("edit.redo", &serde_json::Value::Null).unwrap();
+        assert!(!files.dirty(&s));
+    }
+    // A project given a name keeps it, whatever its destination is called.
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"name": "Mine"})).unwrap();
+    let mut files = ProjectFiles::default();
+    let result = save_new(s.snapshot().unwrap(), None, SaveFormat::Folder, dir.path().join("elsewhere"));
+    complete(&mut files, &mut s, result);
+    assert_eq!(s.project().unwrap().name, "Mine");
+    assert_eq!(pcbcraft_storage::open(&dir.path().join("elsewhere")).unwrap().name, "Mine");
+}
+
+/// Edits made while the first save runs stay in the session, under the new name and unsaved. A
+/// failed or cancelled first save leaves the project Untitled with its history and dirty state.
+#[test]
+fn first_save_keeps_later_edits_and_failures_change_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = untitled();
+    let mut files = ProjectFiles::default();
+    let snapshot = s.snapshot().unwrap();
+    apply(&mut s, MOVE_SYMBOL, json!({"symbol":"symbol-2","x_nm":1_270_000,"y_nm":0}));
+    let result = save_new(snapshot, None, SaveFormat::Folder, dir.path().join("divider"));
+    let update = complete(&mut files, &mut s, result);
+    assert!(matches!(update, Some(Update::Message(text)) if text == "Earlier version saved. Current edits are unsaved."));
+    assert_eq!(s.project().unwrap().name, "divider");
+    assert_eq!(s.inspect()["project"]["schematic"]["symbols"][0]["x_nm"], 1_270_000);
+    assert!(files.dirty(&s));
+    s.apply("edit.undo", &serde_json::Value::Null).unwrap();
+    assert!(!files.dirty(&s), "the saved snapshot is the one before the move");
+
+    fs::write(dir.path().join("taken.pc.zip"), b"someone else's file").unwrap();
+    for result in [
+        save_new(untitled().snapshot().unwrap(), None, SaveFormat::Archive, dir.path().join("taken")),
+        save_new(untitled().snapshot().unwrap(), None, SaveFormat::Folder, dir.path().join("missing").join("board")),
+        Ok(Outcome::Cancelled),
+    ] {
+        let mut s = untitled();
+        let mut files = ProjectFiles::default();
+        let before = s.inspect();
+        let failed = result.is_err();
+        let update = complete(&mut files, &mut s, result);
+        assert_eq!(matches!(update, Some(Update::Error(_))), failed);
+        assert_eq!(s.inspect(), before);
+        assert_eq!(s.project().unwrap().name, "Untitled");
+        assert!(files.dirty(&s));
+    }
+    assert_eq!(fs::read(dir.path().join("taken.pc.zip")).unwrap(), b"someone else's file");
+}
+
+/// The first save's suggested file name is the project's, with characters a file name can't hold
+/// replaced.
+#[test]
+fn first_save_suggests_the_project_name() {
+    assert_eq!(file_name_for("Untitled"), "Untitled");
+    assert_eq!(file_name_for("Power: 5V/3V3"), "Power- 5V-3V3");
+    assert_eq!(file_name_for(" .. "), "project");
 }

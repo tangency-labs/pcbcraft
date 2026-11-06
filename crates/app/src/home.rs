@@ -53,7 +53,7 @@ impl PcbApp {
         let can_save = self.can_save_project();
         let mut rows = vec![
             ("home:start", "Start", String::new(), true, None),
-            ("home:new", "New Project…", key(&COMMAND_N), self.session.available("project.new"), Some(Action::New)),
+            ("home:new", "New Project", key(&COMMAND_N), self.session.available("project.new"), Some(Action::New)),
             ("home:open", "Open…", key(&COMMAND_O), file_ready, Some(Action::Open)),
         ];
         if IN_BROWSER {
@@ -109,12 +109,13 @@ impl PcbApp {
         });
     }
 
-    /// Apply a Home action. New and Open keep Home up until the project is made or opened, so
-    /// cancelling returns to it; saving returns to the workspace like SolidCraft's start page.
+    /// Apply a Home action. New opens an Untitled project in the workspace at once. Open keeps Home
+    /// up until the project is opened, so cancelling returns to it; saving returns to the workspace
+    /// like SolidCraft's start page.
     fn home_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::Back => self.home = false,
-            Action::New => self.ask_name("project.new"),
+            Action::New => self.new_project(),
             Action::Open => self.open_project_file(ctx),
             Action::Save => {
                 self.home = false;

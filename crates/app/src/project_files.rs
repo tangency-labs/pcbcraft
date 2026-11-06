@@ -59,8 +59,10 @@ struct Job {
 enum Outcome {
     Cancelled,
     Opened(Saved),
+    /// A completed desktop save, with the snapshot it started from when the save also named an
+    /// Untitled project. The saved snapshot is then that one's renamed copy.
     #[cfg(not(target_arch = "wasm32"))]
-    Saved(Saved),
+    Saved(Saved, Option<Arc<Project>>),
     #[cfg(target_arch = "wasm32")]
     Downloaded,
 }
@@ -172,6 +174,8 @@ impl ProjectFiles {
     }
 
     /// Accept completed jobs on the editor thread. Keep edits made after the saved revision.
+    /// A save that named an Untitled project renames it in the session too, history included,
+    /// without changing the revision; cancelled and failed saves leave the session as it was.
     pub(super) fn poll(&mut self, session: &mut Session, ctx: &egui::Context) -> Option<Update> {
         let job = self.job.as_mut()?;
         #[cfg(target_arch = "wasm32")]
@@ -199,7 +203,10 @@ impl ProjectFiles {
                 Some(Update::Error("Project changed while opening the file. Open it again to replace the current project.".to_owned()))
             }
             #[cfg(not(target_arch = "wasm32"))]
-            Ok(Outcome::Saved(saved)) => {
+            Ok(Outcome::Saved(saved, renamed)) => {
+                if let Some(original) = renamed {
+                    session.adopt_saved_name(&original, &saved.snapshot);
+                }
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));
                 let added_manifest = saved.target.added_manifest();
                 self.saved = Some(saved);

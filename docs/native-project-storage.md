@@ -7,8 +7,11 @@ create separate schematic and board sessions.
 ## File encodings and save behavior
 
 The working form is a project folder with a plain UTF-8 JSON `project.pc` entry
-point. Desktop New Project defaults to this form. Open accepts the folder, its
-entry point, a `.pc.zip` archive or a legacy project. Save keeps the opened form;
+point. Desktop New Project defaults to this form. A project's first Save asks
+for a new folder, suggesting the project's name; one still named Untitled takes
+the chosen folder or archive name as part of that save, with no undo step.
+Cancelling or failing that save leaves it Untitled and unsaved. Open accepts the
+folder, its entry point, a `.pc.zip` archive or a legacy project. Save keeps the opened form;
 Save As offers a project folder and a packed project. The folder destination is
 a new or empty project directory, while archive Save As requires an unused file.
 Unrelated root files such as `README.md` and `.git` remain untouched.

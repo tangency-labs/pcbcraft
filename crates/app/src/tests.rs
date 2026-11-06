@@ -48,12 +48,21 @@ fn select_symbol(harness: &mut Harness<'_, PcbApp>, name: &str) {
     click(harness, "Close Parts library");
 }
 
-/// Create a project through the File menu and the dialog's labelled name field.
-fn new_project(harness: &mut Harness<'_, PcbApp>, name: &str) {
-    choose(harness, "File", "New Project…");
-    harness.get_by_label("Name").type_text(name);
-    harness.run();
-    harness.get_by_label("OK").click();
+/// Create an Untitled project through the File menu; it opens without a naming dialog.
+fn new_project(harness: &mut Harness<'_, PcbApp>) {
+    choose(harness, "File", "New Project");
+}
+
+/// Home's New Project tile. The navigation row shares its label, so take the larger control.
+fn new_project_tile<'h>(harness: &'h Harness<'_, PcbApp>) -> egui_kittest::Node<'h> {
+    let area = |node: &egui_kittest::Node<'_>| node.rect().area();
+    harness.query_all_by_label("New Project").max_by(|a, b| area(a).total_cmp(&area(b))).unwrap()
+}
+
+/// Empty the focused name field: select all of it, then delete the selection.
+fn clear_name(harness: &mut Harness<'_, PcbApp>) {
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    harness.key_press(Key::Backspace);
     harness.run();
 }
 
@@ -65,11 +74,11 @@ fn the_empty_workspace_reports_no_project() {
     assert!(harness.state().session().project().is_none());
 }
 
-/// The first frame shows the Home actions, and cancelling New/Open does not enter the empty editor.
+/// The first frame shows the Home actions, and cancelling Open does not enter the empty editor.
 #[test]
 fn startup_opens_home_and_cancelled_dialogs_leave_it_visible() {
     let mut harness = startup_harness();
-    harness.get_by_label("New Project");
+    new_project_tile(&harness);
     harness.get_by_label("Open Project");
     assert!(harness.state().session().project().is_none());
     assert!(harness.query_by_label("Toggle Net Inspector").is_none());
@@ -77,25 +86,22 @@ fn startup_opens_home_and_cancelled_dialogs_leave_it_visible() {
     assert!(harness.query_by_label("No project open. Choose File, then New Project.").is_none());
     assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
 
-    click(&mut harness, "New Project");
-    click(&mut harness, "Cancel");
-    harness.get_by_label("Open Project");
     click(&mut harness, "Open Project");
     harness.get_by_label("Project file or archive…");
     click(&mut harness, "Cancel");
-    harness.get_by_label("New Project");
+    new_project_tile(&harness);
     assert!(harness.state().home);
     assert!(harness.state().session().project().is_none());
 }
 
-/// Creating a project from the initial Home page enters the schematic through the shared command.
+/// Creating a project from the initial Home page enters an Untitled schematic through the shared
+/// command at once, with no naming dialog. Parts can be placed and undone before any save.
 #[test]
 fn startup_new_project_enters_the_workspace() {
     let mut harness = startup_harness();
-    click(&mut harness, "New Project");
-    harness.get_by_label("Name").type_text("blinky");
+    new_project_tile(&harness).click();
     harness.run();
-    click(&mut harness, "OK");
+    assert!(matches!(harness.state().dialog, Dialog::None));
     harness.get_by_label("Toggle Net Inspector");
     assert!(harness.query_by_label("Move Parts library").is_none());
     harness.key_press(Key::A);
@@ -103,8 +109,9 @@ fn startup_new_project_enters_the_workspace() {
     harness.get_by_label("Move Parts library");
     harness.get_by_label("Resistor");
     assert!(harness.query_by_label("Open Project").is_none());
-    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
     assert!(!harness.state().home);
+    harness.get_by_label("Unsaved changes");
 }
 
 /// The inspector never reserves space for the empty workspace, even after undoing project creation.
@@ -117,7 +124,7 @@ fn the_empty_workspace_stays_centered_after_undo_with_the_inspector_open() {
     harness.run();
     assert!(harness.query_by_label("Close Net Inspector").is_none());
 
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     harness.get_by_label("Toggle Net Inspector").click();
     harness.run();
     harness.get_by_label("Close Net Inspector");
@@ -127,12 +134,12 @@ fn the_empty_workspace_stays_centered_after_undo_with_the_inspector_open() {
     assert_eq!(harness.get_by_label(empty).rect().center(), original);
 }
 
-/// Creating from the menu closes the dialog and leaves Parts available through A.
+/// Creating from the menu opens Untitled without a dialog and leaves Parts available through A.
 #[test]
 fn a_person_makes_a_project_through_the_menu() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
-    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+    new_project(&mut harness);
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
     assert!(matches!(harness.state().dialog, Dialog::None));
     assert!(harness.query_by_label("Move Parts library").is_none());
     harness.key_press(Key::A);
@@ -157,7 +164,7 @@ fn compact_file_menu_keeps_save_as_accessible() {
     harness.key_press(Key::Escape);
     harness.run();
 
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     choose(&mut harness, "File", "Save As…");
     harness.get_by_label("Project folder…");
     harness.get_by_label("Packed project (.pc.zip)…");
@@ -185,7 +192,7 @@ fn open_home(harness: &mut Harness<'_, PcbApp>) {
 #[test]
 fn home_hides_the_workspace_and_returns_to_the_same_project() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     let revision = harness.state().session().revision();
     open_home(&mut harness);
     assert!(harness.query_by_label("Toggle Net Inspector").is_none());
@@ -198,17 +205,17 @@ fn home_hides_the_workspace_and_returns_to_the_same_project() {
     harness.get_by_label("Toggle Net Inspector");
 
     open_home(&mut harness);
-    click(&mut harness, "Back to blinky");
+    click(&mut harness, "Back to Untitled");
     assert!(!harness.state().home);
     assert_eq!(harness.state().session().revision(), revision);
-    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
 }
 
 /// The canvas keys stay with the hidden schematic, and undo still reaches the shared history.
 #[test]
 fn canvas_keys_do_nothing_on_home() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     open_home(&mut harness);
     harness.key_press(Key::A);
     harness.run();
@@ -222,32 +229,55 @@ fn canvas_keys_do_nothing_on_home() {
     harness.get_by_label("Back to the workspace");
 }
 
-/// The New Project tile runs `project.new` through the name dialog, then shows the new schematic.
-/// Cancelling the dialog leaves Home up.
+/// The New Project tile and the navigation row both run `project.new` and show the new Untitled
+/// schematic. Over unsaved work they first ask, as Open does: Cancel keeps the project and Home,
+/// and discarding starts a new document whose replacement undo brings back. Ctrl+N asks too.
 #[test]
 fn home_new_project_tile_creates_the_project_and_returns_to_it() {
     let mut harness = harness();
     open_home(&mut harness);
     assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
-    click(&mut harness, "New Project");
-    harness.get_by_label("Cancel").click();
+    new_project_tile(&harness).click();
     harness.run();
-    assert!(harness.state().home);
-
-    click(&mut harness, "New Project");
-    harness.get_by_label("Name").type_text("blinky");
-    harness.run();
-    click(&mut harness, "OK");
     assert!(!harness.state().home);
-    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+    assert!(matches!(harness.state().dialog, Dialog::None), "nothing to lose, so no question");
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
     harness.get_by_label("Toggle Net Inspector");
+    let first = harness.state().session().snapshot().unwrap();
+
+    open_home(&mut harness);
+    let area = |node: &egui_kittest::Node<'_>| node.rect().area();
+    let rail = |harness: &mut Harness<'_, PcbApp>| {
+        harness.query_all_by_label("New Project").min_by(|a, b| area(a).total_cmp(&area(b))).unwrap().click();
+        harness.run();
+    };
+    rail(&mut harness);
+    harness.get_by_label("Starting a new project will discard unsaved changes.");
+    click(&mut harness, "Cancel");
+    assert!(harness.state().home);
+    assert!(Arc::ptr_eq(&harness.state().session().snapshot().unwrap(), &first));
+
+    rail(&mut harness);
+    click(&mut harness, "Discard and start new");
+    assert!(!harness.state().home);
+    let second = harness.state().session().snapshot().unwrap();
+    assert_eq!(second.name, "Untitled");
+    assert!(!second.same_document(&first));
+    click(&mut harness, "Undo");
+    assert!(Arc::ptr_eq(&harness.state().session().snapshot().unwrap(), &first));
+
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::N);
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::ConfirmNew));
+    click(&mut harness, "Cancel");
+    assert!(Arc::ptr_eq(&harness.state().session().snapshot().unwrap(), &first));
 }
 
 /// Save As on Home returns to the workspace with the format chooser, and Preferences opens over Home.
 #[test]
 fn home_rows_reach_the_save_and_preferences_dialogs() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     open_home(&mut harness);
     harness.get_by_label("Open Project");
     let preferences = harness.query_all_by_label("Preferences").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
@@ -270,7 +300,7 @@ fn narrow_home_stacks_the_navigation_above_the_tiles() {
     harness.run();
     open_home(&mut harness);
     let back = harness.get_by_label("Back to the workspace").rect();
-    let tile = harness.get_by_label("New Project").rect();
+    let tile = new_project_tile(&harness).rect();
     assert!(back.right() <= 420.0 && tile.right() <= 420.0, "{back:?} {tile:?}");
     assert!(back.bottom() < tile.top(), "{back:?} should sit above {tile:?}");
 }
@@ -343,7 +373,7 @@ fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
     harness.run();
     assert!(!picker_open(&harness));
 
-    new_project(&mut harness, "picker");
+    new_project(&mut harness);
     click(&mut harness, "Choose workspace");
     harness.key_press(Key::Enter);
     harness.run();
@@ -372,7 +402,7 @@ fn enter_on_the_workspace_tile_opens_the_picker() {
 #[test]
 fn the_wire_tool_connects_multi_pin_library_symbols() {
     let mut harness = harness();
-    new_project(&mut harness, "supply");
+    new_project(&mut harness);
     let grid = pcbcraft_engine::schematic::GRID_NM;
     for (definition, x_nm) in [("header-4", 0), ("led", 20 * grid)] {
         let revision = harness.state().session().revision();
@@ -410,7 +440,9 @@ fn integrated_titlebar_keeps_window_controls_accessible() {
     let mut harness = harness();
     assert!(harness.query_by_label("Maximize window").is_none());
     harness.state_mut().integrated_titlebar = true;
-    new_project(&mut harness, "Two resistors");
+    new_project(&mut harness);
+    harness.state_mut().run("project.rename", &json!({"name": "Two resistors"}));
+    harness.run();
     let bar_bottom = harness.get_by_label("File").rect().bottom();
     let title = harness.query_all_by_label("Two resistors").find(|node| node.rect().bottom() <= bar_bottom).unwrap();
     assert!(title.rect().width() < 120.0);
@@ -448,7 +480,7 @@ fn integrated_titlebar_keeps_window_controls_accessible() {
 fn narrow_app_bar_keeps_the_unsaved_marker() {
     let mut harness = harness();
     let name = "Narrow schematic";
-    new_project(&mut harness, name);
+    new_project(&mut harness);
     harness.get_by_label("Unsaved changes");
 
     // The desktop minimum of 640 pixels leaves 320 logical points at 200% UI scale.
@@ -476,11 +508,11 @@ fn narrow_app_bar_keeps_the_unsaved_marker() {
 #[test]
 fn app_bar_actions_reach_the_same_state_as_commands_an_agent_runs() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     click(&mut harness, "Undo");
     click(&mut harness, "Redo");
     let mut session = Session::default();
-    session.execute("project.new", &json!({"name": "blinky"})).unwrap();
+    session.execute("project.new", &Value::Null).unwrap();
     session.execute("edit.undo", &Value::Null).unwrap();
     session.execute("edit.redo", &Value::Null).unwrap();
     assert_equivalent_sessions(harness.state().session(), &session);
@@ -489,20 +521,29 @@ fn app_bar_actions_reach_the_same_state_as_commands_an_agent_runs() {
 #[test]
 fn a_bad_name_stays_in_the_dialog_with_the_reason() {
     let mut harness = harness();
-    choose(&mut harness, "File", "New Project…");
+    new_project(&mut harness);
+    let revision = harness.state().session().revision();
+    choose(&mut harness, "File", "Rename Project…");
+    clear_name(&mut harness);
     harness.get_by_label("OK").click();
     harness.run();
     harness.get_by_label("the name can't be empty");
-    assert!(harness.state().session().project().is_none());
+    assert_eq!(harness.state().session().revision(), revision);
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
 }
 
 #[test]
 fn cancelling_changes_nothing() {
     let mut harness = harness();
-    choose(&mut harness, "File", "New Project…");
+    new_project(&mut harness);
+    let revision = harness.state().session().revision();
+    choose(&mut harness, "File", "Rename Project…");
+    harness.get_by_label("Name").type_text(" board");
+    harness.run();
     harness.get_by_label("Cancel").click();
     harness.run();
-    assert_eq!(harness.state().session().revision(), 0);
+    assert_eq!(harness.state().session().revision(), revision);
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
     assert!(harness.query_by_label("Cancel").is_none());
 }
 
@@ -510,17 +551,17 @@ fn cancelling_changes_nothing() {
 #[test]
 fn rename_starts_from_the_current_name_and_can_be_undone() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     choose(&mut harness, "File", "Rename Project…");
-    assert_eq!(harness.get_by_label("Name").value().as_deref(), Some("blinky"));
+    assert_eq!(harness.get_by_label("Name").value().as_deref(), Some("Untitled"));
     harness.get_by_label("Name").type_text(" v2");
     harness.run();
     harness.get_by_label("OK").click();
     harness.run();
-    assert_eq!(harness.state().session().project().unwrap().name, "blinky v2");
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled v2");
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
-    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
 }
 
 #[test]
@@ -529,7 +570,7 @@ fn undo_and_redo_keys_match_kicad_and_do_nothing_when_there_is_nothing_to_do() {
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert_eq!(harness.state().session().revision(), 0);
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert!(harness.state().session().project().is_none());
@@ -541,11 +582,11 @@ fn undo_and_redo_keys_match_kicad_and_do_nothing_when_there_is_nothing_to_do() {
 #[test]
 fn typing_ctrl_z_in_a_name_field_does_not_undo_the_project() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     choose(&mut harness, "File", "Rename Project…");
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
-    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+    assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
 }
 
 /// The right-side app bar controls reach both dialogs and apply theme and scale changes.
@@ -714,7 +755,7 @@ fn grid_opacity_preference_steps_resets_and_cancels() {
 #[test]
 fn hiding_the_grid_keeps_snapping_and_leaves_the_project_untouched() {
     let mut harness = harness();
-    new_project(&mut harness, "faded");
+    new_project(&mut harness);
     let before = harness.state().session().snapshot().unwrap();
     let revision = harness.state().session().revision();
     let dirty = harness.state().files.dirty(&harness.state().session);
@@ -741,7 +782,7 @@ fn hiding_the_grid_keeps_snapping_and_leaves_the_project_untouched() {
 #[test]
 fn navigation_preferences_change_what_the_wheel_does() {
     let mut harness = harness();
-    new_project(&mut harness, "navigation");
+    new_project(&mut harness);
     let wheel = |harness: &mut Harness<'_, PcbApp>, modifiers| {
         harness.hover_at(canvas_center(harness));
         harness.run();
@@ -768,7 +809,7 @@ fn navigation_preferences_change_what_the_wheel_does() {
 #[test]
 fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     click(&mut harness, "Add symbol (A)");
     select_symbol(&mut harness, "Resistor");
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
@@ -777,7 +818,7 @@ fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     // A click near the center snaps to the schematic origin.
     click_canvas(&mut harness);
     let mut session = Session::default();
-    session.execute("project.new", &json!({"name": "blinky"})).unwrap();
+    session.execute("project.new", &Value::Null).unwrap();
     session.execute(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": 1})).unwrap();
     assert_equivalent_sessions(harness.state().session(), &session);
     click_canvas(&mut harness);
@@ -792,7 +833,7 @@ fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
 #[test]
 fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
     let mut harness = harness();
-    new_project(&mut harness, "blinky");
+    new_project(&mut harness);
     harness.key_press(Key::A);
     harness.run();
     harness.get_by_label("LED");
@@ -850,7 +891,7 @@ fn click_canvas_at(harness: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
 #[test]
 fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     let mut harness = harness();
-    new_project(&mut harness, "navigation");
+    new_project(&mut harness);
     let point = canvas_center(&harness) + egui::vec2(40.64, 0.0);
     harness.hover_at(point);
     harness.run();
@@ -882,7 +923,7 @@ fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
 #[test]
 fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
     let mut harness = harness();
-    new_project(&mut harness, "empty");
+    new_project(&mut harness);
     harness.hover_at(egui::pos2(600.0, 400.0));
     harness.run();
     harness.event(egui::Event::Zoom(2.0));
@@ -909,7 +950,7 @@ fn click_pin(harness: &mut Harness<'_, PcbApp>, symbol: usize, pin: usize) {
 
 /// Place a resistor and LED through the canvas so their exact terminal positions are known.
 fn wiring_project(harness: &mut Harness<'_, PcbApp>) {
-    new_project(harness, "wiring");
+    new_project(harness);
     click(harness, "Add symbol (A)");
     select_symbol(harness, "Resistor");
     click_canvas(harness);
@@ -955,7 +996,7 @@ fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
     let mut harness = harness();
     harness.set_size(egui::vec2(400.0, 600.0));
     harness.run();
-    new_project(&mut harness, "compact");
+    new_project(&mut harness);
     // The floating Browser would cover the narrow canvas where the parts go.
     click(&mut harness, "View");
     click(&mut harness, "Toggle Browser");
@@ -1015,7 +1056,7 @@ fn wiring_accepts_empty_space_and_escape_discards_the_preview() {
 #[test]
 fn the_parts_browser_searches_and_places_parts() {
     let mut harness = harness();
-    new_project(&mut harness, "parts");
+    new_project(&mut harness);
     assert!(harness.query_by_label("Move Parts library").is_none());
     harness.key_press(Key::A);
     harness.run();
@@ -1056,7 +1097,7 @@ fn the_parts_browser_searches_and_places_parts() {
 #[test]
 fn clicking_parts_and_cancelling_placement_keep_the_browser_visible() {
     let mut harness = harness();
-    new_project(&mut harness, "parts");
+    new_project(&mut harness);
     harness.key_press(Key::A);
     harness.run();
     click(&mut harness, "Parts library position");
@@ -1089,7 +1130,7 @@ fn clicking_parts_and_cancelling_placement_keep_the_browser_visible() {
 #[test]
 fn the_browser_leaves_escape_to_overlays_and_home() {
     let mut harness = harness();
-    new_project(&mut harness, "parts");
+    new_project(&mut harness);
     harness.key_press(Key::A);
     harness.run();
     click(&mut harness, "File");
@@ -1120,7 +1161,7 @@ fn the_browser_leaves_escape_to_overlays_and_home() {
 #[test]
 fn dragging_a_part_onto_the_sheet_places_it() {
     let mut harness = harness();
-    new_project(&mut harness, "drag");
+    new_project(&mut harness);
     harness.key_press(Key::A);
     harness.run();
     let from = harness.get_by_label("Capacitor").rect().center();
@@ -1186,7 +1227,7 @@ fn an_intervening_edit_cancels_a_browser_drag() {
 
 /// Place a resistor at the schematic origin, which sits at the canvas center.
 fn resistor_at_origin(harness: &mut Harness<'_, PcbApp>) {
-    new_project(harness, "edits");
+    new_project(harness);
     let revision = harness.state().session().revision();
     harness.state_mut().session.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": revision})).unwrap();
     harness.run();
@@ -1485,7 +1526,7 @@ mod live_mcp {
 #[test]
 fn placement_and_hover_rotation_use_one_shared_edit_each() {
     let mut harness = harness();
-    new_project(&mut harness, "Rotation");
+    new_project(&mut harness);
     click(&mut harness, "Add symbol (A)");
     select_symbol(&mut harness, "Resistor");
     let before = harness.state().session().inspect();
@@ -1521,7 +1562,7 @@ fn placement_and_hover_rotation_use_one_shared_edit_each() {
 #[test]
 fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
     let mut harness = harness();
-    new_project(&mut harness, "Free routes");
+    new_project(&mut harness);
     harness.key_press(Key::W);
     harness.run();
     click_canvas_offset(&mut harness, egui::vec2(-101.6, -101.6));
@@ -1569,7 +1610,7 @@ fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
 #[test]
 fn stale_or_cancelled_free_wire_drafts_never_commit() {
     let mut harness = harness();
-    new_project(&mut harness, "Stale route");
+    new_project(&mut harness);
     for stale in [false, true] {
         harness.key_press(Key::W);
         harness.run();
@@ -1596,7 +1637,7 @@ fn stale_or_cancelled_free_wire_drafts_never_commit() {
 #[test]
 fn ribbon_group_menus_run_their_actions() {
     let mut harness = harness();
-    new_project(&mut harness, "menus");
+    new_project(&mut harness);
     harness.get_by_label("Collapse Browser");
 
     click(&mut harness, "View");
