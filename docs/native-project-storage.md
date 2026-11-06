@@ -36,7 +36,8 @@ The browser uploads packed projects and legacy single-file projects and download
 `.pc.zip`. It cannot reconstruct a folder from an uploaded entry point alone.
 Download encoding runs in batches of 256 records and archive hashing/copying in
 256 KiB chunks, allowing the editor to yield between batches. The board-header
-phase also writes its bounded setup of at most 128 layers and 127 strata. A requested download
+phase also writes its bounded setup of at most 64 material revisions, 128 layers,
+127 strata and 256 nested prepreg plies. A requested download
 does not confirm a durable write and does not clear the editor's dirty state.
 
 ## Document ownership
@@ -45,7 +46,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/5` | Project UUID, name, ordered sheet list and shared components |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` | Sheet UUID, unit placements, junctions and wires |
-| `board.json` | `pcbcraft-board/1` or `/2` | Footprints linked to shared components; version 2 also requires layer/stackup setup |
+| `board.json` | `pcbcraft-board/1`, `/2` or `/3` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
@@ -68,10 +69,13 @@ sides; the profile has a UUID and front-to-back `strata`. Copper strata referenc
 catalog layer UUIDs, while dielectric strata own UUIDs and optional material
 names. Profile, layer and dielectric IDs must be non-nil and mutually unique.
 Catalog order is canonical UUID order; physical order belongs only to strata.
-The material name is descriptive text only: this version has no structured
-FR-4 product identity, Tg, core/prepreg role or multi-ply construction. The
-[material proposal](pcb-representation.md#materials-core-and-prepreg) records
-those next requirements and the need for an explicit schema migration.
+The legacy material name is descriptive text only. Material-aware setup uses
+version 3, which adds a project-local `materials` catalog, exact ID/revision
+references, sourced Tg and Dk/Df reports, core/prepreg construction, ordered plies
+and optional symmetric finished-gap tolerance. The [material contract](board-materials.md)
+defines field meanings, units and bounds. Unmodified version-2 projects retain
+their bytes and unknown construction; material-aware fields require version 3
+even when a field's collection is empty in the input.
 
 The current uniform rigid profile alternates copper and dielectric, with front
 and back copper at its ends and every catalog copper layer appearing once.
@@ -83,8 +87,10 @@ thicknesses cannot exceed 100,000,000 nm. Omission means unknown; explicit null
 is rejected. The derived laminate thickness remains unknown until all strata
 are specified, and is never stored as a second independently editable value.
 
-Version 1 refuses setup, and version 2 refuses missing setup. Unknown fields,
+Version 1 refuses setup, and versions 2/3 refuse missing setup. Unknown fields,
 purposes, references and unsupported versions fail before project adoption.
+Setup decoding preserves original JSON for typed validation, so duplicate keys
+are refused rather than overwritten while checking the version's vocabulary.
 Legacy single-document encoders refuse configured boards instead of losing
 their setup; ordinary folder/archive saves use the current split-document
 codecs. The [representation plan](pcb-representation.md) explains future regions,

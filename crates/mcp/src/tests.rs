@@ -109,6 +109,9 @@ fn board_setup_commands_are_discoverable_and_atomic() {
     let description = body(&call(&mut s, "describe_command", json!({"command":SET_BOARD_SETUP})));
     let schema = &description["params"]["properties"]["setup"];
     assert_eq!(schema["additionalProperties"], false);
+    let material_schema = &schema["properties"]["materials"]["items"]["properties"];
+    assert_eq!(material_schema["tg"]["items"]["properties"]["temperature_milli_c"]["type"], "integer");
+    assert_eq!(material_schema["dielectric"]["items"]["properties"]["frequency_hz"]["type"], "integer");
     assert_eq!(schema["properties"]["stackup"]["properties"]["strata"]["items"]["oneOf"][0]["properties"]["thickness_nm"]["type"], "integer");
     let created = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let initialized = body(&call(
@@ -118,11 +121,21 @@ fn board_setup_commands_are_discoverable_and_atomic() {
     ));
     let mut setup = initialized["project"]["board"]["setup"].clone();
     setup["stackup"]["strata"][1]["thickness_nm"] = json!(2_540_000);
+    let material = json!({"id":"00000000-0000-0000-0000-000000000101","revision":1});
+    setup["materials"] = json!([{"id":material["id"],"revision":1,"name":"Custom dielectric","family":"User-defined",
+        "dielectric":[{"dk_millionths":4200000,"frequency_hz":1000000000,"basis":"typical","source":{"document":"Synthetic source"}}]
+    }]);
+    setup["stackup"]["strata"][1]["construction"] = json!({"kind":"core","material":material});
     let params = json!({"setup":setup,"expected_revision":initialized["revision"]});
     let updated = body(&call(&mut s, "execute", json!({"command":SET_BOARD_SETUP,"params":params})));
     assert_eq!(updated["project"]["board"]["setup"]["stackup"]["strata"][1]["thickness_nm"], 2_540_000);
+    assert_eq!(updated["project"]["board"]["setup"]["materials"], setup["materials"]);
     let stale = call(&mut s, "execute", json!({"command":SET_BOARD_SETUP,"params":params}));
     assert_eq!(stale["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), updated);
+    setup["stackup"]["strata"][1]["construction"]["material"]["revision"] = json!(2);
+    let invalid = call(&mut s, "execute", json!({"command":SET_BOARD_SETUP,"params":{"setup":setup,"expected_revision":updated["revision"]}}));
+    assert_eq!(invalid["isError"], true);
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), updated);
     let undone = body(&call(&mut s, "execute", json!({"command":"edit.undo"})));
     assert_eq!(undone["project"], initialized["project"]);

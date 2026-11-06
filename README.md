@@ -298,8 +298,10 @@ first board milestone, including split and detached editor views, cross-probing,
 footprint mapping and reviewed schematic-to-board updates.
 The [PCB representation plan](docs/pcb-representation.md) records layer/stackup
 ownership, #75's unit contract and the proposed shared net/rule model. Its first
-engine slice supports validated setup commands, undo and native persistence;
-the setup UI, board canvas and rule resolver remain follow-up work.
+engine supports validated setup commands, custom materials, sourced Tg/Dk/Df
+reports, core/prepreg plies, undo and native persistence. The
+[material contract](docs/board-materials.md) documents these fields; the stackup
+UI, impedance estimator, board canvas and rule resolver remain follow-up work.
 
 ## Checks
 

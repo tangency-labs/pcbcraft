@@ -134,6 +134,11 @@ footprints, initialize with `copper_layers: 2` (or `4`) and the current
 `expected_revision`. Inspection returns `project.board.setup`; submit an edited
 copy with the current revision to rename layers or specify `thickness_nm`.
 Unspecified thickness stays unknown, and undo restores the previous setup.
+The same command accepts project-local custom material definitions, sourced Tg
+and Dk/Df reports, and core or ordered prepreg construction. Use the discovered
+schema and [material contract](board-materials.md) for the exact fields and units;
+material references pin both ID and revision. Updating a retained material
+definition requires a new revision and explicit reference changes.
 These are headless engine commands for now; there is no board setup dialog or
 live-editor permission for them yet. The [representation plan](pcb-representation.md)
 describes what follows this foundation.

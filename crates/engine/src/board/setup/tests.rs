@@ -289,7 +289,7 @@ fn versioned_storage_round_trips_without_silent_loss() {
     b["format"] = json!("pcbcraft-board/1");
     invalid.push(b);
     let mut b = board.clone();
-    b["format"] = json!("pcbcraft-board/3");
+    b["format"] = json!("pcbcraft-board/4");
     invalid.push(b);
     let mut b = board.clone();
     b.as_object_mut().unwrap().remove("setup");

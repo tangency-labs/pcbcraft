@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use super::materials::{self, Construction, Material};
 use crate::{CommandError, Session, fresh_id};
 
 #[cfg(test)]
@@ -53,7 +54,8 @@ pub struct Layer {
     pub side: Option<Side>,
 }
 
-/// Copper references a catalog layer; dielectric has its own identity and optional material.
+/// Copper references a catalog layer; dielectric has its own identity, legacy descriptive label,
+/// optional construction and finished thickness. Ply stock thickness is never added to this value.
 /// Omitted thickness is unknown. Zero is never an unspecified-thickness sentinel.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -67,6 +69,11 @@ pub enum Stratum {
         id: Uuid,
         #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
         material: Option<String>,
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        construction: Option<Construction>,
+        /// Symmetric tolerance on finished dielectric thickness; requires a specified thickness.
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        thickness_tolerance_nm: Option<i64>,
         #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
         thickness_nm: Option<i64>,
     },
@@ -102,6 +109,8 @@ pub struct Stackup {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "SetupRecords")]
 pub struct BoardSetup {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    materials: Vec<Material>,
     layers: Vec<Layer>,
     stackup: Stackup,
 }
@@ -109,6 +118,8 @@ pub struct BoardSetup {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SetupRecords {
+    #[serde(default)]
+    materials: Vec<Material>,
     layers: Vec<Layer>,
     stackup: Stackup,
 }
@@ -118,6 +129,7 @@ impl TryFrom<SetupRecords> for BoardSetup {
 
     /// Refuse malformed or unsupported constructions before creating an adoptable setup.
     fn try_from(mut records: SetupRecords) -> Result<Self, Self::Error> {
+        let material_keys = materials::validate_catalog(&mut records.materials)?;
         if !(2..=MAX_LAYERS).contains(&records.layers.len()) {
             return Err(format!("board setup requires 2 to {MAX_LAYERS} layers"));
         }
@@ -150,6 +162,7 @@ impl TryFrom<SetupRecords> for BoardSetup {
             }
         }
         let mut copper = BTreeSet::new();
+        let mut ply_count = 0;
         let mut known_thickness = 0_i64;
         for (index, stratum) in records.stackup.strata.iter().enumerate() {
             if let Some(thickness) = stratum.thickness_nm() {
@@ -179,10 +192,25 @@ impl TryFrom<SetupRecords> for BoardSetup {
                         return Err("copper surface sides must agree with front-to-back physical stack order".to_owned());
                     }
                 }
-                Stratum::Dielectric { id, material, .. } if index % 2 == 1 => {
+                Stratum::Dielectric { id, material, construction, thickness_nm, thickness_tolerance_nm } if index % 2 == 1 => {
                     unique_id(&mut ids, *id)?;
                     if let Some(material) = material {
                         valid_text("dielectric material", material)?;
+                    }
+                    if let Some(tolerance) = thickness_tolerance_nm
+                        && (*tolerance < 0
+                            || !thickness_nm.is_some_and(|thickness| *tolerance < thickness && *tolerance <= MAX_THICKNESS_NM - thickness))
+                    {
+                        return Err(
+                            "dielectric tolerance requires a specified thickness with positive lower and at most 100 mm upper bounds".to_owned()
+                        );
+                    }
+                    if let Some(construction) = construction {
+                        construction.validate(&material_keys)?;
+                        for id in construction.ply_ids() {
+                            unique_id(&mut ids, id)?;
+                            ply_count += 1;
+                        }
                     }
                 }
                 _ => return Err("rigid stackup must alternate copper and dielectric strata".to_owned()),
@@ -191,15 +219,31 @@ impl TryFrom<SetupRecords> for BoardSetup {
         if known_thickness > MAX_THICKNESS_NM {
             return Err("specified stackup thickness exceeds 100 mm".to_owned());
         }
+        if ply_count > materials::MAX_TOTAL_PLIES {
+            return Err(format!("board setup supports at most {} prepreg plies", materials::MAX_TOTAL_PLIES));
+        }
         if records.layers.iter().filter(|layer| layer.purpose == LayerPurpose::Copper).count() != copper.len() {
             return Err("every copper layer must occur in the stackup".to_owned());
         }
         records.layers.sort_unstable_by_key(|layer| layer.id);
-        Ok(Self { layers: records.layers, stackup: records.stackup })
+        Ok(Self { materials: records.materials, layers: records.layers, stackup: records.stackup })
     }
 }
 
 impl BoardSetup {
+    /// Embedded material revisions in canonical ID/revision order, available without a source library.
+    pub fn materials(&self) -> &[Material] {
+        &self.materials
+    }
+
+    /// Whether saving needs the material-aware board format instead of the legacy layer-only format.
+    pub(crate) fn requires_material_format(&self) -> bool {
+        !self.materials.is_empty()
+            || self.stackup.strata.iter().any(|stratum| {
+                matches!(stratum, Stratum::Dielectric { construction: Some(_), .. } | Stratum::Dielectric { thickness_tolerance_nm: Some(_), .. })
+            })
+    }
+
     /// The layer catalog in stable ID order, independent of names and stack order.
     pub fn layers(&self) -> &[Layer] {
         &self.layers
@@ -236,7 +280,13 @@ impl BoardSetup {
             layers.push(Layer { id, name, purpose: LayerPurpose::Copper, side });
             strata.push(Stratum::Copper { layer: id, thickness_nm: None });
             if index + 1 < copper_layers {
-                strata.push(Stratum::Dielectric { id: fresh_id()?, material: None, thickness_nm: None });
+                strata.push(Stratum::Dielectric {
+                    id: fresh_id()?,
+                    material: None,
+                    construction: None,
+                    thickness_tolerance_nm: None,
+                    thickness_nm: None,
+                });
             }
         }
         for (side, prefix) in [(Side::Front, "Front"), (Side::Back, "Back")] {
@@ -251,7 +301,8 @@ impl BoardSetup {
             }
         }
         layers.push(Layer { id: fresh_id()?, name: "Board outline".to_owned(), purpose: LayerPurpose::Outline, side: None });
-        Self::try_from(SetupRecords { layers, stackup: Stackup { id: fresh_id()?, strata } }).map_err(CommandError::InvalidParams)
+        Self::try_from(SetupRecords { materials: Vec::new(), layers, stackup: Stackup { id: fresh_id()?, strata } })
+            .map_err(CommandError::InvalidParams)
     }
 
     /// Require identical layer roles and stratum membership for edits on today's populated board.
@@ -270,6 +321,7 @@ impl BoardSetup {
         let name = json!({"type":"string", "minLength":1, "maxLength":MAX_NAME});
         let thickness = json!({"type":"integer", "minimum":1, "maximum":MAX_THICKNESS_NM});
         json!({"type":"object", "additionalProperties":false, "required":["layers","stackup"], "properties": {
+            "materials":materials::schema::catalog(),
             "layers":{"type":"array", "minItems":2, "maxItems":MAX_LAYERS, "items":{
                 "type":"object", "additionalProperties":false, "required":["id","name","purpose"], "properties":{
                     "id":id, "name":name, "purpose":{"type":"string", "enum":["copper","mask","paste","silkscreen","adhesive","fabrication","courtyard","outline","mechanical","user"]},
@@ -282,7 +334,9 @@ impl BoardSetup {
                         "kind":{"const":"copper"}, "layer":id, "thickness_nm":thickness
                     }},
                     {"type":"object", "additionalProperties":false, "required":["kind","id"], "properties":{
-                        "kind":{"const":"dielectric"}, "id":id, "material":name, "thickness_nm":thickness
+                        "kind":{"const":"dielectric"}, "id":id, "material":name, "thickness_nm":thickness,
+                        "construction":materials::schema::construction(),
+                        "thickness_tolerance_nm":{"type":"integer","minimum":0,"maximum":MAX_THICKNESS_NM}
                     }}
                 ]}}
             }}
@@ -314,6 +368,7 @@ impl Session {
     /// Validate the entire candidate before one atomic edit. Renames and thickness/material
     /// edits preserve identity; populated boards reject structural changes until bindings exist.
     /// Catalog reordering alone is a no-op and does not advance revision or clear redo.
+    /// Existing pinned material revisions cannot be rewritten; use a new revision and explicit references.
     pub(crate) fn set_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let setup: BoardSetup = serde_json::from_value(params["setup"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
@@ -321,6 +376,13 @@ impl Session {
         let before = project.board.setup.as_ref().ok_or_else(|| CommandError::Unavailable("initialize board setup first".to_owned()))?;
         if before.stackup.id != setup.stackup.id {
             return Err(CommandError::InvalidParams("editing board setup must retain its stackup profile ID".to_owned()));
+        }
+        for material in &setup.materials {
+            if before.materials.iter().any(|old| old.reference() == material.reference() && old != material) {
+                return Err(CommandError::InvalidParams(
+                    "changing a pinned material requires a new revision and explicit reference updates".to_owned(),
+                ));
+            }
         }
         if !project.board.footprints().is_empty() && !before.same_topology(&setup) {
             return Err(CommandError::Unavailable(
@@ -336,7 +398,7 @@ impl Session {
     }
 }
 
-/// Keep IDs unique across layers, dielectrics and the profile; nil is never an authored identity.
+/// Keep IDs unique across layers, dielectrics, prepreg plies and the profile; nil is never authored.
 fn unique_id(ids: &mut BTreeSet<Uuid>, id: Uuid) -> Result<(), String> {
     if id.is_nil() || !ids.insert(id) { Err("board setup IDs must be non-nil and unique".to_owned()) } else { Ok(()) }
 }

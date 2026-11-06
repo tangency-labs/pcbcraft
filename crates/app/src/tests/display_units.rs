@@ -90,7 +90,7 @@ fn switching_units_never_touches_the_project() {
 }
 
 /// Mixed-unit stackup lengths enter canonical commands; switching display units preserves
-/// their exact values, connectivity, saved bytes, dirty state and the pending redo step.
+/// their exact values, material reports, connectivity, saved bytes, dirty state and pending redo.
 #[test]
 fn board_setup_survives_unit_switching_without_an_electrical_edit() {
     use pcbcraft_chrome::units::parse_length;
@@ -103,6 +103,15 @@ fn board_setup_survives_unit_switching_without_an_electrical_edit() {
     let thickness = parse_length("100 mil", Unit::Mm).unwrap();
     assert_eq!(thickness, parse_length("2.54 mm", Unit::Mil).unwrap());
     setup["stackup"]["strata"][1]["thickness_nm"] = json!(thickness);
+    let material = json!({"id":"00000000-0000-0000-0000-000000000101","revision":1});
+    setup["materials"] = json!([{"id":material["id"],"revision":1,"name":"User material",
+        "tg":[{"temperature_milli_c":160125,"method":"dsc","basis":"typical","source":{"document":"Synthetic source"}}],
+        "dielectric":[{"dk_millionths":4200000,"df_millionths":15000,"frequency_hz":1000000000,"basis":"typical","source":{"document":"Synthetic source"}}]
+    }]);
+    setup["stackup"]["strata"][1]["construction"] = json!({"kind":"prepreg","plies":[{
+        "id":"00000000-0000-0000-0000-000000000201","material":material,"resin_content_ppm":550000,
+        "nominal_thickness_nm":parse_length("4 mil", Unit::Mm).unwrap()
+    }]});
     let revision = h.state().session.revision();
     h.state_mut().run(SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":revision}));
     h.state_mut().run("project.rename", &json!({"name":"An undoable rename"}));
@@ -111,6 +120,8 @@ fn board_setup_survives_unit_switching_without_an_electrical_edit() {
     let snapshot = h.state().session.snapshot().unwrap();
     let inspected = h.state().session.inspect();
     assert_eq!(inspected["project"]["board"]["setup"]["stackup"]["strata"][1]["thickness_nm"], json!(2_540_000));
+    assert_eq!(inspected["project"]["board"]["setup"]["materials"], setup["materials"]);
+    assert_eq!(inspected["project"]["board"]["setup"]["stackup"]["strata"][1]["construction"], setup["stackup"]["strata"][1]["construction"]);
     let dirty = h.state().files.dirty(&h.state().session);
     let documents = encode_documents(snapshot.clone()).unwrap();
     for _ in 0..5 {

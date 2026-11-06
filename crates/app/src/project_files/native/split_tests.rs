@@ -517,6 +517,47 @@ fn headless_and_desktop_read_the_same_split_project() {
     }
 }
 
+/// Material-aware folders and archives use the real native open/save paths without external
+/// libraries, and a failed save cannot clear dirty state or replace the saved baseline.
+#[test]
+fn material_setup_survives_native_folder_and_archive_saves() {
+    use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, SET_BOARD_SETUP};
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = session();
+    apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    let mut setup = s.inspect()["project"]["board"]["setup"].clone();
+    let material = json!({"id":"00000000-0000-0000-0000-000000000101","revision":1});
+    setup["materials"] = json!([{"id":material["id"],"revision":1,"name":"User dielectric","family":"Custom composite",
+        "dielectric":[{"dk_millionths":4200000,"frequency_hz":1000000000,"basis":"typical","source":{"document":"Synthetic source"}}]
+    }]);
+    setup["stackup"]["strata"][1]["construction"] = json!({"kind":"core","material":material});
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":setup}));
+    let snapshot = s.snapshot().unwrap();
+    let documents = encode_documents(snapshot.clone()).unwrap();
+    let root = dir.path().join("material-board");
+    let archive = dir.path().join("material-board.pc.zip");
+    folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+    fs::write(&archive, encode_packed(snapshot.clone()).unwrap()).unwrap();
+    for path in [&root, &archive] {
+        let loaded = load(path).unwrap();
+        assert_eq!(encode_documents(loaded.snapshot.clone()).unwrap(), documents);
+        let outcome = save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target.clone(), &mut |_| Ok(())).unwrap();
+        let mut files = ProjectFiles::default();
+        s.open_snapshot(loaded.snapshot.clone());
+        complete(&mut files, &mut s, Ok(outcome));
+        assert!(!files.dirty(&s));
+        assert_eq!(encode_documents(load(path).unwrap().snapshot).unwrap(), documents);
+        let mut edited = setup.clone();
+        edited["stackup"]["strata"][1]["thickness_nm"] = json!(1500000);
+        apply(&mut s, SET_BOARD_SETUP, json!({"setup":edited}));
+        let failed = save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Err("Interrupted before publish".to_owned()));
+        assert!(failed.is_err());
+        complete(&mut files, &mut s, failed);
+        assert!(files.dirty(&s));
+        assert_eq!(encode_documents(load(path).unwrap().snapshot).unwrap(), documents);
+    }
+}
+
 /// Recovery may briefly see both old and new symbol files, exceeding the final project's
 /// total limit. It must still finish deleting the obsolete copy before validating the result.
 #[test]
