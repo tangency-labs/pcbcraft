@@ -25,6 +25,12 @@ allow = [
     "Zlib",
 ]
 
+# Mozilla's root certificate list, as data, for HTTPS to the Assistant's model endpoints
+# (through rustls-platform-verifier). SolidCraft ships the same crate. Only this crate may use it.
+[[licenses.exceptions]]
+crate = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
+
 [licenses.private]
 ignore = true
 

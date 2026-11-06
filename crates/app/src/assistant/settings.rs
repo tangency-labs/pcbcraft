@@ -2,9 +2,13 @@
 //! (`crates/ui-egui/src/agent_chat/settings.rs`, see `ATTRIBUTION.md`): the master switch, the
 //! permission mode, the agents found and added (each with Test, Default, its own permission mode
 //! and, for added ones, Edit and Remove), the agents not installed with their install command,
-//! and the panel. Endpoint agents (OpenAI- or Anthropic-compatible) are not offered yet.
+//! and the panel. Model endpoints (OpenAI- or Anthropic-compatible) are added with a base URL,
+//! model and optional key; the key goes to the system keychain, never to these settings.
 
-use craft_agents::agents::{self, AgentConfig, AgentPrefs, Kind, Mode};
+use craft_agents::{
+    agents::{self, AgentConfig, AgentPrefs, Kind, Mode},
+    backend::Secrets,
+};
 use egui::{Context, Ui};
 use pcbcraft_chrome::{
     Tokens,
@@ -40,18 +44,17 @@ impl Default for Settings {
 
 impl Settings {
     /// Restore saved settings. Settings from the earlier one-shot Assistant load as defaults,
-    /// and added agents that can't start (no name or command, an endpoint kind, a duplicate id,
-    /// too many) are dropped.
+    /// and added agents that can't start (no name, no command for an ACP agent, an unusable URL
+    /// or no model for an endpoint, a duplicate id, too many) are dropped.
     pub(super) fn load(saved: Option<&str>) -> Self {
         let mut settings = saved.and_then(|text| serde_json::from_str::<Self>(text).ok()).unwrap_or_default();
         let mut seen = std::collections::BTreeSet::new();
         settings.agents.agents.retain(|agent| {
-            agent.kind == Kind::Acp
-                && !agent.id.trim().is_empty()
-                && !agent.name.trim().is_empty()
-                && valid_command(&agent.command)
-                && seen.len() < MAX_AGENTS
-                && seen.insert(agent.id.clone())
+            let usable = match agent.kind {
+                Kind::Acp => valid_command(&agent.command),
+                Kind::Api | Kind::Anthropic => agents::normalize_url(&agent.base_url).is_ok() && valid_model(&agent.model),
+            };
+            usable && !agent.id.trim().is_empty() && !agent.name.trim().is_empty() && seen.len() < MAX_AGENTS && seen.insert(agent.id.clone())
         });
         settings
     }
@@ -63,20 +66,43 @@ fn valid_command(command: &str) -> bool {
     command.len() <= MAX_COMMAND && !command.chars().any(char::is_control) && !craft_agents::acp::split_command(command).is_empty()
 }
 
+/// A model name an endpoint takes: present, bounded, no control characters.
+fn valid_model(model: &str) -> bool {
+    craft_agents::model_id_valid(model.trim())
+}
+
 /// A request from the Assistant dropdown or the AI preferences page.
 #[derive(Debug)]
 pub(crate) enum Request {
     Settings,
-    Add(Form),
+    Add(Box<Form>),
 }
 
-/// The Add or Edit agent form: a name and the command that starts an ACP agent.
-#[derive(Debug, Default)]
+/// The Add or Edit agent form: an ACP agent's name and command, or an endpoint's.
+#[derive(Default)]
 pub(crate) struct Form {
     editing: Option<String>,
+    kind: Kind,
     name: String,
     command: String,
+    base_url: String,
+    model: String,
+    /// A new key typed in; empty keeps a stored one. Never saved in settings.
+    key: String,
+    /// Remove the stored key on save.
+    forget_key: bool,
+    /// The endpoint has a key in the keychain.
+    key_stored: bool,
+    timeout_s: u64,
+    effort: String,
     error: Option<String>,
+}
+
+impl std::fmt::Debug for Form {
+    /// Describe the form without a key that may have been typed into it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Form").field("editing", &self.editing).field("kind", &self.kind).field("name", &self.name).finish_non_exhaustive()
+    }
 }
 
 impl Assistant {
@@ -113,7 +139,7 @@ impl Assistant {
             ui.horizontal(|ui| {
                 ui.strong("Agents");
                 if ui.add_enabled(self.settings.agents.agents.len() < MAX_AGENTS, egui::Button::new("Add agent…")).clicked() {
-                    request = Some(Request::Add(Form::default()));
+                    request = Some(Request::Add(Box::default()));
                 }
                 if ui.add_enabled(self.detecting.is_none(), egui::Button::new("Refresh")).on_hover_text("Look for installed agents again").clicked() {
                     self.detect(ui.ctx());
@@ -212,10 +238,21 @@ impl Assistant {
                 self.settings_changed = true;
             }
             if !entry.found {
-                if ui.button("Edit").clicked() {
-                    let command =
-                        self.settings.agents.agents.iter().find(|agent| agent.id == entry.id).map(|agent| agent.command.clone()).unwrap_or_default();
-                    *request = Some(Request::Add(Form { editing: Some(entry.id.clone()), name: entry.name.clone(), command, error: None }));
+                if ui.button("Edit").clicked()
+                    && let Some(agent) = self.settings.agents.agents.iter().find(|agent| agent.id == entry.id)
+                {
+                    *request = Some(Request::Add(Box::new(Form {
+                        editing: Some(agent.id.clone()),
+                        kind: agent.kind,
+                        name: agent.name.clone(),
+                        command: agent.command.clone(),
+                        base_url: agent.base_url.clone(),
+                        model: agent.model.clone(),
+                        key_stored: agent.key,
+                        timeout_s: agent.request_timeout_s,
+                        effort: agent.reasoning_effort.clone(),
+                        ..Form::default()
+                    })));
                 }
                 if ui.button("Remove").clicked() {
                     self.remove_agent(&entry.id);
@@ -236,8 +273,13 @@ impl Assistant {
         ui.add_space(Tokens::get().space_6);
     }
 
-    /// Forget an added agent and everything remembered for it.
+    /// Forget an added agent, its stored key and everything remembered for it.
     fn remove_agent(&mut self, id: &str) {
+        if self.settings.agents.agents.iter().any(|agent| agent.id == id && agent.key)
+            && let Err(error) = super::host::Keychain.delete(id)
+        {
+            self.test_results.insert(id.to_owned(), Err(format!("The key stays in the keychain: {error}")));
+        }
         let prefs = &mut self.settings.agents;
         prefs.agents.retain(|agent| agent.id != id);
         prefs.agent_permissions.remove(id);
@@ -253,24 +295,96 @@ impl Assistant {
         self.settings_changed = true;
     }
 
-    /// Draw the add/edit dialog and save only a valid agent.
+    /// Draw the add/edit dialog and save only a valid agent: an ACP agent by its command line,
+    /// or a model endpoint by protocol, base URL, model and an optional key.
     pub(crate) fn agent_dialog(&mut self, ctx: &Context, form: &mut Form) -> bool {
+        if form.timeout_s == 0 {
+            form.timeout_s = agents::DEFAULT_REQUEST_TIMEOUT_S;
+        }
         let mut done = false;
         let title = if form.editing.is_some() { "Edit agent" } else { "Add agent" };
         let closing = shell::dialog(ctx, "assistant_agent_dialog", title, |ui| {
             let t = Tokens::get();
+            if form.editing.is_none() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut form.kind, Kind::Acp, "Agent command");
+                    ui.selectable_value(&mut form.kind, Kind::Api, "OpenAI-compatible endpoint");
+                    ui.selectable_value(&mut form.kind, Kind::Anthropic, "Anthropic-compatible endpoint");
+                });
+                if let Some(protocol) = form.kind.protocol() {
+                    ui.horizontal_wrapped(|ui| {
+                        for preset in agents::presets(protocol) {
+                            if ui.small_button(preset.name).on_hover_text(preset.base_url).clicked() {
+                                form.name = preset.name.to_owned();
+                                form.base_url = preset.base_url.to_owned();
+                            }
+                        }
+                    });
+                }
+                ui.separator();
+            }
             let field_width = (ui.available_width() - t.space_24 * 4.0).clamp(160.0, 320.0);
             egui::Grid::new("assistant_agent_form").num_columns(2).spacing([t.space_12, t.space_8]).show(ui, |ui| {
                 let name_label = ui.label("Name");
                 ui.add(egui::TextEdit::singleline(&mut form.name).char_limit(64).desired_width(field_width).hint_text("My agent"))
                     .labelled_by(name_label.id);
                 ui.end_row();
-                let command_label = ui.label("Command");
-                ui.add(egui::TextEdit::singleline(&mut form.command).char_limit(MAX_COMMAND).desired_width(field_width).hint_text("opencode acp"))
+                if form.kind == Kind::Acp {
+                    let command_label = ui.label("Command");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.command).char_limit(MAX_COMMAND).desired_width(field_width).hint_text("opencode acp"),
+                    )
                     .labelled_by(command_label.id);
-                ui.end_row();
+                    ui.end_row();
+                } else {
+                    let url_label = ui.label("Base URL");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.base_url)
+                            .char_limit(2048)
+                            .desired_width(field_width)
+                            .hint_text("http://localhost:11434/v1"),
+                    )
+                    .labelled_by(url_label.id);
+                    ui.end_row();
+                    let model_label = ui.label("Model");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.model)
+                            .char_limit(craft_agents::MODEL_ID_CAP)
+                            .desired_width(field_width)
+                            .hint_text("qwen3"),
+                    )
+                    .labelled_by(model_label.id);
+                    ui.end_row();
+                    let key_label = ui.label("Key");
+                    let hint = if form.key_stored && !form.forget_key { "Stored in the keychain" } else { "Optional" };
+                    ui.add(egui::TextEdit::singleline(&mut form.key).password(true).char_limit(4096).desired_width(field_width).hint_text(hint))
+                        .labelled_by(key_label.id);
+                    ui.end_row();
+                    let timeout_label = ui.label("Request timeout (s)");
+                    ui.add(egui::DragValue::new(&mut form.timeout_s).range(agents::MIN_REQUEST_TIMEOUT_S..=agents::MAX_REQUEST_TIMEOUT_S))
+                        .labelled_by(timeout_label.id);
+                    ui.end_row();
+                    let effort_label = ui.label("Reasoning effort");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut form.effort)
+                            .char_limit(agents::MAX_REASONING_EFFORT_LEN)
+                            .desired_width(field_width)
+                            .hint_text("Provider default"),
+                    )
+                    .labelled_by(effort_label.id);
+                    ui.end_row();
+                }
             });
-            ui.label(dim("A program that speaks the Agent Client Protocol, with its arguments. It runs without a shell."));
+            if form.kind == Kind::Acp {
+                ui.label(dim("A program that speaks the Agent Client Protocol, with its arguments. It runs without a shell."));
+            } else {
+                ui.label(dim(
+                    "PCBCraft runs the conversation itself and gives the model the project tools. A key is kept in the system keychain and only sent over HTTPS or to this computer.",
+                ));
+                if form.key_stored {
+                    ui.checkbox(&mut form.forget_key, "Remove the stored key");
+                }
+            }
             if let Some(error) = &form.error {
                 ui.label(shell::error(error));
             }
@@ -280,7 +394,7 @@ impl Assistant {
                 } else if ui.button(if form.editing.is_some() { "Save" } else { "Add" }).clicked() {
                     match self.save_agent(form) {
                         Ok(()) => done = true,
-                        Err(error) => form.error = Some(error.to_owned()),
+                        Err(error) => form.error = Some(error),
                     }
                 }
             });
@@ -288,37 +402,62 @@ impl Assistant {
         closing || done
     }
 
-    /// Store the agent under a stable id. Editing the connected agent's command disconnects it.
-    fn save_agent(&mut self, form: &Form) -> Result<(), &'static str> {
-        let name = form.name.trim();
-        let command = form.command.trim();
+    /// Store the agent under a stable id, and an endpoint's new key in the keychain. Changing
+    /// what the connected agent starts or calls disconnects it. Nothing is saved on an error.
+    fn save_agent(&mut self, form: &mut Form) -> Result<(), String> {
+        let name = form.name.trim().to_owned();
         if name.is_empty() {
-            return Err("Enter a name for this agent.");
+            return Err("Enter a name for this agent.".to_owned());
         }
-        if !valid_command(command) {
-            return Err("Enter the command that starts the agent.");
+        if self.entries().iter().any(|entry| Some(&entry.id) != form.editing.as_ref() && entry.name.eq_ignore_ascii_case(&name)) {
+            return Err("An agent already uses this name.".to_owned());
         }
-        if self.entries().iter().any(|entry| Some(&entry.id) != form.editing.as_ref() && entry.name.eq_ignore_ascii_case(name)) {
-            return Err("An agent already uses this name.");
+        let mut agent = AgentConfig { name, kind: form.kind, ..AgentConfig::default() };
+        if form.kind == Kind::Acp {
+            agent.command = form.command.trim().to_owned();
+            if !valid_command(&agent.command) {
+                return Err("Enter the command that starts the agent.".to_owned());
+            }
+        } else {
+            agent.base_url = agents::normalize_url(&form.base_url)?;
+            agent.model = form.model.trim().to_owned();
+            if !valid_model(&agent.model) {
+                return Err("Enter the model name.".to_owned());
+            }
+            agent.request_timeout_s = form.timeout_s.clamp(agents::MIN_REQUEST_TIMEOUT_S, agents::MAX_REQUEST_TIMEOUT_S);
+            agent.reasoning_effort = agents::reasoning_effort(&form.effort);
+            agent.key = (form.key_stored && !form.forget_key) || !form.key.trim().is_empty();
+            if agent.key && !agents::key_safe_for(&agent.base_url) {
+                return Err("A key is only sent over HTTPS, or to this computer.".to_owned());
+            }
         }
-        let connected = self.chat.agent.as_ref().map(|agent| agent.id.clone());
+        if form.editing.is_none() && self.settings.agents.agents.len() >= MAX_AGENTS {
+            return Err("The agent list is full.".to_owned());
+        }
+        let prefix = if form.kind == Kind::Acp { "custom" } else { "api" };
+        agent.id = form.editing.clone().unwrap_or_else(|| agents::new_id(&self.settings.agents, prefix));
+        let key = std::mem::take(&mut form.key);
+        let key = key.trim();
+        if form.kind != Kind::Acp && !key.is_empty() {
+            super::host::Keychain.set(&agent.id, key).map_err(|error| format!("Could not store the key in the keychain: {error}"))?;
+        } else if form.forget_key {
+            super::host::Keychain.delete(&agent.id).map_err(|error| format!("Could not remove the key from the keychain: {error}"))?;
+        }
+        let connected = self.chat.agent.as_ref().is_some_and(|connected| connected.id == agent.id);
         let prefs = &mut self.settings.agents;
-        let editing = form.editing.as_ref().and_then(|id| prefs.agents.iter().position(|agent| &agent.id == id));
-        match editing {
-            Some(index) => {
-                let agent = &mut prefs.agents[index];
-                let restart = agent.command != command;
-                agent.name = name.to_owned();
-                agent.command = command.to_owned();
-                if restart && connected.as_ref() == form.editing.as_ref() {
+        match prefs.agents.iter_mut().find(|existing| existing.id == agent.id) {
+            Some(existing) => {
+                let restart = existing.command != agent.command
+                    || existing.base_url != agent.base_url
+                    || existing.model != agent.model
+                    || existing.key != agent.key
+                    || !key.is_empty();
+                *existing = agent;
+                if restart && connected {
                     self.chat.disconnect();
                 }
             }
-            None if prefs.agents.len() >= MAX_AGENTS => return Err("The agent list is full."),
-            None => {
-                let id = agents::new_id(prefs, "custom");
-                prefs.agents.push(AgentConfig { id, name: name.to_owned(), kind: Kind::Acp, command: command.to_owned(), ..AgentConfig::default() });
-            }
+            None => prefs.agents.push(agent),
         }
         self.settings_changed = true;
         Ok(())
@@ -342,10 +481,51 @@ mod tests {
             {"id":"custom-1","name":"Duplicate","kind":"acp","command":"x"},
             {"id":"custom-2","name":"","kind":"acp","command":"x"},
             {"id":"api-1","name":"Endpoint","kind":"api","base_url":"http://localhost:11434/v1","model":"m"},
-            {"id":"custom-3","name":"Bad","kind":"acp","command":"a\u0007b"}
+            {"id":"custom-3","name":"Bad","kind":"acp","command":"a\u0007b"},
+            {"id":"api-2","name":"No model","kind":"api","base_url":"http://localhost:1234/v1","model":""},
+            {"id":"api-3","name":"Bad URL","kind":"anthropic","base_url":"ftp://x","model":"m"}
         ],"ai_permissions":"ask"}}"#;
         let settings = Settings::load(Some(saved));
-        assert_eq!(settings.agents.agents.iter().map(|agent| agent.id.as_str()).collect::<Vec<_>>(), ["custom-1"]);
+        assert_eq!(settings.agents.agents.iter().map(|agent| agent.id.as_str()).collect::<Vec<_>>(), ["custom-1", "api-1"]);
         assert_eq!(settings.agents.ai_permissions, Mode::Ask);
+    }
+
+    /// An endpoint saves without a key; a key for a plain-HTTP remote endpoint is refused before
+    /// the keychain is touched, and nothing is saved.
+    #[test]
+    fn endpoint_keys_only_go_over_https_or_to_this_computer() {
+        let mut assistant = Assistant::default();
+        let mut form = Form {
+            kind: Kind::Api,
+            name: "Local".to_owned(),
+            base_url: "http://localhost:11434/v1/".to_owned(),
+            model: "qwen3".to_owned(),
+            timeout_s: 120,
+            ..Form::default()
+        };
+        assert_eq!(assistant.save_agent(&mut form), Ok(()));
+        let saved = &assistant.settings.agents.agents[0];
+        assert_eq!((saved.id.as_str(), saved.base_url.as_str(), saved.key), ("api-1", "http://localhost:11434/v1", false));
+
+        let mut remote = Form {
+            kind: Kind::Api,
+            name: "Remote".to_owned(),
+            base_url: "http://example.com/v1".to_owned(),
+            model: "m".to_owned(),
+            key: "secret".to_owned(),
+            ..Form::default()
+        };
+        assert_eq!(assistant.save_agent(&mut remote), Err("A key is only sent over HTTPS, or to this computer.".to_owned()));
+        assert_eq!(assistant.settings.agents.agents.len(), 1, "nothing was saved");
+        let mut missing =
+            Form { kind: Kind::Anthropic, name: "No model".to_owned(), base_url: "https://api.anthropic.com/v1".to_owned(), ..Form::default() };
+        assert!(assistant.save_agent(&mut missing).is_err());
+    }
+
+    /// A typed key never shows in debug output.
+    #[test]
+    fn a_typed_key_stays_out_of_debug_output() {
+        let form = Form { key: "sk-secret".to_owned(), name: "Remote".to_owned(), ..Form::default() };
+        assert!(!format!("{form:?}").contains("sk-secret"));
     }
 }

@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use craft_agents::backend::Secrets as _;
 use craft_agents::{
     acp::{self, McpBridge, ModelInfo},
     agents::{Entry, Mode},
@@ -162,14 +163,23 @@ impl Drop for Chat {
 }
 
 impl Chat {
-    /// Start `entry` as an ACP agent with a fresh endpoint and working folder. The bridge needs
+    /// Start `entry` with a fresh endpoint and working folder: an ACP agent as a child process,
+    /// or a model endpoint that PCBCraft talks to itself with its stored key. The bridge needs
     /// `pcbcraft-cli` beside the app; without it the agent can talk but not reach the project.
     pub(super) fn connect(&mut self, ctx: &egui::Context, entry: Entry) {
         self.disconnect();
-        if entry.kind.is_api() {
-            self.state = State::Failed("Model endpoints are not supported yet. Use an installed agent.".to_owned());
-            return;
-        }
+        let key = match (entry.kind.is_api() && entry.key).then(|| super::host::Keychain.get(&entry.id)) {
+            None => None,
+            Some(Ok(Some(key))) => Some(key),
+            Some(Ok(None)) => {
+                self.state = State::Failed("No key is stored for this endpoint. Edit it in Preferences › AI to add one.".to_owned());
+                return;
+            }
+            Some(Err(error)) => {
+                self.state = State::Failed(format!("Could not read the key from the keychain: {error}"));
+                return;
+            }
+        };
         let workdir = match tempfile::Builder::new().prefix("pcbcraft-agent-").tempdir() {
             Ok(dir) => dir,
             Err(error) => {
@@ -185,9 +195,25 @@ impl Chat {
         }
         let wake_ctx = ctx.clone();
         let start = StartContext { cwd: workdir.path().to_path_buf(), bridge, tools: None, wake: Box::new(move || wake_ctx.request_repaint()) };
-        match craft_agents::acp_client::AcpBackend::start(&entry.argv, start) {
+        let started: Result<Box<dyn ChatBackend>, String> = match entry.kind.protocol() {
+            None => craft_agents::acp_client::AcpBackend::start(&entry.argv, start).map(|backend| Box::new(backend) as Box<dyn ChatBackend>),
+            Some(protocol) => {
+                let config = craft_agents::api_client::ApiConfig {
+                    name: entry.name.clone(),
+                    protocol,
+                    base_url: entry.base_url.clone(),
+                    model: entry.model.clone(),
+                    key,
+                    http: std::sync::Arc::new(super::host::http),
+                    request_timeout_s: entry.request_timeout_s,
+                    reasoning_effort: entry.reasoning_effort.clone(),
+                };
+                craft_agents::api_client::ApiBackend::start(config, start).map(|backend| Box::new(backend) as Box<dyn ChatBackend>)
+            }
+        };
+        match started {
             Ok(backend) => {
-                self.attach(Box::new(backend), entry);
+                self.attach(backend, entry);
                 self.control = control;
                 self.workdir = Some(workdir);
             }

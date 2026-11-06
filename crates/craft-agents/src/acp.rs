@@ -200,12 +200,22 @@ impl std::fmt::Debug for McpBridge {
 }
 
 impl McpBridge {
+    /// The bridge's arguments after its program: `mcp --connect PORT`.
+    pub fn args(&self) -> Vec<String> {
+        vec!["mcp".to_owned(), "--connect".to_owned(), self.port.to_string()]
+    }
+
+    /// The bridge's environment: the endpoint's credential and how long a reply may wait.
+    pub fn env(&self) -> Vec<(&'static str, String)> {
+        vec![(TOKEN_ENV, self.token.clone()), (WAIT_ENV, BRIDGE_WAIT_S.to_string())]
+    }
+
     pub fn to_json(&self) -> Value {
         json!({
             "name": BRIDGE_NAME,
             "command": self.cli.to_string_lossy(),
-            "args": ["mcp", "--connect", self.port.to_string()],
-            "env": [{"name": TOKEN_ENV, "value": self.token}, {"name": WAIT_ENV, "value": BRIDGE_WAIT_S.to_string()}],
+            "args": self.args(),
+            "env": self.env().into_iter().map(|(name, value)| json!({"name": name, "value": value})).collect::<Vec<_>>(),
         })
     }
 

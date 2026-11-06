@@ -152,11 +152,26 @@ impl AgentProcess {
         env_remove: &[&str],
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Result<AgentProcess, String> {
+        Self::spawn_with_env(argv, cwd, env_remove, &[], wake)
+    }
+
+    /// [`Self::spawn`], also setting `env` for the program (after removing `env_remove`), as the
+    /// MCP bridge needs for its endpoint credential.
+    pub fn spawn_with_env(
+        argv: &[String],
+        cwd: &std::path::Path,
+        env_remove: &[&str],
+        env: &[(&str, String)],
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Result<AgentProcess, String> {
         let Some((program, args)) = argv.split_first() else { return Err("no agent command".into()) };
         let mut cmd = super::discover::command_for(std::path::Path::new(program));
         cmd.args(args).current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         for v in env_remove {
             cmd.env_remove(v);
+        }
+        for (name, value) in env {
+            cmd.env(name, value);
         }
         detach_group(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;

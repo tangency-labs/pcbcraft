@@ -156,7 +156,7 @@ enum Dialog {
     /// Add an agent. `return_to` is the Preferences window to go back to, when it opened from there.
     #[cfg(not(target_arch = "wasm32"))]
     Agent {
-        form: assistant::AgentForm,
+        form: Box<assistant::AgentForm>,
         return_to: Option<preferences::PreferencesWindow>,
     },
     About,

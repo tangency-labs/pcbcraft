@@ -5,6 +5,7 @@
 //! for the person. Agents come from `craft-agents` (see `ATTRIBUTION.md`).
 
 mod chat;
+mod host;
 mod settings;
 
 pub(crate) use chat::{Answer, Approval, Source, Verdict, gate};
@@ -409,25 +410,30 @@ impl Assistant {
         }
     }
 
-    /// Start `entry` in the background and check that it answers, without opening the chat.
+    /// Check in the background that `entry` answers, without opening the chat: an ACP agent is
+    /// started and asked to open a session; an endpoint is asked for its models and the model.
     fn test_agent(&mut self, ctx: &Context, entry: &Entry) {
         let (send, receive) = mpsc::sync_channel(1);
-        let argv = entry.argv.clone();
+        let id = entry.id.clone();
+        let entry = entry.clone();
         let ctx = ctx.clone();
         let started = std::thread::Builder::new().name("pcbcraft-agent-test".to_owned()).spawn(move || {
-            let result = tempfile::tempdir()
-                .map_err(|error| TestError::Other(format!("Could not make a working folder: {error}")))
-                .and_then(|dir| craft_agents::acp_client::test_agent(&argv, dir.path()));
+            let result = match entry.kind.protocol() {
+                None => tempfile::tempdir()
+                    .map_err(|error| TestError::Other(format!("Could not make a working folder: {error}")))
+                    .and_then(|dir| craft_agents::acp_client::test_agent(&entry.argv, dir.path())),
+                Some(protocol) => test_endpoint(&entry, protocol).map_err(TestError::Other),
+            };
             let _ = send.send(result);
             ctx.request_repaint();
         });
         match started {
             Ok(_) => {
-                self.test_results.remove(&entry.id);
-                self.tests.push((entry.id.clone(), receive));
+                self.test_results.remove(&id);
+                self.tests.push((id.clone(), receive));
             }
             Err(_) => {
-                self.test_results.insert(entry.id.clone(), Err("Could not start the test.".to_owned()));
+                self.test_results.insert(id.clone(), Err("Could not start the test.".to_owned()));
             }
         }
     }
@@ -658,7 +664,7 @@ impl Assistant {
             }
             ui.separator();
             if ui.button("Add agent…").clicked() {
-                self.settings_request = Some(SettingsRequest::Add(AgentForm::default()));
+                self.settings_request = Some(SettingsRequest::Add(Box::default()));
                 ui.close();
             }
             if ui.button("AI settings…").clicked() {
@@ -819,6 +825,20 @@ impl Assistant {
                 ui.label(dim("Connect an agent to start."));
             }
         });
+    }
+}
+
+/// Ask an endpoint for its models and whether `entry`'s model answers, with its stored key.
+fn test_endpoint(entry: &Entry, protocol: craft_agents::agents::Protocol) -> Result<String, String> {
+    use craft_agents::{agents::Protocol, api_client, backend::Secrets};
+    let key = if entry.key { host::Keychain.get(&entry.id)? } else { None };
+    if entry.key && key.is_none() {
+        return Err("No key is stored for this endpoint. Edit it to add one.".to_owned());
+    }
+    let http: craft_agents::backend::HttpFn = Arc::new(host::http);
+    match protocol {
+        Protocol::OpenAi => api_client::test_endpoint(&http, &entry.base_url, key.as_deref(), &entry.model),
+        Protocol::Anthropic => api_client::test_anthropic_endpoint(&http, &entry.base_url, key.as_deref(), &entry.model),
     }
 }
 
@@ -1234,6 +1254,97 @@ mod chat_tests {
         call(&mut harness, &endpoint, "view.fit", fit, None)?;
         let inspected = call(&mut harness, &endpoint, "edit.undo", Value::Null, Some("Allow"));
         assert!(inspected.is_ok() || inspected.is_err_and(|error| error.contains("nothing to undo")));
+        Ok(())
+    }
+
+    /// Each request's first line and body, in order.
+    type Seen = Arc<Mutex<Vec<(String, String)>>>;
+
+    /// Serve `replies` as an OpenAI-compatible endpoint on this computer, one connection each,
+    /// recording each request's first line and body.
+    fn endpoint(replies: Vec<Value>) -> Result<(u16, Seen), std::io::Error> {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        let port = listener.local_addr()?.port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        thread::spawn(move || {
+            let mut replies = replies.into_iter();
+            for stream in listener.incoming().map_while(Result::ok) {
+                let mut reader = BufReader::new(stream);
+                let (mut first, mut length) = (String::new(), 0);
+                if reader.read_line(&mut first).is_err() {
+                    continue;
+                }
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|read| read > 2) {
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                if let Ok(mut seen) = record.lock() {
+                    seen.push((first.trim().to_owned(), String::from_utf8_lossy(&body).into_owned()));
+                }
+                let answer = replies.next().unwrap_or_else(|| json!({"error": {"message": "no more replies"}})).to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+                    answer.len()
+                );
+                let _ = reader.get_mut().write_all(response.as_bytes());
+            }
+        });
+        Ok((port, seen))
+    }
+
+    /// A model endpoint on this computer connects through the desktop's HTTP client: its models
+    /// are listed, a message goes to its chat completions and the reply streams into the chat.
+    #[test]
+    fn a_model_endpoint_answers_through_the_desktop_http_client() -> Result<(), Box<dyn std::error::Error>> {
+        let (port, seen) = endpoint(vec![
+            json!({"data": [{"id": "test-model"}, {"id": "other-model"}]}),
+            json!({"choices": [{"message": {"role": "assistant", "content": "Hello from **the endpoint**"}, "finish_reason": "stop"}]}),
+        ])?;
+        let mut app = PcbApp::default();
+        app.session.apply("project.new", &json!({"name": "endpoint"}))?;
+        app.assistant.detection = Some(Default::default());
+        app.assistant.settings.agents.agents.push(craft_agents::agents::AgentConfig {
+            id: "api-1".to_owned(),
+            name: "Local model".to_owned(),
+            kind: Kind::Api,
+            base_url: format!("http://127.0.0.1:{port}/v1"),
+            model: "test-model".to_owned(),
+            request_timeout_s: 30,
+            ..Default::default()
+        });
+        let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        harness.run();
+        click(&mut harness, "Assistant");
+        assert_eq!(harness.state().assistant.current().map(|agent| agent.name), Some("Local model".to_owned()));
+        click(&mut harness, "Connect");
+        let wait = |harness: &mut Harness<'_, PcbApp>, done: &dyn Fn(&PcbApp) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !done(harness.state()) && Instant::now() < deadline {
+                harness.step();
+                thread::sleep(Duration::from_millis(5));
+            }
+            assert!(done(harness.state()), "{:?}", harness.state().assistant.chat);
+        };
+        wait(&mut harness, &|app| {
+            app.assistant.chat.state == State::Ready && app.assistant.chat.models.as_ref().is_some_and(|(_, models)| models.len() == 2)
+        });
+        assert!(harness.state_mut().assistant.chat.send("hi"));
+        wait(&mut harness, &|app| app.assistant.chat.state == State::Ready);
+        harness.run_steps(2);
+        harness.get_by_label("the endpoint");
+        let seen = seen.lock().map_err(|_| "poisoned")?.clone();
+        assert_eq!(seen[0].0, "GET /v1/models HTTP/1.1");
+        assert_eq!(seen[1].0, "POST /v1/chat/completions HTTP/1.1");
+        let body: Value = serde_json::from_str(&seen[1].1)?;
+        assert_eq!(body["model"], "test-model");
+        assert!(body["messages"].as_array().is_some_and(|messages| messages.iter().any(|message| message["content"] == "hi")), "{body}");
         Ok(())
     }
 }

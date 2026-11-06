@@ -33,6 +33,9 @@ SolidCraft's chat panel, state and gate at the same revision: `chat.rs` follows
 for Allow, Always allow or Deny under the Ask, Edits and All modes), and `settings.rs` follows
 `agent_chat/settings.rs` (agents found, added and not installed, Test, default and per-agent
 modes). The gate's rules are PCBCraft's own command namespaces, and the UI uses PCBCraft's chrome.
+`assistant/host.rs` adapts SolidCraft's `agent_http` and `Keychain` from `apps/solidcraft/src/main.rs`
+at the same revision: HTTPS through `ureq` and `rustls` with the platform's certificates, no
+redirects, a bounded response, and keys in the system keychain through `keyring`.
 
 The local transport in `crates/craft-control/` follows the first-request token
 and loopback design in SolidCraft's

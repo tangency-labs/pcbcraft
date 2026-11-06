@@ -303,8 +303,14 @@ project always runs. Questions the agent asks about its own tools appear in the 
 Open **Preferences → AI** from Home or the gear in the app bar to set the permission mode for all
 agents or one, choose the default agent, **Test** that an agent starts and answers, forget its
 **Always allow** answers, **Refresh** the installed agents, and set where and when the Assistant
-opens. **Add agent…** adds another ACP agent by its command line, which runs without a shell.
-Model endpoints (OpenAI- or Anthropic-compatible, such as Ollama) are not offered yet.
+opens. **Add agent…** adds another ACP agent by its command line, which runs without a shell, or
+a model endpoint: OpenAI-compatible (Ollama, LM Studio, OpenAI, OpenRouter and other presets) or
+Anthropic-compatible, with its base URL, model, optional key, request timeout and reasoning
+effort. For an endpoint PCBCraft runs the conversation itself and gives the model the same project
+tools through the same permission gate. Its key is kept in the system keychain (Keychain on macOS,
+Credential Manager on Windows, the Secret Service on Linux), never in PCBCraft's settings, and is
+only sent over HTTPS or to this computer. **Test** lists an endpoint's models and checks that its
+model answers.
 
 ## Live MCP in the desktop editor
 

@@ -677,8 +677,8 @@ impl ApiBackend {
         // The same MCP server an ACP agent would get.
         let mcp = match &ctx.bridge {
             Some(b) => {
-                let argv = vec![b.cli.to_string_lossy().into_owned(), "mcp".into(), "--connect".into(), format!("127.0.0.1:{}", b.port)];
-                Some(AgentProcess::spawn(&argv, &ctx.cwd, &["PCBCRAFT_CONTROL_TOKEN"], || {})?)
+                let argv: Vec<String> = std::iter::once(b.cli.to_string_lossy().into_owned()).chain(b.args()).collect();
+                Some(AgentProcess::spawn_with_env(&argv, &ctx.cwd, &[], &b.env(), || {})?)
             }
             None => None,
         };
