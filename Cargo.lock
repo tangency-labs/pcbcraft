@@ -687,6 +687,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-agents"
+version = "0.0.0"
+dependencies = [
+ "log",
+ "nix",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-control"
 version = "0.0.0"
 dependencies = [

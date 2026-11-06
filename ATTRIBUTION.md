@@ -16,6 +16,17 @@ PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhe
 | `apps/pcbcraft-web/` | `apps/solidcraft-web/` | Kept the Trunk setup, page layout and web runner start. Dropped offline use, installing, files and URL launch options. |
 | `.github/workflows/`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | same paths | Cut down to what PCBCraft needs. `deny.toml` adds the license allow list. |
 
+`crates/craft-agents/` recreates SolidCraft's agent chat core from
+`crates/ui-egui/src/agent_chat/` at `c553365a2197a689e749389a6fbf707a38df9b61`
+(MIT OR Apache-2.0, copyright (c) 2026 SolidCraft contributors) until SolidCraft
+extracts it as a shared library:
+
+| PCBCraft file | SolidCraft source | What changed |
+|---|---|---|
+| `acp.rs`, `acp_client.rs`, `api_client.rs`, `backend.rs`, `discover.rs`, `markdown.rs`, `process.rs` | same names in `agent_chat/` | Client, bridge and tool names, token variable and system note are PCBCraft's. The MCP bridge runs `pcbcraft-cli mcp --connect PORT` and passes the live endpoint's credential in its environment. |
+| `agents.rs` | `agent_chat/agents.rs` | Agent settings are an `AgentPrefs` value instead of SolidCraft's window state and preferences; `short_command` moved here from `panel.rs`. |
+| `i18n.rs`, `lib.rs` | `i18n.rs`; `agent_chat/mod.rs` | English messages for the keys these modules use; the model id limits and a small `ControlRequest`. |
+
 The local transport in `crates/craft-control/` follows the first-request token
 and loopback design in SolidCraft's
 [`control_server.rs`](https://github.com/tangency-labs/solidcraft/blob/ffc84dbe2e35af7d2eae302d42953271ef7a72b7/apps/solidcraft/src/control_server.rs)
