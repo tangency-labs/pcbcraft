@@ -8,7 +8,7 @@ still needs to work before the first collaboration-ready preview.
 
 | Workflow | Available in this baseline | Remaining scope |
 | --- | --- | --- |
-| Projects | New Project opens Untitled at once and a desktop first save names it after its folder/archive; rename, open, save/save-as folders or `.pc.zip`; shared undo/redo; older native formats migrate | Local recovery of unsaved work: [#69](https://github.com/tangency-labs/pcbcraft/issues/69) |
+| Projects | New Project opens Untitled at once and a desktop first save names it after its folder/archive; rename, open, save/save-as folders or `.pc.zip`; Save/Don't Save/Cancel before closing, New or Open replaces unsaved work; shared undo/redo; older native formats migrate | Local recovery of unsaved work: [#69](https://github.com/tangency-labs/pcbcraft/issues/69) |
 | Schematic editing | One sheet; place, rotate, edit fields, move/delete symbols; directional boxes, modifier selection and group move/delete | Multiple sheets/hierarchy: [#40](https://github.com/tangency-labs/pcbcraft/issues/40)/#41; clipboard, mirror and G-drag: [#44](https://github.com/tangency-labs/pcbcraft/issues/44) |
 | Wiring | Orthogonal routes; direct segment selection, drag/G and Delete; corner/free-end/shared-junction handles; Slice, Break and whole-wire actions; shared undo and headless MCP commands | Automatic endpoint attachment and further reshape work [#67](https://github.com/tangency-labs/pcbcraft/issues/67), automatic healing [#68](https://github.com/tangency-labs/pcbcraft/issues/68); use Slice before branching from a wire's interior |
 | Libraries | Five starter symbol types; pinned symbol revisions survive offline reopen; one placed unit per component | Native local libraries and general footprint assignment [#92](https://github.com/tangency-labs/pcbcraft/issues/92); authoring [#78](https://github.com/tangency-labs/pcbcraft/issues/78)/#79; Git/catalog sources [#93](https://github.com/tangency-labs/pcbcraft/issues/93)/#94 |
@@ -28,7 +28,8 @@ also includes later work. Completing the MVP is not a fabrication-readiness clai
 
 Desktop saves write to the chosen folder/archive. Browser uploads use archives or
 legacy single files; downloads produce `.pc.zip` and do not clear the dirty state
-because the browser cannot confirm a durable write. The desktop Assistant and
+because the browser cannot confirm a durable write, so the page's leave warning
+stays on until the project is replaced. The desktop Assistant and
 local MCP listener are not available in the browser build.
 
 The board walkthrough, polished demo and fresh-user onboarding acceptance in [#90](https://github.com/tangency-labs/pcbcraft/issues/90)

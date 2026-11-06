@@ -11,6 +11,7 @@ use super::*;
 
 mod editor_views;
 mod grid_spacing;
+mod save_changes;
 mod split_editors;
 
 /// Start directly in the workspace for editor-control tests; startup tests use the real constructor.
@@ -252,13 +253,13 @@ fn home_new_project_tile_creates_the_project_and_returns_to_it() {
         harness.run();
     };
     rail(&mut harness);
-    harness.get_by_label("Starting a new project will discard unsaved changes.");
+    harness.get_by_label("Untitled has unsaved changes. If you don't save, they are lost.");
     click(&mut harness, "Cancel");
     assert!(harness.state().home);
     assert!(Arc::ptr_eq(&harness.state().session().snapshot().unwrap(), &first));
 
     rail(&mut harness);
-    click(&mut harness, "Discard and start new");
+    click(&mut harness, "Don't Save");
     assert!(!harness.state().home);
     let second = harness.state().session().snapshot().unwrap();
     assert_eq!(second.name, "Untitled");
@@ -268,7 +269,7 @@ fn home_new_project_tile_creates_the_project_and_returns_to_it() {
 
     harness.key_press_modifiers(Modifiers::COMMAND, Key::N);
     harness.run();
-    assert!(matches!(harness.state().dialog, Dialog::ConfirmNew));
+    assert!(matches!(harness.state().dialog, Dialog::SaveChanges(unsaved::Then::New)));
     click(&mut harness, "Cancel");
     assert!(Arc::ptr_eq(&harness.state().session().snapshot().unwrap(), &first));
 }

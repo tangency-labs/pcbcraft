@@ -75,6 +75,10 @@ first **Save** asks for a project folder, and the project takes that folder's na
    browser, choose **Download**, keep the resulting `.pc.zip`, then reopen that
    download to check it. A download request does not prove the file was saved,
    so the browser deliberately keeps its unsaved marker.
+7. With unsaved changes, closing the desktop window, **Quit**, **New Project**
+   and **Open** ask **Save**, **Don't Save** or **Cancel**. **Save** carries on
+   only once the save succeeds. In the browser, leaving or reloading the page
+   shows the browser's own warning while the project is unsaved.
 
 The wheel zooms and a middle-button drag pans by default. Preferences can change
 wheel behavior, zoom direction/speed, theme and UI scale. Parts and Browser can

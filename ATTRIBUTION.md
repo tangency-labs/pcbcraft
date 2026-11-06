@@ -34,6 +34,13 @@ The integrated Linux title bar and ribbon dimensions follow SolidCraft's
 `796b7c40d380e22f00a0e45a0a48292b1756620d` (MIT OR Apache-2.0,
 copyright (c) 2026 SolidCraft contributors). PCBCraft uses its own compact
 window controls and schematic tool groups.
+The unsaved-changes question in `crates/app/src/unsaved.rs` follows SolidCraft's
+close prompt in `crates/ui-egui/src/documents.rs` and `apps/solidcraft/src/main.rs`
+at `c553365a2197a689e749389a6fbf707a38df9b61` (MIT OR Apache-2.0, copyright (c)
+2026 SolidCraft contributors): the "Save changes to {name}?" wording, the
+Save/Don't Save/Cancel answers, and cancelling the window's close request until
+the question is answered. PCBCraft asks about its one open project, waits for
+a running file operation, and also asks before New Project and Open.
 The filled Save and Report a bug glyphs use the shapes from
 `assets/icons/ui/design/svg/flat/save.svg` and `flat/bug_report.svg` at the
 same revision, drawn with the active theme colors.

@@ -19,6 +19,7 @@ mod preferences;
 mod project_browser;
 mod project_files;
 mod schematic_canvas;
+mod unsaved;
 
 use editor_view::{SchematicView, ViewId, ViewInput};
 use editor_workspace::EditorViews;
@@ -126,9 +127,8 @@ enum Dialog {
         error: Option<String>,
         focused: bool,
     },
-    ConfirmOpen,
-    /// Asks before New Project replaces a project with unsaved changes.
-    ConfirmNew,
+    /// Asks whether to save unsaved changes before closing, New Project or Open.
+    SaveChanges(unsaved::Then),
     OpenLocation,
     SaveEncoding,
     #[cfg(not(target_arch = "wasm32"))]
@@ -170,6 +170,13 @@ pub struct PcbApp {
     home: bool,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
+    /// Set once closing the window has been answered for, so the next close request passes.
+    close_allowed: bool,
+    /// Close, New Project or Open held back until the running file operation finishes.
+    waiting: Option<unsaved::Waiting>,
+    /// Whether the browser's leave-page warning is on, once it has been set.
+    #[cfg(target_arch = "wasm32")]
+    leave_warning: Option<bool>,
     /// The palette and zoom last applied, so they are set only when they change.
     applied: Option<(bool, f32)>,
 }
@@ -274,14 +281,9 @@ impl PcbApp {
         self.views.active.tool = Some(Tool::Wire { revision: self.session.revision(), start: None });
     }
 
-    /// Protect unsaved edits before New Project replaces them, as Open does: with unsaved changes
-    /// ask to discard them first, otherwise start the new project at once.
-    fn new_project(&mut self) {
-        if self.files.dirty(&self.session) {
-            self.dialog = Dialog::ConfirmNew;
-        } else {
-            self.start_new_project();
-        }
+    /// Start a new project, first asking whether to save any unsaved changes it would replace.
+    fn new_project(&mut self, ctx: &egui::Context) {
+        self.unless_unsaved(unsaved::Then::New, ctx);
     }
 
     /// Open an editable Untitled project through `project.new`, leaving naming and a destination
@@ -303,13 +305,9 @@ impl PcbApp {
         self.dialog = Dialog::Name { command, text, error: None, focused: false };
     }
 
-    /// Protect unsaved edits before opening a file that replaces the current session.
+    /// Open a file that replaces the current session, first asking whether to save unsaved changes.
     fn open_project_file(&mut self, ctx: &egui::Context) {
-        if self.files.dirty(&self.session) {
-            self.dialog = Dialog::ConfirmOpen;
-        } else {
-            self.choose_open_location(ctx);
-        }
+        self.unless_unsaved(unsaved::Then::Open, ctx);
     }
 
     /// Desktop users may choose an entry point, archive or folder; browsers pick an upload.
@@ -343,7 +341,7 @@ impl PcbApp {
     fn file_menu(&mut self, ui: &mut Ui) {
         let new_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_N) };
         if self.command_row(ui, "project.new", "", &new_shortcut, MenuIcon::New) {
-            self.new_project();
+            self.new_project(ui.ctx());
         }
         let file_ready = !self.files.busy();
         let open_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_O) };
@@ -1120,7 +1118,7 @@ impl PcbApp {
                 }
             }
             if pressed(&COMMAND_N) {
-                self.new_project();
+                self.new_project(ctx);
             }
             if pressed(&COMMAND_Q) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1205,36 +1203,7 @@ impl PcbApp {
                     self.dialog = Dialog::EditFields { source, symbol, reference, value, error, focused };
                 }
             }
-            Dialog::ConfirmOpen => {
-                let (mut proceed, mut cancel) = (false, false);
-                let closing = shell::dialog(ctx, "confirm_open", "Open Project", |ui| {
-                    ui.label("Opening another project will discard unsaved changes.");
-                    ui.horizontal(|ui| {
-                        proceed = ui.button("Discard and open…").clicked();
-                        cancel = ui.button("Cancel").clicked();
-                    });
-                });
-                if proceed {
-                    self.choose_open_location(ctx);
-                } else if !(cancel || closing) {
-                    self.dialog = Dialog::ConfirmOpen;
-                }
-            }
-            Dialog::ConfirmNew => {
-                let (mut proceed, mut cancel) = (false, false);
-                let closing = shell::dialog(ctx, "confirm_new", "New Project", |ui| {
-                    ui.label("Starting a new project will discard unsaved changes.");
-                    ui.horizontal(|ui| {
-                        proceed = ui.button("Discard and start new").clicked();
-                        cancel = ui.button("Cancel").clicked();
-                    });
-                });
-                if proceed {
-                    self.start_new_project();
-                } else if !(cancel || closing) {
-                    self.dialog = Dialog::ConfirmNew;
-                }
-            }
+            Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;
                 let mut cancel = false;
@@ -1397,6 +1366,7 @@ impl PcbApp {
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.sync_style(&ctx);
+        self.handle_close_request(&ctx);
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {
@@ -1412,6 +1382,9 @@ impl PcbApp {
                 project_files::Update::Error(error) => self.message = Some(error),
             }
         }
+        self.finish_waiting(&ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.warn_before_leaving();
         #[cfg(not(target_arch = "wasm32"))]
         let assistant_keys = self.assistant_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]
