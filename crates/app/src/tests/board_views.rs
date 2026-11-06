@@ -295,3 +295,72 @@ fn mixed_pane_close_buttons_preserve_the_surviving_view() {
         }
     }
 }
+
+/// PCB grid preferences change only board drawing, survive serialization, and preserve snapping
+/// and project state. Cancel restores the previous style and page defaults restore Off.
+#[test]
+fn pcb_grid_preferences_are_shared_display_settings() {
+    use pcbcraft_chrome::grid::Style;
+    let mut h = board_harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB layout beside current view");
+    let board_rect = h.get_by_label("PCB canvas 3").rect();
+    click_canvas_at(&mut h, board_rect.center());
+    let id = h.state().views.active.id();
+    h.state_mut().views.view_mut(id).unwrap().camera.set_snap_nm(10 * pcbcraft_chrome::grid::NM_PER_MIL);
+    h.run();
+    let camera = h.state().views.view(id).unwrap().camera.saved_state();
+    let snap = h.state().views.view(id).unwrap().camera.snap(board_rect.center() + egui::vec2(13.0, 9.0), board_rect);
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let marks = |h: &Harness<'_, PcbApp>, color| {
+        let dots = h.output().shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Circle(dot) if dot.fill == color)).count();
+        let lines = h.output().shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::LineSegment {stroke, ..} if stroke.color == color)).count();
+        (dots, lines)
+    };
+    let schematic_marks = marks(&h, Tokens::get().canvas_grid);
+    assert!(schematic_marks.0 > 0);
+    assert_eq!(h.state().preferences.board_grid_style, Style::Off);
+    assert_eq!(marks(&h, Tokens::get().board_grid), (0, 0));
+    h.get_by_label("Grid 10 mil");
+
+    for (label, style) in [("Dots", Style::Dots), ("Lines", Style::Lines), ("Off", Style::Off)] {
+        click(&mut h, "Preferences");
+        h.get_by_label("PCB grid");
+        click(&mut h, label);
+        click(&mut h, "OK");
+        assert_eq!(h.state().preferences.board_grid_style, style);
+        assert_eq!(crate::preferences::Preferences::parse(&h.state().preferences.to_text()).board_grid_style, style);
+        let (dots, lines) = marks(&h, Tokens::get().board_grid);
+        match style {
+            Style::Dots => {
+                assert!(dots > 0);
+                assert_eq!(lines, 0);
+                h.get_by_label("Grid 10 mil · dots 50 mil");
+            }
+            Style::Lines => {
+                assert_eq!(dots, 0);
+                assert!(lines > 0);
+                h.get_by_label("Grid 10 mil · lines 50 mil");
+            }
+            Style::Off => {
+                assert_eq!((dots, lines), (0, 0));
+                h.get_by_label("Grid 10 mil");
+            }
+        }
+        assert_eq!(marks(&h, Tokens::get().canvas_grid), schematic_marks);
+        assert_eq!(h.state().views.view(id).unwrap().camera.saved_state(), camera);
+        assert_eq!(h.state().views.view(id).unwrap().camera.snap(board_rect.center() + egui::vec2(13.0, 9.0), board_rect), snap);
+        assert_eq!(h.state().session.revision(), revision);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    }
+    click(&mut h, "Preferences");
+    click(&mut h, "Dots");
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().preferences.board_grid_style, Style::Off);
+    click(&mut h, "Preferences");
+    click(&mut h, "Lines");
+    click(&mut h, "Restore page defaults");
+    assert_eq!(h.state().preferences.board_grid_style, Style::Off);
+    click(&mut h, "OK");
+}

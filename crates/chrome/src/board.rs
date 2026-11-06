@@ -67,19 +67,13 @@ pub fn browser_bottom(area: Rect) -> f32 {
     area.top() + (area.height() * 0.42).min(260.0).max(crate::workspace::floating_card_min_height()).min(area.height())
 }
 
-/// Paint the board's own canvas and subdued line grid, independently of schematic/background
-/// theme choices. Opacity and zoom thinning use the common navigation preferences.
-pub fn canvas(p: &Painter, rect: Rect, origin: Pos2, step: f32, opacity: u8) {
+/// Paint the board's own canvas with the preferred grid style, independently of the schematic
+/// and chrome theme. A hidden grid still leaves snapping to the caller's camera.
+pub fn canvas(p: &Painter, rect: Rect, origin: Pos2, step: f32, opacity: u8, style: crate::grid::Style) {
     let t = Tokens::get();
     p.rect_filled(rect, 0, t.board_canvas);
-    let (Some(color), Some(every)) = (crate::grid::color(t.board_grid, opacity), crate::grid::shown_every(step)) else {
+    let Some(color) = crate::grid::color(t.board_grid, opacity) else {
         return;
     };
-    let step = step * every as f32;
-    for index in ((rect.left() - origin.x) / step).ceil() as i32..=((rect.right() - origin.x) / step).floor() as i32 {
-        p.vline(origin.x + index as f32 * step, rect.y_range(), Stroke::new(1.0, color));
-    }
-    for index in ((rect.top() - origin.y) / step).ceil() as i32..=((rect.bottom() - origin.y) / step).floor() as i32 {
-        p.hline(rect.x_range(), origin.y + index as f32 * step, Stroke::new(1.0, color));
-    }
+    crate::grid::paint_style(p, rect, origin, step, color, style);
 }

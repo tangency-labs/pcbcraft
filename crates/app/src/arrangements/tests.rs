@@ -185,7 +185,7 @@ fn missing_target_is_not_rebound_and_can_be_explicitly_replaced() {
 
 /// Browser navigation belongs to the focused pane, even when another pane shows that sheet.
 #[test]
-fn browser_sheet_reuses_local_tab_without_switching_arrangements_or_other_panes() {
+fn browser_sheet_switches_the_pane_without_adding_tabs_or_changing_arrangements() {
     let mut h = harness();
     let original = h.state().views.active.id();
     let arrangement = h.state().arrangements.active();
@@ -206,29 +206,46 @@ fn browser_sheet_reuses_local_tab_without_switching_arrangements_or_other_panes(
     let group = h.state().views.hosts[&h.state().views.main].layout.group(original).unwrap().views();
     assert_eq!(group, vec![original, board]);
     assert_eq!(h.state().views.view(companion).unwrap().camera.saved_state(), companion_camera);
+    assert_eq!(h.query_all_by_label("Close view Arrangement test › Main").count(), 1);
+    assert_eq!(h.query_all_by_label("Close view Arrangement test › Board").count(), 1);
     assert_eq!(h.state().session.revision(), revision);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
-    // A tab click returns to the existing board camera instead of creating another view.
-    let tabs: Vec<_> = h.query_all_by_label("Arrangement test › Board").collect();
-    tabs[0].click();
-    h.run();
+    // The picker returns to the existing camera without exposing cached documents as tabs.
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
     assert_eq!(h.state().views.active.id(), board);
+    assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
+    assert_eq!(h.query_all_by_label("Close view Arrangement test › Board").count(), 2);
     click(&mut h, "Main");
     assert_eq!(h.state().views.hosts[&h.state().views.main].layout.group(original).unwrap().views(), group);
 }
 
-/// Closing and detaching tabs retain their siblings; collapse/restore keeps complete tab groups.
+/// Single views have no document strip after workspace changes. Split headers address whole
+/// panes, including cached navigation, so closing or detaching never uncovers a hidden document.
 #[test]
-fn document_tabs_survive_split_toggle_detach_and_local_close() {
+fn workspace_switches_keep_single_views_clear_and_split_actions_address_whole_panes() {
     let mut h = harness();
     let sheet = h.state().views.active.id();
+    let canvas_top = h.get_by_label("Schematic canvas").rect().top();
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
     let board = h.state().views.active.id();
+    assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
+    assert!(h.query_by_label("Close view Arrangement test › Board").is_none());
+    assert_eq!(h.get_by_label("PCB canvas").rect().top(), canvas_top);
+    click(&mut h, "Main");
+    assert_eq!(h.get_by_label("Schematic canvas").rect().top(), canvas_top);
+    assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
     click(&mut h, "Choose workspace");
     click(&mut h, "Open Schematic beside current view");
     let group = h.state().views.hosts[&h.state().views.main].layout.group(board).unwrap().views();
     assert_eq!(group, vec![sheet, board]);
+    let companion = h.state().views.hosts[&h.state().views.main].layout.visible_views()[1];
+    assert_eq!(h.query_all_by_label("Close view Arrangement test › Main").count(), 1);
+    assert_eq!(h.query_all_by_label("Close view Arrangement test › Board").count(), 1);
     h.state_mut().split_editors(&egui::Context::default(), false);
     h.run();
     assert_eq!(h.state().views.hosts[&h.state().views.main].layout.views(), group);
@@ -239,17 +256,23 @@ fn document_tabs_survive_split_toggle_detach_and_local_close() {
     h.run();
     let detached = h.state_mut().views.detach_view(board).unwrap();
     h.run();
-    assert_eq!(h.state().views.hosts[&h.state().views.main].layout.views(), vec![sheet]);
-    assert_eq!(h.state().views.hosts[&detached].layout.views(), vec![board]);
-    h.state_mut().views.close_view(board);
+    assert_eq!(h.state().views.hosts[&h.state().views.main].layout.views(), vec![companion]);
+    assert_eq!(h.state().views.hosts[&detached].layout.views(), group);
+    assert_eq!(h.state_mut().views.detach_view(board), Some(detached), "a sole detached pane stays in its window");
+    assert!(h.state().arrangement_snapshot().unwrap().valid());
+    h.state_mut().views.dock_view(board);
     h.run();
-    assert!(h.state().views.view(board).is_none());
+    assert!(!h.state().views.hosts.contains_key(&detached));
+    assert_eq!(h.state().views.hosts[&h.state().views.main].layout.group(board).unwrap().views(), group);
     assert!(h.state().arrangement_snapshot().unwrap().valid());
-    click(&mut h, "Choose workspace");
-    click(&mut h, "PCB layout");
     click(&mut h, "Close view Arrangement test › Board");
-    assert_eq!(h.state().views.active.id(), sheet);
+    assert!(h.state().views.view(board).is_none());
+    assert!(h.state().views.view(sheet).is_none());
+    assert_eq!(h.state().views.active.id(), companion);
+    assert!(!h.state().views.is_split());
+    assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     assert!(h.state().arrangement_snapshot().unwrap().valid());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }
 
 /// A queued arrangement intent cannot cross a project replacement or an owned modal.

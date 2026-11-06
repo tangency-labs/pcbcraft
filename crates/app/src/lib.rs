@@ -880,13 +880,20 @@ impl PcbApp {
 
     /// Show the command error or placement hint alongside the project name, and at the right
     /// the focused view's grid spacing, which can be changed there. Home has no canvas, so it
-    /// shows no grid.
+    /// shows no grid. Density annotations follow the visible grid style, independently of snapping.
     fn status(&mut self, ui: &mut Ui) {
         let name = self.session.project().map_or("No project open", |p| p.name.as_str()).to_owned();
         let message = self.message.clone();
         let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
         let mut spacing = self.views.active.camera.snap_nm();
         let every = grid::shown_every(self.views.active.camera.snap_step()).unwrap_or(1);
+        let grid_style = if self.preferences.grid_opacity_percent == 0 {
+            grid::Style::Off
+        } else if self.views.active.workspace == Workspace::Board {
+            self.preferences.board_grid_style
+        } else {
+            grid::Style::Dots
+        };
         let mut grid_changed = false;
         let mut unit = self.preferences.units;
         let pointer = self.pointer.filter(|_| grid_view.is_some());
@@ -932,8 +939,15 @@ impl PcbApp {
                 // schematic showing there is nothing to measure, so none of them appear.
                 if grid_view.is_some() {
                     units::toggle(ui, &mut unit, &units_shortcut);
-                    grid_changed =
-                        grid::spacing_menu(ui, &mut spacing, &grid::SCHEMATIC_SPACING_PRESETS_NM, grid::SCHEMATIC_SPACING_DEFAULT_NM, every, unit);
+                    grid_changed = grid::spacing_menu(
+                        ui,
+                        &mut spacing,
+                        &grid::SCHEMATIC_SPACING_PRESETS_NM,
+                        grid::SCHEMATIC_SPACING_DEFAULT_NM,
+                        every,
+                        unit,
+                        grid_style,
+                    );
                 }
                 if let Some(point) = pointer {
                     let text = format!("X {}  Y {}", units::readout(point.x_nm, unit), units::readout(point.y_nm, unit));

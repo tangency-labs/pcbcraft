@@ -10,6 +10,7 @@ use pcbcraft_engine::{
 use std::collections::BTreeSet;
 
 /// Select visible placements without granting input to another workspace or mutating the project.
+/// Grid preferences affect drawing only; camera navigation and snapping remain independent.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -20,6 +21,7 @@ pub(super) fn show(
     enabled: bool,
     navigation: Navigation,
     opacity: u8,
+    grid_style: pcbcraft_chrome::grid::Style,
     label: &str,
 ) -> Option<BTreeSet<String>> {
     let rect = ui.available_rect_before_wrap();
@@ -27,7 +29,7 @@ pub(super) fn show(
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     camera.navigate_board(&response, rect, project, enabled, navigation);
     let p = ui.painter().with_clip_rect(rect);
-    board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity);
+    board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     let copper = project.setup().map(|setup| {
         setup
             .layers()

@@ -11,12 +11,14 @@ The app starts on **Home**, where you can create or open a project. It does not
 yet reopen the last project automatically. The app bar shows the project name and an
 unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
-pages for Appearance (theme, interface scale, grid opacity, units), Navigation (whether the wheel
+pages for Appearance (theme, interface scale, PCB grid, grid opacity, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant.
-**Grid opacity** fades the canvas grid
+The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
+**Off**, **Dots** or **Lines** for all PCB views and windows. This choice is remembered
+between sessions and leaves snapping unchanged. **Grid opacity** fades visible grids
 from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
-same points. The opacity applies to both split panes and is kept with your
+same points. The opacity applies across views and windows and is kept with your
 preferences, not in the project.
 The right end of the bottom status bar shows the grid point under the pointer (**X**, **Y**,
 with Y increasing down), the **Grid** button and the display unit. Click the unit, or press

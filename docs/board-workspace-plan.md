@@ -101,24 +101,26 @@ Closing that editor discards its unfinished form.
 | --- | --- | --- |
 | Project name and dirty indicator | The shared project | Controller |
 | Top tabs | Named arrangements of its windows and panes | Design, Routing, Review |
-| Tabs within a pane | Independent views of documents | Controller › Main, Controller › Board |
-| Browser sheet selection | Open or activate that sheet in the focused pane | Main |
+| Split pane header | The document currently shown in that pane | Controller › Main, Controller › Board |
+| Browser sheet selection | Show that sheet in the focused pane | Main |
 | Workspace picker | Open a document here, beside it, or in a native window | PCB layout |
 
-Selecting a Browser sheet reuses its tab in the focused pane or adds one there.
-A view of that sheet elsewhere stays independent, and the top arrangement tab
+Selecting a Browser sheet changes the focused pane's document while remembering
+its prior navigation. It adds no document tabs. A view of that sheet elsewhere
+stays independent, and the top arrangement tab
 stays selected. The board Browser includes the current schematic sheet so this
 navigation works from either workspace. The engine currently exposes one editable
 sheet and one legacy board; the typed targets carry sheet and board identity,
 but the UI does not imply that hierarchical or multiple-board editing has shipped.
-Future sheet tabs should show occurrence paths such as **Power › Regulators**.
+Future sheet headers should show occurrence paths such as **Power › Regulators**.
 
-A pane keeps its tab order and active document. Its **×** closes that view,
-without deleting the document or closing other views of it; closing the last tab
-in a secondary pane removes that pane. The main host retains one document view.
+A split pane has one header for its current document. Its **×** closes the pane,
+including its cached document navigation, without deleting a document or closing
+other panes. Detach and Dock move the pane with that navigation intact, rather
+than uncovering a previously visited document. The main host retains one pane.
 Native window Close still dismisses only that window while another survives, and
-the final window uses the project's save decision. A lone document keeps the
-compact canvas breadcrumb; tab strips appear for split panes or multiple tabs.
+the final window uses the project's save decision. A single pane keeps the
+compact canvas breadcrumb with no header strip, including after workspace changes.
 
 The arrangement covers the whole project working setup, including detached
 windows. Selecting a different top tab explicitly restores that setup and can
@@ -131,7 +133,7 @@ latest layout. Deletion asks for confirmation and is disabled for the only
 remaining arrangement; it does not remove electrical data. Cancelled forms leave
 the saved collection, live layout and project history unchanged.
 
-Version 1 records contain window membership, split ratios, tab order, active
+Version 1 records contain window membership, split ratios, cached documents, active
 views, focus, stable document targets, both workspace cameras and grids, board
 layer visibility/selection, and supported panel visibility, collapse and
 placement. Desktop bounds are recorded separately from cameras. Runtime view
@@ -139,7 +141,9 @@ and host IDs are freshly allocated on activation. Gestures, selections,
 highlights, pending probe requests, modal dialogs and electrical history are
 excluded, so restoration cannot grant a delayed edit authority or roll back
 project data. Tree-row expansion, provider payloads, view orientation and filters
-are not yet persisted.
+are not yet persisted. The internal `tabs` record retains its original serialized
+name for compatibility; it now stores a pane's document navigation cache and does
+not introduce a tab strip in the interface.
 
 Records live under `pcbcraft.project_arrangements` in eframe's user-local storage,
 not in the electrical project. Desktop keys combine the project UUID with the
@@ -221,8 +225,8 @@ The controls below describe the current inspection implementation. Opening a
 different workspace or a detached window does not require splitting first.
 
 The workspace picker should be the common entry point for changing what a view
-shows and where it opens. Selecting **PCB layout** opens or activates its
-document tab in the focused pane. Each available workspace card contains a split icon and a desktop-only window
+shows and where it opens. Selecting **PCB layout** switches the focused pane to
+the board. Each available workspace card contains a split icon and a desktop-only window
 icon, with tooltips naming the target and placement, so either arrangement is
 available directly from a single schematic view. Opening a board in another host
 must leave the current schematic visible without briefly splitting or switching
@@ -280,8 +284,10 @@ physical stackup, units and the proposed shared net/rule contracts before the
 board renderer makes those relationships visible. The inspection slice adds a
 board-addressed renderer, direct workspace/placement choices, a footprint Browser,
 grouped Layers and read-only Properties following the FigCraft exports. PCB
-views have a dedicated near-black canvas and subdued line grid, including with
-light application chrome, and a Layout ribbon independent of schematic Capture. Copper
+views have a dedicated near-black canvas, including with light application chrome,
+and a Layout ribbon independent of schematic Capture. The PCB grid is hidden by
+default; Preferences → Appearance offers Off, Dots and Lines across all PCB views
+and windows, independently of snap spacing. Copper
 markers use visible layers; active layer, layer visibility and document ownership
 remain distinct. The current model has no pad shape, drill, outline or copper
 tracks, so the view shows pad-center markers rather than fabrication geometry.
@@ -439,7 +445,7 @@ board. This is a behavior fixture, not a validated electrical reference design.
 
 - Place, move and rotate a footprint through shared engine commands. Each completed gesture is one undo step; cancellation makes no edit.
 - Switch workspaces, split schematic and board, and open at least two additional native editor windows without moving the existing views. Exercise a split inside a detached window, another view of the same board, explicit Detach/Dock, and secondary Close without an implicit split elsewhere. Preserve independent cameras and the same open project throughout.
-- Name and switch arrangements, then close and reopen the project. Restore the last active arrangement's document tabs, splits, independent cameras, panels and supported windows from user-local state without changing electrical files. Exercise unavailable documents/providers and a changed monitor configuration without losing the saved arrangement.
+- Name and switch arrangements, then close and reopen the project. Restore the last active arrangement's document navigation, splits, independent cameras, panels and supported windows from user-local state without changing electrical files. Exercise unavailable documents/providers and a changed monitor configuration without losing the saved arrangement.
 - Select a component, pin, footprint and pad from either side. Highlight the exact counterpart without focus theft or selection loops; cameras stay put by default, with optional directed selection following that preserves zoom. Reveal counterpart navigates explicitly.
 - Rename a reference and change placement without breaking correspondence. Exercise an unassigned component and reject an incompatible mapping without partial mutation.
 - Undo and redo from either editor, then inspect through live MCP. Both views and MCP report the same revision and electrical state.

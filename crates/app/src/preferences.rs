@@ -84,10 +84,12 @@ pub struct Preferences {
     pub theme: ThemeChoice,
     pub scale_percent: u16,
     pub navigation: Navigation,
-    /// How strongly the canvas grid shows, in percent; 0 hides it. Shared by both schematic
-    /// views, this changes drawing only, never snapping, selection, cameras or project history.
-    /// Detached editor windows and per-view overrides are not implemented yet.
+    /// How strongly visible canvas grids show, in percent; 0 hides them. Shared across views
+    /// and windows, this changes drawing only, never snapping, cameras or project history.
     pub grid_opacity_percent: u8,
+    /// Display style for every PCB view. Off is the default, including for older saved settings.
+    /// Schematic views retain their dot grid; snap spacing stays independent in each view.
+    pub board_grid_style: grid::Style,
     /// The schematic snap spacing last chosen in any view, in nanometres. Both views start from
     /// it when the app starts; after that each view keeps its own spacing through focus changes,
     /// splitting and reopening files. It is never saved in the project.
@@ -106,6 +108,7 @@ impl Default for Preferences {
             scale_percent: 100,
             navigation: Navigation::default(),
             grid_opacity_percent: grid::OPACITY_DEFAULT,
+            board_grid_style: grid::Style::Off,
             schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
             selection_follow: SelectionFollow::default(),
             units: Unit::default(),
@@ -281,6 +284,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
             preferences.theme = defaults.theme;
             preferences.scale_percent = defaults.scale_percent;
             preferences.grid_opacity_percent = defaults.grid_opacity_percent;
+            preferences.board_grid_style = defaults.board_grid_style;
             preferences.units = defaults.units;
         }
         NAVIGATION => preferences.navigation = defaults.navigation,
@@ -289,7 +293,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
     }
 }
 
-/// Theme, interface scale, grid opacity and display units.
+/// Theme, interface scale, PCB grid display, shared grid opacity and display units.
 fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(ui, "Appearance", "How PCBCraft looks. Changes show at once; Cancel puts them back.");
     let preferences = &mut *data.preferences;
@@ -317,6 +321,13 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
         });
     });
     settings::section(ui, "Canvas", |ui| {
+        settings::row_with_keywords(ui, "PCB grid", &["board", "layout", "grid", "dots", "lines", "hide"], |ui| {
+            settings::segmented(
+                ui,
+                &mut preferences.board_grid_style,
+                &[(grid::Style::Off, "Off"), (grid::Style::Dots, "Dots"), (grid::Style::Lines, "Lines")],
+            );
+        });
         settings::row_with_keywords(ui, "Grid opacity", &["transparency", "fade", "dots"], |ui| {
             grid::opacity_control(ui, &mut preferences.grid_opacity_percent);
         });
@@ -426,11 +437,15 @@ mod tests {
             scale_percent: 110,
             navigation: Navigation { scroll: ScrollAction::Pan, reverse_zoom: true, zoom_speed_percent: 150, zoom_around: ZoomAround::Center },
             grid_opacity_percent: 35,
+            board_grid_style: grid::Style::Dots,
             schematic_grid_nm: 25 * grid::NM_PER_MIL,
             selection_follow: SelectionFollow::SecondaryFollowsPrimary,
             units: Unit::Mm,
         };
-        assert_eq!(Preferences::parse(&preferences.to_text()), preferences);
+        for style in [grid::Style::Off, grid::Style::Dots, grid::Style::Lines] {
+            let preferences = Preferences { board_grid_style: style, ..preferences };
+            assert_eq!(Preferences::parse(&preferences.to_text()), preferences);
+        }
         // Settings saved before units existed show mils, as the grid did then.
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":40}").units, Unit::Mil);
         let hidden = Preferences { grid_opacity_percent: 0, ..Preferences::default() };
@@ -450,6 +465,9 @@ mod tests {
         let older = Preferences::parse("{\"theme\":\"Light\",\"scale_percent\":125}");
         assert_eq!((older.theme, older.scale_percent, older.navigation), (ThemeChoice::Light, 125, Navigation::default()));
         assert_eq!(older.grid_opacity_percent, grid::OPACITY_DEFAULT);
+        assert_eq!(older.board_grid_style, grid::Style::Off);
+        let future = Preferences::parse(r#"{"theme":"Light","board_grid_style":"FutureStyle"}"#);
+        assert_eq!((future.theme, future.board_grid_style), (ThemeChoice::Light, grid::Style::Off));
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":101}").grid_opacity_percent, grid::OPACITY_DEFAULT);
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":-1}"), Preferences::default());
         assert_eq!(older.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM);
@@ -483,6 +501,7 @@ mod tests {
             scale_percent: 150,
             navigation: Navigation { reverse_zoom: true, ..Navigation::default() },
             grid_opacity_percent: 20,
+            board_grid_style: grid::Style::Lines,
             schematic_grid_nm: 10 * grid::NM_PER_MIL,
             selection_follow: SelectionFollow::Both,
             units: Unit::Mm,

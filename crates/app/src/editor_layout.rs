@@ -13,7 +13,8 @@ impl HostId {
     pub(super) const ROOT: Self = Self(0);
 }
 
-/// A window can contain any number of views, with independent divider positions.
+/// A window can contain any number of panes, with independent divider positions. `Tabs`
+/// retains the saved-format name for a pane's cached documents; it has no visible tab strip.
 #[derive(Clone, Debug)]
 pub(super) enum Layout {
     View(ViewId),
@@ -107,18 +108,24 @@ impl Layout {
         }
     }
 
-    /// Insert a view beside the addressed leaf, preserving all other placements and dividers.
+    /// Insert a new single-document pane beside the addressed pane.
     pub(super) fn insert(&mut self, beside: ViewId, id: ViewId) -> bool {
+        self.insert_group(beside, &Self::View(id))
+    }
+
+    /// Insert a whole pane, including its cached document navigation, beside the addressed pane.
+    /// Existing placements and divider ratios stay intact; an unknown source changes nothing.
+    pub(super) fn insert_group(&mut self, beside: ViewId, group: &Self) -> bool {
         match self {
             Self::View(current) if *current == beside => {
-                *self = Self::Split { first: Box::new(self.clone()), second: Box::new(Self::View(id)), ratio: 0.5 };
+                *self = Self::Split { first: Box::new(self.clone()), second: Box::new(group.clone()), ratio: 0.5 };
                 true
             }
             Self::Tabs { views, .. } if views.contains(&beside) => {
-                *self = Self::Split { first: Box::new(self.clone()), second: Box::new(Self::View(id)), ratio: 0.5 };
+                *self = Self::Split { first: Box::new(self.clone()), second: Box::new(group.clone()), ratio: 0.5 };
                 true
             }
-            Self::Split { first, second, .. } => first.insert(beside, id) || second.insert(beside, id),
+            Self::Split { first, second, .. } => first.insert_group(beside, group) || second.insert_group(beside, group),
             _ => false,
         }
     }

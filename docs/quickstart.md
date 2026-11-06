@@ -88,6 +88,11 @@ float or collapse; **View** restores a hidden panel. **Help → Keyboard Shortcu
 shows the current bindings. Keyboard editing shortcuts apply to the canvas when
 a text field or dialog is not using the keys.
 
+The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
+**Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
+views and windows. Grid opacity affects visible grids in both workspaces; display
+changes leave snapping and each view's spacing unchanged.
+
 To compare views, choose **View → Split**, pan one pane, and select a symbol:
 the other pane highlights it while keeping its own selection. **View → Settings**
 can also pan other views to reveal a selection. On desktop, **View → New window**
@@ -104,11 +109,12 @@ single view. Right-click any arrangement tab for **Rename…**, **Duplicate…**
 **Delete…**. Renaming or deleting an inactive tab leaves the current setup in
 place. Naming opens a dialog in the window you are using;
 **Cancel** or **Esc** discards the draft. Each arrangement remembers
-its panes, document tabs, cameras, panels and desktop windows locally; reopening
+its panes, document navigation, cameras, panels and desktop windows locally; reopening
 the saved project restores the last active arrangement. Selecting a sheet in
-Browser or a workspace opens or activates its document tab in the focused pane,
-without switching arrangements or moving views elsewhere. Tab **×** closes that
-view. The engine currently exposes one editable sheet and one legacy board.
+Browser or a workspace changes what the focused pane shows, without adding tabs,
+switching arrangements or moving views elsewhere. A single view has no lower tab
+strip; split panes each show one document header whose **×** closes the pane.
+The engine currently exposes one editable sheet and one legacy board.
 See [arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
 for storage and monitor-restoration limits.
 

@@ -74,6 +74,7 @@ impl PcbApp {
 
     /// Paint any addressed board pane, with input granted only to its focused view. The renderer
     /// returns selection intent; validation and broadcasting happen after its borrow ends.
+    /// All board panes use the shared grid display preference without changing their cameras.
     pub(super) fn board_pane(&mut self, ui: &mut Ui, id: ViewId) {
         let enabled = ui.is_enabled()
             && (crate::IN_BROWSER || ui.input(|input| input.focused))
@@ -109,6 +110,7 @@ impl PcbApp {
                         enabled,
                         self.preferences.navigation,
                         self.preferences.grid_opacity_percent,
+                        self.preferences.board_grid_style,
                         &label,
                     )
                 })
