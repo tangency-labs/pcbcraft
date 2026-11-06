@@ -22,7 +22,7 @@ fn slide_preview(h: &mut Harness<'_, PcbApp>, id: u64, from: Point, to: Point) -
     h.run();
     h.hover_at(end);
     h.run();
-    assert!(matches!(view(h, id).tool, Some(Tool::MoveSegment { .. })));
+    assert!(matches!(view(h, id).tool, Some(Tool::Reshape { .. })));
     end
 }
 
@@ -89,8 +89,15 @@ fn dragging_a_segment_aligns_adjacent_runs_without_moving_the_whole_wire() {
             assert_eq!(after.wires()[0].endpoints(), before.wires()[0].endpoints());
             assert_eq!(view(&h, 1 - id).camera.screen(grid(0, 0), canvas(&h, 1 - id)), center);
             for pane in [0, 1] {
-                assert_painted(&h, pane, &routes(&h)[0], pcbcraft_chrome::Tokens::get().schematic_wire);
+                let ink = pcbcraft_chrome::Tokens::get();
+                assert_painted(&h, pane, &routes(&h)[0], if pane == id { ink.schematic_wire } else { ink.schematic_highlight });
             }
+            assert!(view(&h, id).selected_leg.is_some(), "The reshaped segment stays selected");
+            h.key_press(Key::Delete);
+            h.run();
+            assert_eq!(routes(&h).len(), 2, "The retained selection deletes only the newly aligned segment");
+            click(&mut h, "Undo");
+            assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
             focus_tab(&mut h, 1 - id);
             click(&mut h, "Undo");
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
@@ -138,7 +145,7 @@ fn whole_wire_actions_and_keyboard_segment_drag_remain_distinct() {
     h.run();
     h.key_press(Key::G);
     h.run();
-    assert!(matches!(view(&h, 1).tool, Some(Tool::MoveSegment { .. })));
+    assert!(matches!(view(&h, 1).tool, Some(Tool::Reshape { .. })));
     select_segment(&mut h, 1, grid(10, 3));
     assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(10, 0), grid(10, 6), grid(8, 6)]]);
 }
@@ -207,4 +214,46 @@ fn selected_segments_expire_on_shared_edits_without_whole_wire_fallback() {
     assert_eq!(h.state().session.inspect(), before);
     assert!(view(&h, 1).selected_leg.is_none());
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
+}
+
+/// #105's corner and shared-junction handles take priority over segment dragging, even after
+/// a segment click. Both split layouts/panes preserve every connected route and shared undo.
+#[test]
+fn corner_and_branched_endpoint_handles_survive_segment_selection_in_both_panes() {
+    for narrow in [false, true] {
+        for id in [0, 1] {
+            let mut h = split_harness(narrow);
+            let revision = h.state().session.revision();
+            h.state_mut().run(DRAW_WIRE, &json!({"from":{"junction":"junction-3"},"to":grid(16,6),"bends":[],"expected_revision":revision}));
+            h.run();
+            let before = h.state().session.snapshot().unwrap();
+            let endpoints: Vec<_> = before.wires().iter().map(|wire| wire.endpoints()).collect();
+            for (from, to, expected) in [
+                (grid(8, 0), grid(4, 3), vec![vec![grid(-8, 0), grid(-8, 3), grid(4, 3), grid(4, 6), grid(8, 6)], vec![grid(8, 6), grid(16, 6)]]),
+                (grid(8, 6), grid(10, 9), vec![vec![grid(-8, 0), grid(10, 0), grid(10, 9)], vec![grid(10, 9), grid(16, 9), grid(16, 6)]]),
+            ] {
+                select_segment(&mut h, id, grid(8, 3));
+                let end = slide_preview(&mut h, id, from, to);
+                let Some(Tool::Reshape { drag, .. }) = &view(&h, id).tool else { panic!("handle did not start a reshape") };
+                assert!(!matches!(drag.edit, pcbcraft_engine::wire::Reshape::Segment { .. }));
+                assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+                h.drop_at(end);
+                h.run();
+                assert_eq!(h.state().message, None);
+                assert_eq!(routes(&h), expected);
+                assert_eq!(h.state().session.project().unwrap().wires().iter().map(|wire| wire.endpoints()).collect::<Vec<_>>(), endpoints);
+                assert_eq!(view(&h, id).selection.single_wire(), Some("wire-4"));
+                let after = h.state().session.snapshot().unwrap();
+                for pane in [0, 1] {
+                    assert_painted(&h, pane, &expected[1], pcbcraft_chrome::Tokens::get().schematic_wire);
+                }
+                focus_tab(&mut h, 1 - id);
+                click(&mut h, "Undo");
+                assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+                click(&mut h, "Redo");
+                assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+                click(&mut h, "Undo");
+            }
+        }
+    }
 }

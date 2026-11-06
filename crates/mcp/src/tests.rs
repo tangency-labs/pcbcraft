@@ -252,7 +252,7 @@ fn mcp_slides_wire_segments_and_rejects_stale_retries() {
     let mut server = server();
     let command = pcbcraft_engine::MOVE_WIRE_SEGMENT;
     let description = body(&call(&mut server, "describe_command", json!({"command":command})));
-    assert_eq!(description["params"]["required"], json!(["wire", "at", "offset_nm", "expected_revision"]));
+    assert_eq!(description["params"]["required"], json!(["wire", "at", "to", "expected_revision"]));
     body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Slide"}})));
     let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
     let drawn = body(&call(
@@ -262,7 +262,7 @@ fn mcp_slides_wire_segments_and_rejects_stale_retries() {
         "params":{"from":point(0,0),"to":point(8,6),"bends":[point(8,0)],"expected_revision":1}}),
     ));
     let wire = &drawn["project"]["schematic"]["wires"][0]["id"];
-    let request = json!({"command":command,"params":{"wire":wire,"at":point(8,3),"offset_nm":2_540_000,"expected_revision":drawn["revision"]}});
+    let request = json!({"command":command,"params":{"wire":wire,"at":point(8,3),"to":point(10,3),"expected_revision":drawn["revision"]}});
     let moved = body(&call(&mut server, "execute", request.clone()));
     let route = &moved["project"]["schematic"]["wires"][0];
     assert_eq!(route["bends"], json!([point(10, 0), point(10, 6)]));
@@ -315,6 +315,56 @@ fn mcp_slices_wires_and_deletes_segments() {
         &mut server,
         "execute",
         json!({"command":pcbcraft_engine::DELETE_WIRE_SEGMENT,"params":{"wire":wire,"at":point(0, 0),"expected_revision":cut["revision"]}}),
+    );
+    assert_eq!(refused["isError"], true);
+}
+
+/// Agents reshape wires with the same three commands the canvas drags use: slide a segment,
+/// move a corner and move a free end. Each keeps the wire's endpoints and its net.
+#[test]
+fn mcp_reshapes_wire_segments_corners_and_ends() {
+    let mut server = server();
+    for (command, required) in [
+        (pcbcraft_engine::MOVE_WIRE_SEGMENT, json!(["wire", "at", "to", "expected_revision"])),
+        (pcbcraft_engine::MOVE_WIRE_CORNER, json!(["wire", "at", "to", "expected_revision"])),
+        (pcbcraft_engine::MOVE_JUNCTION, json!(["junction", "to", "expected_revision"])),
+    ] {
+        let described = body(&call(&mut server, "describe_command", json!({"command":command})));
+        assert_eq!(described["params"]["required"], required, "{command}");
+    }
+    body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Shape"}})));
+    let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
+    let drawn = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DRAW_WIRE,"params":{"from":point(0, 0),"to":point(8, 6),"bends":[point(8, 0)],"expected_revision":1}}),
+    ));
+    let wire = drawn["project"]["schematic"]["wires"][0].clone();
+    let slid = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::MOVE_WIRE_SEGMENT,"params":{"wire":wire["id"],"at":point(8, 3),"to":point(10, 3),"expected_revision":drawn["revision"]}}),
+    ));
+    let after = &slid["project"]["schematic"]["wires"][0];
+    assert_eq!((&after["from"], &after["to"]), (&wire["from"], &wire["to"]));
+    assert_eq!(after["bends"], json!([point(10, 0), point(10, 6)]));
+    let cornered = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::MOVE_WIRE_CORNER,"params":{"wire":wire["id"],"at":point(10, 0),"to":point(9, 0),"expected_revision":slid["revision"]}}),
+    ));
+    assert_eq!(cornered["project"]["schematic"]["wires"][0]["bends"], json!([point(9, 0), point(9, 6)]));
+    let moved = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::MOVE_JUNCTION,"params":{"junction":wire["to"]["junction"],"to":point(12, 6),"expected_revision":cornered["revision"]}}),
+    ));
+    assert_eq!(moved["project"]["schematic"]["wires"][0]["bends"], json!([point(9, 0), point(9, 6)]));
+    assert_eq!(moved["project"]["schematic"]["netlist"], drawn["project"]["schematic"]["netlist"]);
+    let refused = call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::MOVE_WIRE_SEGMENT,"params":{"wire":wire["id"],"at":point(9, 3),"to":point(11, 4),"expected_revision":moved["revision"]}}),
     );
     assert_eq!(refused["isError"], true);
 }

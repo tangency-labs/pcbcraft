@@ -47,6 +47,8 @@ pub(super) struct SchematicView {
     pub(super) selection: Selection,
     /// A sub-selection of the sole selected wire, valid only at its captured revision.
     pub(super) selected_leg: Option<LegTarget>,
+    /// Explicit Select Wire opts into translating the entire route instead of reshaping it.
+    pub(super) whole_wire_drag: bool,
     pub(super) tool: Option<Tool>,
     pub(super) wire_draft: Draft,
     pub(super) rotate_requested: bool,
@@ -68,6 +70,7 @@ impl SchematicView {
             camera: Camera::default(),
             selection: Selection::default(),
             selected_leg: None,
+            whole_wire_drag: false,
             tool: None,
             wire_draft: Draft::default(),
             rotate_requested: false,
@@ -128,6 +131,8 @@ impl SchematicView {
 
     /// Rebind after project replacement or reopening, preserving the view's runtime identity.
     /// Ordinary edits and undo retain the camera and surviving selection, but cancel old drafts.
+    /// A stale segment selection clears both the leg and its item selection, preventing a
+    /// geometry change from widening Delete's target to the whole surviving wire.
     /// Return whether the sheet or history root changed. Synchronization never edits the session.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
         let binding = Binding::current(session);
@@ -151,6 +156,9 @@ impl SchematicView {
             self.selection.retain(project);
         } else {
             self.selection = Selection::default();
+        }
+        if self.selection.single_wire().is_none() {
+            self.whole_wire_drag = false;
         }
         changed
     }

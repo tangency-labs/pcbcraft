@@ -156,6 +156,7 @@ impl PcbApp {
     /// Route explicit selection through the coordinator with the current follow policy.
     pub(super) fn select(&mut self, selection: Selection) {
         self.views.active.selected_leg = None;
+        self.views.active.whole_wire_drag = false;
         self.views.select(selection, &self.session, self.preferences.selection_follow);
     }
 
@@ -261,6 +262,7 @@ impl PcbApp {
                                     None,
                                     &view.selection,
                                     view.selected_leg.as_ref(),
+                                    view.whole_wire_drag,
                                     &highlight,
                                     false,
                                     self.preferences.navigation,

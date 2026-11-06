@@ -310,3 +310,114 @@ fn delayed_wire_actions_cannot_follow_focus_or_layout_changes() {
         assert_eq!(h.state().session.inspect(), before);
     }
 }
+
+/// Select the test wire as a click would, so its handles are live.
+fn select_wire(h: &mut Harness<'_, PcbApp>) {
+    h.state_mut().select(pcbcraft_engine::selection::Selection::one_wire("wire-4".to_owned()));
+    h.run();
+}
+
+/// Drag with the primary button from one model point to another in small steps.
+fn drag(h: &mut Harness<'_, PcbApp>, from: Point, to: Pos2) {
+    let start = screen(h, from);
+    h.hover_at(start);
+    h.run();
+    h.drag_at(start);
+    h.run();
+    for step in 1..=4 {
+        h.hover_at(start + (to - start) * step as f32 / 4.0);
+        h.run();
+    }
+}
+
+/// Finish a drag at `to`.
+fn drop(h: &mut Harness<'_, PcbApp>, to: Pos2) {
+    h.drop_at(to);
+    h.run();
+}
+
+/// Dragging a leg of the selected wire slides it across its direction only, through the shared
+/// command, as one undo step; the wire stays selected and keeps its identity and ends.
+#[test]
+fn dragging_a_selected_segment_slides_it() {
+    let mut h = harness();
+    select_wire(&mut h);
+    h.get_by_label("Wire selected · Drag a segment, corner or free end to reshape · Del delete");
+    let revision = h.state().session.revision();
+    let ends = h.state().session.project().unwrap().wires()[0].endpoints();
+    let to = screen(&h, grid(11, 4));
+    drag(&mut h, grid(8, 3), to);
+    h.get_by_label("Reshape wire · Esc to cancel");
+    assert_eq!(h.state().session.revision(), revision, "a drag is only a preview");
+    drop(&mut h, to);
+    assert_eq!(h.state().message, None);
+    assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(11, 0), grid(11, 6), grid(8, 6)]]);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_eq!(h.state().session.project().unwrap().wires()[0].endpoints(), ends);
+    assert_eq!(h.state().views.active.selection.single_wire(), Some("wire-4"));
+    click(&mut h, "Undo");
+    assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(8, 0), grid(8, 6)]]);
+}
+
+/// A corner drags both of its legs; a free end drags its end leg and leaves the far end put.
+#[test]
+fn dragging_a_corner_or_a_free_end_reshapes_the_route() {
+    let mut h = harness();
+    select_wire(&mut h);
+    let to = screen(&h, grid(4, 3));
+    drag(&mut h, grid(8, 0), to);
+    drop(&mut h, to);
+    assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(-8, 3), grid(4, 3), grid(4, 6), grid(8, 6)]]);
+    click(&mut h, "Undo");
+
+    let to = screen(&h, grid(10, 9));
+    drag(&mut h, grid(8, 6), to);
+    drop(&mut h, to);
+    assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(10, 0), grid(10, 9)]]);
+    let project = h.state().session.project().unwrap();
+    assert_eq!(project.endpoint_position(project.wires()[0].endpoints()[1]), Some(grid(10, 9)));
+}
+
+/// Escape, a release over a card, or an edit made during the drag (by an agent, say) leaves the
+/// route as it was.
+#[test]
+fn cancelled_or_stale_reshapes_change_nothing() {
+    let mut h = harness();
+    select_wire(&mut h);
+    let before = h.state().session.inspect();
+    let to = screen(&h, grid(11, 3));
+    drag(&mut h, grid(8, 3), to);
+    h.key_press(egui::Key::Escape);
+    h.run();
+    drop(&mut h, to);
+    assert_eq!(h.state().session.inspect(), before);
+
+    // The ribbon is outside the canvas.
+    select_wire(&mut h);
+    drag(&mut h, grid(8, 3), to);
+    let ribbon = h.get_by_label("Capture").rect().center();
+    h.hover_at(ribbon);
+    h.run();
+    drop(&mut h, ribbon);
+    assert_eq!(h.state().session.inspect(), before);
+
+    select_wire(&mut h);
+    drag(&mut h, grid(8, 3), to);
+    let revision = h.state().session.revision();
+    h.state_mut().session.apply(DRAW_WIRE, &json!({"from":grid(-8, 10),"to":grid(8, 10),"bends":[],"expected_revision":revision})).unwrap();
+    h.run();
+    drop(&mut h, to);
+    assert_eq!(routes(&h)[0], vec![grid(-8, 0), grid(8, 0), grid(8, 6)]);
+}
+
+/// Whole-wire translation is an explicit choice; an ordinary drag now reshapes one segment.
+#[test]
+fn dragging_an_explicitly_selected_wire_moves_it_whole() {
+    let mut h = harness();
+    right_click(&mut h, grid(8, 3), egui::Vec2::ZERO);
+    click(&mut h, "Select Wire");
+    let to = screen(&h, grid(8, 5));
+    drag(&mut h, grid(8, 3), to);
+    drop(&mut h, to);
+    assert_eq!(routes(&h), vec![vec![grid(-8, 2), grid(8, 2), grid(8, 8)]]);
+}

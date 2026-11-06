@@ -12,6 +12,9 @@ use crate::{
     },
 };
 
+mod reshape;
+pub use reshape::Reshape;
+
 /// Maximum intermediate points accepted in a single authored wire.
 pub const MAX_BENDS: usize = 64;
 
@@ -63,51 +66,6 @@ pub(crate) fn parse_bends(value: &Value) -> Option<Vec<Point>> {
 }
 
 impl Project {
-    /// Slide the leg containing `at` perpendicular to itself by `offset_nm`, retaining the wire
-    /// identity, electrical endpoints and junction positions. End legs gain orthogonal links to
-    /// their fixed anchors. Adjacent zero-length/collinear legs collapse when aligned. Missing or
-    /// ambiguous targets, overflow and excessive geometry are rejected without changing `self`.
-    /// The editor uses this same transformation for disposable previews and committed edits.
-    pub fn with_wire_segment_offset(&self, wire: &str, at: Point, offset_nm: i64) -> Result<Self, CommandError> {
-        let index = self
-            .wires
-            .iter()
-            .position(|candidate| candidate.id() == wire)
-            .ok_or_else(|| CommandError::InvalidParams("wire does not exist".to_owned()))?;
-        let path = self.wire_path(&self.wires[index]);
-        let leg = leg_at(&path, at)?;
-        if offset_nm == 0 {
-            return Ok(self.clone());
-        }
-        let horizontal = path[leg].y_nm == path[leg + 1].y_nm;
-        let shift = |mut point: Point| -> Result<Point, CommandError> {
-            let coordinate = if horizontal { &mut point.y_nm } else { &mut point.x_nm };
-            *coordinate =
-                coordinate.checked_add(offset_nm).ok_or_else(|| CommandError::InvalidParams("segment move exceeds schematic bounds".to_owned()))?;
-            if !valid_point(&point) {
-                return Err(CommandError::InvalidParams("segment move exceeds schematic bounds".to_owned()));
-            }
-            Ok(point)
-        };
-        let mut route = path[..leg].to_vec();
-        if leg == 0 {
-            route.push(path[0]);
-        }
-        route.extend([shift(path[leg])?, shift(path[leg + 1])?]);
-        route.extend_from_slice(&path[leg + 2..]);
-        if leg + 2 == path.len() {
-            route.push(path[leg + 1]);
-        }
-        let route = crate::schematic::orthogonal_path(route, true);
-        if route.len() < 2 || route.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(CommandError::InvalidParams("segment move would collapse the wire".to_owned()));
-        }
-        let bends = interior(&route)?;
-        let mut next = self.clone();
-        Arc::make_mut(&mut next.wires)[index].bends = Some(bends);
-        Ok(next)
-    }
-
     /// Resolve either kind of explicit electrical endpoint in this snapshot.
     pub fn endpoint_position(&self, endpoint: WireEndpoint) -> Option<Point> {
         match endpoint {
@@ -217,21 +175,6 @@ pub fn wire_path(wire: &Wire, from: Point, to: Point) -> Vec<Point> {
 }
 
 impl Session {
-    /// Commit the shared segment-slide transformation as one undo step. A zero displacement or
-    /// unchanged route is a no-op; stale revisions and invalid geometry leave history untouched.
-    pub(crate) fn move_wire_segment(&mut self, params: &Value) -> Result<(), CommandError> {
-        self.check_revision(params)?;
-        let (_, _, at) = self.wire_target(params)?;
-        let project = self.open_project()?;
-        let wire = params["wire"].as_str().unwrap_or_default();
-        let offset = params["offset_nm"].as_i64().unwrap_or_default();
-        let next = project.with_wire_segment_offset(wire, at, offset)?;
-        if next.wires != project.wires {
-            self.change(next);
-        }
-        Ok(())
-    }
-
     /// Commit one complete route, including its free points, as one revision and undo step.
     /// All geometry and endpoint checks precede adoption, so a rejected draft changes nothing.
     pub(crate) fn draw_wire(&mut self, params: &Value) -> Result<(), CommandError> {
@@ -445,7 +388,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::{
-        BREAK_WIRE, DELETE_WIRE, DELETE_WIRE_SEGMENT, DRAW_WIRE, MOVE_WIRE_SEGMENT, PLACE_SYMBOL, ROTATE_SYMBOL, SLICE_WIRE,
+        BREAK_WIRE, DELETE_WIRE, DELETE_WIRE_SEGMENT, DRAW_WIRE, PLACE_SYMBOL, ROTATE_SYMBOL, SLICE_WIRE,
         persistence::{self, Encoding},
         schematic::{GRID_NM, WireEndpoint},
     };
@@ -561,115 +504,6 @@ mod tests {
     /// A grid point as a model point.
     fn grid(x: i64, y: i64) -> Point {
         Point { x_nm: x * GRID_NM, y_nm: y * GRID_NM }
-    }
-
-    /// Slide a leg through the catalog using the current revision and grid displacement.
-    fn slide(session: &mut Session, wire: &str, at: Point, offset: i64) -> Result<u64, CommandError> {
-        session.apply(MOVE_WIRE_SEGMENT, &json!({"wire":wire,"at":at,"offset_nm":offset * GRID_NM,"expected_revision":session.revision()}))
-    }
-
-    /// Internal segments move perpendicular to their direction, leaving endpoints and other
-    /// wires alone. The preview equals the committed snapshot and history stores one step.
-    #[test]
-    fn segment_slides_keep_anchors_topology_and_shared_preview() {
-        let mut session = empty();
-        draw(&mut session, point(0, 0), point(12, 10), json!([point(4, 0), point(4, 6), point(12, 6)]));
-        let endpoint = session.project().unwrap().wires()[0].endpoints()[0].inspect();
-        draw(&mut session, endpoint, point(-4, 0), json!([]));
-        draw(&mut session, point(6, -4), point(6, 14), json!([]));
-        let before = session.snapshot().unwrap();
-        let junctions: Vec<_> = before.junctions().collect();
-        let endpoints = before.wires()[0].endpoints();
-        for (at, offset, expected) in [
-            (grid(4, 3), 2, vec![grid(0, 0), grid(6, 0), grid(6, 6), grid(12, 6), grid(12, 10)]),
-            (grid(8, 6), -3, vec![grid(0, 0), grid(4, 0), grid(4, 3), grid(12, 3), grid(12, 10)]),
-            // Aligning adjoining horizontal runs removes the now-zero vertical leg.
-            (grid(8, 6), -6, vec![grid(0, 0), grid(12, 0), grid(12, 10)]),
-        ] {
-            let preview = before.with_wire_segment_offset("wire-4", at, offset * GRID_NM).unwrap();
-            let revision = session.revision();
-            slide(&mut session, "wire-4", at, offset).unwrap();
-            let after = session.snapshot().unwrap();
-            assert_eq!(session.revision(), revision + 1);
-            assert_eq!(after.inspect_schematic(), preview.inspect_schematic());
-            assert_eq!(after.wire_path(&after.wires()[0]), expected);
-            assert_eq!(after.wires()[0].endpoints(), endpoints);
-            assert_eq!(after.junctions().collect::<Vec<_>>(), junctions);
-            assert_eq!(&after.wires()[1..], &before.wires()[1..]);
-            assert!(after.same_connectivity(&before));
-            let bytes = persistence::encode(after.clone()).unwrap();
-            assert_eq!(persistence::encode(persistence::decode(&bytes).unwrap()).unwrap(), bytes);
-            session.apply("edit.undo", &Value::Null).unwrap();
-            assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
-            session.apply("edit.redo", &Value::Null).unwrap();
-            assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &after));
-            session.apply("edit.undo", &Value::Null).unwrap();
-        }
-    }
-
-    /// A single leg between component pins gains two end links; neither component nor pin moves.
-    /// Free-ended and end-leg routes keep their anchor positions by the same transformation.
-    #[test]
-    fn sliding_end_segments_keeps_pins_and_free_endpoints_fixed() {
-        let mut session = empty();
-        for x in [0, 16] {
-            session
-                .apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":x * GRID_NM,"y_nm":0,"expected_revision":session.revision()}))
-                .unwrap();
-        }
-        draw(&mut session, json!({"symbol":"symbol-2","terminal":"2"}), json!({"symbol":"symbol-3","terminal":"1"}), json!([]));
-        let before = session.snapshot().unwrap();
-        let wire = &before.wires()[0];
-        let path = before.wire_path(wire);
-        let at = Point { x_nm: (path[0].x_nm + path[1].x_nm) / 2, y_nm: path[0].y_nm };
-        slide(&mut session, &wire.id(), at, 3).unwrap();
-        let after = session.project().unwrap();
-        assert_eq!(after.symbols(), before.symbols());
-        assert_eq!(after.wires()[0].endpoints(), wire.endpoints());
-        assert!(after.same_connectivity(&before));
-        assert_eq!(
-            routes(&session)[0],
-            vec![path[0], Point { y_nm: at.y_nm + 3 * GRID_NM, ..path[0] }, Point { y_nm: at.y_nm + 3 * GRID_NM, ..path[1] }, path[1]]
-        );
-
-        let mut free = empty();
-        draw(&mut free, point(0, 0), point(8, 6), json!([point(8, 0)]));
-        slide(&mut free, "wire-4", grid(4, 0), 2).unwrap();
-        assert_eq!(routes(&free), vec![vec![grid(0, 0), grid(0, 2), grid(8, 2), grid(8, 6)]]);
-        slide(&mut free, "wire-4", grid(8, 4), 2).unwrap();
-        assert_eq!(routes(&free), vec![vec![grid(0, 0), grid(0, 2), grid(10, 2), grid(10, 6), grid(8, 6)]]);
-    }
-
-    /// Invalid targets/displacements, stale requests and excessive bend counts cannot alter
-    /// history. A zero slide stays a no-op.
-    #[test]
-    fn rejected_and_zero_segment_slides_leave_the_snapshot_unchanged() {
-        let mut session = empty();
-        draw(&mut session, point(0, 0), point(8, 6), json!([point(8, 0)]));
-        let before = session.inspect();
-        for params in [
-            json!({"wire":"wire-4","at":grid(8, 0),"offset_nm":GRID_NM,"expected_revision":session.revision()}),
-            json!({"wire":"wire-4","at":grid(2, 1),"offset_nm":GRID_NM,"expected_revision":session.revision()}),
-            json!({"wire":"wire-999","at":grid(2, 0),"offset_nm":GRID_NM,"expected_revision":session.revision()}),
-            json!({"wire":"wire-4","at":grid(2, 0),"offset_nm":i64::MAX,"expected_revision":session.revision()}),
-            json!({"wire":"wire-4","at":grid(8, 2),"offset_nm":MAX_CENTER_NM,"expected_revision":session.revision()}),
-            json!({"wire":"wire-4","at":grid(2, 0),"offset_nm":0.5,"expected_revision":session.revision()}),
-            json!({"wire":"wire-4","at":grid(2, 0),"offset_nm":GRID_NM,"expected_revision":0}),
-        ] {
-            assert!(session.apply(MOVE_WIRE_SEGMENT, &params).is_err());
-            assert_eq!(session.inspect(), before);
-        }
-        slide(&mut session, "wire-4", grid(2, 0), 0).unwrap();
-        assert_eq!(session.inspect(), before);
-        assert!(session.project().unwrap().with_wire_segment_offset("wire-4", grid(8, 2), i64::MAX).is_err());
-
-        let mut bounded = empty();
-        let path: Vec<_> = (0..MAX_BENDS + 2).map(|index| grid(index.div_ceil(2) as i64, (index / 2) as i64)).collect();
-        draw(&mut bounded, json!(path[0]), json!(path[MAX_BENDS + 1]), json!(&path[1..=MAX_BENDS]));
-        let before = bounded.inspect();
-        let at = Point { x_nm: GRID_NM / 2, y_nm: 0 };
-        assert!(slide(&mut bounded, "wire-4", at, -1).is_err());
-        assert_eq!(bounded.inspect(), before);
     }
 
     /// Slicing keeps the route and its connections, splits identity at a new shared junction,

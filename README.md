@@ -60,10 +60,21 @@ route. Hovering a row previews what it changes. An unconnected wire end shows a 
 point where three or more wires meet shows a dot, and two wires meeting end to end read as one
 line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
 `schematic.delete_wire_segment` with a point on the wire.
-`schematic.move_wire_segment` takes `wire`, `at`, `offset_nm` and `expected_revision`;
-positive offsets slide vertical segments right or horizontal segments down. It uses the same
+`schematic.move_wire_segment` takes `wire`, `at`, `to` and `expected_revision`;
+`to` moves the point at `at` perpendicular to the segment. It uses the same
 geometry as the canvas preview and commits one undo step. These commands are available in
 headless MCP; the live desktop connection still exposes only symbol movement.
+
+Selecting a segment also shows square handles on its wire’s corners and free ends. Drag a handle
+to reshape it in place: a straight segment slides across its direction, a corner drags the
+two legs that meet there, and a free end or junction drags the end leg of every wire attached
+to it. The wire's other ends stay put, gaining an orthogonal leg where needed; pins never leave
+their parts, and connections don't change. The drag moves by the grid's snapped travel, so an
+off-grid wire stays off the grid by the same amount. Release to commit one undoable edit;
+**Esc**, releasing outside the sheet, or an edit made meanwhile cancels it. Multi-item
+selections and explicit **Select Wire** selections still move whole routes. Agents use `schematic.move_wire_segment`,
+`schematic.move_wire_corner` and `schematic.move_junction`. Overlapping or doubled-back runs
+are not yet merged automatically.
 
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
 **E** edits its reference and value and **Delete** removes it with its wires.

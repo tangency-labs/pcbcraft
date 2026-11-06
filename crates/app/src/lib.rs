@@ -402,6 +402,7 @@ impl PcbApp {
             WireAction::SelectWire => {
                 if leg.revision == self.session.revision() {
                     self.select(Selection::one_wire(leg.wire.clone()));
+                    self.views.active.whole_wire_drag = true;
                 }
                 return;
             }
@@ -420,6 +421,32 @@ impl PcbApp {
         self.run(command, &params);
         if self.message.is_none() {
             self.select(Selection::default());
+        }
+    }
+
+    /// Commit a finished reshape drag through the matching shared command at the revision the
+    /// drag began on, so an edit made meanwhile makes it fail visibly. Segments rebind to the
+    /// new geometry when unambiguous, otherwise clear; corner/junction edits keep the wire selected.
+    fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::schematic::Point, revision: u64) {
+        use pcbcraft_engine::wire::Reshape;
+        let (command, params) = match &drag.edit {
+            Reshape::Segment { wire, at } => (pcbcraft_engine::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": at, "to": to})),
+            Reshape::Corner { wire, at } => (pcbcraft_engine::MOVE_WIRE_CORNER, json!({"wire": wire, "at": at, "to": to})),
+            Reshape::Junction(id) => (pcbcraft_engine::MOVE_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to})),
+        };
+        let mut params = params;
+        params["expected_revision"] = json!(revision);
+        let selected_segment = self.views.active.selected_leg.is_some();
+        self.run(command, &params);
+        if self.message.is_none() && selected_segment {
+            if let pcbcraft_engine::wire::Reshape::Segment { wire, .. } = &drag.edit
+                && let Some(leg) =
+                    self.session.project().and_then(|project| schematic_canvas::LegTarget::at_model(project, wire, to, self.session.revision()))
+            {
+                self.select_leg(leg);
+            } else {
+                self.select(Selection::default());
+            }
         }
     }
 
@@ -756,7 +783,7 @@ impl PcbApp {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
                         Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
-                        Tool::MoveSegment { .. } => dim("Drag wire segment · Esc to cancel"),
+                        Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
                         Tool::BoxSelect { .. } => dim("Select items · Esc to cancel"),
                         Tool::Wire { start: None, .. } => dim("Wire · Click a start point"),
                         Tool::Wire { start: Some(_), .. } => dim("Wire · Click corners · Enter finish · Space flip · Esc cancel"),
@@ -764,7 +791,11 @@ impl PcbApp {
                 } else if self.views.active.selected_leg.is_some() {
                     ui.label(dim("Wire segment selected · Del delete"));
                 } else if self.views.active.selection.single_wire().is_some() {
-                    ui.label(dim("Wire selected · Del delete"));
+                    ui.label(dim(if self.views.active.whole_wire_drag {
+                        "Whole wire selected · Drag to move · Del delete"
+                    } else {
+                        "Wire selected · Drag a segment, corner or free end to reshape · Del delete"
+                    }));
                 } else if self.files.busy() {
                     ui.label(dim("File operation in progress"));
                 } else if let Some(notice) = &self.file_notice {
@@ -819,6 +850,7 @@ impl PcbApp {
                             self.views.active.tool.clone(),
                             &self.views.active.selection,
                             self.views.active.selected_leg.as_ref(),
+                            self.views.active.whole_wire_drag,
                             &highlight,
                             input_enabled,
                             self.preferences.navigation,
@@ -891,27 +923,36 @@ impl PcbApp {
                 self.select(symbol.map(Selection::one_symbol).unwrap_or_default());
             }
             (None, Click::SelectLeg(leg)) => self.select_leg(leg),
-            (None, Click::GrabSegment(leg, origin)) => {
-                self.select_leg(leg.clone());
-                self.views.active.tool = Some(Tool::MoveSegment { leg, origin });
-            }
-            (Some(Tool::MoveSegment { leg, .. }), Click::FinishSegment(offset)) => {
-                self.views.active.tool = None;
-                if let Some(offset) = offset {
-                    self.run(
-                        pcbcraft_engine::MOVE_WIRE_SEGMENT,
-                        &json!({"wire":leg.wire,"at":leg.inside(),"offset_nm":offset,"expected_revision":leg.revision}),
-                    );
-                }
-            }
             (None, Click::GrabItems(items, origin)) => {
+                let whole_wire_drag = self.views.active.whole_wire_drag && items.single_wire().is_some();
                 self.select(items.clone());
+                self.views.active.whole_wire_drag = whole_wire_drag;
                 self.views.active.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
             }
             (Some(Tool::MoveItems { items, revision, .. }), Click::FinishItems(delta)) => {
                 self.views.active.tool = None;
                 if let Some(delta) = delta {
                     self.run(pcbcraft_engine::MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"expected_revision":revision}));
+                }
+            }
+            (None, Click::GrabReshape(drag)) => {
+                if let pcbcraft_engine::wire::Reshape::Segment { wire, at } = &drag.edit {
+                    if let Some(leg) =
+                        self.session.project().and_then(|project| schematic_canvas::LegTarget::at_model(project, wire, *at, self.session.revision()))
+                    {
+                        self.select_leg(leg);
+                    } else {
+                        return;
+                    }
+                } else {
+                    self.select(Selection::one_wire(drag.wire.clone()));
+                }
+                self.views.active.tool = Some(Tool::Reshape { drag, revision: self.session.revision() });
+            }
+            (Some(Tool::Reshape { drag, revision }), Click::FinishReshape(to)) => {
+                self.views.active.tool = None;
+                if let Some(to) = to {
+                    self.reshape_wire(&drag, to, revision);
                 }
             }
             (None, Click::DeleteItems) => self.delete_selection(),

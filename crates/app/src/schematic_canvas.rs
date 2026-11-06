@@ -9,7 +9,7 @@ pub(crate) use selection::BoxDrag;
 mod tests;
 
 pub(crate) use camera::Camera;
-pub(crate) use wires::{Draft, LegTarget};
+pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
 
 use crate::preferences::Navigation;
 use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
@@ -24,24 +24,46 @@ use pcbcraft_engine::{
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Debug)]
 pub(crate) enum Tool {
-    PlaceSymbol { definition: Arc<SymbolDefinition>, revision: u64, turns: u8 },
-    Wire { revision: u64, start: Option<Anchor> },
-    BoxSelect { drag: BoxDrag, revision: u64 },
-    MoveItems { items: Selection, origin: Point, revision: u64 },
-    MoveSegment { leg: LegTarget, origin: Point },
-    Move { symbol: SymbolPlacement, offset: Vec2, revision: u64 },
+    PlaceSymbol {
+        definition: Arc<SymbolDefinition>,
+        revision: u64,
+        turns: u8,
+    },
+    Wire {
+        revision: u64,
+        start: Option<Anchor>,
+    },
+    BoxSelect {
+        drag: BoxDrag,
+        revision: u64,
+    },
+    MoveItems {
+        items: Selection,
+        origin: Point,
+        revision: u64,
+    },
+    Move {
+        symbol: SymbolPlacement,
+        offset: Vec2,
+        revision: u64,
+    },
+    /// Dragging a segment, corner or free end of the selected wire.
+    Reshape {
+        drag: wires::ReshapeDrag,
+        revision: u64,
+    },
 }
 
 impl Tool {
     /// Return the revision used to reject stale canvas actions.
     pub(crate) fn revision(&self) -> u64 {
         match self {
-            Self::MoveSegment { leg, .. } => leg.revision,
             Self::PlaceSymbol { revision, .. }
             | Self::Wire { revision, .. }
             | Self::Move { revision, .. }
             | Self::BoxSelect { revision, .. }
-            | Self::MoveItems { revision, .. } => *revision,
+            | Self::MoveItems { revision, .. }
+            | Self::Reshape { revision, .. } => *revision,
         }
     }
 }
@@ -51,12 +73,15 @@ pub(crate) enum Click {
     Place(Point),
     StartBox(BoxDrag),
     SelectItems(Selection),
+    /// Select one leg for direct deletion and reshaping.
+    SelectLeg(LegTarget),
     GrabItems(Selection, Point),
     FinishItems(Option<Point>),
+    /// A drag started on a segment, corner or free end of the one selected wire.
+    GrabReshape(wires::ReshapeDrag),
+    /// The reshape drag ended: where the grabbed point goes, or `None` to cancel.
+    FinishReshape(Option<Point>),
     DeleteItems,
-    SelectLeg(LegTarget),
-    GrabSegment(LegTarget, Point),
-    FinishSegment(Option<i64>),
     WirePoint(Anchor, bool),
     CancelWire,
     Grab(SymbolPlacement, Vec2),
@@ -100,7 +125,7 @@ pub(crate) enum WireAction {
     DeleteSegment,
     /// Remove the whole wire.
     Delete,
-    /// Select the whole route for group-style dragging or deletion.
+    /// Select the complete route for translation or deletion.
     SelectWire,
 }
 
@@ -113,8 +138,7 @@ pub(crate) enum SymbolAction {
 }
 
 /// Draw the schematic and its active preview, and report a requested tool action.
-/// A primary drag grabs a symbol, one wire segment or an explicitly selected whole-item group;
-/// empty-space and secondary drags draw
+/// A primary drag reshapes one wire, grabs a symbol or moves an explicitly selected whole-wire/group; empty-space and secondary drags draw
 /// selection boxes. Move previews end on release, with no edit outside the canvas or after focus loss.
 ///
 /// Return `Click::CancelWire` when Cancel or Escape dismisses an in-progress wire
@@ -130,12 +154,12 @@ pub(crate) enum SymbolAction {
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
 ///
-/// With no tool, a primary click selects a symbol or one wire segment, or clears selection on
-/// empty canvas. Shift/Ctrl combine whole-item hits with the previous selection. G over a wire
-/// starts the same segment slide as a drag, completed by the next click. A secondary click selects the symbol under it and opens its menu; a row
+/// With no tool, a primary click selects one wire leg or an item, or clears
+/// selection on empty canvas. Shift/Ctrl combine those hits with the previous selection. A secondary click selects the symbol under it and opens its menu; a row
 /// picked there returns `Click::Edit`. A secondary click on a wire selects it and opens Slice, Break, Delete Segment and Delete Wire for the leg under the click, returning `Click::WireEdit`
-/// bound to `revision`. `selected_leg` limits blue ink and subsequent edits to one segment;
-/// the remaining `selected` items are drawn in the accent colour. Both mouse buttons can start a box;
+/// bound to `revision`. `selected_leg` limits blue ink and Delete to one leg; `whole_wire_drag`
+/// opts out of handles and reshaping for explicit whole-route movement. G over a wire starts
+/// a reshape completed by the next click. Other `selected` items use the accent colour. Both mouse buttons can start a box;
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
@@ -152,6 +176,7 @@ pub(crate) fn show(
     tool: Option<Tool>,
     selected: &Selection,
     selected_leg: Option<&LegTarget>,
+    whole_wire_drag: bool,
     highlighted: &Selection,
     input_enabled: bool,
     navigation: Navigation,
@@ -163,7 +188,7 @@ pub(crate) fn show(
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
-    let moving = matches!(tool, Some(Tool::Move { .. } | Tool::MoveItems { .. } | Tool::MoveSegment { .. } | Tool::BoxSelect { .. }));
+    let moving = matches!(tool, Some(Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. } | Tool::Reshape { .. }));
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
     let group_delta = match &tool {
@@ -173,22 +198,16 @@ pub(crate) fn show(
         }),
         _ => None,
     };
-    let group_preview = match (&tool, group_delta) {
-        (Some(Tool::MoveItems { items, .. }), Some(delta)) => items.moved(project, delta).ok(),
+    let reshape_target = match &tool {
+        Some(Tool::Reshape { drag, .. }) => ui.input(|input| input.pointer.hover_pos()).map(|pointer| drag.target(camera.snap(pointer, rect))),
         _ => None,
     };
-    let segment_offset = match &tool {
-        Some(Tool::MoveSegment { leg, origin, .. }) => ui.input(|input| input.pointer.hover_pos()).map(|pointer| {
-            let point = camera.snap(pointer, rect);
-            if leg.horizontal() { point.y_nm - origin.y_nm } else { point.x_nm - origin.x_nm }
-        }),
+    let group_preview = match (&tool, group_delta, reshape_target) {
+        (Some(Tool::MoveItems { items, .. }), Some(delta), _) => items.moved(project, delta).ok(),
+        (Some(Tool::Reshape { drag, .. }), _, Some(to)) => project.reshaped(&drag.edit, to).ok(),
         _ => None,
     };
-    let segment_preview = match (&tool, segment_offset) {
-        (Some(Tool::MoveSegment { leg, .. }), Some(offset)) => project.with_wire_segment_offset(&leg.wire, leg.inside(), offset).ok(),
-        _ => None,
-    };
-    let project = segment_preview.as_ref().or(group_preview.as_ref()).unwrap_or(project);
+    let project = group_preview.as_ref().unwrap_or(project);
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();
     let screen = |point| camera.screen(point, rect);
@@ -209,7 +228,16 @@ pub(crate) fn show(
     }
     wires::paint(&painter, rect, project, camera, moved.clone(), &whole_wires, &highlighted.wires);
     if let Some(leg) = selected_leg {
-        let offset = if segment_preview.is_some() { segment_offset.unwrap_or_default() } else { 0 };
+        let offset = match (&tool, reshape_target) {
+            (Some(Tool::Reshape { drag, .. }), Some(to)) if group_preview.is_some() => {
+                if leg.horizontal() {
+                    to.y_nm - drag.grabbed.y_nm
+                } else {
+                    to.x_nm - drag.grabbed.x_nm
+                }
+            }
+            _ => 0,
+        };
         wires::paint_selected_leg(&painter, rect, camera, leg, offset);
     }
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
@@ -228,6 +256,14 @@ pub(crate) fn show(
             };
             paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
         }
+    }
+
+    // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
+    if !whole_wire_drag
+        && matches!(tool, None | Some(Tool::Reshape { .. }))
+        && let Some(wire) = selected.single_wire()
+    {
+        wires::paint_handles(&painter, rect, project, camera, wire);
     }
 
     if let Some(Tool::Wire { start: Some(start), .. }) = tool
@@ -273,16 +309,6 @@ pub(crate) fn show(
 
     // Handle active rectangles before context menus: a secondary drag consumes its release.
     let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
-    if let Some(Tool::MoveSegment { .. }) = &tool {
-        if lost_focus || response.secondary_clicked() {
-            return Some(Click::FinishSegment(None));
-        }
-        let finish = ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary));
-        if finish {
-            return Some(Click::FinishSegment(segment_offset.filter(|_| input_enabled && response.contains_pointer() && segment_preview.is_some())));
-        }
-        return None;
-    }
     if let Some(Tool::BoxSelect { drag, .. }) = &tool {
         if lost_focus {
             return Some(Click::SelectItems(drag.base.clone()));
@@ -295,6 +321,15 @@ pub(crate) fn show(
                 let valid = input_enabled && response.contains_pointer();
                 return Some(Click::SelectItems(if valid { drag.base.combine(&hits, drag.add, drag.toggle) } else { drag.base.clone() }));
             }
+        }
+        return None;
+    }
+    if matches!(tool, Some(Tool::Reshape { .. })) {
+        if lost_focus || response.secondary_clicked() {
+            return Some(Click::FinishReshape(None));
+        }
+        if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+            return Some(Click::FinishReshape(reshape_target.filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some())));
         }
         return None;
     }
@@ -316,6 +351,16 @@ pub(crate) fn show(
     {
         let right = response.drag_started_by(egui::PointerButton::Secondary);
         let modifiers = ui.input(|i| i.modifiers);
+        // A plain drag on the one selected wire reshapes it instead of moving it whole.
+        if !right
+            && !whole_wire_drag
+            && !modifiers.shift
+            && !modifiers.ctrl
+            && let Some(wire) = selected.single_wire()
+            && let Some(drag) = wires::reshape_at(project, camera, rect, wire, origin, camera.snap(origin, rect))
+        {
+            return Some(Click::GrabReshape(drag));
+        }
         let hit = selection::at(project, camera, rect, origin);
         if right || hit.is_empty() || modifiers.shift || modifiers.ctrl {
             return Some(Click::StartBox(BoxDrag {
@@ -326,16 +371,13 @@ pub(crate) fn show(
                 button: if right { egui::PointerButton::Secondary } else { egui::PointerButton::Primary },
             }));
         }
-        if hit.symbols.is_subset(&selected.symbols)
-            && hit.wires.is_subset(&selected.wires)
-            && (selected.len() > 1 || (!hit.wires.is_empty() && selected_leg.is_none()))
-        {
+        if hit.symbols.is_subset(&selected.symbols) && hit.wires.is_subset(&selected.wires) && (selected.len() > 1 || whole_wire_drag) {
             return Some(Click::GrabItems(selected.clone(), camera.snap(origin, rect)));
         }
-        if hit.single_wire().is_some()
-            && let Some(leg) = wires::leg_at(project, camera, rect, origin, revision)
+        if let Some(wire) = hit.single_wire()
+            && let Some(drag) = wires::reshape_at(project, camera, rect, wire, origin, camera.snap(origin, rect))
         {
-            return Some(Click::GrabSegment(leg, camera.snap(origin, rect)));
+            return Some(Click::GrabReshape(drag));
         }
         return grab_symbol(project, camera, rect, origin);
     }
@@ -403,9 +445,10 @@ pub(crate) fn show(
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::G))
         && let Some(pointer) = response.hover_pos()
-        && let Some(leg) = wires::leg_at(project, camera, rect, pointer, revision)
+        && let Some(wire) = selection::at(project, camera, rect, pointer).single_wire()
+        && let Some(drag) = wires::reshape_at(project, camera, rect, wire, pointer, camera.snap(pointer, rect))
     {
-        return Some(Click::GrabSegment(leg, camera.snap(pointer, rect)));
+        return Some(Click::GrabReshape(drag));
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
@@ -427,7 +470,7 @@ pub(crate) fn show(
         Tool::Wire { start, .. } => {
             wires::pick(&painter, rect, &response, project, camera, start, draft).map(|(anchor, finish)| Click::WirePoint(anchor, finish))
         }
-        Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } | Tool::MoveSegment { .. } => None,
+        Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } | Tool::Reshape { .. } => None,
     }
 }
 
