@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::*;
 
 mod editor_views;
+mod grid_spacing;
 mod split_editors;
 
 /// Start directly in the workspace for editor-control tests; startup tests use the real constructor.

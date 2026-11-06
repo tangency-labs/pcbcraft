@@ -216,6 +216,47 @@ fn selected_segments_expire_on_shared_edits_without_whole_wire_fallback() {
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
 }
 
+/// A metric grid in one pane controls both mouse and G reshaping without borrowing the
+/// other pane's coarser grid or snapping the wire's existing off-grid offset away.
+#[test]
+fn segment_reshape_uses_its_own_panes_custom_grid() {
+    for narrow in [false, true] {
+        for id in [0, 1] {
+            let mut h = split_harness(narrow);
+            h.state_mut().set_view_grid(ViewId(id), 500_000);
+            h.state_mut().set_view_grid(ViewId(1 - id), 2_540_000);
+            h.run();
+            let before = h.state().session.snapshot().unwrap();
+            let revision = h.state().session.revision();
+            let from = grid(8, 3);
+            let to = Point { x_nm: 11_160_000, y_nm: from.y_nm };
+            if id == 0 {
+                let end = slide_preview(&mut h, id, from, to);
+                assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+                h.drop_at(end);
+                h.run();
+            } else {
+                select_segment(&mut h, id, from);
+                h.key_press(Key::G);
+                h.run();
+                assert!(matches!(view(&h, id).tool, Some(Tool::Reshape { .. })));
+                select_segment(&mut h, id, to);
+            }
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert_eq!(
+                routes(&h),
+                vec![vec![grid(-8, 0), Point { x_nm: 11_160_000, y_nm: 0 }, Point { x_nm: 11_160_000, y_nm: 7_620_000 }, grid(8, 6)]]
+            );
+            assert_eq!(view(&h, id).camera.snap_nm(), 500_000);
+            assert_eq!(view(&h, 1 - id).camera.snap_nm(), 2_540_000);
+            assert_eq!(h.state().session.project().unwrap().wires()[0].endpoints(), before.wires()[0].endpoints());
+            click(&mut h, "Undo");
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}
+
 /// #105's corner and shared-junction handles take priority over segment dragging, even after
 /// a segment click. Both split layouts/panes preserve every connected route and shared undo.
 #[test]

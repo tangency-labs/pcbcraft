@@ -64,6 +64,9 @@ const COMMAND_Q: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Ke
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
+/// KiCad's keys for the next and previous grid: N for finer, Shift+N for coarser.
+const FINER_GRID: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::N);
+const COARSER_GRID: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::N);
 const EDIT_FIELDS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::E);
 const COMMAND_COMMA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
 
@@ -216,9 +219,12 @@ impl PcbApp {
         // Home uses custom fonts on its first frame; installing during that frame is too late.
         fonts::install(&cc.egui_ctx);
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
+        let mut views = EditorViews::default();
+        views.set_grid_everywhere(preferences.schematic_grid_nm);
         Self {
             home: true,
             preferences,
+            views,
             #[cfg(not(target_arch = "wasm32"))]
             assistant: assistant::Assistant::from_setting(
                 cc.storage.and_then(|s| s.get_string(ASSISTANT_AGENT_KEY)).as_deref(),
@@ -1042,6 +1048,12 @@ impl PcbApp {
             if self.views.active.tool.is_none() && self.views.active.selection.single_symbol().is_some() && pressed(&EDIT_FIELDS) {
                 self.edit_selected(SymbolAction::EditFields);
             }
+            // Shift+N first: an unshifted pattern also matches a shifted key.
+            if pressed(&COARSER_GRID) {
+                self.cycle_grid(false);
+            } else if pressed(&FINER_GRID) {
+                self.cycle_grid(true);
+            }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
                 self.parts.focus_search();
             }
@@ -1436,6 +1448,8 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));
+    list.push(("View", "Finer grid", key(&FINER_GRID)));
+    list.push(("View", "Coarser grid", key(&COARSER_GRID)));
     list.push(("View", "Back from Home", "Esc".to_owned()));
     list
 }

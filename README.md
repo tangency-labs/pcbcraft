@@ -2,6 +2,10 @@
 
 Electronics design that feels like the tools you already know, built so a person and an agent can work on the same board, at the same time, with the same commands.
 
+Start with the [quickstart](docs/quickstart.md) for a small editable example,
+the [capability table](docs/capabilities.md) for current limits, or
+[CONTRIBUTING.md](CONTRIBUTING.md) to build and work on an issue.
+
 **Status: just started.** Schematic editing works on desktop and in the browser.
 The app starts on **Home**, where you can create or open a project. It does not
 yet reopen the last project automatically. The app bar shows the project name and an
@@ -14,6 +18,15 @@ a list of Shortcuts and, on the desktop, the AI page for the Assistant.
 from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
 same points. The opacity applies to both split panes and is kept with your
 preferences, not in the project.
+The **Grid** button at the right of each sheet tab sets that pane's snap spacing:
+100, 50 (the default, where symbol pins sit), 25, 10 or 5 mil, or any other spacing
+typed as mils or millimetres (`20`, `20 mil`, `0.5 mm`, from 0.01 mm to 1000 mil).
+**N** steps the focused pane finer and **Shift+N** coarser. A new spacing never moves
+or rescales anything already drawn, and pins stay reachable at any spacing because
+wires attach to them by clicking. When zooming out thins the dots, the button says
+how far apart the drawn dots are (for example *Grid 10 mil · dots 50 mil*). Each pane
+keeps its own spacing through focus changes, splitting and reopening files; the last
+one chosen is kept with your preferences, not in the project.
 Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays
@@ -156,6 +169,9 @@ trunk serve --locked
 ```
 
 Then open [the local web app](http://127.0.0.1:8781).
+
+The [Dual LED editing demo](examples/README.md) includes a small wired schematic,
+a shareable archive and a walkthrough for editing and inspecting pin/pad mappings.
 
 ## Assistant in the desktop editor
 

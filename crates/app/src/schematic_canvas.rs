@@ -77,7 +77,7 @@ pub(crate) enum Click {
     SelectLeg(LegTarget),
     GrabItems(Selection, Point),
     FinishItems(Option<Point>),
-    /// A drag started on a segment, corner or free end of the one selected wire.
+    /// A drag started on a wire segment, corner or free end; the handler selects its target.
     GrabReshape(wires::ReshapeDrag),
     /// The reshape drag ended: where the grabbed point goes, or `None` to cancel.
     FinishReshape(Option<Point>),
@@ -163,7 +163,8 @@ pub(crate) enum SymbolAction {
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
-/// where points snap.
+/// where points snap. The camera's snap spacing sets both the drawn grid and every snapped point;
+/// pins and junctions are picked by distance, so they stay reachable at any spacing.
 /// `label` distinguishes simultaneously visible canvases in accessibility output.
 /// `highlighted` marks counterparts selected in another view. It affects paint only; hit
 /// testing, group moves and deletion use `selected`, which takes visual precedence on overlap.
@@ -212,8 +213,8 @@ pub(crate) fn show(
     let tokens = Tokens::get();
     let screen = |point| camera.screen(point, rect);
     let origin = screen(Point { x_nm: 0, y_nm: 0 });
-    let grid_step = camera.grid_step();
-    canvas_grid::paint(&painter, rect, origin, grid_step, grid_opacity);
+    let unit_step = camera.unit_step();
+    canvas_grid::paint(&painter, rect, origin, camera.snap_step(), grid_opacity);
     let moved = match &tool {
         Some(Tool::Move { symbol, offset, .. }) => response
             .interact_pointer_pos()
@@ -240,12 +241,12 @@ pub(crate) fn show(
         };
         wires::paint_selected_leg(&painter, rect, camera, leg, offset);
     }
-    let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
+    let visible = rect.expand((unit_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
         let center = screen(position);
         if visible.contains(center) {
-            let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
+            let reference = (unit_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
             let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
             let color = if selected.symbols.contains(&symbol.id()) {
                 tokens.accent
@@ -254,7 +255,7 @@ pub(crate) fn show(
             } else {
                 tokens.text
             };
-            paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
+            paint_symbol(&painter, &symbol.definition, center, unit_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
         }
     }
 
@@ -297,7 +298,7 @@ pub(crate) fn show(
     {
         let point = camera.snap(pointer, rect);
         if valid_position(point) {
-            paint_symbol(&painter, &drag.definition, screen(point), grid_step, 0, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
+            paint_symbol(&painter, &drag.definition, screen(point), unit_step, 0, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
@@ -476,7 +477,8 @@ pub(crate) fn show(
 
 /// The rows of a wire's context menu, named as in KiCad's schematic editor: Slice (when the leg
 /// has a grid point to split at), Break (when the wire has more than one leg), Delete Segment
-/// and Delete Wire. The hovered row previews its effect on the canvas.
+/// and Delete Wire, plus Select Wire for whole-route selection. The hovered row previews
+/// its effect on the canvas.
 fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: wires::LegTarget) -> Option<Click> {
     let rows = [
         (MenuItem::new("Slice").enabled(leg.split.is_some()), WireAction::Slice),
@@ -515,8 +517,8 @@ pub(super) fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, p
         .map(|symbol| (symbol, camera.screen(symbol.position, rect)))
         .filter(|(symbol, center)| {
             body(&symbol.definition, symbol.turns())
-                .translate(center.to_vec2() / camera.grid_step())
-                .contains((pointer.to_vec2() / camera.grid_step()).to_pos2())
+                .translate(center.to_vec2() / camera.unit_step())
+                .contains((pointer.to_vec2() / camera.unit_step()).to_pos2())
         })
         .min_by(|(_, a), (_, b)| a.distance_sq(pointer).total_cmp(&b.distance_sq(pointer)))
 }
@@ -559,7 +561,7 @@ fn placement_preview(
     if !valid_position(point) {
         return None;
     }
-    paint_symbol(painter, definition, screen(point), camera.grid_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
+    paint_symbol(painter, definition, screen(point), camera.unit_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
 }
 

@@ -50,7 +50,7 @@ impl Draft {
     }
 }
 
-/// A reshape grabbed on the selected wire: what moves, the model point grabbed, and the snapped
+/// A reshape grabbed on a wire: what moves, the model point grabbed, and the snapped
 /// pointer at the press. The grabbed point moves by the snapped pointer's travel, so a wire off
 /// the grid stays off it by the same amount, as group moves do.
 #[derive(Clone, Debug)]
@@ -80,7 +80,7 @@ impl ReshapeDrag {
     }
 }
 
-/// What a press at `pointer` grabs on the selected wire `wire`: one of its free ends or
+/// What a press at `pointer` grabs on `wire`: one of its free ends or
 /// junctions, then an interior corner, then a leg, each within the pin hit radius (the wire
 /// stroke radius for legs). Pins can't be dragged off their parts, so terminal ends grab
 /// nothing. `origin` is the snapped press point. `None` when nothing of that wire is there.
