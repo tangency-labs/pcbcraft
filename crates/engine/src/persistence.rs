@@ -98,6 +98,7 @@ struct Document {
 struct Sheet {
     id: Uuid,
     symbols: Vec<Placement<'static>>,
+    #[serde(default, deserialize_with = "present")]
     junctions: Option<Vec<Junction>>,
     wires: Vec<Connection<'static>>,
 }
@@ -242,6 +243,12 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document, String> {
     })
 }
 
+/// Optional geometry may be omitted, but an explicit null is malformed rather than absent.
+/// This keeps old format tags from accepting newer fields by spelling their value as null.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
 /// Stored wire geometry is absent on legacy auto-routed pin links.
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -249,7 +256,7 @@ struct Connection<'a> {
     id: u64,
     from: Endpoint<'a>,
     to: Endpoint<'a>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     bends: Option<Vec<Point>>,
 }
 
@@ -772,6 +779,20 @@ mod tests {
         let forged = original.replacen("\"y_nm\":0}", "\"y_nm\":0,\"rotation\":90}", 1);
         assert_ne!(forged, original);
         assert!(decode(forged.as_bytes()).unwrap_err().contains("unknown field `rotation`"));
+    }
+
+    /// Explicit null geometry cannot bypass format 1/2's refusal of newer fields.
+    #[test]
+    fn old_formats_refuse_null_wire_geometry() {
+        for fixture in [FORMAT_1_FIXTURE, FORMAT_2_FIXTURE] {
+            let original: serde_json::Value = serde_json::from_slice(fixture).unwrap();
+            let mut bends = original.clone();
+            bends["sheet"]["wires"][0]["bends"] = serde_json::Value::Null;
+            assert!(decode(&serde_json::to_vec(&bends).unwrap()).is_err());
+            let mut junctions = original;
+            junctions["sheet"]["junctions"] = serde_json::Value::Null;
+            assert!(decode(&serde_json::to_vec(&junctions).unwrap()).is_err());
+        }
     }
 
     /// Component fields and unit rotation survive a save, while invalid rotations and
