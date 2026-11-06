@@ -75,7 +75,7 @@ first **Save** asks for a project folder, and the project takes that folder's na
    browser, choose **Download**, keep the resulting `.pc.zip`, then reopen that
    download to check it. A download request does not prove the file was saved,
    so the browser deliberately keeps its unsaved marker.
-7. With unsaved changes, closing the desktop window, **Quit**, **New Project**
+7. With unsaved changes, closing the last desktop editor window, **Quit**, **New Project**
    and **Open** ask **Save**, **Don't Save** or **Cancel**. **Save** carries on
    only once the save succeeds. In the browser, leaving or reloading the page
    shows the browser's own warning while the project is unsaved.
@@ -98,8 +98,10 @@ Right-click a sheet tab to open beside it or close that pane. Closing a detached
 window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
-Closing the primary window prompts once for unsaved changes; **Cancel** leaves
-the editors open. Browser builds keep panes inside one tab. Schematic is currently
+Close the original window while another editor remains: the surviving window
+keeps its views and takes over project dialogs. Closing the last editor window
+prompts for unsaved changes; **Cancel** keeps that window open. **File → Quit**
+from any editor asks once before closing the whole project. Browser builds keep panes inside one tab. Schematic is currently
 the only editable workspace, so these actions show additional views of its one
 sheet; schematic/PCB workspace choices come with the board editor.
 

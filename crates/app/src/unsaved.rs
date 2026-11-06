@@ -1,10 +1,9 @@
 //! The unsaved-changes question asked before closing the window, starting a new project or
 //! opening another: **Save**, **Don't Save** or **Cancel**, worded and ordered as in SolidCraft.
 //!
-//! Every way of closing the desktop window (the OS close button, the integrated title bar's close
-//! control, File → Quit and Ctrl+Q) reaches the root viewport as one close request, so a single
-//! check covers them all. The browser has no window to close; it keeps the page's own leave
-//! warning on while the project has unsaved changes (see [`PcbApp::warn_before_leaving`]).
+//! Native window Close dismisses just that window while another editor survives. The last
+//! editor and explicit File → Quit / Ctrl+Q use one project-close decision. The browser keeps
+//! its own leave warning on while the project has unsaved changes (see [`PcbApp::warn_before_leaving`]).
 
 use egui::{ViewportCommand, ViewportId};
 
@@ -44,31 +43,38 @@ impl PcbApp {
         }
     }
 
-    /// Answer the desktop window's close request. A clean project closes. With unsaved changes the
-    /// window stays open and asks; while a file operation runs it stays open and decides once that
-    /// finishes, so a save in flight is never cut off. Repeated requests preserve a pending decision.
-    /// Once closing is allowed, later requests pass; commands always target the primary window.
+    /// Distinguish a native window dismissal from explicit Quit. Closing the original window
+    /// hides its framework shell when editors survive; only the final window or Quit ends the app.
     pub(crate) fn handle_close_request(&mut self, ctx: &egui::Context) {
         if IN_BROWSER || self.close_allowed || !ctx.input(|input| input.viewport().close_requested()) {
             return;
         }
-        self.views.cancel_gestures();
-        if self.waiting.is_some() {
-            // A repeated OS close must not replace the pending Save/Don't Save decision.
+        if std::mem::take(&mut self.windows.quit_requested) {
+            self.begin_project_close(ctx);
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            self.close_editor_host(crate::editor_layout::HostId::ROOT, ctx);
+        }
+        if !self.close_allowed {
             ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+        }
+    }
+
+    /// Ask once before ending the project. Running file jobs retain their owner and captured
+    /// decision; a repeated request cannot overwrite a pending Save or Don't Save answer.
+    pub(super) fn begin_project_close(&mut self, ctx: &egui::Context) {
+        self.views.cancel_gestures();
+        if self.waiting.is_some() || matches!(self.dialog, Dialog::SaveChanges(Then::Close)) {
             return;
         }
         if self.files.busy() {
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             self.waiting = Some(Waiting::ToDecide(Then::Close));
             self.file_notice = Some("PCBCraft will close when the file operation finishes".to_owned());
         } else if self.files.dirty(&self.session) {
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
-            // Closed from a taskbar or window switcher, the question is only seen once the window comes forward.
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
+            ctx.send_viewport_cmd_to(crate::editor_windows::viewport(self.views.main), ViewportCommand::Focus);
             self.dialog = Dialog::SaveChanges(Then::Close);
         } else {
-            self.close_allowed = true;
+            self.carry_on(Then::Close, ctx);
         }
     }
 

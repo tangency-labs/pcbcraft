@@ -19,9 +19,10 @@ tabs display project and sheet paths with chevrons, never runtime view numbers.
 Tab menus can open beside, open a new window, detach, dock or close a specific view.
 
 The native hosts borrow the same application on the UI thread, retaining one
-file controller, command history and service owner. Closing a secondary window
-dismisses its views without changing other layouts; closing the root uses one
-project-level **Save / Don’t Save / Cancel** decision. Layout transitions expire
+file controller, command history and service owner. Closing any window dismisses
+its views while another editor remains; a survivor takes over project controls
+without changing its layout. Closing the last editor or explicitly choosing Quit
+uses one project-level **Save / Don’t Save / Cancel** decision. Layout transitions expire
 old input without editing the document, and closed view/host IDs are never reused.
 Highlighting and optional selection following reach compatible views across all
 hosts while preserving edit selection, zoom and focus. Board rendering,
@@ -153,13 +154,19 @@ bytes, advance its revision or add a document undo step. Live requests identify
 their target view explicitly. Headless sessions report that window actions need
 a live editor rather than silently succeeding.
 
-The proposed initial desktop policy has one primary project window and
-detachable secondary editor windows in the same process. Closing a secondary
-window dismisses its views; only an explicit Dock moves them into another host.
-This supersedes the original #64 proposal to return a closed view to the primary
-window, following user review of the unexpected split. Closing the primary
-window uses the project's save or discard decision once and closes its secondary views.
-Root-window promotion and independent-process editing can follow separately.
+Desktop windows share one process and one project owner. Closing any editor
+window dismisses its views while other editor windows remain; only explicit Dock
+moves them into another host. When the main window closes, a surviving native
+window takes over project dialogs, Home and the Assistant while retaining its ID,
+position, layout, camera and selection. The framework's original root shell stays
+hidden to drive the shared services and immediate viewports; it has no editor
+views and is not counted as an open project window. Closing the last editor, or
+choosing File → Quit from any window, runs one save/discard decision. Cancel or
+save failure keeps the last editor available. A save already in progress remains
+owned and can finish after the original window closes. This supersedes both the
+original redock-on-Close proposal and the interim original-window-closes-project
+policy, following user review. Independent-process editing remains separate.
+
 Browser acceptance covers switching and splitting inside one tab; separate
 browser windows need another coordination design.
 
@@ -276,7 +283,7 @@ board. This is a behavior fixture, not a validated electrical reference design.
 - Undo and redo from either editor, then inspect through live MCP. Both views and MCP report the same revision and electrical state.
 - Add and remove a schematic part. Preview board consequences, reject a stale preview, apply the current preview once, and undo it once. Unchanged footprints keep their placement.
 - Save and reopen with the source library unavailable. Definitions, mappings, outline and placements survive; a no-op save produces no tracked-file diff.
-- Exercise text input, a modal dialog, a second edit during a gesture, secondary-window close, project replacement and primary-window close with unsaved changes. No stale gesture or late request changes a replacement project.
+- Exercise text input, a modal dialog, a second edit during a gesture, closing the original window before its peers, project replacement, and last-window close or explicit Quit with unsaved changes. No stale gesture or late request changes a replacement project.
 - Run presentation actions through GUI and live MCP and compare view state. Confirm that the document revision, saved data, dirty state and history remain unchanged.
 - Verify the board canvas and split arrangement in the browser. Record the desktop platforms on which separate native windows were actually qualified.
 

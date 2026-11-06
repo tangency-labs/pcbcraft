@@ -5,7 +5,7 @@ use pcbcraft_chrome::editor;
 
 use crate::ViewId;
 
-/// Stable host identity. Zero is the primary project window; native host IDs are never reused.
+/// Stable host identity. Zero is the original native window; IDs are never reused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct HostId(pub(super) u64);
 
