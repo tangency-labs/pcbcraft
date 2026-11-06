@@ -479,35 +479,26 @@ fn mcp_reshapes_wire_segments_corners_and_ends() {
     assert_eq!(refused["isError"], true);
 }
 
-/// MCP publishes segment targets and explicit healing, using the same graph changes and
-/// undo history as the ribbon; a stale retry cannot reapply cleanup.
+/// A session without a window refuses window commands and editor inspection with a reason,
+/// instead of silently succeeding, and leaves the project untouched.
 #[test]
-fn mcp_branches_into_wire_segments_and_heals_selection() {
+fn headless_sessions_say_window_commands_need_a_live_editor() {
     let mut server = server();
-    let command = pcbcraft_engine::HEAL_WIRES;
-    let description = body(&call(&mut server, "describe_command", json!({"command":command})));
-    assert_eq!(description["params"]["required"], json!(["items", "expected_revision"]));
-    let mut state = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Branch"}})));
-    let point = |x: i64, y: i64| json!({"x_nm":x*1_270_000,"y_nm":y*1_270_000});
-    state = body(&call(
-        &mut server,
-        "execute",
-        json!({"command":pcbcraft_engine::DRAW_WIRE,
-        "params":{"from":point(0,0),"to":point(20,0),"bends":[],"expected_revision":state["revision"]}}),
-    ));
-    let wire = state["project"]["schematic"]["wires"][0]["id"].clone();
-    let before = state["project"].clone();
-    state = body(&call(
-        &mut server,
-        "execute",
-        json!({"command":pcbcraft_engine::DRAW_WIRE,
-        "params":{"from":point(10,10),"to":{"wire":wire,"at":point(10,0)},"bends":[],"expected_revision":state["revision"]}}),
-    ));
-    assert_eq!(state["project"]["schematic"]["wires"].as_array().unwrap().len(), 3);
-    let request = json!({"command":command,"params":{"items":{"symbols":[],"wires":[wire]},"expected_revision":state["revision"]}});
-    let healed = body(&call(&mut server, "execute", request.clone()));
-    assert_eq!(healed, state, "this branch is already normalized");
-    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
-    assert_eq!(undone["project"], before);
-    assert_eq!(call(&mut server, "execute", request)["isError"], true);
+    body(&call(&mut server, "execute", json!({"command": "project.new"})));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    for (tool, arguments) in [
+        ("execute", json!({"command": "view.split", "params": {"view": 0, "split": true}})),
+        ("execute", json!({"command": "app.set_preferences", "params": {"theme": "light"}})),
+        ("describe_command", json!({"command": "window.set_panel"})),
+        ("inspect_editor", json!({})),
+    ] {
+        let refused = call(&mut server, tool, arguments);
+        assert_eq!(refused["isError"], true, "{tool}");
+        assert!(refused["content"][0]["text"].as_str().unwrap().contains("Connect AI assistants"), "{refused}");
+    }
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    let unknown = call(&mut server, "describe_command", json!({"command": "schematic.nothing"}));
+    assert_eq!(unknown["content"][0]["text"], "unknown command `schematic.nothing`");
+    let listed = body(&call(&mut server, "list_commands", json!({})));
+    assert!(listed.as_array().unwrap().iter().all(|command| !crate::is_window_command(command["id"].as_str().unwrap())));
 }

@@ -241,3 +241,34 @@ fn dont_save_waits_for_a_running_save() {
         }
     }
 }
+
+/// `file.save` refuses an Untitled project, which needs a location picked in the editor. Once
+/// saved there, it writes in place like File › Save without a picker, and clears the unsaved
+/// state when it finishes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_save_window_command_saves_in_place_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = unsaved_project();
+    let ctx = h.ctx.clone();
+    let refused = h.state_mut().run_window_command(&ctx, "file.save", &json!({})).unwrap_err();
+    assert!(refused.contains("Choose Save in the editor"), "{refused}");
+    assert!(!h.state().files.stand_in_waiting(), "no picker opened");
+
+    press(&mut h, "Save Project");
+    h.state_mut().files.finish_stand_in(dir.path().join("board"));
+    settle(&mut h);
+    let revision = h.state().session().revision();
+    h.state_mut().run(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 25_400_000, "y_nm": 0, "expected_revision": revision}));
+    h.run();
+    assert!(h.state().files.dirty(h.state().session()));
+
+    h.state_mut().run_window_command(&ctx, "file.save", &json!({})).unwrap();
+    assert!(h.state().files.busy());
+    assert_eq!(window_commands::inspect_editor(h.state())["file_operation"], true);
+    h.state_mut().files.finish_stand_in(dir.path().join("unused"));
+    settle(&mut h);
+    assert!(!h.state().files.dirty(h.state().session()));
+    let reopened = pcbcraft_storage::open(&dir.path().join("board")).unwrap();
+    assert_eq!(reopened.symbols().len(), 2);
+}

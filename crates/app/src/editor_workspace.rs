@@ -172,6 +172,12 @@ impl EditorViews {
         self.hosts.iter().find_map(|(host, layout)| layout.layout.views().contains(&id).then_some(*host))
     }
 
+    /// The view holding the primary role for selection following, wherever it is hosted.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn primary(&self) -> ViewId {
+        self.primary
+    }
+
     /// Whether the current render host has a visible split.
     pub(super) fn is_split(&self) -> bool {
         self.hosts.get(&self.host).is_some_and(ViewHost::split)
@@ -702,7 +708,7 @@ impl PcbApp {
 
     /// Route focus without moving cameras or editing the document. Release text search and
     /// browser drag ownership when a pane takes over; dialog input remains with its owner.
-    fn activate_editor(&mut self, ctx: &egui::Context, id: ViewId) {
+    pub(super) fn activate_editor(&mut self, ctx: &egui::Context, id: ViewId) {
         if !matches!(self.dialog, Dialog::None) || !self.views.activate(id) {
             return;
         }

@@ -259,9 +259,22 @@ inspection. Keep the revision as a JSON number, without quotes.
 In the live editor the resistor and attached wire move, the project becomes
 unsaved, and GUI **Undo**/**Redo** use the same history. Inspect after each step
 to verify the result. If another edit changed the revision, inspect again before
-retrying. The live adapter currently permits only `schematic.move_symbol` as an
-edit; headless discovery exposes the larger command catalog. Full live command
-coverage is tracked in [#61](https://github.com/tangency-labs/pcbcraft/issues/61).
+retrying. The live editor runs the same project commands as a headless session.
+
+The live editor also offers window commands. Call `inspect_editor` for its view
+IDs, then split the window and switch to the light theme:
+
+```json
+{"command": "view.split", "params": {"view": 0, "split": true}}
+```
+
+```json
+{"command": "app.set_preferences", "params": {"theme": "light"}}
+```
+
+The window splits and changes palette, but the project's revision, unsaved state
+and undo history stay as they were. A headless session refuses these commands
+and says they need a live editor.
 
 If a step fails, report the checkout commit, platform, exact action and error
 through [GitHub issues](https://github.com/tangency-labs/pcbcraft/issues), with a

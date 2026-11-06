@@ -1,9 +1,8 @@
-//! MCP tool definitions and dispatch. Every tool wraps an engine command or an inspection.
+//! MCP tool definitions and dispatch. Every tool wraps an engine or window command, or an inspection.
 
-use pcbcraft_engine::command;
 use serde_json::{Value, json};
 
-use crate::backend::Backend;
+use crate::backend::{Backend, is_window_command, needs_live_editor};
 
 /// What a tool may do, for the client's approval prompts (MCP tool annotations). Clients that
 /// auto-approve on these hints must not be told less than the truth.
@@ -48,7 +47,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "execute",
             "Run a command",
-            "Run a shared command. Set inspect to false to return only its resulting revision.",
+            "Run a project or window command. Project commands answer with the project, window commands (view., window., app., file.) with the editor; set inspect to false to return only the revision.",
             json!({"command": {"type": "string"}, "params": {"type": "object"}, "inspect": {"type": "boolean", "default": true}}),
             &["command"],
             Effect::Edits,
@@ -62,6 +61,14 @@ pub fn tool_definitions() -> Vec<Value> {
             Effect::ReadOnly,
         ),
         tool("inspect_project", "Inspect the project", "The open project and whether undo and redo can run.", json!({}), &[], Effect::ReadOnly),
+        tool(
+            "inspect_editor",
+            "Inspect the editor",
+            "The open editor's windows, views (with the IDs window commands take), panels, selection, camera and settings. Needs a live editor.",
+            json!({}),
+            &[],
+            Effect::ReadOnly,
+        ),
     ]
 }
 
@@ -100,6 +107,17 @@ fn failure(message: &str) -> Value {
     json!({"isError": true, "content": [{"type": "text", "text": message}]})
 }
 
+/// Describe a command from the backend's own discovery, so a live editor's window commands are
+/// described too. A window command a headless session lacks says what it needs.
+fn describe_command(backend: &mut dyn Backend, id: &str) -> Result<Value, String> {
+    let commands = backend.call("engine.commands", json!({}))?;
+    match commands.as_array().into_iter().flatten().find(|command| command["id"] == id) {
+        Some(command) => Ok(command.clone()),
+        None if is_window_command(id) => Err(needs_live_editor(&format!("`{id}`"))),
+        None => Err(format!("unknown command `{id}`")),
+    }
+}
+
 /// Run a tool whose arguments have been checked.
 pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
     let result = match name {
@@ -111,13 +129,11 @@ pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
             };
             Value::Array(all.as_array().into_iter().flatten().filter(keeps).cloned().collect())
         }),
-        "describe_command" => {
-            let id = args["command"].as_str().unwrap_or_default();
-            command(id).filter(|_| backend.permits_command(id)).map(|c| c.to_json()).ok_or_else(|| format!("unknown command `{id}`"))
-        }
+        "describe_command" => describe_command(backend, args["command"].as_str().unwrap_or_default()),
         "execute" => backend.call("engine.execute", json!({"command": args["command"], "params": args["params"], "inspect": args["inspect"]})),
         "cross_probe" => backend.call("project.cross_probe", args.clone()),
         "inspect_project" => backend.call("project.inspect", json!({})),
+        "inspect_editor" => backend.call("editor.inspect", json!({})),
         _ => Err(format!("unknown tool `{name}`")),
     };
     match result {

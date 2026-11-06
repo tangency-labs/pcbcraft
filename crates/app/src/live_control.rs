@@ -13,8 +13,10 @@ use std::{
 
 use craft_control::loopback::{AcceptedPeer, Listener, Token};
 use pcbcraft_engine::Session;
-use pcbcraft_mcp::live::{TOKEN_ENV, call_editor};
+use pcbcraft_mcp::live::{Editor, TOKEN_ENV};
 use serde_json::{Value, json};
+
+use crate::{Dialog, PcbApp, window_commands};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const EDITOR_TIMEOUT: Duration = Duration::from_secs(2);
@@ -31,10 +33,25 @@ pub(super) struct LiveControl {
 }
 
 /// Keep the response channel and deadline with the request until the editor sees it.
-struct Request {
+pub(super) struct Request {
     body: Value,
     deadline: Instant,
     reply: SyncSender<Value>,
+}
+
+impl Request {
+    /// The authenticated request, as `{"method": ..., "params": ...}`.
+    pub(super) fn body(&self) -> &Value {
+        &self.body
+    }
+
+    /// Send the editor's answer. A peer that has already given up is ignored.
+    pub(super) fn answer(self, result: Result<Value, String>) {
+        let _ = self.reply.try_send(match result {
+            Ok(result) => json!({"result": result}),
+            Err(error) => json!({"error": error}),
+        });
+    }
 }
 
 impl std::fmt::Debug for LiveControl {
@@ -78,27 +95,61 @@ impl LiveControl {
         format!("{config:#}")
     }
 
-    /// Run at most one request on the editor thread. Expired requests never reach the session.
-    /// Return an error if the listener has stopped so the window can clear its enabled state.
-    pub(super) fn poll(&self, session: &mut Session, can_edit: bool) -> Result<(), String> {
+    /// Take at most one request for the editor thread to run. Expired requests are answered
+    /// here and never reach the editor. Return an error if the listener has stopped so the
+    /// window can clear its enabled state.
+    pub(super) fn poll(&self) -> Result<Option<Request>, String> {
         if self.stop.load(Ordering::Acquire) {
             return Err("The local MCP connection stopped".to_owned());
         }
         let request = match self.requests.try_recv() {
             Ok(request) => request,
-            Err(mpsc::TryRecvError::Empty) => return Ok(()),
+            Err(mpsc::TryRecvError::Empty) => return Ok(None),
             Err(mpsc::TryRecvError::Disconnected) => return Err("The local MCP connection stopped".to_owned()),
         };
-        let result = if Instant::now() < request.deadline {
-            call_editor(session, &request.body, can_edit)
-        } else {
-            Err("The editor did not receive the request in time".to_owned())
-        };
-        let _ = request.reply.try_send(match result {
-            Ok(result) => json!({"result": result}),
-            Err(error) => json!({"error": error}),
-        });
-        Ok(())
+        if Instant::now() < request.deadline {
+            return Ok(Some(request));
+        }
+        request.answer(Err("The editor did not receive the request in time".to_owned()));
+        Ok(None)
+    }
+}
+
+/// The open editor as the live connection sees it, for one request on the editor thread.
+pub(super) struct LiveEditor<'a> {
+    pub(super) app: &'a mut PcbApp,
+    pub(super) ctx: &'a egui::Context,
+}
+
+impl Editor for LiveEditor<'_> {
+    fn session(&mut self) -> &mut Session {
+        &mut self.app.session
+    }
+
+    /// Hold every command while a dialog, file operation or project close owns the editor, as
+    /// the GUI disables its controls. New Project waits for unsaved changes to be saved or
+    /// discarded in the editor, which is where the GUI asks.
+    fn refusal(&self, command: &str) -> Option<String> {
+        let app = &*self.app;
+        if !matches!(app.dialog, Dialog::None) || app.files.busy() || app.project_action_pending() {
+            return Some(format!("Finish the current dialog or file operation in the editor before running `{command}`"));
+        }
+        if command == "project.new" && app.files.dirty(&app.session) {
+            return Some("The open project has unsaved changes. Save or discard them in the editor before starting a new project.".to_owned());
+        }
+        None
+    }
+
+    fn window_commands(&self) -> Vec<Value> {
+        window_commands::window_catalog()
+    }
+
+    fn inspect(&self) -> Value {
+        window_commands::inspect_editor(self.app)
+    }
+
+    fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), String> {
+        self.app.run_window_command(self.ctx, id, params)
     }
 }
 

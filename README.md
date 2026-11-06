@@ -110,12 +110,9 @@ point where three or more wires meet shows a dot, and two wires meeting end to e
 line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
 `schematic.delete_wire_segment` with a point on the wire.
 `schematic.move_wire_segment` takes `wire`, `at`, `to` and `expected_revision`;
-`to` moves the point at `at` in both axes for a detached straight wire, or perpendicular
-to the segment when its ends are anchored. It uses the same
-geometry as the canvas preview and commits one undo step. Optional `connect_ends` names
-up to two of that wire’s degree-one junction IDs to join to exact stationary pin or wire contacts;
-ordinary geometry-only commands omit it. These commands are available in
-headless MCP; the live desktop connection still exposes only symbol movement.
+`to` moves the point at `at` perpendicular to the segment. It uses the same
+geometry as the canvas preview and commits one undo step. These commands are available in
+headless MCP and through the live desktop connection.
 
 Selecting a segment also shows square handles on its wire’s corners and free ends. Drag a handle
 to reshape it in place: a straight segment slides across its direction, a corner drags the
@@ -233,22 +230,11 @@ Closing any editor window leaves the others open. If the original window closes,
 a surviving window takes over project dialogs and the Assistant without moving
 its panes or resetting its camera. Closing the last editor window, or choosing
 **File → Quit** from any window, uses one **Save / Don’t Save / Cancel** decision
-for the project. Canceling or failing a save leaves the project open.
-
-The top **Views** tab represents a named arrangement of the project's panes and
-windows. Use **+** to add one, or right-click a tab to rename, duplicate or delete
-it. Arrangements restore when a saved project is reopened on the same computer;
-they live in user-local app settings and do not change or travel with project
-files. Unsaved projects keep arrangements only for the session until their first
-successful save. See the [arrangement persistence details](docs/board-workspace-plan.md#named-arrangements-and-reopening-a-project).
-
-Browser builds support panes within one tab; native window actions are desktop
-only. The workspace tile can switch to PCB layout, open it beside
-the schematic or create a board window directly. Existing placements render as
-pad-center markers with component counterpart highlights, grouped Layers and
-read-only Properties. The editor still supports one schematic sheet and one
-board; board editing and live-MCP view/window controls remain planned. See the
-[board inspection walkthrough](docs/quickstart.md#inspect-a-board-beside-its-schematic).
+for the project. Canceling or failing a save leaves the project open. View arrangements last for the app session and do not change
+project files. Browser builds support panes within one tab; native window actions
+are desktop only. The editor still supports one schematic sheet. Live MCP reaches
+these view and window controls too (see below). Mixed-workspace splits and
+schematic-to-board cross-probing remain planned in #64 and #65.
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
 Desktop projects default to a folder containing separate project, schematic,
@@ -331,6 +317,31 @@ with `schematic.move_symbol` and pass the ID as `symbol`, coordinates as integer
 `(0, 5_080_000)` and watch the attached wire follow it. Undo and redo in the
 editor, then inspect again to confirm the position. The edit stays unsaved
 until you save the project.
+
+The live connection runs every project command in `list_commands`, such as
+`schematic.delete_wire` or `edit.undo`, in the window's own session, so the
+editor and the agent share one undo history and the status bar names each edit
+(for example **Delete Wire through MCP**). `project.new` waits until the open
+project's unsaved changes are saved or discarded in the editor, and every
+command waits while a dialog or file operation is open.
+
+It also lists window commands, marked `"scope": "window"`, which run through the
+same handlers as the editor's own controls and never edit the project, its
+revision or undo history; only `file.save` changes the unsaved state. Call `inspect_editor` for the window
+and view IDs they take, with each view's selection, zoom, center and grid:
+
+| Commands | Matching control |
+|---|---|
+| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Sheet tabs and **View → Split / Detach / New window** |
+| `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
+| `view.set_grid`, `view.select` | Status-bar grid spacing; click and box selection |
+| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs, closing a non-last window |
+| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, selection following, navigation) and **Home** |
+| `file.save` | **File → Save** for a project that already has a location |
+
+Closing the last window and choosing where to save an Untitled project stay in
+the editor, which asks about unsaved changes. Headless sessions refuse window
+commands with a reason.
 
 ## Headless MCP
 

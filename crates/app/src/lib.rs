@@ -29,11 +29,13 @@ mod project_files;
 mod recent_projects;
 mod schematic_canvas;
 mod unsaved;
+mod window_commands;
 
 use editor_view::{EditorView, ViewId, ViewInput, Workspace};
 use editor_windows::EditorWindows;
 use editor_workspace::EditorViews;
 use schematic_canvas::{Click, PartDrag, SymbolAction, Tool};
+use window_commands::Panel;
 
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
@@ -767,17 +769,14 @@ impl PcbApp {
                 toggle: true,
             },
         ];
-        match workspace::ribbon_group(ui, "Panels", &panels) {
-            Some(0) => self.browser.open = !self.browser.open,
-            Some(1) => {
-                if self.parts.open {
-                    self.parts.close(ui.ctx());
-                } else {
-                    self.parts.focus_search();
-                }
-            }
-            Some(2) => self.net_inspector.open = !self.net_inspector.open,
-            _ => {}
+        let toggled = match workspace::ribbon_group(ui, "Panels", &panels) {
+            Some(0) => Some(Panel::Browser),
+            Some(1) => Some(Panel::Parts),
+            Some(2) => Some(Panel::Nets),
+            _ => None,
+        };
+        if let Some(panel) = toggled {
+            self.set_panel(ui.ctx(), panel, !self.panel_open(panel));
         }
         workspace::ribbon_separator(ui);
         let navigate = [RibbonTool {
@@ -790,7 +789,7 @@ impl PcbApp {
             toggle: false,
         }];
         if workspace::ribbon_group(ui, "Navigate", &navigate).is_some() {
-            self.views.active.camera.request_fit();
+            self.fit_view(self.views.active.id());
         }
         workspace::ribbon_separator(ui);
         let mut editors = vec![
@@ -895,8 +894,8 @@ impl PcbApp {
             },
         ];
         match workspace::ribbon_group(ui, "Inspect", &inspect) {
-            Some(0) => self.net_inspector.open = !self.net_inspector.open,
-            Some(1) => self.views.active.camera.request_fit(),
+            Some(0) => self.set_panel(ui.ctx(), Panel::Nets, !self.panel_open(Panel::Nets)),
+            Some(1) => self.fit_view(self.views.active.id()),
             _ => {}
         }
         workspace::ribbon_separator(ui);
@@ -1564,7 +1563,7 @@ impl PcbApp {
         let mut close = false;
         let dismissed = shell::dialog(ctx, "local_mcp", "Connect AI assistants", |ui| {
             if let Some(control) = &self.live_control {
-                ui.label("Clients with this configuration can inspect this window and move symbols.");
+                ui.label("Clients with this configuration can inspect and edit this project and control its editor windows.");
                 let disable = ui
                     .horizontal(|ui| {
                         if ui.button(if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
@@ -1579,7 +1578,7 @@ impl PcbApp {
                     copied = false;
                 }
             } else {
-                ui.label("Let a local MCP client inspect and move symbols in this editor.");
+                ui.label("Let a local MCP client inspect and edit this project and control its editor windows.");
                 if ui.button("Enable local connection").clicked() {
                     match live_control::LiveControl::start(ctx) {
                         Ok(control) => {
@@ -1600,20 +1599,31 @@ impl PcbApp {
         }
     }
 
-    /// Apply a live request after completed file jobs and local keyboard shortcuts.
-    /// A successful move advances the same revision used by the canvas and save status.
+    /// Run at most one live request after completed file jobs, before any window draws. Document
+    /// commands advance the same revision used by the canvas and save status, and the status bar
+    /// names the edit; window commands change only views, windows and settings. A stopped
+    /// listener clears the enabled state and reports why.
     #[cfg(not(target_arch = "wasm32"))]
-    fn poll_live_control(&mut self) {
-        let Some(control) = &self.live_control else { return };
-        let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
+    fn poll_live_control(&mut self, ctx: &egui::Context) {
+        let request = match self.live_control.as_ref().map(live_control::LiveControl::poll) {
+            None | Some(Ok(None)) => return,
+            Some(Err(error)) => {
+                self.live_control = None;
+                self.message = Some(error);
+                return;
+            }
+            Some(Ok(Some(request))) => request,
+        };
         let revision = self.session.revision();
-        if let Err(error) = control.poll(&mut self.session, can_edit) {
-            self.live_control = None;
-            self.message = Some(error);
-        } else if self.session.revision() != revision {
+        let result = pcbcraft_mcp::live::call_editor(&mut live_control::LiveEditor { app: self, ctx }, request.body());
+        if self.session.revision() != revision {
+            self.views.sync(&self.session);
+            let title = request.body()["params"]["command"].as_str().and_then(command).map_or("Edit", |command| command.title);
             self.message = None;
-            self.file_notice = Some("Symbol moved through MCP".to_owned());
+            self.file_notice = Some(format!("{title} through MCP"));
         }
+        request.answer(result);
+        self.repaint_editors(ctx);
     }
 
     /// Poll the shared project exactly once through the framework root, even after its native
@@ -1646,7 +1656,7 @@ impl PcbApp {
         self.views.sync(&self.session);
         self.sync_arrangements(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
-        self.poll_live_control();
+        self.poll_live_control(&ctx);
         if self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
             self.editor_host_frame(ui, self.integrated_titlebar);
         }

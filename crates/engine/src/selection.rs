@@ -74,7 +74,8 @@ impl Selection {
     }
 
     /// Parse bounded canonical ID lists, rejecting extra fields and duplicate identities.
-    pub(crate) fn parse(value: &Value) -> Option<Self> {
+    /// Identities are checked for form only; [`Self::retain`] drops those absent from a project.
+    pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
         if object.len() != 2 {
             return None;
