@@ -307,12 +307,39 @@ fn the_grid_control_sits_in_the_status_bar() {
     assert_eq!((h.get_by_label(&path).rect(), h.get_by_label("Capture").rect()), (tab, ribbon));
     assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
 
-    // The menu opens upward and stays on screen.
-    grid_button(&h).click();
-    h.run();
-    let row = h.get_by_label("100 mil").rect();
-    assert!(row.max.y <= grid_button(&h).rect().min.y && row.min.y >= 0.0, "{row:?}");
-    h.key_press(Key::Escape);
+    // The whole menu opens upward and stays on screen, with its error and pin-hint lines showing,
+    // at the normal size, a compact width and a larger interface scale.
+    for (size, zoom) in [(egui::vec2(1000.0, 700.0), 1.0), (egui::vec2(640.0, 560.0), 1.0), (egui::vec2(800.0, 700.0), 1.5)] {
+        h.set_size(size);
+        h.ctx.set_zoom_factor(zoom);
+        h.run();
+        let id = h.state().views.active.id();
+        h.state_mut().set_view_grid(id, 30 * MIL);
+        h.run();
+        grid_button(&h).click();
+        h.run();
+        type_custom(&mut h, "2 cm");
+        h.run();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size / zoom);
+        let button = grid_button(&h).rect();
+        let mut menu = egui::Rect::NOTHING;
+        for label in
+            ["100 mil", "30 mil (custom)", "Apply", "Unknown unit \"cm\". Use mil, mm or in", "Pins are on 50 mil; wire to them by clicking the pin."]
+        {
+            menu = menu.union(h.get_by_label(label).rect());
+        }
+        menu = menu.union(h.get_by_role_and_label(Role::TextInput, "Custom").rect());
+        assert!(screen.contains_rect(menu), "{size:?} at {zoom}: {menu:?} leaves {screen:?}");
+        assert!(menu.max.y <= button.min.y, "{size:?} at {zoom}: {menu:?} covers {button:?}");
+        h.key_press(Key::Escape);
+        h.run();
+        h.key_press(Key::Escape);
+        h.run();
+    }
+    h.ctx.set_zoom_factor(1.0);
+    h.set_size(egui::vec2(1000.0, 700.0));
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_grid(id, 10 * MIL);
     h.run();
 
     h.state_mut().message = Some("A very long error message that would otherwise run all the way across the bar ".repeat(8));
