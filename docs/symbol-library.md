@@ -118,5 +118,6 @@ The format leaves room for more than the engine places today:
   the library. Loading symbol libraries from folders on disk comes next.
 - **Other libraries.** Library folders, Git, databases and managed libraries,
   plus import from other formats, are later slices of issue #28.
+  [library-sources.md](library-sources.md) proposes the model for them.
 - **Footprint libraries** follow the same approach, as their own format and
   files.
