@@ -44,15 +44,27 @@ pub fn tab_height() -> f32 {
     t.space_24 + t.space_8
 }
 
-/// Show the sheet path on a document tab. Focus changes its underline, leaving the tab and
-/// surrounding workspace stationary. Long paths elide from the left to retain the sheet name;
-/// accessibility and hover text always contain the complete path. The host supplies stable IDs.
-pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool) -> bool {
+/// Show the sheet path on a document tab, with the view's own controls (such as its grid) laid
+/// out by `trailing` from the strip's right edge. Focus changes the tab's underline, leaving the
+/// tab and surrounding workspace stationary. Long paths elide from the left to retain the sheet
+/// name in the room the controls leave; accessibility and hover text always contain the complete
+/// path. The host supplies stable IDs. Returns true when the tab was clicked.
+pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool, trailing: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), tab_height()), Sense::hover());
+    ui.painter().rect_filled(strip, 0, t.panel);
+    ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, t.border));
+    let controls = ui
+        .scope_builder(
+            egui::UiBuilder::new().max_rect(strip.shrink2(vec2(t.space_12, 0.0))).layout(egui::Layout::right_to_left(egui::Align::Center)),
+            trailing,
+        )
+        .response
+        .rect;
+    let reserved = if controls.width() > 0.0 { controls.width() + t.space_12 } else { 0.0 };
     let font = FontId::proportional(t.font_label);
     let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text);
-    let available = (strip.width() - 2.0 * t.space_12).max(0.0);
+    let available = (strip.width() - 2.0 * t.space_12 - reserved).max(0.0);
     let mut label = path.to_owned();
     if measure(&label).size().x > available {
         for (index, _) in path.char_indices().skip(1) {
@@ -63,12 +75,10 @@ pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool) -> bool {
         }
     }
     let galley = measure(&label);
-    let width = (galley.size().x + 2.0 * t.space_12).min(strip.width());
+    let width = (galley.size().x + 2.0 * t.space_12).min((strip.width() - reserved).max(0.0));
     let tab = Rect::from_min_size(strip.min, vec2(width, strip.height()));
     let response = ui.interact(tab, ui.id().with("sheet_tab"), Sense::click());
     response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, active, path));
-    ui.painter().rect_filled(strip, 0, t.panel);
-    ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, t.border));
     let painter = ui.painter_at(tab);
     painter.rect_filled(tab, 0, t.canvas);
     painter.galley(pos2(tab.left() + t.space_12, tab.center().y - galley.size().y / 2.0), galley, t.text);

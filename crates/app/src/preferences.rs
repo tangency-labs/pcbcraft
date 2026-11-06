@@ -99,6 +99,10 @@ pub struct Preferences {
     /// views, this changes drawing only, never snapping, selection, cameras or project history.
     /// Detached editor windows and per-view overrides are not implemented yet.
     pub grid_opacity_percent: u8,
+    /// The schematic snap spacing last chosen in any view, in nanometres. Both views start from
+    /// it when the app starts; after that each view keeps its own spacing through focus changes,
+    /// splitting and reopening files. It is never saved in the project.
+    pub schematic_grid_nm: i64,
     /// Automatic counterpart navigation; highlighting remains enabled when this is Off.
     pub selection_follow: SelectionFollow,
 }
@@ -110,6 +114,7 @@ impl Default for Preferences {
             scale_percent: 100,
             navigation: Navigation::default(),
             grid_opacity_percent: grid::OPACITY_DEFAULT,
+            schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
             selection_follow: SelectionFollow::default(),
         }
     }
@@ -118,7 +123,7 @@ impl Default for Preferences {
 impl Preferences {
     /// Read saved settings. Anything unreadable falls back to the defaults rather than stopping the
     /// app from starting, a scale or zoom speed off its range or step goes back to 100%, and a
-    /// grid opacity above 100% goes back to the default.
+    /// grid opacity above 100% or a grid spacing outside its range goes back to the default.
     pub fn parse(text: &str) -> Self {
         let mut preferences: Self = serde_json::from_str(text).unwrap_or_else(|e| {
             log::warn!("preferences: ignoring what was saved: {e}");
@@ -133,6 +138,9 @@ impl Preferences {
         }
         if !grid::OPACITY_RANGE.contains(&preferences.grid_opacity_percent) {
             preferences.grid_opacity_percent = grid::OPACITY_DEFAULT;
+        }
+        if !grid::SPACING_RANGE_NM.contains(&preferences.schematic_grid_nm) {
+            preferences.schematic_grid_nm = grid::SCHEMATIC_SPACING_DEFAULT_NM;
         }
         preferences
     }
@@ -420,6 +428,7 @@ mod tests {
             scale_percent: 110,
             navigation: Navigation { scroll: ScrollAction::Pan, reverse_zoom: true, zoom_speed_percent: 150, zoom_around: ZoomAround::Center },
             grid_opacity_percent: 35,
+            schematic_grid_nm: 25 * grid::NM_PER_MIL,
             selection_follow: SelectionFollow::SecondaryFollowsPrimary,
         };
         assert_eq!(Preferences::parse(&preferences.to_text()), preferences);
@@ -442,6 +451,12 @@ mod tests {
         assert_eq!(older.grid_opacity_percent, grid::OPACITY_DEFAULT);
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":101}").grid_opacity_percent, grid::OPACITY_DEFAULT);
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":-1}"), Preferences::default());
+        assert_eq!(older.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM);
+        assert_eq!(Preferences::parse("{\"schematic_grid_nm\":635000}").schematic_grid_nm, 635_000);
+        for bad in ["0", "-1270000", "999999999999", "1.5", "\"50 mil\""] {
+            let parsed = Preferences::parse(&format!("{{\"schematic_grid_nm\":{bad},\"grid_opacity_percent\":40}}"));
+            assert_eq!(parsed.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM, "{bad}");
+        }
     }
 
     #[test]
@@ -460,9 +475,12 @@ mod tests {
             scale_percent: 150,
             navigation: Navigation { reverse_zoom: true, ..Navigation::default() },
             grid_opacity_percent: 20,
+            schematic_grid_nm: 10 * grid::NM_PER_MIL,
             selection_follow: SelectionFollow::Both,
         };
         restore_page_defaults(&mut preferences, NAVIGATION);
+        // Grid spacing is chosen in the views, not on a page, so no page reset touches it.
+        assert_eq!(preferences.schematic_grid_nm, 10 * grid::NM_PER_MIL);
         assert_eq!(preferences.navigation, Navigation::default());
         assert_eq!((preferences.theme, preferences.scale_percent, preferences.grid_opacity_percent), (ThemeChoice::Light, 150, 20));
         assert_eq!(preferences.selection_follow, SelectionFollow::Both);
@@ -470,6 +488,6 @@ mod tests {
         assert_eq!(preferences.selection_follow, SelectionFollow::Off);
         assert_eq!((preferences.theme, preferences.grid_opacity_percent), (ThemeChoice::Light, 20));
         restore_page_defaults(&mut preferences, APPEARANCE);
-        assert_eq!(preferences, Preferences::default());
+        assert_eq!(preferences, Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, ..Preferences::default() });
     }
 }
