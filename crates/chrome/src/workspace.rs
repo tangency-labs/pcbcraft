@@ -34,6 +34,8 @@ pub enum ToolIcon {
     Nets,
     Fit,
     Browser,
+    SplitView,
+    Settings,
 }
 
 /// The glyph at the start of a Browser row: a container or one of the ribbon's own glyphs.
@@ -769,7 +771,7 @@ fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, s
 
 /// Draw a ribbon glyph in the theme's icon roles: line art in `icon_line` and accents in the
 /// strongest icon blue, both faded when the action is unavailable. Symbol, Wire, Fit and the
-/// Browser folder follow PCBcraft Next's icon art; Nets is PCBCraft's own.
+/// Browser folder follow PCBcraft Next's icon art; Nets and SplitView are PCBCraft's own.
 fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tokens, enabled: bool) {
     let fade = |color: Color32| if enabled { color } else { color.gamma_multiply(0.33) };
     let (ink, accent) = (fade(t.icon_line), fade(t.icon_active_3));
@@ -810,6 +812,17 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
             }
             p.rect_filled(Rect::from_min_max(at(24.0, 24.0), at(40.0, 40.0)), (2.0 * size / 64.0) as u8, ink);
         }
+        ToolIcon::Settings => {
+            let mut painter = p.clone();
+            if !enabled {
+                painter.set_opacity(0.33);
+            }
+            crate::menu::MenuIcon::Settings.paint_sized(&painter, center, size, t, false);
+        }
         ToolIcon::Browser => paint_folder(p, center, size, ink),
+        ToolIcon::SplitView => {
+            line(&[(8.0, 12.0), (56.0, 12.0), (56.0, 52.0), (8.0, 52.0), (8.0, 12.0)], stroke(4.0, ink));
+            line(&[(32.0, 12.0), (32.0, 52.0)], stroke(4.0, accent));
+        }
     }
 }
