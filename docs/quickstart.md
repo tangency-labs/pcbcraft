@@ -88,6 +88,15 @@ float or collapse; **View** restores a hidden panel. **Help → Keyboard Shortcu
 shows the current bindings. Keyboard editing shortcuts apply to the canvas when
 a text field or dialog is not using the keys.
 
+To compare views, choose **View → Split**, pan one pane, and select a symbol:
+the other pane highlights it while keeping its own selection. **View → Settings**
+can also pan the counterpart into view. On the desktop, **View → Detach** moves
+the active view to another native window. Edit there and undo in the primary
+window to check the shared history. **View → Dock**, or closing the detached
+window, returns both views to a split without resetting their cameras. Closing
+the primary window prompts once for unsaved changes; **Cancel** leaves both
+windows open. Browser builds keep both views inside one tab.
+
 Share the entire project folder or its `.pc.zip` archive, rather than the entry
 point alone. Used symbol definitions are pinned so the recipient does not need
 your source library. The folder is the Git-friendly working form; opening and

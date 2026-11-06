@@ -10,13 +10,15 @@ This is the proposed architecture and acceptance plan for
 [#54](https://github.com/tangency-labs/pcbcraft/issues/54), with editor hosting in
 [#64](https://github.com/tangency-labs/pcbcraft/issues/64) and cross-probing in
 [#65](https://github.com/tangency-labs/pcbcraft/issues/65). Two schematic views now
-share one session through **View → Split**, with independent cameras and edit
+share one session through **View → Split** and desktop **View → Detach**, with independent cameras and edit
 selections, stationary workspace controls and shared undo. Sheet tabs display
 the project and sheet hierarchy with chevrons; runtime view numbers never stand
 in for sheet identity. Pane changes invalidate pending input without editing the
-document. This is the first host for exercising view ownership; board rendering,
-detached editor windows and schematic-to-board cross-probing remain
-unimplemented. Selection highlighting between two views of the same schematic
+document. The native host borrows the same application on the UI thread, retaining
+one file controller and command history. Each window keeps its own panels;
+closing the child redocks its view, while closing the root uses one project-level
+**Save / Don’t Save / Cancel** decision. Board rendering and schematic-to-board cross-probing
+remain unimplemented. Selection highlighting between two views of the same schematic
 is implemented, using separate paint state from each view's edit selection.
 Opening a split seeds the other camera from the active view. View settings now
 provide optional selection following in both directions or either stable role
@@ -69,6 +71,39 @@ without opening another copy of the project. Different projects may have
 different sessions; two views of this project use the same authority. View
 layout and navigation stay outside tracked electrical documents and electrical
 undo history.
+
+### Workspace selection and placement
+
+The workspace picker should be the common entry point for changing what a view
+shows and where it opens. Selecting **PCB layout** switches the focused view in
+place. The same workspace row should offer **Open beside** and desktop-only
+**Open in new window** as explicit alternatives, so either arrangement is
+available directly from a single schematic view. Opening a board in another host
+must leave the current schematic visible without briefly splitting or switching
+it as an intermediate step. These are planned interactions for the board canvas;
+the current schematic-only **View → Detach** already works without splitting first.
+
+| Choice | Result |
+| --- | --- |
+| Select Schematic or PCB layout | Change the focused view's workspace in its current pane or window |
+| Open beside | Keep the current view and place the requested workspace in the companion pane |
+| Open in new window | Keep the current view and place the requested workspace in a separate native window |
+| Detach / Dock an existing view | Move that view with its target, camera and selection intact |
+
+Opening beside or in a window should reuse a matching companion view when one
+exists, moving or focusing it as requested instead of creating an accidental
+duplicate. Switching a view back to a workspace restores that view's prior
+camera, layers and filters for the workspace. A switch cancels unfinished input;
+it does not replace the project or reset the other view. Tabs identify sheet
+paths or the board, while the focused view determines its window's ribbon and
+panels. Detach/Dock should also be available from a view's tab menu so the target
+is explicit when several views are visible.
+
+Keep workspace target and host placement separate in the presentation handlers:
+opening a target in the current view, beside it or in another window is distinct
+from moving an existing view. GUI and live-MCP callers must use those same
+handlers under #61. Browser builds offer in-place switching and Open beside;
+native window actions are omitted. The existing close policy below still applies.
 
 The focused view determines where editing shortcuts and contextual controls act.
 Text fields and dialogs retain keyboard ownership. A tool gesture captures its
@@ -128,9 +163,9 @@ project-wide net identity. Pending navigation captures both view input addresses
 and the policy at selection. Revision changes, reopening, focus changes, modal
 input, Home, a collapsed split, and changed preferences discard it. Target host
 geometry is supplied before consuming the request, so selection coordination
-does not depend on native-window coordinates. A native host still needs window
-lifecycle/input routing and a PCB target still needs component/pad correspondence
-and its own geometry adapter.
+does not depend on native-window coordinates. The native host supplies independent
+input streams and invalidates gestures on focus/host changes. A PCB target still
+needs component/pad correspondence and its own geometry adapter.
 
 Distinguish unassigned footprints, assigned but unplaced footprints, unresolved
 mappings and targets removed since selection. Represent one-to-many matches or

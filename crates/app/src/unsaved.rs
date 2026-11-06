@@ -6,7 +6,7 @@
 //! check covers them all. The browser has no window to close; it keeps the page's own leave
 //! warning on while the project has unsaved changes (see [`PcbApp::warn_before_leaving`]).
 
-use egui::ViewportCommand;
+use egui::{ViewportCommand, ViewportId};
 
 use super::{Dialog, IN_BROWSER, PcbApp, shell};
 
@@ -46,19 +46,26 @@ impl PcbApp {
 
     /// Answer the desktop window's close request. A clean project closes. With unsaved changes the
     /// window stays open and asks; while a file operation runs it stays open and decides once that
-    /// finishes, so a save in flight is never cut off. Once closing is allowed, later requests pass.
+    /// finishes, so a save in flight is never cut off. Repeated requests preserve a pending decision.
+    /// Once closing is allowed, later requests pass; commands always target the primary window.
     pub(crate) fn handle_close_request(&mut self, ctx: &egui::Context) {
         if IN_BROWSER || self.close_allowed || !ctx.input(|input| input.viewport().close_requested()) {
             return;
         }
+        self.views.cancel_gestures();
+        if self.waiting.is_some() {
+            // A repeated OS close must not replace the pending Save/Don't Save decision.
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
+            return;
+        }
         if self.files.busy() {
-            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             self.waiting = Some(Waiting::ToDecide(Then::Close));
             self.file_notice = Some("PCBCraft will close when the file operation finishes".to_owned());
         } else if self.files.dirty(&self.session) {
-            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::CancelClose);
             // Closed from a taskbar or window switcher, the question is only seen once the window comes forward.
-            ctx.send_viewport_cmd(ViewportCommand::Focus);
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Focus);
             self.dialog = Dialog::SaveChanges(Then::Close);
         } else {
             self.close_allowed = true;
@@ -95,7 +102,7 @@ impl PcbApp {
         match then {
             Then::Close => {
                 self.close_allowed = true;
-                ctx.send_viewport_cmd(ViewportCommand::Close);
+                ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
             }
             Then::New => self.start_new_project(),
             Then::Open => self.choose_open_location(ctx),
