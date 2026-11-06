@@ -209,7 +209,8 @@ follow `src/desktop/canvas.rs` at the same revision, retaining upstream symbol
 definitions and their shorter leads. Familiar starter parts lead in the
 prototype’s order. Presentation lives in chrome;
 search and revision-checked placement use the upstream library and commands.
-Clicking a part retains upstream's close-and-place behavior. Camera clearance
+Clicking a part retains upstream's placement command and leaves the card open;
+the header's Close button and View toggle hide it without losing its state. Camera clearance
 uses the actual visible cards, including a library moved into the canvas.
 The Parts collapse control uses the chevron and accessible naming of the
 collapsing card header in Next's `src/desktop/panels.rs` at the same revision.

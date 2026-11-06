@@ -208,10 +208,14 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
 };
 
 impl PcbApp {
-    /// The app as the desktop and browser builds start it.
+    /// Start desktop and browser builds on Home with no project loaded, restoring app settings.
+    /// Successful New/Open actions enter the workspace; cancelling them leaves Home visible.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Home uses custom fonts on its first frame; installing during that frame is too late.
+        fonts::install(&cc.egui_ctx);
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
         Self {
+            home: true,
             preferences,
             #[cfg(not(target_arch = "wasm32"))]
             assistant: assistant::Assistant::from_setting(
@@ -523,7 +527,7 @@ impl PcbApp {
         self.ribbon_tab = tab;
     }
 
-    /// The View tab: show or hide the Browser, the parts library and the Net Inspector, and fit.
+    /// The View tab: show or hide Browser, Parts and Net Inspector, and fit the view.
     /// Each group's caption also lists its actions in a menu, with check marks for the panels.
     fn view_tab(&mut self, ui: &mut Ui) {
         use workspace::{RibbonTool, ToolIcon};
@@ -543,7 +547,7 @@ impl PcbApp {
             RibbonTool {
                 icon: ToolIcon::Symbol,
                 label: "Parts",
-                description: "Toggle parts library",
+                description: "Toggle Parts",
                 shortcut: "",
                 enabled: parts,
                 active: parts && self.parts.open,
@@ -561,8 +565,13 @@ impl PcbApp {
         ];
         match workspace::ribbon_group(ui, "Panels", &panels) {
             Some(0) => self.browser.open = !self.browser.open,
-            Some(1) if self.parts.open => self.parts.open = false,
-            Some(1) => self.parts.open_and_focus(),
+            Some(1) => {
+                if self.parts.open {
+                    self.parts.close(ui.ctx());
+                } else {
+                    self.parts.focus_search();
+                }
+            }
             Some(2) => self.net_inspector.open = !self.net_inspector.open,
             _ => {}
         }
@@ -593,11 +602,11 @@ impl PcbApp {
             description: "Add symbol (A)",
             shortcut: "A",
             enabled: self.session.available(PLACE_SYMBOL),
-            active: matches!(self.tool, Some(Tool::PlaceSymbol { .. })) || self.parts.open,
+            active: matches!(self.tool, Some(Tool::PlaceSymbol { .. })),
             toggle: false,
         }];
         if workspace::ribbon_group(ui, "Place", &place).is_some() {
-            self.parts.open_and_focus();
+            self.parts.focus_search();
         }
         workspace::ribbon_separator(ui);
         let connect = [RibbonTool {
@@ -799,7 +808,7 @@ impl PcbApp {
 
     /// Handle app shortcuts outside text fields and dialogs. Assistant focus suppresses canvas tools.
     /// On Home, Escape returns to the workspace and the canvas keys do nothing. In the workspace,
-    /// Escape closes the parts browser before cancelling a tool, after overlays have priority.
+    /// Escape leaves parts search before cancelling a tool, after overlays have priority.
     fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool) {
         self.rotate_requested = false;
         if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.parts.take_escape(ctx) {
@@ -855,7 +864,7 @@ impl PcbApp {
                 }
             }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
-                self.parts.open_and_focus();
+                self.parts.focus_search();
             }
             if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
                 self.begin_wire();
@@ -900,8 +909,8 @@ impl PcbApp {
                 let title = command(id).map_or(id, |c| c.title);
                 let (mut submit, mut cancel) = (false, false);
                 let closing = shell::dialog(ctx, "name_dialog", title, |ui| {
-                    ui.label("Name");
-                    let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
+                    let label = ui.label("Name");
+                    let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY)).labelled_by(label.id);
                     if !focused {
                         field.request_focus();
                         focused = true;
@@ -938,14 +947,14 @@ impl PcbApp {
             Dialog::EditFields { symbol, mut reference, mut value, mut error, mut focused } => {
                 let (mut submit, mut cancel) = (false, false);
                 let closing = shell::dialog(ctx, "edit_fields", "Edit Symbol Fields", |ui| {
-                    ui.label("Reference");
-                    let field = ui.add(egui::TextEdit::singleline(&mut reference).desired_width(f32::INFINITY));
+                    let label = ui.label("Reference");
+                    let field = ui.add(egui::TextEdit::singleline(&mut reference).desired_width(f32::INFINITY)).labelled_by(label.id);
                     if !focused {
                         field.request_focus();
                         focused = true;
                     }
-                    ui.label("Value");
-                    let value_field = ui.add(egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY));
+                    let label = ui.label("Value");
+                    let value_field = ui.add(egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY)).labelled_by(label.id);
                     submit = (field.lost_focus() || value_field.lost_focus()) && ui.input(|i| i.key_pressed(Key::Enter));
                     if let Some(error) = &error {
                         ui.label(shell::error(error.as_str()));

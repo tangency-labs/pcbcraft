@@ -585,17 +585,18 @@ pub fn sheet_heading(p: &egui::Painter, canvas: Rect, left: f32, title: &str, co
 /// Reserve at most two fifths of the workspace width and leave room below the
 /// card for a floating launcher. Return whether Close was clicked.
 pub fn right_card(ui: &mut Ui, id: &'static str, title: &str, bottom_clearance: f32, add: impl FnOnce(&mut Ui)) -> bool {
-    docked_card(ui, Panel::right(id), title, bottom_clearance, add)
+    docked_card(ui, Panel::right(id), title, bottom_clearance, true, add)
 }
 
-/// Dock a card at the left edge of the canvas, with the same frame,
-/// width limit and Close button as [`right_card`]. Return whether Close was clicked.
-pub fn left_card(ui: &mut Ui, id: &'static str, title: &str, add: impl FnOnce(&mut Ui)) -> bool {
-    docked_card(ui, Panel::left(id), title, 0.0, add)
+/// Dock a persistent card at the left edge of the canvas, with the same frame and width limit
+/// as [`right_card`]. It has no Close button; the caller determines when it is visible.
+pub fn left_card(ui: &mut Ui, id: &'static str, title: &str, add: impl FnOnce(&mut Ui)) {
+    docked_card(ui, Panel::left(id), title, 0.0, false, add);
 }
 
-/// The docked card both sides share: a titled card with Close over a scrolling body.
-fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, add: impl FnOnce(&mut Ui)) -> bool {
+/// The docked card both sides share: a title and optional Close button over a scrolling body.
+/// Return whether the button was clicked; persistent cards always return false.
+fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, closable: bool, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     let width = (ui.available_width() * 0.4).min(260.0);
     let clearance = bottom_clearance.min(ui.available_height() * 0.4);
@@ -609,7 +610,7 @@ fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, ad
         .resizable(false)
         .show_separator_line(false)
         .frame(Frame::new().fill(t.canvas).inner_margin(margin))
-        .show(ui, |ui| card(t, t.space_8).show(ui, |ui| card_contents(ui, title, f32::INFINITY, add)).inner)
+        .show(ui, |ui| card(t, t.space_8).show(ui, |ui| card_contents(ui, title, f32::INFINITY, closable, add)).inner)
         .inner
 }
 
@@ -668,18 +669,20 @@ fn card_header(ui: &mut Ui, title: &str, collapsed: bool) -> Response {
     response.on_hover_text(if collapsed { "Expand panel" } else { "Collapse panel" })
 }
 
-/// A card's header, with its title and a Close button named after it, over a body that scrolls
-/// beyond `max_body_height`. Returns whether Close was clicked.
-fn card_contents(ui: &mut Ui, title: &str, max_body_height: f32, add: impl FnOnce(&mut Ui)) -> bool {
+/// A card's header, with its title and optional named Close button, over a body that scrolls
+/// beyond `max_body_height`. Returns whether Close was clicked; persistent cards return false.
+fn card_contents(ui: &mut Ui, title: &str, max_body_height: f32, closable: bool, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     ui.set_width(ui.available_width());
     let header_size = vec2(ui.available_width(), t.control_height);
     let close = ui
         .allocate_ui_with_layout(header_size, Layout::right_to_left(Align::Center), |ui| {
             // Named after the card, so a screen reader can tell several cards apart.
-            let close = ui.small_button("Close");
-            close.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("Close {title}")));
-            let close = close.clicked();
+            let close = closable && {
+                let close = ui.small_button("Close");
+                close.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("Close {title}")));
+                close.clicked()
+            };
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 ui.add(Label::new(RichText::new(title).font(FontId::proportional(t.font_label))).truncate()).on_hover_text(title);
             });

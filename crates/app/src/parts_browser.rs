@@ -1,5 +1,5 @@
-//! The parts browser: a movable card floating over the canvas that lists the starter library's symbols as
-//! searchable thumbnails, in place of the old Place Symbol dialog. Click a part to place it, or
+//! The parts browser: a movable card floating over the canvas that lists the starter library's
+//! symbols as searchable thumbnails. Click a part to place it, or
 //! drag parts onto the sheet one after another. Browsing never edits the project; placing goes through the same
 //! `schematic.place_symbol` command as before. Adapted from PCBcraft Next's parts browser.
 
@@ -26,31 +26,29 @@ pub(crate) struct PartsBrowser {
 }
 
 impl PartsBrowser {
-    /// Open the browser with an empty, focused search, as Capture › Symbol and A do. If it's
-    /// already open, keep the search. A collapsed card expands before focusing it.
-    pub(crate) fn open_and_focus(&mut self) {
-        if !self.open {
-            self.query.clear();
-        }
+    /// Open and focus the retained search, as Capture › Symbol and A do. A collapsed card expands first.
+    pub(crate) fn focus_search(&mut self) {
         self.open = true;
         self.panel.expand();
         self.focus = true;
     }
 
-    /// Close the browser on Escape when its search had focus or workspace keys are available.
+    /// Hide the card without changing its search, view, position or the active placement tool.
+    pub(crate) fn close(&mut self, ctx: &egui::Context) {
+        self.open = false;
+        self.focus = false;
+        self.search_focused = false;
+        self.panel.cancel_drag();
+        egui::DragAndDrop::clear_payload(ctx);
+        ctx.request_repaint();
+    }
+
+    /// Escape first cancels a panel drag or leaves search focus, keeping the library visible.
     /// Call after giving dialogs, popups and the assistant priority, but before tool cancellation.
-    /// A panel drag first restores its original position. Returns true when either action consumes Escape.
+    /// Outside a drag/search, Escape remains available to the canvas.
     pub(crate) fn take_escape(&mut self, ctx: &egui::Context) -> bool {
-        if self.open
-            && (self.search_focused || !ctx.egui_wants_keyboard_input())
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
-            if self.panel.cancel_drag() {
-                ctx.request_repaint();
-                return true;
-            }
-            self.open = false;
-            egui::DragAndDrop::clear_payload(ctx);
+        if self.open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && (self.panel.cancel_drag() || self.search_focused) {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             self.search_focused = false;
             ctx.request_repaint();
             return true;
@@ -64,7 +62,7 @@ impl PartsBrowser {
         matches(&self.query)
     }
 
-    /// The current card rectangle, absent while hidden. Used for fitting and pointer exclusion.
+    /// The current card rectangle, absent while hidden or before drawing. Used for fitting and pointer exclusion.
     pub(crate) fn rect(&self) -> Rect {
         if self.open { self.rect.unwrap_or(Rect::NOTHING) } else { Rect::NOTHING }
     }
@@ -74,7 +72,8 @@ impl PartsBrowser {
         if self.open { self.panel.browser_area(canvas) } else { canvas }
     }
 
-    /// Draw the floating library; clicking a part or pressing Enter closes it and starts placement.
+    /// Draw the floating library when open; clicking a part or pressing Enter releases search
+    /// focus and starts placement while keeping the query and card visible.
     /// Drag payloads retain the current revision so intervening edits cancel placement. A short
     /// dock temporarily uses List while preserving the preferred view for a taller card.
     pub(crate) fn show(
@@ -117,13 +116,19 @@ impl PartsBrowser {
                     picked = Some(definition.clone());
                 }
             });
+            if picked.is_some() {
+                search.surrender_focus();
+                *search_focused = false;
+            }
         });
         if panel.is_collapsed() {
             *search_focused = false;
         }
         self.rect = Some(rect);
-        if closed || picked.is_some() {
-            self.open = false;
+        if closed {
+            self.close(ui.ctx());
+        }
+        if picked.is_some() {
             self.search_focused = false;
             egui::DragAndDrop::clear_payload(ui.ctx());
             ui.ctx().request_repaint();
@@ -254,7 +259,7 @@ mod tests {
         h.run();
         let canvas = h.get_by_label("Schematic canvas").rect();
         assert!(canvas.contains_rect(h.state().parts.rect()));
-        assert!(canvas.contains_rect(h.get_by_label("Close Parts library").rect()));
+        assert!(canvas.contains_rect(h.get_by_label("Collapse Parts library").rect()));
         position(&mut h, "Dock right");
         assert!(canvas.contains_rect(h.state().parts.rect()));
     }
@@ -279,7 +284,7 @@ mod tests {
             let origin = h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
             click(&mut h, "Collapse Parts library");
             let collapsed = h.state().parts.rect();
-            assert!(h.state().parts.open);
+            h.get_by_label("Move Parts library");
             assert!(collapsed.height() < 60.0);
             assert_eq!(collapsed.min, expanded.min);
             assert_eq!(collapsed.width(), expanded.width());
@@ -304,6 +309,44 @@ mod tests {
             assert!(h.state().parts.search_focused);
             assert_eq!(h.state().parts.query, "cap");
         }
+        assert_eq!(h.state().session.inspect(), before);
+    }
+
+    /// Closing hides all coverage while retaining search, density and dock position. A and the
+    /// View toggle reopen the card, and these window actions never change project history.
+    #[test]
+    fn close_and_reopen_preserve_catalog_state() {
+        let mut h = harness();
+        let before = h.state().session.inspect();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let origin = h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+        h.key_press(Key::A);
+        h.run();
+        click(&mut h, "Large");
+        h.get_by_role(egui::accesskit::Role::TextInput).click();
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
+        h.run();
+        position(&mut h, "Dock right");
+        let card = h.state().parts.rect();
+        click(&mut h, "Close Parts library");
+        assert!(h.query_by_label("Move Parts library").is_none());
+        assert!(!h.state().parts.rect().is_positive());
+        assert_eq!(h.state().parts.browser_area(canvas), canvas);
+        h.key_press(Key::A);
+        h.run();
+        assert_eq!(h.state().parts.rect(), card);
+        assert_eq!(h.state().parts.query, "cap");
+        assert_eq!(h.state().parts.view, View::Large);
+        assert!(h.state().parts.search_focused);
+        click(&mut h, "View");
+        click(&mut h, "Toggle Parts");
+        assert!(h.query_by_label("Move Parts library").is_none());
+        click(&mut h, "Toggle Parts");
+        assert_eq!(h.state().parts.rect(), card);
+        assert_eq!(h.state().parts.query, "cap");
+        assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
+        assert_eq!(h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
         assert_eq!(h.state().session.inspect(), before);
     }
 
@@ -346,17 +389,17 @@ mod tests {
         click(&mut h, "Parts library position");
         h.key_press(Key::Escape);
         h.run();
-        assert!(h.state().parts.open);
+        h.get_by_label("Move Parts library");
         h.key_press(Key::Escape);
         h.run();
-        assert!(!h.state().parts.open);
+        h.get_by_label("Move Parts library");
         h.key_press(Key::A);
         h.run();
         h.get_by_label("Collapse Parts library");
         assert!(h.state().parts.search_focused);
     }
 
-    /// A title drag snaps on release; Escape restores its origin before closing the library.
+    /// A title drag snaps on release; Escape restores its origin while keeping the library visible.
     #[test]
     fn header_drags_snap_to_edges_and_escape_restores_the_previous_position() {
         let mut h = harness();
@@ -375,7 +418,7 @@ mod tests {
         assert_eq!(h.state().parts.rect(), original);
         h.drop_at(from + vec2(100.0, 80.0));
         h.run();
-        assert!(h.state().parts.open);
+        h.get_by_label("Move Parts library");
         for right in [true, false] {
             let from = h.get_by_label("Move Parts library").rect().center();
             let to = pos2(if right { canvas.right() - 20.0 } else { canvas.left() + 20.0 }, canvas.center().y);
@@ -431,10 +474,10 @@ mod tests {
         h.key_press(Key::Escape);
         h.run();
         assert!(h.query_by_label("Dock left").is_none());
-        assert!(h.state().parts.open);
+        h.get_by_label("Move Parts library");
         h.key_press(Key::Escape);
         h.run();
-        assert!(!h.state().parts.open);
+        h.get_by_label("Move Parts library");
     }
 
     #[test]
