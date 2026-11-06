@@ -1721,7 +1721,15 @@ impl PcbApp {
             #[cfg(not(target_arch = "wasm32"))]
             if main {
                 let can_edit = workspace.is_some() && matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
-                self.assistant.show(&ctx, workspace, &mut self.session, can_edit);
+                self.assistant.show(&ctx, workspace, &self.session, can_edit);
+                if let Some(proposal) = self.assistant.take_apply() {
+                    let result = self.run_agent_steps(&ctx, proposal.revision, &proposal.steps);
+                    self.assistant.applied(&proposal.summary(), result);
+                }
+                if let Some(executable) = self.assistant.take_send() {
+                    let context = self.agent_context(&ctx);
+                    self.assistant.send(&ctx, &self.session, std::ffi::OsStr::new(&executable), context);
+                }
                 if let Some(request) = self.assistant.take_settings_request() {
                     self.dialog = match request {
                         assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),

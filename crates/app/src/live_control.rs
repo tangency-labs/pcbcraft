@@ -13,7 +13,7 @@ use std::{
 
 use craft_control::loopback::{AcceptedPeer, Listener, Token};
 use pcbcraft_engine::Session;
-use pcbcraft_mcp::live::{Editor, TOKEN_ENV};
+use pcbcraft_mcp::live::{Editor, TOKEN_ENV, call_editor};
 use serde_json::{Value, json};
 
 use crate::{Dialog, PcbApp, window_commands};
@@ -112,6 +112,54 @@ impl LiveControl {
         }
         request.answer(Err("The editor did not receive the request in time".to_owned()));
         Ok(None)
+    }
+}
+
+impl PcbApp {
+    /// What an in-app agent is told, exactly as a live MCP client would see it: the project and
+    /// editor inspection and the command discovery list.
+    pub(super) fn agent_context(&mut self, ctx: &egui::Context) -> Value {
+        let mut editor = LiveEditor { app: self, ctx };
+        let discover =
+            |method: &str, editor: &mut LiveEditor<'_>| call_editor(editor, &json!({"method": method, "params": {}})).unwrap_or(Value::Null);
+        json!({
+            "project": discover("project.inspect", &mut editor),
+            "editor": discover("editor.inspect", &mut editor),
+            "commands": discover("engine.commands", &mut editor),
+        })
+    }
+
+    /// Run reviewed agent steps in order through the live MCP dispatcher, with the same refusals.
+    /// Steps were proposed against `revision`; each project command receives the revision
+    /// current when it runs, which is safe because nothing else runs between steps on this thread.
+    /// Returns how many project edits were made. If a step fails, the project edits made by
+    /// earlier steps are undone and the error names the step; window changes stay.
+    pub(super) fn run_agent_steps(&mut self, ctx: &egui::Context, revision: u64, steps: &[(String, Value)]) -> Result<usize, String> {
+        if self.session.revision() != revision {
+            return Err("The project changed. Ask again to refresh the proposal.".to_owned());
+        }
+        let mut edits = 0;
+        for (index, (command, params)) in steps.iter().enumerate() {
+            let mut params = params.clone();
+            if pcbcraft_engine::command(command).is_some_and(|known| known.params.iter().any(|param| param.name == "expected_revision")) {
+                params["expected_revision"] = json!(self.session.revision());
+            }
+            let before = self.session.revision();
+            let request = json!({"method": "engine.execute", "params": {"command": command, "params": params, "inspect": false}});
+            let result = call_editor(&mut LiveEditor { app: self, ctx }, &request);
+            edits += usize::from(self.session.revision() != before);
+            if let Err(error) = result {
+                for _ in 0..edits {
+                    let _ = self.session.apply("edit.undo", &Value::Null);
+                }
+                self.views.sync(&self.session);
+                let undone = if edits == 0 { "" } else { " The project edits from earlier steps were undone." };
+                return Err(format!("Step {} ({command}) failed: {error}.{undone}", index + 1));
+            }
+        }
+        self.views.sync(&self.session);
+        self.repaint_editors(ctx);
+        Ok(edits)
     }
 }
 

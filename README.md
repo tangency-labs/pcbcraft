@@ -292,11 +292,17 @@ If the agent asks you to sign in, choose **Sign in** and complete the browser
 flow. You can also sign in with `codex login` or `claude auth login --claudeai`
 in a terminal, then choose **I've signed in** or **Retry** in PCBcraft.
 
-Open a schematic and ask a question or request a wire or a symbol move.
-**Send** shares the schematic and recent conversation with the selected
-agent. Review the specific edit, then choose **Apply** or **Discard**.
-**Undo** reverts an applied edit. **Stop** cancels a request in progress.
-If the schematic changed since the request, ask again before applying.
+Open a project and ask a question or request a change. The Assistant has the
+same commands as a live MCP client: every project command, plus the window
+commands for views, windows, panels, preferences and Home (see
+[Live MCP](#live-mcp-in-the-desktop-editor)). **Send** shares the project, the
+editor's windows and views, the command list and recent conversation with the
+selected agent. It proposes a numbered list of commands; review it, then choose
+**Apply** or **Discard**. Apply runs the steps in order through the same
+dispatcher as live MCP. If a step fails, the project edits of the earlier steps
+are undone and the Assistant names the step. Each project edit is one **Undo**.
+**Stop** cancels a request in progress. If the project changed since the
+request, ask again before applying.
 
 PCBcraft remembers the agent choice and reuses the CLI sign-in across
 projects. Switching projects or agents starts a fresh conversation.

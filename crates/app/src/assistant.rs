@@ -1,4 +1,6 @@
-//! In-app agent conversation. The editor owns the proposed edit and its revision.
+//! In-app agent conversation. The agent sees the same command catalog and editor inspection
+//! as a live MCP client and proposes an ordered batch of those commands. The editor owns the
+//! proposal and its revision, and Apply runs it through the live MCP dispatcher.
 
 mod agent;
 mod settings;
@@ -18,9 +20,9 @@ use std::{
 
 use egui::{Align, Context, Layout, Rect, ScrollArea, TextEdit, Ui};
 use pcbcraft_chrome::{Tokens, assistant as chrome, shell::dim};
-use pcbcraft_engine::{CONNECT_PINS, MOVE_SYMBOL, Project, Session, schematic::Terminal};
+use pcbcraft_engine::{Project, Session};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use settings::{Choice, Settings};
 
@@ -58,6 +60,12 @@ pub(super) struct Assistant {
     messages: Vec<Message>,
     job: Option<Job>,
     proposal: Option<Proposal>,
+    /// The person pressed Apply; the editor takes the proposal and runs it after drawing.
+    apply_requested: bool,
+    /// The person pressed Send with this agent executable; the editor adds its context.
+    send_requested: Option<String>,
+    /// The commands the pending or last request offered, for checking its proposal.
+    known: Known,
     notice: Option<String>,
 }
 
@@ -83,49 +91,83 @@ struct Message {
     text: String,
 }
 
+/// Most commands one proposal may hold.
+const MAX_STEPS: usize = 16;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Reply {
     reply: String,
-    edit: Option<Edit>,
+    edits: Vec<Step>,
 }
 
+/// One proposed command. `params` is a JSON object written as a string, so strict structured
+/// output (which allows no free-form objects) can still carry any command's parameters.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum Edit {
-    ConnectPins { from: Value, to: Value },
-    MoveSymbol { symbol: String, x_nm: i64, y_nm: i64 },
+#[serde(deny_unknown_fields)]
+struct Step {
+    command: String,
+    params: String,
 }
 
-impl Edit {
-    /// Translate the bounded response into a shared engine command and its display text.
-    /// Resolve the actual endpoints and symbol ID against the supplied snapshot.
-    fn prepare(self, project: &Project, revision: u64) -> Option<Proposal> {
-        let (command, params, summary) = match self {
-            Self::ConnectPins { from, to } => {
-                let label = |address: &Value| {
-                    let pin = Terminal::parse(address)?;
-                    Some(format!("{}.{}", project.reference(project.terminal_symbol(pin)?), pin.number()))
-                };
-                let summary = format!("Connect {} to {}", label(&from)?, label(&to)?);
-                (CONNECT_PINS, json!({"from": from, "to": to, "expected_revision": revision}), summary)
+/// The commands offered to the agent, by ID, with their titles for the review list.
+type Known = std::collections::BTreeMap<String, String>;
+
+/// Read the IDs and titles from a discovery list (`engine.commands`).
+fn known_commands(commands: &Value) -> Known {
+    commands
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|command| Some((command["id"].as_str()?.to_owned(), command["title"].as_str().unwrap_or_default().to_owned())))
+        .collect()
+}
+
+impl Reply {
+    /// Check the steps against the offered commands and parse their parameters, dropping any
+    /// `expected_revision`: the editor supplies the current revision when it applies them.
+    /// Unknown commands, unreadable parameters or too many steps reject the whole proposal.
+    fn prepare(edits: Vec<Step>, known: &Known, revision: u64) -> Result<Option<Proposal>, String> {
+        if edits.is_empty() {
+            return Ok(None);
+        }
+        if edits.len() > MAX_STEPS {
+            return Err(format!("The proposal has more than {MAX_STEPS} steps. Ask for a smaller change."));
+        }
+        let mut steps = Vec::with_capacity(edits.len());
+        let mut summary = Vec::with_capacity(edits.len());
+        for (index, step) in edits.into_iter().enumerate() {
+            let title = known.get(&step.command).ok_or_else(|| format!("The proposal uses an unknown command `{}`. Ask again.", step.command))?;
+            let mut params = match step.params.trim() {
+                "" => Value::Object(Default::default()),
+                text => serde_json::from_str::<Value>(text)
+                    .ok()
+                    .filter(Value::is_object)
+                    .ok_or_else(|| format!("The proposal's parameters for `{}` aren't a JSON object. Ask again.", step.command))?,
+            };
+            if let Some(object) = params.as_object_mut() {
+                object.remove("expected_revision");
             }
-            Self::MoveSymbol { symbol, x_nm, y_nm } => {
-                let placement = project.symbols().iter().find(|placement| placement.id() == symbol)?;
-                let summary = format!("Move {} to ({x_nm}, {y_nm}) nm", project.reference(placement));
-                (MOVE_SYMBOL, json!({"symbol": symbol, "x_nm": x_nm, "y_nm": y_nm, "expected_revision": revision}), summary)
-            }
-        };
-        Some(Proposal { revision, command, params, summary })
+            summary.push(format!("{}. {title} {params}", index + 1));
+            steps.push((step.command, params));
+        }
+        Ok(Some(Proposal { revision, steps, summary: summary.join("\n") }))
     }
 }
 
+/// A reviewed batch of shared commands, valid only at the revision it was proposed against.
 #[derive(Debug)]
-struct Proposal {
-    revision: u64,
-    command: &'static str,
-    params: Value,
+pub(super) struct Proposal {
+    pub(super) revision: u64,
+    pub(super) steps: Vec<(String, Value)>,
     summary: String,
+}
+
+impl Proposal {
+    /// The numbered steps as the review list shows them.
+    pub(super) fn summary(&self) -> String {
+        self.summary.clone()
+    }
 }
 
 #[derive(Debug)]
@@ -307,7 +349,9 @@ impl Assistant {
     }
 
     /// Advance jobs and render the conversation. Home passes no workspace and suspends its view.
-    pub(super) fn show(&mut self, ctx: &Context, workspace: Option<Rect>, session: &mut Session, can_edit: bool) {
+    /// The conversation only reads the session; Send and Apply are handed to the editor through
+    /// [`Self::take_send`] and [`Self::take_apply`], which add context and run the commands.
+    pub(super) fn show(&mut self, ctx: &Context, workspace: Option<Rect>, session: &Session, can_edit: bool) {
         self.sync_project(session);
         self.poll(session);
         if !self.settings.show_features {
@@ -353,7 +397,7 @@ impl Assistant {
     }
 
     /// Move the conversation into a native viewport and remember where it was on this run.
-    fn show_window(&mut self, ctx: &Context, session: &mut Session, can_edit: bool) -> Option<chrome::Action> {
+    fn show_window(&mut self, ctx: &Context, session: &Session, can_edit: bool) -> Option<chrome::Action> {
         let title = session.project().map_or_else(|| "Assistant".to_owned(), |p| format!("{} — Assistant", p.name));
         let mut builder = egui::ViewportBuilder::default().with_title(title).with_min_inner_size([320.0, 320.0]);
         if !self.window_placed {
@@ -450,20 +494,30 @@ impl Assistant {
         }
     }
 
-    /// Start one request using an immutable snapshot. Only a successful start consumes the draft.
-    fn send(&mut self, ctx: &Context, session: &Session, executable: &OsStr) {
+    /// The executable the person asked to send with, once. The editor answers with
+    /// [`Self::send`] and its context.
+    pub(super) fn take_send(&mut self) -> Option<String> {
+        self.send_requested.take()
+    }
+
+    /// Start one request using an immutable snapshot and the editor's `context`: its project
+    /// and editor inspection and the `commands` it offers, as live MCP discovery lists them.
+    /// Only a successful start consumes the draft.
+    pub(super) fn send(&mut self, ctx: &Context, session: &Session, executable: &OsStr, context: Value) {
         let Some(snapshot) = session.snapshot() else { return };
         let prompt = self.draft.trim().to_owned();
         if prompt.is_empty() || self.job.is_some() || self.proposal.is_some() || !matches!(self.auth, Some(Ok(true))) {
             return;
         }
+        self.known = known_commands(&context["commands"]);
+        let commands: Vec<String> = self.known.keys().cloned().collect();
         let history = self.messages.clone();
         let revision = session.revision();
         let agent = self.settings.target(self.settings.selected).0;
         let executable = executable.to_owned();
         let worker_prompt = prompt.clone();
         if self.start_job(ctx, JobKind::Chat(revision), move |stop| {
-            agent::request(agent, &executable, &snapshot, &history, &worker_prompt, stop).map(Outcome::Reply)
+            agent::request(agent, &executable, &snapshot, &context, &commands, &history, &worker_prompt, stop).map(Outcome::Reply)
         }) {
             self.draft.clear();
             self.notice = None;
@@ -471,6 +525,24 @@ impl Assistant {
         } else {
             self.notice = Some("Could not start the Assistant.".to_owned());
         }
+    }
+
+    /// The proposal the person chose to apply, once. The editor runs it and reports back
+    /// through [`Self::applied`].
+    pub(super) fn take_apply(&mut self) -> Option<Proposal> {
+        if std::mem::take(&mut self.apply_requested) { self.proposal.take() } else { None }
+    }
+
+    /// Record how an applied proposal went: how many project edits it made (each undoable),
+    /// or why it stopped.
+    pub(super) fn applied(&mut self, summary: &str, result: Result<usize, String>) {
+        self.notice = Some(match result {
+            Ok(edits) => {
+                self.add_message("Editor", format!("Applied:\n{summary}"));
+                if edits == 0 { "Applied.".to_owned() } else { "Applied. Use Undo to revert.".to_owned() }
+            }
+            Err(error) => error,
+        });
     }
 
     /// Check the selected agent's login or launch its own browser sign-in.
@@ -520,10 +592,12 @@ impl Assistant {
         match (kind, result) {
             (JobKind::Chat(revision), Ok(Outcome::Reply(reply))) => {
                 self.add_message(self.settings.target(self.settings.selected).0.label(), reply.reply);
-                if let Some(edit) = reply.edit {
-                    self.proposal = session.project().filter(|_| session.revision() == revision).and_then(|project| edit.prepare(project, revision));
-                    if self.proposal.is_none() {
-                        self.notice = Some("The proposal could not be matched to the current schematic. Ask again.".to_owned());
+                if !reply.edits.is_empty() && (session.project().is_none() || session.revision() != revision) {
+                    self.notice = Some("The project changed while the agent worked. Ask again to refresh the proposal.".to_owned());
+                } else {
+                    match Reply::prepare(reply.edits, &self.known, revision) {
+                        Ok(proposal) => self.proposal = proposal,
+                        Err(error) => self.notice = Some(error),
                     }
                 }
             }
@@ -545,7 +619,7 @@ impl Assistant {
     }
 
     /// Draw replies, a reviewable edit, and the request field inside the workspace drawer.
-    fn panel(&mut self, ui: &mut Ui, session: &mut Session, can_edit: bool) {
+    fn panel(&mut self, ui: &mut Ui, session: &Session, can_edit: bool) {
         let t = Tokens::get();
         if self.confirm_new {
             ui.label("Start a new chat? This clears the conversation, draft, and any unapplied proposal.");
@@ -572,7 +646,7 @@ impl Assistant {
                 ui.label(&proposal.summary);
                 ui.horizontal(|ui| {
                     if ui.add_enabled(can_edit, egui::Button::new("Apply")).clicked() {
-                        self.apply(session);
+                        self.apply_requested = true;
                     } else if ui.button("Discard").clicked() {
                         self.proposal = None;
                         self.notice = Some("Proposal discarded.".to_owned());
@@ -706,24 +780,11 @@ impl Assistant {
                 }
                 ui.spinner();
             } else if ui.add_enabled(can_send, egui::Button::new("Send")).on_hover_text("Send (Enter)").clicked() || enter {
-                let command = self.settings.target(self.settings.selected).2.to_owned();
-                self.send(ui.ctx(), session, OsStr::new(&command));
+                self.send_requested = Some(self.settings.target(self.settings.selected).2.to_owned());
             }
             if session.project().is_none() {
                 ui.label(dim("Open or create a project to start."));
             }
-        });
-    }
-
-    /// Apply the reviewed edit once. The engine rechecks its revision and records a single Undo.
-    fn apply(&mut self, session: &mut Session) {
-        let Some(proposal) = self.proposal.take() else { return };
-        self.notice = Some(match session.apply(proposal.command, &proposal.params) {
-            Ok(_) => {
-                self.add_message("Editor", format!("Applied: {}", proposal.summary));
-                "Applied. Use Undo to revert.".to_owned()
-            }
-            Err(error) => error.to_string(),
         });
     }
 }
@@ -743,6 +804,8 @@ mod tests {
     use pcbcraft_engine::PLACE_RESISTOR;
 
     use crate::{PcbApp, tests::click};
+
+    use serde_json::json;
 
     use super::{agent::Agent, *};
 
@@ -956,7 +1019,9 @@ done
 prompt=$(cat)
 case "$prompt" in *'"request":"Connect the resistors"'*) ;; *) exit 1 ;; esac
 case "$prompt" in *'"reference":"R1"'*'"reference":"R2"'*) ;; *) exit 1 ;; esac
-reply='{"reply":"I propose connecting the resistors.","edit":{"kind":"connect_pins","from":{"symbol":"symbol-2","terminal":"2"},"to":{"symbol":"symbol-3","terminal":"1"}}}'
+case "$prompt" in *'"id":"schematic.delete_wire"'*'"id":"view.split"'*) ;; *) exit 1 ;; esac
+case "$prompt" in *'"focused_view":0'*) ;; *) exit 1 ;; esac
+reply='{"reply":"I propose connecting the resistors.\\n\\nThen splitting the view.","edits":[{"command":"schematic.connect_pins","params":"{\"from\":{\"symbol\":\"symbol-2\",\"terminal\":\"2\"},\"to\":{\"symbol\":\"symbol-3\",\"terminal\":\"1\"},\"expected_revision\":99}"},{"command":"view.split","params":"{\"view\":0,\"split\":true}"}]}'
 case "${0##*/}" in
     codex) printf '%s' "$reply" > "$output" ;;
     claude) printf '{"is_error":false,"structured_output":%s}' "$reply" ;;
@@ -980,7 +1045,8 @@ esac
         let ctx = harness.ctx.clone();
         let start = |app: &mut PcbApp| {
             app.assistant.draft = "Connect the resistors".to_owned();
-            app.assistant.send(&ctx, &app.session, executable.as_os_str());
+            let context = app.agent_context(&ctx);
+            app.assistant.send(&ctx, &app.session, executable.as_os_str(), context);
         };
         let wait = |harness: &mut Harness<'_, PcbApp>| {
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -1005,18 +1071,57 @@ esac
         start(harness.state_mut());
         wait(&mut harness);
         assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(0));
-        harness.get_by_label("Connect R1.2 to R2.1");
+        let proposal = harness.state().assistant.proposal.as_ref().ok_or_else(|| format!("Missing proposal: {:?}", harness.state().assistant.notice))?;
+        let commands: Vec<&str> = proposal.steps.iter().map(|(command, _)| command.as_str()).collect();
+        assert_eq!(commands, ["schematic.connect_pins", "view.split"]);
+        assert!(proposal.steps[0].1.get("expected_revision").is_none(), "the editor supplies the revision");
+        assert!(proposal.summary.starts_with("1. Connect Pins {"), "{}", proposal.summary);
+        assert!(proposal.summary.contains("\n2. Split {"), "{}", proposal.summary);
+        harness.get_by_label("I propose connecting the resistors.\n\nThen splitting the view.");
         click(&mut harness, "Apply");
         assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(1));
+        assert!(harness.state().views.is_split(), "window commands run through the same dispatcher");
+        harness.get_by_label("Applied. Use Undo to revert.");
         click(&mut harness, "Undo");
         assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(0));
 
         start(harness.state_mut());
         harness.state_mut().session.apply("project.rename", &json!({"name": "changed while waiting"}))?;
         wait(&mut harness);
-        harness.get_by_label("The proposal could not be matched to the current schematic. Ask again.");
+        harness.get_by_label("The project changed while the agent worked. Ask again to refresh the proposal.");
         assert!(harness.query_by_label("Apply").is_none());
         assert_eq!(harness.state().session.project().map(|project| project.wires().len()), Some(0));
+        Ok(())
+    }
+
+    /// A failing step undoes the project edits of the steps before it, names the step, and
+    /// leaves the history as it was; a stale proposal runs nothing.
+    #[test]
+    fn a_failing_step_undoes_the_earlier_project_edits() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = PcbApp::default();
+        app.session.apply("project.new", &json!({"name": "batch"}))?;
+        for (x, revision) in [(0, 1), (20_000_000, 2)] {
+            app.session.apply(PLACE_RESISTOR, &json!({"x_nm": x, "y_nm": 0, "expected_revision": revision}))?;
+        }
+        app.views.sync(&app.session);
+        let before = app.session.inspect();
+        let ctx = egui::Context::default();
+        let connect = json!({"from": {"symbol": "symbol-2", "terminal": "2"}, "to": {"symbol": "symbol-3", "terminal": "1"}});
+        let steps = vec![
+            ("schematic.connect_pins".to_owned(), connect.clone()),
+            ("schematic.rotate_symbol".to_owned(), json!({"symbol": "symbol-2"})),
+            ("schematic.delete_wire".to_owned(), json!({"wire": "wire-99"})),
+        ];
+        let error = app.run_agent_steps(&ctx, before["revision"].as_u64().ok_or("revision")?, &steps).unwrap_err();
+        assert!(error.starts_with("Step 3 (schematic.delete_wire) failed:"), "{error}");
+        assert!(error.ends_with("The project edits from earlier steps were undone."), "{error}");
+        assert_eq!(app.session.inspect()["project"], before["project"]);
+        assert_eq!(app.session.inspect()["can_undo"], before["can_undo"]);
+
+        let stale = app.run_agent_steps(&ctx, 1, &steps[..1]).unwrap_err();
+        assert!(stale.contains("project changed"), "{stale}");
+        let revision = app.session.revision();
+        assert_eq!(app.run_agent_steps(&ctx, revision, &steps[..2]), Ok(2));
         Ok(())
     }
 }
