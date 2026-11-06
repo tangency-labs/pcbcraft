@@ -95,7 +95,8 @@ timestamps, previews, caches, preferences, selections, undo history, session
 revisions, assistant state and credentials outside the tracked project.
 
 Pin each used definition by persistent ID and revision. The first profile can
-resolve an approved, versioned built-in symbol offline. If the project must
+resolve a versioned symbol from the embedded starter library offline (see
+[symbol-library.md](symbol-library.md)). If the project must
 carry a copy of a used definition, record it once with its origin, revision and
 license or notice, subject to redistribution approval. An unavailable required
 definition produces a dependency error, since substituting a newer pin layout
@@ -133,7 +134,7 @@ with storage adapters that report their own publication results.
 
 ## First fixture and acceptance
 
-Create an original one-sheet fixture with two approved built-in resistors.
+Create an original one-sheet fixture with two starter library resistors.
 Place `R1` at `(0, 0)` and `R2` at `(25_400_000, 0)` in nanometers. Give each a
 fixed component and symbol ID, and connect pin `2` of `R1` to pin `1` of `R2`
 with one fixed wire ID. Both symbols use the same pinned definition.

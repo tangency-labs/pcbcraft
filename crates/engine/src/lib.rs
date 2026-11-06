@@ -6,6 +6,7 @@
 //! The native codec snapshots authored data independently of editing history and transport.
 
 pub mod board;
+pub mod library;
 pub mod persistence;
 pub mod schematic;
 
@@ -17,7 +18,7 @@ use std::{
 };
 
 use schematic::{
-    BUILTIN_SYMBOLS, Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, RESISTOR, SymbolDefinition, SymbolPlacement, Terminal, Wire, builtin_symbol,
+    Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, library_symbol,
     wiring::{Connectivity, MAX_WIRES},
 };
 use serde_json::{Map, Value, json};
@@ -51,7 +52,9 @@ impl ParamKind {
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
             Self::FootprintDefinition => json!({"type":"string", "enum":[FOOTPRINT_DEFINITION]}),
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
-            Self::SymbolDefinition => json!({"type": "string", "enum": BUILTIN_SYMBOLS.iter().map(|definition| definition.id).collect::<Vec<_>>()}),
+            Self::SymbolDefinition => {
+                json!({"type": "string", "enum": library::starter().symbols().iter().map(|definition| definition.id.as_str()).collect::<Vec<_>>()})
+            }
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
             Self::Revision => json!({"type": "integer", "minimum": 0}),
             Self::Terminal => json!({
@@ -73,7 +76,7 @@ impl ParamKind {
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::Name | Self::Text if value.is_string() => Ok(()),
             Self::SymbolId if value.as_str().and_then(schematic::parse_symbol_id).is_some() => Ok(()),
-            Self::SymbolDefinition if value.as_str().and_then(builtin_symbol).is_some() => Ok(()),
+            Self::SymbolDefinition if value.as_str().and_then(library_symbol).is_some() => Ok(()),
             Self::Coordinate if value.as_i64().is_some_and(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Revision if value.as_u64().is_some() => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
@@ -81,7 +84,7 @@ impl ParamKind {
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),
-            Self::SymbolDefinition => Err("must identify a built-in symbol definition"),
+            Self::SymbolDefinition => Err("must identify a symbol in the starter library"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
             Self::Terminal => Err("must identify a symbol and its terminal number (1 or 2)"),
@@ -133,7 +136,7 @@ impl Command {
 const NAME: Param = Param { name: "name", summary: "The project's name", kind: ParamKind::Name };
 /// Compatibility command for callers that placed resistors before the symbol picker.
 pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
-/// Place the specified built-in symbol on the schematic.
+/// Place the specified starter library symbol on the schematic.
 pub const PLACE_SYMBOL: &str = "schematic.place_symbol";
 /// The command that joins two inspected symbol terminals with an undoable wire.
 pub const CONNECT_PINS: &str = "schematic.connect_pins";
@@ -159,15 +162,15 @@ const CATALOG: &[Command] = &[
     Command {
         id: PLACE_RESISTOR,
         title: "Place Resistor",
-        summary: "Compatibility command for the built-in 1k resistor. Use schematic.place_symbol for new calls. Undoable.",
+        summary: "Compatibility command for the starter library's 1k resistor. Use schematic.place_symbol for new calls. Undoable.",
         params: &[SYMBOL_X, SYMBOL_Y, EXPECTED_REVISION],
     },
     Command {
         id: PLACE_SYMBOL,
         title: "Place Symbol",
-        summary: "Place a built-in symbol on the open schematic. Undoable.",
+        summary: "Place a starter library symbol on the open schematic. Undoable.",
         params: &[
-            Param { name: "definition", summary: "ID of the built-in symbol definition", kind: ParamKind::SymbolDefinition },
+            Param { name: "definition", summary: "ID of a symbol in the starter library", kind: ParamKind::SymbolDefinition },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
@@ -498,12 +501,16 @@ impl Session {
                     self.change(project);
                 }
             }
-            PLACE_RESISTOR => self.place_symbol(&RESISTOR, params)?,
+            PLACE_RESISTOR => {
+                let resistor =
+                    library_symbol("resistor").ok_or_else(|| CommandError::Unavailable("the starter library has no resistor symbol".to_owned()))?;
+                self.place_symbol(resistor, params)?;
+            }
             PLACE_SYMBOL => {
                 let definition = params["definition"]
                     .as_str()
-                    .and_then(builtin_symbol)
-                    .ok_or_else(|| CommandError::InvalidParams("unknown built-in symbol definition".to_owned()))?;
+                    .and_then(library_symbol)
+                    .ok_or_else(|| CommandError::InvalidParams("unknown symbol definition".to_owned()))?;
                 self.place_symbol(definition, params)?;
             }
             CONNECT_PINS => self.connect_pins(params)?,
@@ -890,7 +897,7 @@ mod tests {
         let symbol = &state["project"]["schematic"]["symbols"][0];
         assert_ne!(symbol["id"], symbol["component_id"]);
         assert_eq!(symbol["reference"], "R1");
-        assert_eq!(symbol["pins"][0], json!({"number": "1", "x_nm": 500 - schematic::PIN_OFFSET_NM, "y_nm": -200}));
+        assert_eq!(symbol["pins"][0], json!({"number": "1", "electrical_type": "passive", "x_nm": 500 - schematic::PIN_OFFSET_NM, "y_nm": -200}));
         s.execute("project.rename", &json!({"name": "renamed"})).unwrap();
         assert_eq!(&s.inspect()["project"]["schematic"]["symbols"][0], symbol);
         s.execute("edit.undo", &Value::Null).unwrap();
@@ -902,6 +909,23 @@ mod tests {
         let state = s.execute(PLACE_RESISTOR, &place(s.revision())).unwrap();
         assert_ne!(state["project"]["schematic"]["symbols"][0]["id"], symbol["id"]);
         assert!(!s.available("edit.redo"));
+    }
+
+    /// Unit identities come from the parsed library definition, even when the unit is not
+    /// named `main`. The placement command and saved unit record preserve that identity.
+    #[test]
+    fn placement_preserves_the_library_unit_identity() {
+        let mut file: Value = serde_json::from_str(include_str!("../../../libraries/starter/symbols/resistor.json")).unwrap();
+        file["units"][0]["id"] = json!("body");
+        let definition = Box::leak(Box::new(library::parse_symbol(&file.to_string()).unwrap()));
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name": "Unit identity"})).unwrap();
+        session.place_symbol(definition, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": session.revision()})).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        assert_eq!(snapshot.symbols()[0].unit, "body");
+        let stored: Value = serde_json::from_slice(&persistence::encode(snapshot).unwrap()).unwrap();
+        assert_eq!(stored["sheet"]["symbols"][0]["unit"], "body");
+        assert_eq!(session.inspect()["project"]["schematic"]["symbols"][0]["unit"], "body");
     }
 
     /// Number each kind independently and preserve LED terminal identities across undo and redo.
@@ -922,8 +946,8 @@ mod tests {
         assert_eq!(
             symbols[1]["pins"],
             json!([
-                {"number": "1", "name": "Anode", "x_nm": -schematic::PIN_OFFSET_NM, "y_nm": 0},
-                {"number": "2", "name": "Cathode", "x_nm": schematic::PIN_OFFSET_NM, "y_nm": 0},
+                {"number": "1", "name": "Anode", "electrical_type": "passive", "x_nm": -schematic::PIN_OFFSET_NM, "y_nm": 0},
+                {"number": "2", "name": "Cathode", "electrical_type": "passive", "x_nm": schematic::PIN_OFFSET_NM, "y_nm": 0},
             ])
         );
         assert_eq!(schematic["netlist"]["unconnected"].as_array().unwrap().len(), 8);

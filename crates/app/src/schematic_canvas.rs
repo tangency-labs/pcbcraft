@@ -7,11 +7,11 @@ mod tests;
 pub(crate) use camera::Camera;
 
 use crate::preferences::Navigation;
-use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
 use pcbcraft_engine::{
     Project,
-    schematic::{MAX_CENTER_NM, Point, SymbolDefinition, SymbolKind, SymbolPlacement, Terminal},
+    schematic::{GRID_NM, MAX_CENTER_NM, Point, Shape, SymbolDefinition, SymbolPlacement, Terminal},
 };
 
 /// The active canvas interaction, bound to the revision at which it began.
@@ -298,24 +298,43 @@ fn paint_grid(painter: &Painter, rect: Rect, origin: Pos2, tokens: Tokens, mut s
     }
 }
 
-const LED_ARROW_TIP_Y: f32 = -3.1;
-/// Half the height of the capacitor plates and the connector body, in grid steps.
-const BODY_HALF_HEIGHT: f32 = 1.77;
+/// One schematic grid step in nanometers, for converting library drawings to grid steps.
+const GRID: f32 = GRID_NM as f32;
+
+/// A library point in grid steps from the symbol's center, before rotation.
+fn grid(point: Point) -> (f32, f32) {
+    (point.x_nm as f32 / GRID, point.y_nm as f32 / GRID)
+}
+
+/// [`grid`] as a position, for bounds.
+fn grid_pos(point: Point) -> Pos2 {
+    let (x, y) = grid(point);
+    pos2(x, y)
+}
 
 /// The area a symbol's drawing covers around its center, in grid steps, after its turns: its
-/// pins and body, including the LED's arrows. Fit uses it so every part stays in view.
+/// pins and every stroke. Fit uses it so every part stays in view.
 pub(super) fn grid_bounds(definition: &SymbolDefinition, turns: u8) -> Rect {
     turn_rect(unturned_bounds(definition), turns)
 }
 
 /// [`grid_bounds`] before rotation.
 fn unturned_bounds(definition: &SymbolDefinition) -> Rect {
-    let top = match definition.kind {
-        SymbolKind::Resistor => 0.0,
-        SymbolKind::Led => LED_ARROW_TIP_Y,
-        SymbolKind::Capacitor | SymbolKind::Connector => -BODY_HALF_HEIGHT,
-    };
-    Rect::from_min_max(pos2(-5.0, top), pos2(5.0, 0.0))
+    let pins = definition.pins().iter().map(|pin| Rect::from_pos(grid_pos(pin.offset)));
+    pins.fold(drawing_bounds(definition), Rect::union)
+}
+
+/// The bounds of a symbol's strokes alone, in grid steps before rotation, or nothing when it
+/// has none.
+fn drawing_bounds(definition: &SymbolDefinition) -> Rect {
+    let point = |point: &Point| Rect::from_pos(grid_pos(*point));
+    definition.drawing.iter().fold(Rect::NOTHING, |bounds, shape| {
+        bounds.union(match shape {
+            Shape::Line(from, to) | Shape::Rect(from, to) => point(from).union(point(to)),
+            Shape::Polyline(points) => points.iter().map(point).fold(Rect::NOTHING, Rect::union),
+            Shape::Circle(center, radius) => point(center).expand(*radius as f32 / GRID),
+        })
+    })
 }
 
 /// The grabbable body of a symbol in grid steps after its turns: the area around its drawing.
@@ -323,8 +342,9 @@ fn body_size(turns: u8) -> Vec2 {
     if turns % 2 == 1 { vec2(4.0, 5.0) } else { vec2(5.0, 4.0) }
 }
 
-/// Draw the symbol around its center, with one grid step of `step` points and its pins at ±5
-/// steps, turned with the symbol. At overview zoom use a simpler outline.
+/// Draw the symbol's library strokes around its center, with one grid step of `step` points,
+/// turned with the symbol. With a label, the reference goes above the drawing and the value
+/// below it, or both beside an upright part.
 /// Horizontal labels follow the rotated drawing's upper and lower clearance, including LED arrows.
 fn paint_symbol(
     painter: &Painter,
@@ -336,73 +356,30 @@ fn paint_symbol(
     label: Option<(&str, &str)>,
 ) {
     let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color);
-    let xy = |(x, y): (f32, f32)| {
+    let xy = |point: &Point| {
+        let (x, y) = grid(*point);
         let (x, y) = turn(x, y, turns);
         pos2(center.x + x * step, center.y + y * step)
     };
-    let line = |points: &[(f32, f32)]| painter.add(Shape::line(points.iter().copied().map(xy).collect(), stroke));
-    let kind = definition.kind;
-    let (left, right) = (xy((-5.0, 0.0)), xy((5.0, 0.0)));
-    if step < theme::SCHEMATIC_DETAIL_GRID_SPACING {
-        match kind {
-            SymbolKind::Resistor => {
-                line(&[(-5.0, 0.0), (-2.5, 0.0), (-1.2, -0.9), (0.0, 0.9), (1.2, -0.9), (2.5, 0.0), (5.0, 0.0)]);
+    for shape in &definition.drawing {
+        match shape {
+            Shape::Line(from, to) => {
+                painter.line_segment([xy(from), xy(to)], stroke);
             }
-            SymbolKind::Led => {
-                line(&[(-5.0, 0.0), (-1.3, 0.0), (-1.3, -1.5), (1.3, 0.0), (-1.3, 1.5), (-1.3, 0.0)]);
-                line(&[(1.3, -1.5), (1.3, 1.5), (1.3, 0.0), (5.0, 0.0)]);
+            Shape::Polyline(points) => {
+                painter.add(egui::Shape::line(points.iter().map(xy).collect(), stroke));
             }
-            SymbolKind::Capacitor => {
-                line(&[(-5.0, 0.0), (-0.5, 0.0)]);
-                line(&[(-0.5, -BODY_HALF_HEIGHT), (-0.5, BODY_HALF_HEIGHT)]);
-                line(&[(0.5, -BODY_HALF_HEIGHT), (0.5, BODY_HALF_HEIGHT)]);
-                line(&[(0.5, 0.0), (5.0, 0.0)]);
+            Shape::Rect(min, max) => {
+                painter.rect_stroke(Rect::from_two_pos(xy(min), xy(max)), 0, stroke, egui::StrokeKind::Middle);
             }
-            SymbolKind::Connector => {
-                line(&[(-5.0, 0.0), (-2.46, 0.0)]);
-                line(&[(2.46, 0.0), (5.0, 0.0)]);
-                let h = BODY_HALF_HEIGHT;
-                line(&[(-2.46, -h), (2.46, -h), (2.46, h), (-2.46, h), (-2.46, -h)]);
+            Shape::Circle(at, radius) => {
+                painter.circle_stroke(xy(at), *radius as f32 / GRID * step, stroke);
             }
         }
-        return;
     }
-    painter.line_segment([left, xy((-2.5, 0.0))], stroke);
-    painter.line_segment([xy((2.5, 0.0)), right], stroke);
-    // The PCBcraft Next drawings are expressed in grid steps.
-    let (reference_offset, value_offset): (f32, f32) = match kind {
-        SymbolKind::Resistor => {
-            line(&[(-2.5, 0.0), (-2.0, -0.9), (-1.2, 0.9), (-0.4, -0.9), (0.4, 0.9), (1.2, -0.9), (2.0, 0.9), (2.5, 0.0)]);
-            (1.2, 1.2)
-        }
-        SymbolKind::Led => {
-            line(&[(-2.5, 0.0), (-1.3, 0.0)]);
-            line(&[(-1.3, -1.5), (1.3, 0.0), (-1.3, 1.5), (-1.3, -1.5)]);
-            line(&[(1.3, -1.5), (1.3, 1.5)]);
-            line(&[(1.3, 0.0), (2.5, 0.0)]);
-            line(&[(0.0, -2.0), (1.3, LED_ARROW_TIP_Y), (0.8, -3.0)]);
-            line(&[(1.1, -1.7), (2.4, -2.8), (1.9, -2.7)]);
-            (3.7, 1.8)
-        }
-        // Converted from PCBcraft Next's point drawings, where one grid step is 10.16 points.
-        SymbolKind::Capacitor => {
-            line(&[(-2.5, 0.0), (-0.5, 0.0)]);
-            line(&[(-0.5, -BODY_HALF_HEIGHT), (-0.5, BODY_HALF_HEIGHT)]);
-            line(&[(0.5, -BODY_HALF_HEIGHT), (0.5, BODY_HALF_HEIGHT)]);
-            line(&[(0.5, 0.0), (2.5, 0.0)]);
-            (2.3, 2.3)
-        }
-        SymbolKind::Connector => {
-            let h = BODY_HALF_HEIGHT;
-            line(&[(-2.5, 0.0), (-1.18, 0.0)]);
-            line(&[(1.18, 0.0), (2.5, 0.0)]);
-            line(&[(-2.46, -h), (2.46, -h), (2.46, h), (-2.46, h), (-2.46, -h)]);
-            for x in [-0.89, 0.89] {
-                painter.circle_stroke(xy((x, 0.0)), 0.3 * step, stroke);
-            }
-            (2.3, 2.3)
-        }
-    };
+    // Text clears the drawing by a little under half a grid step.
+    let bounds = drawing_bounds(definition);
+    let (reference_offset, value_offset) = if bounds.is_positive() { (0.4 - bounds.min.y, bounds.max.y + 0.4) } else { (1.0, 1.0) };
     if let Some((reference, value)) = label {
         let t = Tokens::get();
         let font = FontId::proportional(t.font_button);

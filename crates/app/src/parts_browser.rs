@@ -1,11 +1,11 @@
-//! The parts browser: a card docked at the left of the canvas that lists the built-in parts as
+//! The parts browser: a card docked at the left of the canvas that lists the starter library's symbols as
 //! searchable thumbnails, in place of the old Place Symbol dialog. Click a part to place it, or
 //! drag parts onto the sheet one after another. Browsing never edits the project; placing goes through the same
 //! `schematic.place_symbol` command as before. Adapted from PCBcraft Next's parts browser.
 
 use egui::{Align2, FontId, Rect, Response, Sense, Ui, pos2, vec2};
 use pcbcraft_chrome::{Tokens, workspace};
-use pcbcraft_engine::schematic::{BUILTIN_SYMBOLS, SymbolDefinition};
+use pcbcraft_engine::{library, schematic::SymbolDefinition};
 
 use crate::schematic_canvas::{PartDrag, paint_preview};
 
@@ -69,18 +69,18 @@ impl PartsBrowser {
         false
     }
 
-    /// The built-in parts whose name, ID or reference prefix contains the search text, in
-    /// catalog order. Matching ignores case; an empty search lists every part.
+    /// The starter library's symbols whose name or ID contains the search text, or whose reference
+    /// prefix is it, in library order. Matching ignores case; an empty search lists every symbol.
     fn matches(&self) -> Vec<&'static SymbolDefinition> {
         let query = self.query.trim().to_lowercase();
-        BUILTIN_SYMBOLS
+        library::starter()
+            .symbols()
             .iter()
-            .copied()
             .filter(|definition| {
                 query.is_empty()
                     || definition.name.to_lowercase().contains(&query)
                     || definition.id.contains(&query)
-                    || definition.reference_prefix().to_string().eq_ignore_ascii_case(&query)
+                    || definition.reference_prefix().eq_ignore_ascii_case(&query)
             })
             .collect()
     }
@@ -149,7 +149,7 @@ fn part(ui: &mut Ui, definition: &'static SymbolDefinition, view: View, selected
         View::Medium | View::Large => vec2(thumb, thumb + t.space_16),
     };
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, definition.name));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &definition.name));
     response.dnd_set_drag_payload(PartDrag { definition, revision });
     let hot = response.hovered() || response.has_focus() || response.dragged();
     if selected || hot {
@@ -162,7 +162,7 @@ fn part(ui: &mut Ui, definition: &'static SymbolDefinition, view: View, selected
             let preview = Rect::from_min_size(rect.min + vec2(t.space_4, t.space_3), vec2(thumb, thumb));
             paint_preview(&painter, definition, preview.shrink(t.space_2), ink);
             let text = pos2(preview.right() + t.space_8, rect.center().y);
-            painter.text(text, Align2::LEFT_CENTER, definition.name, FontId::proportional(t.font_label), ink);
+            painter.text(text, Align2::LEFT_CENTER, &definition.name, FontId::proportional(t.font_label), ink);
             let prefix = format!("{}?", definition.reference_prefix());
             painter.text(rect.right_center() - vec2(t.space_6, 0.0), Align2::RIGHT_CENTER, prefix, FontId::monospace(t.font_small), t.text_dim);
         }
@@ -171,7 +171,7 @@ fn part(ui: &mut Ui, definition: &'static SymbolDefinition, view: View, selected
             let preview = Rect::from_min_size(rect.min, vec2(thumb, thumb)).shrink(t.space_6);
             paint_preview(&painter, definition, preview, ink);
             // Long names end in an ellipsis inside the tile; the tooltip has the full name.
-            let mut job = egui::text::LayoutJob::simple_singleline(definition.name.to_owned(), FontId::proportional(t.font_small), ink);
+            let mut job = egui::text::LayoutJob::simple_singleline(definition.name.clone(), FontId::proportional(t.font_small), ink);
             job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - t.space_4);
             let galley = painter.layout_job(job);
             let at = pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - t.space_2 - galley.size().y);
@@ -189,8 +189,8 @@ mod tests {
     #[test]
     fn search_matches_names_ids_and_prefixes_ignoring_case() {
         let mut browser = PartsBrowser::default();
-        let names = |browser: &PartsBrowser| browser.matches().into_iter().map(|definition| definition.name).collect::<Vec<_>>();
-        assert_eq!(names(&browser).len(), BUILTIN_SYMBOLS.len());
+        let names = |browser: &PartsBrowser| browser.matches().into_iter().map(|definition| definition.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names(&browser).len(), library::starter().symbols().len());
         browser.query = "CAP".to_owned();
         assert_eq!(names(&browser), ["Capacitor"]);
         browser.query = "j".to_owned();

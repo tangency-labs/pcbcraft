@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     MAX_NAME, MAX_OBJECT_ID, MAX_REFERENCE_NUMBER, Project,
     board::{Board, Footprint},
-    schematic::{Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolPlacement, Terminal, Wire, builtin_symbol, wiring::MAX_WIRES},
+    schematic::{Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolPlacement, Terminal, Wire, library_symbol, wiring::MAX_WIRES},
 };
 
 mod archive;
@@ -186,7 +186,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document, String> {
     let mut components = Vec::with_capacity(legacy.sheet.symbols.len());
     let mut symbols = Vec::with_capacity(legacy.sheet.symbols.len());
     for record in legacy.sheet.symbols {
-        let definition = builtin_symbol(&record.definition)
+        let definition = library_symbol(&record.definition)
             .filter(|definition| definition.revision() == record.definition_revision)
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
         components.push(ComponentRecord {
@@ -303,7 +303,7 @@ impl Encoder {
             {
                 let record = ComponentRecord {
                     id,
-                    definition: component.definition.id.into(),
+                    definition: component.definition.id.as_str().into(),
                     definition_revision: component.definition.revision(),
                     reference_number: component.reference_number,
                     reference: component.reference.as_str().into(),
@@ -429,11 +429,11 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     let mut components = BTreeMap::new();
     for record in records {
         validate_id(&mut component_ids, record.id)?;
-        let definition = builtin_symbol(&record.definition)
+        let definition = library_symbol(&record.definition)
             .filter(|definition| record.definition_revision == definition.revision())
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
         if !(1..=MAX_REFERENCE_NUMBER).contains(&record.reference_number)
-            || !references.insert((definition.reference_prefix, record.reference_number))
+            || !references.insert((definition.reference_prefix(), record.reference_number))
         {
             return Err("invalid or duplicate component reference number".to_owned());
         }
@@ -577,13 +577,13 @@ mod tests {
         session
     }
 
-    /// Every built-in definition places through the shared command, numbers its references by
-    /// prefix and survives a save and reopen with its kind, reference and value.
+    /// Every starter library symbol places through the shared command, numbers its references
+    /// by prefix and survives a save and reopen with its kind, reference and value.
     #[test]
-    fn every_builtin_symbol_places_and_round_trips() {
+    fn every_library_symbol_places_and_round_trips() {
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "All parts"})).unwrap();
-        for (index, definition) in crate::schematic::BUILTIN_SYMBOLS.iter().enumerate() {
+        for (index, definition) in crate::library::starter().symbols().iter().enumerate() {
             let x_nm = index as i64 * 25_400_000;
             session
                 .apply(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
@@ -594,7 +594,7 @@ mod tests {
             symbols.as_array().unwrap().iter().map(|symbol| (symbol["kind"].clone(), symbol["reference"].clone(), symbol["value"].clone())).collect();
         assert_eq!(
             summary,
-            [("resistor", "R1", "1k"), ("led", "D1", "LED"), ("capacitor", "C1", "100nF"), ("connector", "J1", "Input")]
+            [("capacitor", "C1", "100nF"), ("connector", "J1", "Input"), ("led", "D1", "LED"), ("resistor", "R1", "1k")]
                 .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
         );
         let loaded = decode(&encode(session.snapshot().unwrap()).unwrap()).unwrap();

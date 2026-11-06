@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 
 pub const GRID_NM: i64 = 1_270_000;
 pub const PIN_OFFSET_NM: i64 = 5 * GRID_NM;
+/// Symbol centers stay this far inside the sheet edge, which is as far as a library pin may sit
+/// from its symbol's center, so every pin stays on the sheet.
 pub const MAX_CENTER_NM: i64 = 1_000_000_000 - PIN_OFFSET_NM;
 pub(crate) const MAX_SYMBOLS: usize = 4096;
 
@@ -29,96 +31,113 @@ pub struct Point {
     pub y_nm: i64,
 }
 
-/// The drawing used for a built-in symbol.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SymbolKind {
-    Resistor,
-    Led,
-    Capacitor,
-    /// A two-pin connector: a body with a contact for each pin.
-    Connector,
+/// How a terminal behaves electrically, as its symbol library declares it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElectricalType {
+    Passive,
+    Input,
+    Output,
+    Bidirectional,
+    PowerIn,
+    PowerOut,
+    Unspecified,
 }
 
-/// An in-memory schematic definition with a stable command ID and two numbered pins.
+impl ElectricalType {
+    /// The name used in symbol files and inspection, such as `power_in`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Passive => "passive",
+            Self::Input => "input",
+            Self::Output => "output",
+            Self::Bidirectional => "bidirectional",
+            Self::PowerIn => "power_in",
+            Self::PowerOut => "power_out",
+            Self::Unspecified => "unspecified",
+        }
+    }
+}
+
+/// One stroke of a symbol's drawing, in nanometers from the symbol's center before rotation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Shape {
+    Line(Point, Point),
+    /// Connected segments through each point in order; repeat the first point to close it.
+    Polyline(Vec<Point>),
+    /// An outline between two opposite corners.
+    Rect(Point, Point),
+    /// An outline around a center, with its radius in nanometers.
+    Circle(Point, i64),
+}
+
+/// One pin of a symbol: where it sits before rotation, its optional name and its electrical type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinDefinition {
+    pub offset: Point,
+    pub name: Option<String>,
+    pub electrical_type: ElectricalType,
+}
+
+/// A schematic symbol definition loaded from a symbol library (see [`crate::library`]). It
+/// describes only the schematic symbol; layout footprints are separate definitions.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SymbolDefinition {
-    /// Stable ID accepted by the shared placement command.
-    pub id: &'static str,
-    /// Label shown in the symbol picker.
-    pub name: &'static str,
-    /// Drawing used on the schematic canvas.
-    pub kind: SymbolKind,
-    pub(crate) reference_prefix: char,
-    value: &'static str,
-    pin_names: [Option<&'static str>; 2],
+    /// Stable ID accepted by the shared placement command and saved in project files.
+    pub id: String,
+    /// Label shown in the parts browser.
+    pub name: String,
+    /// The library's revision of this definition, pinned by each component.
+    pub(crate) revision: u32,
+    pub(crate) reference_prefix: String,
+    pub(crate) value: String,
+    /// The library-defined identity of the supported unit.
+    pub(crate) unit: String,
+    /// Pin 1, then pin 2.
+    pub(crate) pins: [PinDefinition; 2],
+    /// The strokes drawn on the schematic canvas.
+    pub drawing: Vec<Shape>,
 }
-
-pub(crate) static RESISTOR: SymbolDefinition =
-    SymbolDefinition { id: "resistor", name: "Resistor", kind: SymbolKind::Resistor, reference_prefix: 'R', value: "1k", pin_names: [None, None] };
-
-/// The built-in choices available to both the symbol picker and command clients.
-pub static BUILTIN_SYMBOLS: &[&SymbolDefinition] = &[
-    &RESISTOR,
-    &SymbolDefinition {
-        id: "led",
-        name: "LED",
-        kind: SymbolKind::Led,
-        reference_prefix: 'D',
-        value: "LED",
-        pin_names: [Some("Anode"), Some("Cathode")],
-    },
-    &SymbolDefinition {
-        id: "capacitor",
-        name: "Capacitor",
-        kind: SymbolKind::Capacitor,
-        reference_prefix: 'C',
-        value: "100nF",
-        pin_names: [None, None],
-    },
-    &SymbolDefinition {
-        id: "connector",
-        name: "2-pin connector",
-        kind: SymbolKind::Connector,
-        reference_prefix: 'J',
-        value: "Input",
-        pin_names: [None, None],
-    },
-];
 
 impl SymbolDefinition {
-    /// The supported unit identity, stored on placements separately from the component.
-    pub(crate) fn unit_id(&self) -> &str {
-        "main"
+    /// Return the unit identity supplied by the library, used by saved placements.
+    pub fn unit_id(&self) -> &str {
+        &self.unit
     }
 
-    /// The definition revision pinned by a component.
+    /// Return the definition revision pinned by a component.
     pub(crate) fn revision(&self) -> u32 {
-        1
+        self.revision
     }
 
-    /// The initial value copied into a newly placed component.
+    /// Return the initial value copied into a new component.
     pub(crate) fn default_value(&self) -> &str {
-        self.value
+        &self.value
     }
 
-    /// The letter automatic references start with, such as R for a resistor.
-    pub fn reference_prefix(&self) -> char {
-        self.reference_prefix
+    /// The letters automatic references start with, such as R for a resistor.
+    pub fn reference_prefix(&self) -> &str {
+        &self.reference_prefix
+    }
+
+    /// Pin 1, then pin 2, as the library defines them before rotation.
+    pub fn pins(&self) -> &[PinDefinition; 2] {
+        &self.pins
+    }
+
+    /// Return pin 1 and pin 2 for this symbol centered at this point and turned this many
+    /// quarter turns counterclockwise.
+    pub fn pin_positions(&self, Point { x_nm, y_nm }: Point, turns: u8) -> [Point; 2] {
+        self.pins.each_ref().map(|pin| {
+            let (x, y) = rotate(pin.offset.x_nm, pin.offset.y_nm, turns);
+            Point { x_nm: x_nm + x, y_nm: y_nm + y }
+        })
     }
 }
 
-/// Resolve an exact built-in definition ID without falling back to another symbol.
-pub(crate) fn builtin_symbol(id: &str) -> Option<&'static SymbolDefinition> {
-    BUILTIN_SYMBOLS.iter().copied().find(|definition| definition.id == id)
-}
-
-/// Return pin 1 and pin 2 for a built-in symbol centered at this point and turned this many
-/// quarter turns counterclockwise. Unturned, pin 1 is on the left and pin 2 on the right.
-pub fn pin_positions(Point { x_nm, y_nm }: Point, turns: u8) -> [Point; 2] {
-    [-PIN_OFFSET_NM, PIN_OFFSET_NM].map(|offset| {
-        let (x, y) = rotate(offset, 0, turns);
-        Point { x_nm: x_nm + x, y_nm: y_nm + y }
-    })
+/// Resolve an exact definition ID in the starter library without falling back to another symbol.
+pub(crate) fn library_symbol(id: &str) -> Option<&'static SymbolDefinition> {
+    crate::library::starter().symbol(id)
 }
 
 /// Turn an offset from a symbol's center by quarter turns counterclockwise as seen on the
@@ -230,19 +249,24 @@ impl SymbolPlacement {
 
     /// Return pin 1 and pin 2 in absolute schematic coordinates, turned with the symbol.
     pub fn pins(&self) -> [Point; 2] {
-        pin_positions(self.position, self.rotation)
+        self.definition.pin_positions(self.position, self.rotation)
     }
 
     /// Report the component and symbol IDs, the reference and value shown, the rotation, and the
-    /// numbered pin coordinates with, for LEDs, their polarity.
+    /// numbered pin coordinates with their electrical types and any names, such as an LED's polarity.
     pub(crate) fn inspect(&self, reference: &str, value: &str) -> Value {
         let pins = ["1", "2"]
             .into_iter()
             .zip(self.pins())
-            .zip(self.definition.pin_names)
-            .map(|((number, position), name)| {
-                let mut pin = json!({"number": number, "x_nm": position.x_nm, "y_nm": position.y_nm});
-                if let Some(name) = name {
+            .zip(&self.definition.pins)
+            .map(|((number, position), definition)| {
+                let mut pin = json!({
+                    "number": number,
+                    "electrical_type": definition.electrical_type.as_str(),
+                    "x_nm": position.x_nm,
+                    "y_nm": position.y_nm,
+                });
+                if let Some(name) = &definition.name {
                     pin["name"] = json!(name);
                 }
                 pin
