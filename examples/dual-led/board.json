@@ -1,0 +1,21 @@
+{
+  "format": "pcbcraft-board/1",
+  "footprints": [
+    {"id":26,"component":2,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":0,"y_nm":-10160000}
+
+    ,
+    {"id":27,"component":3,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":-7620000,"y_nm":-2540000}
+
+    ,
+    {"id":28,"component":4,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":7620000,"y_nm":-2540000}
+
+    ,
+    {"id":29,"component":6,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":-7620000,"y_nm":5080000}
+
+    ,
+    {"id":30,"component":7,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":7620000,"y_nm":5080000}
+
+    ,
+    {"id":31,"component":9,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":0,"y_nm":12700000}
+  ]
+}

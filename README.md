@@ -141,6 +141,9 @@ trunk serve --locked
 
 Then open [the local web app](http://127.0.0.1:8781).
 
+The [Dual LED editing demo](examples/README.md) includes a small wired schematic,
+a shareable archive and a walkthrough for editing and inspecting pin/pad mappings.
+
 ## Assistant in the desktop editor
 
 Open **Assistant** from the chat icon next to Preferences or press
