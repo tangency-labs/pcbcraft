@@ -238,6 +238,62 @@ fn split_layout_preserves_views_and_fits_narrow_windows() {
     assert_eq!(h.state().session.inspect(), before);
 }
 
+/// One view uses the canvas breadcrumb without reserving a tab row. Opening a split adds
+/// headers and their panel clearance; closing either active pane restores the original area.
+/// The breadcrumb stays 12 points past Browser's right edge, or inside the canvas's left
+/// edge when Browser is hidden; its source text identifies the heading even when elided.
+#[test]
+fn single_view_reclaims_the_header_and_panel_clearance() {
+    let breadcrumb_gap = 12.0;
+    for size in [egui::vec2(1400.0, 900.0), egui::vec2(800.0, 800.0)] {
+        let mut h = harness();
+        h.set_size(size);
+        new_project(&mut h, "Solo");
+        click(&mut h, "View");
+        click(&mut h, "Toggle Parts");
+        let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
+        let single = h.get_by_label("Schematic canvas").rect();
+        let browser = h.state().browser.rect();
+        let parts = h.state().parts.rect();
+        let before = h.state().session.inspect();
+        assert!(h.query_by_label(&path).is_none(), "a single view must not have a tab");
+        assert!(
+            h.output().shapes.iter().any(|shape| matches!(
+                &shape.shape, egui::Shape::Text(text) if text.galley.job.text == path
+                    && single.contains(text.pos)
+                    && (text.pos.x - (browser.right() + breadcrumb_gap)).abs() < 1.0
+            )),
+            "the breadcrumb belongs on the canvas beside Browser"
+        );
+
+        for active in [0, 1] {
+            click(&mut h, "Split editor views");
+            assert_eq!(h.get_all_by_label(&path).count(), 2);
+            let extra = canvas(&h, 0).top() - single.top();
+            assert!(extra >= 32.0, "only a split reserves a header row: {extra}");
+            assert!((h.state().browser.rect().top() - browser.top() - extra).abs() < 1.0);
+            focus_tab(&mut h, active);
+            click(&mut h, "Split editor views");
+            assert!(h.query_by_label(&path).is_none());
+            assert_eq!(h.get_by_label("Schematic canvas").rect(), single);
+            assert_eq!(h.state().browser.rect(), browser);
+            assert_eq!(h.state().parts.rect(), parts);
+            assert_eq!(h.state().views.active.id(), ViewId(active as u64));
+        }
+        click(&mut h, "Toggle Browser");
+        assert_eq!(h.get_by_label("Schematic canvas").rect(), single);
+        assert!(
+            h.output().shapes.iter().any(|shape| matches!(
+                &shape.shape, egui::Shape::Text(text) if text.galley.job.text == path
+                    && single.contains(text.pos)
+                    && (text.pos.x - (single.left() + breadcrumb_gap)).abs() < 1.0
+            )),
+            "hiding Browser moves the breadcrumb into the freed space"
+        );
+        assert_eq!(h.state().session.inspect(), before);
+    }
+}
+
 /// A modal retains input even when the other pane is clicked, and project replacement clears
 /// selection and drafts in both views before either can operate on reused local object IDs.
 #[test]

@@ -228,8 +228,9 @@ impl PcbApp {
         }
     }
 
-    /// Render sheet tabs and canvases in stable view order. Workspace panels stay at their
-    /// window positions and address the focused view; their geometry never follows focus.
+    /// Render split panes with sheet tabs in stable view order, or a single canvas with an
+    /// overlaid breadcrumb and no tab clearance. Workspace panels address the focused view;
+    /// their geometry changes with the layout, never with focus alone.
     pub(super) fn editor_workspace(&mut self, ui: &mut Ui, workspace: Rect) {
         if self.session.project().is_none() {
             self.canvas(ui);
@@ -256,7 +257,8 @@ impl PcbApp {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
                 let view = if active { &self.views.active } else { &self.views.other };
-                if let Some(path) = view.sheet_path(&self.session)
+                if self.views.split
+                    && let Some(path) = view.sheet_path(&self.session)
                     && editor::sheet_tab(ui, &path, active)
                 {
                     self.activate_editor(ui.ctx(), id);
@@ -300,6 +302,11 @@ impl PcbApp {
                         });
                     });
                 }
+                if !self.views.split
+                    && let Some(path) = self.views.active.sheet_path(&self.session)
+                {
+                    workspace::sheet_heading(ui.painter(), canvas, self.browser.rect(), &path, "1 / 1");
+                }
             });
         }
         if self.views.pending_reveal.is_some() {
@@ -308,8 +315,9 @@ impl PcbApp {
         }
     }
 
-    /// Draw shared panels once against the workspace bounds. Return a Browser pick with its
-    /// originating view address so centering can use that pane's actual uncovered canvas.
+    /// Draw shared panels once against the workspace bounds, reserving tab clearance only
+    /// while split. Return a Browser pick with its originating view address so centering
+    /// can use that pane's actual uncovered canvas.
     fn editor_panels(&mut self, ui: &mut Ui) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
         let source = self.views.active.input(&self.session)?;
         #[cfg(not(target_arch = "wasm32"))]
@@ -318,7 +326,9 @@ impl PcbApp {
         let clearance = 0.0;
         self.net_inspector.show(ui, &self.session, clearance);
         let mut area = ui.available_rect_before_wrap();
-        area.min.y = (area.min.y + editor::tab_height() + ui.spacing().item_spacing.y).min(area.max.y);
+        if self.views.split {
+            area.min.y = (area.min.y + editor::tab_height() + ui.spacing().item_spacing.y).min(area.max.y);
+        }
         let pick = self.browser.show(ui, self.parts.browser_area(area), &self.session, &self.views.active.selection);
         let placing = match &self.views.active.tool {
             Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),

@@ -569,11 +569,12 @@ pub(crate) fn paint_menu_glyph(p: &egui::Painter, icon: ToolIcon, center: Pos2, 
     paint_icon(p, icon, center, size, Tokens::get(), true);
 }
 
-/// Paint the sheet path at the top of the canvas, starting at `left` (past a floating Browser),
-/// and the sheet count, such as "1 / 1", at its right, as PCBcraft Next does. Paint after the
-/// canvas so the text sits on top of it; it takes no input.
-pub fn sheet_heading(p: &egui::Painter, canvas: Rect, left: f32, title: &str, count: &str) {
+/// Paint the sheet path beside the visible Browser, or at the canvas's left inset when the
+/// Browser rectangle is not finite. The sheet count sits at the right, as in PCBcraft Next.
+/// Paint after the canvas so the text overlays it without reserving space or taking input.
+pub fn sheet_heading(p: &egui::Painter, canvas: Rect, browser: Rect, title: &str, count: &str) {
     let t = Tokens::get();
+    let left = if browser.is_finite() { browser.right() + FLOATING_GAP } else { canvas.left() + FLOATING_GAP };
     let y = canvas.top() + FLOATING_GAP + FLOATING_HEADER / 2.0 + FLOATING_MARGIN;
     let count_width = p.layout_no_wrap(count.to_owned(), FontId::proportional(t.font_body), t.text_dim).size().x;
     let right = canvas.right() - FLOATING_GAP;

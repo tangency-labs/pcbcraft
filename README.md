@@ -110,8 +110,10 @@ Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
 
 The **Browser** floats over the left of the canvas and shows the project as
-**Project → Sheets → Main → Symbols / Nets**. The tab above each canvas shows
-its sheet hierarchy, such as **Power controller › Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
+**Project → Sheets → Main → Symbols / Nets**. With one view open, the sheet path
+and count sit directly on the canvas beside the Browser, without a tab strip.
+Split views have a tab above each canvas showing its sheet path, such as
+**Power controller › Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
 items, and click one to select it and center the view on it. A net row selects
 one of its wires. Click the Browser's title to fold it. Browsing never changes the
 project, and the canvas keeps its full size; **Fit** keeps the drawing clear of

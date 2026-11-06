@@ -143,6 +143,11 @@ described in PCBcraft Next's `docs/sheet-workflows.md` at
 `568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0). Next lists sheet
 tabs as unfinished. These tabs are new upstream code over its current single-sheet
 model; no prototype tab or hierarchy implementation was copied.
+The single-view layout in `crates/app/src/editor_workspace.rs` restores the existing
+`crates/chrome/src/workspace.rs::sheet_heading` canvas overlay, following Next's
+`src/desktop/canvas.rs` and `src/desktop/panels.rs` at the same revision. Its path
+and count share the canvas with the floating Browser; tab strips and their panel
+clearance are reserved for split views. Heading insets remain in chrome.
 
 ## Bundled fonts
 

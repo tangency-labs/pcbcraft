@@ -289,7 +289,7 @@ fn startup_seeds_both_panes_from_the_preference() {
 }
 
 /// The grid control lives in the bottom status bar, not in the sheet headers. Changing the
-/// spacing or zooming leaves the ribbon and sheet tabs where they were, and a long status
+/// spacing or zooming leaves the ribbon and canvas where they were, and a long status
 /// message truncates before the control instead of running under it.
 #[test]
 fn the_grid_control_sits_in_the_status_bar() {
@@ -300,11 +300,12 @@ fn the_grid_control_sits_in_the_status_bar() {
     assert!(button.min.y >= canvas.max.y, "below the canvas: {button:?} vs {canvas:?}");
     assert!(button.max.x > canvas.center().x, "at the right end");
     let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
-    let tab = h.get_by_label(&path).rect();
+    assert!(h.query_by_label(&path).is_none(), "single-view navigation has no tab strip");
     let ribbon = h.get_by_label("Capture").rect();
     choose_grid(&mut h, "10 mil");
     h.get_by_label("Grid 10 mil · dots 50 mil");
-    assert_eq!((h.get_by_label(&path).rect(), h.get_by_label("Capture").rect()), (tab, ribbon));
+    assert!(h.query_by_label(&path).is_none());
+    assert_eq!(h.get_by_label("Capture").rect(), ribbon);
     assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
 
     // The whole menu opens upward and stays on screen, with its error and pin-hint lines showing,
