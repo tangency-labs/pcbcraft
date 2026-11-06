@@ -385,6 +385,30 @@ impl PcbApp {
     }
 
     /// Delete the complete selection through the shared atomic command; failures retain it.
+    /// Run a wire menu row through the shared commands at the revision the menu opened on, so an
+    /// edit made meanwhile (by an agent, say) makes it fail visibly instead of hitting the wrong
+    /// leg. A successful edit clears the selection, whose wire may no longer exist.
+    fn edit_wire(&mut self, action: schematic_canvas::WireAction, leg: &schematic_canvas::LegTarget) {
+        use schematic_canvas::WireAction;
+        let (command, at) = match action {
+            WireAction::Slice => match leg.split {
+                Some(point) => (pcbcraft_engine::SLICE_WIRE, Some(point)),
+                None => return,
+            },
+            WireAction::Break => (pcbcraft_engine::BREAK_WIRE, Some(leg.inside())),
+            WireAction::DeleteSegment => (pcbcraft_engine::DELETE_WIRE_SEGMENT, Some(leg.inside())),
+            WireAction::Delete => (pcbcraft_engine::DELETE_WIRE, None),
+        };
+        let mut params = json!({"wire": leg.wire, "expected_revision": leg.revision});
+        if let Some(at) = at {
+            params["at"] = json!(at);
+        }
+        self.run(command, &params);
+        if self.message.is_none() {
+            self.selection = Selection::default();
+        }
+    }
+
     fn delete_selection(&mut self) {
         self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.selection,"expected_revision":self.session.revision()}));
         if self.message.is_none() {
@@ -727,6 +751,7 @@ impl PcbApp {
                 return schematic_canvas::show(
                     ui,
                     project,
+                    self.session.revision(),
                     &mut self.camera,
                     self.tool.clone(),
                     &self.selection,
@@ -798,6 +823,7 @@ impl PcbApp {
                 self.tool = None;
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
+            (None, Some(Click::WireEdit(action, leg))) => self.edit_wire(action, &leg),
             (None, Some(Click::Edit(action, symbol))) => {
                 self.selection = Selection::one_symbol(symbol);
                 self.edit_selected(action);

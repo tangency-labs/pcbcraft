@@ -173,12 +173,17 @@ impl<'a> MenuItem<'a> {
 
     /// Draw the row. True when it was clicked, and the menu closes.
     pub fn show(&self, ui: &mut Ui) -> bool {
+        self.show_response(ui).clicked()
+    }
+
+    /// Draw the row and return its response, so the caller can preview what a hovered row will
+    /// do. A click closes the menu, as with [`Self::show`].
+    pub fn show_response(&self, ui: &mut Ui) -> Response {
         let response = self.row(ui);
-        let clicked = response.clicked();
-        if clicked {
+        if response.clicked() {
             ui.close();
         }
-        clicked
+        response
     }
 
     /// Measure to content on the popup's sizing pass and fill the row on subsequent passes.

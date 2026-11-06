@@ -31,6 +31,12 @@ pub const SCHEMATIC_PREVIEW_STROKE: f32 = 1.1;
 pub const SCHEMATIC_PIN_RADIUS: f32 = 3.0;
 /// Distance at which the Wire tool snaps to a terminal.
 pub const SCHEMATIC_PIN_HIT_RADIUS: f32 = 8.0;
+/// Radius of the filled dot where three or more wires meet at a free point.
+pub const SCHEMATIC_JUNCTION_RADIUS: f32 = 2.5;
+/// Half the side of the open square on an unconnected wire end.
+pub const SCHEMATIC_DANGLING_HALF_SIZE: f32 = 2.5;
+/// Radius of the ring marking where Slice will split a wire.
+pub const SCHEMATIC_BREAK_MARK_RADIUS: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
