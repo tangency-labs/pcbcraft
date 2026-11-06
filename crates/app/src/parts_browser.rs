@@ -1,5 +1,5 @@
-//! The parts browser: a card docked at the left of the canvas that lists the starter library's symbols as
-//! searchable thumbnails, in place of the old Place Symbol dialog. Click a part to place it, or
+//! The parts browser: a persistent card docked at the left of the canvas that lists the starter library's
+//! symbols as searchable thumbnails. Click a part to place it, or
 //! drag parts onto the sheet one after another. Browsing never edits the project; placing goes through the same
 //! `schematic.place_symbol` command as before. Adapted from PCBcraft Next's parts browser.
 
@@ -35,7 +35,6 @@ impl View {
 
 #[derive(Debug, Default)]
 pub(crate) struct PartsBrowser {
-    pub(crate) open: bool,
     query: String,
     view: View,
     /// Focus the search field on the next frame, as after pressing A.
@@ -46,25 +45,16 @@ pub(crate) struct PartsBrowser {
 }
 
 impl PartsBrowser {
-    /// Open the browser with an empty, focused search, as Capture › Symbol and A do. If it's
-    /// already open, keep the search and just focus it.
-    pub(crate) fn open_and_focus(&mut self) {
-        if !self.open {
-            self.query.clear();
-        }
-        self.open = true;
+    /// Focus the existing search without changing its query, as Capture › Symbol and A do.
+    pub(crate) fn focus_search(&mut self) {
         self.focus = true;
     }
 
-    /// Close the browser on Escape when its search had focus or workspace keys are available.
-    /// Call after giving dialogs, popups and the assistant priority, but before tool cancellation.
-    /// Return true when the key was consumed and the browser closed.
+    /// Let Escape leave the search field without hiding the dock or cancelling the canvas tool.
+    /// Call after giving dialogs, popups and the assistant priority. Return whether the search
+    /// consumed Escape; outside search, the canvas handles cancellation normally.
     pub(crate) fn take_escape(&mut self, ctx: &egui::Context) -> bool {
-        if self.open
-            && (self.search_focused || !ctx.egui_wants_keyboard_input())
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
-            self.open = false;
+        if self.search_focused && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.search_focused = false;
             return true;
         }
@@ -88,16 +78,13 @@ impl PartsBrowser {
             .collect()
     }
 
-    /// Draw the browser while it's open and return the part clicked, or the first match when
-    /// Enter is pressed in the search field. Either closes the browser.
+    /// Draw the dock and return the part clicked, or the first match when Enter is pressed in
+    /// the search field. Selection releases search focus and leaves the dock and query visible.
     /// New drags capture `revision` so intervening edits can cancel them before placement.
     /// `placing` is the part being placed, which is highlighted. See [`Self::take_escape`].
     pub(crate) fn show(&mut self, ui: &mut Ui, placing: Option<&Arc<SymbolDefinition>>, revision: u64) -> Option<Arc<SymbolDefinition>> {
-        if !self.open {
-            return None;
-        }
         let mut picked = None;
-        let closed = workspace::left_card(ui, "parts_browser", "Parts", |ui| {
+        workspace::left_card(ui, "parts_browser", "Parts", |ui| {
             let t = Tokens::get();
             let search = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search parts").desired_width(f32::INFINITY));
             if std::mem::take(&mut self.focus) {
@@ -131,12 +118,11 @@ impl PartsBrowser {
                     }
                 }
             });
+            if picked.is_some() {
+                search.surrender_focus();
+                self.search_focused = false;
+            }
         });
-        // Clicking a part closes the browser and hands the canvas its room back, as the Place
-        // Symbol dialog and KiCad's chooser do. Dragging leaves it open for the next part.
-        if closed || picked.is_some() {
-            self.open = false;
-        }
         picked
     }
 }

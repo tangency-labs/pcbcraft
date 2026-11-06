@@ -64,6 +64,8 @@ fn startup_home_enters_the_workspace_only_after_a_successful_open() {
         assert_eq!(harness.state().session().project().is_some(), opened);
     }
     harness.get_by_label("Toggle Net Inspector");
+    harness.get_by_label("Parts");
+    harness.get_by_label("Resistor");
     assert_eq!(encode_documents(harness.state().session().snapshot().unwrap()).unwrap(), documents);
 }
 

@@ -725,7 +725,10 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
     use pcbcraft_engine::PLACE_RESISTOR;
 
     use crate::{PcbApp, tests::click};
@@ -799,7 +802,7 @@ mod tests {
         Ok(())
     }
 
-    /// Clicking the chat blocks placement and browser Escape shortcuts while application shortcuts still work.
+    /// Clicking the chat keeps canvas/search shortcuts with the Assistant while application shortcuts still work.
     #[test]
     fn assistant_focus_keeps_application_shortcuts_available() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = PcbApp::default();
@@ -808,7 +811,7 @@ mod tests {
         harness.run();
         harness.key_press(egui::Key::A);
         harness.run();
-        assert!(harness.state().parts.open);
+        harness.get_by_label("Parts");
         click(&mut harness, "Assistant");
         let point = harness.state().assistant.panel_rect.ok_or("Assistant panel is missing")?.center();
         harness.drag_at(point);
@@ -818,10 +821,14 @@ mod tests {
         assert!(harness.state().assistant.keyboard_active);
         harness.key_press(egui::Key::Escape);
         harness.run();
-        assert!(harness.state().parts.open, "The assistant owns Escape while its conversation has focus");
+        harness.get_by_label("Parts");
         harness.key_press(egui::Key::A);
         harness.run();
         assert!(matches!(harness.state().dialog, crate::Dialog::None));
+        assert!(
+            !harness.get_by_role(egui::accesskit::Role::TextInput).accesskit_node().is_focused(),
+            "Assistant focus must not move to parts search"
+        );
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
         harness.run();
         assert!(matches!(harness.state().dialog, crate::Dialog::Preferences(_)));

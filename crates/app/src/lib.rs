@@ -513,9 +513,9 @@ impl PcbApp {
         // Schematic is the only workspace so far, so picking it just closes the picker.
         workspace::ribbon(ui, "Schematic", "Capture", WORKSPACES, |ui| {
             workspace::ribbon_group(ui, "Place", 1, |ui| {
-                let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. })) || self.parts.open;
+                let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. }));
                 if workspace::tool(ui, ToolIcon::Symbol, "Symbol", "Add symbol (A)", self.session.available(PLACE_SYMBOL), placing).clicked() {
-                    self.parts.open_and_focus();
+                    self.parts.focus_search();
                 }
             });
             ui.separator();
@@ -684,7 +684,7 @@ impl PcbApp {
 
     /// Handle app shortcuts outside text fields and dialogs. Assistant focus suppresses canvas tools.
     /// On Home, Escape returns to the workspace and the canvas keys do nothing. In the workspace,
-    /// Escape closes the parts browser before cancelling a tool, after overlays have priority.
+    /// Escape leaves parts search before cancelling a tool, after overlays have priority.
     fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool) {
         self.rotate_requested = false;
         if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.parts.take_escape(ctx) {
@@ -740,7 +740,7 @@ impl PcbApp {
                 }
             }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
-                self.parts.open_and_focus();
+                self.parts.focus_search();
             }
             if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
                 self.begin_wire();
@@ -785,8 +785,8 @@ impl PcbApp {
                 let title = command(id).map_or(id, |c| c.title);
                 let (mut submit, mut cancel) = (false, false);
                 let closing = shell::dialog(ctx, "name_dialog", title, |ui| {
-                    ui.label("Name");
-                    let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
+                    let label = ui.label("Name");
+                    let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY)).labelled_by(label.id);
                     if !focused {
                         field.request_focus();
                         focused = true;
@@ -823,14 +823,14 @@ impl PcbApp {
             Dialog::EditFields { symbol, mut reference, mut value, mut error, mut focused } => {
                 let (mut submit, mut cancel) = (false, false);
                 let closing = shell::dialog(ctx, "edit_fields", "Edit Symbol Fields", |ui| {
-                    ui.label("Reference");
-                    let field = ui.add(egui::TextEdit::singleline(&mut reference).desired_width(f32::INFINITY));
+                    let label = ui.label("Reference");
+                    let field = ui.add(egui::TextEdit::singleline(&mut reference).desired_width(f32::INFINITY)).labelled_by(label.id);
                     if !focused {
                         field.request_focus();
                         focused = true;
                     }
-                    ui.label("Value");
-                    let value_field = ui.add(egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY));
+                    let label = ui.label("Value");
+                    let value_field = ui.add(egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY)).labelled_by(label.id);
                     submit = (field.lost_focus() || value_field.lost_focus()) && ui.input(|i| i.key_pressed(Key::Enter));
                     if let Some(error) = &error {
                         ui.label(shell::error(error.as_str()));
