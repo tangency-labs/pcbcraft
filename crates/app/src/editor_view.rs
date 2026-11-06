@@ -22,6 +22,13 @@ pub(super) struct ViewInput {
     pub(super) revision: u64,
 }
 
+impl ViewInput {
+    /// The view that owns this captured input, independent of its current window.
+    pub(super) fn view(self) -> ViewId {
+        self.view
+    }
+}
+
 /// A persistent sheet address plus the runtime file adoption that bound it to the view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Binding {

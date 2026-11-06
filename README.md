@@ -147,8 +147,24 @@ Drag the divider to resize the panes; narrow windows stack them vertically.
 Opening Split copies the active view’s current zoom and position into the other
 pane. Turning Split off keeps the active view; reopening copies its camera again
 while retaining each view’s separate edit selection.
+On the desktop, **View → Detach** moves the active view into a separate native
+window; splitting first is not required. It uses the same title-bar style as the
+primary window. Detaching from a single view seeds the remaining view with the same zoom
+and position; detaching from a split keeps both cameras. Each window has its own
+Browser, Parts and Net Inspector panels, while edits, highlights, selection
+following, undo and saving still use one project. Primary/secondary follow roles
+stay with their original views when either is detached. **View → Dock** returns
+it to a split with both cameras and selections retained. Closing the detached
+window leaves the primary view in place without opening a split or prompting
+to save. Unfinished gestures are canceled when focus or hosting changes.
+
+Closing the primary window or choosing **File → Quit** uses one **Save / Don’t Save / Cancel**
+decision for the project. A canceled or failed save keeps both editors open.
 The arrangement lasts for the app session and does not change project files.
-Detached editor windows and schematic-to-board cross-probing remain planned.
+Browser builds support Split within one tab; detached windows are desktop only.
+This currently supports two schematic views and one detached editor window.
+Mixed-workspace splits, multiple detached editors, schematic-to-board
+cross-probing and live-MCP window controls remain planned.
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
 Desktop projects default to a folder containing separate project, schematic,

@@ -141,11 +141,13 @@ impl Panel {
 
     /// Draw a floating card with drag, collapse, position and close controls. A collapsed card
     /// occupies only its header and does not call `add`; otherwise `add` receives whether the
-    /// compact list is needed. Returns its actual rectangle and Close.
+    /// compact list is needed. Inherits the host's enabled state so a project dialog can also
+    /// disable cards in another window. Returns its actual rectangle and Close.
     pub fn show(&mut self, ui: &Ui, canvas: Rect, browser: Rect, add: impl FnOnce(&mut Ui, bool)) -> (Rect, bool) {
         let rect = self.rect(canvas, browser, self.position);
         let t = Tokens::get();
         let shown = egui::Area::new("parts_browser".into())
+            .enabled(ui.is_enabled())
             .order(egui::Order::Middle)
             .fixed_pos(rect.min)
             .movable(false)

@@ -1,4 +1,4 @@
-//! Two schematic views over one session. Focus moves whole view state, never document state.
+//! Two schematic views over one session, hosted in a split or separate native windows.
 
 use egui::{Rect, Ui};
 use pcbcraft_chrome::{editor, grid, shell, workspace};
@@ -14,6 +14,8 @@ pub(super) struct EditorViews {
     pub(super) active: SchematicView,
     pub(super) other: SchematicView,
     pub(super) split: bool,
+    /// The view hosted by the secondary native window, if any. The other stays in the root.
+    pub(super) detached: Option<ViewId>,
     ratio: f32,
     rects: [(ViewId, Rect); 2],
     /// Last explicit selection intent. Focus changes alone never replace it.
@@ -36,6 +38,7 @@ impl Default for EditorViews {
             active: SchematicView::new(ViewId(0)),
             other: SchematicView::new(ViewId(1)),
             split: false,
+            detached: None,
             ratio: 0.5,
             rects: [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)],
             selection_source: None,
@@ -45,6 +48,72 @@ impl Default for EditorViews {
 }
 
 impl EditorViews {
+    /// Whether both views are visible, regardless of their window arrangement.
+    pub(super) fn both_visible(&self) -> bool {
+        self.split || self.detached.is_some()
+    }
+
+    /// Borrow a view by stable identity, without changing input ownership.
+    pub(super) fn view(&self, id: ViewId) -> Option<&SchematicView> {
+        if self.active.id() == id {
+            Some(&self.active)
+        } else if self.other.id() == id {
+            Some(&self.other)
+        } else {
+            None
+        }
+    }
+
+    /// Bind the render slot to an existing view without generating a focus/selection event.
+    /// Native hosts restore the previous slot afterwards; the session is never swapped.
+    pub(super) fn bind(&mut self, id: ViewId) {
+        if self.other.id() == id {
+            std::mem::swap(&mut self.active, &mut self.other);
+        }
+    }
+
+    /// Move the current view to a native host. If necessary, seed a second view first; an
+    /// existing split retains both cameras and selections. Old host input becomes invalid.
+    pub(super) fn detach(&mut self) {
+        if self.detached.is_some() {
+            return;
+        }
+        if !self.split {
+            self.other.camera = self.active.camera.fork_navigation();
+        }
+        self.suspend();
+        self.detached = Some(self.active.id());
+        self.split = false;
+        self.bind(self.other.id());
+        self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
+    }
+
+    /// Return the detached view to a visible split, retaining both cameras and selections.
+    /// The returned view receives focus, but no stale native-window gesture can survive.
+    pub(super) fn redock(&mut self) {
+        if let Some(id) = self.detached.take() {
+            self.suspend();
+            self.bind(id);
+            self.split = true;
+            self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
+        }
+    }
+
+    /// Dismiss the detached host while keeping the remaining view in place. The hidden view
+    /// retains its navigation and selection, but old gestures and pending reveals expire.
+    /// Closing a view never changes the project or implicitly opens a split.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn close_detached(&mut self) {
+        if let Some(id) = self.detached.take() {
+            self.suspend();
+            if self.active.id() == id {
+                self.bind(self.other.id());
+            }
+            self.split = false;
+            self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
+        }
+    }
+
     /// Give both views the same snap spacing, as at startup from the remembered preference.
     /// An out-of-range spacing leaves both unchanged.
     pub(super) fn set_grid_everywhere(&mut self, spacing_nm: i64) {
@@ -68,7 +137,7 @@ impl EditorViews {
         self.active.selection = selection;
         self.selection_source = Some(self.active.id());
         self.pending_reveal = None;
-        if self.split
+        if self.both_visible()
             && !self.active.selection.is_empty()
             && policy.allows(self.active.id() == ViewId(0))
             && self.active.shares_sheet(&self.other, session)
@@ -82,18 +151,20 @@ impl EditorViews {
     /// revisions, rebinding, or preference changes invalidate delayed requests; painting a
     /// highlight never produces another request or repeatedly overrides manual navigation.
     fn reveal_for(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) {
-        if id != self.other.id() {
+        if !self.pending_reveal.as_ref().is_some_and(|pending| pending.target.view() == id) {
             return;
         }
         if let Some(pending) = self.pending_reveal.take()
-            && self.split
+            && self.both_visible()
             && pending.policy == policy
-            && self.active.accepts(pending.source, session)
-            && self.other.accepts(pending.target, session)
+            && self.view(pending.source.view()).is_some_and(|view| view.accepts(pending.source, session))
+            && self.view(id).is_some_and(|view| view.accepts(pending.target, session))
             && self.active.shares_sheet(&self.other, session)
             && let Some(project) = session.project()
         {
-            self.other.camera.reveal_selection(project, &self.active.selection);
+            let selection = if self.active.id() == id { self.other.selection.clone() } else { self.active.selection.clone() };
+            let target = if self.active.id() == id { &mut self.active } else { &mut self.other };
+            target.camera.reveal_selection(project, &selection);
         }
     }
 
@@ -101,7 +172,7 @@ impl EditorViews {
     /// against live, pruned view state so deletion, undo and reopening cannot retain stale IDs.
     /// Focus and cameras are unaffected, and the source view never receives its own projection.
     pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
-        if !self.split {
+        if !self.both_visible() {
             return Selection::default();
         }
         let (source, target) = if self.selection_source == Some(self.active.id()) && id == self.other.id() {
@@ -194,7 +265,7 @@ impl PcbApp {
 
     /// Apply the presentation action from the View ribbon. A modal owns input until it closes.
     pub(super) fn split_editors(&mut self, ctx: &egui::Context, split: bool) {
-        if self.session.project().is_none() || !matches!(self.dialog, Dialog::None) {
+        if self.session.project().is_none() || !matches!(self.dialog, Dialog::None) || self.views.detached.is_some() {
             return;
         }
         self.views.set_split(split);
@@ -216,7 +287,7 @@ impl PcbApp {
     /// Resolve a new pointer press before consuming keyboard input. A held drag crossing the
     /// divider keeps its original owner; popups and modals do not transfer editor focus.
     pub(super) fn editor_pointer_focus(&mut self, ctx: &egui::Context) {
-        if self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
+        if !self.views.split || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
             return;
         }
         let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
@@ -245,7 +316,7 @@ impl PcbApp {
             vec![(self.views.active.id(), ui.available_rect_before_wrap())]
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let assistant = self.assistant.covered_rect(workspace);
+        let assistant = if self.windows.rendering_secondary { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
         #[cfg(target_arch = "wasm32")]
         let assistant = {
             let _ = workspace;
@@ -267,6 +338,9 @@ impl PcbApp {
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);
                 if self.views.active.id() == id {
                     self.views.active.camera.set_uncovered(canvas, uncovered);
+                    if matches!(self.dialog, Dialog::None) {
+                        self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
+                    }
                     if let Some((source, pick)) = pick.take() {
                         self.show_pick(source, pick);
                     }
@@ -315,7 +389,7 @@ impl PcbApp {
         }
         if self.views.pending_reveal.is_some() {
             // A selection in the later-painted pane must wake the earlier target host.
-            ui.ctx().request_repaint();
+            self.repaint_editors(ui.ctx());
         }
     }
 
@@ -325,7 +399,7 @@ impl PcbApp {
     fn editor_panels(&mut self, ui: &mut Ui) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
         let source = self.views.active.input(&self.session)?;
         #[cfg(not(target_arch = "wasm32"))]
-        let clearance = self.assistant.rail_clearance();
+        let clearance = if self.windows.rendering_secondary { 0.0 } else { self.assistant.rail_clearance() };
         #[cfg(target_arch = "wasm32")]
         let clearance = 0.0;
         self.net_inspector.show(ui, &self.session, clearance);

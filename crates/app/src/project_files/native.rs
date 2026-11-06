@@ -366,3 +366,5 @@ fn publish(path: &Path, expected: Option<&[u8]>, bytes: &[u8], after_staging: im
 mod split_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod window_tests;

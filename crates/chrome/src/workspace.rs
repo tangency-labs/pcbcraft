@@ -35,6 +35,7 @@ pub enum ToolIcon {
     Fit,
     Browser,
     SplitView,
+    EditorWindow,
     Settings,
 }
 
@@ -623,7 +624,8 @@ fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, cl
 /// its header is the title with a chevron that collapses the card to that header. Open, it
 /// sizes to its rows and scrolls once it would pass the area's bottom edge. It sits above the
 /// canvas and below popups, so it takes its own clicks and wheel input. Returns the card's
-/// rectangle and whether the header was clicked, which should toggle `collapsed`.
+/// rectangle and whether the header was clicked, which should toggle `collapsed`. Inherits
+/// the host's enabled state, including when a project dialog lives in another native window.
 pub fn floating_card(ui: &Ui, id: &'static str, title: &str, area: Rect, collapsed: bool, add: impl FnOnce(&mut Ui)) -> (Rect, bool) {
     let t = Tokens::get();
     let width = (area.width() * 0.4).min(260.0);
@@ -631,6 +633,7 @@ pub fn floating_card(ui: &Ui, id: &'static str, title: &str, area: Rect, collaps
     let body_height = (height - 2.0 * (FLOATING_MARGIN + 1.0) - FLOATING_HEADER - t.space_8).max(TREE_ROW_HEIGHT);
     let frame = floating_frame();
     let shown = egui::Area::new(egui::Id::new(id))
+        .enabled(ui.is_enabled())
         .order(egui::Order::Middle)
         .fixed_pos(area.min + vec2(FLOATING_GAP, FLOATING_GAP))
         .constrain(false)
@@ -824,6 +827,10 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
         ToolIcon::SplitView => {
             line(&[(8.0, 12.0), (56.0, 12.0), (56.0, 52.0), (8.0, 52.0), (8.0, 12.0)], stroke(4.0, ink));
             line(&[(32.0, 12.0), (32.0, 52.0)], stroke(4.0, accent));
+        }
+        ToolIcon::EditorWindow => {
+            line(&[(12.0, 20.0), (8.0, 20.0), (8.0, 54.0), (44.0, 54.0), (44.0, 50.0)], stroke(4.0, ink));
+            line(&[(20.0, 10.0), (56.0, 10.0), (56.0, 44.0), (20.0, 44.0), (20.0, 10.0)], stroke(4.0, accent));
         }
     }
 }

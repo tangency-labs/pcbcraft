@@ -9,6 +9,7 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
 mod editor_view;
+mod editor_windows;
 mod editor_workspace;
 mod home;
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +23,7 @@ mod schematic_canvas;
 mod unsaved;
 
 use editor_view::{SchematicView, ViewId, ViewInput};
+use editor_windows::EditorWindows;
 use editor_workspace::EditorViews;
 use schematic_canvas::{Click, PartDrag, SymbolAction, Tool};
 
@@ -153,6 +155,7 @@ enum Dialog {
 #[derive(Debug, Default)]
 pub struct PcbApp {
     views: EditorViews,
+    windows: EditorWindows,
     integrated_titlebar: bool,
     #[cfg(not(target_arch = "wasm32"))]
     assistant: assistant::Assistant,
@@ -390,7 +393,7 @@ impl PcbApp {
         if !IN_BROWSER {
             let quit_shortcut = ui.ctx().format_shortcut(&COMMAND_Q);
             if MenuItem::new("Quit").icon(MenuIcon::Close).shortcut(&quit_shortcut).show(ui) {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                self.request_project_close(ui.ctx());
             }
         }
     }
@@ -702,13 +705,13 @@ impl PcbApp {
             self.views.active.camera.request_fit();
         }
         workspace::ribbon_separator(ui);
-        let editors = [
+        let mut editors = vec![
             RibbonTool {
                 icon: ToolIcon::SplitView,
                 label: "Split",
                 description: "Split editor views",
                 shortcut: "",
-                enabled: has_project,
+                enabled: has_project && self.views.detached.is_none(),
                 active: self.views.split,
                 toggle: true,
             },
@@ -722,9 +725,21 @@ impl PcbApp {
                 toggle: false,
             },
         ];
+        if !IN_BROWSER {
+            editors.push(RibbonTool {
+                icon: ToolIcon::EditorWindow,
+                label: if self.views.detached.is_some() { "Dock" } else { "Detach" },
+                description: if self.views.detached.is_some() { "Dock editor view" } else { "Detach active editor view" },
+                shortcut: "",
+                enabled: has_project,
+                active: false,
+                toggle: false,
+            });
+        }
         match workspace::ribbon_group(ui, "Editors", &editors) {
             Some(0) => self.split_editors(ui.ctx(), !self.views.split),
             Some(1) => self.dialog = Dialog::Preferences(preferences::PreferencesWindow::at_views(self.preferences)),
+            Some(2) => self.toggle_editor_window(ui.ctx()),
             _ => {}
         }
     }
@@ -880,7 +895,14 @@ impl PcbApp {
             "Schematic canvas 2"
         };
         let source = self.views.active.input(&self.session);
-        let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
+        // Web wheel events reach the canvas before it gains keyboard focus. Native windows
+        // still require OS focus so an inactive host cannot act on canvas input.
+        let input_enabled = ui.is_enabled()
+            && (IN_BROWSER || ui.input(|input| input.focused))
+            && !self.home
+            && !self.project_action_pending()
+            && matches!(self.dialog, Dialog::None)
+            && !egui::Popup::is_any_open(ui.ctx());
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
@@ -934,7 +956,7 @@ impl PcbApp {
         if let (Some(source), Some(click)) = (source, click) {
             self.view_click(source, click);
             // Selection can change after the other pane was painted, without a document edit.
-            ui.ctx().request_repaint();
+            self.repaint_editors(ui.ctx());
         }
     }
 
@@ -1056,7 +1078,7 @@ impl PcbApp {
     /// On Home, Escape returns to the workspace and the canvas keys do nothing. In the workspace,
     /// Escape leaves parts search before cancelling a tool, after overlays have priority.
     fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool, view: ViewId) {
-        if view != self.views.active.id() {
+        if view != self.views.active.id() || !ctx.input(|input| input.focused) || self.project_action_pending() {
             return;
         }
         self.views.active.rotate_requested = false;
@@ -1147,7 +1169,7 @@ impl PcbApp {
                 self.new_project(ctx);
             }
             if pressed(&COMMAND_Q) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.request_project_close(ctx);
             }
         }
     }
@@ -1376,7 +1398,7 @@ impl PcbApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn poll_live_control(&mut self) {
         let Some(control) = &self.live_control else { return };
-        let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy();
+        let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
         let revision = self.session.revision();
         if let Err(error) = control.poll(&mut self.session, can_edit) {
             self.live_control = None;
@@ -1391,9 +1413,11 @@ impl PcbApp {
     /// dialog, and discard browser drags when their starting project revision becomes stale.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
         self.sync_style(&ctx);
         self.pointer = self.pointer_next.take();
         self.handle_close_request(&ctx);
+        self.editor_window_focus(&ctx);
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {
@@ -1421,6 +1445,9 @@ impl PcbApp {
         self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_live_control();
+        if self.project_action_pending() {
+            ui.disable();
+        }
         self.app_bar(ui);
         if self.home {
             self.status(ui);
@@ -1430,7 +1457,12 @@ impl PcbApp {
             if self.integrated_titlebar {
                 shell::resize_window_edges(ui);
             }
-            self.dialogs(&ctx);
+            self.project_dialogs(&ctx);
+            #[cfg(not(target_arch = "wasm32"))]
+            self.detached_editor(&ctx);
+            if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home) {
+                self.repaint_editors(&ctx);
+            }
             return;
         }
         self.ribbon(ui);
@@ -1447,7 +1479,7 @@ impl PcbApp {
         self.editor_workspace(ui, workspace);
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy();
+            let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
             self.assistant.show(&ctx, Some(workspace), &mut self.session, can_edit);
             if let Some(request) = self.assistant.take_settings_request() {
                 self.dialog = match request {
@@ -1461,10 +1493,14 @@ impl PcbApp {
         if self.integrated_titlebar {
             shell::resize_window_edges(ui);
         }
-        self.dialogs(&ctx);
+        self.project_dialogs(&ctx);
         self.views.sync(&self.session);
-        if revision != self.session.revision() {
-            ctx.request_repaint();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.detached_editor(&ctx);
+        if revision != self.session.revision()
+            || before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home)
+        {
+            self.repaint_editors(&ctx);
         }
     }
 }

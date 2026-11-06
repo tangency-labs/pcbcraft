@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod detached_editors;
 mod display_units;
 mod editor_views;
 mod grid_spacing;
