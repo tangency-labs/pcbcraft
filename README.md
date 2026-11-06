@@ -56,6 +56,17 @@ point where three or more wires meet shows a dot, and two wires meeting end to e
 line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
 `schematic.delete_wire_segment` with a point on the wire.
 
+Click a wire to select it and show square handles on its corners and free ends, then drag
+to reshape it in place: a straight segment slides across its direction, a corner drags the
+two legs that meet there, and a free end or junction drags the end leg of every wire attached
+to it. The wire's other ends stay put, gaining an orthogonal leg where needed; pins never leave
+their parts, and connections don't change. The drag moves by the grid's snapped travel, so an
+off-grid wire stays off the grid by the same amount. Release to commit one undoable edit;
+**Esc**, releasing outside the sheet, or an edit made meanwhile cancels it. Dragging a wire that
+isn't the only selection still moves it whole. Agents use `schematic.move_wire_segment`,
+`schematic.move_wire_corner` and `schematic.move_junction`. Overlapping or doubled-back runs
+are not yet merged automatically.
+
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
 **E** edits its reference and value and **Delete** removes it with its wires.
 Right-click a symbol for the same actions, and press **Esc** to clear the selection.

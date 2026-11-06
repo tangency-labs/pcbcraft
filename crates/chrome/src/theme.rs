@@ -37,6 +37,8 @@ pub const SCHEMATIC_JUNCTION_RADIUS: f32 = 2.5;
 pub const SCHEMATIC_DANGLING_HALF_SIZE: f32 = 2.5;
 /// Radius of the ring marking where Slice will split a wire.
 pub const SCHEMATIC_BREAK_MARK_RADIUS: f32 = 4.0;
+/// Half the side of the square handles on a selected wire's corners and free ends.
+pub const SCHEMATIC_HANDLE_HALF_SIZE: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {

@@ -9,7 +9,7 @@ pub(crate) use selection::BoxDrag;
 mod tests;
 
 pub(crate) use camera::Camera;
-pub(crate) use wires::{Draft, LegTarget};
+pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
 
 use crate::preferences::Navigation;
 use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
@@ -24,11 +24,34 @@ use pcbcraft_engine::{
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Debug)]
 pub(crate) enum Tool {
-    PlaceSymbol { definition: Arc<SymbolDefinition>, revision: u64, turns: u8 },
-    Wire { revision: u64, start: Option<Anchor> },
-    BoxSelect { drag: BoxDrag, revision: u64 },
-    MoveItems { items: Selection, origin: Point, revision: u64 },
-    Move { symbol: SymbolPlacement, offset: Vec2, revision: u64 },
+    PlaceSymbol {
+        definition: Arc<SymbolDefinition>,
+        revision: u64,
+        turns: u8,
+    },
+    Wire {
+        revision: u64,
+        start: Option<Anchor>,
+    },
+    BoxSelect {
+        drag: BoxDrag,
+        revision: u64,
+    },
+    MoveItems {
+        items: Selection,
+        origin: Point,
+        revision: u64,
+    },
+    Move {
+        symbol: SymbolPlacement,
+        offset: Vec2,
+        revision: u64,
+    },
+    /// Dragging a segment, corner or free end of the selected wire.
+    Reshape {
+        drag: wires::ReshapeDrag,
+        revision: u64,
+    },
 }
 
 impl Tool {
@@ -39,7 +62,8 @@ impl Tool {
             | Self::Wire { revision, .. }
             | Self::Move { revision, .. }
             | Self::BoxSelect { revision, .. }
-            | Self::MoveItems { revision, .. } => *revision,
+            | Self::MoveItems { revision, .. }
+            | Self::Reshape { revision, .. } => *revision,
         }
     }
 }
@@ -51,6 +75,10 @@ pub(crate) enum Click {
     SelectItems(Selection),
     GrabItems(Selection, Point),
     FinishItems(Option<Point>),
+    /// A drag started on a segment, corner or free end of the one selected wire.
+    GrabReshape(wires::ReshapeDrag),
+    /// The reshape drag ended: where the grabbed point goes, or `None` to cancel.
+    FinishReshape(Option<Point>),
     DeleteItems,
     WirePoint(Anchor, bool),
     CancelWire,
@@ -152,7 +180,7 @@ pub(crate) fn show(
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
-    let moving = matches!(tool, Some(Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. }));
+    let moving = matches!(tool, Some(Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. } | Tool::Reshape { .. }));
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
     let group_delta = match &tool {
@@ -162,8 +190,13 @@ pub(crate) fn show(
         }),
         _ => None,
     };
-    let group_preview = match (&tool, group_delta) {
-        (Some(Tool::MoveItems { items, .. }), Some(delta)) => items.moved(project, delta).ok(),
+    let reshape_target = match &tool {
+        Some(Tool::Reshape { drag, .. }) => response.interact_pointer_pos().map(|pointer| drag.target(camera.snap(pointer, rect))),
+        _ => None,
+    };
+    let group_preview = match (&tool, group_delta, reshape_target) {
+        (Some(Tool::MoveItems { items, .. }), Some(delta), _) => items.moved(project, delta).ok(),
+        (Some(Tool::Reshape { drag, .. }), _, Some(to)) => project.reshaped(&drag.edit, to).ok(),
         _ => None,
     };
     let project = group_preview.as_ref().unwrap_or(project);
@@ -182,6 +215,11 @@ pub(crate) fn show(
         _ => None,
     };
     wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires, &highlighted.wires);
+    if matches!(tool, None | Some(Tool::Reshape { .. }))
+        && let Some(wire) = selected.single_wire()
+    {
+        wires::paint_handles(&painter, rect, project, camera, wire);
+    }
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
@@ -258,6 +296,15 @@ pub(crate) fn show(
         }
         return None;
     }
+    if matches!(tool, Some(Tool::Reshape { .. })) {
+        if lost_focus {
+            return Some(Click::FinishReshape(None));
+        }
+        if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+            return Some(Click::FinishReshape(reshape_target.filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some())));
+        }
+        return None;
+    }
     if matches!(tool, Some(Tool::MoveItems { .. })) {
         if lost_focus {
             return Some(Click::FinishItems(None));
@@ -276,6 +323,15 @@ pub(crate) fn show(
     {
         let right = response.drag_started_by(egui::PointerButton::Secondary);
         let modifiers = ui.input(|i| i.modifiers);
+        // A plain drag on the one selected wire reshapes it instead of moving it whole.
+        if !right
+            && !modifiers.shift
+            && !modifiers.ctrl
+            && let Some(wire) = selected.single_wire()
+            && let Some(drag) = wires::reshape_at(project, camera, rect, wire, origin, camera.snap(origin, rect))
+        {
+            return Some(Click::GrabReshape(drag));
+        }
         let hit = selection::at(project, camera, rect, origin);
         if right || hit.is_empty() || modifiers.shift || modifiers.ctrl {
             return Some(Click::StartBox(BoxDrag {
@@ -364,7 +420,7 @@ pub(crate) fn show(
         Tool::Wire { start, .. } => {
             wires::pick(&painter, rect, &response, project, camera, start, draft).map(|(anchor, finish)| Click::WirePoint(anchor, finish))
         }
-        Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } => None,
+        Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } | Tool::Reshape { .. } => None,
     }
 }
 

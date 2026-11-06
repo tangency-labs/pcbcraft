@@ -416,6 +416,20 @@ impl PcbApp {
         }
     }
 
+    /// Commit a finished reshape drag through the matching shared command at the revision the
+    /// drag began on, so an edit made meanwhile makes it fail visibly. The wire stays selected.
+    fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::schematic::Point, revision: u64) {
+        use pcbcraft_engine::wire::Reshape;
+        let (command, params) = match &drag.edit {
+            Reshape::Segment { wire, at } => (pcbcraft_engine::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": at, "to": to})),
+            Reshape::Corner { wire, at } => (pcbcraft_engine::MOVE_WIRE_CORNER, json!({"wire": wire, "at": at, "to": to})),
+            Reshape::Junction(id) => (pcbcraft_engine::MOVE_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to})),
+        };
+        let mut params = params;
+        params["expected_revision"] = json!(revision);
+        self.run(command, &params);
+    }
+
     /// Delete the complete selection through the shared atomic command; failures retain it.
     fn delete_selection(&mut self) {
         self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.views.active.selection,"expected_revision":self.session.revision()}));
@@ -744,12 +758,13 @@ impl PcbApp {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
                         Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
+                        Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
                         Tool::BoxSelect { .. } => dim("Select items · Esc to cancel"),
                         Tool::Wire { start: None, .. } => dim("Wire · Click a start point"),
                         Tool::Wire { start: Some(_), .. } => dim("Wire · Click corners · Enter finish · Space flip · Esc cancel"),
                     });
                 } else if self.views.active.selection.single_wire().is_some() {
-                    ui.label(dim("Wire selected · Del delete"));
+                    ui.label(dim("Wire selected · Drag a segment, corner or free end to reshape · Del delete"));
                 } else if self.files.busy() {
                     ui.label(dim("File operation in progress"));
                 } else if let Some(notice) = &self.file_notice {
@@ -882,6 +897,15 @@ impl PcbApp {
                 self.views.active.tool = None;
                 if let Some(delta) = delta {
                     self.run(pcbcraft_engine::MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"expected_revision":revision}));
+                }
+            }
+            (None, Click::GrabReshape(drag)) => {
+                self.views.active.tool = Some(Tool::Reshape { drag, revision: self.session.revision() });
+            }
+            (Some(Tool::Reshape { drag, revision }), Click::FinishReshape(to)) => {
+                self.views.active.tool = None;
+                if let Some(to) = to {
+                    self.reshape_wire(&drag, to, revision);
                 }
             }
             (None, Click::DeleteItems) => self.delete_selection(),
