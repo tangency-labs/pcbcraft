@@ -9,7 +9,7 @@ pub(crate) use selection::BoxDrag;
 mod tests;
 
 pub(crate) use camera::Camera;
-pub(crate) use wires::Draft;
+pub(crate) use wires::{Draft, LegTarget};
 
 use crate::preferences::Navigation;
 use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
@@ -60,6 +60,8 @@ pub(crate) enum Click {
     Select(Option<String>),
     /// A row of the selected symbol's context menu.
     Edit(SymbolAction, String),
+    /// A row of a wire's context menu, with the leg it was opened on.
+    WireEdit(WireAction, wires::LegTarget),
     /// A part dragged from the parts browser was released over the canvas at this snapped point.
     Drop(PartDrag, Point),
 }
@@ -80,6 +82,19 @@ pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, re
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP);
     let center = rect.center() - bounds.center().to_vec2() * step;
     paint_symbol(painter, definition, center, step, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color), None);
+}
+
+/// What a wire's context menu asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WireAction {
+    /// Split the wire at the grid point under the click, keeping it connected (KiCad's Slice).
+    Slice,
+    /// Separate the leg under the click from the legs beside it (KiCad's Break).
+    Break,
+    /// Remove the leg under the click, leaving free ends.
+    DeleteSegment,
+    /// Remove the whole wire.
+    Delete,
 }
 
 /// What the selected symbol's context menu asks for.
@@ -109,7 +124,8 @@ pub(crate) enum SymbolAction {
 ///
 /// With no tool, a primary click returns `Click::SelectItems` for a symbol or wire, or clears
 /// selection on empty canvas. Shift/Ctrl combine those hits with the previous selection. A secondary click selects the symbol under it and opens its menu; a row
-/// picked there returns `Click::Edit`. `selected` items are drawn in the accent colour. Both mouse buttons can start a box;
+/// picked there returns `Click::Edit`. A secondary click on a wire selects it and opens Slice, Break, Delete Segment and Delete Wire for the leg under the click, returning `Click::WireEdit`
+/// bound to `revision`. `selected` items are drawn in the accent colour. Both mouse buttons can start a box;
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
@@ -122,6 +138,7 @@ pub(crate) enum SymbolAction {
 pub(crate) fn show(
     ui: &mut Ui,
     project: &Project,
+    revision: u64,
     camera: &mut Camera,
     tool: Option<Tool>,
     selected: &Selection,
@@ -290,9 +307,24 @@ pub(crate) fn show(
                     let hit = selection::at(project, camera, rect, p);
                     !hit.is_empty() && hit.symbols.is_subset(&selected.symbols) && hit.wires.is_subset(&selected.wires)
                 }));
+        // A wire's menu keeps the leg it was opened on until it closes.
+        let leg_id = response.id.with("wire_menu_leg");
+        if let Some(pointer) = pressed {
+            let leg = (target.is_none() && !group).then(|| wires::leg_at(project, camera, rect, pointer, revision)).flatten();
+            ui.data_mut(|data| match leg {
+                Some(leg) => {
+                    data.insert_temp(leg_id, leg);
+                }
+                None => data.remove::<wires::LegTarget>(leg_id),
+            });
+        }
+        let leg = ui.data(|data| data.get_temp::<wires::LegTarget>(leg_id)).filter(|_| target.is_none() && !group);
         let picked = menu::context(&response, |ui| {
             if group {
                 return MenuItem::new("Delete selected items").shortcut("Del").show(ui).then_some(Click::DeleteItems);
+            }
+            if let Some(leg) = leg.clone() {
+                return wire_menu(ui, &painter, rect, camera, leg);
             }
             let Some(id) = target.clone() else {
                 ui.close();
@@ -306,6 +338,9 @@ pub(crate) fn show(
             return Some(click);
         }
         if pressed.is_some() && !group {
+            if let Some(leg) = leg.filter(|_| target.is_none()) {
+                return Some(Click::SelectItems(Selection::one_wire(leg.wire)));
+            }
             return Some(Click::Select(target));
         }
     }
@@ -332,6 +367,31 @@ pub(crate) fn show(
         }
         Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } => None,
     }
+}
+
+/// The rows of a wire's context menu, named as in KiCad's schematic editor: Slice (when the leg
+/// has a grid point to split at), Break (when the wire has more than one leg), Delete Segment
+/// and Delete Wire. The hovered row previews its effect on the canvas.
+fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: wires::LegTarget) -> Option<Click> {
+    let rows = [
+        (MenuItem::new("Slice").enabled(leg.split.is_some()), WireAction::Slice),
+        (MenuItem::new("Break").enabled(leg.route.len() > 2), WireAction::Break),
+        (MenuItem::new("Delete Segment"), WireAction::DeleteSegment),
+        (MenuItem::new("Delete Wire").shortcut("Del"), WireAction::Delete),
+    ];
+    let mut hovered = None;
+    let mut picked = None;
+    for (row, action) in rows {
+        let response = row.show_response(ui);
+        if response.hovered() && row.enabled {
+            hovered = Some(action);
+        }
+        if response.clicked() {
+            picked = Some(action);
+        }
+    }
+    wires::paint_leg_preview(painter, rect, camera, &leg, hovered);
+    picked.map(|action| Click::WireEdit(action, leg))
 }
 
 /// Pick the nearest symbol body under the original press and preserve the grab offset.

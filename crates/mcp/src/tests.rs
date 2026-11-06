@@ -244,3 +244,45 @@ fn mcp_draws_free_routes_to_multi_pin_symbols() {
     assert_eq!(deleted["project"]["schematic"]["wires"], json!([]));
     assert_eq!(deleted["project"]["schematic"]["junctions"], json!([]));
 }
+
+/// MCP discovers the wire slice, break and segment deletion through the shared catalog and runs
+/// them: a slice keeps the route connected through a new junction, and deleting a leg leaves
+/// free ends.
+#[test]
+fn mcp_slices_wires_and_deletes_segments() {
+    let mut server = server();
+    for command in [pcbcraft_engine::SLICE_WIRE, pcbcraft_engine::BREAK_WIRE, pcbcraft_engine::DELETE_WIRE_SEGMENT] {
+        let described = body(&call(&mut server, "describe_command", json!({"command":command})));
+        assert_eq!(described["params"]["required"], json!(["wire", "at", "expected_revision"]));
+    }
+    body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Cut"}})));
+    let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
+    let drawn = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DRAW_WIRE,"params":{"from":point(0, 0),"to":point(8, 0),"bends":[],"expected_revision":1}}),
+    ));
+    let wire = drawn["project"]["schematic"]["wires"][0]["id"].clone();
+    let broken = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::SLICE_WIRE,"params":{"wire":wire,"at":point(4, 0),"expected_revision":drawn["revision"]}}),
+    ));
+    let wires = &broken["project"]["schematic"]["wires"];
+    assert_eq!(wires.as_array().unwrap().len(), 2);
+    assert_eq!(wires[0]["to"], wires[1]["from"]);
+    let nets = |state: &Value| state["project"]["schematic"]["netlist"]["nets"].as_array().unwrap().len();
+    assert_eq!(nets(&broken), nets(&drawn), "a slice keeps one net");
+    let cut = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DELETE_WIRE_SEGMENT,"params":{"wire":wires[1]["id"],"at":point(6, 0),"expected_revision":broken["revision"]}}),
+    ));
+    assert_eq!(cut["project"]["schematic"]["wires"].as_array().unwrap().len(), 1);
+    let refused = call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DELETE_WIRE_SEGMENT,"params":{"wire":wire,"at":point(0, 0),"expected_revision":cut["revision"]}}),
+    );
+    assert_eq!(refused["isError"], true);
+}

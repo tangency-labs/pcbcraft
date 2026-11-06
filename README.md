@@ -57,7 +57,13 @@ or empty grid space to start. Click to add corners, **Space** to flip the curren
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
 to finish, or press **Enter** or double-click to finish on empty space. **Esc** or
 right-click → **Cancel** discards the draft. Click a completed wire and press **Delete**
-to remove it. Crossings stay disconnected; joining the interior of a wire is later work.
+to remove it. Crossings stay disconnected. Right-click a wire for the same edits as KiCad:
+**Slice** splits it at the grid point under the pointer and keeps it connected, so a new wire
+can start from the slice point. **Break** separates the leg under the pointer from the legs beside it. **Delete Segment** removes just that leg, and **Delete Wire** the whole
+route. Hovering a row previews what it changes. An unconnected wire end shows a small square, a
+point where three or more wires meet shows a dot, and two wires meeting end to end read as one
+line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
+`schematic.delete_wire_segment` with a point on the wire.
 
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
 **E** edits its reference and value and **Delete** removes it with its wires.
