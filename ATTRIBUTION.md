@@ -263,3 +263,13 @@ or external implementation was copied; the example is generated from original
 starter definitions through shared engine commands. The current slice omits the
 reference's routing tools, selection filters, Flip view and fabrication geometry.
 It extends the existing chrome card primitives; their provenance is recorded above.
+
+## Eframe native window lifecycle patch
+
+`vendor/eframe/` contains the crates.io eframe 0.36.2 package from egui revision
+`49682f8baa058bf49e011035cfbd6e825f88a5ef`, copyright (c) 2018-2021 Emil Ernerfeldt,
+MIT OR Apache-2.0. Both license texts are retained alongside it. Local changes add
+an opt-in WGPU root-window retirement request so a surviving editor keeps its
+native window when the original closes. The patch boundary and upgrade procedure
+are recorded in [vendor/eframe/PATCH.md](vendor/eframe/PATCH.md). Document/session
+ownership and the close/save policy remain in PCBcraft.
