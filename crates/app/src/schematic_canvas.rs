@@ -78,6 +78,8 @@ pub(crate) enum SymbolAction {
 /// With canvas input enabled and no drag in progress, a primary click during
 /// placement returns `Click::Place` at a valid snapped point. In Wire mode, a
 /// primary click that hits a terminal returns `Click::Pin`.
+/// A browser part dragged over the canvas previews at the snapped pointer position; releasing
+/// it returns `Click::Drop`. Blocked input or an out-of-bounds position suppresses both.
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
 ///
@@ -148,8 +150,14 @@ pub(crate) fn show(
     }
 
     // A part dragged from the browser previews under the pointer and places where it's released.
-    if let Some(drag) = response.dnd_hover_payload::<PartDrag>()
-        && let Some(pointer) = response.hover_pos()
+    // hover_pos is absent while another widget owns the drag. Read the pointer directly and
+    // transform it into this canvas layer, matching the coordinates used by camera snapping.
+    let drag_pointer = ui
+        .input(|i| i.pointer.hover_pos())
+        .map(|pointer| ui.ctx().layer_transform_from_global(response.layer_id).map_or(pointer, |from_global| from_global * pointer));
+    if input_enabled
+        && let Some(drag) = response.dnd_hover_payload::<PartDrag>()
+        && let Some(pointer) = drag_pointer
     {
         let point = camera.snap(pointer, rect);
         if valid_position(point) {
@@ -157,7 +165,7 @@ pub(crate) fn show(
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
-        && let Some(pointer) = response.hover_pos().or_else(|| response.interact_pointer_pos())
+        && let Some(pointer) = drag_pointer
     {
         let point = camera.snap(pointer, rect);
         return (input_enabled && valid_position(point)).then_some(Click::Drop(drag.0, point));

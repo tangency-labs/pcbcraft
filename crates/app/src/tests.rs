@@ -790,7 +790,6 @@ fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
     assert_eq!(harness.state().session().inspect(), before);
 }
 
-/// Open the context menu during an active wire draft with a real secondary click.
 /// The parts browser opens from A with its search focused, filters as you type, places the
 /// first match on Enter, and keeps the old click-to-place flow. Escape closes it.
 #[test]
@@ -820,8 +819,57 @@ fn the_parts_browser_searches_and_places_parts() {
     assert!(harness.state().tool.is_none());
 }
 
-/// Dragging a part from the browser onto the sheet places it where it's released, through the
-/// shared command, and leaves the browser open for the next one.
+/// Escape closes the browser after changing its view, before cancelling an active placement.
+#[test]
+fn escape_closes_the_browser_after_search_loses_focus() {
+    let mut harness = harness();
+    new_project(&mut harness, "parts");
+    harness.key_press(Key::A);
+    harness.run();
+    click(&mut harness, "Capacitor");
+    harness.key_press(Key::A);
+    harness.run();
+    click(&mut harness, "List");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!harness.state().parts.open);
+    assert!(harness.state().tool.is_some(), "Closing the browser must not cancel placement");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(harness.state().tool.is_none());
+}
+
+/// Popups, dialogs and Home handle Escape before the open parts browser does.
+#[test]
+fn the_browser_leaves_escape_to_overlays_and_home() {
+    let mut harness = harness();
+    new_project(&mut harness, "parts");
+    harness.key_press(Key::A);
+    harness.run();
+    click(&mut harness, "File");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(harness.query_by_label("New Project…").is_none());
+    assert!(harness.state().parts.open);
+
+    click(&mut harness, "Preferences");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::None));
+    assert!(harness.state().parts.open);
+
+    click(&mut harness, "Home");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!harness.state().home);
+    assert!(harness.state().parts.open);
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!harness.state().parts.open);
+}
+
+/// Dragging a part previews it on the snapped grid before release, places it through the shared
+/// command, and leaves the browser open for the next one.
 #[test]
 fn dragging_a_part_onto_the_sheet_places_it() {
     let mut harness = harness();
@@ -829,7 +877,7 @@ fn dragging_a_part_onto_the_sheet_places_it() {
     harness.key_press(Key::A);
     harness.run();
     let from = harness.get_by_label("Capacitor").rect().center();
-    let to = canvas_center(&harness) + egui::vec2(50.8, 0.0);
+    let to = canvas_center(&harness) + egui::vec2(52.0, 3.0);
     harness.event(egui::Event::PointerMoved(from));
     harness.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     harness.run();
@@ -837,10 +885,29 @@ fn dragging_a_part_onto_the_sheet_places_it() {
         harness.event(egui::Event::PointerMoved(from + (to - from) * (step as f32 / 6.0)));
         harness.run();
     }
+    let canvas = harness.get_by_label("Schematic canvas").rect();
+    let preview = harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::LineSegment { points, stroke }
+                if stroke.color == Tokens::get().accent && points.iter().all(|point| canvas.contains(*point)) =>
+            {
+                Some(egui::Rect::from_two_pos(points[0], points[1]))
+            }
+            _ => None,
+        })
+        .reduce(|a, b| a.union(b))
+        .expect("The dragged part must have a visible preview before release");
+    let snapped = canvas.center() + egui::vec2(50.8, 0.0);
+    assert!(preview.center().distance(snapped) < 0.1, "The preview must snap to the placement grid: {preview:?}");
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
     harness.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     harness.run();
     assert_eq!(first_symbol(&harness, "kind"), "capacitor");
     assert_eq!(first_symbol(&harness, "x_nm"), 5 * pcbcraft_engine::schematic::GRID_NM);
+    assert_eq!(first_symbol(&harness, "y_nm"), 0);
     assert!(harness.state().parts.open);
 }
 

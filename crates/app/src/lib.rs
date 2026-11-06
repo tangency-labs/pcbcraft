@@ -583,9 +583,10 @@ impl PcbApp {
     }
 
     /// Handle app shortcuts outside text fields and dialogs. Assistant focus suppresses canvas tools.
-    /// On Home, Escape returns to the workspace and the canvas keys do nothing.
+    /// On Home, Escape returns to the workspace and the canvas keys do nothing. In the workspace,
+    /// Escape closes the parts browser before cancelling a tool, after overlays have priority.
     fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool) {
-        if matches!(self.dialog, Dialog::None) && self.parts.take_escape(ctx) {
+        if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.parts.take_escape(ctx) {
             return;
         }
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {

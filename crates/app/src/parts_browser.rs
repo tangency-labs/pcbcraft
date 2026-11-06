@@ -54,10 +54,14 @@ impl PartsBrowser {
         self.focus = true;
     }
 
-    /// Close the browser on Escape when its search field had focus. Call before other Escape
-    /// handling, so the key doesn't also cancel a tool. True when it closed.
+    /// Close the browser on Escape when its search had focus or workspace keys are available.
+    /// Call after giving dialogs, popups and the assistant priority, but before tool cancellation.
+    /// Return true when the key was consumed and the browser closed.
     pub(crate) fn take_escape(&mut self, ctx: &egui::Context) -> bool {
-        if self.open && self.search_focused && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        if self.open
+            && (self.search_focused || !ctx.egui_wants_keyboard_input())
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
             self.open = false;
             self.search_focused = false;
             return true;
