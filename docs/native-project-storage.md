@@ -186,8 +186,10 @@ The current project document is plain UTF-8 JSON tagged
 `pcbcraft-project/4`. A project-level `symbol_definitions` array keeps a full
 copy of every symbol definition the project uses; components live in a
 project-level `components` array; the sheet holds unit placements, junctions and
-wires. Every saved definition, component, placement, junction and wire occupies
-its own line in stable order, with blank lines between records.
+wires. Every component, placement, junction and wire occupies its own line in
+stable order, with blank lines between records. A saved definition spans lines
+like its library file: its header fields on the first line, then one line per
+terminal, drawing stroke and pin, so editing one stroke or pin changes one line.
 
 | Record | Stored fields |
 | --- | --- |

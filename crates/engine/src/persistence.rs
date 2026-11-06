@@ -435,7 +435,8 @@ impl Encoder {
         for _ in 0..records {
             if let Some(definition) = definitions.get(self.written_definitions) {
                 let more = self.written_definitions + 1 < definitions.len();
-                write_record(&mut self.bytes, &crate::library::saved_copy(definition), more)?;
+                crate::library::write_saved_copy(&mut self.bytes, definition)?;
+                self.bytes.extend_from_slice(if more { b",\n\n" } else { b"\n" });
                 self.written_definitions += 1;
                 continue;
             }
@@ -999,6 +1000,19 @@ mod tests {
         let weak = std::sync::Arc::downgrade(&session.project().unwrap().components().next().unwrap().definition);
         drop(session);
         assert!(weak.upgrade().is_none(), "the team-passives copy is freed with the last project using it");
+    }
+
+    /// A saved copy spans lines like a library file, one per terminal, stroke and pin, so changing
+    /// one stroke of it changes exactly one line of the project file.
+    #[test]
+    fn a_saved_copy_edit_changes_one_line() {
+        let mut document: serde_json::Value = serde_json::from_slice(CURRENT_FIXTURE).unwrap();
+        document["symbol_definitions"][0]["units"][0]["drawing"][0]["to_nm"] = json!([-3_810_000, 0]);
+        let edited = encode(decode(&serde_json::to_vec(&document).unwrap()).unwrap()).unwrap();
+        let (before, after) = (std::str::from_utf8(CURRENT_FIXTURE).unwrap(), std::str::from_utf8(&edited).unwrap());
+        assert_eq!(before.lines().count(), after.lines().count());
+        let changed: Vec<_> = before.lines().zip(after.lines()).filter(|(old, new)| old != new).map(|(_, new)| new.trim()).collect();
+        assert_eq!(changed, [r#"{"type":"line","from_nm":[-6350000,0],"to_nm":[-3810000,0]},"#]);
     }
 
     /// Saved copies must match the components exactly: each component's copy is saved once,

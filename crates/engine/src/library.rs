@@ -295,9 +295,57 @@ pub(crate) fn read_saved_copy(value: Value) -> Result<Arc<SymbolDefinition>, Str
     Ok(starter.symbols.iter().chain(&starter.revisions).find(|known| ***known == definition).cloned().unwrap_or_else(|| Arc::new(definition)))
 }
 
+/// Write a symbol's saved form into a project file, indented as one project record: the header
+/// fields on the first line, then one line per terminal, drawing stroke and pin, so editing one
+/// stroke or pin changes one line. The JSON is the same as [`saved_copy`] serializes, and the
+/// output depends only on the definition, so an unchanged project saves without a diff.
+pub(crate) fn write_saved_copy(bytes: &mut Vec<u8>, definition: &SymbolDefinition) -> Result<(), String> {
+    let SavedSymbol { library, format, id, revision, name, reference_prefix, default_value, terminals, units } = saved_copy(definition);
+    let header = compact(&SavedHeader { library, format, id, revision, name, reference_prefix, default_value })?;
+    // The header object stays open so the lists below continue it.
+    let header = header.strip_suffix('}').unwrap_or(&header);
+    let list = |bytes: &mut Vec<u8>, indent: &str, items: Vec<String>| {
+        for (index, item) in items.iter().enumerate() {
+            bytes.extend_from_slice(indent.as_bytes());
+            bytes.extend_from_slice(item.as_bytes());
+            bytes.extend_from_slice(if index + 1 < items.len() { b",\n" } else { b"\n" });
+        }
+    };
+    bytes.extend_from_slice(b"      ");
+    bytes.extend_from_slice(header.as_bytes());
+    bytes.extend_from_slice(b",\n        \"terminals\":[\n");
+    list(bytes, "          ", terminals.iter().map(compact).collect::<Result<_, _>>()?);
+    bytes.extend_from_slice(b"        ],\n        \"units\":[\n");
+    for (index, unit) in units.iter().enumerate() {
+        bytes.extend_from_slice(format!("          {{\"id\":{},\n            \"drawing\":[\n", compact(&unit.id)?).as_bytes());
+        list(bytes, "              ", unit.drawing.iter().map(compact).collect::<Result<_, _>>()?);
+        bytes.extend_from_slice(b"            ],\n            \"pins\":[\n");
+        list(bytes, "              ", unit.pins.iter().map(compact).collect::<Result<_, _>>()?);
+        bytes.extend_from_slice(if index + 1 < units.len() { b"            ]},\n" } else { b"            ]}\n" });
+    }
+    bytes.extend_from_slice(b"        ]}");
+    Ok(())
+}
+
+/// Serialize one saved part of a symbol as compact JSON, with its fields in declaration order.
+fn compact(value: &impl Serialize) -> Result<String, String> {
+    serde_json::to_string(value).map_err(|error| error.to_string())
+}
+
+#[derive(Serialize)]
+struct SavedHeader<'a> {
+    library: &'a str,
+    format: &'static str,
+    id: &'a str,
+    revision: u32,
+    name: &'a str,
+    reference_prefix: &'a str,
+    default_value: &'a str,
+}
+
 /// The saved form of a symbol in a project: its library ID, then the same fields as its
 /// symbol file, so [`read_saved_copy`] reads it back to an equal definition.
-pub(crate) fn saved_copy(definition: &SymbolDefinition) -> impl Serialize + '_ {
+pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
     let point = |point: &Point| [point.x_nm, point.y_nm];
     SavedSymbol {
         library: &definition.library,
@@ -331,7 +379,7 @@ pub(crate) fn saved_copy(definition: &SymbolDefinition) -> impl Serialize + '_ {
 }
 
 #[derive(Serialize)]
-struct SavedSymbol<'a> {
+pub(crate) struct SavedSymbol<'a> {
     library: &'a str,
     format: &'static str,
     id: &'a str,
