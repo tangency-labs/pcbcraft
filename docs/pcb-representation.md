@@ -4,7 +4,7 @@ November 6, 2026. This records the agreed architectural direction and the propos
 contracts that still need implementation. It extends the [board workspace
 plan](board-workspace-plan.md), [native storage contract](native-project-storage.md)
 and [library proposal](library-sources.md) merged in #118. The implementation
-status below distinguishes the first layer/stackup slice from later work; this
+status below distinguishes the layer/stackup and material slices from later work; this
 document does not claim a working board canvas, router or design-rule checker.
 
 The model should support a small board soon while allowing richer constructions
@@ -37,7 +37,9 @@ save/history contract; merely viewing a pinned definition does not create one.
 
 Keep code organized around these responsibilities as features arrive. The first
 implementation's `engine::board::setup` module owns layer/stackup types, validation
-and commands; the existing persistence module owns format versions and encoding.
+and commands; `engine::board::materials` owns pinned material reports and
+construction, with electrical reports in a separate submodule. The existing
+persistence module owns format versions and encoding.
 GUI and MCP callers use the command catalog instead of implementing their own
 mutation rules. Shared net identity and rule resolution should become separate
 engine modules, while footprint definitions remain separate from board instances.
@@ -68,9 +70,9 @@ a layer's purpose under existing geometry requires the same validation.
 
 Represent the stackup as an ordered construction of copper and dielectric
 strata. Copper strata reference layer IDs. Dielectric strata have their own IDs,
-optional material information and thickness. The current implementation stores
-only a material-name string; structured material properties and core/prepreg
-construction are proposed below. A stackup profile has a stable ID;
+optional material information and thickness. Structured material reports and
+core/prepreg construction now accompany the legacy descriptive material label.
+A stackup profile has a stable ID;
 the first board has one uniform rigid profile. Region assignments and additional
 profiles are a later extension for flex/rigid-flex, not an inferred capability
 of the initial model.
@@ -111,12 +113,13 @@ pad stacks and vias reviewed before applying it to a populated board.
 
 Core/prepreg construction and substrate properties belong in the foundation
 before a material-aware setup UI or impedance calculation relies on it. The
-current `material` string is a human label with no inferred electrical or thermal
-properties. It cannot yet represent a qualified FR-4 product, Tg, a core versus
-prepreg choice, or several prepreg plies within one dielectric gap. Those remain
-implementation work, not capabilities supplied by naming a layer `FR-4`.
+legacy `material` string remains a human label with no inferred electrical or
+thermal properties. The implemented [material contract](board-materials.md)
+adds embedded definitions, sourced Tg and Dk/Df reports, core construction,
+ordered prepreg plies and finished-gap tolerance through shared setup commands.
+It supports user-defined families and products without a fixed FR-4 catalog.
 
-The proposed contract separates three responsibilities:
+The contract separates three responsibilities:
 
 | Record | Responsibility |
 | --- | --- |
@@ -126,7 +129,7 @@ The proposed contract separates three responsibilities:
 
 FR-4 does not select a single product or assign a Tg. Material properties need
 their own typed records: Tg with a temperature unit, measurement method and
-source; later Dk/Df with frequency and relevant test conditions, and thermal
+source; Dk/Df with frequency and relevant test conditions; later thermal
 expansion with direction and temperature interval. A reported typical value
 must remain distinct from a guaranteed minimum or a design requirement. Isola's
 [370HR datasheet, revision E](https://www.isola-group.com/wp-content/uploads/data-sheets/370hr-laminate-prepreg.pdf)
@@ -160,21 +163,58 @@ later estimate needs an explicit calculation and provenance. Lengths still obey
 #75's canonical-nanometer contract, while temperature and dimensionless material
 properties use their own units and validation.
 
-Implement this in a dedicated material module consumed by stackup validation,
-the eventual property resolver and setup commands. Extend the dielectric gap
-with a versioned construction/ply representation rather than flattening several
-plies into a label or relaxing validation to accept unknown required semantics.
-The current alternating copper/dielectric format can describe an unresolved gap,
-but cannot save the construction proposed here. Migration must preserve its ID,
-label and thickness without guessing a material product, Tg or core/prepreg role.
+The dedicated material module is consumed by stackup validation and setup
+commands, and will supply the future property resolver. Board format 3 stores
+these records, while unchanged version-2 projects preserve their IDs, labels
+and thicknesses without guessing a product, Tg or core/prepreg role. Tests cover
+mixed custom materials, unresolved properties, distinct report methods and
+frequencies, invalid references/dimensions, explicit revision updates, offline
+save/reopen and undo. Material requirements and derived-result invalidation
+remain work for the future rule resolver and calculation layer.
 
-Acceptance for that slice includes a core and a multi-ply prepreg group with
-different material references, an FR-4 label with unknown Tg, differing Tg test
-methods, independent changes to material requirements and selected products,
-rejection of invalid references/dimensions, and offline save/reopen plus undo.
-Changing a material must invalidate affected derived results without changing
-electrical net identity. Confirm the construction schema and thickness/tolerance
-ownership before implementing those tests and the public format.
+### Stackup and impedance UI
+
+The next user-facing workflow is **Board Setup → Stackup & Impedance**, accessible
+from the project even before the layout canvas or router is complete. It should
+combine an editable stack table with material selection, custom material entry
+and impedance profiles. Altium's published [stack manager workflow](https://www.altium.com/documentation/altium-designer/pcb/defining-layer-stack)
+is a behavior reference for keeping layer construction and impedance profiles
+together; this does not adopt its implementation or promise solver parity.
+
+A user chooses a starting stackup or enters the fabricator's construction, then
+selects signal/reference layers, calculation geometry and frequency. A profile
+can estimate impedance from a supplied width, or estimate width for a target
+impedance. Differential profiles additionally need pair spacing: one of width
+or spacing must be fixed before solving for the other. Store targets separately
+from derived dimensions so later stackup changes can identify stale results.
+No calculation should silently use a layer merely because it is named Ground.
+
+Offer editable starting presets with explicit assumptions, including material
+reports and dimensions; keep the current topology-only presets available when
+those values are unknown. Preset values must have qualified provenance or be
+clearly identified as user-editable engineering assumptions. A calculator needs
+a supported model, relevant Dk and dielectric/copper geometry; Df is retained for
+models that include loss. Mixed plies, anisotropy, mask, copper shape and roughness
+must be handled explicitly where the chosen model requires them. Missing or
+incompatible inputs produce a useful unresolved state, never a silent FR-4
+constant or a nominal-ply thickness substituted for the finished gap.
+
+The first calculator should expose only independently validated geometries and
+show its model, assumptions and estimate status. Reference examples and tests
+must cover valid ranges, dimensional units, inversion to width and rejection of
+unsupported geometry. More capable solvers can then replace or supplement it
+behind the same calculation interface. Altium [distinguishes its field solver
+from closed-form calculators](https://www.altium.com/documentation/knowledge-base/altium-designer/validate-transmission-impedance-computed-in-layer-stack);
+an initial estimate here must not claim equivalent accuracy.
+
+After review, accepted width and pair spacing feed the shared net/class routing
+rules. Minimum clearance and fabrication limits remain separate constraints:
+an impedance calculation cannot override them. Material, thickness or profile
+changes invalidate affected estimates and expose a reviewable rule update;
+they do not silently resize existing tracks. The calculation service and the
+apply-to-rules action belong in engine commands for GUI/MCP parity, with #75's
+shared unit parser at the input boundary. These UI, calculation and rule steps
+remain follow-up implementation work; the current slice supplies their inputs.
 
 ## Footprints, parts and pad stacks
 
@@ -263,6 +303,56 @@ results are revision-keyed caches outside tracked documents. Selecting a width
 does not establish controlled impedance; that needs a qualified material/stackup
 model and a separately implemented calculation.
 
+### Project settings and fabrication profiles
+
+Provide a project settings editor available from schematic and layout, with
+Manufacturing, Stackup & Impedance and Electrical Rules pages. Manufacturing
+settings describe a selected fabrication process; electrical rules describe the
+design's requirements. Both are project data with shared engine validation,
+undo and persistence, rather than application preferences or per-window state.
+
+An editable fabrication profile should cover these initial groups:
+
+| Group | Constraints |
+| --- | --- |
+| Copper | Minimum trace width and copper spacing, plus copper-to-board-edge clearance |
+| Holes and vias | Minimum drill/finished-hole sizes with their meanings explicit, via land diameter, annular ring and hole-to-hole clearance |
+| Via capabilities | Supported through, blind/buried and microvia processes, permitted layer spans, aspect-ratio limits and restrictions on stacked/staggered constructions when specified |
+| Silkscreen | Minimum text height and stroke width, and clearance from exposed pads/mask openings |
+| Stackup | Offered constructions, thickness ranges/tolerances and material selections where supplied |
+
+Do not reduce microvia support to a single unchecked boolean: process capability
+and valid span/dimensions must agree. Unknown capability remains unspecified,
+not permission to route that feature. The first implementation may support a
+subset of the table, but must reject unsupported required profile constraints.
+
+Profiles should be shareable as a separate, portable, versioned file. The planned
+contract uses a stable profile ID and revision, a name, optional fabricator and
+process/service identification, provenance and typed constraints in canonical
+units. Optional offered stackups reference embedded pinned material definitions;
+the profile must be self-contained for those selections, without machine-local
+paths, credentials, executable rules or required online lookups. The file
+extension and exact schema will be fixed in that implementation slice, before
+publishing examples. Users can author custom profiles; third-party profiles
+require qualified provenance and redistribution terms before bundling.
+
+Import validates the complete profile and presents its constraints before an
+explicit apply. A project retains a pinned copy, selected offered stackup and
+its own explicit refinements, so moving the portable file or going offline does
+not change the design. A source path is a hint, not identity. Re-exporting the
+profile should not include unrelated project circuitry. Taking a newer revision
+is deliberate: compare changed limits, report conflicts with current rules and
+geometry, and apply the accepted update in one undoable transaction. Never
+silently mutate the shared profile file when editing a project's settings.
+
+The shared resolver combines process limits with electrical requirements and
+routing preferences. An impedance-derived width or pair gap must satisfy the
+selected process limits; pair spacing is not a substitute for general clearance.
+Keep unresolved/conflicting settings visible to users and MCP, with contributing
+profile/rule revisions, and invalidate calculations on input changes. Project
+settings, portable profile import/export, the resolver and DRC are planned work,
+not capabilities implemented by the current material model.
+
 ## Units and numeric input — #75
 
 Lengths remain signed integer nanometers internally, with field-specific bounds.
@@ -315,9 +405,11 @@ yet. General footprint layer bindings are also absent; the first slice must
 conservatively reject topology changes on populated boards rather than infer a
 reassignment from the hard-coded two-pad footprint.
 
-Follow with the structured material/core/prepreg contract and its bounded model
-implementation (#76), then shared unit parsing/numeric setup UI (#75/#76), the net-identity and
-rule-resolution contract (#77 with #42), pinned footprints/assignments (#92),
+The structured material/core/prepreg model and sourced electrical reports are
+now implemented (#76). Follow with shared unit parsing and the stackup UI
+(#75/#76), project manufacturing settings and portable fabrication profiles,
+a bounded impedance estimator, and the net-identity/rule-resolution contract
+(#77 with #42) before applying estimates to routing rules. Then add pinned footprints/assignments (#92),
 then the board canvas and mixed workspace/cross-probing acceptance (#54/#64/#65).
 Review the accepted-board baseline and pending removals under #55 before exposing
 schematic deletion in that board workflow. Live editor command parity remains

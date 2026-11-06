@@ -14,6 +14,7 @@ const PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
+const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -51,7 +52,7 @@ struct SheetDocument {
 struct BoardDocument {
     format: String,
     #[serde(default, deserialize_with = "present")]
-    setup: Option<crate::board::setup::BoardSetup>,
+    setup: Option<Box<serde_json::value::RawValue>>,
     footprints: Vec<Footprint>,
 }
 
@@ -107,9 +108,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
     }
     let board: BoardDocument = parse(documents, "board.json")?;
-    if !matches!((board.format.as_str(), board.setup.is_some()), (BOARD_FORMAT, false) | (CONFIGURED_BOARD_FORMAT, true)) {
-        return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format));
-    }
+    let setup = match (board.format.as_str(), board.setup) {
+        (BOARD_FORMAT, None) => None,
+        (CONFIGURED_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, true)?),
+        (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
+    };
     let mut used = BTreeSet::from([ENTRY_POINT.to_owned(), sheet_path.clone(), "board.json".to_owned()]);
     let mut definitions = Vec::new();
     for component in &project.components {
@@ -144,8 +148,44 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project = validate_document(document, None).map_err(|error| format!("{ENTRY_POINT}, {sheet_path}, board.json: {error}"))?;
     let project_data = Arc::make_mut(&mut project);
     project_data.sheet_name.clone_from(&reference.name);
-    Arc::make_mut(&mut project_data.board).setup = board.setup;
+    Arc::make_mut(&mut project_data.board).setup = setup;
     Ok(project)
+}
+
+/// Version 2 retains its original field vocabulary; migration preserves labels and dimensions
+/// without inferring material definitions or construction. Version 3 uses the extended model.
+fn decode_setup(raw: &serde_json::value::RawValue, legacy: bool) -> Result<crate::board::setup::BoardSetup, String> {
+    if legacy {
+        let value: serde_json::Value = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
+        legacy_fields(&value, &["layers", "stackup"])?;
+        legacy_fields(&value["stackup"], &["id", "strata"])?;
+        if let Some(layers) = value["layers"].as_array() {
+            for layer in layers {
+                legacy_fields(layer, &["id", "name", "purpose", "side"])?;
+            }
+        }
+        if let Some(strata) = value["stackup"]["strata"].as_array() {
+            for stratum in strata {
+                let fields = if stratum["kind"] == "copper" {
+                    &["kind", "layer", "thickness_nm"][..]
+                } else {
+                    &["kind", "id", "material", "thickness_nm"][..]
+                };
+                legacy_fields(stratum, fields)?;
+            }
+        }
+    }
+    // Decode the original JSON into typed records so duplicate keys cannot be lost in Value.
+    serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))
+}
+
+/// Do not accept a newer field under an older version, even if it is empty or null.
+fn legacy_fields(value: &serde_json::Value, allowed: &[&str]) -> Result<(), String> {
+    let object = value.as_object().ok_or("board.json: version 2 setup records must be objects")?;
+    if let Some(field) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("board.json: field {field} is not supported by version 2"));
+    }
+    Ok(())
 }
 
 /// Reject unsafe names, excess entries and oversized input before parsing any JSON.
@@ -199,7 +239,8 @@ impl DocumentsEncoder {
     }
 
     /// Write at most `records` records or phase transitions. The board-header transition also
-    /// writes its bounded setup (at most 128 layers and 127 strata). Stop on completed documents.
+    /// writes its bounded setup (at most 64 material revisions, 128 layers, 127 strata and
+    /// 256 nested prepreg plies). Stop on completed documents.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
             match self.phase {
@@ -334,11 +375,21 @@ impl DocumentsEncoder {
     }
 }
 
-/// Preserve version 1 bytes for unconfigured boards; version 2 keeps each bounded setup
-/// record on its own line. Configuration is at most 128 layers and 127 strata.
+/// Retain version 1/2 encoding until material-aware fields need version 3. Each layer, gap and
+/// pinned material revision has a stable record line; configuration collections are bounded.
 fn board_header(bytes: &mut Vec<u8>, setup: Option<&crate::board::setup::BoardSetup>) -> Result<(), String> {
     if let Some(setup) = setup {
-        bytes.extend_from_slice(format!("{{\n  \"format\": \"{CONFIGURED_BOARD_FORMAT}\",\n  \"setup\": {{\n    \"layers\": [\n").as_bytes());
+        let format = if setup.requires_material_format() { MATERIAL_BOARD_FORMAT } else { CONFIGURED_BOARD_FORMAT };
+        bytes.extend_from_slice(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes());
+        if !setup.materials().is_empty() {
+            bytes.extend_from_slice(b"    \"materials\": [\n");
+            let mut first = true;
+            for material in setup.materials() {
+                record(bytes, &mut first, material)?;
+            }
+            bytes.extend_from_slice(b"    ],\n");
+        }
+        bytes.extend_from_slice(b"    \"layers\": [\n");
         let mut first = true;
         for layer in setup.layers() {
             record(bytes, &mut first, layer)?;

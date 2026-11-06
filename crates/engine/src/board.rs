@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::schematic::{MAX_CENTER_NM, Point, Terminal};
 
+pub mod materials;
 pub mod setup;
 
 pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
