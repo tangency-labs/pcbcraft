@@ -58,9 +58,22 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
     let mut session = Session::default();
     for (command, params) in steps {
         let result = call(&mut s, "execute", json!({"command": command, "params": params}));
-        assert_eq!(body(&result), session.execute(command, &params).unwrap());
+        assert_eq!(without_sheet_identity(body(&result)), without_sheet_identity(session.execute(command, &params).unwrap()));
     }
-    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), session.inspect());
+    assert_eq!(without_sheet_identity(body(&call(&mut s, "inspect_project", json!({})))), without_sheet_identity(session.inspect()));
+}
+
+/// Independent project.new commands generate different UUIDs. Check each sheet's path and
+/// retain its other metadata while comparing commands from these separate projects.
+fn without_sheet_identity(mut state: Value) -> Value {
+    for sheet in state["project"]["sheets"].as_array_mut().unwrap() {
+        let id = sheet["id"].as_str().unwrap();
+        assert_eq!(id.len(), 36);
+        assert_eq!(sheet["file"], format!("sheets/{id}.json"));
+        sheet["id"] = Value::Null;
+        sheet["file"] = Value::Null;
+    }
+    state
 }
 
 /// Expose the shared symbol choices without changing the legacy resistor command's inputs.

@@ -1,0 +1,15 @@
+{
+  "format": "pcbcraft-sheet/1",
+  "id": "0bbcf5e3-dd21-47b3-ae6b-bd66c8f97989",
+  "symbols": [
+    {"id":2,"component":2,"unit":"main","x_nm":0,"y_nm":0,"rotation":0}
+
+    ,
+    {"id":3,"component":3,"unit":"main","x_nm":25400000,"y_nm":0,"rotation":0}
+  ],
+  "junctions": [
+  ],
+  "wires": [
+    {"id":4,"from":{"symbol":2,"pin":"2"},"to":{"symbol":3,"pin":"1"}}
+  ]
+}

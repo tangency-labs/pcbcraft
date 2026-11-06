@@ -94,8 +94,8 @@ fn compact_file_menu_keeps_save_as_accessible() {
 
     new_project(&mut harness, "blinky");
     choose(&mut harness, "File", "Save As…");
-    harness.get_by_label("Plain JSON");
-    harness.get_by_label("ZIP archive");
+    harness.get_by_label("Project folder…");
+    harness.get_by_label("Packed project (.pc.zip)…");
 }
 
 /// The brand and File trigger share the same centerline as the quick actions.
@@ -194,7 +194,7 @@ fn home_rows_reach_the_save_and_preferences_dialogs() {
 
     click(&mut harness, "Save As…");
     assert!(!harness.state().home);
-    harness.get_by_label("Plain JSON");
+    harness.get_by_label("Project folder…");
 }
 
 /// At narrow widths the navigation sits above the tiles, and both stay inside the window.
@@ -418,7 +418,7 @@ fn app_bar_actions_reach_the_same_state_as_commands_an_agent_runs() {
     session.execute("project.new", &json!({"name": "blinky"})).unwrap();
     session.execute("edit.undo", &Value::Null).unwrap();
     session.execute("edit.redo", &Value::Null).unwrap();
-    assert_eq!(harness.state().session().inspect(), session.inspect());
+    assert_equivalent_sessions(harness.state().session(), &session);
 }
 
 #[test]
@@ -653,9 +653,9 @@ fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     let mut session = Session::default();
     session.execute("project.new", &json!({"name": "blinky"})).unwrap();
     session.execute(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": 1})).unwrap();
-    assert_eq!(harness.state().session().inspect(), session.inspect());
+    assert_equivalent_sessions(harness.state().session(), &session);
     click_canvas(&mut harness);
-    assert_eq!(harness.state().session().inspect(), session.inspect());
+    assert_equivalent_sessions(harness.state().session(), &session);
     click(&mut harness, "Undo");
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
     click(&mut harness, "Redo");
@@ -1420,4 +1420,41 @@ fn stale_or_cancelled_free_wire_drafts_never_commit() {
         assert_eq!(harness.state().session().inspect(), before);
         assert_eq!(harness.state().session().project().unwrap().junctions().count(), 0);
     }
+}
+
+/// Independently created projects have distinct UUIDs; compare the shared command results
+/// while checking the sheet list apart from its generated identity and derived path.
+fn assert_equivalent_sessions(actual: &Session, expected: &Session) {
+    let mut a = actual.inspect();
+    let mut b = expected.inspect();
+    for state in [&mut a, &mut b] {
+        for sheet in state["project"]["sheets"].as_array_mut().unwrap() {
+            sheet["id"] = Value::Null;
+            sheet["file"] = Value::Null;
+        }
+    }
+    assert_eq!(a, b);
+}
+
+/// File and folder choices stay visible on narrow windows without opening an OS picker.
+#[test]
+fn project_location_and_save_choices_fit_a_narrow_window() {
+    let mut harness = harness();
+    harness.set_size(egui::vec2(320.0, 520.0));
+    harness.run();
+    harness.state_mut().dialog = Dialog::OpenLocation;
+    harness.run();
+    for label in ["Project file or archive…", "Project folder…", "Cancel"] {
+        let rect = harness.get_by_label(label).rect();
+        assert!(rect.left() >= 0.0 && rect.right() <= 320.0);
+    }
+    click(&mut harness, "Cancel");
+    harness.state_mut().dialog = Dialog::SaveEncoding;
+    harness.run();
+    for label in ["Project folder…", "Packed project (.pc.zip)…", "Cancel"] {
+        let rect = harness.get_by_label(label).rect();
+        assert!(rect.left() >= 0.0 && rect.right() <= 320.0);
+    }
+    click(&mut harness, "Cancel");
+    assert!(!harness.state().files.busy());
 }

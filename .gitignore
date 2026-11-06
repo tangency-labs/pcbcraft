@@ -2,3 +2,6 @@
 /dist
 # Private notes for the maintainers: never commit.
 /HANDOFF.md
+.pcbcraft-save/
+.pcbcraft-stage-*/
+.*.pcbcraft-lock

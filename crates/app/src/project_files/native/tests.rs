@@ -8,7 +8,7 @@ use std::{
 
 use pcbcraft_engine::{
     MOVE_SYMBOL, PLACE_FOOTPRINT, Session,
-    persistence::{MAX_PROJECT_BYTES, decode, encode},
+    persistence::{MAX_PROJECT_BYTES, decode, encode, encode_file},
     schematic::Point,
 };
 use serde_json::{Value, json};
@@ -390,12 +390,12 @@ fn convert_zip_round_trip_and_keep_the_existing_encoding() {
     save_at(reopened.snapshot.clone(), plain.clone(), None, false, Encoding::Json, || Ok(())).unwrap();
     assert_eq!(read(&plain).unwrap(), json_bytes);
     let baseline = (reopened.snapshot.clone(), reopened.target);
-    save(reopened.snapshot.clone(), Some(baseline.clone()), Encoding::Json).unwrap();
+    save_at(reopened.snapshot.clone(), path.clone(), Some(baseline.1.bytes.clone()), true, Encoding::Zip, || Ok(())).unwrap();
     assert_eq!(read(&path).unwrap(), noncanonical);
 
     fixture.session.open_snapshot(reopened.snapshot);
     move_symbol(&mut fixture.session, "symbol-2", 0, STEP);
-    save(fixture.session.snapshot().unwrap(), Some(baseline), Encoding::Json).unwrap();
+    save_at(fixture.session.snapshot().unwrap(), path.clone(), Some(baseline.1.bytes), false, Encoding::Zip, || Ok(())).unwrap();
     let edited = load(&path).unwrap();
     assert_eq!(edited.target.encoding, Encoding::Zip);
     assert_eq!(positions(&edited.snapshot)[0], Point { x_nm: 0, y_nm: STEP });

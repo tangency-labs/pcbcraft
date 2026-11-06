@@ -1,0 +1,366 @@
+//! The Git working format: an entry point and independently editable documents.
+
+use super::*;
+
+/// The fixed, plain-text entry point inside a project folder.
+pub const ENTRY_POINT: &str = "project.pc";
+/// Each JSON document is bounded independently; large projects need not fit in one legacy file.
+pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+/// Bound total decoded documents below the packed-file limit, leaving room for ZIP metadata.
+pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
+/// Bound directory metadata as well as payload allocation.
+pub const MAX_DOCUMENTS: usize = 4096;
+const PROJECT_FORMAT: &str = "pcbcraft-project/5";
+const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
+const BOARD_FORMAT: &str = "pcbcraft-board/1";
+
+/// Relative portable paths and exact document bytes; folders carry no hash manifest.
+pub type Documents = BTreeMap<String, Vec<u8>>;
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SheetReference {
+    id: Uuid,
+    name: String,
+    file: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectDocument {
+    format: String,
+    id: Uuid,
+    name: String,
+    sheets: Vec<SheetReference>,
+    components: Vec<ComponentRecord<'static>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SheetDocument {
+    format: String,
+    id: Uuid,
+    symbols: Vec<Placement<'static>>,
+    junctions: Vec<Junction>,
+    wires: Vec<Connection<'static>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BoardDocument {
+    format: String,
+    footprints: Vec<Footprint>,
+}
+
+/// Accept only paths owned by this format. Symbol identities are checked against their files on decode.
+pub fn is_document_path(path: &str) -> bool {
+    if path == ENTRY_POINT || path == "board.json" {
+        return true;
+    }
+    let pieces: Vec<_> = path.split('/').collect();
+    match pieces.as_slice() {
+        ["sheets", name] => name.strip_suffix(".json").and_then(|name| Uuid::parse_str(name).ok()).is_some(),
+        ["library", "symbols", library, name] => {
+            let id = |text: &str| {
+                (1..=64).contains(&text.len())
+                    && text.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+                    && !text.starts_with('-')
+                    && !text.ends_with('-')
+            };
+            id(library)
+                && name
+                    .strip_suffix(".json")
+                    .and_then(|name| name.rsplit_once(".r"))
+                    .is_some_and(|(symbol, revision)| id(symbol) && revision.parse::<u32>().is_ok_and(|revision| revision > 0))
+        }
+        _ => false,
+    }
+}
+
+/// Bound and validate every part before constructing a project. No partial state is returned.
+pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
+    check_documents(documents)?;
+    let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
+    if project.format != PROJECT_FORMAT {
+        return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
+    }
+    // The schema uses a list so adding sheets does not need another storage redesign. The
+    // current engine edits one sheet; refusing extra sheets prevents silently losing them.
+    if project.sheets.len() != 1 {
+        return Err(format!("{ENTRY_POINT}: this editor supports exactly one schematic sheet"));
+    }
+    let reference = &project.sheets[0];
+    let sheet_path = format!("sheets/{}.json", reference.id);
+    if reference.file != sheet_path
+        || reference.name.is_empty()
+        || reference.name.trim() != reference.name
+        || reference.name.chars().count() > MAX_NAME
+        || reference.name.chars().any(char::is_control)
+    {
+        return Err(format!("{ENTRY_POINT}: invalid sheet name or file for {}", reference.id));
+    }
+    let sheet: SheetDocument = parse(documents, &sheet_path)?;
+    if sheet.format != SHEET_FORMAT || sheet.id != reference.id {
+        return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
+    }
+    let board: BoardDocument = parse(documents, "board.json")?;
+    if board.format != BOARD_FORMAT {
+        return Err(format!("board.json: unsupported board format {}", board.format));
+    }
+    let mut used = BTreeSet::from([ENTRY_POINT.to_owned(), sheet_path.clone(), "board.json".to_owned()]);
+    let mut definitions = Vec::new();
+    for component in &project.components {
+        let path = format!("library/symbols/{}/{}.r{}.json", component.library, component.definition, component.definition_revision);
+        if !is_document_path(&path) {
+            return Err(format!("{ENTRY_POINT}: component {} has an invalid definition identity", component.id));
+        }
+        if used.insert(path.clone()) {
+            let value: serde_json::Value = parse(documents, &path)?;
+            let definition = crate::library::read_saved_copy(value.clone()).map_err(|error| format!("{path}: {error}"))?;
+            if definition.library != component.library
+                || definition.id != component.definition
+                || definition.revision() != component.definition_revision
+            {
+                return Err(format!("{path}: saved symbol identity does not match its file name"));
+            }
+            definitions.push(value);
+        }
+    }
+    if let Some(path) = documents.keys().find(|path| !used.contains(*path)) {
+        return Err(format!("{path}: unexpected or unused project document"));
+    }
+    let document = Document {
+        format: super::FORMAT.to_owned(),
+        id: project.id,
+        name: project.name,
+        symbol_definitions: definitions,
+        components: project.components,
+        sheet: Sheet { id: sheet.id, symbols: sheet.symbols, junctions: Some(sheet.junctions), wires: sheet.wires },
+        board: Some(BoardRecords { footprints: board.footprints }),
+    };
+    let mut project = validate_document(document, None).map_err(|error| format!("{ENTRY_POINT}, {sheet_path}, board.json: {error}"))?;
+    Arc::make_mut(&mut project).sheet_name.clone_from(&reference.name);
+    Ok(project)
+}
+
+/// Reject unsafe names, excess entries and oversized input before parsing any JSON.
+pub(super) fn check_documents(documents: &Documents) -> Result<(), String> {
+    if documents.len() > MAX_DOCUMENTS || documents.values().map(Vec::len).sum::<usize>() > MAX_DOCUMENTS_BYTES {
+        return Err("project exceeds the document count or total size limit".to_owned());
+    }
+    for (path, bytes) in documents {
+        if !is_document_path(path) {
+            return Err(format!("{path}: unexpected project path"));
+        }
+        if bytes.len() > MAX_DOCUMENT_BYTES {
+            return Err(format!("{path}: document exceeds its size limit"));
+        }
+    }
+    Ok(())
+}
+
+/// Parse a required document and keep its filename in syntax and schema errors.
+fn parse<T: serde::de::DeserializeOwned>(documents: &Documents, path: &str) -> Result<T, String> {
+    let bytes = documents.get(path).ok_or_else(|| format!("{path}: missing project document"))?;
+    serde_json::from_slice(bytes).map_err(|error| format!("{path}: {error}"))
+}
+
+/// Encode the folder's complete logical contents; filesystem publication is a separate operation.
+pub fn encode_documents(project: Arc<Project>) -> Result<Documents, String> {
+    let mut encoder = DocumentsEncoder::new(project);
+    loop {
+        if let Some(documents) = encoder.step(256)? {
+            return Ok(documents);
+        }
+    }
+}
+
+/// Incremental split-document writer. Each step bounds work by editable records so browser
+/// downloads can yield between frames, without constructing a legacy monolithic document.
+pub struct DocumentsEncoder {
+    project: Arc<Project>,
+    documents: Documents,
+    bytes: Vec<u8>,
+    phase: u8,
+    cursor: u64,
+    first: bool,
+    definitions: BTreeMap<(String, String, u32), Arc<crate::schematic::SymbolDefinition>>,
+}
+
+impl DocumentsEncoder {
+    /// Retain the immutable save snapshot without walking its contents in the input handler.
+    pub fn new(project: Arc<Project>) -> Self {
+        Self { project, documents: Documents::new(), bytes: Vec::new(), phase: 0, cursor: 0, first: true, definitions: BTreeMap::new() }
+    }
+
+    /// Write at most `records` records or phase transitions. Stop after receiving the documents.
+    pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
+        for _ in 0..records {
+            match self.phase {
+                0 => {
+                    let p = &self.project;
+                    let sheets = [SheetReference { id: p.sheet_id, name: p.sheet_name.clone(), file: format!("sheets/{}.json", p.sheet_id) }];
+                    write!(
+                        self.bytes,
+                        "{{\n  \"format\": \"{PROJECT_FORMAT}\",\n  \"id\": \"{}\",\n  \"name\": {},\n  \"sheets\": {},\n  \"components\": [\n",
+                        p.id,
+                        json(&p.name)?,
+                        json(&sheets)?
+                    )
+                    .map_err(|e| e.to_string())?;
+                    self.next();
+                }
+                1 => {
+                    if let Some((&id, c)) = self.project.components.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
+                    {
+                        record(
+                            &mut self.bytes,
+                            &mut self.first,
+                            &ComponentRecord {
+                                id,
+                                library: c.definition.library.as_str().into(),
+                                definition: c.definition.id.as_str().into(),
+                                definition_revision: c.definition.revision(),
+                                reference_number: c.reference_number,
+                                reference: c.reference.as_str().into(),
+                                value: c.value.as_str().into(),
+                            },
+                        )?;
+                        self.definitions
+                            .insert((c.definition.library.clone(), c.definition.id.clone(), c.definition.revision()), c.definition.clone());
+                        self.cursor = id;
+                    } else {
+                        self.finish_document(ENTRY_POINT.to_owned())?;
+                        self.next();
+                        write!(self.bytes, "{{\n  \"format\": \"{SHEET_FORMAT}\",\n  \"id\": \"{}\",\n  \"symbols\": [\n", self.project.sheet_id)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                2 => {
+                    if let Some(s) = self.project.symbols.get(self.cursor as usize) {
+                        record(
+                            &mut self.bytes,
+                            &mut self.first,
+                            &Placement {
+                                id: s.ordinal,
+                                component: s.component,
+                                unit: s.unit.as_str().into(),
+                                x_nm: s.position.x_nm,
+                                y_nm: s.position.y_nm,
+                                rotation: u16::from(s.rotation) * 90,
+                            },
+                        )?;
+                        self.cursor += 1;
+                    } else {
+                        self.bytes.extend_from_slice(b"  ],\n  \"junctions\": [\n");
+                        self.next();
+                    }
+                }
+                3 => {
+                    if let Some((&id, p)) = self.project.junctions.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
+                    {
+                        record(&mut self.bytes, &mut self.first, &Junction { id, x_nm: p.x_nm, y_nm: p.y_nm })?;
+                        self.cursor = id;
+                    } else {
+                        self.bytes.extend_from_slice(b"  ],\n  \"wires\": [\n");
+                        self.next();
+                    }
+                }
+                4 => {
+                    if let Some(w) = self.project.wires.get(self.cursor as usize) {
+                        let [from, to] = w.endpoints();
+                        record(
+                            &mut self.bytes,
+                            &mut self.first,
+                            &Connection { id: w.ordinal, from: from.into(), to: to.into(), bends: w.bends.clone() },
+                        )?;
+                        self.cursor += 1;
+                    } else {
+                        self.finish_document(format!("sheets/{}.json", self.project.sheet_id))?;
+                        self.next();
+                        self.bytes.extend_from_slice(format!("{{\n  \"format\": \"{BOARD_FORMAT}\",\n  \"footprints\": [\n").as_bytes());
+                    }
+                }
+                5 => {
+                    if let Some(f) = self.project.board.footprints().get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, f)?;
+                        self.cursor += 1;
+                    } else {
+                        self.finish_document("board.json".to_owned())?;
+                        self.next();
+                    }
+                }
+                6 => {
+                    if let Some(((library, id, revision), definition)) = self.definitions.pop_first() {
+                        let mut bytes = Vec::new();
+                        saved_document(&mut bytes, &definition)?;
+                        self.documents.insert(format!("library/symbols/{library}/{id}.r{revision}.json"), bytes);
+                    } else {
+                        check_documents(&self.documents)?;
+                        self.next();
+                        return Ok(Some(std::mem::take(&mut self.documents)));
+                    }
+                }
+                _ => return Err("document encoding is already complete".to_owned()),
+            }
+            if self.bytes.len() > MAX_DOCUMENT_BYTES {
+                return Err("encoded document exceeds its size limit".to_owned());
+            }
+        }
+        Ok(None)
+    }
+
+    /// Advance to the next list and reset its ordering cursor and separator state.
+    fn next(&mut self) {
+        self.phase += 1;
+        self.cursor = 0;
+        self.first = true;
+    }
+
+    /// Close the last array and object and retain the exact bytes under the document's path.
+    fn finish_document(&mut self, path: String) -> Result<(), String> {
+        self.bytes.extend_from_slice(b"  ]\n}\n");
+        if self.bytes.len() > MAX_DOCUMENT_BYTES {
+            return Err(format!("{path}: encoded document exceeds its size limit"));
+        }
+        self.documents.insert(path, std::mem::take(&mut self.bytes));
+        Ok(())
+    }
+}
+
+/// Keep commas on their own lines so adding a record never rewrites the previous record.
+fn record(bytes: &mut Vec<u8>, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+    if !*first {
+        bytes.extend_from_slice(b"\n    ,\n");
+    }
+    *first = false;
+    bytes.extend_from_slice(b"    ");
+    serde_json::to_writer(&mut *bytes, value).map_err(|e| e.to_string())?;
+    bytes.push(b'\n');
+    Ok(())
+}
+
+/// Serialize a small header field without introducing unstable object ordering.
+fn json(value: &impl Serialize) -> Result<String, String> {
+    serde_json::to_string(value).map_err(|e| e.to_string())
+}
+
+/// Reuse the saved-symbol field order while making each array separator independent of its
+/// previous record. Removing the legacy embedding indentation makes this a standalone file.
+fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefinition) -> Result<(), String> {
+    let mut embedded = Vec::new();
+    crate::library::write_saved_copy(&mut embedded, definition)?;
+    let text = std::str::from_utf8(&embedded).map_err(|e| e.to_string())?;
+    for line in text.lines() {
+        let line = line.strip_prefix("      ").unwrap_or(line);
+        let record = line.strip_suffix(',').unwrap_or(line);
+        bytes.extend_from_slice(record.as_bytes());
+        bytes.push(b'\n');
+        if line.ends_with(',') {
+            let indent = &line[..line.len() - line.trim_start().len()];
+            bytes.extend_from_slice(indent.as_bytes());
+            bytes.extend_from_slice(b",\n");
+        }
+    }
+    Ok(())
+}

@@ -1,0 +1,4 @@
+# Working project documents are text. Portable archives are binary exports.
+*.pc text eol=lf
+*.json text eol=lf
+*.pc.zip binary

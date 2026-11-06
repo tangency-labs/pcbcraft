@@ -43,9 +43,13 @@ project migrates it on the next save. Authored wire routes use format 3. Footpri
 Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
 
-Open a native `.pc` project from **File → Open…**. On desktop, **Save** keeps the
-open file's format, and **File → Save As…** offers a choice. In the browser, use
-**Download Project…** for the same choice. Both plain JSON and ZIP use `.pc`.
+Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
+Desktop projects default to a folder containing separate project, schematic,
+board and saved symbol documents. **Save** keeps the opened form, and
+**File → Save As…** offers **Project folder…** and **Packed project (.pc.zip)…**.
+Commit the folder to Git; use the archive to share the complete project.
+Ordinary hand-zipped project folders open too, including those without a manifest.
+The browser uploads archives and legacy files and downloads `.pc.zip` archives.
 The [native storage notes](docs/native-project-storage.md) describe the formats,
 file safety and performance checks.
 
@@ -110,7 +114,7 @@ isn't on your PATH, set its command to the full path of the binary in
 `target/debug`. Close the setup dialog before editing. The copied configuration
 grants access to this window until you disable the connection or close the app.
 
-For a quick check, open `crates/app/tests/fixtures/two-resistors.pc`. Use
+For a quick check, open `crates/app/tests/fixtures/split/two-resistors/project.pc`. Use
 `inspect_project` to get R1's symbol ID and the current revision. Call `execute`
 with `schematic.move_symbol` and pass the ID as `symbol`, coordinates as integer
 `x_nm` and `y_nm`, and the inspected revision as `expected_revision`. Move R1 to
@@ -123,7 +127,7 @@ until you save the project.
 To start the MCP server from the repository root, run
 `cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it
 at `pcbcraft-cli mcp`. Pass
-`--project path/to/project.pc` after `mcp` to start with a saved snapshot. The
+`--project path/to/project.pc` (or a folder or `.pc.zip`) after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to return just the resulting revision. Use `inspect_project` to read
 the project, or `cross_probe` to look up a linked terminal or pad.
