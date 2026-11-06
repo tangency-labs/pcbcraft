@@ -56,6 +56,7 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
 
 /// Encode and publish the chosen snapshot. The staging callback runs after the
 /// temporary file is flushed and before any replacement of the destination.
+/// Migrated snapshots always encode the current schema, even with no user edits.
 fn save_at(
     snapshot: Arc<Project>,
     path: PathBuf,
@@ -64,8 +65,11 @@ fn save_at(
     encoding: Encoding,
     after_staging: impl FnOnce() -> Result<(), String>,
 ) -> Result<Outcome, String> {
-    let bytes =
-        if unchanged { expected.clone().ok_or("Missing saved project baseline")? } else { Arc::from(encode_file(Arc::clone(&snapshot), encoding)?) };
+    let bytes = if unchanged && snapshot.upgraded_from().is_none() {
+        expected.clone().ok_or("Missing saved project baseline")?
+    } else {
+        Arc::from(encode_file(Arc::clone(&snapshot), encoding)?)
+    };
     publish(&path, expected.as_deref(), &bytes, after_staging)?;
     Ok(Outcome::Saved(Saved { snapshot, target: Target { path, bytes, encoding } }))
 }

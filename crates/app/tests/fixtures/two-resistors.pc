@@ -1,13 +1,18 @@
 {
-  "format": "pcbcraft-project/1",
+  "format": "pcbcraft-project/2",
   "id": "519a42d4-d658-4905-90fb-a9483718ac39",
   "name": "Two resistors",
+  "components": [
+      {"id":2,"definition":"resistor","definition_revision":1,"reference_number":1,"reference":"R1","value":"1k"},
+
+      {"id":3,"definition":"resistor","definition_revision":1,"reference_number":2,"reference":"R2","value":"1k"}
+    ],
   "sheet": {
     "id": "0bbcf5e3-dd21-47b3-ae6b-bd66c8f97989",
     "symbols": [
-      {"id":2,"definition":"resistor","definition_revision":1,"reference_number":1,"x_nm":0,"y_nm":0},
+      {"id":2,"component":2,"unit":"main","x_nm":0,"y_nm":0,"rotation":0},
 
-      {"id":3,"definition":"resistor","definition_revision":1,"reference_number":2,"x_nm":25400000,"y_nm":0}
+      {"id":3,"component":3,"unit":"main","x_nm":25400000,"y_nm":0,"rotation":0}
     ],
     "wires": [
       {"id":4,"from":{"symbol":2,"pin":"2"},"to":{"symbol":3,"pin":"1"}}

@@ -11,7 +11,7 @@ the same project schema. The desktop, browser and MCP CLI can open either one.
 
 | Encoding | Intended use | Contents |
 | --- | --- | --- |
-| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/1` |
+| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/2` |
 | ZIP `.pc` | Portable copy for sharing or bundling assets | A manifest, the same project document, and any bundled asset bytes |
 
 Open determines the encoding from the file contents. A ZIP signature selects
@@ -182,15 +182,60 @@ remain separate design decisions.
 ## Current implementation
 
 The current project document is plain UTF-8 JSON tagged
-`pcbcraft-project/1`. The files contain a project ID, name, one sheet with a
-stable ID, and one line per placement and wire. Blank lines between records
-let neighboring edits merge. A wire saves the two symbol IDs and pin numbers.
-A symbol pins its built-in definition revision. An optional board section
-stores footprint placements and the explicit pin-to-pad mapping. The
-generic two-pad footprint can be assigned through `pcb.place_footprint`.
-The engine builds indexes for pin and pad lookup, which MCP exposes through
-`cross_probe`. Board tracks, vias, layout editing, and reviewed schematic-to-board
-updates need a later schema and editor slice.
+`pcbcraft-project/2`. Components live in a project-level `components` array;
+the sheet holds unit placements and wires. Every component, placement and wire
+occupies its own line in stable ID order, with blank lines between records.
+
+| Record | Stored fields |
+| --- | --- |
+| Component | `id`, `definition`, `definition_revision`, `reference_number`, `reference`, `value` |
+| Unit placement (`sheet.symbols`) | `id`, `component`, `unit`, `x_nm`, `y_nm`, `rotation` |
+| Footprint | Its own ID, definition/revision, position and pin-to-pad mapping, plus `component` |
+
+The component owns the displayed designator (`reference`) and value. Both are
+explicit, including the initial values supplied at placement. `reference_number`
+retains the automatic numbering allocation when a person edits a designator.
+An edited reference has no spaces and is unique across components; references
+and values are respectively 1 to 32 and 1 to 64 characters on one line.
+Reference-prefix enforcement and unannotated references are later work.
+
+A unit placement references the component and a unit in its pinned definition;
+it stores no designator, value, footprint or pad data. Rotation is required,
+in degrees counterclockwise: 0, 90, 180 or 270. The current engine supports one
+unit per component and requires that unit to be placed exactly once. Missing
+components, unknown units, duplicate placements and unplaced components are
+rejected. This establishes the ownership model for future multi-unit support
+without enabling multi-unit placement yet.
+
+Component IDs have their own namespace. Placement, wire and footprint IDs share
+the existing object namespace. A component and its placement may have different
+numeric IDs. Wires still save symbol IDs and pin numbers, so moving a unit edits
+only that unit's line. Editing its fields edits only the component's line.
+A footprint attaches to the component ID, never the designator or placement ID.
+Cross-probing resolves component pins through the unit-placement index.
+Deleting the last placed unit also removes the component and its footprint;
+undo restores the complete snapshot.
+
+### Format 1 migration
+
+Opening a `pcbcraft-project/1` file runs the explicit `migrate_from_1` path.
+Each legacy symbol becomes a component with its pinned definition, automatic
+reference and default value, plus an unrotated unit placement. Both preserve
+their former numeric identities, while wire endpoints remain unchanged. Legacy
+footprint `symbol` links become `component` links with the same mapping.
+
+The editor reports that the next save writes format 2. The migration is tested
+against `crates/app/tests/fixtures/two-resistors-format-1.pc`, which must save
+as exactly `two-resistors.pc`. The old fixture stays unchanged; the current
+fixture is generated through the engine's migration and serializer. A format 1
+file containing newer fields is rejected by the strict legacy schema. Format 2
+requires separate component and placement records; the earlier unmerged format 2
+layout is not an additional supported format. An unchanged current-format save
+retains the original bytes in both JSON and ZIP.
+
+The generic two-pad footprint can be assigned through `pcb.place_footprint`,
+which accepts a placed symbol and resolves its component. Board tracks, vias,
+layout editing and reviewed schematic-to-board updates remain later slices.
 
 Object IDs preserve the current command addresses and are scoped to the
 project. Two Git branches can move different placements independently.

@@ -1,6 +1,9 @@
 mod camera;
 mod wires;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use camera::Camera;
 
 use crate::preferences::Navigation;
@@ -8,7 +11,7 @@ use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense,
 use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
 use pcbcraft_engine::{
     Project,
-    schematic::{MAX_CENTER_NM, Point, SymbolDefinition, SymbolKind, SymbolPlacement, Terminal, pin_positions},
+    schematic::{MAX_CENTER_NM, Point, SymbolDefinition, SymbolKind, SymbolPlacement, Terminal},
 };
 
 /// The active canvas interaction, bound to the revision at which it began.
@@ -35,6 +38,18 @@ pub(crate) enum Click {
     CancelWire,
     Grab(SymbolPlacement, Vec2),
     FinishMove(Option<Point>),
+    /// Select a symbol by ID, or clear the selection after a click on empty canvas.
+    Select(Option<String>),
+    /// A row of the selected symbol's context menu.
+    Edit(SymbolAction, String),
+}
+
+/// What the selected symbol's context menu asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SymbolAction {
+    Rotate,
+    EditFields,
+    Delete,
 }
 
 /// Draw the schematic and its active preview, and report a requested tool action.
@@ -50,11 +65,17 @@ pub(crate) enum Click {
 /// primary click that hits a terminal returns `Click::Pin`.
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
+///
+/// With no tool, a primary click returns `Click::Select` for the symbol under it, or `None` in
+/// it for empty canvas. A secondary click selects the symbol under it and opens its menu; a row
+/// picked there returns `Click::Edit`. `selected` is drawn in the accent colour.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
     project: &Project,
     camera: &mut Camera,
     tool: Option<Tool>,
+    selected: Option<&str>,
     input_enabled: bool,
     navigation: Navigation,
 ) -> Option<Click> {
@@ -82,12 +103,13 @@ pub(crate) fn show(
     wires::paint(&painter, rect, project, camera, moved);
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
-        let position = moved.filter(|(moving, _)| moving.terminals() == symbol.terminals()).map_or(symbol.position, |(_, point)| point);
+        let position = moved.filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| point);
         let center = screen(position);
         if visible.contains(center) {
-            let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| symbol.reference());
-            let label = reference.as_deref().map(|reference| (reference, symbol.value()));
-            paint_symbol(&painter, symbol.definition.kind, center, pin_positions(position).map(screen), tokens.text, label);
+            let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
+            let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
+            let color = if selected == Some(symbol.id().as_str()) { tokens.accent } else { tokens.text };
+            paint_symbol(&painter, symbol.definition, center, grid_step, symbol.turns(), color, label);
         }
     }
 
@@ -110,6 +132,30 @@ pub(crate) fn show(
         return None;
     }
 
+    if tool.is_none() && (input_enabled || response.context_menu_opened()) {
+        // A right-click names its symbol this frame; afterwards the menu follows the selection.
+        let pressed = response.secondary_clicked().then(|| response.interact_pointer_pos()).flatten();
+        let target = match pressed {
+            Some(pointer) => symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id()),
+            None => selected.map(str::to_owned),
+        };
+        let picked = menu::context(&response, |ui| {
+            let Some(id) = target.clone() else {
+                ui.close();
+                return None;
+            };
+            let rows =
+                [("Rotate", "R", SymbolAction::Rotate), ("Edit Fields…", "E", SymbolAction::EditFields), ("Delete", "Del", SymbolAction::Delete)];
+            rows.into_iter().find_map(|(label, key, action)| MenuItem::new(label).shortcut(key).show(ui).then(|| Click::Edit(action, id.clone())))
+        });
+        if let Some(click) = picked.and_then(|shown| shown.inner) {
+            return Some(click);
+        }
+        if pressed.is_some() {
+            return Some(Click::Select(target));
+        }
+    }
+
     if moving && response.drag_stopped_by(egui::PointerButton::Primary) {
         return Some(Click::FinishMove(moved.map(|(_, point)| point).filter(|_| input_enabled)));
     }
@@ -124,8 +170,12 @@ pub(crate) fn show(
     if !input_enabled || response.dragged() {
         return None;
     }
+    if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
+        let pointer = response.interact_pointer_pos()?;
+        return Some(Click::Select(symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id())));
+    }
     match tool? {
-        Tool::PlaceSymbol { definition, .. } => placement_preview(&painter, rect, response, camera, tokens, definition.kind).map(Click::Place),
+        Tool::PlaceSymbol { definition, .. } => placement_preview(&painter, rect, response, camera, tokens, definition).map(Click::Place),
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start).map(Click::Pin),
         Tool::Move { .. } => None,
     }
@@ -133,15 +183,36 @@ pub(crate) fn show(
 
 /// Pick the nearest symbol body under the original press and preserve the grab offset.
 fn grab_symbol(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Click> {
-    let size = vec2(5.0, 4.0) * camera.grid_step();
-    let (symbol, center) = project
+    let (symbol, center) = symbol_at(project, camera, rect, pointer)?;
+    Some(Click::Grab(*symbol, center - pointer))
+}
+
+/// The symbol whose body is under the pointer, nearest center first, with its screen center.
+fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<(&'a SymbolPlacement, Pos2)> {
+    project
         .symbols()
         .iter()
         .rev()
         .map(|symbol| (symbol, camera.screen(symbol.position, rect)))
-        .filter(|(_, center)| Rect::from_center_size(*center, size).contains(pointer))
-        .min_by(|(_, a), (_, b)| a.distance_sq(pointer).total_cmp(&b.distance_sq(pointer)))?;
-    Some(Click::Grab(*symbol, center - pointer))
+        .filter(|(symbol, center)| Rect::from_center_size(*center, body_size(symbol.turns()) * camera.grid_step()).contains(pointer))
+        .min_by(|(_, a), (_, b)| a.distance_sq(pointer).total_cmp(&b.distance_sq(pointer)))
+}
+
+/// Turn an offset in grid steps by quarter turns counterclockwise, as the engine turns pins.
+fn turn(x: f32, y: f32, turns: u8) -> (f32, f32) {
+    match turns % 4 {
+        0 => (x, y),
+        1 => (y, -x),
+        2 => (-x, -y),
+        _ => (-y, x),
+    }
+}
+
+/// A rectangle in grid steps after quarter turns: the turned corners' bounds.
+fn turn_rect(rect: Rect, turns: u8) -> Rect {
+    let (ax, ay) = turn(rect.min.x, rect.min.y, turns);
+    let (bx, by) = turn(rect.max.x, rect.max.y, turns);
+    Rect::from_two_pos(pos2(ax, ay), pos2(bx, by))
 }
 
 /// Keep previews inside the same coordinate bounds the command validates.
@@ -150,14 +221,21 @@ fn valid_position(point: Point) -> bool {
 }
 
 /// Draw the pending symbol on its snapped model point until the user commits or cancels.
-fn placement_preview(painter: &Painter, rect: Rect, response: Response, camera: &Camera, tokens: Tokens, kind: SymbolKind) -> Option<Point> {
+fn placement_preview(
+    painter: &Painter,
+    rect: Rect,
+    response: Response,
+    camera: &Camera,
+    tokens: Tokens,
+    definition: &SymbolDefinition,
+) -> Option<Point> {
     let screen = |point| camera.screen(point, rect);
     let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos())?;
     let point = camera.snap(pointer, rect);
     if !valid_position(point) {
         return None;
     }
-    paint_symbol(painter, kind, screen(point), pin_positions(point).map(screen), tokens.accent, None);
+    paint_symbol(painter, definition, screen(point), camera.grid_step(), 0, tokens.accent, None);
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
 }
 
@@ -182,22 +260,47 @@ const LED_ARROW_TIP_Y: f32 = -3.1;
 /// Half the height of the capacitor plates and the connector body, in grid steps.
 const BODY_HALF_HEIGHT: f32 = 1.77;
 
-/// How far above the pin line a symbol's drawing reaches, in grid steps (negative is up).
-/// Fit uses it so the tallest part of each symbol stays in view.
-pub(super) fn top_extent(kind: SymbolKind) -> f32 {
-    match kind {
+/// The area a symbol's drawing covers around its center, in grid steps, after its turns: its
+/// pins and body, including the LED's arrows. Fit uses it so every part stays in view.
+pub(super) fn grid_bounds(definition: &SymbolDefinition, turns: u8) -> Rect {
+    turn_rect(unturned_bounds(definition), turns)
+}
+
+/// [`grid_bounds`] before rotation.
+fn unturned_bounds(definition: &SymbolDefinition) -> Rect {
+    let top = match definition.kind {
         SymbolKind::Resistor => 0.0,
         SymbolKind::Led => LED_ARROW_TIP_Y,
         SymbolKind::Capacitor | SymbolKind::Connector => -BODY_HALF_HEIGHT,
-    }
+    };
+    Rect::from_min_max(pos2(-5.0, top), pos2(5.0, 0.0))
 }
 
-/// Draw the symbol between its engine pin positions. At overview zoom use a simpler outline.
-fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]: [Pos2; 2], color: egui::Color32, label: Option<(&str, &str)>) {
+/// The grabbable body of a symbol in grid steps after its turns: the area around its drawing.
+fn body_size(turns: u8) -> Vec2 {
+    if turns % 2 == 1 { vec2(4.0, 5.0) } else { vec2(5.0, 4.0) }
+}
+
+/// Draw the symbol around its center, with one grid step of `step` points and its pins at ±5
+/// steps, turned with the symbol. At overview zoom use a simpler outline.
+/// Horizontal labels follow the rotated drawing's upper and lower clearance, including LED arrows.
+fn paint_symbol(
+    painter: &Painter,
+    definition: &SymbolDefinition,
+    center: Pos2,
+    step: f32,
+    turns: u8,
+    color: egui::Color32,
+    label: Option<(&str, &str)>,
+) {
     let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color);
-    let step = (right.x - left.x) / 10.0;
-    let xy = |(x, y)| pos2(center.x + x * step, center.y + y * step);
+    let xy = |(x, y): (f32, f32)| {
+        let (x, y) = turn(x, y, turns);
+        pos2(center.x + x * step, center.y + y * step)
+    };
     let line = |points: &[(f32, f32)]| painter.add(Shape::line(points.iter().copied().map(xy).collect(), stroke));
+    let kind = definition.kind;
+    let (left, right) = (xy((-5.0, 0.0)), xy((5.0, 0.0)));
     if step < theme::SCHEMATIC_DETAIL_GRID_SPACING {
         match kind {
             SymbolKind::Resistor => {
@@ -225,7 +328,7 @@ fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]
     painter.line_segment([left, xy((-2.5, 0.0))], stroke);
     painter.line_segment([xy((2.5, 0.0)), right], stroke);
     // The PCBcraft Next drawings are expressed in grid steps.
-    let (reference_offset, value_offset) = match kind {
+    let (reference_offset, value_offset): (f32, f32) = match kind {
         SymbolKind::Resistor => {
             line(&[(-2.5, 0.0), (-2.0, -0.9), (-1.2, 0.9), (-0.4, -0.9), (0.4, 0.9), (1.2, -0.9), (2.0, 0.9), (2.5, 0.0)]);
             (1.2, 1.2)
@@ -261,8 +364,16 @@ fn paint_symbol(painter: &Painter, kind: SymbolKind, center: Pos2, [left, right]
     if let Some((reference, value)) = label {
         let t = Tokens::get();
         let font = FontId::proportional(t.font_button);
-        let label_offset = |grid_steps: f32| egui::vec2(0.0, (step * grid_steps).max(t.space_12));
-        painter.text(center - label_offset(reference_offset), Align2::CENTER_BOTTOM, reference, font.clone(), color);
-        painter.text(center + label_offset(value_offset), Align2::CENTER_TOP, value, font, color);
+        if turns % 2 == 1 {
+            // Upright parts carry their text at the side, as KiCad places it.
+            let side = center + vec2((step * reference_offset.max(value_offset)).max(t.space_12), 0.0);
+            painter.text(side - vec2(0.0, t.space_2), Align2::LEFT_BOTTOM, reference, font.clone(), color);
+            painter.text(side + vec2(0.0, t.space_2), Align2::LEFT_TOP, value, font, color);
+        } else {
+            let label_offset = |grid_steps: f32| egui::vec2(0.0, (step * grid_steps).max(t.space_12));
+            let (above, below) = if turns % 4 == 2 { (value_offset, reference_offset) } else { (reference_offset, value_offset) };
+            painter.text(center - label_offset(above), Align2::CENTER_BOTTOM, reference, font.clone(), color);
+            painter.text(center + label_offset(below), Align2::CENTER_TOP, value, font, color);
+        }
     }
 }

@@ -126,6 +126,41 @@ fn two_resistors_round_trip_and_save_without_a_diff() {
     assert_eq!(read(&fixture.path).unwrap(), noncanonical);
 }
 
+/// Saving an untouched legacy project upgrades it once, in either encoding. Subsequent
+/// saves preserve the published bytes, and reopening no longer reports a migration.
+#[test]
+fn untouched_legacy_project_is_upgraded_on_save() {
+    let legacy = include_bytes!("../../../tests/fixtures/two-resistors-format-1.pc");
+    for encoding in [Encoding::Json, Encoding::Zip] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.pc");
+        let bytes = match encoding {
+            Encoding::Json => legacy.to_vec(),
+            Encoding::Zip => {
+                let mut encoder = pcbcraft_engine::persistence::ArchiveEncoder::new(legacy.to_vec()).unwrap();
+                loop {
+                    if let Some(bytes) = encoder.step().unwrap() {
+                        break bytes;
+                    }
+                }
+            }
+        };
+        fs::write(&path, &bytes).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.snapshot.upgraded_from(), Some(1));
+        let outcome = save_at(loaded.snapshot, path.clone(), Some(loaded.target.bytes), true, encoding, || Ok(())).unwrap();
+        let Outcome::Saved(saved) = outcome else {
+            panic!("expected successful save");
+        };
+        assert_ne!(read(&path).unwrap(), bytes);
+        let published = read(&path).unwrap();
+        assert_eq!(load(&path).unwrap().snapshot.upgraded_from(), None);
+        assert_eq!(encode(load(&path).unwrap().snapshot).unwrap(), TWO_RESISTORS);
+        save_at(saved.snapshot, path.clone(), Some(saved.target.bytes), true, encoding, || Ok(())).unwrap();
+        assert_eq!(read(&path).unwrap(), published);
+    }
+}
+
 /// Two independent symbol moves change one record each and merge with Git's normal three-way driver.
 #[test]
 fn independent_placement_edits_merge_and_reopen() {
@@ -171,8 +206,10 @@ fn failed_opens_preserve_the_active_project_and_dirty_state() {
     let invalid = fixture.dir.path().join("invalid.pc");
     let original = std::str::from_utf8(TWO_RESISTORS).unwrap();
     for payload in [
-        original.replace("pcbcraft-project/1", "pcbcraft-project/999").into_bytes(),
+        original.replace("pcbcraft-project/2", "pcbcraft-project/999").into_bytes(),
         vec![b' '; MAX_PROJECT_BYTES + 1],
+        original.replace("\"component\":2", "\"component\":999").into_bytes(),
+        original.replace("\"unit\":\"main\"", "\"unit\":\"unknown\"").into_bytes(),
         original.replace("\"pin\":\"2\"", "\"pin\":\"9\"").into_bytes(),
     ] {
         fs::write(&invalid, payload).unwrap();
@@ -263,7 +300,7 @@ fn assert_one_writer(encoding: Encoding) {
     assert_eq!(read(&first.path).unwrap(), encode_file(winner, encoding).unwrap());
 }
 
-/// Pause the real worker after staging R1, edit R2, then verify which snapshot reached disk.
+/// Pause the real worker after staging R1, move and rename R2, then verify which snapshot reached disk.
 #[test]
 fn a_late_move_is_not_marked_saved() {
     for encoding in [Encoding::Json, Encoding::Zip] {
@@ -293,12 +330,24 @@ fn assert_late_move(encoding: Encoding) {
         });
         wait_ready.recv().unwrap();
         move_symbol(&mut fixture.session, "symbol-3", R2_X, STEP);
+        fixture
+            .session
+            .apply(
+                pcbcraft_engine::SET_SYMBOL_FIELDS,
+                &json!({
+                    "symbol": "symbol-3", "reference": "R7", "value": "10k", "expected_revision": fixture.session.revision()
+                }),
+            )
+            .unwrap();
         release.send(()).unwrap();
     });
     assert!(matches!(fixture.files.poll(&mut fixture.session, &egui::Context::default()), Some(Update::Message(_))));
     let reopened = load(&fixture.path).unwrap().snapshot;
     assert_eq!(positions(&reopened), [Point { x_nm: 0, y_nm: STEP }, Point { x_nm: R2_X, y_nm: 0 }]);
+    assert_eq!(reopened.reference(&reopened.symbols()[1]), "R2");
     assert_connectivity(&inspect(reopened));
+    let active = fixture.session.project().unwrap();
+    assert_eq!(active.reference(&active.symbols()[1]), "R7");
     assert_eq!(positions(fixture.session.project().unwrap()), [Point { x_nm: 0, y_nm: STEP }, Point { x_nm: R2_X, y_nm: STEP }]);
     assert!(fixture.files.dirty(&fixture.session));
 }

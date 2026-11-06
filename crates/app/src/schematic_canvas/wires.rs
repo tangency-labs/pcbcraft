@@ -10,7 +10,7 @@ use super::Camera;
 /// Paint wire endpoints at their current positions, including an in-progress symbol move.
 pub(super) fn paint(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, moved: Option<(SymbolPlacement, Point)>) {
     let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, Tokens::get().schematic_wire);
-    let preview = moved.map(|(symbol, point)| (symbol.terminals(), pin_positions(point)));
+    let preview = moved.map(|(symbol, point)| (symbol.terminals(), pin_positions(point, symbol.turns())));
     let position = |pin| {
         preview
             .and_then(|(terminals, points)| terminals.iter().position(|&terminal| terminal == pin).map(|index| points[index]))

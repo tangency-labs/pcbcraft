@@ -85,31 +85,132 @@ pub static BUILTIN_SYMBOLS: &[&SymbolDefinition] = &[
     },
 ];
 
+impl SymbolDefinition {
+    /// The supported unit identity, stored on placements separately from the component.
+    pub(crate) fn unit_id(&self) -> &str {
+        "main"
+    }
+
+    /// The definition revision pinned by a component.
+    pub(crate) fn revision(&self) -> u32 {
+        1
+    }
+
+    /// The initial value copied into a newly placed component.
+    pub(crate) fn default_value(&self) -> &str {
+        self.value
+    }
+}
+
 /// Resolve an exact built-in definition ID without falling back to another symbol.
 pub(crate) fn builtin_symbol(id: &str) -> Option<&'static SymbolDefinition> {
     BUILTIN_SYMBOLS.iter().copied().find(|definition| definition.id == id)
 }
 
-/// Return pin 1 (left) and pin 2 (right) for a built-in symbol centered at this point.
-pub fn pin_positions(Point { x_nm, y_nm }: Point) -> [Point; 2] {
-    [Point { x_nm: x_nm - PIN_OFFSET_NM, y_nm }, Point { x_nm: x_nm + PIN_OFFSET_NM, y_nm }]
+/// Return pin 1 and pin 2 for a built-in symbol centered at this point and turned this many
+/// quarter turns counterclockwise. Unturned, pin 1 is on the left and pin 2 on the right.
+pub fn pin_positions(Point { x_nm, y_nm }: Point, turns: u8) -> [Point; 2] {
+    [-PIN_OFFSET_NM, PIN_OFFSET_NM].map(|offset| {
+        let (x, y) = rotate(offset, 0, turns);
+        Point { x_nm: x_nm + x, y_nm: y_nm + y }
+    })
 }
 
-/// A component and its single schematic symbol, with distinct identities.
-/// The session assigns the ordinal and keeps it stable through undo and redo.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SymbolPlacement {
-    /// Definition selected when the symbol was placed.
+/// Turn an offset from a symbol's center by quarter turns counterclockwise as seen on the
+/// schematic, where y grows downward: one turn takes a pin on the right to the top.
+pub fn rotate(x: i64, y: i64, turns: u8) -> (i64, i64) {
+    match turns % 4 {
+        0 => (x, y),
+        1 => (y, -x),
+        2 => (-x, -y),
+        _ => (-y, x),
+    }
+}
+
+/// One logical component, independent of the position of its schematic unit.
+/// The component owns the definition, designator and value; footprints link to its ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Component {
     pub definition: &'static SymbolDefinition,
     pub(crate) ordinal: u64,
     pub(crate) reference_number: usize,
+    pub(crate) reference: String,
+    pub(crate) value: String,
+}
+
+impl Component {
+    /// Return the component identity, which is independent of any symbol placement ID.
+    pub fn id(&self) -> String {
+        format!("component-{}", self.ordinal)
+    }
+
+    /// Return the designator shared by this component's schematic units and board footprint.
+    pub fn reference(&self) -> &str {
+        &self.reference
+    }
+
+    /// Return the value shared by this component's schematic units.
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    /// Publish component-owned fields independently of schematic placement geometry.
+    pub(crate) fn inspect(&self) -> Value {
+        json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
+            "reference": self.reference, "value": self.value})
+    }
+}
+
+/// Longest edited reference and value, in characters.
+pub(crate) const MAX_REFERENCE: usize = 32;
+pub(crate) const MAX_VALUE: usize = 64;
+
+/// Check edited reference text: 1 to 32 characters, no spaces or control characters.
+/// The command and the file loader share this, so a saved project always reopens.
+pub(crate) fn check_reference(text: &str) -> Result<(), String> {
+    check_text("reference", text, MAX_REFERENCE)?;
+    if text.chars().any(char::is_whitespace) {
+        return Err("a reference can't contain spaces".to_owned());
+    }
+    Ok(())
+}
+
+/// Check edited value text: 1 to 64 characters on one line, without surrounding spaces.
+pub(crate) fn check_value(text: &str) -> Result<(), String> {
+    check_text("value", text, MAX_VALUE)
+}
+
+/// Non-empty, trimmed, at most `limit` characters and free of control characters.
+fn check_text(name: &str, text: &str, limit: usize) -> Result<(), String> {
+    if text.is_empty() || text.trim() != text || text.chars().count() > limit || text.chars().any(char::is_control) {
+        return Err(format!("`{name}` must be 1 to {limit} characters on one line"));
+    }
+    Ok(())
+}
+
+/// A placed schematic unit referencing a component. The resolved drawing is a cache;
+/// only the component ID, unit ID, placement ID and geometry are saved here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SymbolPlacement {
+    /// Drawing resolved from the owning component, never separately serialized.
+    pub definition: &'static SymbolDefinition,
+    pub(crate) ordinal: u64,
+    pub(crate) component: u64,
+    pub unit: &'static str,
     pub position: Point,
+    /// Quarter turns counterclockwise, 0 to 3.
+    pub(crate) rotation: u8,
 }
 
 impl SymbolPlacement {
-    /// Format the reference from the definition's prefix and the number assigned during placement.
-    pub fn reference(&self) -> String {
-        format!("{}{}", self.definition.reference_prefix, self.reference_number)
+    /// Quarter turns counterclockwise, 0 to 3.
+    pub fn turns(&self) -> u8 {
+        self.rotation
+    }
+
+    /// Return the owning component's stable identity, independent of this placement's ID.
+    pub fn component_id(&self) -> String {
+        format!("component-{}", self.component)
     }
 
     /// Return the identifier shared by command clients and the saved schematic.
@@ -117,23 +218,19 @@ impl SymbolPlacement {
         symbol_id(self.ordinal)
     }
 
-    /// Return the default display value for this built-in symbol.
-    pub fn value(&self) -> &'static str {
-        self.definition.value
-    }
-
     /// Return the two terminal references in the same order as the pin positions.
     pub fn terminals(&self) -> [Terminal; 2] {
         Terminal::for_symbol(self.ordinal)
     }
 
-    /// Return pin 1 (left) and pin 2 (right) in absolute schematic coordinates.
+    /// Return pin 1 and pin 2 in absolute schematic coordinates, turned with the symbol.
     pub fn pins(&self) -> [Point; 2] {
-        pin_positions(self.position)
+        pin_positions(self.position, self.rotation)
     }
 
-    /// Report the component and symbol IDs alongside numbered pin coordinates and, for LEDs, their polarity.
-    pub(crate) fn inspect(&self) -> Value {
+    /// Report the component and symbol IDs, the reference and value shown, the rotation, and the
+    /// numbered pin coordinates with, for LEDs, their polarity.
+    pub(crate) fn inspect(&self, reference: &str, value: &str) -> Value {
         let pins = ["1", "2"]
             .into_iter()
             .zip(self.pins())
@@ -148,10 +245,12 @@ impl SymbolPlacement {
             .collect::<Vec<_>>();
         json!({
             "id": symbol_id(self.ordinal),
-            "component_id": format!("component-{}", self.ordinal),
+            "component_id": self.component_id(),
+            "unit": self.unit,
             "kind": self.definition.id,
-            "reference": self.reference(),
-            "value": self.value(),
+            "reference": reference,
+            "value": value,
+            "rotation": u16::from(self.rotation) * 90,
             "x_nm": self.position.x_nm,
             "y_nm": self.position.y_nm,
             "pins": pins,

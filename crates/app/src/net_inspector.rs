@@ -26,7 +26,7 @@ impl Snapshot {
             terminals
                 .iter()
                 .filter_map(|&pin| {
-                    let reference = project.terminal_symbol(pin)?.reference();
+                    let reference = project.reference(project.terminal_symbol(pin)?);
                     Some(format!("{reference}.{}", pin.number()))
                 })
                 .collect::<Vec<_>>()
