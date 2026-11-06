@@ -911,6 +911,32 @@ fn dragging_a_part_onto_the_sheet_places_it() {
     assert!(harness.state().parts.open);
 }
 
+/// An edit during a browser drag invalidates that gesture without reverting the intervening edit.
+#[test]
+fn an_intervening_edit_cancels_a_browser_drag() {
+    let mut harness = harness();
+    resistor_at_origin(&mut harness);
+    harness.key_press(Key::A);
+    harness.run();
+    let from = harness.get_by_label("Capacitor").rect().center();
+    let to = canvas_center(&harness) + egui::vec2(50.8, 0.0);
+    harness.drag_at(from);
+    harness.run();
+    harness.hover_at(from + egui::vec2(8.0, 0.0));
+    harness.run();
+    harness.hover_at(to);
+    harness.run();
+
+    let revision = harness.state().session().revision();
+    let params = json!({"symbol": "symbol-2", "x_nm": 0, "y_nm": 1_270_000, "expected_revision": revision});
+    harness.state_mut().session.apply(MOVE_SYMBOL, &params).unwrap();
+    let after_edit = harness.state().session().inspect();
+    harness.run();
+    harness.drop_at(to);
+    harness.run();
+    assert_eq!(harness.state().session().inspect(), after_edit, "A stale browser drag must not place a symbol");
+}
+
 /// Place a resistor at the schematic origin, which sits at the canvas center.
 fn resistor_at_origin(harness: &mut Harness<'_, PcbApp>) {
     new_project(harness, "edits");

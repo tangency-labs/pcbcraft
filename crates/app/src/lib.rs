@@ -15,7 +15,7 @@ mod preferences;
 mod project_files;
 mod schematic_canvas;
 
-use schematic_canvas::{Click, SymbolAction, Tool};
+use schematic_canvas::{Click, PartDrag, SymbolAction, Tool};
 
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
@@ -514,7 +514,8 @@ impl PcbApp {
         );
     }
 
-    /// Draw the schematic and send completed edits through the shared command catalog. Cancel only clears the local preview.
+    /// Draw the schematic and send completed edits through the shared command catalog using each
+    /// gesture's starting revision to reject stale actions. Cancel only clears the local preview.
     fn canvas(&mut self, ui: &mut Ui) {
         let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
         let click = shell::canvas(ui, |ui| {
@@ -554,9 +555,8 @@ impl PcbApp {
                 self.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
             }
             (None, Some(Click::Select(symbol))) => self.selected = symbol,
-            (_, Some(Click::Drop(definition, point))) => {
+            (_, Some(Click::Drop(PartDrag { definition, revision }, point))) => {
                 self.tool = None;
-                let revision = self.session.revision();
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
             (None, Some(Click::Edit(action, symbol))) => {
@@ -885,7 +885,8 @@ impl PcbApp {
         }
     }
 
-    /// Draw one frame. Drop the preview if another action changed the project or opened a dialog.
+    /// Draw one frame. Cancel canvas tools when another action changes the project or opens a
+    /// dialog, and discard browser drags when their starting project revision becomes stale.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.sync_style(&ctx);
@@ -936,6 +937,9 @@ impl PcbApp {
         if self.tool.is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
             self.tool = None;
         }
+        if egui::DragAndDrop::payload::<PartDrag>(&ctx).is_some_and(|drag| drag.revision != self.session.revision()) {
+            egui::DragAndDrop::clear_payload(&ctx);
+        }
         self.status(ui);
         #[cfg(not(target_arch = "wasm32"))]
         let workspace = ui.available_rect_before_wrap();
@@ -949,7 +953,7 @@ impl PcbApp {
                 Some(Tool::PlaceSymbol { definition, .. }) => Some(definition),
                 _ => None,
             };
-            if let Some(definition) = self.parts.show(ui, placing) {
+            if let Some(definition) = self.parts.show(ui, placing, self.session.revision()) {
                 self.begin_placement(definition);
             }
             self.net_inspector.show(ui, &self.session, clearance);

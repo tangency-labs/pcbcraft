@@ -43,15 +43,18 @@ pub(crate) enum Click {
     /// A row of the selected symbol's context menu.
     Edit(SymbolAction, String),
     /// A part dragged from the parts browser was released over the canvas at this snapped point.
-    Drop(&'static SymbolDefinition, Point),
+    Drop(PartDrag, Point),
 }
 
-/// What the parts browser hands the canvas while a part is dragged.
+/// A browser drag bound to the project revision at which the gesture began.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct PartDrag(pub(crate) &'static SymbolDefinition);
+pub(crate) struct PartDrag {
+    pub(crate) definition: &'static SymbolDefinition,
+    pub(crate) revision: u64,
+}
 
-/// Draw a part's preview fitted inside `rect`, for the parts browser's thumbnails. Pin names
-/// show once the preview is large enough to read them, as on the canvas.
+/// Draw a part's preview fitted inside `rect`, for the parts browser's thumbnails. The symbol
+/// is drawn unrotated and without labels.
 pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, rect: Rect, color: egui::Color32) {
     let bounds = grid_bounds(definition, 0);
     let step = (rect.width() / bounds.width().max(1.0)).min(rect.height() / bounds.height().max(1.0));
@@ -161,14 +164,14 @@ pub(crate) fn show(
     {
         let point = camera.snap(pointer, rect);
         if valid_position(point) {
-            paint_symbol(&painter, drag.0, screen(point), grid_step, 0, tokens.accent, None);
+            paint_symbol(&painter, drag.definition, screen(point), grid_step, 0, tokens.accent, None);
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
         && let Some(pointer) = drag_pointer
     {
         let point = camera.snap(pointer, rect);
-        return (input_enabled && valid_position(point)).then_some(Click::Drop(drag.0, point));
+        return (input_enabled && valid_position(point)).then_some(Click::Drop(*drag, point));
     }
 
     if tool.is_none() && (input_enabled || response.context_menu_opened()) {

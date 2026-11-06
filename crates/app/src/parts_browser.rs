@@ -87,8 +87,9 @@ impl PartsBrowser {
 
     /// Draw the browser while it's open and return the part clicked, or the first match when
     /// Enter is pressed in the search field. Either closes the browser.
+    /// New drags capture `revision` so intervening edits can cancel them before placement.
     /// `placing` is the part being placed, which is highlighted. See [`Self::take_escape`].
-    pub(crate) fn show(&mut self, ui: &mut Ui, placing: Option<&'static SymbolDefinition>) -> Option<&'static SymbolDefinition> {
+    pub(crate) fn show(&mut self, ui: &mut Ui, placing: Option<&'static SymbolDefinition>, revision: u64) -> Option<&'static SymbolDefinition> {
         if !self.open {
             return None;
         }
@@ -122,7 +123,7 @@ impl PartsBrowser {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(t.space_6, t.space_6);
                 for definition in parts {
-                    if part(ui, definition, self.view, placing == Some(definition)).clicked() {
+                    if part(ui, definition, self.view, placing == Some(definition), revision).clicked() {
                         picked = Some(definition);
                     }
                 }
@@ -138,8 +139,8 @@ impl PartsBrowser {
 }
 
 /// One part: a thumbnail tile, or a row with a small thumbnail beside its name and reference
-/// prefix. Clicking reports it; dragging carries it to the canvas.
-fn part(ui: &mut Ui, definition: &'static SymbolDefinition, view: View, selected: bool) -> Response {
+/// prefix. Clicking reports it; dragging carries it and the starting project revision to the canvas.
+fn part(ui: &mut Ui, definition: &'static SymbolDefinition, view: View, selected: bool, revision: u64) -> Response {
     let t = Tokens::get();
     let thumb = view.thumbnail();
     let size = match view {
@@ -149,7 +150,7 @@ fn part(ui: &mut Ui, definition: &'static SymbolDefinition, view: View, selected
     };
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, definition.name));
-    response.dnd_set_drag_payload(PartDrag(definition));
+    response.dnd_set_drag_payload(PartDrag { definition, revision });
     let hot = response.hovered() || response.has_focus() || response.dragged();
     if selected || hot {
         ui.painter().rect_filled(rect, t.radius_sm, if selected { t.accent_soft } else { t.hover });
