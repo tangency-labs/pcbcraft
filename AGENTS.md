@@ -2,6 +2,22 @@
 
 Read [VISION.md](VISION.md) first. PRs are written by agents; keep them small, and say what the user sees.
 
+## Opening issues
+
+Check for an existing issue and read the repository's current label names and
+descriptions before opening one. Include at least one classification label
+(`bug`, `enhancement`, `documentation` or `question`) and the relevant existing
+`area: ...` labels. Documentation-only issues and trackers spanning several areas
+can omit area labels when no specific area owns the work. Use `future` only for explicitly
+deferred work; `good first issue` and `help wanted` need a deliberate assessment.
+
+Pass labels in the creation request when the tool supports them. Otherwise add
+them immediately afterward, then read the issue back to verify they were applied
+before reporting creation complete. Preserve existing labels when adding missing
+ones. If permissions prevent labeling, report the remaining triage work instead
+of claiming the issue is fully classified. This is an agent workflow requirement,
+not a GitHub restriction on contributors who cannot apply labels.
+
 ## License and sources: the rule that can't be undone
 
 The project is MIT OR Apache-2.0, so code can move freely between the Craft apps.
