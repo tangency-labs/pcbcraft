@@ -9,8 +9,16 @@ use serde_json::{Value, json};
 
 use super::*;
 
+/// Start directly in the workspace for editor-control tests; startup tests use the real constructor.
 fn harness<'a>() -> Harness<'a, PcbApp> {
     let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), PcbApp::default());
+    harness.run();
+    harness
+}
+
+/// Exercise the same constructor used by both launchers, with no saved application settings.
+fn startup_harness<'a>() -> Harness<'a, PcbApp> {
+    let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc));
     harness.run();
     harness
 }
@@ -41,10 +49,46 @@ fn new_project(harness: &mut Harness<'_, PcbApp>, name: &str) {
 }
 
 #[test]
-fn it_opens_with_no_project_and_says_so() {
+fn the_empty_workspace_reports_no_project() {
     let harness = harness();
     harness.get_by_label("No project open. Choose File, then New Project.");
     assert!(harness.state().session().project().is_none());
+}
+
+/// The first frame shows the Home actions, and cancelling New/Open does not enter the empty editor.
+#[test]
+fn startup_opens_home_and_cancelled_dialogs_leave_it_visible() {
+    let mut harness = startup_harness();
+    harness.get_by_label("New Project");
+    harness.get_by_label("Open Project");
+    assert!(harness.state().session().project().is_none());
+    assert!(harness.query_by_label("Toggle Net Inspector").is_none());
+    assert!(harness.query_by_label("No project open. Choose File, then New Project.").is_none());
+    assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
+
+    click(&mut harness, "New Project");
+    click(&mut harness, "Cancel");
+    harness.get_by_label("Open Project");
+    click(&mut harness, "Open Project");
+    harness.get_by_label("Project file or archive…");
+    click(&mut harness, "Cancel");
+    harness.get_by_label("New Project");
+    assert!(harness.state().home);
+    assert!(harness.state().session().project().is_none());
+}
+
+/// Creating a project from the initial Home page enters the schematic through the shared command.
+#[test]
+fn startup_new_project_enters_the_workspace() {
+    let mut harness = startup_harness();
+    click(&mut harness, "New Project");
+    harness.get_by_role(egui::accesskit::Role::TextInput).type_text("blinky");
+    harness.run();
+    click(&mut harness, "OK");
+    harness.get_by_label("Toggle Net Inspector");
+    assert!(harness.query_by_label("Open Project").is_none());
+    assert_eq!(harness.state().session().project().unwrap().name, "blinky");
+    assert!(!harness.state().home);
 }
 
 /// The inspector never reserves space for the empty workspace, even after undoing project creation.

@@ -3,7 +3,8 @@
 Electronics design that feels like the tools you already know, built so a person and an agent can work on the same board, at the same time, with the same commands.
 
 **Status: just started.** Schematic editing works on desktop and in the browser.
-Use **File → New Project…** to start. The app bar shows the project name and an
+The app starts on **Home**, where you can create or open a project. It does not
+yet reopen the last project automatically. The app bar shows the project name and an
 unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
 pages for Appearance (theme, interface scale), Navigation (whether the wheel

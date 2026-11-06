@@ -200,10 +200,14 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
 };
 
 impl PcbApp {
-    /// The app as the desktop and browser builds start it.
+    /// Start desktop and browser builds on Home with no project loaded, restoring app settings.
+    /// Successful New/Open actions enter the workspace; cancelling them leaves Home visible.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Home uses custom fonts on its first frame; installing during that frame is too late.
+        fonts::install(&cc.egui_ctx);
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
         Self {
+            home: true,
             preferences,
             #[cfg(not(target_arch = "wasm32"))]
             assistant: assistant::Assistant::from_setting(

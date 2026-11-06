@@ -39,6 +39,34 @@ fn complete(files: &mut ProjectFiles, session: &mut Session, result: Result<Outc
     files.poll(session, &egui::Context::default())
 }
 
+/// Initial Home stays visible through pending, cancelled and failed opens; a completed open
+/// enters the loaded schematic through the same file-result polling used by the real window.
+#[test]
+fn startup_home_enters_the_workspace_only_after_a_successful_open() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let documents = encode_documents(session().snapshot().unwrap()).unwrap();
+    folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+    let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| crate::PcbApp::new(cc));
+    for result in [Ok(Outcome::Cancelled), Err("Could not open fixture".to_owned()), load(&root).map(Outcome::Opened)] {
+        let (send, receiver) = mpsc::channel();
+        let app = harness.state_mut();
+        app.files.job = Some(Job { receiver, revision: app.session.revision() });
+        // A pending file job deliberately keeps repainting while waiting for its worker.
+        harness.step();
+        harness.get_by_label("New Project");
+        assert!(harness.state().session().project().is_none());
+        let opened = matches!(&result, Ok(Outcome::Opened(_)));
+        send.send(result).unwrap();
+        harness.run();
+        assert_eq!(harness.state().home, !opened);
+        assert_eq!(harness.state().session().project().is_some(), opened);
+    }
+    harness.get_by_label("Toggle Net Inspector");
+    assert_eq!(encode_documents(harness.state().session().snapshot().unwrap()).unwrap(), documents);
+}
+
 /// Interrupt after each durable step, including deletions and cleanup, then recover before open.
 #[test]
 fn every_interrupted_folder_save_reopens_as_old_or_new() {
