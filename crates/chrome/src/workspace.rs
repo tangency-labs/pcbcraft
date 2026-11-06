@@ -324,17 +324,18 @@ pub fn sheet_header(ui: &mut Ui, title: &str) {
 /// Reserve at most two fifths of the workspace width and leave room below the
 /// card for a floating launcher. Return whether Close was clicked.
 pub fn right_card(ui: &mut Ui, id: &'static str, title: &str, bottom_clearance: f32, add: impl FnOnce(&mut Ui)) -> bool {
-    docked_card(ui, Panel::right(id), title, bottom_clearance, add)
+    docked_card(ui, Panel::right(id), title, bottom_clearance, true, add)
 }
 
-/// Dock a card at the left edge of the canvas, as the parts browser is, with the same frame,
-/// width limit and Close button as [`right_card`]. Return whether Close was clicked.
-pub fn left_card(ui: &mut Ui, id: &'static str, title: &str, add: impl FnOnce(&mut Ui)) -> bool {
-    docked_card(ui, Panel::left(id), title, 0.0, add)
+/// Dock a persistent card at the left edge of the canvas, with the same frame and width limit
+/// as [`right_card`]. It has no Close button; the caller determines when it is visible.
+pub fn left_card(ui: &mut Ui, id: &'static str, title: &str, add: impl FnOnce(&mut Ui)) {
+    docked_card(ui, Panel::left(id), title, 0.0, false, add);
 }
 
-/// The docked card both sides share: a titled card with Close over a scrolling body.
-fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, add: impl FnOnce(&mut Ui)) -> bool {
+/// The docked card both sides share: a title and optional Close button over a scrolling body.
+/// Return whether the button was clicked; persistent cards always return false.
+fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, closable: bool, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     let width = (ui.available_width() * 0.4).min(260.0);
     let clearance = bottom_clearance.min(ui.available_height() * 0.4);
@@ -355,7 +356,7 @@ fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, ad
                     let header_size = vec2(ui.available_width(), t.control_height);
                     let close = ui
                         .allocate_ui_with_layout(header_size, Layout::right_to_left(Align::Center), |ui| {
-                            let close = ui.small_button("Close").clicked();
+                            let close = closable && ui.small_button("Close").clicked();
                             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                                 ui.add(Label::new(RichText::new(title).font(FontId::proportional(t.font_label))).truncate()).on_hover_text(title);
                             });

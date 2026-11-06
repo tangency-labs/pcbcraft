@@ -3,7 +3,8 @@
 Electronics design that feels like the tools you already know, built so a person and an agent can work on the same board, at the same time, with the same commands.
 
 **Status: just started.** Schematic editing works on desktop and in the browser.
-Use **File → New Project…** to start. The app bar shows the project name and an
+The app starts on **Home**, where you can create or open a project. It does not
+yet reopen the last project automatically. The app bar shows the project name and an
 unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
 pages for Appearance (theme, interface scale), Navigation (whether the wheel
@@ -15,15 +16,16 @@ Search finds any setting; changes show at once, and **Cancel** puts them back. T
 open with its history while Home is shown. See [VISION.md](VISION.md) for the
 project's direction.
 
-Choose **Capture → Symbol** or press **A** to open the **Parts** browser, which
-lists the schematic symbols in the starter library under
+The **Parts** browser stays docked beside an open schematic. Choose
+**Capture → Symbol** or press **A** to focus its search. It lists schematic symbols from
 [`libraries/starter`](libraries/starter): a resistor, LED, capacitor, two-pin
 connector and 4-pin header. See [docs/symbol-library.md](docs/symbol-library.md) for the file
 format. Type to search, choose Small, Medium, Large or List, and click a part (or
 press **Enter** for the first match) to place it on the grid, or drag parts
 straight onto the sheet. Press **R** to rotate a click-to-place preview before placing it,
-or **Esc** to close the browser or cancel placing. New resistors, capacitors, LEDs and
-two-pin connectors use shorter leads from revision 2 of the starter symbols; saved
+or **Esc** to leave search focus or cancel placing; the browser stays visible.
+New resistors, capacitors, LEDs and two-pin connectors use shorter leads from
+revision 2 of the starter symbols; saved
 revision 1 parts retain their original geometry.
 
 Choose **Capture → Wire** or press **W**, then click a pin, an existing wire endpoint
