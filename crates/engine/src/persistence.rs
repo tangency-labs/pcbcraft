@@ -490,7 +490,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         symbols
             .binary_search_by_key(&endpoint.symbol, |symbol| symbol.ordinal)
             .ok()
-            .and_then(|_| Terminal::from_number(endpoint.symbol, &endpoint.pin))
+            .and_then(|index| Terminal::from_number(endpoint.symbol, symbols[index].definition, &endpoint.pin))
             .ok_or_else(|| format!("wire points to missing pin {} on symbol {}", endpoint.pin, endpoint.symbol))
     };
 
@@ -515,8 +515,12 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         board.footprints.sort_unstable_by_key(|footprint| footprint.id);
         for footprint in board.footprints {
             validate_id(&mut ids, footprint.id)?;
-            if !components.contains_key(&footprint.component) {
-                return Err("footprint points to a missing component".to_owned());
+            match components.get(&footprint.component) {
+                None => return Err("footprint points to a missing component".to_owned()),
+                Some(component) if !component.definition.fits_two_pad_footprint() => {
+                    return Err("the two-pad footprint only fits symbols with exactly pins 1 and 2".to_owned());
+                }
+                Some(_) => {}
             }
             layout.append(footprint).map_err(str::to_owned)?;
         }
@@ -594,13 +598,76 @@ mod tests {
             symbols.as_array().unwrap().iter().map(|symbol| (symbol["kind"].clone(), symbol["reference"].clone(), symbol["value"].clone())).collect();
         assert_eq!(
             summary,
-            [("capacitor", "C1", "100nF"), ("connector", "J1", "Input"), ("led", "D1", "LED"), ("resistor", "R1", "1k")]
-                .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
+            [
+                ("capacitor", "C1", "100nF"),
+                ("connector", "J1", "Input"),
+                ("header-4", "J2", "Header"),
+                ("led", "D1", "LED"),
+                ("resistor", "R1", "1k"),
+                ("voltage-regulator", "U1", "LDO"),
+            ]
+            .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
         );
         let loaded = decode(&encode(session.snapshot().unwrap()).unwrap()).unwrap();
         let mut reopened = Session::default();
         reopened.open_snapshot(loaded);
         assert_eq!(reopened.inspect()["project"]["schematic"]["symbols"], symbols);
+    }
+
+    /// Multi-pin library symbols wire by pin number through the shared command, report every
+    /// pin with its name and electrical type, and survive a save and reopen. A pin the symbol
+    /// doesn't have is refused, and the two-pad footprint refuses a three-pin regulator both as a
+    /// command and in a forged file.
+    #[test]
+    fn multi_pin_symbols_wire_by_number_and_refuse_missing_pins() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name": "Supply"})).unwrap();
+        for (definition, x_nm) in [("voltage-regulator", 0), ("header-4", 50_800_000)] {
+            session
+                .apply(PLACE_SYMBOL, &json!({"definition": definition, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
+                .unwrap();
+        }
+        let wire = |session: &mut Session, from: &str, to: &str| {
+            session.apply(
+                CONNECT_PINS,
+                &json!({
+                    "from": {"symbol": "symbol-2", "terminal": from},
+                    "to": {"symbol": "symbol-3", "terminal": to},
+                    "expected_revision": session.revision()
+                }),
+            )
+        };
+        wire(&mut session, "3", "4").unwrap();
+        assert!(wire(&mut session, "4", "1").is_err(), "the regulator has no pin 4");
+        assert!(wire(&mut session, "9", "1").is_err(), "no library symbol has a pin 9");
+        let state = session.inspect();
+        let regulator = &state["project"]["schematic"]["symbols"][0];
+        assert_eq!(regulator["pins"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            regulator["pins"][2],
+            json!({"number": "3", "name": "OUT", "electrical_type": "power_out", "x_nm": 8_890_000, "y_nm": -1_270_000})
+        );
+        let net = &state["project"]["schematic"]["netlist"]["nets"][0]["terminals"];
+        assert_eq!(net, &json!([{"symbol": "symbol-2", "terminal": "3"}, {"symbol": "symbol-3", "terminal": "4"}]));
+
+        let bytes = encode(session.snapshot().unwrap()).unwrap();
+        let mut reopened = Session::default();
+        reopened.open_snapshot(decode(&bytes).unwrap());
+        assert_eq!(reopened.inspect()["project"], state["project"]);
+
+        let footprint = json!({
+            "symbol": "symbol-2", "definition": "generic-through-hole-2",
+            "pin_1_pad": 1, "x_nm": 0, "y_nm": 0, "expected_revision": session.revision(),
+        });
+        assert!(session.apply(crate::PLACE_FOOTPRINT, &footprint).unwrap_err().to_string().contains("exactly pins 1 and 2"));
+        let mut forged: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        forged["board"] = json!({"footprints": [{
+            "id": 9, "component": 2, "definition": "generic-through-hole-2", "definition_revision": 1, "pin_1_pad": 1, "x_nm": 0, "y_nm": 0
+        }]});
+        assert!(decode(&serde_json::to_vec(&forged).unwrap()).unwrap_err().contains("exactly pins 1 and 2"));
+        let mut missing = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+        missing["sheet"]["wires"][0]["from"]["pin"] = json!("4");
+        assert!(decode(&serde_json::to_vec(&missing).unwrap()).unwrap_err().contains("missing pin 4"));
     }
 
     const FORMAT_1_FIXTURE: &[u8] = include_bytes!("../../app/tests/fixtures/two-resistors-format-1.pc");

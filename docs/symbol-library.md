@@ -20,8 +20,10 @@ libraries/starter/
   symbols/
     capacitor.json    one symbol per file
     connector.json
+    header-4.json
     led.json
     resistor.json
+    voltage-regulator.json
 ```
 
 The manifest:
@@ -71,13 +73,17 @@ downward, before any rotation. The schematic grid is 1.27 mm (1,270,000 nm).
 | `name` | Shown in the parts browser, 1 to 64 characters. |
 | `reference_prefix` | 1 to 4 capital letters that start automatic references, such as `R`. |
 | `default_value` | The value a newly placed symbol shows, 1 to 64 characters. |
-| `terminals` | The logical connections, each with a stable `id`, an optional `name` and an `electrical_type`: `passive`, `input`, `output`, `bidirectional`, `power_in`, `power_out` or `unspecified`. |
+| `terminals` | 1 to 128 logical connections, each with a stable `id` (the pin number: 1 to 8 letters, digits, `+`, `-` or `_`, unique in the symbol), an optional `name` up to 32 characters and an `electrical_type`: `passive`, `input`, `output`, `bidirectional`, `power_in`, `power_out` or `unspecified`. Wires and footprints refer to a pin by its `id`. |
 | `units` | Drawn sections of the symbol. Each has an `id`, a `drawing` and `pins` that place each terminal. |
 
 Drawing strokes are `line` (`from_nm`, `to_nm`), `polyline` (`points_nm`, 2 to
-64 points; repeat the first point to close it), `rect` (`min_nm`, `max_nm`) and
-`circle` (`center_nm`, `radius_nm`). Each drawing has at most 256 strokes, and
-every point stays within 12.7 mm of the center.
+64 points; repeat the first point to close it), `rect` (`min_nm`, `max_nm`),
+`circle` (`center_nm`, `radius_nm`) and `text` (`at_nm`, `text` of 1 to 16
+characters, and `align`: `start`, `middle` or `end`). Text labels such as pin
+names stay upright when the symbol turns: a half turn swaps `start` and `end` so
+a label inside a body edge stays inside, and a quarter turn centers it. Each
+drawing has at most 256 strokes, and every point stays within 12.7 mm of the
+center.
 
 Unknown fields are refused, so a misspelled field can't be silently ignored.
 A file that fails any check is left out of the library with a message naming
@@ -87,10 +93,13 @@ the file and the reason; the rest of the library still loads.
 
 The format leaves room for more than the engine places today:
 
-- **Two terminals**, `"1"` then `"2"`, because wiring and the two-pad footprint
-  still use two pins.
+- **Any number of terminals**, each placed by exactly one pin of the unit. The
+  starter two-pad footprint only maps symbols with exactly pins `"1"` and `"2"`;
+  other parts have no footprint until footprint libraries exist.
 - **One unit.** Multi-unit symbols, such as a dual op-amp, are planned (issue #28).
-- **Pins** on the 1.27 mm grid, at most 6.35 mm from the center on each axis.
+- **Pins** on the 1.27 mm grid, at most 12.7 mm from the center on each axis,
+  each at its own position. Symbol centers stay 12.7 mm inside the sheet edge so
+  every pin stays on the sheet.
 
 ## Not yet
 

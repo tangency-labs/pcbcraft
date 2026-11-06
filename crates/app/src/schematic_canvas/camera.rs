@@ -2,7 +2,7 @@ use egui::{Event, MouseWheelUnit, PointerButton, Pos2, Rect, Response, Vec2, pos
 use pcbcraft_chrome::theme;
 use pcbcraft_engine::{
     Project,
-    schematic::{GRID_NM, MAX_CENTER_NM, PIN_OFFSET_NM, Point},
+    schematic::{GRID_NM, MAX_CENTER_NM, MAX_PIN_OFFSET_NM, Point},
 };
 
 use super::grid_bounds;
@@ -83,7 +83,7 @@ impl Camera {
             }
         }
         // Keep the view center within reach of the full schematic coordinate range.
-        let limit = Vec2::splat((MAX_CENTER_NM + PIN_OFFSET_NM) as f32 / GRID_NM as f32 * self.grid_step());
+        let limit = Vec2::splat((MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f32 / GRID_NM as f32 * self.grid_step());
         self.offset = self.offset.clamp(-limit, limit);
     }
 
