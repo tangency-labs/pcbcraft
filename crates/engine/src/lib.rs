@@ -31,6 +31,9 @@ const MAX_REFERENCE_NUMBER: usize = 1_000_000;
 const MAX_OBJECT_ID: u64 = i64::MAX as u64;
 /// Longest project name, in characters.
 const MAX_NAME: usize = 200;
+/// The name `project.new` gives a project when none is supplied. A desktop project still bearing
+/// it takes its folder or archive name when first saved (see [`Session::adopt_saved_name`]).
+pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
@@ -181,6 +184,7 @@ impl Command {
 }
 
 const NAME: Param = Param { required: true, name: "name", summary: "The project's name", kind: ParamKind::Name };
+const NEW_NAME: Param = Param { required: false, name: "name", summary: "The project's name (default Untitled)", kind: ParamKind::Name };
 /// Compatibility command for callers that placed resistors before the symbol picker.
 pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
 /// Place the specified starter library symbol on the schematic.
@@ -227,7 +231,12 @@ const SYMBOL_Y: Param =
     Param { required: true, name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 
 const CATALOG: &[Command] = &[
-    Command { id: "project.new", title: "New Project", summary: "Start a new empty project, replacing the open one. Undoable.", params: &[NAME] },
+    Command {
+        id: "project.new",
+        title: "New Project",
+        summary: "Start a new empty project, named Untitled unless a name is given, replacing the open one. Undoable.",
+        params: &[NEW_NAME],
+    },
     Command { id: "project.rename", title: "Rename Project", summary: "Change the open project's name.", params: &[NAME] },
     Command {
         id: PLACE_RESISTOR,
@@ -544,6 +553,13 @@ impl Project {
         self.id == other.id
     }
 
+    /// Copy this snapshot under another name, for a save that names the project after its file.
+    /// The name is trimmed and checked like `project.rename`'s; an invalid one is an error and
+    /// the copy shares every other collection with this snapshot.
+    pub fn renamed(&self, name: &str) -> Result<Self, CommandError> {
+        Ok(Self { name: name_param(&json!({"name": name}))?, ..self.clone() })
+    }
+
     /// Whether two snapshots share the same terminal groups and pin references.
     pub fn same_connectivity(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.connectivity, &other.connectivity)
@@ -618,6 +634,33 @@ impl Session {
         self.revision
     }
 
+    /// Give the project the name a completed save chose for it, as part of that save rather than
+    /// as an edit. `original` is the snapshot the save started from and `saved` its renamed copy.
+    /// Every snapshot of that document still bearing `original`'s name, in the open project and in
+    /// undo and redo, takes the new name, so undo doesn't bring the old name back; a name the person
+    /// set meanwhile is kept. `original` itself is replaced by `saved`, so a caller comparing
+    /// snapshots by pointer still sees the saved one. The revision and history depth don't change,
+    /// so edits based on the current revision stay valid. Returns whether anything was renamed.
+    pub fn adopt_saved_name(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
+        if !saved.same_document(original) {
+            return false;
+        }
+        let mut renamed = false;
+        for slot in std::iter::once(&mut self.project).chain(self.undo.iter_mut()).chain(self.redo.iter_mut()) {
+            let Some(project) = slot.as_mut() else { continue };
+            if !project.same_document(original) || project.name != original.name {
+                continue;
+            }
+            *project = if Arc::ptr_eq(project, original) {
+                Arc::clone(saved)
+            } else {
+                Arc::new(Project { name: saved.name.clone(), ..Project::clone(project) })
+            };
+            renamed = true;
+        }
+        renamed
+    }
+
     /// Return the runtime revision at which a file replaced the history root, or zero before
     /// the first open. Reopening even the same snapshot changes this value; edits and undo do not.
     pub fn history_root_revision(&self) -> u64 {
@@ -687,7 +730,7 @@ impl Session {
         }
         match id {
             "project.new" => self.change(Project {
-                name: name_param(params)?,
+                name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
                 id: fresh_id()?,
                 sheet_id: fresh_id()?,
                 sheet_name: "Schematic".to_owned(),
@@ -1105,7 +1148,6 @@ mod tests {
             ("no.such", Value::Null),
             ("project.rename", json!({"name": "x"})),
             ("edit.undo", Value::Null),
-            ("project.new", json!({})),
             ("project.new", json!({"name": "  "})),
             ("project.new", json!({"name": 3})),
             ("project.new", json!({"name": "x", "extra": "y"})),
@@ -1116,6 +1158,78 @@ mod tests {
             assert!(s.execute(id, &params).is_err(), "{id} {params}");
             assert_eq!(s.inspect(), before, "{id} {params}");
         }
+    }
+
+    /// New Project needs no name: without one the project is Untitled, with its own identity.
+    #[test]
+    fn a_new_project_without_a_name_is_untitled() {
+        let mut s = Session::default();
+        s.apply("project.new", &Value::Null).unwrap();
+        let first = s.snapshot().unwrap();
+        s.apply("project.new", &json!({})).unwrap();
+        let second = s.snapshot().unwrap();
+        assert_eq!((first.name.as_str(), second.name.as_str()), (UNTITLED, UNTITLED));
+        assert!(!first.same_document(&second), "two untitled projects are different documents");
+        let schema = command("project.new").unwrap().to_json();
+        assert_eq!(schema["params"]["required"], json!([]));
+    }
+
+    /// A save that names an untitled project renames its whole history without an undo step or a
+    /// new revision. The saved snapshot is swapped in by pointer, and an edit made while the save
+    /// ran keeps its changes under the new name. A name the person chose meanwhile is kept.
+    #[test]
+    fn a_saved_name_renames_the_untitled_history_in_place() {
+        let mut s = Session::default();
+        s.apply("project.new", &Value::Null).unwrap();
+        s.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": s.revision()})).unwrap();
+        let original = s.snapshot().unwrap();
+        let saved = Arc::new(original.renamed(" blinky ").unwrap());
+        assert_eq!(saved.name, "blinky");
+        assert!(original.renamed("").is_err() && original.renamed("a\nb").is_err());
+        // An edit lands while the save is running.
+        s.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 25_400_000, "y_nm": 0, "expected_revision": s.revision()})).unwrap();
+        let revision = s.revision();
+
+        assert!(s.adopt_saved_name(&original, &saved));
+        assert_eq!(s.revision(), revision);
+        assert_eq!((name(&s), s.project().unwrap().symbols().len()), (Some("blinky"), 2));
+        assert!(!Arc::ptr_eq(&s.snapshot().unwrap(), &saved), "the later edit is still unsaved");
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &saved));
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(name(&s), Some("blinky"), "undo doesn't bring Untitled back");
+        s.apply("edit.redo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &saved));
+        assert!(!s.adopt_saved_name(&original, &saved), "nothing is left to rename");
+
+        // Renamed by the person during the save, the project keeps their name.
+        let mut s = Session::default();
+        s.apply("project.new", &Value::Null).unwrap();
+        let original = s.snapshot().unwrap();
+        s.apply("project.rename", &json!({"name": "Mine"})).unwrap();
+        s.adopt_saved_name(&original, &Arc::new(original.renamed("file").unwrap()));
+        assert_eq!(name(&s), Some("Mine"));
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(name(&s), Some("file"));
+
+        // A save of another document renames nothing here.
+        let mut other = Session::default();
+        other.apply("project.new", &Value::Null).unwrap();
+        let foreign = other.snapshot().unwrap();
+        assert!(!s.adopt_saved_name(&foreign, &Arc::new(foreign.renamed("x").unwrap())));
+        assert!(!s.adopt_saved_name(&original, &Arc::new(foreign.renamed("x").unwrap())), "the copy must be of the same document");
+
+        // A new project started while the first save ran stays Untitled; the saved one, now
+        // behind it in undo, takes the name.
+        let mut s = Session::default();
+        s.apply("project.new", &Value::Null).unwrap();
+        let original = s.snapshot().unwrap();
+        s.apply("project.new", &Value::Null).unwrap();
+        let saved = Arc::new(original.renamed("first").unwrap());
+        assert!(s.adopt_saved_name(&original, &saved));
+        assert_eq!(name(&s), Some(UNTITLED));
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &saved));
     }
 
     #[test]

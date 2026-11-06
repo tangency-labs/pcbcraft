@@ -248,7 +248,7 @@ fn single_view_reclaims_the_header_and_panel_clearance() {
     for size in [egui::vec2(1400.0, 900.0), egui::vec2(800.0, 800.0)] {
         let mut h = harness();
         h.set_size(size);
-        new_project(&mut h, "Solo");
+        new_project(&mut h);
         click(&mut h, "View");
         click(&mut h, "Toggle Parts");
         let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
@@ -481,7 +481,7 @@ fn panels_stay_put_and_tabs_name_the_sheet_in_both_views() {
         }
     }
     assert_eq!(h.state().session.inspect(), before);
-    assert_eq!(h.get_all_by_label("edits › Main").count(), 2);
+    assert_eq!(h.get_all_by_label("Untitled › Main").count(), 2);
     assert!(h.query_by_label("Schematic 1").is_none());
     assert!(h.query_by_label("Schematic 2").is_none());
     let targets = [view(&h, 0).input(&h.state().session).unwrap(), view(&h, 1).input(&h.state().session).unwrap()];
@@ -495,7 +495,7 @@ fn panels_stay_put_and_tabs_name_the_sheet_in_both_views() {
     }
     focus_tab(&mut h, 0);
     click(&mut h, "Undo");
-    assert_eq!(h.get_all_by_label("edits › Main").count(), 2);
+    assert_eq!(h.get_all_by_label("Untitled › Main").count(), 2);
 }
 
 /// PR #71's selection modifiers, both box directions/buttons and group edits remain available

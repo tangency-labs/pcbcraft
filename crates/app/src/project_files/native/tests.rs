@@ -34,7 +34,7 @@ impl Fixture {
         let path = dir.path().join("two-resistors.pc");
         let original = decode(TWO_RESISTORS).unwrap();
         let result = save_at(original, path.clone(), None, false, encoding, || Ok(()));
-        assert!(matches!(result, Ok(Outcome::Saved(_))));
+        assert!(matches!(result, Ok(Outcome::Saved(..))));
         let mut session = Session::default();
         let mut files = ProjectFiles::default();
         let result = load(&path).map(Outcome::Opened);
@@ -149,7 +149,7 @@ fn untouched_legacy_project_is_upgraded_on_save() {
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.snapshot.upgraded_from(), Some(1));
         let outcome = save_at(loaded.snapshot, path.clone(), Some(loaded.target.bytes), true, encoding, || Ok(())).unwrap();
-        let Outcome::Saved(saved) = outcome else {
+        let Outcome::Saved(saved, _) = outcome else {
             panic!("expected successful save");
         };
         assert_ne!(read(&path).unwrap(), bytes);
@@ -185,7 +185,7 @@ fn independent_placement_edits_merge_and_reopen() {
     branch.open_snapshot(loaded.snapshot);
     move_symbol(&mut branch, "symbol-3", R2_X, STEP);
     let result = save_at(branch.snapshot().unwrap(), other.clone(), Some(loaded.target.bytes), false, Encoding::Json, || Ok(()));
-    assert!(matches!(result, Ok(Outcome::Saved(_))));
+    assert!(matches!(result, Ok(Outcome::Saved(..))));
 
     let merge = Command::new("git").arg("merge-file").arg("-p").arg(&fixture.path).arg(&base).arg(&other).output().unwrap();
     assert!(merge.status.success(), "{}", String::from_utf8_lossy(&merge.stdout));

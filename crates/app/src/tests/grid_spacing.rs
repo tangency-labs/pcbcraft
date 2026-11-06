@@ -50,7 +50,7 @@ fn project_state(h: &Harness<'_, PcbApp>) -> (u64, bool, bool, Vec<u8>) {
 #[test]
 fn grid_menu_changes_snapping_without_touching_the_project() {
     let mut h = harness();
-    new_project(&mut h, "grid");
+    new_project(&mut h);
     let before = project_state(&h);
     assert_eq!(h.state().views.active.camera.snap_nm(), 50 * MIL);
     choose_grid(&mut h, "25 mil");
@@ -77,7 +77,7 @@ fn grid_menu_changes_snapping_without_touching_the_project() {
 #[test]
 fn custom_spacing_reads_units_and_explains_refusals() {
     let mut h = harness();
-    new_project(&mut h, "custom");
+    new_project(&mut h);
     let before = project_state(&h);
     click(&mut h, "Grid 50 mil");
     type_custom(&mut h, "2 cm");
@@ -104,7 +104,7 @@ fn custom_spacing_reads_units_and_explains_refusals() {
 #[test]
 fn grid_keys_step_through_the_presets() {
     let mut h = harness();
-    new_project(&mut h, "keys");
+    new_project(&mut h);
     let before = project_state(&h);
     let snap = |h: &Harness<'_, PcbApp>| h.state().views.active.camera.snap_nm() / MIL;
     h.key_press(Key::N);
@@ -135,7 +135,7 @@ fn grid_keys_step_through_the_presets() {
 #[test]
 fn off_grid_items_stay_put_and_keep_their_offset_when_moved() {
     let mut h = harness();
-    new_project(&mut h, "offgrid");
+    new_project(&mut h);
     let place = |h: &mut Harness<'_, PcbApp>, x: i64, y: i64| {
         let revision = h.state().session.revision();
         h.state_mut().session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":x,"y_nm":y,"expected_revision":revision})).unwrap();
@@ -206,7 +206,7 @@ fn pins_stay_reachable_on_coarse_and_uneven_grids() {
 #[test]
 fn the_grid_button_reports_thinned_dots() {
     let mut h = harness();
-    new_project(&mut h, "thin");
+    new_project(&mut h);
     // 10 mil is about 2 points at the default zoom: every fifth dot is drawn.
     choose_grid(&mut h, "10 mil");
     h.get_by_label("Grid 10 mil · dots 50 mil");
@@ -235,7 +235,7 @@ fn the_grid_button_reports_thinned_dots() {
 fn each_pane_keeps_its_own_grid() {
     let mut h = harness();
     h.set_size(egui::vec2(1400.0, 900.0));
-    new_project(&mut h, "panes");
+    new_project(&mut h);
     h.state_mut().browser.open = false;
     choose_grid(&mut h, "25 mil");
     click(&mut h, "View");
@@ -294,7 +294,7 @@ fn startup_seeds_both_panes_from_the_preference() {
 #[test]
 fn the_grid_control_sits_in_the_status_bar() {
     let mut h = harness();
-    new_project(&mut h, "layout");
+    new_project(&mut h);
     let canvas = h.get_by_label("Schematic canvas").rect();
     let button = grid_button(&h).rect();
     assert!(button.min.y >= canvas.max.y, "below the canvas: {button:?} vs {canvas:?}");

@@ -110,7 +110,7 @@ enum Help {
 enum Dialog {
     #[default]
     None,
-    /// Asks for the name that `project.new` or `project.rename` takes.
+    /// Asks for the name that `project.rename` takes.
     Name {
         command: &'static str,
         text: String,
@@ -272,6 +272,17 @@ impl PcbApp {
         self.views.active.tool = Some(Tool::Wire { revision: self.session.revision(), start: None });
     }
 
+    /// Open an editable Untitled project at once through `project.new`, leaving naming and a
+    /// destination to the first save, and enter the workspace. The open project is replaced as an
+    /// undoable step, as for an agent; a failure shows in the status bar and leaves Home as it was.
+    fn new_project(&mut self) {
+        self.run("project.new", &Value::Null);
+        if self.message.is_none() {
+            self.home = false;
+        }
+    }
+
+    /// Open the name dialog for `command`, starting from the current name when renaming.
     fn ask_name(&mut self, command: &'static str) {
         let text = match command {
             "project.rename" => self.session.project().map(|p| p.name.clone()).unwrap_or_default(),
@@ -319,8 +330,8 @@ impl PcbApp {
     /// Shortcuts sit above Quit, as in SolidCraft.
     fn file_menu(&mut self, ui: &mut Ui) {
         let new_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_N) };
-        if self.command_row(ui, "project.new", "…", &new_shortcut, MenuIcon::New) {
-            self.ask_name("project.new");
+        if self.command_row(ui, "project.new", "", &new_shortcut, MenuIcon::New) {
+            self.new_project();
         }
         let file_ready = !self.files.busy();
         let open_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_O) };
@@ -1097,7 +1108,7 @@ impl PcbApp {
                 }
             }
             if pressed(&COMMAND_N) {
-                self.ask_name("project.new");
+                self.new_project();
             }
             if pressed(&COMMAND_Q) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1134,10 +1145,6 @@ impl PcbApp {
                         Ok(_) => {
                             self.file_notice = None;
                             self.message = None;
-                            if id == "project.new" {
-                                self.views.sync(&self.session);
-                                self.home = false;
-                            }
                         }
                         Err(e) => {
                             error = Some(e.to_string());

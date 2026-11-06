@@ -8,7 +8,7 @@ use std::{
 };
 
 use pcbcraft_engine::{
-    Project,
+    Project, UNTITLED,
     persistence::{
         Documents, ENTRY_POINT, Encoding, decode_documents, decode_file, decode_packed, encode_documents, encode_packed_documents, read_bytes,
     },
@@ -109,16 +109,16 @@ fn load_folder(root: &Path) -> Result<Saved, String> {
 /// Save a non-legacy target in place when no format is requested. Otherwise, including every
 /// legacy target, ask for a new destination in the requested format (a folder by default).
 /// Unchanged documents retain their bytes; dismissing the picker returns `Outcome::Cancelled`.
+/// A first save suggests the project's name; one still named Untitled is saved under its chosen
+/// folder or archive name (see [`name_for`]), and the outcome carries the snapshot it renamed.
 pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Target)>, format: Option<SaveFormat>) -> Result<Outcome, String> {
     if let Some((old, target)) = previous.as_ref().filter(|(_, target)| format.is_none() && !target.legacy) {
         return save_target(snapshot, Some(old), target.clone(), &mut |_| Ok(()));
     }
-    let suggestion = previous.as_ref().and_then(|(_, target)| target.path.file_name()).and_then(|name| name.to_str()).unwrap_or("project");
-    let suggestion = suggestion
-        .strip_suffix(".pc.zip")
-        .or_else(|| suggestion.strip_suffix(".pc"))
-        .or_else(|| suggestion.strip_suffix(".zip"))
-        .unwrap_or(suggestion);
+    let suggestion = match previous.as_ref().and_then(|(_, target)| target.path.file_name()).and_then(|name| name.to_str()) {
+        Some(file) => stem(file).to_owned(),
+        None => file_name_for(&snapshot.name),
+    };
     let mut dialog = rfd::FileDialog::new();
     if let Some(parent) = previous.as_ref().and_then(|(_, target)| target.path.parent()) {
         dialog = dialog.set_directory(parent);
@@ -128,9 +128,17 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
         SaveFormat::Folder => dialog.set_title("Create project folder").set_file_name(suggestion).save_file(),
         SaveFormat::Archive => dialog.add_filter("Packed PCBCraft project", &["zip"]).set_file_name(format!("{suggestion}.pc.zip")).save_file(),
     };
-    let Some(mut path) = path else {
+    let Some(path) = path else {
         return Ok(Outcome::Cancelled);
     };
+    save_new(snapshot, previous.as_ref(), format, path)
+}
+
+/// Publish to a destination the person chose, which must not exist yet, adding `.pc.zip` to an
+/// archive name without it. An Untitled project saved for the first time takes the destination's
+/// name (see [`name_for`]); the outcome then carries the snapshot it renamed. A failure leaves no
+/// name change behind, since only a successful outcome is adopted.
+fn save_new(snapshot: Arc<Project>, previous: Option<&(Arc<Project>, Target)>, format: SaveFormat, mut path: PathBuf) -> Result<Outcome, String> {
     if format == SaveFormat::Archive && !path.to_string_lossy().ends_with(".pc.zip") {
         if path.extension().is_some_and(|extension| extension == "zip" || extension == "pc") {
             path.set_extension("pc.zip");
@@ -141,6 +149,10 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
         }
     }
     let path = normalize(&path)?;
+    let (snapshot, renamed) = match name_for(&snapshot, previous.is_some(), &path) {
+        Some(named) => (Arc::new(named), Some(snapshot)),
+        None => (snapshot, None),
+    };
     let mut target = Target {
         path,
         bytes: Arc::from([]),
@@ -150,8 +162,7 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
         needs_manifest: false,
         added_manifest: false,
     };
-    let documents =
-        working_documents(&snapshot, previous.as_ref().map(|(old, _)| old), previous.as_ref().and_then(|(_, target)| target.documents.as_deref()))?;
+    let documents = working_documents(&snapshot, previous.map(|(old, _)| old), previous.and_then(|(_, target)| target.documents.as_deref()))?;
     if target.encoding == Encoding::Zip {
         target.bytes = encode_packed_documents(documents.clone())?.into();
         publish(&target.path, None, &target.bytes, || Ok(()))?;
@@ -159,7 +170,30 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
         folder::save(&target.path, None, &documents, &mut |_| Ok(()))?;
     }
     target.documents = Some(Arc::new(documents));
-    Ok(Outcome::Saved(Saved { snapshot, target }))
+    Ok(Outcome::Saved(Saved { snapshot, target }, renamed))
+}
+
+/// Strip a project extension from a folder or archive file name.
+fn stem(file: &str) -> &str {
+    file.strip_suffix(".pc.zip").or_else(|| file.strip_suffix(".pc")).or_else(|| file.strip_suffix(".zip")).unwrap_or(file)
+}
+
+/// Suggest a destination file name for a project's first save. Characters that can't appear in
+/// a file name on common desktops become `-`; a name with nothing left suggests `project`.
+fn file_name_for(name: &str) -> String {
+    let file: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '-' } else { c }).collect();
+    let file = file.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    if file.is_empty() { "project".to_owned() } else { file.to_owned() }
+}
+
+/// Name an Untitled project after the destination of its first save, as SolidCraft does. A project
+/// saved before, named by the person, or given a destination whose name isn't a valid project name
+/// keeps its name, and `None` is returned.
+fn name_for(snapshot: &Project, saved_before: bool, path: &Path) -> Option<Project> {
+    if saved_before || snapshot.name != UNTITLED {
+        return None;
+    }
+    snapshot.renamed(stem(path.file_name()?.to_str()?)).ok()
 }
 
 /// Keep exact source bytes for every logically unchanged document, including Save As conversion.
@@ -211,7 +245,7 @@ fn save_target(
         folder::save(&target.path, target.documents.as_deref(), &documents, checkpoint)?;
         target.documents = Some(Arc::new(documents));
     }
-    Ok(Outcome::Saved(Saved { snapshot, target }))
+    Ok(Outcome::Saved(Saved { snapshot, target }, None))
 }
 
 /// Encode and publish the chosen snapshot. The staging callback runs after the
@@ -232,10 +266,10 @@ fn save_at(
         Arc::from(pcbcraft_engine::persistence::encode_file(Arc::clone(&snapshot), encoding)?)
     };
     publish(&path, expected.as_deref(), &bytes, after_staging)?;
-    Ok(Outcome::Saved(Saved {
-        snapshot,
-        target: Target { path, bytes, encoding, documents: None, legacy: true, needs_manifest: false, added_manifest: false },
-    }))
+    Ok(Outcome::Saved(
+        Saved { snapshot, target: Target { path, bytes, encoding, documents: None, legacy: true, needs_manifest: false, added_manifest: false } },
+        None,
+    ))
 }
 
 /// Canonicalize the parent directory so application instances use the same lock for the destination.
