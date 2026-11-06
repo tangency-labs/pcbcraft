@@ -137,6 +137,13 @@ palette. PCBCraft's pages, settings, page glyphs and search glyph are its own,
 and its search counts matches without drawing them, then draws only the rows
 that match.
 
+The sheet-path tabs in `crates/app/src/editor_view.rs` and
+`crates/chrome/src/editor.rs` follow the breadcrumb and occurrence-path behavior
+described in PCBcraft Next's `docs/sheet-workflows.md` at
+`568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0). Next lists sheet
+tabs as unfinished. These tabs are new upstream code over its current single-sheet
+model; no prototype tab or hierarchy implementation was copied.
+
 ## Bundled fonts
 
 | File | Source | License |

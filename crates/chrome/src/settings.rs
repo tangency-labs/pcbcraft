@@ -482,6 +482,24 @@ pub fn hint(ui: &mut Ui, text: &str) {
     });
 }
 
+/// Choose a single option in a compact dropdown, using the window's themed widget styles.
+/// The label supplies a stable accessible name; returns whether the value changed.
+pub fn choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T, options: &[(T, &str)]) -> bool {
+    let before = *value;
+    let selected = options.iter().find(|(option, _)| option == value).map_or("", |(_, text)| *text);
+    egui::ComboBox::from_id_salt(label)
+        .selected_text(selected)
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            for (option, text) in options {
+                ui.selectable_value(value, *option, *text);
+            }
+        })
+        .response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
+    before != *value
+}
+
 /// Choose one of `options` with a row of joined toggle buttons. True when the choice changed.
 pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, options: &[(T, &str)]) -> bool {
     let t = Tokens::get();

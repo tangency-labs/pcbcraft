@@ -353,6 +353,14 @@ impl std::fmt::Display for CommandError {
 
 impl std::error::Error for CommandError {}
 
+/// The persistent address of a schematic sheet within a project. Names and file paths are not
+/// identities; this address survives edits and saves, but does not identify a runtime opening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SheetTarget {
+    project: uuid::Uuid,
+    sheet: uuid::Uuid,
+}
+
 /// A typed project snapshot. History and background saves share immutable collections.
 #[derive(Clone, Debug)]
 pub struct Project {
@@ -375,6 +383,11 @@ pub struct Project {
 }
 
 impl Project {
+    /// Address the single supported sheet without exposing or deriving identity from its name.
+    pub fn sheet_target(&self) -> SheetTarget {
+        SheetTarget { project: self.id, sheet: self.sheet_id }
+    }
+
     /// Return all schematic symbols in placement order.
     pub fn symbols(&self) -> &[SymbolPlacement] {
         &self.symbols
@@ -477,7 +490,8 @@ impl Project {
     }
 }
 
-/// The open project and its history. There is one per window or per MCP server.
+/// The open project and its history. Editor views share this authority; headless MCP owns a
+/// separate session. Window placement and navigation are not part of the project history.
 #[derive(Debug, Default)]
 pub struct Session {
     project: Option<Arc<Project>>,
@@ -485,6 +499,9 @@ pub struct Session {
     redo: Vec<Option<Arc<Project>>>,
     /// Goes up with every change, undo and redo included, so it never repeats.
     revision: u64,
+    /// Revision at the latest file adoption. View bindings use it to distinguish reopening the
+    /// same persistent project from an edit or undo within the current history.
+    history_root_revision: u64,
 }
 
 impl Session {
@@ -498,7 +515,8 @@ impl Session {
     }
 
     /// Adopt a validated project as a new history root. Advance past its highest stored ID
-    /// so old revision checks fail and newly created objects cannot reuse loaded IDs.
+    /// so old revision checks fail and newly created objects cannot reuse loaded IDs. Record the
+    /// new root revision even when reopening the same snapshot, so views can reset local state.
     pub fn open_snapshot(&mut self, project: Arc<Project>) {
         let highest = project
             .symbols
@@ -509,6 +527,7 @@ impl Session {
             .max(project.junctions.last_key_value().map_or(0, |(&id, _)| id))
             .max(project.board.footprints().last().map_or(0, |footprint| footprint.id));
         self.revision = self.revision.max(highest) + 1;
+        self.history_root_revision = self.revision;
         self.project = Some(project);
         self.undo.clear();
         self.redo.clear();
@@ -516,6 +535,12 @@ impl Session {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Return the runtime revision at which a file replaced the history root, or zero before
+    /// the first open. Reopening even the same snapshot changes this value; edits and undo do not.
+    pub fn history_root_revision(&self) -> u64 {
+        self.history_root_revision
     }
 
     /// Whether the command can run now, for greying out a menu item. Unknown ids can't.

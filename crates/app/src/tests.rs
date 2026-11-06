@@ -9,6 +9,9 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod editor_views;
+mod split_editors;
+
 /// Start directly in the workspace for editor-control tests; startup tests use the real constructor.
 fn harness<'a>() -> Harness<'a, PcbApp> {
     let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), PcbApp::default());
@@ -211,7 +214,7 @@ fn canvas_keys_do_nothing_on_home() {
     assert!(matches!(harness.state().dialog, Dialog::None));
     harness.key_press(Key::W);
     harness.run();
-    assert!(harness.state().tool.is_none());
+    assert!(harness.state().views.active.tool.is_none());
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert!(harness.state().session().project().is_none());
@@ -750,14 +753,14 @@ fn navigation_preferences_change_what_the_wheel_does() {
         harness.run();
     };
     wheel(&mut harness, Modifiers::NONE);
-    let zoomed = harness.state().camera.zoom();
+    let zoomed = harness.state().views.active.camera.zoom();
     assert!(zoomed > 1.0);
 
     harness.state_mut().preferences.navigation.scroll = ScrollAction::Pan;
     wheel(&mut harness, Modifiers::NONE);
-    assert_eq!(harness.state().camera.zoom(), zoomed);
+    assert_eq!(harness.state().views.active.camera.zoom(), zoomed);
     wheel(&mut harness, Modifiers::COMMAND);
-    assert!(harness.state().camera.zoom() > zoomed);
+    assert!(harness.state().views.active.camera.zoom() > zoomed);
 }
 
 /// Capture placement snaps through the shared engine command and can be undone from the app bar.
@@ -894,7 +897,7 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
 /// Resolve the actual library pin through the canvas camera so fixture geometry can evolve.
 fn pin_screen(harness: &Harness<'_, PcbApp>, symbol: usize, pin: usize) -> egui::Pos2 {
     let point = harness.state().session().project().unwrap().symbols()[symbol].pins()[pin];
-    harness.state().camera.screen(point, harness.get_by_label("Schematic canvas").rect())
+    harness.state().views.active.camera.screen(point, harness.get_by_label("Schematic canvas").rect())
 }
 
 /// Click an exact pin without assuming a particular symbol-library revision.
@@ -1042,10 +1045,10 @@ fn the_parts_browser_searches_and_places_parts() {
     harness.run();
     harness.get_by_label("Move Parts library");
     assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("cap"));
-    assert!(harness.state().tool.is_none());
+    assert!(harness.state().views.active.tool.is_none());
     harness.key_press(Key::W);
     harness.run();
-    assert!(matches!(harness.state().tool, Some(Tool::Wire { .. })), "Escape must release search focus for canvas shortcuts");
+    assert!(matches!(harness.state().views.active.tool, Some(Tool::Wire { .. })), "Escape must release search focus for canvas shortcuts");
 }
 
 /// Click selection, search Escape and tool cancellation keep the card and canvas bounds stable.
@@ -1063,15 +1066,15 @@ fn clicking_parts_and_cancelling_placement_keep_the_browser_visible() {
     assert_eq!(harness.get_by_label("Schematic canvas").rect(), canvas);
     harness.key_press(Key::R);
     harness.run();
-    assert!(matches!(harness.state().tool, Some(Tool::PlaceSymbol { turns: 1, .. })));
+    assert!(matches!(harness.state().views.active.tool, Some(Tool::PlaceSymbol { turns: 1, .. })));
     harness.key_press(Key::A);
     harness.run();
     harness.key_press(Key::Escape);
     harness.run();
-    assert!(harness.state().tool.is_some(), "Escape from search releases focus before cancelling placement");
+    assert!(harness.state().views.active.tool.is_some(), "Escape from search releases focus before cancelling placement");
     harness.key_press(Key::Escape);
     harness.run();
-    assert!(harness.state().tool.is_none());
+    assert!(harness.state().views.active.tool.is_none());
     harness.get_by_label("Move Parts library");
     assert_eq!(harness.get_by_label("Schematic canvas").rect(), canvas);
     click(&mut harness, "Resistor");
@@ -1200,7 +1203,7 @@ fn a_selected_symbol_rotates_edits_and_deletes_with_kicad_keys() {
     let mut harness = harness();
     resistor_at_origin(&mut harness);
     click_canvas(&mut harness);
-    assert_eq!(harness.state().selection.single_symbol(), Some("symbol-2"));
+    assert_eq!(harness.state().views.active.selection.single_symbol(), Some("symbol-2"));
     harness.get_by_label("R1 selected · R rotate · E edit fields · Del delete");
 
     harness.key_press(Key::R);
@@ -1221,12 +1224,12 @@ fn a_selected_symbol_rotates_edits_and_deletes_with_kicad_keys() {
 
     harness.key_press(Key::Escape);
     harness.run();
-    assert!(harness.state().selection.is_empty());
+    assert!(harness.state().views.active.selection.is_empty());
     click_canvas(&mut harness);
     harness.key_press(Key::Delete);
     harness.run();
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
-    assert!(harness.state().selection.is_empty());
+    assert!(harness.state().views.active.selection.is_empty());
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert_eq!(first_symbol(&harness, "value"), "4.7k");
@@ -1245,7 +1248,7 @@ fn the_symbol_context_menu_rotates_and_edits() {
         harness.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
         harness.run();
     }
-    assert_eq!(harness.state().selection.single_symbol(), Some("symbol-2"));
+    assert_eq!(harness.state().views.active.selection.single_symbol(), Some("symbol-2"));
     harness.get_by_label("Delete");
     click(&mut harness, "Rotate");
     assert_eq!(first_symbol(&harness, "rotation"), 90);
@@ -1256,7 +1259,7 @@ fn the_symbol_context_menu_rotates_and_edits() {
         .session
         .apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 25_400_000, "y_nm": 0, "expected_revision": revision}))
         .unwrap();
-    harness.state_mut().selection = Selection::one_symbol("symbol-2".to_owned());
+    harness.state_mut().views.active.selection = Selection::one_symbol("symbol-2".to_owned());
     harness.state_mut().edit_selected(SymbolAction::EditFields);
     harness.run();
     let reference = harness.get_by_label("Reference");
@@ -1531,7 +1534,7 @@ fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
     harness.run();
     harness.key_press(Key::Enter);
     harness.run();
-    assert!(harness.state().tool.is_none());
+    assert!(harness.state().views.active.tool.is_none());
     let before = harness.state().session().snapshot().unwrap();
     assert_eq!(before.wires().len(), 1);
     let path = before.wire_path(&before.wires()[0]);
@@ -1541,7 +1544,7 @@ fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
     let reopened = pcbcraft_engine::persistence::decode(&bytes).unwrap();
     assert_eq!(reopened.inspect_schematic(), before.inspect_schematic());
     click_canvas_offset(&mut harness, egui::vec2(-101.6, 0.0));
-    assert!(harness.state().selection.single_wire().is_some());
+    assert!(harness.state().views.active.selection.single_wire().is_some());
     harness.key_press(Key::Delete);
     harness.run();
     assert!(harness.state().session().project().unwrap().wires().is_empty());
@@ -1572,7 +1575,7 @@ fn stale_or_cancelled_free_wire_drafts_never_commit() {
         let before = harness.state().session().inspect();
         harness.key_press(Key::Enter);
         harness.run();
-        assert!(harness.state().tool.is_none());
+        assert!(harness.state().views.active.tool.is_none());
         assert_eq!(harness.state().session().inspect(), before);
         assert_eq!(harness.state().session().project().unwrap().junctions().count(), 0);
     }
@@ -1595,7 +1598,7 @@ fn ribbon_group_menus_run_their_actions() {
 
     click(&mut harness, "Capture");
     choose(&mut harness, "Connect menu", "Wire");
-    assert!(matches!(harness.state().tool, Some(Tool::Wire { .. })));
+    assert!(matches!(harness.state().views.active.tool, Some(Tool::Wire { .. })));
     assert_eq!(harness.state().session().revision(), 1);
 }
 

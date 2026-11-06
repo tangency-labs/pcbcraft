@@ -66,21 +66,52 @@ impl Navigation {
     }
 }
 
+/// Which view may pan to reveal a selection made in its counterpart. Highlighting remains
+/// enabled in every mode; primary and secondary refer to view identity, not keyboard focus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelectionFollow {
+    #[default]
+    Off,
+    Both,
+    SecondaryFollowsPrimary,
+    PrimaryFollowsSecondary,
+}
+
+impl SelectionFollow {
+    /// Whether a selection from this stable role may navigate its counterpart.
+    pub(crate) fn allows(self, source_is_primary: bool) -> bool {
+        match self {
+            Self::Off => false,
+            Self::Both => true,
+            Self::SecondaryFollowsPrimary => source_is_primary,
+            Self::PrimaryFollowsSecondary => !source_is_primary,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub theme: ThemeChoice,
     pub scale_percent: u16,
     pub navigation: Navigation,
-    /// How strongly the canvas grid shows, in percent; 0 hides it. One setting for every canvas
-    /// in every window: it only changes drawing, never snapping or the project, so it makes no
-    /// undo step. Per-view overrides belong with split and detached views (#64).
+    /// How strongly the canvas grid shows, in percent; 0 hides it. Shared by both schematic
+    /// views, this changes drawing only, never snapping, selection, cameras or project history.
+    /// Detached editor windows and per-view overrides are not implemented yet.
     pub grid_opacity_percent: u8,
+    /// Automatic counterpart navigation; highlighting remains enabled when this is Off.
+    pub selection_follow: SelectionFollow,
 }
 
 impl Default for Preferences {
     fn default() -> Self {
-        Self { theme: ThemeChoice::default(), scale_percent: 100, navigation: Navigation::default(), grid_opacity_percent: grid::OPACITY_DEFAULT }
+        Self {
+            theme: ThemeChoice::default(),
+            scale_percent: 100,
+            navigation: Navigation::default(),
+            grid_opacity_percent: grid::OPACITY_DEFAULT,
+            selection_follow: SelectionFollow::default(),
+        }
     }
 }
 
@@ -144,10 +175,11 @@ pub(crate) enum Outcome {
 
 const APPEARANCE: usize = 0;
 const NAVIGATION: usize = 1;
-const SHORTCUTS: usize = 2;
+const VIEWS: usize = 2;
+const SHORTCUTS: usize = 3;
 /// The AI page follows Shortcuts, as SolidCraft's Assistant page does. Desktop only.
 #[cfg(not(target_arch = "wasm32"))]
-const AI: usize = 3;
+const AI: usize = 4;
 
 /// The settings a page draws, and the shortcut list the read-only Shortcuts page shows.
 pub(crate) struct PageData<'a> {
@@ -164,6 +196,11 @@ impl PreferencesWindow {
     /// Open on Appearance, remembering the current settings for Cancel.
     pub(crate) fn new(preferences: Preferences) -> Self {
         Self { state: WindowState::default(), kept: preferences }
+    }
+
+    /// Open on Views from the View ribbon, with the same Apply and Cancel behavior.
+    pub(crate) fn at_views(preferences: Preferences) -> Self {
+        Self { state: WindowState { page: VIEWS, query: String::new() }, kept: preferences }
     }
 
     /// Open on the Shortcuts page, for Help › Keyboard Shortcuts.
@@ -193,12 +230,13 @@ impl PreferencesWindow {
         let mut pages: Vec<Page<PageData<'_>>> = vec![
             Page { icon: MenuIcon::Appearance, label: "Appearance", draw: appearance },
             Page { icon: MenuIcon::Navigation, label: "Navigation", draw: navigation },
+            Page { icon: MenuIcon::Settings, label: "Views", draw: views },
             Page { icon: MenuIcon::Keyboard, label: "Shortcuts", draw: shortcuts_page },
         ];
         #[cfg(not(target_arch = "wasm32"))]
         pages.push(Page { icon: MenuIcon::Assistant, label: "AI", draw: ai_page });
         // Search results span pages, so there is no single page whose defaults to restore.
-        let defaults_enabled = matches!(self.state.page, APPEARANCE | NAVIGATION) && !settings::searching(&self.state.query);
+        let defaults_enabled = matches!(self.state.page, APPEARANCE | NAVIGATION | VIEWS) && !settings::searching(&self.state.query);
         let footer = Footer { apply_enabled: *preferences != self.kept, defaults_enabled };
         let mut data = PageData {
             preferences,
@@ -244,6 +282,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
             preferences.grid_opacity_percent = defaults.grid_opacity_percent;
         }
         NAVIGATION => preferences.navigation = defaults.navigation,
+        VIEWS => preferences.selection_follow = defaults.selection_follow,
         _ => {}
     }
 }
@@ -313,6 +352,30 @@ fn navigation(ui: &mut Ui, data: &mut PageData<'_>) {
     });
 }
 
+/// Selection following is navigation only, with stable roles even when focus changes.
+fn views(ui: &mut Ui, data: &mut PageData<'_>) {
+    settings::heading(
+        ui,
+        "Views",
+        "Following pans an out-of-view selection into view without changing zoom. Primary is the left or top pane; secondary is the right or bottom pane, regardless of focus.",
+    );
+    settings::section(ui, "Selection", |ui| {
+        settings::row_with_keywords(ui, "Follow selection", &["split", "pan", "highlight", "primary", "secondary"], |ui| {
+            settings::choice(
+                ui,
+                "Follow selection mode",
+                &mut data.preferences.selection_follow,
+                &[
+                    (SelectionFollow::Off, "Highlight only"),
+                    (SelectionFollow::Both, "Both views"),
+                    (SelectionFollow::SecondaryFollowsPrimary, "Secondary follows primary"),
+                    (SelectionFollow::PrimaryFollowsSecondary, "Primary follows secondary"),
+                ],
+            );
+        });
+    });
+}
+
 /// The Assistant's settings, drawn by the Assistant. While searching, one row stands in for them
 /// so "agent" or "assistant" still finds this page.
 #[cfg(not(target_arch = "wasm32"))]
@@ -357,6 +420,7 @@ mod tests {
             scale_percent: 110,
             navigation: Navigation { scroll: ScrollAction::Pan, reverse_zoom: true, zoom_speed_percent: 150, zoom_around: ZoomAround::Center },
             grid_opacity_percent: 35,
+            selection_follow: SelectionFollow::SecondaryFollowsPrimary,
         };
         assert_eq!(Preferences::parse(&preferences.to_text()), preferences);
         let hidden = Preferences { grid_opacity_percent: 0, ..Preferences::default() };
@@ -371,6 +435,7 @@ mod tests {
         assert_eq!(Preferences::parse("{\"scale_percent\":112}").scale_percent, 100);
         assert_eq!(Preferences::parse("{\"navigation\":{\"zoom_speed_percent\":55}}").navigation.zoom_speed_percent, 100);
         assert_eq!(Preferences::parse("{\"theme\":\"Dark\"}").theme, ThemeChoice::Dark);
+        assert_eq!(Preferences::parse(r#"{"theme":"Light","navigation":{"reverse_zoom":true}}"#).selection_follow, SelectionFollow::Off);
         // Settings saved before Navigation existed keep their theme and scale.
         let older = Preferences::parse("{\"theme\":\"Light\",\"scale_percent\":125}");
         assert_eq!((older.theme, older.scale_percent, older.navigation), (ThemeChoice::Light, 125, Navigation::default()));
@@ -395,10 +460,15 @@ mod tests {
             scale_percent: 150,
             navigation: Navigation { reverse_zoom: true, ..Navigation::default() },
             grid_opacity_percent: 20,
+            selection_follow: SelectionFollow::Both,
         };
         restore_page_defaults(&mut preferences, NAVIGATION);
         assert_eq!(preferences.navigation, Navigation::default());
         assert_eq!((preferences.theme, preferences.scale_percent, preferences.grid_opacity_percent), (ThemeChoice::Light, 150, 20));
+        assert_eq!(preferences.selection_follow, SelectionFollow::Both);
+        restore_page_defaults(&mut preferences, VIEWS);
+        assert_eq!(preferences.selection_follow, SelectionFollow::Off);
+        assert_eq!((preferences.theme, preferences.grid_opacity_percent), (ThemeChoice::Light, 20));
         restore_page_defaults(&mut preferences, APPEARANCE);
         assert_eq!(preferences, Preferences::default());
     }

@@ -64,11 +64,11 @@ pub(crate) enum Click {
     Drop(PartDrag, Point),
 }
 
-/// A browser drag bound to the project revision at which the gesture began.
+/// A browser drag bound to the view, sheet and revision at which the gesture began.
 #[derive(Clone, Debug)]
 pub(crate) struct PartDrag {
     pub(crate) definition: Arc<SymbolDefinition>,
-    pub(crate) revision: u64,
+    pub(crate) source: crate::editor_view::ViewInput,
 }
 
 /// Draw a part's preview fitted inside `rect`, for the parts browser's thumbnails. The symbol
@@ -114,6 +114,9 @@ pub(crate) enum SymbolAction {
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
 /// where points snap.
+/// `label` distinguishes simultaneously visible canvases in accessibility output.
+/// `highlighted` marks counterparts selected in another view. It affects paint only; hit
+/// testing, group moves and deletion use `selected`, which takes visual precedence on overlap.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
@@ -121,15 +124,17 @@ pub(crate) fn show(
     camera: &mut Camera,
     tool: Option<Tool>,
     selected: &Selection,
+    highlighted: &Selection,
     input_enabled: bool,
     navigation: Navigation,
     grid_opacity: u8,
     draft: &Draft,
+    label: &str,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, "Schematic canvas"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     let moving = matches!(tool, Some(Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. }));
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
@@ -159,7 +164,7 @@ pub(crate) fn show(
             .filter(|(_, point)| valid_position(*point)),
         _ => None,
     };
-    wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires);
+    wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires, &highlighted.wires);
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
@@ -167,7 +172,13 @@ pub(crate) fn show(
         if visible.contains(center) {
             let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
             let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
-            let color = if selected.symbols.contains(&symbol.id()) { tokens.accent } else { tokens.text };
+            let color = if selected.symbols.contains(&symbol.id()) {
+                tokens.accent
+            } else if highlighted.symbols.contains(&symbol.id()) {
+                tokens.schematic_highlight
+            } else {
+                tokens.text
+            };
             paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
         }
     }

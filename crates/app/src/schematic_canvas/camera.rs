@@ -3,6 +3,7 @@ use pcbcraft_chrome::theme;
 use pcbcraft_engine::{
     Project,
     schematic::{GRID_NM, MAX_CENTER_NM, MAX_PIN_OFFSET_NM, Point},
+    selection::Selection,
 };
 
 use super::grid_bounds;
@@ -28,6 +29,48 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// Seed another view from the currently displayed transform, leaving its host geometry
+    /// unset. Splitting supersedes any unpainted Fit request so both views start at this zoom.
+    pub(crate) fn fork_navigation(&mut self) -> Self {
+        self.fit_requested = false;
+        Self { zoom: self.zoom, offset: self.offset, ..Self::default() }
+    }
+
+    /// Reveal the selected symbols and wire paths if they extend outside the usable canvas.
+    /// Zoom remains unchanged; oversized groups are centered even when they cannot fully fit.
+    /// Empty selections, stale IDs and unavailable host geometry do not move the camera.
+    pub(crate) fn reveal_selection(&mut self, project: &Project, selection: &Selection) {
+        let mut bounds = Rect::NOTHING;
+        let rect = Rect::from_center_size(Pos2::ZERO, Vec2::ZERO);
+        for symbol in project.symbols().iter().filter(|symbol| selection.symbols.contains(&symbol.id())) {
+            let center = self.screen(symbol.position, rect).to_vec2();
+            let extent = grid_bounds(&symbol.definition, symbol.turns());
+            let step = self.grid_step();
+            bounds = bounds.union(
+                Rect::from_min_max(pos2(extent.min.x * step, extent.min.y * step), pos2(extent.max.x * step, extent.max.y * step)).translate(center),
+            );
+        }
+        for point in project.wires().iter().filter(|wire| selection.wires.contains(&wire.id())).flat_map(|wire| project.wire_path(wire)) {
+            bounds = bounds.union(Rect::from_pos(self.screen(point, rect)));
+        }
+        self.reveal_bounds(bounds);
+    }
+
+    /// Center already projected bounds only when they are outside the usable region. Keep a
+    /// label margin where space permits; a visible selection never nudges the camera.
+    fn reveal_bounds(&mut self, bounds: Rect) {
+        if let Some(uncovered) = self.uncovered
+            && uncovered.is_positive()
+            && bounds.is_finite()
+        {
+            let margin = theme::SCHEMATIC_FIT_MARGIN.min(uncovered.width() / 4.0).min(uncovered.height() / 4.0);
+            if !uncovered.shrink(margin).contains_rect(bounds) {
+                self.offset += uncovered.center() - bounds.center();
+                self.fit_requested = false;
+            }
+        }
+    }
+
     /// Fit the project after the menu closes, using the next canvas rectangle.
     pub(crate) fn request_fit(&mut self) {
         self.fit_requested = true;
@@ -170,6 +213,33 @@ fn wheel(events: &[Event], viewport_height: f32, navigation: Navigation) -> Whee
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Visible targets do not move, while out-of-view and oversized bounds center in the
+    /// uncovered region without zooming. Missing or invalid geometry cannot move the view.
+    #[test]
+    fn reveal_respects_uncovered_geometry_without_changing_zoom() {
+        let mut camera = Camera { zoom: 2.0, offset: vec2(12.0, 30.0), ..Camera::default() };
+        let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let clear = Rect::from_min_size(pos2(300.0, 0.0), vec2(500.0, 600.0));
+        camera.set_uncovered(canvas, clear);
+        let usable = camera.uncovered.unwrap();
+        let visible = Rect::from_center_size(usable.center(), vec2(40.0, 40.0));
+        camera.reveal_bounds(visible);
+        assert_eq!(camera.offset, vec2(12.0, 30.0));
+        let outside = visible.translate(vec2(-600.0, 800.0));
+        camera.reveal_bounds(outside);
+        assert_eq!(camera.offset, vec2(612.0, -770.0));
+        let oversized = Rect::from_center_size(pos2(500.0, 400.0), vec2(1000.0, 1000.0));
+        let before = camera.offset;
+        camera.reveal_bounds(oversized);
+        assert_eq!(camera.offset, before + (usable.center() - oversized.center()));
+        let before = camera.offset;
+        camera.reveal_bounds(Rect::NOTHING);
+        camera.uncovered = None;
+        camera.reveal_bounds(outside);
+        assert_eq!(camera.offset, before);
+        assert_eq!(camera.zoom, 2.0);
+    }
 
     fn scroll(y: f32, command: bool) -> Event {
         let modifiers = if command { egui::Modifiers::COMMAND } else { egui::Modifiers::NONE };
