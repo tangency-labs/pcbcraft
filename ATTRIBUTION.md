@@ -321,6 +321,12 @@ net-name machinery are not imported.
 
 Pin contact on part/group moves, two-pin insertion into straight wires, the explicit
 Heal command and the Capture → Wire edits group are new upstream implementations.
+Shortening U-shaped returns by sliding a shared junction along its existing straight
+run in `crates/engine/src/wire/heal.rs` is also original upstream logic; it preserves
+endpoint identities and does not connect unrelated crossings.
+Self-intersection erasure and removal of branch-free alternative routes in
+`crates/engine/src/wire/heal/loops.rs`, plus the remembered Auto-heal preference,
+are original upstream implementations as well.
 The Slice, Break, Heal and Delete glyphs in `crates/chrome/src/workspace.rs` are
 original drawings using the existing shared icon palette and ribbon metrics.
 The horizontal ribbon scrollbar uses Next's five-point `scroll_gutter` from

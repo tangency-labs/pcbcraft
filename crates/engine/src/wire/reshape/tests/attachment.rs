@@ -25,7 +25,7 @@ fn attaching_a_branched_junction_to_a_pin_is_one_persistent_edit() {
     let before = session.snapshot().unwrap();
     let revision = session.revision();
     assert_eq!(before.connectivity().nets.len(), 2);
-    let preview = before.attached(junction(source), super::super::super::Anchor::Existing(target), revision).unwrap();
+    let preview = before.attached(junction(source), super::super::super::Anchor::Existing(target), revision, true).unwrap();
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     run(&mut session, ATTACH_JUNCTION, json!({"junction":source.inspect()["junction"],"to":target.inspect()})).unwrap();
     let after = session.snapshot().unwrap();

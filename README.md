@@ -117,11 +117,20 @@ The same wire/point target works with `schematic.draw_wire`.
 
 Completed draws and moves heal positive-length collinear overlaps, doubled-back legs,
 duplicate strokes and redundant straight-through junctions in the affected routes.
+When a route returns to an already connected straight wire through a U-shaped detour,
+healing slides the junction to the nearer intersection without passing another branch
+or moving a pin. Self-crossing returns and redundant loops also shorten; cleanup keeps
+the shorter alternative only when the removed path has no intermediate pin or branch.
+The Wire edits menu's **Auto-heal wires** toggle defaults on and is remembered as a
+user preference. Turn it off to keep detours and loops during editing, then use **Heal**
+on selected wires when you want cleanup. Commands that draw, place, move or attach
+support the optional `auto_heal` boolean with the same default; `schematic.heal_wires`
+always performs cleanup.
 Crossings and nearby geometry remain disconnected. **Heal** applies the same cleanup
 to selected wires and connects old endpoints that exactly touch a pin; agents use
 `schematic.heal_wires` with `items` and `expected_revision`. Healing is part of the
 initiating edit's undo step, and opening a file never performs cleanup. Ambiguous pin
-contacts, unsupported loops and overly complex edits are rejected as a whole. This
+contacts, unsupported connections and overly complex edits are rejected as a whole. This
 local cleanup does not route around obstacles or resolve conflicting net names
 (named nets are separate work).
 

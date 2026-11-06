@@ -16,6 +16,12 @@ mod heal;
 mod reshape;
 pub use reshape::Reshape;
 
+/// Automatic normalization defaults on for existing command clients. An explicit false
+/// preserves authored routes while still resolving deliberate connection targets.
+pub(crate) fn auto_heal(params: &Value) -> bool {
+    params["auto_heal"].as_bool().unwrap_or(true)
+}
+
 /// Maximum intermediate points accepted in a single authored wire.
 pub const MAX_BENDS: usize = 64;
 
@@ -217,23 +223,16 @@ impl Session {
         if path.windows(2).any(|pair| pair[0] == pair[1] || (pair[0].x_nm != pair[1].x_nm && pair[0].y_nm != pair[1].y_nm)) {
             return Err(CommandError::InvalidParams("wire legs must be nonzero and horizontal or vertical".to_owned()));
         }
-        if let [Anchor::Split { wire: a, .. }, Anchor::Split { wire: b, .. }] = anchors
-            && a == b
-        {
-            return Err(CommandError::InvalidParams("finish the branch on another wire or endpoint".into()));
-        }
         let mut edit = heal::Edit::new(project, self.revision());
-        let endpoints = [edit.resolve(anchors[0])?, edit.resolve(anchors[1])?];
-        if edit.project.wires.iter().any(|wire| wire.endpoints == endpoints || wire.endpoints == [endpoints[1], endpoints[0]]) {
-            return Err(CommandError::InvalidParams("these endpoints are already joined by a wire".into()));
-        }
-        let ordinal = edit.id()?;
-        if edit.project.wires.len() >= MAX_WIRES {
-            return Err(CommandError::Unavailable("the schematic wire limit has been reached".into()));
-        }
-        Arc::make_mut(&mut edit.project.wires).push(Wire { ordinal, endpoints, bends: Some(bends) });
-        edit.touched.insert(ordinal);
-        let candidate = edit.heal()?;
+        let endpoints = match anchors {
+            [Anchor::Split { wire: a, at: p }, Anchor::Split { wire: b, at: q }] if a == b => {
+                let (from, to) = edit.cut_pair(a, p, q)?;
+                [from, to]
+            }
+            _ => [edit.resolve(anchors[0])?, edit.resolve(anchors[1])?],
+        };
+        edit.draw(endpoints, &path)?;
+        let candidate = edit.finish(auto_heal(params))?;
         self.change(candidate);
         Ok(())
     }

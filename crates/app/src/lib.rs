@@ -288,9 +288,17 @@ impl PcbApp {
 
     /// Run a command through the shared session, then discard view state invalidated by it.
     /// A failure shows in the status bar and leaves the document and surviving view state intact.
+    /// Commands that support automatic wire cleanup default to the person's current preference;
+    /// the explicit Heal command always cleans up, without changing that preference.
     fn run(&mut self, id: &str, params: &Value) {
         self.file_notice = None;
-        self.message = self.session.apply(id, params).err().map(|e| e.to_string());
+        let mut params = params.clone();
+        if pcbcraft_engine::command(id).is_some_and(|c| c.params.iter().any(|p| p.name == "auto_heal"))
+            && let Some(params) = params.as_object_mut()
+        {
+            params.entry("auto_heal").or_insert(json!(self.preferences.auto_heal_wires));
+        }
+        self.message = self.session.apply(id, &params).err().map(|e| e.to_string());
         self.views.sync(&self.session);
     }
 
@@ -888,6 +896,7 @@ impl PcbApp {
     /// Expose implemented wire edits through both ribbon buttons and their caption menu.
     /// Slice/Break use the selected leg's captured point and revision; Heal and Delete act on
     /// the selected wires, with Delete retaining the narrower segment-selection semantics.
+    /// The menu-only Auto-heal toggle changes the saved preference for future edits, not history.
     fn wire_edit_ribbon(&mut self, ui: &mut egui::Ui) {
         use workspace::{RibbonTool, ToolIcon};
         let leg = self.views.active.selected_leg.clone();
@@ -908,7 +917,16 @@ impl PcbApp {
             active: false,
             toggle: false,
         });
-        match workspace::ribbon_group(ui, "Wire edits", &tools) {
+        let options = [RibbonTool {
+            icon: ToolIcon::Heal,
+            label: "Auto-heal wires",
+            description: "Auto-heal wires",
+            shortcut: "",
+            enabled: true,
+            active: self.preferences.auto_heal_wires,
+            toggle: true,
+        }];
+        match workspace::ribbon_group_with_menu(ui, "Wire edits", &tools, &options) {
             Some(0) => {
                 if let Some(leg) = leg {
                     self.edit_wire(schematic_canvas::WireAction::Slice, &leg);
@@ -926,6 +944,7 @@ impl PcbApp {
                 }
             }
             Some(3) => self.delete_selection(),
+            Some(4) => self.preferences.auto_heal_wires = !self.preferences.auto_heal_wires,
             _ => {}
         }
     }
@@ -1084,6 +1103,7 @@ impl PcbApp {
                             input_enabled,
                             self.preferences.navigation,
                             self.preferences.grid_opacity_percent,
+                            self.preferences.auto_heal_wires,
                             &self.views.active.schematic.wire_draft,
                             &label,
                         );

@@ -580,6 +580,12 @@ pub struct RibbonTool<'a> {
 /// same tools with their glyphs, shortcuts and, for toggles, check marks. Returns the index of
 /// the tool picked from either this frame.
 pub fn ribbon_group(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]) -> Option<usize> {
+    ribbon_group_with_menu(ui, title, tools, &[])
+}
+
+/// Draw a ribbon group with additional menu-only options after a separator. Returned indices
+/// address the visible tools first, then the extra entries; toggles use the shared checked row.
+pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>], menu_tools: &[RibbonTool<'_>]) -> Option<usize> {
     let t = Tokens::get();
     let font = FontId::proportional(t.font_body);
     let widths: Vec<f32> = tools
@@ -618,7 +624,10 @@ pub fn ribbon_group(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]) -> Optio
     egui::Popup::menu(&response).frame(crate::menu::frame()).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(t.control_height * 7.0);
         ui.spacing_mut().item_spacing.y = 0.0;
-        for (index, tool) in tools.iter().enumerate() {
+        for (index, tool) in tools.iter().chain(menu_tools).enumerate() {
+            if index == tools.len() {
+                ui.separator();
+            }
             let mut item = crate::MenuItem::new(tool.label).tool_icon(tool.icon).shortcut(tool.shortcut).enabled(tool.enabled);
             if tool.toggle {
                 item = item.checked(tool.active);

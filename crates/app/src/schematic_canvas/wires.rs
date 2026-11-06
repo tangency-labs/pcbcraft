@@ -84,10 +84,10 @@ impl ReshapeDrag {
 
     /// Validate a disposable preview with the same engine operation used on release.
     /// Only a junction handle can attach; invalid geometry or topology yields no preview.
-    pub(crate) fn preview(&self, project: &Project, to: Anchor, revision: u64) -> Option<Project> {
+    pub(crate) fn preview(&self, project: &Project, to: Anchor, revision: u64, auto_heal: bool) -> Option<Project> {
         match (&self.edit, to) {
-            (Reshape::Junction(id), Anchor::Existing(_) | Anchor::Split { .. }) => project.attached(*id, to, revision).ok(),
-            (_, Anchor::Free(point)) => project.reshaped(&self.edit, point).and_then(|next| next.healed(project, revision)).ok(),
+            (Reshape::Junction(id), Anchor::Existing(_) | Anchor::Split { .. }) => project.attached(*id, to, revision, auto_heal).ok(),
+            (_, Anchor::Free(point)) => project.reshaped(&self.edit, point).and_then(|next| next.healed(project, revision, auto_heal)).ok(),
             _ => None,
         }
     }

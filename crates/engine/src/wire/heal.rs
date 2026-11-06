@@ -11,6 +11,8 @@ use std::{
     sync::Arc,
 };
 
+mod loops;
+
 /// One disposable edit owns allocation and comparison budgets; nothing reaches history on error.
 pub(super) struct Edit {
     pub project: Project,
@@ -41,6 +43,20 @@ fn on_segment(p: Point, a: Point, b: Point) -> bool {
         || (a.y_nm == b.y_nm && p.y_nm == a.y_nm && (a.x_nm.min(b.x_nm)..=a.x_nm.max(b.x_nm)).contains(&p.x_nm))
 }
 
+/// Locate the nearer end of a three-leg U-shaped return. The shortcut must land inside the
+/// first leg; a plain elbow, a straight continuation or a return past that leg is unchanged.
+fn return_corner(path: &[Point]) -> Option<Point> {
+    let [a, b, c, d] = *path.last_chunk::<4>()?;
+    let at = if a.x_nm == b.x_nm && b.y_nm == c.y_nm && c.x_nm == d.x_nm {
+        Point { x_nm: b.x_nm, y_nm: d.y_nm }
+    } else if a.y_nm == b.y_nm && b.x_nm == c.x_nm && c.y_nm == d.y_nm {
+        Point { x_nm: d.x_nm, y_nm: b.y_nm }
+    } else {
+        return None;
+    };
+    (at != a && at != b && at != d && on_segment(at, a, b)).then_some(at)
+}
+
 /// A strictly positive collinear overlap; perpendicular crossings and point contact are excluded.
 fn overlap(a: &[Point], b: &[Point]) -> Option<(Point, Point)> {
     if a[0].y_nm == a[1].y_nm && b[0].y_nm == b[1].y_nm && a[0].y_nm == b[0].y_nm {
@@ -57,6 +73,24 @@ fn overlap(a: &[Point], b: &[Point]) -> Option<(Point, Point)> {
 }
 
 impl Edit {
+    /// Finish a candidate with optional normalization. With cleanup disabled, retain authored
+    /// paths but reject graph shapes the native format cannot represent; never save invalid
+    /// parallel edges or a wire whose endpoints have become the same identity.
+    pub fn finish(mut self, auto_heal: bool) -> Result<Project, CommandError> {
+        if auto_heal {
+            return self.heal();
+        }
+        let mut pairs = BTreeSet::new();
+        for wire in self.project.wires.iter() {
+            let [a, b] = wire.endpoints;
+            if a == b || !pairs.insert((a.min(b), a.max(b))) {
+                return Err(CommandError::InvalidParams("this connection needs wire healing; enable Auto-heal or separate the routes".into()));
+            }
+        }
+        self.project.prune_junctions();
+        self.project.connectivity = Arc::default();
+        Ok(self.project)
+    }
     /// Find one unambiguous electrical identity or interior route at a contact point, excluding
     /// routes already attached to the moving symbol. A crossing has no preferred branch.
     fn contact(&self, point: Point, symbol: u64) -> Result<Option<Anchor>, CommandError> {
@@ -212,6 +246,40 @@ impl Edit {
         }
     }
 
+    /// Add a distinct path between resolved identities. A native wire pair must be unique, so
+    /// a second route is represented through an explicit corner junction before optional loop
+    /// cleanup. This also lets cleanup-off preserve intentional parallel paths on save/reopen.
+    pub(super) fn draw(&mut self, endpoints: [WireEndpoint; 2], path: &[Point]) -> Result<(), CommandError> {
+        if let Some(existing) = self.project.wires.iter().find(|w| w.endpoints == endpoints || w.endpoints == [endpoints[1], endpoints[0]]).cloned() {
+            let old = self.project.wire_path(&existing);
+            if old == path || old.iter().rev().eq(path.iter()) {
+                return Err(CommandError::InvalidParams("these endpoints are already joined by this route".into()));
+            }
+            if old.len() > 2 {
+                self.split(existing.ordinal, old[1])?;
+            } else if path.len() > 2 {
+                let node = self.free(path[1])?;
+                self.push_wire([endpoints[0], node], &path[..2])?;
+                return self.push_wire([node, endpoints[1]], &path[1..]);
+            } else {
+                return Err(CommandError::InvalidParams("these endpoints are already joined by a wire".into()));
+            }
+        }
+        self.push_wire(endpoints, path)
+    }
+
+    /// Allocate one authored route within the wire limit and track it for local normalization.
+    fn push_wire(&mut self, endpoints: [WireEndpoint; 2], path: &[Point]) -> Result<(), CommandError> {
+        if self.project.wires.len() >= MAX_WIRES {
+            return Err(CommandError::Unavailable("the schematic wire limit has been reached".into()));
+        }
+        let ordinal = self.id()?;
+        let bends = super::interior(path)?;
+        Arc::make_mut(&mut self.project.wires).push(Wire { ordinal, endpoints, bends: Some(bends) });
+        self.touched.insert(ordinal);
+        Ok(())
+    }
+
     /// Split at an unambiguous route point, preserving the first piece's ID. Endpoints reuse
     /// their identities; a new interior junction and second wire are allocated atomically.
     pub fn split(&mut self, id: u64, at: Point) -> Result<WireEndpoint, CommandError> {
@@ -269,7 +337,7 @@ impl Edit {
     }
 
     /// Resolve both boundaries of one overlap, following the newly split piece for the second.
-    fn cut_pair(&mut self, wire: u64, p: Point, q: Point) -> Result<(WireEndpoint, WireEndpoint), CommandError> {
+    pub(super) fn cut_pair(&mut self, wire: u64, p: Point, q: Point) -> Result<(WireEndpoint, WireEndpoint), CommandError> {
         let existing: BTreeSet<_> = self.project.wires.iter().map(|w| w.ordinal).collect();
         let a = self.split(wire, p)?;
         let second = self
@@ -403,6 +471,86 @@ impl Edit {
         Err(CommandError::Unavailable("too many redundant junctions to heal in one edit".into()))
     }
 
+    /// Shorten one U-shaped return touched directly or through an incident wire by sliding
+    /// its existing junction along an attached
+    /// straight run. Every other incident leg must remain collinear, and at least one must cover
+    /// the shortcut. Never pass another corner/endpoint, move a pin, or join a separate crossing.
+    /// IDs and endpoint identities stay fixed; only the participating paths and junction move.
+    fn straighten_return(&mut self) -> Result<bool, CommandError> {
+        let mut adjacent = BTreeMap::<u64, Vec<usize>>::new();
+        for (index, wire) in self.project.wires.iter().enumerate() {
+            for end in wire.endpoints {
+                if let WireEndpoint::Junction(id) = end {
+                    adjacent.entry(id).or_default().push(index);
+                }
+            }
+        }
+        for index in 0..self.project.wires.len() {
+            let wire = self.project.wires[index].clone();
+            for end in wire.endpoints {
+                let WireEndpoint::Junction(id) = end else { continue };
+                let Some(neighbors) = adjacent.get(&id) else { continue };
+                if !neighbors.iter().any(|&i| self.touched.contains(&self.project.wires[i].ordinal)) {
+                    continue;
+                }
+                let mut path = self.project.wire_path(&wire);
+                let reversed = wire.endpoints[0] == end;
+                if reversed {
+                    path.reverse();
+                }
+                let Some(at) = return_corner(&path) else { continue };
+                let old = path[path.len() - 1];
+                let mut covered = false;
+                let mut allowed = true;
+                let mut paths = Vec::new();
+                for &other in neighbors.iter().filter(|&&other| other != index) {
+                    self.compare()?;
+                    let neighbor = &self.project.wires[other];
+                    let mut route = self.project.wire_path(neighbor);
+                    let reverse = neighbor.endpoints[0] == end;
+                    if reverse {
+                        route.reverse();
+                    }
+                    let Some(&q) = route.iter().rev().nth(1) else {
+                        allowed = false;
+                        break;
+                    };
+                    if !((old.x_nm == at.x_nm && q.x_nm == at.x_nm) || (old.y_nm == at.y_nm && q.y_nm == at.y_nm)) || on_segment(q, old, at) {
+                        allowed = false;
+                        break;
+                    }
+                    covered |= on_segment(at, old, q);
+                    route.pop();
+                    route.push(at);
+                    simplify(&mut route);
+                    if reverse {
+                        route.reverse();
+                    }
+                    paths.push((other, route));
+                }
+                if !allowed || !covered {
+                    continue;
+                }
+                path.truncate(path.len() - 3);
+                path.push(at);
+                simplify(&mut path);
+                if reversed {
+                    path.reverse();
+                }
+                paths.push((index, path));
+                for (index, path) in paths {
+                    let bends = super::interior(&path)?;
+                    let wire = &mut Arc::make_mut(&mut self.project.wires)[index];
+                    wire.bends = Some(bends);
+                    self.touched.insert(wire.ordinal);
+                }
+                Arc::make_mut(&mut self.project.junctions).insert(id, at);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Normalize touched routes and their positive overlaps in a bounded, deterministic candidate.
     pub fn heal(mut self) -> Result<Project, CommandError> {
         let ids: Vec<_> = self.touched.iter().copied().collect();
@@ -413,6 +561,7 @@ impl Edit {
             let original = self.project.wire_path(&self.project.wires[index]);
             let mut path = original.clone();
             simplify(&mut path);
+            self.erase_path_loops(&mut path)?;
             if path.len() < 2 {
                 let [a, b] = self.project.wires[index].endpoints;
                 self.merge(a, b)?;
@@ -422,9 +571,18 @@ impl Edit {
             }
         }
         for _ in 0..64 {
+            if self.remove_redundant_loop()? {
+                continue;
+            }
+            if self.straighten_return()? {
+                continue;
+            }
             let Some((a, b, p, q)) = self.next_overlap()? else {
                 self.deduplicate()?;
                 self.collapse()?;
+                if self.straighten_return()? {
+                    continue;
+                }
                 self.deduplicate()?;
                 self.project.prune_junctions();
                 self.project.connectivity = Arc::default();
@@ -437,7 +595,7 @@ impl Edit {
             self.deduplicate()?;
             self.touched.extend([a, b]);
         }
-        Err(CommandError::Unavailable("too many overlapping runs in one edit".into()))
+        Err(CommandError::Unavailable("too many overlapping runs or return bends in one edit".into()))
     }
 }
 
@@ -467,7 +625,8 @@ impl Project {
 
     /// Normalize only routes changed by an edit, including routes whose component pins moved.
     /// Preview and commit use the same revision for deterministic new IDs. Loading never calls it.
-    pub fn healed(&self, before: &Project, revision: u64) -> Result<Project, CommandError> {
+    /// `auto_heal = false` still connects exact contacts, but preserves route geometry.
+    pub fn healed(&self, before: &Project, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
         let mut edit = Edit::new(self, revision);
         for wire in self.wires.iter() {
             if before.wires.iter().find(|w| w.ordinal == wire.ordinal).is_none_or(|old| old != wire || before.wire_path(old) != self.wire_path(wire))
@@ -479,7 +638,7 @@ impl Project {
         if edit.touched.is_empty() {
             return Ok(self.clone());
         }
-        let mut next = edit.heal()?;
+        let mut next = edit.finish(auto_heal)?;
         if before.symbols.iter().flat_map(|s| s.terminals()).eq(next.symbols.iter().flat_map(|s| s.terminals()))
             && before.wires.iter().map(|w| (w.ordinal, w.endpoints)).eq(next.wires.iter().map(|w| (w.ordinal, w.endpoints)))
         {
@@ -490,7 +649,8 @@ impl Project {
 
     /// Attach a dragged junction to an explicit pin, endpoint or wire interior, then heal the
     /// touched routes as one candidate. Allocation uses the gesture's captured revision.
-    pub fn attached(&self, junction: u64, target: Anchor, revision: u64) -> Result<Project, CommandError> {
+    /// The optional cleanup mode is shared with commands and gesture previews.
+    pub fn attached(&self, junction: u64, target: Anchor, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
         if target == Anchor::Existing(WireEndpoint::Junction(junction)) {
             return Err(CommandError::InvalidParams("choose a different endpoint to attach to".into()));
         }
@@ -511,11 +671,12 @@ impl Project {
         for wire in moved.wires.iter().filter(|w| w.endpoints.contains(&WireEndpoint::Junction(junction))) {
             edit.touched.insert(wire.ordinal);
         }
-        edit.heal()
+        edit.finish(auto_heal)
     }
 
     /// Preview a symbol move together with pin contact and local wire healing.
-    pub fn moved_symbol(&self, symbol: &str, to: Point, revision: u64) -> Result<Project, CommandError> {
+    /// With automatic cleanup disabled, exact pin contact still connects without normalization.
+    pub fn moved_symbol(&self, symbol: &str, to: Point, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
         let index = super::parse_id(symbol, "symbol-")
             .and_then(|id| self.symbol_index(id))
             .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".into()))?;
@@ -527,7 +688,7 @@ impl Project {
         }
         let mut next = self.clone();
         Arc::make_mut(&mut next.symbols)[index].position = to;
-        next.healed(self, revision)
+        next.healed(self, revision, auto_heal)
     }
 }
 

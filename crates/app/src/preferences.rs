@@ -94,6 +94,9 @@ pub struct Preferences {
     /// it when the app starts; after that each view keeps its own spacing through focus changes,
     /// splitting and reopening files. It is never saved in the project.
     pub schematic_grid_nm: i64,
+    /// Clean up touched wire routes after editing. Explicit Heal is available in either mode.
+    /// This is a user preference, never part of a project or its undo history.
+    pub auto_heal_wires: bool,
     /// Automatic counterpart navigation; highlighting remains enabled when this is Off.
     pub selection_follow: SelectionFollow,
     /// The unit lengths and coordinates are shown in, and that numbers typed without a unit are
@@ -110,6 +113,7 @@ impl Default for Preferences {
             grid_opacity_percent: grid::OPACITY_DEFAULT,
             board_grid_style: grid::Style::Off,
             schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
+            auto_heal_wires: true,
             selection_follow: SelectionFollow::default(),
             units: Unit::default(),
         }
@@ -439,6 +443,7 @@ mod tests {
             grid_opacity_percent: 35,
             board_grid_style: grid::Style::Dots,
             schematic_grid_nm: 25 * grid::NM_PER_MIL,
+            auto_heal_wires: false,
             selection_follow: SelectionFollow::SecondaryFollowsPrimary,
             units: Unit::Mm,
         };
@@ -503,6 +508,7 @@ mod tests {
             grid_opacity_percent: 20,
             board_grid_style: grid::Style::Lines,
             schematic_grid_nm: 10 * grid::NM_PER_MIL,
+            auto_heal_wires: false,
             selection_follow: SelectionFollow::Both,
             units: Unit::Mm,
         };
@@ -516,6 +522,6 @@ mod tests {
         assert_eq!(preferences.selection_follow, SelectionFollow::Off);
         assert_eq!((preferences.theme, preferences.grid_opacity_percent), (ThemeChoice::Light, 20));
         restore_page_defaults(&mut preferences, APPEARANCE);
-        assert_eq!(preferences, Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, ..Preferences::default() });
+        assert_eq!(preferences, Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, auto_heal_wires: false, ..Preferences::default() });
     }
 }

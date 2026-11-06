@@ -37,6 +37,7 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    AutoHeal,
     Name,
     /// Free text for a symbol's reference or value. Its length and characters are checked by the command.
     Text,
@@ -69,6 +70,7 @@ impl ParamKind {
             Self::BoardSetup => board::setup::BoardSetup::schema(),
             Self::BoardId => json!({"type":"string", "format":"uuid"}),
             Self::CopperLayers => json!({"type":"integer", "enum":[2,4]}),
+            Self::AutoHeal => json!({"type":"boolean","default":true}),
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()}
@@ -112,6 +114,7 @@ impl ParamKind {
             Self::BoardId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup if value.is_object() => Ok(()),
             Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
+            Self::AutoHeal if value.is_boolean() => Ok(()),
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition if value.as_str() == Some(FOOTPRINT_DEFINITION) => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
@@ -133,6 +136,7 @@ impl ParamKind {
             Self::BoardId => Err("must identify a board by UUID"),
             Self::BoardSetup => Err("must contain a board setup object"),
             Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
+            Self::AutoHeal => Err("must be a boolean"),
             Self::FootprintDefinition => Err("must identify the built-in footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name | Self::Text => Err("must be a string"),
@@ -248,6 +252,12 @@ const BOARD: Param = Param {
 };
 const EXPECTED_REVISION: Param =
     Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
+const AUTO_HEAL: Param = Param {
+    required: false,
+    name: "auto_heal",
+    summary: "Clean up touched wire overlaps, returns and redundant loops; defaults to true. False preserves authored routes; explicit attachments still connect.",
+    kind: ParamKind::AutoHeal,
+};
 
 /// Move a group of symbols and wire routes as one revision and undo step.
 pub const MOVE_ITEMS: &str = "schematic.move_items";
@@ -274,7 +284,7 @@ const CATALOG: &[Command] = &[
         id: PLACE_RESISTOR,
         title: "Place Resistor",
         summary: "Compatibility command for the starter library's 1k resistor. Use schematic.place_symbol for new calls. Undoable.",
-        params: &[SYMBOL_X, SYMBOL_Y, EXPECTED_REVISION],
+        params: &[SYMBOL_X, SYMBOL_Y, EXPECTED_REVISION, AUTO_HEAL],
     },
     Command {
         id: PLACE_SYMBOL,
@@ -286,6 +296,7 @@ const CATALOG: &[Command] = &[
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -307,6 +318,7 @@ const CATALOG: &[Command] = &[
             },
             Param { required: true, name: "bends", summary: "Intermediate orthogonal route points, excluding endpoints", kind: ParamKind::WireBends },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -354,6 +366,7 @@ const CATALOG: &[Command] = &[
             Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
             Param { required: true, name: "to", summary: "Where that point goes; it may differ from at only across the leg", kind: ParamKind::Point },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -365,6 +378,7 @@ const CATALOG: &[Command] = &[
             Param { required: true, name: "at", summary: "An interior corner of the wire's drawn route", kind: ParamKind::Point },
             Param { required: true, name: "to", summary: "The corner's new position", kind: ParamKind::Point },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -375,6 +389,7 @@ const CATALOG: &[Command] = &[
             Param { required: true, name: "junction", summary: "Junction or free endpoint ID from inspection", kind: ParamKind::JunctionId },
             Param { required: true, name: "to", summary: "The new position", kind: ParamKind::Point },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -396,6 +411,7 @@ const CATALOG: &[Command] = &[
                 kind: ParamKind::WireEndpoint,
             },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -417,6 +433,7 @@ const CATALOG: &[Command] = &[
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -465,6 +482,7 @@ const CATALOG: &[Command] = &[
             Param { required: true, name: "dx_nm", summary: "Horizontal displacement in nanometers", kind: ParamKind::Displacement },
             Param { required: true, name: "dy_nm", summary: "Vertical displacement in nanometers", kind: ParamKind::Displacement },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -982,7 +1000,7 @@ impl Session {
             rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
         });
         project.connectivity = Arc::default();
-        let project = project.healed(self.open_project()?, self.revision())?;
+        let project = project.healed(self.open_project()?, self.revision(), wire::auto_heal(params))?;
         self.change(project);
         Ok(())
     }
@@ -999,7 +1017,7 @@ impl Session {
             .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         if project.symbols[index].position != position {
-            let next = project.moved_symbol(&project.symbols[index].id(), position, self.revision())?;
+            let next = project.moved_symbol(&project.symbols[index].id(), position, self.revision(), wire::auto_heal(params))?;
             self.change(next);
         }
         Ok(())

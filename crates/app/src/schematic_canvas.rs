@@ -188,6 +188,7 @@ pub(crate) fn show(
     input_enabled: bool,
     navigation: Navigation,
     grid_opacity: u8,
+    auto_heal: bool,
     draft: &Draft,
     label: &str,
 ) -> Option<Click> {
@@ -220,9 +221,13 @@ pub(crate) fn show(
         _ => None,
     };
     let group_preview = match (&tool, group_delta, reshape_target) {
-        (Some(Tool::Move { symbol, .. }), _, _) => moved.as_ref().and_then(|(_, point)| project.moved_symbol(&symbol.id(), *point, revision).ok()),
-        (Some(Tool::MoveItems { items, .. }), Some(delta), _) => items.moved(project, delta).and_then(|next| next.healed(project, revision)).ok(),
-        (Some(Tool::Reshape { drag, .. }), _, Some(to)) => drag.preview(project, to, revision),
+        (Some(Tool::Move { symbol, .. }), _, _) => {
+            moved.as_ref().and_then(|(_, point)| project.moved_symbol(&symbol.id(), *point, revision, auto_heal).ok())
+        }
+        (Some(Tool::MoveItems { items, .. }), Some(delta), _) => {
+            items.moved(project, delta).and_then(|next| next.healed(project, revision, auto_heal)).ok()
+        }
+        (Some(Tool::Reshape { drag, .. }), _, Some(to)) => drag.preview(project, to, revision, auto_heal),
         _ => None,
     };
     let project = group_preview.as_ref().unwrap_or(project);

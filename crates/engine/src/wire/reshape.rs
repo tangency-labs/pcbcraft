@@ -187,7 +187,7 @@ impl Session {
             .and_then(|id| parse_id(id, "junction-"))
             .ok_or_else(|| CommandError::InvalidParams("invalid junction".to_owned()))?;
         let to = super::Anchor::parse(&params["to"]).ok_or_else(|| CommandError::InvalidParams("invalid attachment target".to_owned()))?;
-        let next = self.open_project()?.attached(junction, to, self.revision())?;
+        let next = self.open_project()?.attached(junction, to, self.revision(), super::auto_heal(params))?;
         self.change(next);
         Ok(())
     }
@@ -221,7 +221,7 @@ impl Session {
         self.check_revision(params)?;
         let to = point_param(params, "to")?;
         let project = self.open_project()?;
-        let next = project.reshaped(edit, to)?.healed(project, self.revision())?;
+        let next = project.reshaped(edit, to)?.healed(project, self.revision(), super::auto_heal(params))?;
         if next.wires != project.wires || next.junctions != project.junctions {
             self.change(next);
         }

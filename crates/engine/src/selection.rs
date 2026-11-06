@@ -169,7 +169,7 @@ impl Session {
         let items = Selection::parse(&params["items"]).ok_or_else(|| CommandError::InvalidParams("invalid selection".to_owned()))?;
         let project = self.open_project()?;
         let delta = Point { x_nm: params["dx_nm"].as_i64().unwrap_or_default(), y_nm: params["dy_nm"].as_i64().unwrap_or_default() };
-        let next = items.moved(project, delta)?.healed(project, self.revision())?;
+        let next = items.moved(project, delta)?.healed(project, self.revision(), crate::wire::auto_heal(params))?;
         if next.symbols != project.symbols || next.wires != project.wires || next.junctions != project.junctions {
             self.change(next);
         }

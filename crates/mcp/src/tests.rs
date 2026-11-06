@@ -361,6 +361,32 @@ fn mcp_attaches_junctions_and_rejects_stale_retries() {
     assert_eq!(undone["project"], state["project"]);
 }
 
+/// MCP discovers the default-on boolean, preserves a loop when it is explicitly false, and
+/// can later heal that selected route through the same revision-checked command as the GUI.
+#[test]
+fn mcp_can_disable_automatic_healing_and_heal_later() {
+    let mut server = server();
+    let description = body(&call(&mut server, "describe_command", json!({"command":pcbcraft_engine::DRAW_WIRE})));
+    assert_eq!(description["params"]["properties"]["auto_heal"]["type"], "boolean");
+    assert_eq!(description["params"]["properties"]["auto_heal"]["default"], true);
+    let start = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Loop"}})));
+    let p = |x: i64, y: i64| json!({"x_nm":x*1_270_000,"y_nm":y*1_270_000});
+    let mut params = json!({"from":p(-10,0),"to":p(20,12),"bends":[p(6,0),p(6,12),p(-4,12),p(-4,6),p(6,6),p(6,12)],"auto_heal":"false","expected_revision":start["revision"]});
+    assert_eq!(call(&mut server, "execute", json!({"command":pcbcraft_engine::DRAW_WIRE,"params":params}))["isError"], true);
+    params["auto_heal"] = json!(false);
+    let looped = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::DRAW_WIRE,"params":params})));
+    let wire = &looped["project"]["schematic"]["wires"][0];
+    assert_eq!(wire["bends"].as_array().unwrap().len(), 6);
+    let healed = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::HEAL_WIRES,"params":{"items":{"symbols":[],"wires":[wire["id"]]},"expected_revision":looped["revision"]}}),
+    ));
+    assert_eq!(healed["project"]["schematic"]["wires"][0]["bends"], json!([p(6, 0), p(6, 12)]));
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"], looped["project"]);
+}
+
 /// MCP discovers the wire slice, break and segment deletion through the shared catalog and runs
 /// them: a slice keeps the route connected through a new junction, and deleting a leg leaves
 /// free ends.

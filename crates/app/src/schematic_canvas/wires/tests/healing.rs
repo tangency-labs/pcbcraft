@@ -58,6 +58,94 @@ fn wire_tool_finishes_on_a_segment() {
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
+/// Reproduce W drawing past a horizontal wire then returning to it: finishing the branch
+/// removes the little U-shaped return in the same undo step and preserves the trunk's tail.
+#[test]
+fn wire_tool_heals_a_return_to_the_connected_trunk() {
+    let mut h = harness();
+    h.state_mut().session.apply("project.new", &json!({"name":"Return bend"})).unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().session.apply(DRAW_WIRE, &json!({"from":grid(2,12),"to":grid(14,12),"bends":[],"expected_revision":revision})).unwrap();
+    h.state_mut().browser.open = false;
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let start = screen(&h, grid(-10, 0));
+    h.hover_at(start);
+    h.run();
+    h.key_press(egui::Key::W);
+    h.run();
+    for point in [grid(-10, 0), grid(6, 13), grid(8, 12)] {
+        let pos = screen(&h, point);
+        h.hover_at(pos);
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run();
+        }
+    }
+    assert_eq!(h.state().message, None);
+    assert!(h.state().views.active.tool.is_none());
+    assert_eq!(routes(&h), vec![vec![grid(2, 12), grid(6, 12)], vec![grid(6, 12), grid(14, 12)], vec![grid(-10, 0), grid(6, 0), grid(6, 12)]]);
+    click(&mut h, "Undo");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// The remembered menu toggle affects actual W gestures without adding document history.
+/// Off retains a loop; explicit Heal still removes it and Undo brings the loop back.
+#[test]
+fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
+    for automatic in [false, true] {
+        let mut h = harness();
+        h.state_mut().session.apply("project.new", &json!({"name":"Optional healing"})).unwrap();
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .session
+            .apply(
+                DRAW_WIRE,
+                &json!({"from":grid(-10,0),"to":grid(20,12),"bends":[grid(6,0),grid(6,6),grid(-4,6),grid(-4,12)],"expected_revision":revision}),
+            )
+            .unwrap();
+        h.state_mut().browser.open = false;
+        h.run();
+        assert!(h.state().preferences.auto_heal_wires);
+        let before = h.state().session.snapshot().unwrap();
+        if !automatic {
+            click(&mut h, "Wire edits menu");
+            click(&mut h, "Auto-heal wires");
+            assert!(!h.state().preferences.auto_heal_wires);
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            let restored = crate::preferences::Preferences::parse(&h.state().preferences.to_text());
+            assert!(!restored.auto_heal_wires);
+        }
+        h.key_press(egui::Key::W);
+        h.run();
+        for point in [grid(6, 6), grid(6, 12)] {
+            let pos = screen(&h, point);
+            h.hover_at(pos);
+            h.run();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                h.run();
+            }
+        }
+        assert_eq!(h.state().message, None);
+        assert!(h.state().views.active.tool.is_none());
+        assert_eq!(h.state().session.project().unwrap().wires().len(), if automatic { 2 } else { 5 });
+        if !automatic {
+            let looped = h.state().session.snapshot().unwrap();
+            let wire = looped.wires().last().unwrap().id();
+            h.state_mut().select(pcbcraft_engine::selection::Selection::one_wire(wire));
+            h.run();
+            click(&mut h, "Heal selected wires");
+            assert_eq!(h.state().session.project().unwrap().wires().len(), 2);
+            assert!(!h.state().preferences.auto_heal_wires);
+            click(&mut h, "Undo");
+            assert!(Arc::ptr_eq(&looped, &h.state().session.snapshot().unwrap()));
+        }
+    }
+    assert!(crate::preferences::Preferences::parse("{}").auto_heal_wires);
+}
+
 /// Ribbon buttons and caption-menu entries invoke the same selected-leg commands. Heal can
 /// reconnect an old visually touching endpoint, and unavailable actions remain disabled.
 #[test]
