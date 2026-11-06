@@ -115,12 +115,13 @@ to see the accepted parameters. Pass those inspected values to `execute`:
     "symbol": "<symbol ID from inspection>",
     "x_nm": 0,
     "y_nm": 5080000,
-    "expected_revision": "<replace with the inspected integer revision>"
+    "expected_revision": 1
   }
 }
 ```
 
-The strings in angle brackets are placeholders, not literal command arguments.
+Replace the symbol ID placeholder and example revision `1` with the values from
+inspection. Keep the revision as a JSON number, without quotes.
 In the live editor the resistor and attached wire move, the project becomes
 unsaved, and GUI **Undo**/**Redo** use the same history. Inspect after each step
 to verify the result. If another edit changed the revision, inspect again before
