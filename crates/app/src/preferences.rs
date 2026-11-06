@@ -453,9 +453,16 @@ mod tests {
         assert_eq!(Preferences::parse("{\"grid_opacity_percent\":-1}"), Preferences::default());
         assert_eq!(older.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM);
         assert_eq!(Preferences::parse("{\"schematic_grid_nm\":635000}").schematic_grid_nm, 635_000);
-        for bad in ["0", "-1270000", "999999999999", "1.5", "\"50 mil\""] {
+        // An out-of-range spacing resets only itself; a value of the wrong type is unreadable,
+        // so everything falls back.
+        for bad in ["0", "-1270000", "999999999999"] {
             let parsed = Preferences::parse(&format!("{{\"schematic_grid_nm\":{bad},\"grid_opacity_percent\":40}}"));
             assert_eq!(parsed.schematic_grid_nm, grid::SCHEMATIC_SPACING_DEFAULT_NM, "{bad}");
+            assert_eq!(parsed.grid_opacity_percent, 40, "{bad}");
+        }
+        for bad in ["1.5", "\"50 mil\""] {
+            let parsed = Preferences::parse(&format!("{{\"schematic_grid_nm\":{bad},\"grid_opacity_percent\":40}}"));
+            assert_eq!(parsed, Preferences::default(), "{bad}");
         }
     }
 
