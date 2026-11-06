@@ -547,7 +547,10 @@ impl Assistant {
                 self.add_message("Editor", format!("Applied:\n{summary}"));
                 if edits == 0 { "Applied.".to_owned() } else { "Applied. Use Undo to revert.".to_owned() }
             }
-            Err(error) => error,
+            Err(error) => {
+                self.add_message("Editor", format!("Not applied: {error}"));
+                error
+            }
         });
     }
 
@@ -1197,6 +1200,9 @@ esac
         let error = app.run_agent_steps(&ctx, before["revision"].as_u64().ok_or("revision")?, &steps).unwrap_err();
         assert!(error.starts_with("Step 3 (schematic.delete_wire) failed:"), "{error}");
         assert!(error.ends_with("The project edits from earlier steps were undone."), "{error}");
+        app.assistant.applied("1. Delete Wire", Err(error.clone()));
+        let shown = app.assistant.messages.last().ok_or("no message")?;
+        assert_eq!((shown.role, shown.text.as_str()), ("Editor", format!("Not applied: {error}").as_str()), "the conversation says it failed");
         assert_eq!(app.session.inspect()["project"], before["project"]);
         assert_eq!(app.session.inspect()["can_undo"], before["can_undo"]);
 

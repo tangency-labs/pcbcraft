@@ -80,11 +80,16 @@ fn inspect(project: Arc<Project>) -> Value {
     session.inspect()["project"]["schematic"].clone()
 }
 
-/// Assert exact persisted connectivity, including isolated terminals and the wire ID.
+/// Assert exact persisted connectivity, including isolated terminals and the wire ID. The drawn
+/// `path` is derived from the symbols, not stored, so it is left out.
 fn assert_connectivity(schematic: &Value) {
     let left = json!({"symbol":"symbol-2", "terminal":"2"});
     let right = json!({"symbol":"symbol-3", "terminal":"1"});
-    assert_eq!(schematic["wires"], json!([{"id":"wire-4", "from":left, "to":right}]));
+    let mut wires = schematic["wires"].clone();
+    for wire in wires.as_array_mut().into_iter().flatten() {
+        wire.as_object_mut().map(|wire| wire.remove("path"));
+    }
+    assert_eq!(wires, json!([{"id":"wire-4", "from":left, "to":right}]));
     assert_eq!(
         schematic["netlist"],
         json!({

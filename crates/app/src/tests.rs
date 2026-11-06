@@ -988,6 +988,7 @@ fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
             "from": {"symbol": "symbol-2", "terminal": "2"},
             "to": {"symbol": "symbol-3", "terminal": "1"},
             "bends": [{"x_nm": 21_590_000, "y_nm": 0}],
+            "path": [{"x_nm": 5_080_000, "y_nm": 0}, {"x_nm": 21_590_000, "y_nm": 0}, {"x_nm": 21_590_000, "y_nm": 7_620_000}],
         }])
     );
     assert_eq!(schematic["netlist"]["nets"].as_array().unwrap().len(), 1);
@@ -1506,10 +1507,15 @@ mod live_mcp {
         let moved = payload(tool(&mut harness, connection, "execute", request.clone()));
         let to = &moved["project"]["schematic"];
         assert_eq!(to["symbols"][0]["y_nm"], 5_080_000);
-        for key in ["id", "from", "to"] {
-            assert_eq!(to["wires"][0][key], from["wires"][0][key]);
-        }
-        assert_eq!(to["netlist"], from["netlist"]);
+        let authored = |wires: &Value| {
+            let mut wires = wires.clone();
+            for wire in wires.as_array_mut().into_iter().flatten() {
+                wire.as_object_mut().map(|wire| wire.remove("path"));
+            }
+            wires
+        };
+        assert_eq!(authored(&to["wires"]), authored(&from["wires"]), "the stored wire is unchanged");
+        assert_eq!(to["wires"][0]["path"][0], json!({"x_nm": 5_080_000, "y_nm": 5_080_000}), "its drawn route follows the pin");
         let after_wire = painted_wire(&harness);
         assert_ne!(after_wire, before_wire);
         assert_eq!(after_wire.last(), before_wire.last());
