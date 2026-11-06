@@ -215,11 +215,6 @@ pub(crate) fn show(
         _ => None,
     };
     wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires, &highlighted.wires);
-    if matches!(tool, None | Some(Tool::Reshape { .. }))
-        && let Some(wire) = selected.single_wire()
-    {
-        wires::paint_handles(&painter, rect, project, camera, wire);
-    }
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
@@ -236,6 +231,13 @@ pub(crate) fn show(
             };
             paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
         }
+    }
+
+    // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
+    if matches!(tool, None | Some(Tool::Reshape { .. }))
+        && let Some(wire) = selected.single_wire()
+    {
+        wires::paint_handles(&painter, rect, project, camera, wire);
     }
 
     if let Some(Tool::Wire { start: Some(start), .. }) = tool
