@@ -24,8 +24,8 @@ fn navigation_and_selection_belong_to_the_view() {
         modifiers: Modifiers::NONE,
     });
     harness.run();
-    assert_eq!(harness.state().view.selected.as_deref(), Some("symbol-2"));
-    assert!(harness.state().view.camera.zoom() > 1.0);
+    assert_eq!(harness.state().views.active.selected.as_deref(), Some("symbol-2"));
+    assert!(harness.state().views.active.camera.zoom() > 1.0);
     assert!(other.selected.is_none());
     assert_eq!(other.camera.zoom(), 1.0);
     assert_eq!(harness.state().session.inspect(), inspected);
@@ -41,7 +41,7 @@ fn stale_and_foreign_view_input_cannot_replace_current_interactions() {
     let mut harness = harness();
     resistor_at_origin(&mut harness);
     let app = harness.state_mut();
-    let old = app.view.input(&app.session).unwrap();
+    let old = app.views.active.input(&app.session).unwrap();
     let definition = app.session.project().unwrap().symbols()[0].definition.clone();
     app.run("project.rename", &json!({"name": "current"}));
     let mut other = SchematicView::new(ViewId(1));
@@ -50,19 +50,19 @@ fn stale_and_foreign_view_input_cannot_replace_current_interactions() {
     let before = app.session.inspect();
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
     let origin = Point { x_nm: 0, y_nm: 0 };
-    let before_camera = app.view.camera.screen(origin, rect);
+    let before_camera = app.views.active.camera.screen(origin, rect);
     for source in [old, foreign] {
         app.view_click(source, Click::Select(Some("symbol-2".to_owned())));
         app.view_click(source, Click::Edit(SymbolAction::Delete, "symbol-2".to_owned()));
         app.show_pick(source, project_browser::Pick { id: "symbol-2".to_owned(), wire: false, at: Point { x_nm: 25_400_000, y_nm: 0 } });
-        assert!(app.view.selected.is_none());
-        assert_eq!(app.view.camera.screen(origin, rect), before_camera);
+        assert!(app.views.active.selected.is_none());
+        assert_eq!(app.views.active.camera.screen(origin, rect), before_camera);
         app.begin_wire();
-        let current = app.view.input(&app.session).unwrap();
+        let current = app.views.active.input(&app.session).unwrap();
         app.view_click(current, Click::Drop(PartDrag { definition: definition.clone(), source }, Point { x_nm: 0, y_nm: 0 }));
         app.view_click(source, Click::CancelWire);
-        assert!(matches!(app.view.tool, Some(Tool::Wire { .. })));
-        app.view.cancel_gesture();
+        assert!(matches!(app.views.active.tool, Some(Tool::Wire { .. })));
+        app.views.active.cancel_gesture();
     }
     assert_eq!(app.session.inspect(), before);
 }
@@ -80,15 +80,15 @@ fn reopening_during_a_move_does_not_move_the_reopened_symbol() {
     harness.run();
     harness.hover_at(to);
     harness.run();
-    assert!(matches!(harness.state().view.tool, Some(Tool::Move { .. })));
+    assert!(matches!(harness.state().views.active.tool, Some(Tool::Move { .. })));
     harness.state_mut().session.open_snapshot(snapshot);
     let reopened = harness.state().session.inspect();
     harness.run();
     harness.drop_at(to);
     harness.run();
     assert_eq!(harness.state().session.inspect(), reopened);
-    assert!(harness.state().view.tool.is_none());
-    assert!(harness.state().view.selected.is_none());
+    assert!(harness.state().views.active.tool.is_none());
+    assert!(harness.state().views.active.selected.is_none());
 }
 
 /// The fields dialog retains its starting revision and cannot overwrite an intervening edit or
@@ -141,7 +141,7 @@ fn only_the_addressed_view_consumes_editor_shortcuts() {
         app.shortcuts(ctx, false, ViewId(99));
         assert_eq!(app.session.inspect(), before);
         assert!(ctx.input(|input| input.key_pressed(Key::Delete)));
-        app.shortcuts(ctx, false, app.view.id());
+        app.shortcuts(ctx, false, app.views.active.id());
     });
     output.drop_without_applying_deltas();
     assert!(app.session.project().unwrap().symbols().is_empty());

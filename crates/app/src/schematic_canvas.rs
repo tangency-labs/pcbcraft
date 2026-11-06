@@ -97,6 +97,7 @@ pub(crate) enum SymbolAction {
 /// With no tool, a primary click returns `Click::Select` for the symbol under it, or `None` in
 /// it for empty canvas. Wire strokes return `Click::SelectWire` when no symbol is hit. A secondary click selects the symbol under it and opens its menu; a row
 /// picked there returns `Click::Edit`. `selected` is drawn in the accent colour.
+/// `label` identifies the canvas in accessibility output, distinguishing simultaneous views.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
@@ -108,11 +109,12 @@ pub(crate) fn show(
     navigation: Navigation,
     draft: &Draft,
     selected_wire: Option<&str>,
+    label: &str,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, "Schematic canvas"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     let moving = matches!(tool, Some(Tool::Move { .. }));
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 

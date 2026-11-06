@@ -332,13 +332,13 @@ mod tests {
 
         click(&mut harness, "Expand Symbols");
         click(&mut harness, "R2  1k");
-        assert_eq!(harness.state().view.selected.as_deref(), Some("symbol-3"));
-        assert_eq!(harness.state().view.selected_wire, None);
+        assert_eq!(harness.state().views.active.selected.as_deref(), Some("symbol-3"));
+        assert_eq!(harness.state().views.active.selected_wire, None);
 
         click(&mut harness, "Expand Nets");
         click(&mut harness, "Net 1");
-        assert_eq!(harness.state().view.selected, None);
-        assert_eq!(harness.state().view.selected_wire.as_deref(), Some("wire-4"));
+        assert_eq!(harness.state().views.active.selected, None);
+        assert_eq!(harness.state().views.active.selected_wire.as_deref(), Some("wire-4"));
         assert_eq!(harness.state().session.revision(), 4);
 
         click(&mut harness, "Collapse Symbols");
@@ -362,7 +362,7 @@ mod tests {
         let covered = app.browser.covered_width();
         assert!(covered > 0.0);
         for symbol in project.symbols() {
-            let at = app.view.camera.screen(symbol.position, canvas);
+            let at = app.views.active.camera.screen(symbol.position, canvas);
             assert!(at.x > canvas.left() + covered, "{} at {at:?} is under the Browser", symbol.id());
         }
 

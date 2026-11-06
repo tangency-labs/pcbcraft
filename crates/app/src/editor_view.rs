@@ -1,5 +1,5 @@
 //! Schematic view state and input addresses. A view borrows the project session; it never owns
-//! a document copy, file lifecycle or undo history. The first slice hosts one view in the root UI.
+//! a document copy, file lifecycle or undo history.
 
 use pcbcraft_engine::{Session, SheetTarget};
 
@@ -8,8 +8,7 @@ use crate::schematic_canvas::{Camera, Draft, Tool};
 #[cfg(test)]
 mod tests;
 
-/// Runtime identity assigned by the host, independent of a sheet or native window. The current
-/// single-view host uses zero; additional hosts must assign distinct IDs within the app.
+/// Runtime identity assigned by the host, independent of a sheet or native window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(super) struct ViewId(pub(super) u64);
 
@@ -19,6 +18,7 @@ pub(super) struct ViewId(pub(super) u64);
 pub(super) struct ViewInput {
     view: ViewId,
     target: SheetTarget,
+    input_epoch: u64,
     pub(super) revision: u64,
 }
 
@@ -42,6 +42,7 @@ impl Binding {
 pub(super) struct SchematicView {
     id: ViewId,
     binding: Option<Binding>,
+    input_epoch: u64,
     pub(super) camera: Camera,
     pub(super) selected: Option<String>,
     pub(super) selected_wire: Option<String>,
@@ -62,6 +63,7 @@ impl SchematicView {
         Self {
             id,
             binding: None,
+            input_epoch: 0,
             camera: Camera::default(),
             selected: None,
             selected_wire: None,
@@ -85,10 +87,11 @@ impl SchematicView {
     /// Capture an input address only while this view is bound to the session's current sheet.
     pub(super) fn input(&self, session: &Session) -> Option<ViewInput> {
         let binding = self.binding.filter(|binding| Some(*binding) == Binding::current(session))?;
-        Some(ViewInput { view: self.id, target: binding.target, revision: session.revision() })
+        Some(ViewInput { view: self.id, target: binding.target, input_epoch: self.input_epoch, revision: session.revision() })
     }
 
-    /// Reject input from another view, another sheet, a reopened file or an outdated revision.
+    /// Reject input from another view, another sheet, a reopened file, an earlier focus interval
+    /// or an outdated revision.
     pub(super) fn accepts(&self, input: ViewInput, session: &Session) -> bool {
         self.input(session) == Some(input)
     }
@@ -99,6 +102,13 @@ impl SchematicView {
         self.tool = None;
         self.wire_draft = Draft::default();
         self.rotate_requested = false;
+    }
+
+    /// Relinquish input when focus or hosting changes. Old events stay invalid even after this
+    /// view becomes active again without a document edit. Navigation and selection survive.
+    pub(super) fn release_input(&mut self) {
+        self.cancel_gesture();
+        self.input_epoch += 1;
     }
 
     /// Rebind after project replacement or reopening, preserving the view's runtime identity.

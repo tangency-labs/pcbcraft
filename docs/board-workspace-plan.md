@@ -9,8 +9,12 @@ the views through explicit component and terminal identities.
 This is the proposed architecture and acceptance plan for
 [#54](https://github.com/tangency-labs/pcbcraft/issues/54), with editor hosting in
 [#64](https://github.com/tangency-labs/pcbcraft/issues/64) and cross-probing in
-[#65](https://github.com/tangency-labs/pcbcraft/issues/65). Board rendering,
-split editor views and detached editor windows are not implemented yet.
+[#65](https://github.com/tangency-labs/pcbcraft/issues/65). Two schematic views now
+share one session through **View → Split**, with independent cameras and edit
+selections, contextual controls and shared undo. Pane changes invalidate pending
+input without editing the document. This is the first host for exercising view
+ownership; board rendering, detached editor windows and cross-probing remain
+unimplemented. Presentation actions are not exposed through live MCP yet.
 
 ## Existing foundation
 
@@ -23,8 +27,10 @@ to be built.
 
 The desktop Assistant already opens a secondary native viewport with access to
 the same session. Editor focus, canvas input, repainting and close behavior need
-their own qualification. The app currently owns one schematic camera and
-selection, which must become view state before adding editor views.
+their own qualification. At that baseline the app owned one schematic camera and
+selection. Those fields now belong to explicit view state,
+with persistent project/sheet addresses and input invalidation across focus
+changes, history changes and file reopening.
 
 PCBcraft Next's
 [probe contracts](https://github.com/travle1/pcbcraft-next/blob/568cd495397a91563e563e7163efb226d84fa83a/docs/sheet-workflows.md#hooks-for-later-pcb-cross-probing)
@@ -146,10 +152,10 @@ external library services, routing (#56), zones (#57), DRC (#58), manufacturing
 The project-local variant work in #28 remains part of library management but
 does not block the first original footprint fixture.
 
-Before shell work starts, reconcile the current state of
-[#62](https://github.com/tangency-labs/pcbcraft/pull/62), which changes Browser,
-Parts and the ribbon. #63's Home startup and persistent Parts changes are already
-in the baseline above.
+The split host builds on the Browser, Parts and ribbon changes merged in
+[#62](https://github.com/tangency-labs/pcbcraft/pull/62), together with #63's Home
+startup. Native hosting should preserve these contextual controls when moving
+the same view between a pane and a window.
 
 ## First acceptance project
 

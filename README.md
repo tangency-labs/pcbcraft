@@ -66,6 +66,15 @@ the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
 Inspector panels, and fits the view. Each ribbon group's caption, such as
 **Place ⌄**, opens a menu of the same actions. A project has one sheet so far.
 
+**View → Split** opens two views of that schematic. Click a pane or its title to
+activate it; the ribbon, Browser, Parts and Net Inspector follow the active
+pane. Each view keeps its own camera and edit selection, while edits, undo,
+redo and saving use the same project. Changing panes cancels unfinished gestures.
+Drag the divider to resize the panes; narrow windows stack them vertically.
+Turning Split off keeps the active view and retains the hidden view for later.
+The arrangement lasts for the app session and does not change project files.
+Detached editor windows and schematic-to-board cross-probing remain planned.
+
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
 Desktop projects default to a folder containing separate project, schematic,
 board and saved symbol documents. **Save** keeps the opened form, and
