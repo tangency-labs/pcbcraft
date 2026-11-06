@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let project = session.snapshot().ok_or("demo has no project")?;
     let documents = encode_documents(project.clone())?;
     let archive = encode_packed(project)?;
-    fs::create_dir(&destination)?;
+    fs::create_dir(&destination).map_err(|error| format!("cannot create {}: {error}", destination.display()))?;
     let publish = || -> Result<(), Box<dyn Error>> {
         for (relative, bytes) in documents {
             let path = destination.join("dual-led").join(relative);
