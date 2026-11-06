@@ -2,6 +2,10 @@
 
 Electronics design that feels like the tools you already know, built so a person and an agent can work on the same board, at the same time, with the same commands.
 
+Start with the [quickstart](docs/quickstart.md) for a small editable example,
+the [capability table](docs/capabilities.md) for current limits, or
+[CONTRIBUTING.md](CONTRIBUTING.md) to build and work on an issue.
+
 **Status: just started.** Schematic editing works on desktop and in the browser.
 The app starts on **Home**, where you can create or open a project. It does not
 yet reopen the last project automatically. The app bar shows the project name and an
