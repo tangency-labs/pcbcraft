@@ -59,12 +59,14 @@ pub(crate) struct PartDrag {
 }
 
 /// Draw a part's preview fitted inside `rect`, for the parts browser's thumbnails. The symbol
-/// is drawn unrotated and without labels.
+/// is drawn unrotated and without labels. A shared minimum preview extent keeps small symbols
+/// from growing disproportionately large across the catalog.
 pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, rect: Rect, color: egui::Color32) {
     let bounds = grid_bounds(definition, 0);
-    let step = (rect.width() / bounds.width().max(1.0)).min(rect.height() / bounds.height().max(1.0));
+    let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
+    let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP);
     let center = rect.center() - bounds.center().to_vec2() * step;
-    paint_symbol(painter, definition, center, step, 0, color, None);
+    paint_symbol(painter, definition, center, step, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color), None);
 }
 
 /// What the selected symbol's context menu asks for.
@@ -137,7 +139,7 @@ pub(crate) fn show(
             let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
             let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
             let color = if selected == Some(symbol.id().as_str()) { tokens.accent } else { tokens.text };
-            paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), color, label);
+            paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
         }
     }
 
@@ -172,7 +174,7 @@ pub(crate) fn show(
     {
         let point = camera.snap(pointer, rect);
         if valid_position(point) {
-            paint_symbol(&painter, &drag.definition, screen(point), grid_step, 0, tokens.accent, None);
+            paint_symbol(&painter, &drag.definition, screen(point), grid_step, 0, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
@@ -300,7 +302,7 @@ fn placement_preview(
     if !valid_position(point) {
         return None;
     }
-    paint_symbol(painter, definition, screen(point), camera.grid_step(), turns, tokens.accent, None);
+    paint_symbol(painter, definition, screen(point), camera.grid_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
 }
 
@@ -385,16 +387,8 @@ fn body(definition: &SymbolDefinition, turns: u8) -> Rect {
 /// turned with the symbol. With a label, the reference goes above the drawing and the value
 /// below it, or both beside an upright part.
 /// Horizontal labels follow the rotated drawing's upper and lower clearance, including LED arrows.
-fn paint_symbol(
-    painter: &Painter,
-    definition: &SymbolDefinition,
-    center: Pos2,
-    step: f32,
-    turns: u8,
-    color: egui::Color32,
-    label: Option<(&str, &str)>,
-) {
-    let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color);
+fn paint_symbol(painter: &Painter, definition: &SymbolDefinition, center: Pos2, step: f32, turns: u8, stroke: Stroke, label: Option<(&str, &str)>) {
+    let color = stroke.color;
     let xy = |point: &Point| {
         let (x, y) = grid(*point);
         let (x, y) = turn(x, y, turns);

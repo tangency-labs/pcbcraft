@@ -44,10 +44,10 @@ pub fn toolbar(ui: &mut Ui, active: bool, ready: bool, shortcut: &str) -> bool {
 /// Draw the bottom-right strip. Clicking it restores the Assistant.
 pub fn minimized(ctx: &Context, workspace: Rect) -> bool {
     let t = Tokens::get();
-    let bounds = workspace.shrink(t.space_12);
-    let width = bounds.width().min(ENTRY_WIDTH);
+    let rect = entry_bounds(workspace);
+    let width = rect.width();
     Area::new(egui::Id::new("assistant_minimized"))
-        .fixed_pos(bounds.right_bottom() - vec2(width, ENTRY_HEIGHT))
+        .fixed_pos(rect.min)
         .constrain_to(workspace)
         .default_size(vec2(width, ENTRY_HEIGHT))
         .order(Order::Foreground)
@@ -55,11 +55,23 @@ pub fn minimized(ctx: &Context, workspace: Rect) -> bool {
         .inner
 }
 
+/// The minimized Assistant's footprint, for navigation that avoids floating controls.
+pub fn entry_bounds(workspace: Rect) -> Rect {
+    let bounds = workspace.shrink(Tokens::get().space_12);
+    let size = vec2(bounds.width().min(ENTRY_WIDTH), ENTRY_HEIGHT);
+    Rect::from_min_size(bounds.right_bottom() - size, size)
+}
+
+/// The expanded Assistant's footprint on either workspace edge.
+pub fn drawer_bounds(workspace: Rect, dock: Dock) -> Rect {
+    dock_bounds(workspace.shrink(Tokens::get().space_12), dock)
+}
+
 /// Show the full-height workspace panel, with a drag handle for docking and an inner resize edge.
 pub fn drawer(ctx: &Context, workspace: Rect, dock: &mut Dock, status: &str, ready: bool, add: impl FnOnce(&mut Ui)) -> (Option<Action>, Rect) {
     let t = Tokens::get();
     let bounds = workspace.shrink(t.space_12);
-    let rect = dock_bounds(bounds, *dock);
+    let rect = drawer_bounds(workspace, *dock);
     let left = dock.left;
     let shown = Area::new(egui::Id::new("assistant_drawer"))
         .fixed_pos(rect.min)

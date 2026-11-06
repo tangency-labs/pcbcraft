@@ -14,6 +14,7 @@ mod live_control;
 mod net_inspector;
 mod parts_browser;
 mod preferences;
+mod project_browser;
 mod project_files;
 mod schematic_canvas;
 
@@ -151,6 +152,9 @@ pub struct PcbApp {
     preferences: Preferences,
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
+    browser: project_browser::ProjectBrowser,
+    /// The ribbon tab shown, an index into [`RIBBON_TABS`].
+    ribbon_tab: usize,
     dialog: Dialog,
     /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
     home: bool,
@@ -163,6 +167,10 @@ pub struct PcbApp {
     applied: Option<(bool, f32)>,
 }
 
+/// The Schematic workspace's ribbon tabs, in order.
+const RIBBON_TABS: [&str; 2] = ["Capture", "View"];
+const VIEW_TAB: usize = 1;
+
 /// The workspaces the ribbon's tile lists. One electronics project spans them; only Schematic
 /// exists yet, and the rest show as planned.
 const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
@@ -170,7 +178,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
         workspace::Workspace {
             title: "Schematic",
             description: "Capture circuits, place symbols and connect pins",
-            tabs: Some("Capture"),
+            tabs: Some("Capture · View"),
             icon: workspace::WorkspaceIcon::Schematic,
             current: true,
         },
@@ -504,38 +512,154 @@ impl PcbApp {
         !self.home && self.assistant.shortcuts(ctx)
     }
 
-    /// Show placement, wiring, inspection, and fit actions in the Capture ribbon, with the
-    /// workspace picker on its tile.
+    /// Show the ribbon tab picked: placement, wiring, inspection and fit actions on Capture, and
+    /// the panel toggles and fit on View. The workspace picker is on its tile.
     fn ribbon(&mut self, ui: &mut Ui) {
-        use workspace::ToolIcon;
+        let mut tab = self.ribbon_tab;
+        // Schematic is the only workspace so far, so picking it just closes the picker.
+        workspace::ribbon(ui, "Schematic", &RIBBON_TABS, &mut tab, WORKSPACES, |ui, shown| {
+            if shown == VIEW_TAB {
+                self.view_tab(ui);
+            } else {
+                self.capture_tab(ui);
+            }
+        });
+        self.ribbon_tab = tab;
+    }
+
+    /// The View tab: show or hide Browser, Parts and Net Inspector, and fit the view.
+    /// Each group's caption also lists its actions in a menu, with check marks for the panels.
+    fn view_tab(&mut self, ui: &mut Ui) {
+        use workspace::{RibbonTool, ToolIcon};
 
         let has_project = self.session.project().is_some();
-        // Schematic is the only workspace so far, so picking it just closes the picker.
-        workspace::ribbon(ui, "Schematic", "Capture", WORKSPACES, |ui| {
-            workspace::ribbon_group(ui, "Place", 1, |ui| {
-                let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. }));
-                if workspace::tool(ui, ToolIcon::Symbol, "Symbol", "Add symbol (A)", self.session.available(PLACE_SYMBOL), placing).clicked() {
+        let parts = self.session.available(PLACE_SYMBOL);
+        let panels = [
+            RibbonTool {
+                icon: ToolIcon::Browser,
+                label: "Browser",
+                description: "Toggle Browser",
+                shortcut: "",
+                enabled: has_project,
+                active: has_project && self.browser.open,
+                toggle: true,
+            },
+            RibbonTool {
+                icon: ToolIcon::Symbol,
+                label: "Parts",
+                description: "Toggle Parts",
+                shortcut: "",
+                enabled: parts,
+                active: parts && self.parts.open,
+                toggle: true,
+            },
+            RibbonTool {
+                icon: ToolIcon::Nets,
+                label: "Nets",
+                description: "Toggle Net Inspector",
+                shortcut: "",
+                enabled: has_project,
+                active: has_project && self.net_inspector.open,
+                toggle: true,
+            },
+        ];
+        match workspace::ribbon_group(ui, "Panels", &panels) {
+            Some(0) => self.browser.open = !self.browser.open,
+            Some(1) => {
+                if self.parts.open {
+                    self.parts.close(ui.ctx());
+                } else {
                     self.parts.focus_search();
                 }
-            });
-            ui.separator();
-            workspace::ribbon_group(ui, "Connect", 1, |ui| {
-                let wiring = matches!(self.tool, Some(Tool::Wire { .. }));
-                if workspace::tool(ui, ToolIcon::Wire, "Wire", "Draw wire (W)", self.session.available(CONNECT_PINS), wiring).clicked() {
-                    self.begin_wire();
-                }
-            });
-            ui.separator();
-            workspace::ribbon_group(ui, "View", 2, |ui| {
-                if workspace::tool(ui, ToolIcon::Nets, "Nets", "Toggle Net Inspector", has_project, has_project && self.net_inspector.open).clicked()
-                {
-                    self.net_inspector.open = !self.net_inspector.open;
-                }
-                if workspace::tool(ui, ToolIcon::Fit, "Fit", "Fit schematic", has_project, false).clicked() {
-                    self.camera.request_fit();
-                }
-            });
-        });
+            }
+            Some(2) => self.net_inspector.open = !self.net_inspector.open,
+            _ => {}
+        }
+        workspace::ribbon_separator(ui);
+        let navigate = [RibbonTool {
+            icon: ToolIcon::Fit,
+            label: "Fit",
+            description: "Fit schematic",
+            shortcut: "",
+            enabled: has_project,
+            active: false,
+            toggle: false,
+        }];
+        if workspace::ribbon_group(ui, "Navigate", &navigate).is_some() {
+            self.camera.request_fit();
+        }
+    }
+
+    /// The Capture tab: place symbols, draw wires, inspect nets and fit. Each group's caption
+    /// also lists its actions in a menu.
+    fn capture_tab(&mut self, ui: &mut Ui) {
+        use workspace::{RibbonTool, ToolIcon};
+
+        let has_project = self.session.project().is_some();
+        let place = [RibbonTool {
+            icon: ToolIcon::Symbol,
+            label: "Symbol",
+            description: "Add symbol (A)",
+            shortcut: "A",
+            enabled: self.session.available(PLACE_SYMBOL),
+            active: matches!(self.tool, Some(Tool::PlaceSymbol { .. })),
+            toggle: false,
+        }];
+        if workspace::ribbon_group(ui, "Place", &place).is_some() {
+            self.parts.focus_search();
+        }
+        workspace::ribbon_separator(ui);
+        let connect = [RibbonTool {
+            icon: ToolIcon::Wire,
+            label: "Wire",
+            description: "Draw wire (W)",
+            shortcut: "W",
+            enabled: self.session.available(CONNECT_PINS),
+            active: matches!(self.tool, Some(Tool::Wire { .. })),
+            toggle: false,
+        }];
+        if workspace::ribbon_group(ui, "Connect", &connect).is_some() {
+            self.begin_wire();
+        }
+        workspace::ribbon_separator(ui);
+        let inspect = [
+            RibbonTool {
+                icon: ToolIcon::Nets,
+                label: "Nets",
+                description: "Toggle Net Inspector",
+                shortcut: "",
+                enabled: has_project,
+                active: has_project && self.net_inspector.open,
+                toggle: true,
+            },
+            RibbonTool {
+                icon: ToolIcon::Fit,
+                label: "Fit",
+                description: "Fit schematic",
+                shortcut: "",
+                enabled: has_project,
+                active: false,
+                toggle: false,
+            },
+        ];
+        match workspace::ribbon_group(ui, "Inspect", &inspect) {
+            Some(0) => self.net_inspector.open = !self.net_inspector.open,
+            Some(1) => self.camera.request_fit(),
+            _ => {}
+        }
+    }
+
+    /// Select what a Browser row names and center the view on it. Selection is view state, so
+    /// the project and its revision are unchanged.
+    fn show_pick(&mut self, pick: project_browser::Pick) {
+        if pick.wire {
+            self.selected = None;
+            self.selected_wire = Some(pick.id);
+        } else {
+            self.selected = Some(pick.id);
+            self.selected_wire = None;
+        }
+        self.camera.center_on(pick.at);
     }
 
     /// Show the command error or placement hint alongside the project name.
@@ -1090,23 +1214,39 @@ impl PcbApp {
         self.status(ui);
         #[cfg(not(target_arch = "wasm32"))]
         let workspace = ui.available_rect_before_wrap();
-        if let Some(project) = self.session.project() {
-            workspace::sheet_header(ui, &format!("{} / Main", project.name));
+        if self.session.project().is_some() {
             #[cfg(not(target_arch = "wasm32"))]
             let clearance = self.assistant.rail_clearance();
             #[cfg(target_arch = "wasm32")]
             let clearance = 0.0;
+            self.net_inspector.show(ui, &self.session, clearance);
+            let canvas = ui.available_rect_before_wrap();
+            let browser_area = self.parts.browser_area(canvas);
+            let pick = self.browser.show(ui, browser_area, &self.session, self.selected.as_deref(), self.selected_wire.as_deref());
             let placing = match &self.tool {
                 Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
                 _ => None,
             };
-            if let Some(definition) = self.parts.show(ui, placing.as_ref(), self.session.revision()) {
+            if let Some(definition) = self.parts.show(ui, canvas, self.browser.rect(), placing.as_ref(), self.session.revision()) {
                 self.begin_placement(definition);
             }
-            self.net_inspector.show(ui, &self.session, clearance);
+            #[cfg(not(target_arch = "wasm32"))]
+            let assistant = self.assistant.covered_rect(workspace);
+            #[cfg(target_arch = "wasm32")]
+            let assistant = egui::Rect::NOTHING;
+            self.camera.set_uncovered(canvas, workspace::catalog::uncovered(canvas, &[self.browser.rect(), self.parts.rect(), assistant]));
+            if let Some(pick) = pick {
+                self.show_pick(pick);
+            }
         }
         let revision = self.session.revision();
+        let canvas = ui.available_rect_before_wrap();
         self.canvas(ui);
+        if let Some(project) = self.session.project() {
+            // Beside the floating Browser, as in PCBcraft Next; one sheet so far.
+            let left = canvas.left() + self.browser.covered_width() + 12.0;
+            workspace::sheet_heading(ui.painter(), canvas, left, &format!("{}  /  Main", project.name), "1 / 1");
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy();

@@ -66,6 +66,7 @@ PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apach
 | `libraries/starter/symbols/led.json`, `crates/engine/src/schematic.rs` | `src/document.rs`, `src/definitions.rs`, `src/desktop/canvas.rs` | Adapted the original generic LED definition and drawing to the shared placement command. Preserved numbered terminals and identified their polarity in inspection. The drawing now lives in the starter library as nanometer strokes. |
 | `libraries/starter/symbols/capacitor.json`, `libraries/starter/symbols/connector.json` | `src/document.rs`, `src/desktop/canvas.rs` | Added the original generic capacitor and two-pin connector with their names, reference prefixes and default values. Converted their point drawings to nanometer strokes in the starter library. |
 | `crates/engine/src/lib.rs`, `crates/app/src/schematic_canvas.rs`, `crates/app/src/lib.rs` | `docs/implementation-status.md` (behavior only) | Followed the prototype's select, rotate, delete and reference/value editing behavior with new engine commands, a format 2 schema and canvas code. No prototype implementation was copied. |
+| `crates/app/src/project_browser.rs`, `crates/chrome/src/workspace.rs`, `crates/app/src/lib.rs` | `docs/sheet-workflows.md`, `docs/desktop-guide.md`, `docs/ui-audit.md` (behavior only) | Followed the prototype's Browser tree (Project › Sheets › sheet › Symbols / Nets), with fold arrows separate from row clicks, sheet-local item lists that select without opening a drawer, and Capture/View ribbon tabs where tab changes never edit the project. The tree, tab strip, row glyphs and pick-to-center are new code; no prototype implementation was copied. Sheet creation and hierarchy are not ported yet. |
 | `crates/app/src/parts_browser.rs`, `crates/chrome/src/workspace.rs` | `docs/implementation-status.md` (behavior only) | Followed the prototype's searchable parts browser with Small/Medium/Large/List views, click-to-place and drag-to-sheet placement. The card, thumbnails and drag handling are new code over the existing canvas painter; floating and snapping the panel are not ported. |
 | `crates/engine/src/schematic/wiring.rs`, `crates/engine/src/lib.rs` | `src/document.rs`, `src/netlist.rs` | Adapted explicit terminal references and net traversal to the existing command session. This slice supports direct pin links on one schematic. |
 | `crates/engine/src/schematic.rs`, `crates/engine/src/lib.rs`, `libraries/starter/symbols/resistor.json` | `src/document.rs`, `src/definitions.rs`, `src/session.rs` | Adapted nanometer coordinates, distinct component and symbol identities, and the procedural resistor definition to the existing session and command history. The resistor drawing now lives in the starter library. |
@@ -163,3 +164,55 @@ and `workspace-render.svg` from the same file set; the PCB layout and simulation
 glyphs follow PCBcraft Next's original `assets/original/workspace-layout.svg` and
 `simulate.svg`. The Current badge uses the Home rail's accent pair, which keeps
 its small text readable.
+
+The Browser rows (`crates/chrome/src/workspace.rs`, `tree_row`) adapt the row
+layout of SolidCraft's `crates/ui-egui/src/ui_kit/tree.rs` at
+`c553365a2197a689e749389a6fbf707a38df9b61` (MIT OR Apache-2.0, copyright (c) 2026
+SolidCraft contributors): a stable ID per row, a disclosure arrow that folds
+without clicking the row, and the selected fill with a semibold, ellipsized
+label. Eyes, radios, badges, actions, drag handling and translation are left out,
+and the arrow is its own accessible button.
+
+The ribbon groups (`crates/chrome/src/workspace.rs`, `ribbon_group`, `tool_button`
+and `ribbon_separator`) follow PCBcraft Next's `tool_group`, `tool_button` and
+`group_separator` in `src/desktop/ribbon.rs` and its `RibbonMetrics` in
+`src/desktop/theme.rs` at `568cd495397a91563e563e7163efb226d84fa83a`: 56 by 52
+point buttons 2 points apart, the glyph and label placement, group padding, the
+separator slot, and a caption with a caret 10 points under the buttons that opens
+a menu of the group's actions, and the 5 point gutter under the groups. The
+menu's check marks for toggles
+(`crates/chrome/src/menu.rs`) follow Next's `src/desktop/controls.rs` `MenuItem`.
+The code is new; Next's planned, disabled tools are not shown.
+
+The floating Browser card, its collapsing header, the row metrics (26 point rows,
+16 point indent, 18 point arrow target, 15 point glyph, label 25 points in), the
+"R1  1k" item labels and the breadcrumb with its sheet count drawn on the canvas
+follow PCBcraft Next's `src/desktop/panels.rs`, `src/desktop/controls.rs` and
+`src/desktop/canvas.rs` at the revision above; the code is new. The ribbon and
+Browser glyphs are drawn in two colour roles, with the new `icon_line` token
+taking its light and dark values from PCBcraft Next's
+`assets/family/icon-palette.toml`. Symbol, Wire and the sheet glyph redraw PCBcraft
+Next's original `assets/original/place-symbol.svg`, `wire.svg` and `sheet.svg`.
+The folder and Fit glyphs redraw SolidCraft's
+`assets/icons/ui/design/svg/flat/folder.svg` and `fit.svg` at
+`60488a0837affcee79832bdb7bf6e860e84b10f2` (MIT OR Apache-2.0, copyright (c) 2026
+SolidCraft contributors), as carried in PCBcraft Next's `assets/family/icons/`.
+
+The floating Parts library in `crates/app/src/parts_browser.rs` and
+`crates/chrome/src/workspace/catalog.rs` adapts PCBcraft Next's
+`src/desktop/library.rs`, `panels.rs`, `controls.rs` and `theme.rs` at
+`568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0). It keeps the
+260-point card, drag grip, edge snapping, position menu, compact list, view
+controls and preview/name/value tile layout. The catalog preview extent and
+stroke weight in `crates/app/src/schematic_canvas.rs` and chrome theme metrics
+follow `src/desktop/canvas.rs` at the same revision, retaining upstream symbol
+definitions and their shorter leads. Familiar starter parts lead in the
+prototype’s order. Presentation lives in chrome;
+search and revision-checked placement use the upstream library and commands.
+Clicking a part retains upstream's placement command and leaves the card open;
+the header's Close button and View toggle hide it without losing its state. Camera clearance
+uses the actual visible cards, including a library moved into the canvas.
+The Parts collapse control uses the chevron and accessible naming of the
+collapsing card header in Next's `src/desktop/panels.rs` at the same revision.
+Applying that control to the Parts card, preserving its search/view/position,
+and expanding it on **A** are upstream additions.

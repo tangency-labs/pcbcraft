@@ -136,7 +136,7 @@ impl SymbolDefinition {
     }
 
     /// Return the initial value copied into a new component.
-    pub(crate) fn default_value(&self) -> &str {
+    pub fn default_value(&self) -> &str {
         &self.value
     }
 

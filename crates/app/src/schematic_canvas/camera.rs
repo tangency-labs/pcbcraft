@@ -17,11 +17,13 @@ pub(crate) struct Camera {
     zoom: f32,
     offset: Vec2,
     fit_requested: bool,
+    /// Usable canvas rectangle relative to its center, clear of floating cards.
+    uncovered: Option<Rect>,
 }
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { zoom: 1.0, offset: Vec2::ZERO, fit_requested: false }
+        Self { zoom: 1.0, offset: Vec2::ZERO, fit_requested: false, uncovered: None }
     }
 }
 
@@ -29,6 +31,25 @@ impl Camera {
     /// Fit the project after the menu closes, using the next canvas rectangle.
     pub(crate) fn request_fit(&mut self) {
         self.fit_requested = true;
+    }
+
+    /// Set the rectangle available to Fit and centering, relative to the full canvas. Opening
+    /// or moving a card changes this target without moving the camera until navigation is requested.
+    pub(crate) fn set_uncovered(&mut self, canvas: Rect, uncovered: Rect) {
+        self.uncovered = Some(uncovered.translate(-canvas.center().to_vec2()));
+    }
+
+    /// The canvas offset that puts the drawing's origin at the middle of the uncovered part.
+    fn uncovered_center(&self) -> Vec2 {
+        self.uncovered.map_or(Vec2::ZERO, |rect| rect.center().to_vec2())
+    }
+
+    /// Pan so a model point sits at the center of the uncovered canvas, keeping the zoom.
+    /// Cancels a pending fit, which would otherwise move the view away again.
+    pub(crate) fn center_on(&mut self, point: Point) {
+        let scale = self.grid_step() / GRID_NM as f32;
+        self.offset = self.uncovered_center() - vec2(point.x_nm as f32, point.y_nm as f32) * scale;
+        self.fit_requested = false;
     }
 
     /// The current zoom factor, for tests that check navigation.
@@ -87,9 +108,10 @@ impl Camera {
         self.offset = self.offset.clamp(-limit, limit);
     }
 
-    /// Center symbol and wire bounds, including free routes and a margin for labels.
+    /// Center symbol and wire bounds, including free routes and a margin for labels, in the part
+    /// of the canvas left uncovered by all visible floating cards.
     fn fit(&mut self, project: &Project, rect: Rect) {
-        *self = Self::default();
+        *self = Self { uncovered: self.uncovered, ..Self::default() };
         let mut bounds = Rect::NOTHING;
         for symbol in project.symbols() {
             let center = self.screen(symbol.position, rect) - rect.center();
@@ -104,9 +126,10 @@ impl Camera {
             bounds = bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN));
         }
         if bounds.is_finite() {
-            let available = (rect.size() - Vec2::splat(2.0 * theme::SCHEMATIC_FIT_MARGIN)).max(Vec2::splat(1.0));
+            let size = self.uncovered.map_or(rect.size(), |clear| clear.size());
+            let available = (size - Vec2::splat(2.0 * theme::SCHEMATIC_FIT_MARGIN)).max(Vec2::splat(1.0));
             self.zoom = (available.x / bounds.width()).min(available.y / bounds.height()).clamp(MIN_ZOOM, 1.0);
-            self.offset = -bounds.center().to_vec2() * self.zoom;
+            self.offset = self.uncovered_center() - bounds.center().to_vec2() * self.zoom;
         }
     }
 }

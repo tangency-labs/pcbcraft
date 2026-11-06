@@ -18,7 +18,15 @@ fn rotated_led_labels_clear_the_drawing() {
         for turns in 0..4 {
             ctx.begin_pass(egui::RawInput::default());
             let painter = ctx.layer_painter(egui::LayerId::background());
-            paint_symbol(&painter, &definition, pos2(250.0, 250.0), step, turns, egui::Color32::WHITE, Some(("D1", "LED")));
+            paint_symbol(
+                &painter,
+                &definition,
+                pos2(250.0, 250.0),
+                step,
+                turns,
+                Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, egui::Color32::WHITE),
+                Some(("D1", "LED")),
+            );
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
             let drawing = output
