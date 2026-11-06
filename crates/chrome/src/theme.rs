@@ -58,6 +58,8 @@ pub struct Tokens {
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
     pub schematic_wire: Color32,
+    /// Counterpart highlight from another editor, distinct from this view's edit selection.
+    pub schematic_highlight: Color32,
     /// Symbol ink on the Parts library's raised preview tiles.
     pub catalog_symbol: Color32,
     /// Home page: page fill, card surface and border, and secondary text. These and the rail and
@@ -166,6 +168,7 @@ impl Tokens {
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(194, 201, 211),
             schematic_wire: Color32::from_rgb(20, 112, 75),
+            schematic_highlight: Color32::from_rgb(145, 88, 12),
             catalog_symbol: Color32::from_rgb(55, 95, 130),
             // Placeholders until `with_home` derives them from the colours above.
             file_background: Color32::PLACEHOLDER,
@@ -257,6 +260,7 @@ impl Tokens {
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
+        t.schematic_highlight = Color32::from_rgb(240, 192, 106);
         t.catalog_symbol = Color32::from_rgb(143, 176, 205);
         t.icon_ink = Color32::from_rgb(0x1f, 0x20, 0x21);
         t.icon_line = Color32::from_rgb(0xdb, 0xe4, 0xee);
@@ -397,6 +401,7 @@ mod tests {
             assert!(contrast(t.ribbon_tab_text, t.accent_soft) >= 4.5);
             assert!(contrast(t.text_dim, t.panel) >= 4.5);
             assert!(contrast(t.canvas_ink, t.canvas) >= 3.0);
+            assert!(contrast(t.schematic_highlight, t.canvas) >= 4.5);
             assert!(contrast(t.error, t.panel) >= 4.5);
         }
     }

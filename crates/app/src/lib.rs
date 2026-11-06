@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
+mod editor_view;
+mod editor_workspace;
 mod home;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
@@ -18,6 +20,8 @@ mod project_browser;
 mod project_files;
 mod schematic_canvas;
 
+use editor_view::{SchematicView, ViewId, ViewInput};
+use editor_workspace::EditorViews;
 use schematic_canvas::{Click, PartDrag, SymbolAction, Tool};
 
 use eframe::Frame;
@@ -112,6 +116,7 @@ enum Dialog {
     },
     /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
     EditFields {
+        source: ViewInput,
         symbol: String,
         reference: String,
         value: String,
@@ -136,10 +141,11 @@ enum Dialog {
     About,
 }
 
+/// The project host owns one session, file lifecycle and services. Its schematic view holds
+/// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
-    rotate_requested: bool,
-    wire_draft: schematic_canvas::Draft,
+    views: EditorViews,
     integrated_titlebar: bool,
     #[cfg(not(target_arch = "wasm32"))]
     assistant: assistant::Assistant,
@@ -148,7 +154,6 @@ pub struct PcbApp {
     live_control: Option<live_control::LiveControl>,
     files: project_files::ProjectFiles,
     file_notice: Option<String>,
-    camera: schematic_canvas::Camera,
     preferences: Preferences,
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
@@ -158,9 +163,6 @@ pub struct PcbApp {
     dialog: Dialog,
     /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
     home: bool,
-    tool: Option<Tool>,
-    /// Disposable selection, pruned against the current snapshot after edits and undo.
-    selection: Selection,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
     /// The palette and zoom last applied, so they are set only when they change.
@@ -241,23 +243,27 @@ impl PcbApp {
         &self.preferences
     }
 
-    /// Run a command for the person at the keyboard. A failure shows in the status bar.
+    /// Run a command through the shared session, then discard view state invalidated by it.
+    /// A failure shows in the status bar and leaves the document and surviving view state intact.
     fn run(&mut self, id: &str, params: &Value) {
         self.file_notice = None;
         self.message = self.session.apply(id, params).err().map(|e| e.to_string());
+        self.views.sync(&self.session);
     }
 
     /// Start a symbol preview at the current project revision.
     fn begin_placement(&mut self, definition: Arc<SymbolDefinition>) {
+        self.views.sync(&self.session);
         self.message = None;
-        self.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
+        self.views.active.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
     }
 
     /// Start a fresh wire draft at the current revision, accepting empty space or existing endpoints.
     fn begin_wire(&mut self) {
+        self.views.sync(&self.session);
         self.message = None;
-        self.wire_draft = schematic_canvas::Draft::default();
-        self.tool = Some(Tool::Wire { revision: self.session.revision(), start: None });
+        self.views.active.wire_draft = schematic_canvas::Draft::default();
+        self.views.active.tool = Some(Tool::Wire { revision: self.session.revision(), start: None });
     }
 
     fn ask_name(&mut self, command: &'static str) {
@@ -358,33 +364,34 @@ impl PcbApp {
     /// The selected symbol's shown reference, if it still exists.
     fn selected_reference(&self) -> Option<String> {
         let project = self.session.project()?;
-        let id = self.selection.single_symbol()?;
+        let id = self.views.active.selection.single_symbol()?;
         project.symbols().iter().find(|symbol| symbol.id() == id).map(|symbol| project.reference(symbol))
     }
 
     /// Rotate, delete or open Edit Fields for the selected symbol through the shared commands.
     /// Deleting clears the selection; a failed command shows in the status bar.
     fn edit_selected(&mut self, action: SymbolAction) {
-        let Some(id) = self.selection.single_symbol().map(str::to_owned) else { return };
+        self.views.sync(&self.session);
+        let Some(id) = self.views.active.selection.single_symbol().map(str::to_owned) else { return };
         let revision = self.session.revision();
         match action {
             SymbolAction::Rotate => self.run(ROTATE_SYMBOL, &json!({"symbol": id, "expected_revision": revision})),
             SymbolAction::Delete => {
                 self.run(DELETE_SYMBOL, &json!({"symbol": id, "expected_revision": revision}));
                 if self.message.is_none() {
-                    self.selection = Selection::default();
+                    self.select(Selection::default());
                 }
             }
             SymbolAction::EditFields => {
                 let Some(project) = self.session.project() else { return };
                 let Some(symbol) = project.symbols().iter().find(|symbol| symbol.id() == id) else { return };
                 let (reference, value) = (project.reference(symbol), project.value(symbol).to_owned());
-                self.dialog = Dialog::EditFields { symbol: id, reference, value, error: None, focused: false };
+                let Some(source) = self.views.active.input(&self.session) else { return };
+                self.dialog = Dialog::EditFields { source, symbol: id, reference, value, error: None, focused: false };
             }
         }
     }
 
-    /// Delete the complete selection through the shared atomic command; failures retain it.
     /// Run a wire menu row through the shared commands at the revision the menu opened on, so an
     /// edit made meanwhile (by an agent, say) makes it fail visibly instead of hitting the wrong
     /// leg. A successful edit clears the selection, whose wire may no longer exist.
@@ -405,14 +412,15 @@ impl PcbApp {
         }
         self.run(command, &params);
         if self.message.is_none() {
-            self.selection = Selection::default();
+            self.select(Selection::default());
         }
     }
 
+    /// Delete the complete selection through the shared atomic command; failures retain it.
     fn delete_selection(&mut self) {
-        self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.selection,"expected_revision":self.session.revision()}));
+        self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.views.active.selection,"expected_revision":self.session.revision()}));
         if self.message.is_none() {
-            self.selection = Selection::default();
+            self.select(Selection::default());
         }
     }
 
@@ -559,7 +567,7 @@ impl PcbApp {
         self.ribbon_tab = tab;
     }
 
-    /// The View tab: show or hide Browser, Parts and Net Inspector, and fit the view.
+    /// The View tab: show or hide contextual panels, fit the active view, and toggle the split.
     /// Each group's caption also lists its actions in a menu, with check marks for the panels.
     fn view_tab(&mut self, ui: &mut Ui) {
         use workspace::{RibbonTool, ToolIcon};
@@ -618,7 +626,33 @@ impl PcbApp {
             toggle: false,
         }];
         if workspace::ribbon_group(ui, "Navigate", &navigate).is_some() {
-            self.camera.request_fit();
+            self.views.active.camera.request_fit();
+        }
+        workspace::ribbon_separator(ui);
+        let editors = [
+            RibbonTool {
+                icon: ToolIcon::SplitView,
+                label: "Split",
+                description: "Split editor views",
+                shortcut: "",
+                enabled: has_project,
+                active: self.views.split,
+                toggle: true,
+            },
+            RibbonTool {
+                icon: ToolIcon::Settings,
+                label: "Settings",
+                description: "View settings",
+                shortcut: "",
+                enabled: true,
+                active: false,
+                toggle: false,
+            },
+        ];
+        match workspace::ribbon_group(ui, "Editors", &editors) {
+            Some(0) => self.split_editors(ui.ctx(), !self.views.split),
+            Some(1) => self.dialog = Dialog::Preferences(preferences::PreferencesWindow::at_views(self.preferences)),
+            _ => {}
         }
     }
 
@@ -634,7 +668,7 @@ impl PcbApp {
             description: "Add symbol (A)",
             shortcut: "A",
             enabled: self.session.available(PLACE_SYMBOL),
-            active: matches!(self.tool, Some(Tool::PlaceSymbol { .. })),
+            active: matches!(self.views.active.tool, Some(Tool::PlaceSymbol { .. })),
             toggle: false,
         }];
         if workspace::ribbon_group(ui, "Place", &place).is_some() {
@@ -647,7 +681,7 @@ impl PcbApp {
             description: "Draw wire (W)",
             shortcut: "W",
             enabled: self.session.available(CONNECT_PINS),
-            active: matches!(self.tool, Some(Tool::Wire { .. })),
+            active: matches!(self.views.active.tool, Some(Tool::Wire { .. })),
             toggle: false,
         }];
         if workspace::ribbon_group(ui, "Connect", &connect).is_some() {
@@ -676,16 +710,19 @@ impl PcbApp {
         ];
         match workspace::ribbon_group(ui, "Inspect", &inspect) {
             Some(0) => self.net_inspector.open = !self.net_inspector.open,
-            Some(1) => self.camera.request_fit(),
+            Some(1) => self.views.active.camera.request_fit(),
             _ => {}
         }
     }
 
-    /// Select what a Browser row names and center the view on it. Selection is view state, so
-    /// the project and its revision are unchanged.
-    fn show_pick(&mut self, pick: project_browser::Pick) {
-        self.selection = if pick.wire { Selection::one_wire(pick.id) } else { Selection::one_symbol(pick.id) };
-        self.camera.center_on(pick.at);
+    /// Select and center a Browser pick only in its originating view and revision. Selection is
+    /// view state, so the project and its revision are unchanged; stale picks do not move a camera.
+    fn show_pick(&mut self, source: ViewInput, pick: project_browser::Pick) {
+        if self.home || !matches!(self.dialog, Dialog::None) || !self.views.active.accepts(source, &self.session) {
+            return;
+        }
+        self.select(if pick.wire { Selection::one_wire(pick.id) } else { Selection::one_symbol(pick.id) });
+        self.views.active.camera.center_on(pick.at);
     }
 
     /// Show the command error or placement hint alongside the project name.
@@ -698,11 +735,11 @@ impl PcbApp {
                 ui.label(dim(name));
                 if let Some(message) = message {
                     ui.label(shell::error(message));
-                } else if self.tool.is_none() && self.selection.len() > 1 {
-                    ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.selection.len())));
-                } else if let (None, Some(reference)) = (&self.tool, self.selected_reference()) {
+                } else if self.views.active.tool.is_none() && self.views.active.selection.len() > 1 {
+                    ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.selection.len())));
+                } else if let (None, Some(reference)) = (&self.views.active.tool, self.selected_reference()) {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
-                } else if let Some(tool) = &self.tool {
+                } else if let Some(tool) = &self.views.active.tool {
                     ui.label(match tool {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
@@ -711,7 +748,7 @@ impl PcbApp {
                         Tool::Wire { start: None, .. } => dim("Wire · Click a start point"),
                         Tool::Wire { start: Some(_), .. } => dim("Wire · Click corners · Enter finish · Space flip · Esc cancel"),
                     });
-                } else if self.selection.single_wire().is_some() {
+                } else if self.views.active.selection.single_wire().is_some() {
                     ui.label(dim("Wire selected · Del delete"));
                 } else if self.files.busy() {
                     ui.label(dim("File operation in progress"));
@@ -731,105 +768,138 @@ impl PcbApp {
     /// Draw the schematic and send completed edits through the shared command catalog using each
     /// gesture's starting revision to reject stale actions. Cancel only clears the local preview.
     fn canvas(&mut self, ui: &mut Ui) {
+        let label = if !self.views.split {
+            "Schematic canvas"
+        } else if self.views.active.id() == ViewId(0) {
+            "Schematic canvas 1"
+        } else {
+            "Schematic canvas 2"
+        };
+        let source = self.views.active.input(&self.session);
         let input_enabled = matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx());
-        let click = shell::canvas(ui, |ui| {
-            if std::mem::take(&mut self.rotate_requested) && input_enabled && self.selection.len() <= 1 {
-                let rect = ui.available_rect_before_wrap();
-                let hovered = self.session.project().and_then(|project| {
-                    let pointer = ui.input(|input| input.pointer.hover_pos())?;
-                    rect.contains(pointer)
-                        .then(|| schematic_canvas::symbol_at(project, &self.camera, rect, pointer))
-                        .flatten()
-                        .map(|(symbol, _)| symbol.id())
-                });
-                if let Some(symbol) = hovered.or_else(|| self.selection.single_symbol().map(str::to_owned)) {
-                    self.selection = Selection::one_symbol(symbol);
-                    self.edit_selected(SymbolAction::Rotate);
-                }
-            }
-            if let Some(project) = self.session.project() {
-                return schematic_canvas::show(
-                    ui,
-                    project,
-                    self.session.revision(),
-                    &mut self.camera,
-                    self.tool.clone(),
-                    &self.selection,
-                    input_enabled,
-                    self.preferences.navigation,
-                    &self.wire_draft,
-                );
-            }
-            let t = Tokens::get();
-            ui.centered_and_justified(|ui| {
-                ui.label(RichText::new("No project open. Choose File, then New Project.").size(t.font_button).color(t.canvas_ink));
-            });
-            None
-        });
-        self.wire_draft.finish_requested = false;
-        match (self.tool.clone(), click) {
-            (Some(Tool::PlaceSymbol { definition, revision, turns }), Some(Click::Place(point))) => {
-                self.tool = None;
+        let click = ui
+            .push_id(self.views.active.widget_id(), |ui| {
+                shell::canvas(ui, |ui| {
+                    if std::mem::take(&mut self.views.active.rotate_requested) && input_enabled && self.views.active.selection.len() <= 1 {
+                        let rect = ui.available_rect_before_wrap();
+                        let hovered = self.session.project().and_then(|project| {
+                            let pointer = ui.input(|input| input.pointer.hover_pos())?;
+                            rect.contains(pointer)
+                                .then(|| schematic_canvas::symbol_at(project, &self.views.active.camera, rect, pointer))
+                                .flatten()
+                                .map(|(symbol, _)| symbol.id())
+                        });
+                        if let Some(symbol) = hovered.or_else(|| self.views.active.selection.single_symbol().map(str::to_owned)) {
+                            self.select(Selection::one_symbol(symbol));
+                            self.edit_selected(SymbolAction::Rotate);
+                        }
+                    }
+                    if let Some(project) = self.session.project() {
+                        let highlight = self.views.highlight_for(self.views.active.id(), &self.session);
+                        return schematic_canvas::show(
+                            ui,
+                            project,
+                            self.session.revision(),
+                            &mut self.views.active.camera,
+                            self.views.active.tool.clone(),
+                            &self.views.active.selection,
+                            &highlight,
+                            input_enabled,
+                            self.preferences.navigation,
+                            self.preferences.grid_opacity_percent,
+                            &self.views.active.wire_draft,
+                            label,
+                        );
+                    }
+                    let t = Tokens::get();
+                    ui.centered_and_justified(|ui| {
+                        ui.label(RichText::new("No project open. Choose File, then New Project.").size(t.font_button).color(t.canvas_ink));
+                    });
+                    None
+                })
+            })
+            .inner;
+        self.views.active.wire_draft.finish_requested = false;
+        if let (Some(source), Some(click)) = (source, click) {
+            self.view_click(source, click);
+            // Selection can change after the other pane was painted, without a document edit.
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// Apply canvas input only to its originating view, sheet and revision. The shared session
+    /// remains the sole mutation authority; stale input cannot alter selection or a new preview.
+    fn view_click(&mut self, source: ViewInput, click: Click) {
+        if self.home || !matches!(self.dialog, Dialog::None) || !self.views.active.accepts(source, &self.session) {
+            return;
+        }
+        match (self.views.active.tool.clone(), click) {
+            (Some(Tool::PlaceSymbol { definition, revision, turns }), Click::Place(point)) => {
+                self.views.active.tool = None;
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}));
             }
-            (Some(Tool::Wire { revision, start: None }), Some(Click::WirePoint(anchor, _))) => {
-                self.tool = Some(Tool::Wire { revision, start: Some(anchor) });
+            (Some(Tool::Wire { revision, start: None }), Click::WirePoint(anchor, _)) => {
+                self.views.active.tool = Some(Tool::Wire { revision, start: Some(anchor) });
             }
-            (Some(Tool::Wire { revision, start: Some(from) }), Some(Click::WirePoint(to, finish))) => {
+            (Some(Tool::Wire { revision, start: Some(from) }), Click::WirePoint(to, finish)) => {
                 if let Some(project) = self.session.project()
                     && let (Some(a), Some(b)) = (from.position(project), to.position(project))
                     && a != b
                 {
                     if finish || matches!(to, pcbcraft_engine::wire::Anchor::Existing(_)) {
-                        let path = self.wire_draft.path(a, b);
+                        let path = self.views.active.wire_draft.path(a, b);
                         self.run(
                             pcbcraft_engine::DRAW_WIRE,
                             &json!({"from": from.inspect(), "to": to.inspect(), "bends": &path[1..path.len()-1], "expected_revision": revision}),
                         );
                         if self.message.is_none() {
-                            self.tool = None;
+                            self.views.active.tool = None;
                         }
-                    } else if !self.wire_draft.corner(a, b) {
+                    } else if !self.views.active.wire_draft.corner(a, b) {
                         self.message = Some("Wire has too many corners; finish it before continuing.".to_owned());
                     }
                 }
             }
-            (None, Some(Click::Grab(symbol, offset))) => {
-                self.selection = Selection::one_symbol(symbol.id());
-                self.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
+            (None, Click::Grab(symbol, offset)) => {
+                self.select(Selection::one_symbol(symbol.id()));
+                self.views.active.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
             }
-            (None, Some(Click::StartBox(drag))) => {
-                self.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
+            (None, Click::StartBox(drag)) => {
+                self.views.active.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
             }
-            (None | Some(Tool::BoxSelect { .. }), Some(Click::SelectItems(items))) => {
-                self.tool = None;
-                self.selection = items;
+            (None | Some(Tool::BoxSelect { .. }), Click::SelectItems(items)) => {
+                self.views.active.tool = None;
+                self.select(items);
             }
-            (None, Some(Click::Select(symbol))) => {
-                self.selection = symbol.map(Selection::one_symbol).unwrap_or_default();
+            (None, Click::Select(symbol)) => {
+                self.select(symbol.map(Selection::one_symbol).unwrap_or_default());
             }
-            (None, Some(Click::GrabItems(items, origin))) => {
-                self.selection = items.clone();
-                self.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
+            (None, Click::GrabItems(items, origin)) => {
+                self.select(items.clone());
+                self.views.active.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
             }
-            (Some(Tool::MoveItems { items, revision, .. }), Some(Click::FinishItems(delta))) => {
-                self.tool = None;
+            (Some(Tool::MoveItems { items, revision, .. }), Click::FinishItems(delta)) => {
+                self.views.active.tool = None;
                 if let Some(delta) = delta {
                     self.run(pcbcraft_engine::MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"expected_revision":revision}));
                 }
             }
-            (None, Some(Click::DeleteItems)) => self.delete_selection(),
-            (_, Some(Click::Drop(PartDrag { definition, revision }, point))) => {
-                self.tool = None;
+            (None, Click::DeleteItems) => self.delete_selection(),
+            (_, Click::Drop(PartDrag { definition, source: drag_source }, point)) => {
+                if !self.views.active.accepts(drag_source, &self.session) {
+                    return;
+                }
+                let revision = drag_source.revision;
+                self.views.active.tool = None;
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
-            (None, Some(Click::WireEdit(action, leg))) => self.edit_wire(action, &leg),
-            (None, Some(Click::Edit(action, symbol))) => {
-                self.selection = Selection::one_symbol(symbol);
+            (None, Click::WireEdit(action, leg)) => self.edit_wire(action, &leg),
+            (None, Click::Edit(action, symbol)) => {
+                self.select(Selection::one_symbol(symbol));
                 self.edit_selected(action);
             }
-            (Some(Tool::Move { symbol, revision, .. }), Some(Click::FinishMove(position))) => {
-                self.tool = None;
+            (Some(Tool::Move { symbol, revision, .. }), Click::FinishMove(position)) => {
+                self.views.active.tool = None;
                 if let Some(point) = position {
                     self.run(
                         MOVE_SYMBOL,
@@ -839,19 +909,23 @@ impl PcbApp {
                     );
                 }
             }
-            (Some(Tool::Wire { .. }), Some(Click::CancelWire)) => {
-                self.tool = None;
+            (Some(Tool::Wire { .. }), Click::CancelWire) => {
+                self.views.active.tool = None;
                 self.message = None;
             }
             _ => {}
         }
     }
 
-    /// Handle app shortcuts outside text fields and dialogs. Assistant focus suppresses canvas tools.
+    /// Route shortcuts only from the addressed view, outside text fields and dialogs. A different
+    /// view leaves the keys unconsumed. Assistant focus suppresses canvas tools.
     /// On Home, Escape returns to the workspace and the canvas keys do nothing. In the workspace,
     /// Escape leaves parts search before cancelling a tool, after overlays have priority.
-    fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool) {
-        self.rotate_requested = false;
+    fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool, view: ViewId) {
+        if view != self.views.active.id() {
+            return;
+        }
+        self.views.active.rotate_requested = false;
         if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.parts.take_escape(ctx) {
             return;
         }
@@ -866,35 +940,35 @@ impl PcbApp {
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
                 // Escape cancels the tool first, then clears the selection.
-                if self.tool.take().is_some() {
+                if self.views.active.tool.take().is_some() {
                     self.message = None;
                 } else {
-                    self.selection = Selection::default();
+                    self.select(Selection::default());
                 }
             }
-            if let Some(Tool::Wire { start, .. }) = &mut self.tool {
+            if let Some(Tool::Wire { start, .. }) = &mut self.views.active.tool {
                 if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
-                    self.wire_draft.horizontal_first = !self.wire_draft.horizontal_first;
+                    self.views.active.wire_draft.horizontal_first = !self.views.active.wire_draft.horizontal_first;
                 }
-                if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace)) && !self.wire_draft.back() {
+                if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace)) && !self.views.active.wire_draft.back() {
                     *start = None;
                 }
-                self.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                self.views.active.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
             }
-            if self.tool.is_none()
-                && !self.selection.is_empty()
+            if self.views.active.tool.is_none()
+                && !self.views.active.selection.is_empty()
                 && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace))
             {
                 self.delete_selection();
             }
             if pressed(&ROTATE) {
-                if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.tool {
+                if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.tool {
                     *turns = (*turns + 1) % 4;
-                } else if self.tool.is_none() {
-                    self.rotate_requested = true;
+                } else if self.views.active.tool.is_none() {
+                    self.views.active.rotate_requested = true;
                 }
             }
-            if self.tool.is_none() && self.selection.single_symbol().is_some() && pressed(&EDIT_FIELDS) {
+            if self.views.active.tool.is_none() && self.views.active.selection.single_symbol().is_some() && pressed(&EDIT_FIELDS) {
                 self.edit_selected(SymbolAction::EditFields);
             }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
@@ -965,7 +1039,7 @@ impl PcbApp {
                             self.file_notice = None;
                             self.message = None;
                             if id == "project.new" {
-                                self.camera = schematic_canvas::Camera::default();
+                                self.views.sync(&self.session);
                                 self.home = false;
                             }
                         }
@@ -978,7 +1052,7 @@ impl PcbApp {
                     self.dialog = Dialog::Name { command: id, text, error, focused };
                 }
             }
-            Dialog::EditFields { symbol, mut reference, mut value, mut error, mut focused } => {
+            Dialog::EditFields { source, symbol, mut reference, mut value, mut error, mut focused } => {
                 let (mut submit, mut cancel) = (false, false);
                 let closing = shell::dialog(ctx, "edit_fields", "Edit Symbol Fields", |ui| {
                     let label = ui.label("Reference");
@@ -999,17 +1073,21 @@ impl PcbApp {
                     });
                 });
                 if submit {
-                    // A refused edit stays in the dialog with the reason, like a bad project name.
-                    let params = json!({"symbol": symbol, "reference": reference, "value": value, "expected_revision": self.session.revision()});
+                    // Stale dialogs close with a status message; validation errors stay editable.
+                    if !self.views.active.accepts(source, &self.session) {
+                        self.message = Some("Project changed; reopen the symbol fields to edit the current revision.".to_owned());
+                        return;
+                    }
+                    let params = json!({"symbol": symbol, "reference": reference, "value": value, "expected_revision": source.revision});
                     match self.session.apply(SET_SYMBOL_FIELDS, &params) {
                         Ok(_) => self.message = None,
                         Err(e) => {
                             error = Some(e.to_string());
-                            self.dialog = Dialog::EditFields { symbol, reference, value, error, focused };
+                            self.dialog = Dialog::EditFields { source, symbol, reference, value, error, focused };
                         }
                     }
                 } else if !(closing || cancel) {
-                    self.dialog = Dialog::EditFields { symbol, reference, value, error, focused };
+                    self.dialog = Dialog::EditFields { source, symbol, reference, value, error, focused };
                 }
             }
             Dialog::ConfirmOpen => {
@@ -1192,13 +1270,12 @@ impl PcbApp {
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {
-                    self.camera = schematic_canvas::Camera::default();
-                    self.camera.request_fit();
-                    self.tool = None;
+                    self.views.sync(&self.session);
+                    self.views.active.camera.request_fit();
+                    self.views.other.camera.request_fit();
                     self.home = false;
                     self.dialog = Dialog::None;
                     self.message = None;
-                    self.selection = Selection::default();
                     self.file_notice = Some(self.files.open_notice());
                 }
                 project_files::Update::Message(text) => self.file_notice = Some(text),
@@ -1209,12 +1286,9 @@ impl PcbApp {
         let assistant_keys = self.assistant_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]
         let assistant_keys = false;
-        if let Some(project) = self.session.project() {
-            self.selection.retain(project);
-        } else {
-            self.selection = Selection::default();
-        }
-        self.shortcuts(&ctx, assistant_keys);
+        self.views.sync(&self.session);
+        self.editor_pointer_focus(&ctx);
+        self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_live_control();
         self.app_bar(ui);
@@ -1230,51 +1304,17 @@ impl PcbApp {
             return;
         }
         self.ribbon(ui);
-        if self.tool.as_ref().is_some_and(|tool| tool.revision() != self.session.revision()) || !matches!(self.dialog, Dialog::None) {
-            self.tool = None;
+        self.views.sync(&self.session);
+        if !matches!(self.dialog, Dialog::None) {
+            self.views.cancel_gestures();
         }
-        if egui::DragAndDrop::payload::<PartDrag>(&ctx).is_some_and(|drag| drag.revision != self.session.revision()) {
+        if egui::DragAndDrop::payload::<PartDrag>(&ctx).is_some_and(|drag| !self.views.active.accepts(drag.source, &self.session)) {
             egui::DragAndDrop::clear_payload(&ctx);
         }
-        if !matches!(self.tool, Some(Tool::Wire { .. })) {
-            self.wire_draft = schematic_canvas::Draft::default();
-        }
         self.status(ui);
-        #[cfg(not(target_arch = "wasm32"))]
         let workspace = ui.available_rect_before_wrap();
-        if self.session.project().is_some() {
-            #[cfg(not(target_arch = "wasm32"))]
-            let clearance = self.assistant.rail_clearance();
-            #[cfg(target_arch = "wasm32")]
-            let clearance = 0.0;
-            self.net_inspector.show(ui, &self.session, clearance);
-            let canvas = ui.available_rect_before_wrap();
-            let browser_area = self.parts.browser_area(canvas);
-            let pick = self.browser.show(ui, browser_area, &self.session, &self.selection);
-            let placing = match &self.tool {
-                Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
-                _ => None,
-            };
-            if let Some(definition) = self.parts.show(ui, canvas, self.browser.rect(), placing.as_ref(), self.session.revision()) {
-                self.begin_placement(definition);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            let assistant = self.assistant.covered_rect(workspace);
-            #[cfg(target_arch = "wasm32")]
-            let assistant = egui::Rect::NOTHING;
-            self.camera.set_uncovered(canvas, workspace::catalog::uncovered(canvas, &[self.browser.rect(), self.parts.rect(), assistant]));
-            if let Some(pick) = pick {
-                self.show_pick(pick);
-            }
-        }
         let revision = self.session.revision();
-        let canvas = ui.available_rect_before_wrap();
-        self.canvas(ui);
-        if let Some(project) = self.session.project() {
-            // Beside the floating Browser, as in PCBcraft Next; one sheet so far.
-            let left = canvas.left() + self.browser.covered_width() + 12.0;
-            workspace::sheet_heading(ui.painter(), canvas, left, &format!("{}  /  Main", project.name), "1 / 1");
-        }
+        self.editor_workspace(ui, workspace);
         #[cfg(not(target_arch = "wasm32"))]
         {
             let can_edit = matches!(self.dialog, Dialog::None) && !self.files.busy();
@@ -1292,7 +1332,8 @@ impl PcbApp {
             shell::resize_window_edges(ui);
         }
         self.dialogs(&ctx);
-        if self.net_inspector.open && revision != self.session.revision() {
+        self.views.sync(&self.session);
+        if revision != self.session.revision() {
             ctx.request_repaint();
         }
     }

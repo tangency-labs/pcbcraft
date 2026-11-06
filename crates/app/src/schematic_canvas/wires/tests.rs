@@ -29,7 +29,7 @@ fn harness() -> Harness<'static, PcbApp> {
 
 /// The screen position of a model point through the actual canvas transform.
 fn screen(h: &Harness<'_, PcbApp>, point: Point) -> Pos2 {
-    h.state().camera.screen(point, h.get_by_label("Schematic canvas").rect())
+    h.state().views.active.camera.screen(point, h.get_by_label("Schematic canvas").rect())
 }
 
 /// Press and release the secondary button `offset` points from a model point, opening the
@@ -58,7 +58,7 @@ fn the_wire_menu_slices_at_the_clicked_grid_point() {
     let before = routes(&h);
     // A little off the wire and between grid points still targets (3, 0).
     right_click(&mut h, grid(3, 0), vec2(2.0, 2.0));
-    assert_eq!(h.state().selection.single_wire(), Some("wire-4"));
+    assert_eq!(h.state().views.active.selection.single_wire(), Some("wire-4"));
     h.get_by_label("Break");
     h.get_by_label("Delete Segment");
     h.get_by_label("Delete Wire");
@@ -67,7 +67,7 @@ fn the_wire_menu_slices_at_the_clicked_grid_point() {
     assert_eq!(h.state().message, None);
     assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(3, 0)], vec![grid(3, 0), grid(8, 0), grid(8, 6)]]);
     assert_eq!(h.state().session.project().unwrap().connectivity().nets.len(), nets);
-    assert!(h.state().selection.is_empty());
+    assert!(h.state().views.active.selection.is_empty());
     click(&mut h, "Undo");
     assert_eq!(routes(&h), before);
 }
@@ -123,4 +123,187 @@ fn the_wire_menu_breaks_a_leg_from_its_neighbour() {
 
     right_click(&mut h, grid(8, 3), egui::Vec2::ZERO);
     assert!(h.get_by_label("Break").accesskit_node().is_disabled());
+}
+
+/// Open both panes through the ribbon, with no floating browser over the test wire.
+fn split_harness(narrow: bool) -> Harness<'static, PcbApp> {
+    let mut h = harness();
+    h.state_mut().browser.open = false;
+    h.state_mut().preferences.grid_opacity_percent = if narrow { 35 } else { 0 };
+    if narrow {
+        h.set_size(vec2(640.0, 800.0));
+    }
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    h
+}
+
+/// Resolve the stable pane identity even after it has exchanged focus slots.
+fn view<'a>(h: &'a Harness<'_, PcbApp>, id: u64) -> &'a crate::SchematicView {
+    let views = &h.state().views;
+    if views.active.id() == crate::ViewId(id) { &views.active } else { &views.other }
+}
+
+/// The actual canvas bounds for one visible pane.
+fn canvas(h: &Harness<'_, PcbApp>, id: u64) -> egui::Rect {
+    h.get_by_label(&format!("Schematic canvas {}", id + 1)).rect()
+}
+
+/// A first secondary press in an inactive pane must activate it and open its own wire menu.
+fn right_click_in(h: &mut Harness<'_, PcbApp>, id: u64, point: Point) {
+    let pos = view(h, id).camera.screen(point, canvas(h, id));
+    h.hover_at(pos);
+    h.run();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+}
+
+/// Focus the tab at a stable pane position; both tabs show the same sheet path.
+fn focus_tab(h: &mut Harness<'_, PcbApp>, id: u64) {
+    h.get_all_by_label("Cuts › Main").nth(id as usize).unwrap().click();
+    h.run();
+}
+
+/// Match the wire's rendered route and colour, excluding menu previews and other pane ink.
+fn assert_painted(h: &Harness<'_, PcbApp>, id: u64, route: &[Point], color: egui::Color32) {
+    let points: Vec<_> = route.iter().map(|point| view(h, id).camera.screen(*point, canvas(h, id))).collect();
+    assert!(
+        h.output().shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Path(path) => path.points == points && path.stroke.color == egui::epaint::ColorMode::Solid(color),
+            _ => false,
+        }),
+        "wire route missing from pane {id}: {route:?}"
+    );
+}
+
+/// Every menu action operates from either pane in both layouts, including the first click in
+/// an inactive pane. Highlights are painted without granting edit selection, then both panes
+/// repaint the shared result and use one undo history without changing the grid preference.
+#[test]
+fn split_wire_actions_share_history_and_keep_highlights_view_local() {
+    let ink = pcbcraft_chrome::Tokens::get();
+    for narrow in [false, true] {
+        for source in [0, 1] {
+            for (action, expected) in [
+                ("Slice", vec![vec![grid(-8, 0), grid(8, 0), grid(8, 3)], vec![grid(8, 3), grid(8, 6)]]),
+                ("Break", vec![vec![grid(-8, 0), grid(8, 0)], vec![grid(8, 0), grid(8, 6)]]),
+                ("Delete Segment", vec![vec![grid(-8, 0), grid(8, 0)]]),
+                ("Delete Wire", vec![]),
+            ] {
+                let mut h = split_harness(narrow);
+                let before = h.state().session.inspect()["project"].clone();
+                let revision = h.state().session.revision();
+                let original = routes(&h)[0].clone();
+                right_click_in(&mut h, source, grid(8, 3));
+                assert_eq!(h.state().views.active.id(), crate::ViewId(source));
+                assert_eq!(view(&h, source).selection.single_wire(), Some("wire-4"));
+                assert!(view(&h, 1 - source).selection.is_empty());
+                assert_painted(&h, source, &original, ink.accent);
+                assert_painted(&h, 1 - source, &original, ink.schematic_highlight);
+                h.hover_at(h.get_by_label(action).rect().center());
+                h.run();
+                let preview_color = if action.starts_with("Delete") { ink.error } else { ink.accent };
+                for id in [0, 1] {
+                    let rect = canvas(&h, id);
+                    let preview = h.output().shapes.iter().any(|shape| match &shape.shape {
+                        egui::Shape::Circle(circle) if action == "Slice" => {
+                            circle.center == view(&h, id).camera.screen(grid(8, 3), rect) && circle.stroke.color == preview_color
+                        }
+                        egui::Shape::Path(path) if action != "Slice" => {
+                            path.stroke.width == 2.0 * pcbcraft_chrome::theme::SCHEMATIC_SYMBOL_STROKE
+                                && path.stroke.color == egui::epaint::ColorMode::Solid(preview_color)
+                                && path.points.iter().all(|point| rect.contains(*point))
+                        }
+                        _ => false,
+                    });
+                    assert_eq!(preview, id == source, "{action} preview in pane {id}");
+                }
+                click(&mut h, action);
+                assert_eq!(h.state().message, None, "{action}, pane {source}, narrow {narrow}");
+                // Allocating wire/junction IDs can advance the revision by more than one.
+                // The Undo assertion below checks that this was one history step.
+                assert!(h.state().session.revision() > revision);
+                assert_eq!(routes(&h), expected);
+                for id in [0, 1] {
+                    assert!(view(&h, id).selection.is_empty());
+                    assert!(h.state().views.highlight_for(crate::ViewId(id), &h.state().session).is_empty());
+                    for route in &expected {
+                        assert_painted(&h, id, route, ink.schematic_wire);
+                    }
+                }
+                let after = h.state().session.inspect()["project"].clone();
+                focus_tab(&mut h, 1 - source);
+                click(&mut h, "Undo");
+                assert_eq!(h.state().session.inspect()["project"], before);
+                for id in [0, 1] {
+                    assert_painted(&h, id, &original, ink.schematic_wire);
+                }
+                click(&mut h, "Redo");
+                assert_eq!(h.state().session.inspect()["project"], after);
+                assert_eq!(h.state().preferences.grid_opacity_percent, if narrow { 35 } else { 0 });
+            }
+        }
+    }
+}
+
+/// An edit arriving while either pane's menu is open is rejected at its original revision.
+/// Reopening even the same snapshot discards the old popup; a fresh menu can edit normally.
+#[test]
+fn split_wire_menus_reject_intervening_edits_and_reopened_projects() {
+    for source in [0, 1] {
+        for reopen in [false, true] {
+            let mut h = split_harness(false);
+            right_click_in(&mut h, source, grid(8, 3));
+            let snapshot = h.state().session.snapshot().unwrap();
+            if reopen {
+                h.state_mut().session.open_snapshot(snapshot);
+                h.run();
+                assert!(h.query_by_label("Delete Segment").is_none());
+            } else {
+                let revision = h.state().session.revision();
+                h.state_mut()
+                    .session
+                    .apply(DRAW_WIRE, &json!({"from":grid(-8, 10),"to":grid(8, 10),"bends":[],"expected_revision":revision}))
+                    .unwrap();
+            }
+            let before = h.state().session.inspect()["project"].clone();
+            if !reopen {
+                click(&mut h, "Delete Segment");
+                assert!(h.state().message.as_deref().is_some_and(|message| message.contains("project changed")));
+            }
+            assert_eq!(h.state().session.inspect()["project"], before);
+            right_click_in(&mut h, source, grid(8, 3));
+            click(&mut h, "Delete Segment");
+            assert_eq!(h.state().message, None);
+            assert_eq!(routes(&h)[0], vec![grid(-8, 0), grid(8, 0)]);
+        }
+    }
+}
+
+/// A menu result captured before a focus round trip or split collapse cannot acquire a new
+/// view's authority just because the wire and project revision still match.
+#[test]
+fn delayed_wire_actions_cannot_follow_focus_or_layout_changes() {
+    for collapse in [false, true] {
+        let mut h = split_harness(false);
+        right_click_in(&mut h, 1, grid(8, 3));
+        let source = h.state().views.active.input(&h.state().session).unwrap();
+        let rect = canvas(&h, 1);
+        let app = h.state();
+        let camera = &app.views.active.camera;
+        let leg = super::leg_at(app.session.project().unwrap(), camera, rect, camera.screen(grid(8, 3), rect), app.session.revision()).unwrap();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        if collapse {
+            click(&mut h, "Split editor views");
+        } else {
+            focus_tab(&mut h, 0);
+            focus_tab(&mut h, 1);
+        }
+        let before = h.state().session.inspect();
+        h.state_mut().view_click(source, crate::Click::WireEdit(crate::schematic_canvas::WireAction::DeleteSegment, leg));
+        assert_eq!(h.state().session.inspect(), before);
+    }
 }

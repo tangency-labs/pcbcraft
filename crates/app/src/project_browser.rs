@@ -143,15 +143,13 @@ pub(crate) struct ProjectBrowser {
     lists: Option<Lists>,
     /// Whether the card is folded to its header.
     collapsed: bool,
-    /// How far the card reached into the canvas from its left edge last frame, 0 when hidden.
-    covered: f32,
     rect: Rect,
 }
 
 impl Default for ProjectBrowser {
     /// The Browser starts open, as KiCad's hierarchy navigator and PCBcraft Next's Browser do.
     fn default() -> Self {
-        Self { open: true, toggled: BTreeSet::new(), lists: None, collapsed: false, covered: 0.0, rect: Rect::NOTHING }
+        Self { open: true, toggled: BTreeSet::new(), lists: None, collapsed: false, rect: Rect::NOTHING }
     }
 }
 
@@ -168,12 +166,6 @@ impl ProjectBrowser {
         }
     }
 
-    /// How far the Browser covers the canvas from its left edge, so Fit and picks can keep the
-    /// drawing clear of it. 0 while it is hidden or no project is open.
-    pub(crate) fn covered_width(&self) -> f32 {
-        self.covered
-    }
-
     /// The actual visible card, including its collapsed header, or no rectangle while hidden.
     pub(crate) fn rect(&self) -> Rect {
         if self.open { self.rect } else { Rect::NOTHING }
@@ -183,7 +175,6 @@ impl ProjectBrowser {
     /// canvas its full size. Selected symbol and wire rows are highlighted. Returns the row picked this frame. The
     /// header folds the card to itself; View › Browser hides it.
     pub(crate) fn show(&mut self, ui: &Ui, canvas: Rect, session: &Session, selected: &pcbcraft_engine::selection::Selection) -> Option<Pick> {
-        self.covered = 0.0;
         self.rect = Rect::NOTHING;
         if !self.open {
             return None;
@@ -255,7 +246,6 @@ impl ProjectBrowser {
             self.collapsed = !self.collapsed;
         }
         self.rect = card;
-        self.covered = card.right() - canvas.left();
         pick
     }
 }
@@ -331,13 +321,13 @@ mod tests {
 
         click(&mut harness, "Expand Symbols");
         click(&mut harness, "R2  1k");
-        assert_eq!(harness.state().selection.single_symbol(), Some("symbol-3"));
-        assert_eq!(harness.state().selection.single_wire(), None);
+        assert_eq!(harness.state().views.active.selection.single_symbol(), Some("symbol-3"));
+        assert_eq!(harness.state().views.active.selection.single_wire(), None);
 
         click(&mut harness, "Expand Nets");
         click(&mut harness, "Net 1");
-        assert_eq!(harness.state().selection.single_symbol(), None);
-        assert_eq!(harness.state().selection.single_wire(), Some("wire-4"));
+        assert_eq!(harness.state().views.active.selection.single_symbol(), None);
+        assert_eq!(harness.state().views.active.selection.single_wire(), Some("wire-4"));
         assert_eq!(harness.state().session.revision(), 4);
 
         click(&mut harness, "Collapse Symbols");
@@ -358,17 +348,17 @@ mod tests {
         click(&mut harness, "Fit schematic");
         let app = harness.state();
         let project = app.session.project().unwrap();
-        let covered = app.browser.covered_width();
+        let covered = app.browser.rect().right() - canvas.left();
         assert!(covered > 0.0);
         for symbol in project.symbols() {
-            let at = app.camera.screen(symbol.position, canvas);
+            let at = app.views.active.camera.screen(symbol.position, canvas);
             assert!(at.x > canvas.left() + covered, "{} at {at:?} is under the Browser", symbol.id());
         }
 
         click(&mut harness, "View");
         click(&mut harness, "Toggle Browser");
         assert_eq!(harness.get_by_label("Schematic canvas").rect(), canvas);
-        assert_eq!(harness.state().browser.covered_width(), 0.0);
+        assert_eq!(harness.state().browser.rect(), egui::Rect::NOTHING);
     }
 
     /// Clicking a sheet name never folds it; only its arrow does. The header folds the card,

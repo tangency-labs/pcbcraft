@@ -7,9 +7,13 @@ The app starts on **Home**, where you can create or open a project. It does not
 yet reopen the last project automatically. The app bar shows the project name and an
 unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
-pages for Appearance (theme, interface scale), Navigation (whether the wheel
-zooms or pans, zoom direction, speed and anchor), a list of Shortcuts and, on
-the desktop, the AI page for the Assistant.
+pages for Appearance (theme, interface scale, grid opacity), Navigation (whether the wheel
+zooms or pans, zoom direction, speed and anchor), Views (selection following),
+a list of Shortcuts and, on the desktop, the AI page for the Assistant.
+**Grid opacity** fades the canvas grid
+from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
+same points. The opacity applies to both split panes and is kept with your
+preferences, not in the project.
 Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays
@@ -73,14 +77,37 @@ Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
 
 The **Browser** floats over the left of the canvas and shows the project as
-**Project → Sheets → Main → Symbols / Nets**, with the sheet's path and count
-beside it. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
+**Project → Sheets → Main → Symbols / Nets**. The tab above each canvas shows
+its sheet hierarchy, such as **Power controller › Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
 items, and click one to select it and center the view on it. A net row selects
 one of its wires. Click the Browser's title to fold it. Browsing never changes the
 project, and the canvas keeps its full size; **Fit** keeps the drawing clear of
 the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
 Inspector panels, and fits the view. Each ribbon group's caption, such as
 **Place ⌄**, opens a menu of the same actions. A project has one sheet so far.
+
+**View → Split** opens two views of that schematic. Click a pane or its sheet tab
+to activate it; the tab underline marks the active view. Browser, Parts and Net
+Inspector keep their workspace positions while their actions target that view.
+Both tabs show the same sheet path when they display the same sheet. Each view
+keeps its own camera and selection, including box and modifier selections, while edits, undo,
+redo and saving use the same project. Changing panes cancels unfinished gestures.
+Selecting symbols or wires highlights their counterparts in the other pane in
+amber; blue remains that pane's own edit selection. Highlights follow the latest
+selection, including Browser picks and box selections, without changing focus.
+**View → Settings → Follow selection** controls automatic panning: highlight only
+(the default), both views, secondary follows primary, or primary follows secondary.
+Following reveals out-of-view items once per selection while keeping zoom; it
+does not repeatedly override manual panning. Primary is the left/top pane and
+secondary the right/bottom pane, regardless of focus. Switching tabs alone keeps
+the highlight; Delete acts only on the focused pane’s own selection. Clearing the
+source selection clears its highlight.
+Drag the divider to resize the panes; narrow windows stack them vertically.
+Opening Split copies the active view’s current zoom and position into the other
+pane. Turning Split off keeps the active view; reopening copies its camera again
+while retaining each view’s separate edit selection.
+The arrangement lasts for the app session and does not change project files.
+Detached editor windows and schematic-to-board cross-probing remain planned.
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
 Desktop projects default to a folder containing separate project, schematic,

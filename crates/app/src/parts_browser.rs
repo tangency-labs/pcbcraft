@@ -9,7 +9,10 @@ use egui::{Rect, Ui};
 use pcbcraft_chrome::workspace::catalog::{self, View};
 use pcbcraft_engine::{library, schematic::SymbolDefinition};
 
-use crate::schematic_canvas::{PartDrag, paint_preview};
+use crate::{
+    editor_view::ViewInput,
+    schematic_canvas::{PartDrag, paint_preview},
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct PartsBrowser {
@@ -26,6 +29,17 @@ pub(crate) struct PartsBrowser {
 }
 
 impl PartsBrowser {
+    /// Release the shared search field when another editor takes input ownership. The query,
+    /// view mode and panel position remain available to the newly focused pane.
+    pub(super) fn release_focus(&mut self, ctx: &egui::Context) {
+        self.focus = false;
+        self.search_focused = false;
+        ctx.memory_mut(|memory| {
+            if let Some(id) = memory.focused() {
+                memory.surrender_focus(id);
+            }
+        });
+    }
     /// Open and focus the retained search, as Capture › Symbol and A do. A collapsed card expands first.
     pub(crate) fn focus_search(&mut self) {
         self.open = true;
@@ -74,7 +88,7 @@ impl PartsBrowser {
 
     /// Draw the floating library when open; clicking a part or pressing Enter releases search
     /// focus and starts placement while keeping the query and card visible.
-    /// Drag payloads retain the current revision so intervening edits cancel placement. A short
+    /// Drag payloads retain the originating view, sheet and revision so intervening edits cancel placement. A short
     /// dock temporarily uses List while preserving the preferred view for a taller card.
     pub(crate) fn show(
         &mut self,
@@ -82,7 +96,7 @@ impl PartsBrowser {
         canvas: Rect,
         browser: Rect,
         placing: Option<&Arc<SymbolDefinition>>,
-        revision: u64,
+        source: ViewInput,
     ) -> Option<Arc<SymbolDefinition>> {
         if !self.open {
             self.rect = None;
@@ -111,7 +125,7 @@ impl PartsBrowser {
                     selected: placing.is_some_and(|placing| Arc::ptr_eq(placing, definition)),
                 };
                 let response = catalog::tile(ui, view, width, item, |painter, rect, ink| paint_preview(painter, definition, rect, ink));
-                response.dnd_set_drag_payload(PartDrag { definition: definition.clone(), revision });
+                response.dnd_set_drag_payload(PartDrag { definition: definition.clone(), source });
                 if response.clicked() {
                     picked = Some(definition.clone());
                 }
@@ -190,11 +204,11 @@ mod tests {
     fn floating_library_preserves_canvas_and_navigation_avoids_both_cards() {
         let mut h = harness();
         let canvas = h.get_by_label("Schematic canvas").rect();
-        let origin = h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+        let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
         let before = h.state().session.inspect();
         h.key_press(Key::A);
         h.run();
-        assert_eq!(h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin, "opening must not pan");
+        assert_eq!(h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin, "opening must not pan");
         for anchor in ["Dock left", "Dock right", "Float"] {
             position(&mut h, anchor);
             assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
@@ -204,7 +218,7 @@ mod tests {
             click(&mut h, "Fit schematic");
             let clear = catalog::uncovered(canvas, &cards);
             for symbol in h.state().session.project().unwrap().symbols() {
-                let at = h.state().camera.screen(symbol.position, canvas);
+                let at = h.state().views.active.camera.screen(symbol.position, canvas);
                 assert!(clear.contains(at), "{anchor}: {at:?} not inside {clear:?}");
             }
         }
@@ -212,7 +226,7 @@ mod tests {
         click(&mut h, "R2  1k");
         let app = h.state();
         let clear = catalog::uncovered(canvas, &[app.browser.rect(), app.parts.rect()]);
-        let at = app.camera.screen(app.session.project().unwrap().symbols()[1].position, canvas);
+        let at = app.views.active.camera.screen(app.session.project().unwrap().symbols()[1].position, canvas);
         assert!(at.distance(clear.center()) < 0.1, "pick must use this frame's card bounds");
         assert_eq!(app.session.inspect(), before);
     }
@@ -231,7 +245,7 @@ mod tests {
         click(&mut h, "Fit schematic");
         let clear = catalog::uncovered(canvas, &[h.state().browser.rect(), h.state().parts.rect(), assistant]);
         for symbol in h.state().session.project().unwrap().symbols() {
-            assert!(clear.contains(h.state().camera.screen(symbol.position, canvas)));
+            assert!(clear.contains(h.state().views.active.camera.screen(symbol.position, canvas)));
         }
     }
 
@@ -281,7 +295,7 @@ mod tests {
         for anchor in ["Float", "Dock left", "Dock right"] {
             position(&mut h, anchor);
             let expanded = h.state().parts.rect();
-            let origin = h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+            let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
             click(&mut h, "Collapse Parts library");
             let collapsed = h.state().parts.rect();
             h.get_by_label("Move Parts library");
@@ -289,13 +303,13 @@ mod tests {
             assert_eq!(collapsed.min, expanded.min);
             assert_eq!(collapsed.width(), expanded.width());
             assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
-            assert_eq!(h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
+            assert_eq!(h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
             assert!(h.query_by_label("Capacitor").is_none());
             assert!(h.query_by_label("Large").is_none());
             click(&mut h, "Fit schematic");
             let clear = catalog::uncovered(canvas, &[h.state().browser.rect(), collapsed]);
             for symbol in h.state().session.project().unwrap().symbols() {
-                assert!(clear.contains(h.state().camera.screen(symbol.position, canvas)));
+                assert!(clear.contains(h.state().views.active.camera.screen(symbol.position, canvas)));
             }
             click(&mut h, "Expand Parts library");
             assert_eq!(h.state().parts.rect(), expanded);
@@ -319,7 +333,7 @@ mod tests {
         let mut h = harness();
         let before = h.state().session.inspect();
         let canvas = h.get_by_label("Schematic canvas").rect();
-        let origin = h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+        let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
         h.key_press(Key::A);
         h.run();
         click(&mut h, "Large");
@@ -346,7 +360,7 @@ mod tests {
         assert_eq!(h.state().parts.rect(), card);
         assert_eq!(h.state().parts.query, "cap");
         assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
-        assert_eq!(h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
+        assert_eq!(h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
         assert_eq!(h.state().session.inspect(), before);
     }
 
@@ -361,7 +375,7 @@ mod tests {
         click(&mut h, "Collapse Parts library");
         h.hover_at(body);
         h.run();
-        let zoom = h.state().camera.zoom();
+        let zoom = h.state().views.active.camera.zoom();
         h.event(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
             delta: vec2(0.0, -50.0),
@@ -369,7 +383,7 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
         h.run();
-        assert_ne!(h.state().camera.zoom(), zoom);
+        assert_ne!(h.state().views.active.camera.zoom(), zoom);
         let from = h.get_by_label("Move Parts library").rect().center();
         let canvas = h.get_by_label("Schematic canvas").rect();
         let to = pos2(canvas.right() - 20.0, canvas.center().y);
@@ -456,7 +470,7 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
         h.run();
-        assert_eq!(h.state().camera.zoom(), 1.0);
+        assert_eq!(h.state().views.active.camera.zoom(), 1.0);
         h.get_by_label("Capacitor").scroll_to_me();
         h.run();
         let from = h.get_by_label("Capacitor").rect().center();

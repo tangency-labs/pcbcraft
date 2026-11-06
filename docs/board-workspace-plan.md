@@ -9,8 +9,19 @@ the views through explicit component and terminal identities.
 This is the proposed architecture and acceptance plan for
 [#54](https://github.com/tangency-labs/pcbcraft/issues/54), with editor hosting in
 [#64](https://github.com/tangency-labs/pcbcraft/issues/64) and cross-probing in
-[#65](https://github.com/tangency-labs/pcbcraft/issues/65). Board rendering,
-split editor views and detached editor windows are not implemented yet.
+[#65](https://github.com/tangency-labs/pcbcraft/issues/65). Two schematic views now
+share one session through **View → Split**, with independent cameras and edit
+selections, stationary workspace controls and shared undo. Sheet tabs display
+the project and sheet hierarchy with chevrons; runtime view numbers never stand
+in for sheet identity. Pane changes invalidate pending input without editing the
+document. This is the first host for exercising view ownership; board rendering,
+detached editor windows and schematic-to-board cross-probing remain
+unimplemented. Selection highlighting between two views of the same schematic
+is implemented, using separate paint state from each view's edit selection.
+Opening a split seeds the other camera from the active view. View settings now
+provide optional selection following in both directions or either stable role
+direction, preserving zoom and focus. Presentation actions are not exposed through
+live MCP yet.
 
 ## Existing foundation
 
@@ -23,8 +34,10 @@ to be built.
 
 The desktop Assistant already opens a secondary native viewport with access to
 the same session. Editor focus, canvas input, repainting and close behavior need
-their own qualification. The app currently owns one schematic camera and
-selection, which must become view state before adding editor views.
+their own qualification. At that baseline the app owned one schematic camera and
+selection. Those fields now belong to explicit view state,
+with persistent project/sheet addresses and input invalidation across focus
+changes, history changes and file reopening.
 
 PCBcraft Next's
 [probe contracts](https://github.com/travle1/pcbcraft-next/blob/568cd495397a91563e563e7163efb226d84fa83a/docs/sheet-workflows.md#hooks-for-later-pcb-cross-probing)
@@ -48,7 +61,8 @@ the opposite side of the board.
 | Open project session | Authoritative schematic and board data, components, definitions and mappings, revision, document commands, undo and redo |
 | Project controller | Save and dirty state, project replacement and close decisions, live MCP attachment, coordinated selection and view registry |
 | Editor view | Stable runtime view ID, schematic or PCB target, camera, active layer, visibility and selection filters, local tool draft |
-| Window or split pane | View placement and sizing, keyboard and pointer focus, contextual ribbon and panels |
+| Window | Shared ribbon and panels anchored to the window, targeting the focused editor |
+| Split pane | View placement and sizing, sheet-path tabs, keyboard and pointer focus |
 
 Moving a view between a pane and a native window retains its target and camera
 without opening another copy of the project. Different projects may have
@@ -95,10 +109,28 @@ missing or unsupported mappings explicitly. General mappings cannot be inferred
 from the current hard-coded two-pad case or matching pin and pad numbers.
 
 A user selection projects highlights into counterpart views without changing
-their focus or cameras. Reveal counterpart explicitly navigates to the object
-and its sheet; automatic following can be a later preference. Only the focused
-view's actual edit selection receives destructive commands. Receiving a
-highlight must not emit another selection event.
+their focus. By default cameras stay put; **View → Settings** allows both views
+to follow selections, only secondary to follow primary, or the reverse. These
+roles remain stable across focus changes. Following pans only when the selected
+bounds extend outside the usable canvas, preserving zoom; an oversized group is
+centered without zooming out. A reveal is consumed once, and subsequent manual
+navigation does not trigger another. Reveal counterpart across sheets remains
+planned. Only the focused view’s actual edit selection receives destructive
+commands. Receiving a highlight must not emit another selection event.
+
+For the current same-sheet views, the latest explicit selection supplies the
+counterpart highlight, with amber ink distinguishing it from local blue edit
+selection. Focus changes retain the source without emitting a selection event.
+Both view bindings must match the current project opening and sheet; deletion
+prunes the live source selection, and reopening resets it. This handles symbols
+and wire identities on one sheet, without claiming board correspondence or
+project-wide net identity. Pending navigation captures both view input addresses
+and the policy at selection. Revision changes, reopening, focus changes, modal
+input, Home, a collapsed split, and changed preferences discard it. Target host
+geometry is supplied before consuming the request, so selection coordination
+does not depend on native-window coordinates. A native host still needs window
+lifecycle/input routing and a PCB target still needs component/pad correspondence
+and its own geometry adapter.
 
 Distinguish unassigned footprints, assigned but unplaced footprints, unresolved
 mappings and targets removed since selection. Represent one-to-many matches or
@@ -146,10 +178,10 @@ external library services, routing (#56), zones (#57), DRC (#58), manufacturing
 The project-local variant work in #28 remains part of library management but
 does not block the first original footprint fixture.
 
-Before shell work starts, reconcile the current state of
-[#62](https://github.com/tangency-labs/pcbcraft/pull/62), which changes Browser,
-Parts and the ribbon. #63's Home startup and persistent Parts changes are already
-in the baseline above.
+The split host builds on the Browser, Parts and ribbon changes merged in
+[#62](https://github.com/tangency-labs/pcbcraft/pull/62), together with #63's Home
+startup. Native hosting should preserve these contextual controls when moving
+the same view between a pane and a window.
 
 ## First acceptance project
 
@@ -159,7 +191,7 @@ board. This is a behavior fixture, not a validated electrical reference design.
 
 - Place, move and rotate a footprint through shared engine commands. Each completed gesture is one undo step; cancellation makes no edit.
 - Switch workspaces, split schematic and board, detach either editor, and return it. Preserve independent cameras and the same open project throughout.
-- Select a component, pin, footprint and pad from either side. Highlight the exact counterpart without focus theft, camera jumps or selection loops; Reveal counterpart navigates explicitly.
+- Select a component, pin, footprint and pad from either side. Highlight the exact counterpart without focus theft or selection loops; cameras stay put by default, with optional directed selection following that preserves zoom. Reveal counterpart navigates explicitly.
 - Rename a reference and change placement without breaking correspondence. Exercise an unassigned component and reject an incompatible mapping without partial mutation.
 - Undo and redo from either editor, then inspect through live MCP. Both views and MCP report the same revision and electrical state.
 - Add and remove a schematic part. Preview board consequences, reject a stale preview, apply the current preview once, and undo it once. Unchanged footprints keep their placement.

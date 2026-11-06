@@ -13,7 +13,7 @@ pub(crate) use wires::{Draft, LegTarget};
 
 use crate::preferences::Navigation;
 use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
-use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
+use pcbcraft_chrome::{MenuItem, Tokens, grid as canvas_grid, menu, theme};
 use pcbcraft_engine::wire::Anchor;
 use pcbcraft_engine::{
     Project,
@@ -66,11 +66,11 @@ pub(crate) enum Click {
     Drop(PartDrag, Point),
 }
 
-/// A browser drag bound to the project revision at which the gesture began.
+/// A browser drag bound to the view, sheet and revision at which the gesture began.
 #[derive(Clone, Debug)]
 pub(crate) struct PartDrag {
     pub(crate) definition: Arc<SymbolDefinition>,
-    pub(crate) revision: u64,
+    pub(crate) source: crate::editor_view::ViewInput,
 }
 
 /// Draw a part's preview fitted inside `rect`, for the parts browser's thumbnails. The symbol
@@ -128,6 +128,11 @@ pub(crate) enum SymbolAction {
 /// bound to `revision`. `selected` items are drawn in the accent colour. Both mouse buttons can start a box;
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
+/// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
+/// where points snap.
+/// `label` distinguishes simultaneously visible canvases in accessibility output.
+/// `highlighted` marks counterparts selected in another view. It affects paint only; hit
+/// testing, group moves and deletion use `selected`, which takes visual precedence on overlap.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
@@ -136,14 +141,17 @@ pub(crate) fn show(
     camera: &mut Camera,
     tool: Option<Tool>,
     selected: &Selection,
+    highlighted: &Selection,
     input_enabled: bool,
     navigation: Navigation,
+    grid_opacity: u8,
     draft: &Draft,
+    label: &str,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, "Schematic canvas"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     let moving = matches!(tool, Some(Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. }));
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
@@ -164,7 +172,7 @@ pub(crate) fn show(
     let screen = |point| camera.screen(point, rect);
     let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let grid_step = camera.grid_step();
-    paint_grid(&painter, rect, origin, tokens, grid_step);
+    canvas_grid::paint(&painter, rect, origin, grid_step, grid_opacity);
     let moved = match &tool {
         Some(Tool::Move { symbol, offset, .. }) => response
             .interact_pointer_pos()
@@ -173,7 +181,7 @@ pub(crate) fn show(
             .filter(|(_, point)| valid_position(*point)),
         _ => None,
     };
-    wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires);
+    wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires, &highlighted.wires);
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
@@ -181,7 +189,13 @@ pub(crate) fn show(
         if visible.contains(center) {
             let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
             let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
-            let color = if selected.symbols.contains(&symbol.id()) { tokens.accent } else { tokens.text };
+            let color = if selected.symbols.contains(&symbol.id()) {
+                tokens.accent
+            } else if highlighted.symbols.contains(&symbol.id()) {
+                tokens.schematic_highlight
+            } else {
+                tokens.text
+            };
             paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
         }
     }
@@ -440,23 +454,6 @@ fn placement_preview(
     }
     paint_symbol(painter, definition, screen(point), camera.grid_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
-}
-
-/// Draw visible grid intersections around the same origin used for snapping.
-fn paint_grid(painter: &Painter, rect: Rect, origin: Pos2, tokens: Tokens, mut step: f32) {
-    while step < theme::SCHEMATIC_MIN_GRID_SPACING {
-        step *= 5.0;
-    }
-    let first_x = ((rect.left() - origin.x) / step).ceil() as i32;
-    let last_x = ((rect.right() - origin.x) / step).floor() as i32;
-    let first_y = ((rect.top() - origin.y) / step).ceil() as i32;
-    let last_y = ((rect.bottom() - origin.y) / step).floor() as i32;
-    for x in first_x..=last_x {
-        for y in first_y..=last_y {
-            let center = pos2(origin.x + x as f32 * step, origin.y + y as f32 * step);
-            painter.circle_filled(center, theme::SCHEMATIC_GRID_DOT_RADIUS, tokens.canvas_grid);
-        }
-    }
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.

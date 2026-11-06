@@ -27,7 +27,7 @@ fn harness() -> Harness<'static, PcbApp> {
 
 /// Position a test gesture in model coordinates using the actual canvas transform.
 fn point(h: &Harness<'_, PcbApp>, x: i64, y: i64) -> Pos2 {
-    h.state().camera.screen(Point { x_nm: x * GRID_NM, y_nm: y * GRID_NM }, h.get_by_label("Schematic canvas").rect())
+    h.state().views.active.camera.screen(Point { x_nm: x * GRID_NM, y_nm: y * GRID_NM }, h.get_by_label("Schematic canvas").rect())
 }
 
 /// Hold either mouse button and carry its modifiers into every frame of the drag.
@@ -60,10 +60,10 @@ fn both_buttons_draw_boxes_and_respect_direction() {
         let from = point(&h, -21, -7);
         let to = point(&h, 21, 7);
         start(&mut h, from, to, button, Modifiers::NONE);
-        assert!(matches!(h.state().tool, Some(Tool::BoxSelect { .. })));
+        assert!(matches!(h.state().views.active.tool, Some(Tool::BoxSelect { .. })));
         assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()=="Window · 3 items")));
         release(&mut h, to, button, Modifiers::NONE);
-        assert_eq!(h.state().selection.len(), 3);
+        assert_eq!(h.state().views.active.selection.len(), 3);
         assert_eq!(h.state().session.inspect(), before);
         assert!(!egui::Popup::is_any_open(&h.ctx));
         // A partial symbol body excludes the wire and reverses from containment to crossing.
@@ -71,11 +71,11 @@ fn both_buttons_draw_boxes_and_respect_direction() {
         let b = point(&h, -14, 5);
         start(&mut h, a, b, button, Modifiers::NONE);
         release(&mut h, b, button, Modifiers::NONE);
-        assert!(h.state().selection.is_empty());
+        assert!(h.state().views.active.selection.is_empty());
         start(&mut h, b, a, button, Modifiers::NONE);
         assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()=="Crossing · 1 items")));
         release(&mut h, a, button, Modifiers::NONE);
-        assert_eq!(h.state().selection.single_symbol(), Some("symbol-2"));
+        assert_eq!(h.state().views.active.selection.single_symbol(), Some("symbol-2"));
         assert_eq!(h.state().session.inspect(), before);
         click(&mut h, "Expand Symbols");
         let row = h.get_by_label("R1  1k");
@@ -93,28 +93,28 @@ fn modifiers_escape_stale_edits_and_panel_release_are_safe() {
         let to = point(&h, x + 5, 5);
         start(&mut h, from, to, PointerButton::Secondary, modifiers);
         release(&mut h, to, PointerButton::Secondary, modifiers);
-        assert_eq!(h.state().selection.symbols.len(), expected);
+        assert_eq!(h.state().views.active.selection.symbols.len(), expected);
     }
-    let selected = h.state().selection.clone();
+    let selected = h.state().views.active.selection.clone();
     let from = point(&h, -22, -8);
     let to = point(&h, 22, 8);
     start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
     h.key_press(Key::Escape);
     h.run();
     release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
-    assert_eq!(h.state().selection, selected);
+    assert_eq!(h.state().views.active.selection, selected);
     start(&mut h, from, to, PointerButton::Secondary, Modifiers::NONE);
     let revision = h.state().session.revision();
     h.state_mut().session.apply(MOVE_SYMBOL, &json!({"symbol":"symbol-2","x_nm":-15*GRID_NM,"y_nm":GRID_NM,"expected_revision":revision})).unwrap();
     h.run();
     release(&mut h, to, PointerButton::Secondary, Modifiers::NONE);
-    assert_eq!(h.state().selection, selected);
+    assert_eq!(h.state().views.active.selection, selected);
     start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
     let panel = h.state().browser.rect().center();
     h.hover_at(panel);
     h.run();
     release(&mut h, panel, PointerButton::Primary, Modifiers::NONE);
-    assert_eq!(h.state().selection, selected);
+    assert_eq!(h.state().views.active.selection, selected);
 }
 
 /// A selected member drags the whole group through one command, including the connecting route;
@@ -131,7 +131,7 @@ fn group_drag_delete_and_undo_use_atomic_commands() {
     let from = point(&h, -15, 0);
     let to = point(&h, -10, 4);
     start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
-    assert!(matches!(h.state().tool, Some(Tool::MoveItems { .. })));
+    assert!(matches!(h.state().views.active.tool, Some(Tool::MoveItems { .. })));
     assert_eq!(h.state().session.revision(), revision);
     release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
     assert_eq!(h.state().session.revision(), revision + 1);
@@ -166,19 +166,19 @@ fn crossing_ignores_empty_wire_bounds_and_middle_drag_only_pans() {
     let to = point(&h, 2, 14);
     start(&mut h, from, to, PointerButton::Secondary, Modifiers::NONE);
     release(&mut h, to, PointerButton::Secondary, Modifiers::NONE);
-    assert!(h.state().selection.is_empty());
+    assert!(h.state().views.active.selection.is_empty());
     let from = point(&h, 5, 12);
     let to = point(&h, 2, 8);
     start(&mut h, from, to, PointerButton::Secondary, Modifiers::NONE);
     release(&mut h, to, PointerButton::Secondary, Modifiers::NONE);
-    assert!(h.state().selection.single_wire().is_some());
-    let selected = h.state().selection.clone();
+    assert!(h.state().views.active.selection.single_wire().is_some());
+    let selected = h.state().views.active.selection.clone();
     let before = h.state().session.inspect();
     let original = point(&h, 0, 0);
     start(&mut h, from, to, PointerButton::Middle, Modifiers::NONE);
     release(&mut h, to, PointerButton::Middle, Modifiers::NONE);
     assert_ne!(point(&h, 0, 0), original);
-    assert_eq!(h.state().selection, selected);
+    assert_eq!(h.state().views.active.selection, selected);
     assert_eq!(h.state().session.inspect(), before);
 }
 
@@ -195,8 +195,8 @@ fn coalesced_move_and_release_finishes_selection() {
         h.hover_at(to);
         h.event(egui::Event::PointerButton { pos: to, button, pressed: false, modifiers: Modifiers::NONE });
         h.run();
-        assert!(h.state().tool.is_none());
-        assert_eq!(h.state().selection.len(), 3);
+        assert!(h.state().views.active.tool.is_none());
+        assert_eq!(h.state().views.active.selection.len(), 3);
     }
 }
 
@@ -209,22 +209,22 @@ fn focus_loss_cancels_uncommitted_gestures() {
     start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
     h.event(egui::Event::WindowFocused(false));
     h.run();
-    assert!(h.state().tool.is_none());
-    assert!(h.state().selection.is_empty());
+    assert!(h.state().views.active.tool.is_none());
+    assert!(h.state().views.active.selection.is_empty());
     release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
     h.event(egui::Event::WindowFocused(true));
     h.run();
     start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
     release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
     let before = h.state().session.inspect();
-    let selected = h.state().selection.clone();
+    let selected = h.state().views.active.selection.clone();
     let from = point(&h, -15, 0);
     let to = point(&h, -10, 4);
     start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
     h.event(egui::Event::WindowFocused(false));
     h.run();
-    assert!(h.state().tool.is_none());
-    assert_eq!(h.state().selection, selected);
+    assert!(h.state().views.active.tool.is_none());
+    assert_eq!(h.state().views.active.selection, selected);
     release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
     assert_eq!(h.state().session.inspect(), before);
 }
