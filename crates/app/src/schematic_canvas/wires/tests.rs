@@ -1,3 +1,5 @@
+mod segments;
+
 use crate::{PcbApp, tests::click};
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::{
@@ -200,7 +202,8 @@ fn split_wire_actions_share_history_and_keep_highlights_view_local() {
                 assert_eq!(h.state().views.active.id(), crate::ViewId(source));
                 assert_eq!(view(&h, source).selection.single_wire(), Some("wire-4"));
                 assert!(view(&h, 1 - source).selection.is_empty());
-                assert_painted(&h, source, &original, ink.accent);
+                assert_painted(&h, source, &original, ink.schematic_wire);
+                assert_painted(&h, source, &original[1..], ink.accent);
                 assert_painted(&h, 1 - source, &original, ink.schematic_highlight);
                 h.hover_at(h.get_by_label(action).rect().center());
                 h.run();
@@ -407,10 +410,12 @@ fn cancelled_or_stale_reshapes_change_nothing() {
     assert_eq!(routes(&h)[0], vec![grid(-8, 0), grid(8, 0), grid(8, 6)]);
 }
 
-/// Without a selection, dragging a wire still moves it whole, as before.
+/// Whole-wire translation is an explicit choice; an ordinary drag now reshapes one segment.
 #[test]
-fn dragging_an_unselected_wire_moves_it_whole() {
+fn dragging_an_explicitly_selected_wire_moves_it_whole() {
     let mut h = harness();
+    right_click(&mut h, grid(8, 3), egui::Vec2::ZERO);
+    click(&mut h, "Select Wire");
     let to = screen(&h, grid(8, 5));
     drag(&mut h, grid(8, 3), to);
     drop(&mut h, to);

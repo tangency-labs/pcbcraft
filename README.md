@@ -60,23 +60,32 @@ Choose **Capture → Wire** or press **W**, then click a pin, an existing wire e
 or empty grid space to start. Click to add corners, **Space** to flip the current
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
 to finish, or press **Enter** or double-click to finish on empty space. **Esc** or
-right-click → **Cancel** discards the draft. Click a completed wire and press **Delete**
-to remove it. Crossings stay disconnected. Right-click a wire for the same edits as KiCad:
+right-click → **Cancel** discards the draft. Click a completed wire segment to select it;
+only that segment turns blue, and **Delete** removes it. Drag a segment perpendicular to its
+direction to adjust alignment, or hover it and press **G**, then click to finish. Attached pins
+and junctions stay fixed while the adjoining legs adjust. **Esc** cancels the preview.
+Right-click → **Select Wire** selects the whole route for dragging or deletion; box and
+modifier selections continue to select whole wires. Crossings stay disconnected.
+Right-click a wire for these edits:
 **Slice** splits it at the grid point under the pointer and keeps it connected, so a new wire
 can start from the slice point. **Break** separates the leg under the pointer from the legs beside it. **Delete Segment** removes just that leg, and **Delete Wire** the whole
 route. Hovering a row previews what it changes. An unconnected wire end shows a small square, a
 point where three or more wires meet shows a dot, and two wires meeting end to end read as one
 line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
 `schematic.delete_wire_segment` with a point on the wire.
+`schematic.move_wire_segment` takes `wire`, `at`, `to` and `expected_revision`;
+`to` moves the point at `at` perpendicular to the segment. It uses the same
+geometry as the canvas preview and commits one undo step. These commands are available in
+headless MCP; the live desktop connection still exposes only symbol movement.
 
-Click a wire to select it and show square handles on its corners and free ends, then drag
+Selecting a segment also shows square handles on its wire’s corners and free ends. Drag a handle
 to reshape it in place: a straight segment slides across its direction, a corner drags the
 two legs that meet there, and a free end or junction drags the end leg of every wire attached
 to it. The wire's other ends stay put, gaining an orthogonal leg where needed; pins never leave
 their parts, and connections don't change. The drag moves by the grid's snapped travel, so an
 off-grid wire stays off the grid by the same amount. Release to commit one undoable edit;
-**Esc**, releasing outside the sheet, or an edit made meanwhile cancels it. Dragging a wire that
-isn't the only selection still moves it whole. Agents use `schematic.move_wire_segment`,
+**Esc**, releasing outside the sheet, or an edit made meanwhile cancels it. Multi-item
+selections and explicit **Select Wire** selections still move whole routes. Agents use `schematic.move_wire_segment`,
 `schematic.move_wire_corner` and `schematic.move_junction`. Overlapping or doubled-back runs
 are not yet merged automatically.
 

@@ -57,13 +57,20 @@ on Home, enter a name and confirm **OK**.
    flips the current elbow and **Backspace** removes the last corner. **Enter**
    or a double-click finishes a free end; **Esc** cancels the unfinished wire.
    A crossing does not create a connection, and attaching to the middle of an
-   existing wire is not implemented yet.
+   existing wire is not automatic yet. Right-click a wire and choose **Slice**
+   to create a connected endpoint there, then start another wire from it.
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right
    selects fully enclosed bodies/routes; right-to-left selects touched ones.
    **Shift** adds and **Ctrl** toggles hits. Drag a selected member to move the
-   group, or **Delete** to remove it. Each edit has one undo step. Clicking a
-   wire and pressing **Delete** removes the whole wire, not just one segment.
-5. Save your desktop copy, reopen its `project.pc`, and check the edit. In the
+   group, or **Delete** to remove it. Each edit has one undo step.
+5. Click a wire segment; only that segment turns blue, and **Delete** removes
+   it. Use **Undo**, then drag the segment perpendicular to its direction to
+   adjust alignment, or hover it and press **G**, then click to finish. Corner
+   and free-end handles reshape the adjoining legs; attached pins stay fixed.
+   **Esc** cancels a preview. Right-click → **Select Wire** selects the complete
+   route for whole-wire movement or deletion. **Slice**, **Break**,
+   **Delete Segment** and **Delete Wire** remain available in that menu.
+6. Save your desktop copy, reopen its `project.pc`, and check the edit. In the
    browser, choose **Download**, keep the resulting `.pc.zip`, then reopen that
    download to check it. A download request does not prove the file was saved,
    so the browser deliberately keeps its unsaved marker.
