@@ -93,7 +93,7 @@ impl Camera {
         let mut bounds = Rect::NOTHING;
         for symbol in project.symbols() {
             let center = self.screen(symbol.position, rect) - rect.center();
-            let extent = grid_bounds(symbol.definition, symbol.turns());
+            let extent = grid_bounds(&symbol.definition, symbol.turns());
             let step = self.grid_step();
             let symbol_bounds = Rect::from_min_max(pos2(extent.min.x * step, extent.min.y * step), pos2(extent.max.x * step, extent.max.y * step))
                 .translate(center)

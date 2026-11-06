@@ -3,6 +3,8 @@
 //! drag parts onto the sheet one after another. Browsing never edits the project; placing goes through the same
 //! `schematic.place_symbol` command as before. Adapted from PCBcraft Next's parts browser.
 
+use std::sync::Arc;
+
 use egui::{Align2, FontId, Rect, Response, Sense, Ui, pos2, vec2};
 use pcbcraft_chrome::{Tokens, workspace};
 use pcbcraft_engine::{library, schematic::SymbolDefinition};
@@ -71,7 +73,7 @@ impl PartsBrowser {
 
     /// The starter library's symbols whose name or ID contains the search text, or whose reference
     /// prefix is it, in library order. Matching ignores case; an empty search lists every symbol.
-    fn matches(&self) -> Vec<&'static SymbolDefinition> {
+    fn matches(&self) -> Vec<Arc<SymbolDefinition>> {
         let query = self.query.trim().to_lowercase();
         library::starter()
             .symbols()
@@ -82,6 +84,7 @@ impl PartsBrowser {
                     || definition.id.contains(&query)
                     || definition.reference_prefix().eq_ignore_ascii_case(&query)
             })
+            .cloned()
             .collect()
     }
 
@@ -89,7 +92,7 @@ impl PartsBrowser {
     /// Enter is pressed in the search field. Either closes the browser.
     /// New drags capture `revision` so intervening edits can cancel them before placement.
     /// `placing` is the part being placed, which is highlighted. See [`Self::take_escape`].
-    pub(crate) fn show(&mut self, ui: &mut Ui, placing: Option<&'static SymbolDefinition>, revision: u64) -> Option<&'static SymbolDefinition> {
+    pub(crate) fn show(&mut self, ui: &mut Ui, placing: Option<&Arc<SymbolDefinition>>, revision: u64) -> Option<Arc<SymbolDefinition>> {
         if !self.open {
             return None;
         }
@@ -115,7 +118,7 @@ impl PartsBrowser {
             let parts = self.matches();
             // Enter in the search places the first match, as Enter does in KiCad's chooser.
             if enter {
-                picked = parts.first().copied();
+                picked = parts.first().cloned();
             }
             if parts.is_empty() {
                 ui.label(pcbcraft_chrome::shell::dim(format!("No parts match “{}”", self.query.trim())));
@@ -123,7 +126,7 @@ impl PartsBrowser {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(t.space_6, t.space_6);
                 for definition in parts {
-                    if part(ui, definition, self.view, placing == Some(definition), revision).clicked() {
+                    if part(ui, &definition, self.view, placing.is_some_and(|placing| Arc::ptr_eq(placing, &definition)), revision).clicked() {
                         picked = Some(definition);
                     }
                 }
@@ -140,7 +143,7 @@ impl PartsBrowser {
 
 /// One part: a thumbnail tile, or a row with a small thumbnail beside its name and reference
 /// prefix. Clicking reports it; dragging carries it and the starting project revision to the canvas.
-fn part(ui: &mut Ui, definition: &'static SymbolDefinition, view: View, selected: bool, revision: u64) -> Response {
+fn part(ui: &mut Ui, definition: &Arc<SymbolDefinition>, view: View, selected: bool, revision: u64) -> Response {
     let t = Tokens::get();
     let thumb = view.thumbnail();
     let size = match view {
@@ -150,7 +153,7 @@ fn part(ui: &mut Ui, definition: &'static SymbolDefinition, view: View, selected
     };
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &definition.name));
-    response.dnd_set_drag_payload(PartDrag { definition, revision });
+    response.dnd_set_drag_payload(PartDrag { definition: definition.clone(), revision });
     let hot = response.hovered() || response.has_focus() || response.dragged();
     if selected || hot {
         ui.painter().rect_filled(rect, t.radius_sm, if selected { t.accent_soft } else { t.hover });
@@ -189,7 +192,7 @@ mod tests {
     #[test]
     fn search_matches_names_ids_and_prefixes_ignoring_case() {
         let mut browser = PartsBrowser::default();
-        let names = |browser: &PartsBrowser| browser.matches().into_iter().map(|definition| definition.name.as_str()).collect::<Vec<_>>();
+        let names = |browser: &PartsBrowser| browser.matches().into_iter().map(|definition| definition.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&browser).len(), library::starter().symbols().len());
         browser.query = "CAP".to_owned();
         assert_eq!(names(&browser), ["Capacitor"]);

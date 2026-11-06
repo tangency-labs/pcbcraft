@@ -159,7 +159,7 @@ fn the_wiring_command_describes_exact_terminal_references() {
     let schema = &body(&result)["params"];
     assert_eq!(schema["properties"]["from"]["type"], "object");
     assert_eq!(schema["properties"]["from"]["required"], json!(["symbol", "terminal"]));
-    assert_eq!(schema["properties"]["to"]["properties"]["terminal"]["enum"], json!(["1", "2", "3", "4"]));
+    assert_eq!(schema["properties"]["to"]["properties"]["terminal"]["pattern"], json!("^[A-Za-z0-9+_-]{1,8}$"));
 }
 
 /// Bulk command callers may skip inspection and fetch the project separately.
@@ -200,7 +200,7 @@ fn cross_probe_follows_the_explicit_pin_to_pad_mapping() {
 fn mcp_draws_free_routes_to_multi_pin_symbols() {
     let mut server = server();
     let command = body(&call(&mut server, "describe_command", json!({"command":pcbcraft_engine::DRAW_WIRE})));
-    assert_eq!(command["params"]["properties"]["from"]["oneOf"][0]["properties"]["terminal"]["enum"], json!(["1", "2", "3", "4"]));
+    assert_eq!(command["params"]["properties"]["from"]["oneOf"][0]["properties"]["terminal"]["pattern"], json!("^[A-Za-z0-9+_-]{1,8}$"));
     body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Free to header"}})));
     let placed = body(&call(
         &mut server,

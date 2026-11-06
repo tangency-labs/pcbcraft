@@ -11,7 +11,7 @@ the same project schema. The desktop, browser and MCP CLI can open either one.
 
 | Encoding | Intended use | Contents |
 | --- | --- | --- |
-| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/2` or `/3` |
+| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/4` |
 | ZIP `.pc` | Portable copy for sharing or bundling assets | A manifest, the same project document, and any bundled asset bytes |
 
 Open determines the encoding from the file contents. A ZIP signature selects
@@ -182,15 +182,19 @@ remain separate design decisions.
 
 ## Current implementation
 
-The current project document is plain UTF-8 JSON tagged `pcbcraft-project/2`
-for legacy pin links or `pcbcraft-project/3` when authored routes or free endpoints
-are present. Components live in a project-level `components` array;
-the sheet holds unit placements and wires. Every component, placement and wire
-occupies its own line in stable ID order, with blank lines between records.
+The current project document is plain UTF-8 JSON tagged
+`pcbcraft-project/4`. A project-level `symbol_definitions` array keeps a full
+copy of every symbol definition the project uses; components live in a
+project-level `components` array; the sheet holds unit placements, junctions and
+wires. Every component, placement, junction and wire occupies its own line in
+stable order, with blank lines between records. A saved definition spans lines
+like its library file: its header fields on the first line, then one line per
+terminal, drawing stroke and pin, so editing one stroke or pin changes one line.
 
 | Record | Stored fields |
 | --- | --- |
-| Component | `id`, `definition`, `definition_revision`, `reference_number`, `reference`, `value` |
+| Saved symbol definition | `library`, then every field of its `pcbcraft-symbol/1` file (see [symbol-library.md](symbol-library.md)) |
+| Component | `id`, `library`, `definition`, `definition_revision`, `reference_number`, `reference`, `value` |
 | Unit placement (`sheet.symbols`) | `id`, `component`, `unit`, `x_nm`, `y_nm`, `rotation` |
 | Footprint | Its own ID, definition/revision, position and pin-to-pad mapping, plus `component` |
 
@@ -200,6 +204,17 @@ retains the automatic numbering allocation when a person edits a designator.
 An edited reference has no spaces and is unique across components; references
 and values are respectively 1 to 32 and 1 to 64 characters on one line.
 Reference-prefix enforcement and unannotated references are later work.
+
+A component names its definition by library ID, symbol ID and revision, and
+that triple must match exactly one saved definition. Components resolve their
+definitions only from these saved copies, never from a library the build or
+desktop has loaded, so a project opens with the same symbols after its library
+changes or is gone. Each saved definition must be used by at least one
+component and must pass every symbol file rule. Placing a part whose library,
+ID and revision the project already saves reuses the project's copy. Saving
+writes one copy per definition in use, sorted by library, ID and revision, so
+an unchanged project saves without a diff and deleting the last part that uses
+a definition drops its copy. Footprints are separate and are not saved here.
 
 A unit placement references the component and a unit in its pinned definition;
 it stores no designator, value, footprint or pad data. Rotation is required,
@@ -218,9 +233,9 @@ Cross-probing resolves component pins through the unit-placement index.
 Deleting the last placed unit also removes the component and its footprint;
 undo restores the complete snapshot.
 
-### Format 3 wire geometry
+### Wire geometry
 
-Format 3 adds `sheet.junctions`, with one `{id, x_nm, y_nm}` record per free
+Format 3 added `sheet.junctions`, with one `{id, x_nm, y_nm}` record per free
 endpoint or shared junction. A wire stores `id`, `from`, `to` and an optional
 ordered `bends` array of `{x_nm, y_nm}` points. Endpoints are either the existing
 `{symbol, pin}` reference or `{junction: id}`. Junctions share the object-ID
@@ -237,11 +252,23 @@ only junctions no longer referenced by any edge.
 Authored bends remain fixed when a connected symbol moves or rotates. The
 renderer adds orthogonal end legs to the moved pins without rewriting the wire
 record, preserving the one-record diff for a symbol move. Legacy wires without
-`bends` retain their automatic display routing. Format 2 continues to serialize
-unchanged for projects containing only those legacy links; formats 1 and 2 refuse
-format 3 geometry. Both JSON and ZIP round trips retain the authored order and
+`bends` retain their automatic display routing. Formats 1 and 2 refuse format 3
+geometry. Format 4 keeps this wire geometry unchanged. Both JSON and ZIP round trips retain the authored order and
 all endpoint identities. Interior wire splitting and junction dragging are not
 implemented in this slice.
+
+### Format 2 and 3 migration
+
+Opening a `pcbcraft-project/2` or `/3` file runs the explicit `migrate_to_4` path.
+A format 2 file must not carry format 3's wire geometry.
+Each component's named definition must exist in the starter library at its
+saved revision; the document gains one saved copy of each definition used, and
+each component gains the starter library's ID. Everything else is carried over
+and checked by the current validator. The editor reports that the next save
+writes the current format. The migration is tested against
+`crates/app/tests/fixtures/two-resistors-format-2.pc`, which must save as
+exactly `two-resistors.pc`, and a format 2 or 3 file with a `library` field is
+refused by the strict schema for those formats.
 
 ### Format 1 migration
 
@@ -251,7 +278,8 @@ reference and default value, plus an unrotated unit placement. Both preserve
 their former numeric identities, while wire endpoints remain unchanged. Legacy
 footprint `symbol` links become `component` links with the same mapping.
 
-The editor reports that the next save writes format 2. The migration is tested
+A format 1 file then continues through the format 2 migration. The editor
+reports that the next save writes the current format. The migration is tested
 against `crates/app/tests/fixtures/two-resistors-format-1.pc`, which must save
 as exactly `two-resistors.pc`. The old fixture stays unchanged; the current
 fixture is generated through the engine's migration and serializer. A format 1

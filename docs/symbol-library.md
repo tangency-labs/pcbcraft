@@ -111,12 +111,10 @@ The format leaves room for more than the engine places today:
 
 ## Not yet
 
-- **Pinning copies into projects.** Projects save each component's `definition`
-  ID and `definition_revision`, and a project opens only when the library has
-  that exact revision. Unit placements reference their component and the library-defined
-  unit ID; they contain only those links and placement geometry. Saving a full
-  copy of each used symbol and its source, so a project reopens without the
-  library, comes with libraries outside the app.
+- **Library folders on desktop.** Projects already keep a full copy of each
+  symbol they use, with its library ID (project format 4; see
+  [native-project-storage.md](native-project-storage.md)), so they reopen without
+  the library. Loading symbol libraries from folders on disk comes next.
 - **Other libraries.** Library folders, Git, databases and managed libraries,
   plus import from other formats, are later slices of issue #28.
 - **Footprint libraries** follow the same approach, as their own format and

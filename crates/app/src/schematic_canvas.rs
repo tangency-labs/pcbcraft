@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 mod camera;
 mod wires;
 
@@ -17,18 +19,18 @@ use pcbcraft_engine::{
 };
 
 /// The active canvas interaction, bound to the revision at which it began.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Tool {
-    PlaceSymbol { definition: &'static SymbolDefinition, revision: u64, turns: u8 },
+    PlaceSymbol { definition: Arc<SymbolDefinition>, revision: u64, turns: u8 },
     Wire { revision: u64, start: Option<Anchor> },
     Move { symbol: SymbolPlacement, offset: Vec2, revision: u64 },
 }
 
 impl Tool {
     /// Return the revision used to reject stale canvas actions.
-    pub(crate) fn revision(self) -> u64 {
+    pub(crate) fn revision(&self) -> u64 {
         match self {
-            Self::PlaceSymbol { revision, .. } | Self::Wire { revision, .. } | Self::Move { revision, .. } => revision,
+            Self::PlaceSymbol { revision, .. } | Self::Wire { revision, .. } | Self::Move { revision, .. } => *revision,
         }
     }
 }
@@ -50,9 +52,9 @@ pub(crate) enum Click {
 }
 
 /// A browser drag bound to the project revision at which the gesture began.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PartDrag {
-    pub(crate) definition: &'static SymbolDefinition,
+    pub(crate) definition: Arc<SymbolDefinition>,
     pub(crate) revision: u64,
 }
 
@@ -118,24 +120,24 @@ pub(crate) fn show(
     let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let grid_step = camera.grid_step();
     paint_grid(&painter, rect, origin, tokens, grid_step);
-    let moved = match tool {
+    let moved = match &tool {
         Some(Tool::Move { symbol, offset, .. }) => response
             .interact_pointer_pos()
             .filter(|pointer| rect.contains(*pointer))
-            .map(|pointer| (symbol, camera.snap(pointer + offset, rect)))
+            .map(|pointer| (symbol.clone(), camera.snap(pointer + *offset, rect)))
             .filter(|(_, point)| valid_position(*point)),
         _ => None,
     };
-    wires::paint(&painter, rect, project, camera, moved, selected_wire);
+    wires::paint(&painter, rect, project, camera, moved.clone(), selected_wire);
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
-        let position = moved.filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| point);
+        let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
         let center = screen(position);
         if visible.contains(center) {
             let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
             let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
             let color = if selected == Some(symbol.id().as_str()) { tokens.accent } else { tokens.text };
-            paint_symbol(&painter, symbol.definition, center, grid_step, symbol.turns(), color, label);
+            paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), color, label);
         }
     }
 
@@ -170,14 +172,14 @@ pub(crate) fn show(
     {
         let point = camera.snap(pointer, rect);
         if valid_position(point) {
-            paint_symbol(&painter, drag.definition, screen(point), grid_step, 0, tokens.accent, None);
+            paint_symbol(&painter, &drag.definition, screen(point), grid_step, 0, tokens.accent, None);
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
         && let Some(pointer) = drag_pointer
     {
         let point = camera.snap(pointer, rect);
-        return (input_enabled && valid_position(point)).then_some(Click::Drop(*drag, point));
+        return (input_enabled && valid_position(point)).then(|| Click::Drop(PartDrag::clone(&drag), point));
     }
 
     if tool.is_none() && (input_enabled || response.context_menu_opened()) {
@@ -230,7 +232,7 @@ pub(crate) fn show(
     }
     match tool? {
         Tool::PlaceSymbol { definition, turns, .. } => {
-            placement_preview(&painter, rect, response, camera, tokens, definition, turns).map(Click::Place)
+            placement_preview(&painter, rect, response, camera, tokens, &definition, turns).map(Click::Place)
         }
         Tool::Wire { start, .. } => {
             wires::pick(&painter, rect, &response, project, camera, start, draft).map(|(anchor, finish)| Click::WirePoint(anchor, finish))
@@ -242,7 +244,7 @@ pub(crate) fn show(
 /// Pick the nearest symbol body under the original press and preserve the grab offset.
 fn grab_symbol(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Click> {
     let (symbol, center) = symbol_at(project, camera, rect, pointer)?;
-    Some(Click::Grab(*symbol, center - pointer))
+    Some(Click::Grab(symbol.clone(), center - pointer))
 }
 
 /// The symbol whose body is under the pointer, nearest center first, with its screen center.
@@ -253,7 +255,7 @@ pub(super) fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, p
         .rev()
         .map(|symbol| (symbol, camera.screen(symbol.position, rect)))
         .filter(|(symbol, center)| {
-            body(symbol.definition, symbol.turns())
+            body(&symbol.definition, symbol.turns())
                 .translate(center.to_vec2() / camera.grid_step())
                 .contains((pointer.to_vec2() / camera.grid_step()).to_pos2())
         })
