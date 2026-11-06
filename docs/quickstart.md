@@ -64,9 +64,9 @@ first **Save** asks for a project folder, and the project takes that folder's na
 3. Press **W**, click a pin, then click corners and a destination pin. **Space**
    flips the current elbow and **Backspace** removes the last corner. **Enter**
    or a double-click finishes a free end; **Esc** cancels the unfinished wire.
-   A crossing does not create a connection, and attaching to the middle of an
-   existing wire is not automatic yet. Right-click a wire and choose **Slice**
-   to create a connected endpoint there, then start another wire from it.
+   Finish on an existing wire segment to create a connected branch. Dragging a
+   free-end handle onto a pin or segment also connects it; simply crossing a
+   wire still leaves the routes separate.
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right
    selects fully enclosed bodies/routes; right-to-left selects touched ones.
    **Shift** adds and **Ctrl** toggles hits. Drag a selected member to move the
@@ -76,8 +76,12 @@ first **Save** asks for a project folder, and the project takes that folder's na
    adjust alignment, or hover it and press **G**, then click to finish. Corner
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
    **Esc** cancels a preview. Right-click → **Select Wire** selects the complete
-   route for whole-wire movement or deletion. **Slice**, **Break**,
-   **Delete Segment** and **Delete Wire** remain available in that menu.
+   route for whole-wire movement or deletion. Capture → **Wire edits** offers
+   **Slice**, **Break**, **Heal** and **Delete** for the selection; the context
+   menu also offers whole-wire deletion. Moves and draws clean up overlapping
+   runs, and **Heal** applies that cleanup to existing selected wires. Dropping
+   a part with a pin exactly on a wire connects it; a two-pin part placed across
+   a straight run replaces the wire between its pins.
 6. Save your desktop copy, reopen its `project.pc`, and check the edit. In the
    browser, choose **Download**, keep the resulting `.pc.zip`, then reopen that
    download to check it. A download request does not prove the file was saved,

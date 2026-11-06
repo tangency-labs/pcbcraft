@@ -464,6 +464,13 @@ impl PcbApp {
     fn edit_wire(&mut self, action: schematic_canvas::WireAction, leg: &schematic_canvas::LegTarget) {
         use schematic_canvas::WireAction;
         let (command, at) = match action {
+            WireAction::Heal => {
+                self.run(pcbcraft_engine::HEAL_WIRES, &json!({"items":Selection::one_wire(leg.wire.clone()),"expected_revision":leg.revision}));
+                if self.message.is_none() {
+                    self.select(Selection::default());
+                }
+                return;
+            }
             WireAction::SelectWire => {
                 if leg.revision == self.session.revision() {
                     self.select(Selection::one_wire(leg.wire.clone()));
@@ -499,7 +506,7 @@ impl PcbApp {
             (Reshape::Segment { wire, at }, Anchor::Free(to)) => (pcbcraft_engine::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": at, "to": to})),
             (Reshape::Corner { wire, at }, Anchor::Free(to)) => (pcbcraft_engine::MOVE_WIRE_CORNER, json!({"wire": wire, "at": at, "to": to})),
             (Reshape::Junction(id), Anchor::Free(to)) => (pcbcraft_engine::MOVE_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to})),
-            (Reshape::Junction(id), Anchor::Existing(to)) => {
+            (Reshape::Junction(id), Anchor::Existing(_) | Anchor::Split { .. }) => {
                 (pcbcraft_engine::ATTACH_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to.inspect()}))
             }
             _ => return,
@@ -874,6 +881,53 @@ impl PcbApp {
             Some(1) => self.views.active.camera.request_fit(),
             _ => {}
         }
+        workspace::ribbon_separator(ui);
+        self.wire_edit_ribbon(ui);
+    }
+
+    /// Expose implemented wire edits through both ribbon buttons and their caption menu.
+    /// Slice/Break use the selected leg's captured point and revision; Heal and Delete act on
+    /// the selected wires, with Delete retaining the narrower segment-selection semantics.
+    fn wire_edit_ribbon(&mut self, ui: &mut egui::Ui) {
+        use workspace::{RibbonTool, ToolIcon};
+        let leg = self.views.active.selected_leg.clone();
+        let selection = &self.views.active.selection;
+        let wires = !selection.wires.is_empty() && selection.symbols.is_empty();
+        let tools = [
+            (ToolIcon::Slice, "Slice", "Slice selected wire", "", leg.as_ref().is_some_and(|l| l.split.is_some())),
+            (ToolIcon::Break, "Break", "Break selected wire segment", "", leg.as_ref().is_some_and(|l| l.route.len() > 2)),
+            (ToolIcon::Heal, "Heal", "Heal selected wires", "", wires),
+            (ToolIcon::Delete, "Delete", "Delete selected wire or segment", "Del", wires),
+        ]
+        .map(|(icon, label, description, shortcut, enabled)| RibbonTool {
+            icon,
+            label,
+            description,
+            shortcut,
+            enabled,
+            active: false,
+            toggle: false,
+        });
+        match workspace::ribbon_group(ui, "Wire edits", &tools) {
+            Some(0) => {
+                if let Some(leg) = leg {
+                    self.edit_wire(schematic_canvas::WireAction::Slice, &leg);
+                }
+            }
+            Some(1) => {
+                if let Some(leg) = leg {
+                    self.edit_wire(schematic_canvas::WireAction::Break, &leg);
+                }
+            }
+            Some(2) => {
+                self.run(pcbcraft_engine::HEAL_WIRES, &json!({"items":self.views.active.selection,"expected_revision":self.session.revision()}));
+                if self.message.is_none() {
+                    self.select(Selection::default());
+                }
+            }
+            Some(3) => self.delete_selection(),
+            _ => {}
+        }
     }
 
     /// Select and center a Browser pick only in its originating view and revision. Selection is
@@ -1073,7 +1127,7 @@ impl PcbApp {
                     && let (Some(a), Some(b)) = (from.position(project), to.position(project))
                     && a != b
                 {
-                    if finish || matches!(to, pcbcraft_engine::wire::Anchor::Existing(_)) {
+                    if finish || !matches!(to, pcbcraft_engine::wire::Anchor::Free(_)) {
                         let path = self.views.active.schematic.wire_draft.path(a, b);
                         self.run(
                             pcbcraft_engine::DRAW_WIRE,

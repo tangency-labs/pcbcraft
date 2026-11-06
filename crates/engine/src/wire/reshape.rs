@@ -1,13 +1,13 @@
 //! Reshaping an existing wire in place: sliding a straight leg, moving an interior corner, or
 //! moving a free endpoint or junction with every route attached to it.
 //!
-//! Reshape edits change geometry only. Every endpoint keeps its identity, so connections and
+//! The pure `Project::reshaped` candidate changes geometry only. Every endpoint keeps its identity, so connections and
 //! component pins are never changed; a route end that is attached to something stays put and
 //! gains an orthogonal leg when the moved part leaves it. Routes stay horizontal and vertical,
 //! with repeated and redundant straight-through points removed. Healing overlapping or
-//! doubled-back runs is not done here.
+//! doubled-back runs is performed by the command through `Project::healed`.
 //! Explicit attachment is a separate edit: it reshapes a junction's routes to an existing
-//! endpoint, replaces their source identity with the target and removes the old junction.
+//! endpoint or wire interior and normalizes the resulting graph.
 
 use std::sync::Arc;
 
@@ -87,38 +87,6 @@ fn follow(neighbour: Point, old: Point, to: Point) -> Point {
 }
 
 impl Project {
-    /// Build a preview or commit candidate connecting every route at `junction` to `to`.
-    /// The target must be a different existing pin or junction. Routes follow the same
-    /// orthogonal geometry rules as [`Self::reshaped`], keeping wire IDs and far endpoints.
-    /// The old junction is removed; no other coincident geometry is connected. Self-loops,
-    /// duplicate endpoint pairs and invalid reshape results are rejected atomically.
-    pub fn attached_junction(&self, junction: u64, to: WireEndpoint) -> Result<Project, CommandError> {
-        let source = WireEndpoint::Junction(junction);
-        if to == source {
-            return Err(CommandError::InvalidParams("choose a different endpoint to attach to".to_owned()));
-        }
-        let point = self.endpoint_position(to).ok_or_else(|| CommandError::InvalidParams("attachment target does not exist".to_owned()))?;
-        let mut next = self.reshaped(&Reshape::Junction(junction), point)?;
-        let mut pairs = std::collections::BTreeSet::new();
-        for wire in Arc::make_mut(&mut next.wires) {
-            for end in &mut wire.endpoints {
-                if *end == source {
-                    *end = to;
-                }
-            }
-            let [a, b] = wire.endpoints;
-            if a == b {
-                return Err(CommandError::InvalidParams("attachment would connect a wire to itself".to_owned()));
-            }
-            if !pairs.insert((a.min(b), a.max(b))) {
-                return Err(CommandError::InvalidParams("attachment would duplicate an existing connection".to_owned()));
-            }
-        }
-        Arc::make_mut(&mut next.junctions).remove(&junction);
-        next.connectivity = Arc::default();
-        Ok(next)
-    }
-
     /// Build the result of moving the grabbed point of `edit` to `to`, for a drag preview or a
     /// command, without changing this snapshot. A segment moves only across its direction, so
     /// `to` must keep `at`'s coordinate along the leg. A corner must be an interior corner, not
@@ -218,8 +186,8 @@ impl Session {
             .as_str()
             .and_then(|id| parse_id(id, "junction-"))
             .ok_or_else(|| CommandError::InvalidParams("invalid junction".to_owned()))?;
-        let to = WireEndpoint::parse(&params["to"]).ok_or_else(|| CommandError::InvalidParams("invalid attachment target".to_owned()))?;
-        let next = self.open_project()?.attached_junction(junction, to)?;
+        let to = super::Anchor::parse(&params["to"]).ok_or_else(|| CommandError::InvalidParams("invalid attachment target".to_owned()))?;
+        let next = self.open_project()?.attached(junction, to, self.revision())?;
         self.change(next);
         Ok(())
     }
@@ -247,12 +215,13 @@ impl Session {
     }
 
     /// Check the revision, build the reshaped project and adopt it as one revision and undo
-    /// step. A move that changes nothing leaves the revision and history alone.
+    /// step, including local healing and exact pin contacts. A move that changes nothing
+    /// leaves the revision and history alone.
     fn reshape(&mut self, params: &Value, edit: &Reshape) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let to = point_param(params, "to")?;
         let project = self.open_project()?;
-        let next = project.reshaped(edit, to)?;
+        let next = project.reshaped(edit, to)?.healed(project, self.revision())?;
         if next.wires != project.wires || next.junctions != project.junctions {
             self.change(next);
         }

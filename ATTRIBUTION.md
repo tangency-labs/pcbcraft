@@ -309,7 +309,20 @@ Next's `docs/wire-editing.md` and implemented by the junction-drop path and
 `attachment_target` in `src/desktop/canvas.rs` at
 `568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0). The new upstream
 implementation reuses its drawing tool's pin/junction hit test, rejects ambiguous
-targets and previews the connection before release. `crates/engine/src/wire/reshape.rs`
-implements attachment against upstream snapshots through a shared command; it does
-not reuse Next's document or session model. Attaching inside a wire segment and
-automatic wire healing remain separate work.
+targets and previews the connection before release. `crates/engine/src/wire/heal.rs`
+and `wire.rs` adapt the bounded split/merge, positive-overlap detection, path
+simplification and degree-two collapse workflow from Next's `src/wiring.rs`
+(`resolve`, `heal_overlaps`, `cut_pair`, `merge_endpoints`, `deduplicate_paths`,
+`collapse_runs`) at the same revision. Upstream retains its own snapshots, command
+catalog, numeric identity allocation, format limits and revision checks; straight
+junction collapse preserves intentional corners, and automatic routes are only
+materialized when normalization changes them. Next's document/session model and
+net-name machinery are not imported.
+
+Pin contact on part/group moves, two-pin insertion into straight wires, the explicit
+Heal command and the Capture → Wire edits group are new upstream implementations.
+The Slice, Break, Heal and Delete glyphs in `crates/chrome/src/workspace.rs` are
+original drawings using the existing shared icon palette and ribbon metrics.
+The horizontal ribbon scrollbar uses Next's five-point `scroll_gutter` from
+`src/desktop/theme.rs` at the same revision; upstream places it below the captions
+so the additional wire actions remain usable at compact window widths.

@@ -1398,7 +1398,12 @@ fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
     assert_eq!(harness.state().session().revision(), revision + 1);
     assert_eq!(moved.symbols()[0].position.y_nm, 4 * pcbcraft_engine::schematic::GRID_NM);
     assert!(before.same_connectivity(moved));
-    assert_eq!(before.wires(), moved.wires());
+    assert_eq!(
+        before.wires().iter().map(|w| (w.id(), w.endpoints())).collect::<Vec<_>>(),
+        moved.wires().iter().map(|w| (w.id(), w.endpoints())).collect::<Vec<_>>()
+    );
+    // The move may heal authored end legs, while terminal identities and net membership stay.
+    assert!(moved.wire_path(&moved.wires()[0]).windows(2).all(|p| p[0] != p[1]));
     click(&mut harness, "Undo");
     assert_eq!(harness.state().session().project().unwrap().symbols(), before.symbols());
 }
@@ -1498,7 +1503,10 @@ mod live_mcp {
         let moved = payload(tool(&mut harness, connection, "execute", request.clone()));
         let to = &moved["project"]["schematic"];
         assert_eq!(to["symbols"][0]["y_nm"], 5_080_000);
-        assert_eq!(to["wires"], from["wires"]);
+        for key in ["id", "from", "to"] {
+            assert_eq!(to["wires"][0][key], from["wires"][0][key]);
+        }
+        assert_eq!(to["netlist"], from["netlist"]);
         let after_wire = painted_wire(&harness);
         assert_ne!(after_wire, before_wire);
         assert_eq!(after_wire.last(), before_wire.last());

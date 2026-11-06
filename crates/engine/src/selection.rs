@@ -162,13 +162,14 @@ fn translated(point: Point, delta: Point) -> Result<Point, CommandError> {
 }
 
 impl Session {
-    /// Validate the revision and complete selection before committing one undoable group move.
+    /// Validate the revision and selection, attach exact pin contacts and heal affected routes
+    /// before committing one undoable group move.
     pub(crate) fn move_items(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| CommandError::InvalidParams("invalid selection".to_owned()))?;
         let project = self.open_project()?;
         let delta = Point { x_nm: params["dx_nm"].as_i64().unwrap_or_default(), y_nm: params["dy_nm"].as_i64().unwrap_or_default() };
-        let next = items.moved(project, delta)?;
+        let next = items.moved(project, delta)?.healed(project, self.revision())?;
         if next.symbols != project.symbols || next.wires != project.wires || next.junctions != project.junctions {
             self.change(next);
         }

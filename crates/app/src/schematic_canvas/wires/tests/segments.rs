@@ -266,12 +266,30 @@ fn corner_and_branched_endpoint_handles_survive_segment_selection_in_both_panes(
             let mut h = split_harness(narrow);
             let revision = h.state().session.revision();
             h.state_mut().run(DRAW_WIRE, &json!({"from":{"junction":"junction-3"},"to":grid(16,6),"bends":[],"expected_revision":revision}));
+            let revision = h.state().session.revision();
+            h.state_mut().run(DRAW_WIRE, &json!({"from":{"junction":"junction-3"},"to":grid(8,12),"bends":[],"expected_revision":revision}));
             h.run();
             let before = h.state().session.snapshot().unwrap();
             let endpoints: Vec<_> = before.wires().iter().map(|wire| wire.endpoints()).collect();
             for (from, to, expected) in [
-                (grid(8, 0), grid(4, 3), vec![vec![grid(-8, 0), grid(-8, 3), grid(4, 3), grid(4, 6), grid(8, 6)], vec![grid(8, 6), grid(16, 6)]]),
-                (grid(8, 6), grid(10, 9), vec![vec![grid(-8, 0), grid(10, 0), grid(10, 9)], vec![grid(10, 9), grid(16, 9), grid(16, 6)]]),
+                (
+                    grid(8, 0),
+                    grid(4, 3),
+                    vec![
+                        vec![grid(-8, 0), grid(-8, 3), grid(4, 3), grid(4, 6), grid(8, 6)],
+                        vec![grid(8, 6), grid(16, 6)],
+                        vec![grid(8, 6), grid(8, 12)],
+                    ],
+                ),
+                (
+                    grid(8, 6),
+                    grid(10, 9),
+                    vec![
+                        vec![grid(-8, 0), grid(10, 0), grid(10, 9)],
+                        vec![grid(10, 9), grid(16, 9), grid(16, 6)],
+                        vec![grid(10, 9), grid(10, 12), grid(8, 12)],
+                    ],
+                ),
             ] {
                 select_segment(&mut h, id, grid(8, 3));
                 let end = slide_preview(&mut h, id, from, to);

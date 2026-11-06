@@ -119,7 +119,7 @@ fn cancelled_or_stale_attachments_do_not_connect() {
 }
 
 /// Two coincident identities are ambiguous, and joining the opposite end of the same route
-/// would collapse it. Neither release commits, while an ordinary wire crossing stays separate.
+/// would collapse it. Neither release commits; a deliberate drop on an unambiguous wire interior creates a branch.
 #[test]
 fn ambiguous_or_invalid_attachment_targets_cancel_the_drop() {
     let mut h = harness();
@@ -141,6 +141,10 @@ fn ambiguous_or_invalid_attachment_targets_cancel_the_drop() {
     let end = screen(&h, grid(15, 10));
     drag(&mut h, grid(8, 6), end);
     drop(&mut h, end);
-    assert_eq!(h.state().session.project().unwrap().wires()[0].endpoints(), ends);
-    assert_eq!(h.state().session.project().unwrap().connectivity().nets.len(), nets);
+    let project = h.state().session.project().unwrap();
+    let target = project.wires()[0].endpoints()[1];
+    assert_ne!(target, ends[1]);
+    assert_eq!(project.endpoint_position(target), Some(grid(15, 10)));
+    assert_eq!(project.wires().iter().filter(|w| w.endpoints().contains(&target)).count(), 3);
+    assert_eq!(project.connectivity().nets.len(), nets - 1);
 }

@@ -83,7 +83,9 @@ direction to adjust alignment, or hover it and press **G**, then click to finish
 and junctions stay fixed while the adjoining legs adjust. **Esc** cancels the preview.
 Right-click → **Select Wire** selects the whole route for dragging or deletion; box and
 modifier selections continue to select whole wires. Crossings stay disconnected.
-Right-click a wire for these edits:
+Select a wire segment, then use Capture → **Wire edits** for **Slice**, **Break**,
+**Heal** or **Delete**. The group caption opens the same actions as a menu.
+Right-click a wire for these edits and whole-wire selection/deletion:
 **Slice** splits it at the grid point under the pointer and keeps it connected, so a new wire
 can start from the slice point. **Break** separates the leg under the pointer from the legs beside it. **Delete Segment** removes just that leg, and **Delete Wire** the whole
 route. Hovering a row previews what it changes. An unconnected wire end shows a small square, a
@@ -99,18 +101,29 @@ Selecting a segment also shows square handles on its wire’s corners and free e
 to reshape it in place: a straight segment slides across its direction, a corner drags the
 two legs that meet there, and a free end or junction drags the end leg of every wire attached
 to it. The wire's other ends stay put, gaining an orthogonal leg where needed; pins never leave
-their parts. Dropping a free end or junction on a highlighted pin or existing endpoint connects
+their parts. Dropping a free end or junction on a highlighted pin, endpoint or wire segment connects
 every wire at that junction to the target, using its exact position even on a different grid.
-Coincident targets and attachments that would collapse or duplicate a connection are refused.
-To connect into the middle of a wire, **Slice** it first to create a connection point.
-Other drags preserve connections and move by the grid's snapped travel, so an off-grid wire
-stays off the grid by the same amount. Release to commit one undoable edit;
+A segment target creates a branch automatically. Ambiguous contacts are refused.
+Moving or placing a part onto a wire connects its touching pins; placing a two-pin part
+across one straight run removes the span between its pins, inserting it without a short.
+Moving a whole wire onto a part also connects an exactly touching endpoint to its pin.
+Drags move by the grid's snapped travel, so an off-grid wire retains its offset until attached. Release to commit one undoable edit;
 **Esc**, releasing outside the sheet, or an edit made meanwhile cancels it. Multi-item
 selections and explicit **Select Wire** selections still move whole routes. Agents use `schematic.move_wire_segment`,
 `schematic.move_wire_corner` and `schematic.move_junction`. For an explicit connection, use
-`schematic.attach_junction` with `junction`, an existing pin or junction as `to`, and
-`expected_revision`. Overlapping or doubled-back runs
-are not yet merged automatically.
+`schematic.attach_junction` with `junction`, a pin/junction reference or
+`{"wire":"wire-N","at":{"x_nm":0,"y_nm":0}}` as `to`, and `expected_revision`.
+The same wire/point target works with `schematic.draw_wire`.
+
+Completed draws and moves heal positive-length collinear overlaps, doubled-back legs,
+duplicate strokes and redundant straight-through junctions in the affected routes.
+Crossings and nearby geometry remain disconnected. **Heal** applies the same cleanup
+to selected wires and connects old endpoints that exactly touch a pin; agents use
+`schematic.heal_wires` with `items` and `expected_revision`. Healing is part of the
+initiating edit's undo step, and opening a file never performs cleanup. Ambiguous pin
+contacts, unsupported loops and overly complex edits are rejected as a whole. This
+local cleanup does not route around obstacles or resolve conflicting net names
+(named nets are separate work).
 
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
 **E** edits its reference and value and **Delete** removes it with its wires.

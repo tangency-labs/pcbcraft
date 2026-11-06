@@ -12,6 +12,7 @@ use crate::{
     },
 };
 
+mod heal;
 mod reshape;
 pub use reshape::Reshape;
 
@@ -23,13 +24,27 @@ pub const MAX_BENDS: usize = 64;
 pub enum Anchor {
     Existing(WireEndpoint),
     Free(Point),
+    /// Explicitly branch into this wire at an unambiguous point on its current route.
+    Split {
+        wire: u64,
+        at: Point,
+    },
 }
 
 impl Anchor {
-    /// Parse a strict terminal/junction reference or a bounded free point.
+    /// Parse a strict terminal/junction reference, explicit wire/at target or bounded free point.
     pub fn parse(value: &Value) -> Option<Self> {
         if let Some(endpoint) = WireEndpoint::parse(value) {
             return Some(Self::Existing(endpoint));
+        }
+        if let Some(object) = value.as_object()
+            && object.len() == 2
+            && object.contains_key("wire")
+            && object.contains_key("at")
+        {
+            let wire = object["wire"].as_str().and_then(|id| parse_id(id, "wire-"))?;
+            let at = serde_json::from_value::<Point>(object["at"].clone()).ok().filter(valid_point)?;
+            return Some(Self::Split { wire, at });
         }
         serde_json::from_value::<Point>(value.clone()).ok().filter(valid_point).map(Self::Free)
     }
@@ -39,6 +54,7 @@ impl Anchor {
         match self {
             Self::Existing(endpoint) => endpoint.inspect(),
             Self::Free(point) => json!(point),
+            Self::Split { wire, at } => json!({"wire":format!("wire-{wire}"),"at":at}),
         }
     }
 
@@ -47,6 +63,9 @@ impl Anchor {
         match self {
             Self::Existing(endpoint) => project.endpoint_position(endpoint),
             Self::Free(point) => Some(point),
+            Self::Split { wire, at } => {
+                project.wires.iter().find(|w| w.ordinal == wire).filter(|w| locate(&project.wire_path(w), at).is_ok()).map(|_| at)
+            }
         }
     }
 }
@@ -176,6 +195,7 @@ pub fn wire_path(wire: &Wire, from: Point, to: Point) -> Vec<Point> {
 
 impl Session {
     /// Commit one complete route, including its free points, as one revision and undo step.
+    /// Interior wire targets split only on commit; overlaps heal in the same candidate.
     /// All geometry and endpoint checks precede adoption, so a rejected draft changes nothing.
     pub(crate) fn draw_wire(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -197,25 +217,23 @@ impl Session {
         if path.windows(2).any(|pair| pair[0] == pair[1] || (pair[0].x_nm != pair[1].x_nm && pair[0].y_nm != pair[1].y_nm)) {
             return Err(CommandError::InvalidParams("wire legs must be nonzero and horizontal or vertical".to_owned()));
         }
-        let mut next = self.next_object_id()?;
-        if next > MAX_OBJECT_ID - 3 {
-            return Err(CommandError::Unavailable("project has exhausted its object IDs".to_owned()));
+        if let [Anchor::Split { wire: a, .. }, Anchor::Split { wire: b, .. }] = anchors
+            && a == b
+        {
+            return Err(CommandError::InvalidParams("finish the branch on another wire or endpoint".into()));
         }
-        let mut candidate = project.clone();
-        let endpoints = anchors.map(|anchor| match anchor {
-            Anchor::Existing(endpoint) => endpoint,
-            Anchor::Free(point) => {
-                let id = next;
-                next += 1;
-                Arc::make_mut(&mut candidate.junctions).insert(id, point);
-                WireEndpoint::Junction(id)
-            }
-        });
-        if candidate.wires.iter().any(|wire| wire.endpoints == endpoints || wire.endpoints == [endpoints[1], endpoints[0]]) {
-            return Err(CommandError::InvalidParams("these endpoints are already joined by a wire".to_owned()));
+        let mut edit = heal::Edit::new(project, self.revision());
+        let endpoints = [edit.resolve(anchors[0])?, edit.resolve(anchors[1])?];
+        if edit.project.wires.iter().any(|wire| wire.endpoints == endpoints || wire.endpoints == [endpoints[1], endpoints[0]]) {
+            return Err(CommandError::InvalidParams("these endpoints are already joined by a wire".into()));
         }
-        Arc::make_mut(&mut candidate.wires).push(Wire { ordinal: next, endpoints, bends: Some(bends) });
-        candidate.connectivity = Arc::default();
+        let ordinal = edit.id()?;
+        if edit.project.wires.len() >= MAX_WIRES {
+            return Err(CommandError::Unavailable("the schematic wire limit has been reached".into()));
+        }
+        Arc::make_mut(&mut edit.project.wires).push(Wire { ordinal, endpoints, bends: Some(bends) });
+        edit.touched.insert(ordinal);
+        let candidate = edit.heal()?;
         self.change(candidate);
         Ok(())
     }

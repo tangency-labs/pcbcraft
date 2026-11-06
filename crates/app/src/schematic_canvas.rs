@@ -120,6 +120,8 @@ pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, re
 /// What a wire's context menu asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WireAction {
+    /// Normalize selected wire geometry and exact pin contacts.
+    Heal,
     /// Split the wire at the grid point under the click, keeping it connected (KiCad's Slice).
     Slice,
     /// Separate the leg under the click from the legs beside it (KiCad's Break).
@@ -209,9 +211,18 @@ pub(crate) fn show(
         }
         _ => None,
     };
+    let moved = match &tool {
+        Some(Tool::Move { symbol, offset, .. }) => response
+            .interact_pointer_pos()
+            .filter(|pointer| rect.contains(*pointer))
+            .map(|pointer| (symbol.clone(), camera.snap(pointer + *offset, rect)))
+            .filter(|(_, point)| valid_position(*point)),
+        _ => None,
+    };
     let group_preview = match (&tool, group_delta, reshape_target) {
-        (Some(Tool::MoveItems { items, .. }), Some(delta), _) => items.moved(project, delta).ok(),
-        (Some(Tool::Reshape { drag, .. }), _, Some(to)) => drag.preview(project, to),
+        (Some(Tool::Move { symbol, .. }), _, _) => moved.as_ref().and_then(|(_, point)| project.moved_symbol(&symbol.id(), *point, revision).ok()),
+        (Some(Tool::MoveItems { items, .. }), Some(delta), _) => items.moved(project, delta).and_then(|next| next.healed(project, revision)).ok(),
+        (Some(Tool::Reshape { drag, .. }), _, Some(to)) => drag.preview(project, to, revision),
         _ => None,
     };
     let project = group_preview.as_ref().unwrap_or(project);
@@ -221,23 +232,16 @@ pub(crate) fn show(
     let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let unit_step = camera.unit_step();
     canvas_grid::paint(&painter, rect, origin, camera.snap_step(), grid_opacity);
-    let moved = match &tool {
-        Some(Tool::Move { symbol, offset, .. }) => response
-            .interact_pointer_pos()
-            .filter(|pointer| rect.contains(*pointer))
-            .map(|pointer| (symbol.clone(), camera.snap(pointer + *offset, rect)))
-            .filter(|(_, point)| valid_position(*point)),
-        _ => None,
-    };
     let mut whole_wires = selected.wires.clone();
     if let Some(leg) = selected_leg {
         whole_wires.remove(&leg.wire);
     }
     wires::paint(&painter, rect, project, camera, moved.clone(), &whole_wires, &highlighted.wires);
     if group_preview.is_some()
-        && let Some(Anchor::Existing(endpoint)) = reshape_target
+        && let Some(target) = reshape_target
+        && !matches!(target, Anchor::Free(_))
     {
-        wires::paint_attachment(&painter, rect, project, camera, endpoint);
+        wires::paint_attachment(&painter, rect, project, camera, target);
     }
     if let Some(leg) = selected_leg {
         let offset = match (&tool, reshape_target) {
@@ -446,7 +450,9 @@ pub(crate) fn show(
     }
 
     if moving && response.drag_stopped_by(egui::PointerButton::Primary) {
-        return Some(Click::FinishMove(moved.map(|(_, point)| point).filter(|_| input_enabled)));
+        return Some(Click::FinishMove(
+            moved.map(|(_, point)| point).filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some()),
+        ));
     }
 
     if !input_enabled || response.dragged() {
@@ -494,6 +500,7 @@ fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: w
     let rows = [
         (MenuItem::new("Slice").enabled(leg.split.is_some()), WireAction::Slice),
         (MenuItem::new("Break").enabled(leg.route.len() > 2), WireAction::Break),
+        (MenuItem::new("Heal Wire"), WireAction::Heal),
         (MenuItem::new("Delete Segment").shortcut("Del"), WireAction::DeleteSegment),
         (MenuItem::new("Delete Wire"), WireAction::Delete),
         (MenuItem::new("Select Wire"), WireAction::SelectWire),

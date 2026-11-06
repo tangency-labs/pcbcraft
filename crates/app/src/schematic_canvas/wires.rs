@@ -73,10 +73,8 @@ impl ReshapeDrag {
             return None;
         }
         if let Reshape::Junction(id) = self.edit {
-            let anchor = anchor_at(&endpoints(project, camera, rect), camera, rect, pointer)?;
-            if let Anchor::Existing(endpoint) = anchor
-                && endpoint != WireEndpoint::Junction(id)
-            {
+            let anchor = anchor_at(&endpoints(project, camera, rect), project, camera, rect, pointer, Some(WireEndpoint::Junction(id)))?;
+            if !matches!(anchor, Anchor::Free(_)) && anchor != Anchor::Existing(WireEndpoint::Junction(id)) {
                 return Some(anchor);
             }
         }
@@ -86,10 +84,10 @@ impl ReshapeDrag {
 
     /// Validate a disposable preview with the same engine operation used on release.
     /// Only a junction handle can attach; invalid geometry or topology yields no preview.
-    pub(crate) fn preview(&self, project: &Project, to: Anchor) -> Option<Project> {
+    pub(crate) fn preview(&self, project: &Project, to: Anchor, revision: u64) -> Option<Project> {
         match (&self.edit, to) {
-            (Reshape::Junction(id), Anchor::Existing(endpoint)) => project.attached_junction(*id, endpoint).ok(),
-            (_, Anchor::Free(point)) => project.reshaped(&self.edit, point).ok(),
+            (Reshape::Junction(id), Anchor::Existing(_) | Anchor::Split { .. }) => project.attached(*id, to, revision).ok(),
+            (_, Anchor::Free(point)) => project.reshaped(&self.edit, point).and_then(|next| next.healed(project, revision)).ok(),
             _ => None,
         }
     }
@@ -323,6 +321,7 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
     match hovered {
         Some(super::WireAction::Delete) => paint_route(painter, rect, camera, target.route.clone(), tokens.error),
         Some(super::WireAction::SelectWire) => paint_route(painter, rect, camera, target.route.clone(), tokens.accent),
+        Some(super::WireAction::Heal) => paint_route(painter, rect, camera, target.route.clone(), tokens.accent),
         Some(super::WireAction::DeleteSegment) => paint_route(painter, rect, camera, leg, tokens.error),
         Some(super::WireAction::Slice) => {
             if let Some(point) = target.split {
@@ -375,7 +374,7 @@ pub(super) fn preview(
 ) -> Option<Anchor> {
     let tokens = Tokens::get();
     let endpoints = endpoints(project, camera, rect);
-    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| anchor_at(&endpoints, camera, rect, at));
+    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| anchor_at(&endpoints, project, camera, rect, at, None));
     if let Some(from) = start.and_then(|anchor| anchor.position(project))
         && let Some(to) = target.and_then(|anchor| anchor.position(project))
     {
@@ -403,7 +402,14 @@ fn endpoints(project: &Project, camera: &Camera, rect: Rect) -> Vec<(WireEndpoin
 
 /// Pick the nearest explicit endpoint within the shared hit radius, refusing equal-distance
 /// targets. Empty space resolves to a bounded grid point; overlapping geometry never joins.
-fn anchor_at(endpoints: &[(WireEndpoint, Pos2)], camera: &Camera, rect: Rect, at: Pos2) -> Option<Anchor> {
+fn anchor_at(
+    endpoints: &[(WireEndpoint, Pos2)],
+    project: &Project,
+    camera: &Camera,
+    rect: Rect,
+    at: Pos2,
+    ignore: Option<WireEndpoint>,
+) -> Option<Anchor> {
     let mut nearest = None;
     let mut distance = theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
     let mut ambiguous = false;
@@ -422,14 +428,42 @@ fn anchor_at(endpoints: &[(WireEndpoint, Pos2)], camera: &Camera, rect: Rect, at
     } else if let Some(endpoint) = nearest {
         Some(Anchor::Existing(endpoint))
     } else {
-        let point = camera.snap(at, rect);
-        super::valid_position(point).then_some(Anchor::Free(point))
+        let mut hit = None;
+        let mut nearest = theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
+        let mut ambiguous = false;
+        for wire in project.wires().iter().filter(|w| ignore.is_none_or(|end| !w.endpoints().contains(&end))) {
+            for pair in project.wire_path(wire).windows(2) {
+                let distance = distance_sq(at, camera.screen(pair[0], rect), camera.screen(pair[1], rect));
+                let snapped = camera.snap(at, rect);
+                let point = if pair[0].x_nm == pair[1].x_nm {
+                    Point { x_nm: pair[0].x_nm, y_nm: snapped.y_nm.clamp(pair[0].y_nm.min(pair[1].y_nm), pair[0].y_nm.max(pair[1].y_nm)) }
+                } else {
+                    Point { x_nm: snapped.x_nm.clamp(pair[0].x_nm.min(pair[1].x_nm), pair[0].x_nm.max(pair[1].x_nm)), y_nm: pair[0].y_nm }
+                };
+                let anchor = Anchor::Split { wire: wire.ordinal(), at: point };
+                if distance < nearest {
+                    hit = Some(anchor);
+                    nearest = distance;
+                    ambiguous = false;
+                } else if distance == nearest && hit.is_some_and(|old| old != anchor) {
+                    ambiguous = true;
+                }
+            }
+        }
+        if ambiguous {
+            None
+        } else {
+            hit.or_else(|| {
+                let point = camera.snap(at, rect);
+                super::valid_position(point).then_some(Anchor::Free(point))
+            })
+        }
     }
 }
 
 /// Mark a validated attachment destination using the same pin ring as the wire drawing tool.
-pub(super) fn paint_attachment(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, endpoint: WireEndpoint) {
-    if let Some(point) = project.endpoint_position(endpoint) {
+pub(super) fn paint_attachment(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, target: Anchor) {
+    if let Some(point) = target.position(project) {
         paint_pin(painter, camera.screen(point, rect), Tokens::get().accent);
     }
 }

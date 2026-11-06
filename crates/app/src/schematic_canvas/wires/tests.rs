@@ -1,4 +1,5 @@
 mod attachment;
+mod healing;
 mod segments;
 
 use crate::{PcbApp, tests::click};

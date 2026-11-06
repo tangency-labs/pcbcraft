@@ -21,11 +21,11 @@ fn attaching_a_branched_junction_to_a_pin_is_one_persistent_edit() {
     let source = session.project().unwrap().wires()[0].endpoints()[1];
     run(&mut session, DRAW_WIRE, json!({"from":source.inspect(),"to":at(20,10),"bends":[]})).unwrap();
     let target = pin_target(&mut session);
-    run(&mut session, DRAW_WIRE, json!({"from":target.inspect(),"to":at(30,14),"bends":[]})).unwrap();
+    run(&mut session, DRAW_WIRE, json!({"from":target.inspect(),"to":at(10,25),"bends":[]})).unwrap();
     let before = session.snapshot().unwrap();
     let revision = session.revision();
     assert_eq!(before.connectivity().nets.len(), 2);
-    let preview = before.attached_junction(junction(source), target).unwrap();
+    let preview = before.attached(junction(source), super::super::super::Anchor::Existing(target), revision).unwrap();
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     run(&mut session, ATTACH_JUNCTION, json!({"junction":source.inspect()["junction"],"to":target.inspect()})).unwrap();
     let after = session.snapshot().unwrap();
@@ -94,13 +94,11 @@ fn invalid_attachments_are_atomic() {
     let (mut session, _) = free_wire();
     let [source, far] = session.project().unwrap().wires()[0].endpoints();
     run(&mut session, DRAW_WIRE, json!({"from":far.inspect(),"to":at(20,10),"bends":[]})).unwrap();
-    let duplicate = session.project().unwrap().wires()[1].endpoints()[1];
     let before = session.snapshot().unwrap();
     let revision = session.revision();
     for to in [
         source.inspect(),
         far.inspect(),
-        duplicate.inspect(),
         json!({"junction":"junction-999"}),
         json!({"symbol":"symbol-999","terminal":"1"}),
         at(20, 10),

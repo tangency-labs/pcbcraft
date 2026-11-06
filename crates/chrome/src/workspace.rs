@@ -25,12 +25,17 @@ const RIBBON_TOOL_LABEL_CENTER: f32 = 10.0;
 const RIBBON_GROUP_PADDING: f32 = 6.0;
 const RIBBON_SEPARATOR_WIDTH: f32 = 12.0;
 const RIBBON_CAPTION_GAP: f32 = 10.0;
+const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 
 /// The glyphs used by the schematic ribbon actions and Browser rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
     Symbol,
     Wire,
+    Slice,
+    Break,
+    Heal,
+    Delete,
     Nets,
     Fit,
     Browser,
@@ -138,7 +143,7 @@ pub struct WorkspacePick {
 /// Put a tabbed command strip above the viewport. `tabs` names the ribbon tabs and `tab` is the
 /// index of the one shown; clicking another tab selects it. `add` draws the actions of the tab
 /// shown, whose index it receives, including a tab clicked this frame. At compact widths the workspace title moves into the strip, and the actions can scroll
-/// horizontally when they exceed the available space.
+/// horizontally when they exceed the available space, with the scrollbar below the captions.
 ///
 /// The workspace tile returns a workspace/placement request. Picking the current row closes
 /// the picker; the split and window icons within its card create another view.
@@ -202,6 +207,10 @@ pub fn ribbon(
                             }
                         });
                         ui.separator();
+                        ui.spacing_mut().scroll.floating = false;
+                        ui.spacing_mut().scroll.bar_width = RIBBON_SCROLL_GUTTER;
+                        ui.spacing_mut().scroll.bar_inner_margin = 0.0;
+                        ui.spacing_mut().scroll.bar_outer_margin = 0.0;
                         ScrollArea::horizontal().id_salt("ribbon_actions").auto_shrink([false, true]).show(ui, |ui| {
                             ui.horizontal_top(|ui| add(ui, *tab));
                         });
@@ -927,6 +936,29 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
             line(&[(10.0, 49.0), (28.0, 49.0), (28.0, 15.0), (54.0, 15.0)], stroke(4.25, accent));
             p.circle_filled(at(10.0, 49.0), 4.0 * size / 64.0, accent);
             p.circle_filled(at(54.0, 15.0), 4.0 * size / 64.0, accent);
+        }
+        ToolIcon::Slice => {
+            line(&[(8.0, 32.0), (56.0, 32.0)], stroke(4.0, ink));
+            line(&[(32.0, 10.0), (32.0, 24.0)], stroke(4.0, accent));
+            line(&[(32.0, 40.0), (32.0, 54.0)], stroke(4.0, accent));
+            p.circle_filled(at(32.0, 32.0), 5.0 * size / 64.0, accent);
+        }
+        ToolIcon::Break => {
+            line(&[(8.0, 32.0), (24.0, 32.0)], stroke(4.0, ink));
+            line(&[(40.0, 32.0), (56.0, 32.0)], stroke(4.0, ink));
+            line(&[(36.0, 12.0), (27.0, 27.0), (37.0, 37.0), (28.0, 52.0)], stroke(3.5, accent));
+        }
+        ToolIcon::Heal => {
+            line(&[(8.0, 44.0), (24.0, 44.0), (24.0, 20.0), (56.0, 20.0)], stroke(4.0, ink));
+            line(&[(35.0, 42.0), (43.0, 50.0), (58.0, 32.0)], stroke(4.0, accent));
+        }
+        ToolIcon::Delete => {
+            line(&[(14.0, 18.0), (50.0, 18.0)], stroke(4.0, ink));
+            line(&[(24.0, 18.0), (24.0, 10.0), (40.0, 10.0), (40.0, 18.0)], stroke(3.5, ink));
+            line(&[(18.0, 24.0), (21.0, 54.0), (43.0, 54.0), (46.0, 24.0)], stroke(4.0, ink));
+            for x in [28.0, 36.0] {
+                line(&[(x, 28.0), (x, 46.0)], stroke(3.0, accent));
+            }
         }
         ToolIcon::Nets => {
             for y in [17.0, 32.0, 47.0] {
