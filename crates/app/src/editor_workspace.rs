@@ -282,6 +282,10 @@ impl PcbApp {
                     ui.push_id(view.widget_id(), |ui| {
                         shell::canvas(ui, |ui| {
                             if let Some(project) = self.session.project() {
+                                // The readout follows the pointer in either pane, focused or not.
+                                if let Some(point) = super::pointer_on_canvas(ui, &view.camera) {
+                                    self.pointer_next = Some(point);
+                                }
                                 schematic_canvas::show(
                                     ui,
                                     project,

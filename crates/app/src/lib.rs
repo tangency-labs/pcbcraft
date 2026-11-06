@@ -31,7 +31,7 @@ use pcbcraft_chrome::{
     MenuItem, Tokens, fonts, grid,
     menu::{self, MenuIcon},
     shell::{self, dim},
-    theme, workspace,
+    theme, units, workspace,
 };
 use pcbcraft_engine::selection::Selection;
 use pcbcraft_engine::{
@@ -70,6 +70,8 @@ const FINER_GRID: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key:
 const COARSER_GRID: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::N);
 const EDIT_FIELDS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::E);
 const COMMAND_COMMA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Comma);
+/// KiCad's key for switching the display units.
+const SWITCH_UNITS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::U);
 
 /// A browser keeps Ctrl+N and Ctrl+Q for itself, and has no window of ours to quit.
 const IN_BROWSER: bool = cfg!(target_arch = "wasm32");
@@ -174,6 +176,11 @@ pub struct PcbApp {
     close_allowed: bool,
     /// Close, New Project or Open held back until the running file operation finishes.
     waiting: Option<unsaved::Waiting>,
+    /// The snapped point under the pointer on a schematic canvas in the last frame, for the
+    /// status bar's coordinate readout. `None` when the pointer is off every canvas.
+    pointer: Option<pcbcraft_engine::schematic::Point>,
+    /// The point being found this frame; it becomes `pointer` at the start of the next.
+    pointer_next: Option<pcbcraft_engine::schematic::Point>,
     /// Whether the browser's leave-page warning is on, once it has been set.
     #[cfg(target_arch = "wasm32")]
     leave_warning: Option<bool>,
@@ -801,6 +808,9 @@ impl PcbApp {
         let mut spacing = self.views.active.camera.snap_nm();
         let every = grid::shown_every(self.views.active.camera.snap_step()).unwrap_or(1);
         let mut grid_changed = false;
+        let mut unit = self.preferences.units;
+        let pointer = self.pointer.filter(|_| grid_view.is_some());
+        let units_shortcut = ui.ctx().format_shortcut(&SWITCH_UNITS);
         shell::status_bar(
             ui,
             |ui| {
@@ -836,9 +846,16 @@ impl PcbApp {
                 }
             },
             |ui| {
+                // Right to left: units, then grid, then the pointer's coordinates. With no
+                // schematic showing there is nothing to measure, so none of them appear.
                 if grid_view.is_some() {
+                    units::toggle(ui, &mut unit, &units_shortcut);
                     grid_changed =
-                        grid::spacing_menu(ui, &mut spacing, &grid::SCHEMATIC_SPACING_PRESETS_NM, grid::SCHEMATIC_SPACING_DEFAULT_NM, every);
+                        grid::spacing_menu(ui, &mut spacing, &grid::SCHEMATIC_SPACING_PRESETS_NM, grid::SCHEMATIC_SPACING_DEFAULT_NM, every, unit);
+                }
+                if let Some(point) = pointer {
+                    let text = format!("X {}  Y {}", units::readout(point.x_nm, unit), units::readout(point.y_nm, unit));
+                    ui.label(dim(text)).on_hover_text("Pointer position on the grid");
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.live_control.is_some() {
@@ -849,6 +866,7 @@ impl PcbApp {
         if let Some(id) = grid_view.filter(|_| grid_changed) {
             self.set_view_grid(id, spacing);
         }
+        self.preferences.units = unit;
     }
 
     /// Draw the schematic and send completed edits through the shared command catalog using each
@@ -866,6 +884,11 @@ impl PcbApp {
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
+                    if self.session.project().is_some()
+                        && let Some(point) = pointer_on_canvas(ui, &self.views.active.camera)
+                    {
+                        self.pointer_next = Some(point);
+                    }
                     if std::mem::take(&mut self.views.active.rotate_requested) && input_enabled && self.views.active.selection.len() <= 1 {
                         let rect = ui.available_rect_before_wrap();
                         let hovered = self.session.project().and_then(|project| {
@@ -1103,6 +1126,9 @@ impl PcbApp {
         }
         if pressed(&COMMAND_COMMA) {
             self.open_preferences();
+        }
+        if pressed(&SWITCH_UNITS) {
+            self.preferences.units = self.preferences.units.toggled();
         }
         if !IN_BROWSER {
             if !self.files.busy() {
@@ -1366,6 +1392,7 @@ impl PcbApp {
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.sync_style(&ctx);
+        self.pointer = self.pointer_next.take();
         self.handle_close_request(&ctx);
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
@@ -1442,6 +1469,15 @@ impl PcbApp {
     }
 }
 
+/// The grid point under the pointer when it is over this canvas and not over a panel floating on
+/// it, snapped by the pane's own camera as a click there would be. Call it before drawing the
+/// canvas, while `ui` still has the canvas's whole rectangle available.
+fn pointer_on_canvas(ui: &Ui, camera: &schematic_canvas::Camera) -> Option<pcbcraft_engine::schematic::Point> {
+    let rect = ui.available_rect_before_wrap();
+    let pointer = ui.input(|input| input.pointer.hover_pos())?;
+    ui.rect_contains_pointer(rect).then(|| camera.snap(pointer, rect))
+}
+
 /// The keys the window answers to, as (section, action, keys), for the Shortcuts page.
 /// Browser builds leave out the shortcuts the browser keeps for itself.
 fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String)> {
@@ -1470,6 +1506,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("View", "Pan", "Middle-button drag".to_owned()));
     list.push(("View", "Finer grid", key(&FINER_GRID)));
     list.push(("View", "Coarser grid", key(&COARSER_GRID)));
+    list.push(("View", "Switch units", key(&SWITCH_UNITS)));
     list.push(("View", "Back from Home", "Esc".to_owned()));
     list
 }

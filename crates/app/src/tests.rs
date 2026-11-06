@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod display_units;
 mod editor_views;
 mod grid_spacing;
 mod save_changes;

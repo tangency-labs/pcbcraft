@@ -1,0 +1,236 @@
+//! Lengths as people read and type them, in mils or millimetres.
+//!
+//! Geometry is stored in whole nanometres and never changes when the display unit does; these
+//! functions only convert at the edge, for labels, readouts and typed values. One mil is exactly
+//! 25 400 nm and one millimetre 1 000 000 nm, so 100 mil is exactly 2.54 mm. A typed value is
+//! rounded once, to the nearest nanometre. [`toggle`] is the status bar's control for switching.
+
+use std::fmt;
+
+use egui::{RichText, Ui};
+use serde::{Deserialize, Serialize};
+
+use crate::Tokens;
+
+/// Nanometres in one mil (a thousandth of an inch), exactly.
+pub const NM_PER_MIL: i64 = 25_400;
+/// Nanometres in one millimetre.
+pub const NM_PER_MM: i64 = 1_000_000;
+/// Nanometres in one inch.
+const NM_PER_INCH: i64 = 1000 * NM_PER_MIL;
+/// The largest length [`parse_length`] accepts either side of zero: one kilometre, well inside
+/// the range where every nanometre is exact in `f64`.
+pub const MAX_LENGTH_NM: i64 = 1_000_000_000_000;
+
+/// The unit lengths are shown in. Values typed without a unit are read in it too.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Unit {
+    /// Thousandths of an inch, the schematic grid's native unit.
+    #[default]
+    Mil,
+    Mm,
+}
+
+impl Unit {
+    /// The unit's short name, as shown after a value: `mil` or `mm`.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Mil => "mil",
+            Self::Mm => "mm",
+        }
+    }
+
+    /// The other unit, for a control that switches between the two.
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Mil => Self::Mm,
+            Self::Mm => Self::Mil,
+        }
+    }
+
+    fn nm(self) -> i64 {
+        match self {
+            Self::Mil => NM_PER_MIL,
+            Self::Mm => NM_PER_MM,
+        }
+    }
+
+    /// Decimals in a coordinate readout: hundredths of a mil, or ten-thousandths of a millimetre.
+    fn readout_decimals(self) -> usize {
+        match self {
+            Self::Mil => 2,
+            Self::Mm => 4,
+        }
+    }
+}
+
+/// Why typed text is not a length.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LengthError {
+    Empty,
+    NotANumber,
+    /// The text after the number, which is not a known unit.
+    Unit(String),
+    /// Further from zero than [`MAX_LENGTH_NM`].
+    OutOfRange,
+}
+
+impl fmt::Display for LengthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Enter a length, such as 20 mil or 0.5 mm"),
+            Self::NotANumber => write!(f, "Enter a number, such as 20 mil or 0.5 mm"),
+            Self::Unit(unit) => write!(f, "Unknown unit \"{unit}\". Use mil, mm or in"),
+            Self::OutOfRange => write!(f, "That length is too large"),
+        }
+    }
+}
+
+/// Read a typed length in whole nanometres. An optional `-` or `+` may lead; then a decimal
+/// number; then, with or without a space and in any case, `mil`, `mils`, `th`, `thou`, `mm`, `in`
+/// or `"`. A number with no unit is in `default`. The value is rounded once to the nearest
+/// nanometre and must be within [`MAX_LENGTH_NM`] of zero. Exponents and unknown units are refused,
+/// so nothing is guessed. Callers check any narrower range of their own.
+pub fn parse_length(text: &str, default: Unit) -> Result<i64, LengthError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(LengthError::Empty);
+    }
+    let (negative, rest) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let split = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(rest.len());
+    let (number, unit) = rest.split_at(split);
+    let nm_per_unit = match unit.trim().to_ascii_lowercase().as_str() {
+        "" => default.nm(),
+        "mil" | "mils" | "th" | "thou" => NM_PER_MIL,
+        "mm" => NM_PER_MM,
+        "in" | "\"" => NM_PER_INCH,
+        _ if number.is_empty() => return Err(LengthError::NotANumber),
+        other => return Err(LengthError::Unit(other.to_owned())),
+    };
+    if !number.bytes().any(|b| b.is_ascii_digit()) {
+        return Err(LengthError::NotANumber);
+    }
+    let value: f64 = number.parse().map_err(|_| LengthError::NotANumber)?;
+    let nm = (value * nm_per_unit as f64).round();
+    if !nm.is_finite() || nm > MAX_LENGTH_NM as f64 {
+        return Err(LengthError::OutOfRange);
+    }
+    let nm = nm as i64;
+    Ok(if negative { -nm } else { nm })
+}
+
+/// Describe a length as it would be typed, in `unit` with at most four decimals and no trailing
+/// zeros: `1_270_000` reads "50 mil" or "1.27 mm". Values that don't convert exactly are rounded
+/// for display only.
+pub fn label(nm: i64, unit: Unit) -> String {
+    let text = format!("{:.4}", nm as f64 / unit.nm() as f64);
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    let text = if text == "-0" { "0" } else { text };
+    format!("{text} {}", unit.symbol())
+}
+
+/// A coordinate for a readout, with a fixed number of decimals so the text doesn't jump as the
+/// pointer moves: "1250.00" in mils, "31.7500" in millimetres. The unit is shown separately.
+pub fn readout(nm: i64, unit: Unit) -> String {
+    let text = format!("{:.*}", unit.readout_decimals(), nm as f64 / unit.nm() as f64);
+    // A tiny negative value rounds to zero; don't show it as "-0.00".
+    if text.trim_start_matches('-').bytes().all(|b| b == b'0' || b == b'.') { text.trim_start_matches('-').to_owned() } else { text }
+}
+
+/// The status bar's unit button. It shows the display unit, and a click switches to the other one.
+/// `shortcut` is shown in its tooltip. Returns true when the unit changed.
+pub fn toggle(ui: &mut Ui, unit: &mut Unit, shortcut: &str) -> bool {
+    let t = Tokens::get();
+    let button = egui::Button::new(RichText::new(unit.symbol()).size(t.font_label)).frame(false);
+    let tip = if shortcut.is_empty() { "Switch units".to_owned() } else { format!("Switch units ({shortcut})") };
+    let response = ui.add(button).on_hover_text(tip);
+    let shown = *unit;
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Units: {}", shown.symbol())));
+    if response.clicked() {
+        *unit = unit.toggled();
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact relations the issue names hold both ways, and a value typed in either unit
+    /// lands on the same nanometre.
+    #[test]
+    fn mils_and_millimetres_convert_exactly() {
+        assert_eq!(parse_length("100 mil", Unit::Mm), Ok(2_540_000));
+        assert_eq!(parse_length("2.54 mm", Unit::Mil), Ok(2_540_000));
+        assert_eq!(parse_length("1 mil", Unit::Mm), parse_length("0.0254", Unit::Mm));
+        assert_eq!(label(2_540_000, Unit::Mil), "100 mil");
+        assert_eq!(label(2_540_000, Unit::Mm), "2.54 mm");
+        assert_eq!(label(NM_PER_MIL, Unit::Mm), "0.0254 mm");
+        assert_eq!(parse_length("1 in", Unit::Mm), Ok(1000 * NM_PER_MIL));
+        assert_eq!(parse_length("0.5\"", Unit::Mm), Ok(500 * NM_PER_MIL));
+    }
+
+    /// A bare number takes the display unit; a typed unit wins over it, in any case and spacing.
+    #[test]
+    fn bare_numbers_use_the_display_unit_and_suffixes_override_it() {
+        assert_eq!(parse_length("50", Unit::Mil), Ok(1_270_000));
+        assert_eq!(parse_length("50", Unit::Mm), Ok(50 * NM_PER_MM));
+        assert_eq!(parse_length("1.27MM", Unit::Mil), Ok(1_270_000));
+        assert_eq!(parse_length(" 50 Mils ", Unit::Mm), Ok(1_270_000));
+        assert_eq!(parse_length("50th", Unit::Mm), Ok(1_270_000));
+        assert_eq!(parse_length(".5 mm", Unit::Mil), Ok(500_000));
+        assert_eq!(parse_length("5.", Unit::Mm), Ok(5 * NM_PER_MM));
+    }
+
+    /// Signs read either way, and negative values format without a stray minus at zero.
+    #[test]
+    fn negative_lengths_read_and_show() {
+        assert_eq!(parse_length("-25 mil", Unit::Mm), Ok(-635_000));
+        assert_eq!(parse_length("+1.5", Unit::Mm), Ok(1_500_000));
+        assert_eq!(parse_length("-0", Unit::Mil), Ok(0));
+        assert_eq!(label(-635_000, Unit::Mil), "-25 mil");
+        assert_eq!(readout(-635_000, Unit::Mil), "-25.00");
+        assert_eq!(readout(-635_000, Unit::Mm), "-0.6350");
+        assert_eq!(readout(-1, Unit::Mil), "0.00");
+        assert_eq!(label(-1, Unit::Mm), "0 mm");
+    }
+
+    /// Rounding happens once, at the nanometre, even far from zero; the limit is a kilometre.
+    #[test]
+    fn precision_holds_near_the_limits() {
+        assert_eq!(parse_length("0.0000004 mm", Unit::Mil), Ok(0));
+        assert_eq!(parse_length("0.0000005 mm", Unit::Mil), Ok(1));
+        assert_eq!(parse_length("1000000 mm", Unit::Mil), Ok(MAX_LENGTH_NM));
+        assert_eq!(parse_length("-1000000 mm", Unit::Mil), Ok(-MAX_LENGTH_NM));
+        assert_eq!(parse_length("1000000.000001 mm", Unit::Mil), Err(LengthError::OutOfRange));
+        assert_eq!(parse_length("123456.789012 mm", Unit::Mil), Ok(123_456_789_012));
+        assert_eq!(readout(123_456_789_012, Unit::Mm), "123456.7890");
+        assert_eq!(parse_length(&"9".repeat(400), Unit::Mm), Err(LengthError::OutOfRange));
+    }
+
+    /// Text that isn't a plain length is refused with the reason, never guessed at.
+    #[test]
+    fn invalid_text_is_refused() {
+        assert_eq!(parse_length("  ", Unit::Mil), Err(LengthError::Empty));
+        assert_eq!(parse_length("mil", Unit::Mil), Err(LengthError::NotANumber));
+        assert_eq!(parse_length("-", Unit::Mil), Err(LengthError::NotANumber));
+        assert_eq!(parse_length(".", Unit::Mil), Err(LengthError::NotANumber));
+        assert_eq!(parse_length("1.2.3", Unit::Mil), Err(LengthError::NotANumber));
+        assert_eq!(parse_length("--5", Unit::Mil), Err(LengthError::NotANumber));
+        assert_eq!(parse_length("1e3", Unit::Mil), Err(LengthError::Unit("e3".into())));
+        assert_eq!(parse_length("5 cm", Unit::Mil), Err(LengthError::Unit("cm".into())));
+        assert_eq!(parse_length("5 mm mil", Unit::Mil), Err(LengthError::Unit("mm mil".into())));
+        assert_eq!(LengthError::Unit("cm".into()).to_string(), "Unknown unit \"cm\". Use mil, mm or in");
+    }
+
+    #[test]
+    fn the_unit_toggles_between_mil_and_mm() {
+        assert_eq!(Unit::default(), Unit::Mil);
+        assert_eq!(Unit::Mil.toggled(), Unit::Mm);
+        assert_eq!(Unit::Mm.toggled().symbol(), "mil");
+    }
+}

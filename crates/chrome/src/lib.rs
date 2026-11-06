@@ -18,6 +18,7 @@ pub mod settings;
 pub mod shell;
 pub mod theme;
 mod titlebar;
+pub mod units;
 pub mod workspace;
 
 pub use menu::MenuItem;

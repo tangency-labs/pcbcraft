@@ -80,7 +80,9 @@ first **Save** asks for a project folder, and the project takes that folder's na
    only once the save succeeds. In the browser, leaving or reloading the page
    shows the browser's own warning while the project is unsaved.
 
-The wheel zooms and a middle-button drag pans by default. Preferences can change
+The status bar shows the grid point under the pointer; click its unit, or press
+**Ctrl+U**, to read coordinates and the grid in mm instead of mil. The wheel zooms
+and a middle-button drag pans by default. Preferences can change
 wheel behavior, zoom direction/speed, theme and UI scale. Parts and Browser can
 float or collapse; **View** restores a hidden panel. **Help → Keyboard Shortcuts**
 shows the current bindings. Keyboard editing shortcuts apply to the canvas when

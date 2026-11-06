@@ -141,7 +141,7 @@ impl Camera {
     /// Snap the pointer to the nearest multiple of the snap spacing in schematic coordinates,
     /// even when the displayed grid is coarser. The division is in `f64`, so points far from
     /// the origin still land exactly on the grid.
-    pub(super) fn snap(&self, pointer: Pos2, rect: Rect) -> Point {
+    pub(crate) fn snap(&self, pointer: Pos2, rect: Rect) -> Point {
         let relative = pointer - rect.center() - self.offset;
         let nm_per_point = GRID_NM as f64 / f64::from(self.unit_step());
         let spacing = self.snap_nm.max(1);

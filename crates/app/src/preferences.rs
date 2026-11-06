@@ -7,6 +7,7 @@ use pcbcraft_chrome::{
     grid,
     menu::MenuIcon,
     settings::{self, Footer, Page, WindowState},
+    units::Unit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -105,6 +106,9 @@ pub struct Preferences {
     pub schematic_grid_nm: i64,
     /// Automatic counterpart navigation; highlighting remains enabled when this is Off.
     pub selection_follow: SelectionFollow,
+    /// The unit lengths and coordinates are shown in, and that numbers typed without a unit are
+    /// read in. It changes only what is shown, never stored geometry or the project.
+    pub units: Unit,
 }
 
 impl Default for Preferences {
@@ -116,6 +120,7 @@ impl Default for Preferences {
             grid_opacity_percent: grid::OPACITY_DEFAULT,
             schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
             selection_follow: SelectionFollow::default(),
+            units: Unit::default(),
         }
     }
 }
@@ -288,6 +293,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
             preferences.theme = defaults.theme;
             preferences.scale_percent = defaults.scale_percent;
             preferences.grid_opacity_percent = defaults.grid_opacity_percent;
+            preferences.units = defaults.units;
         }
         NAVIGATION => preferences.navigation = defaults.navigation,
         VIEWS => preferences.selection_follow = defaults.selection_follow,
@@ -295,7 +301,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
     }
 }
 
-/// Theme, interface scale and grid opacity.
+/// Theme, interface scale, grid opacity and display units.
 fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(ui, "Appearance", "How PCBCraft looks. Changes show at once; Cancel puts them back.");
     let preferences = &mut *data.preferences;
@@ -327,6 +333,10 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
             grid::opacity_control(ui, &mut preferences.grid_opacity_percent);
         });
         settings::hint(ui, "Only the grid fades. Snapping still follows the grid at 0%.");
+        settings::row_with_keywords(ui, "Units", &["mil", "mm", "millimetres", "millimeters", "metric", "imperial", "inch"], |ui| {
+            settings::segmented(ui, &mut preferences.units, &[(Unit::Mil, "mil"), (Unit::Mm, "mm")]);
+        });
+        settings::hint(ui, "Coordinates and the grid show in this unit, and numbers typed without one use it. Stored geometry never changes.");
     });
 }
 
@@ -430,8 +440,11 @@ mod tests {
             grid_opacity_percent: 35,
             schematic_grid_nm: 25 * grid::NM_PER_MIL,
             selection_follow: SelectionFollow::SecondaryFollowsPrimary,
+            units: Unit::Mm,
         };
         assert_eq!(Preferences::parse(&preferences.to_text()), preferences);
+        // Settings saved before units existed show mils, as the grid did then.
+        assert_eq!(Preferences::parse("{\"grid_opacity_percent\":40}").units, Unit::Mil);
         let hidden = Preferences { grid_opacity_percent: 0, ..Preferences::default() };
         assert_eq!(Preferences::parse(&hidden.to_text()), hidden);
     }
@@ -484,13 +497,14 @@ mod tests {
             grid_opacity_percent: 20,
             schematic_grid_nm: 10 * grid::NM_PER_MIL,
             selection_follow: SelectionFollow::Both,
+            units: Unit::Mm,
         };
         restore_page_defaults(&mut preferences, NAVIGATION);
         // Grid spacing is chosen in the views, not on a page, so no page reset touches it.
         assert_eq!(preferences.schematic_grid_nm, 10 * grid::NM_PER_MIL);
         assert_eq!(preferences.navigation, Navigation::default());
         assert_eq!((preferences.theme, preferences.scale_percent, preferences.grid_opacity_percent), (ThemeChoice::Light, 150, 20));
-        assert_eq!(preferences.selection_follow, SelectionFollow::Both);
+        assert_eq!((preferences.selection_follow, preferences.units), (SelectionFollow::Both, Unit::Mm));
         restore_page_defaults(&mut preferences, VIEWS);
         assert_eq!(preferences.selection_follow, SelectionFollow::Off);
         assert_eq!((preferences.theme, preferences.grid_opacity_percent), (ThemeChoice::Light, 20));
