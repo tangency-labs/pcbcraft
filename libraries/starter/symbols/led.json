@@ -1,7 +1,7 @@
 {
   "format": "pcbcraft-symbol/1",
   "id": "led",
-  "revision": 1,
+  "revision": 2,
   "name": "LED",
   "reference_prefix": "D",
   "default_value": "LED",
@@ -13,16 +13,16 @@
     {
       "id": "main",
       "drawing": [
-        {"type": "line", "from_nm": [-6350000, 0], "to_nm": [-1651000, 0]},
+        {"type": "line", "from_nm": [-3810000, 0], "to_nm": [-1651000, 0]},
         {"type": "polyline", "points_nm": [[-1651000, -1905000], [1651000, 0], [-1651000, 1905000], [-1651000, -1905000]]},
         {"type": "line", "from_nm": [1651000, -1905000], "to_nm": [1651000, 1905000]},
-        {"type": "line", "from_nm": [1651000, 0], "to_nm": [6350000, 0]},
+        {"type": "line", "from_nm": [1651000, 0], "to_nm": [3810000, 0]},
         {"type": "polyline", "points_nm": [[0, -2540000], [1651000, -3937000], [1016000, -3810000]]},
         {"type": "polyline", "points_nm": [[1397000, -2159000], [3048000, -3556000], [2413000, -3429000]]}
       ],
       "pins": [
-        {"terminal": "1", "at_nm": [-6350000, 0]},
-        {"terminal": "2", "at_nm": [6350000, 0]}
+        {"terminal": "1", "at_nm": [-3810000, 0]},
+        {"terminal": "2", "at_nm": [3810000, 0]}
       ]
     }
   ]

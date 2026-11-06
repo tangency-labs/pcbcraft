@@ -49,31 +49,94 @@ impl Terminal {
     }
 }
 
-/// An undirected link between two terminals. The sorted endpoints make duplicates comparable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// An explicit electrical endpoint. Geometry alone never joins distinct endpoints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WireEndpoint {
+    Terminal(Terminal),
+    Junction(u64),
+}
+
+impl WireEndpoint {
+    /// Publish an endpoint in the shared command and inspection representation.
+    pub fn inspect(self) -> Value {
+        match self {
+            Self::Terminal(terminal) => terminal.inspect(),
+            Self::Junction(id) => json!({"junction": format!("junction-{id}")}),
+        }
+    }
+
+    /// Parse an existing terminal or junction identity, rejecting extra fields.
+    pub fn parse(value: &Value) -> Option<Self> {
+        if let Some(terminal) = Terminal::parse(value) {
+            return Some(Self::Terminal(terminal));
+        }
+        let object = value.as_object()?;
+        if object.len() != 1 {
+            return None;
+        }
+        parse_id(object.get("junction")?.as_str()?, "junction-").map(Self::Junction)
+    }
+}
+
+/// Read a canonical positive object ID without accepting alternate spellings.
+pub(crate) fn parse_id(value: &str, prefix: &str) -> Option<u64> {
+    let digits = value.strip_prefix(prefix)?;
+    let id = digits.parse::<u64>().ok()?;
+    (id > 0 && id <= crate::MAX_OBJECT_ID && !digits.starts_with('0') && digits.bytes().all(|b| b.is_ascii_digit())).then_some(id)
+}
+
+/// An electrical edge with optional authored bends. Older pin links retain automatic routing.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wire {
     pub(crate) ordinal: u64,
-    pub(crate) terminals: [Terminal; 2],
+    pub(crate) endpoints: [WireEndpoint; 2],
+    pub(crate) bends: Option<Vec<super::Point>>,
 }
 
 impl Wire {
-    /// Return the exact symbol terminals joined by this wire.
-    pub fn terminals(&self) -> [Terminal; 2] {
-        self.terminals
+    /// The stable ID used to select or delete this wire through the shared command.
+    pub fn id(&self) -> String {
+        format!("wire-{}", self.ordinal)
     }
 
-    /// Return the persistent wire ID within this session and its two endpoints.
-    pub(crate) fn inspect(self) -> Value {
-        let [from, to] = self.terminals;
-        json!({"id": format!("wire-{}", self.ordinal), "from": from.inspect(), "to": to.inspect()})
+    /// The exact terminal or junction identities joined by this edge.
+    pub fn endpoints(&self) -> [WireEndpoint; 2] {
+        self.endpoints
+    }
+
+    /// Return the directly attached symbol terminals, excluding free endpoints and junctions.
+    pub fn terminals(&self) -> Vec<Terminal> {
+        self.endpoints
+            .iter()
+            .filter_map(|end| match end {
+                WireEndpoint::Terminal(pin) => Some(*pin),
+                WireEndpoint::Junction(_) => None,
+            })
+            .collect()
+    }
+
+    /// Return authored bends, or None for a legacy automatically routed pin link.
+    pub fn bends(&self) -> Option<&[super::Point]> {
+        self.bends.as_deref()
+    }
+
+    /// Publish the persistent identity, endpoints and authored geometry without display caches.
+    pub(crate) fn inspect(&self) -> Value {
+        let [from, to] = self.endpoints;
+        let mut out = json!({"id": self.id(), "from": from.inspect(), "to": to.inspect()});
+        if let Some(bends) = &self.bends {
+            out["bends"] = json!(bends);
+        }
+        out
     }
 }
 
-/// The typed connectivity of a project snapshot. It is derived from wires and symbols.
+/// The typed connectivity of a project snapshot, derived from explicit edges and endpoints.
 #[derive(Debug)]
 pub struct Connectivity {
     pub nets: Vec<Vec<Terminal>>,
     pub unconnected: Vec<Terminal>,
+    junctions: Vec<Vec<u64>>,
     by_terminal: BTreeMap<Terminal, usize>,
 }
 
@@ -83,36 +146,99 @@ impl Connectivity {
         self.by_terminal.get(&terminal).map(|&index| self.nets[index].as_slice())
     }
 
-    /// Serialize the same inspection contract used by existing MCP callers.
+    /// Preserve the existing terminal report and include junction identities for free wiring.
     pub(crate) fn inspect(&self) -> Value {
-        let nets: Vec<_> =
-            self.nets.iter().map(|group| json!({"terminals": group.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()})).collect();
+        let nets: Vec<_> = self
+            .nets
+            .iter()
+            .zip(&self.junctions)
+            .map(|(group, junctions)| {
+                let mut net = json!({"terminals": group.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()});
+                if !junctions.is_empty() {
+                    net["junctions"] = json!(junctions.iter().map(|id| format!("junction-{id}")).collect::<Vec<_>>());
+                }
+                net
+            })
+            .collect();
         json!({"nets": nets, "unconnected": self.unconnected.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()})
     }
 
-    /// Derive connected groups and isolated terminals in stable order from explicit wire links.
+    /// Walk explicit endpoint identities; crossings and coincident distinct points stay separate.
     pub(crate) fn build(symbols: &[SymbolPlacement], wires: &[Wire]) -> Self {
-        let mut adjacency = BTreeMap::<Terminal, Vec<Terminal>>::new();
+        let mut adjacency = BTreeMap::<WireEndpoint, Vec<WireEndpoint>>::new();
         for wire in wires {
-            let [from, to] = wire.terminals;
+            let [from, to] = wire.endpoints;
             adjacency.entry(from).or_default().push(to);
             adjacency.entry(to).or_default().push(from);
         }
-        let unconnected = symbols.iter().flat_map(SymbolPlacement::terminals).filter(|terminal| !adjacency.contains_key(terminal)).collect();
+        let unconnected = symbols
+            .iter()
+            .flat_map(SymbolPlacement::terminals)
+            .filter(|terminal| !adjacency.contains_key(&WireEndpoint::Terminal(*terminal)))
+            .collect();
         let mut nets = Vec::new();
+        let mut junctions = Vec::new();
         let mut by_terminal = BTreeMap::new();
         while let Some((&first, _)) = adjacency.first_key_value() {
             let mut pending = vec![first];
             let mut group = BTreeSet::new();
-            while let Some(terminal) = pending.pop() {
-                if let Some(neighbors) = adjacency.remove(&terminal) {
-                    group.insert(terminal);
+            let mut points = BTreeSet::new();
+            while let Some(endpoint) = pending.pop() {
+                if let Some(neighbors) = adjacency.remove(&endpoint) {
+                    match endpoint {
+                        WireEndpoint::Terminal(terminal) => {
+                            group.insert(terminal);
+                        }
+                        WireEndpoint::Junction(id) => {
+                            points.insert(id);
+                        }
+                    }
                     pending.extend(neighbors);
                 }
             }
             by_terminal.extend(group.iter().map(|&terminal| (terminal, nets.len())));
             nets.push(group.into_iter().collect());
+            junctions.push(points.into_iter().collect());
         }
-        Self { nets, unconnected, by_terminal }
+        Self { nets, junctions, unconnected, by_terminal }
     }
+}
+
+/// Build an orthogonal path through anchors; diagonal gaps get one deterministic elbow.
+/// Duplicate and collinear intermediate points are removed, retaining endpoint coordinates.
+pub fn orthogonal_path(anchors: impl IntoIterator<Item = super::Point>, horizontal_first: bool) -> Vec<super::Point> {
+    let mut path: Vec<super::Point> = Vec::new();
+    for point in anchors {
+        if let Some(previous) = path.last().copied()
+            && previous.x_nm != point.x_nm
+            && previous.y_nm != point.y_nm
+        {
+            let elbow = if horizontal_first {
+                super::Point { x_nm: point.x_nm, y_nm: previous.y_nm }
+            } else {
+                super::Point { x_nm: previous.x_nm, y_nm: point.y_nm }
+            };
+            append_point(&mut path, elbow);
+        }
+        append_point(&mut path, point);
+    }
+    path
+}
+
+/// Append a path point while collapsing only redundant points on the same straight run.
+fn append_point(path: &mut Vec<super::Point>, point: super::Point) {
+    if path.last() == Some(&point) {
+        return;
+    }
+    if path.len() >= 2 {
+        let a = path[path.len() - 2];
+        let b = path[path.len() - 1];
+        let between = |a: i64, b: i64, c: i64| (a.min(c)..=a.max(c)).contains(&b);
+        if (a.x_nm == b.x_nm && b.x_nm == point.x_nm && between(a.y_nm, b.y_nm, point.y_nm))
+            || (a.y_nm == b.y_nm && b.y_nm == point.y_nm && between(a.x_nm, b.x_nm, point.x_nm))
+        {
+            path.pop();
+        }
+    }
+    path.push(point);
 }

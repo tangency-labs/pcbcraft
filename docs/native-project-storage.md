@@ -11,7 +11,7 @@ the same project schema. The desktop, browser and MCP CLI can open either one.
 
 | Encoding | Intended use | Contents |
 | --- | --- | --- |
-| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/2` |
+| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/2` or `/3` |
 | ZIP `.pc` | Portable copy for sharing or bundling assets | A manifest, the same project document, and any bundled asset bytes |
 
 Open determines the encoding from the file contents. A ZIP signature selects
@@ -182,8 +182,9 @@ remain separate design decisions.
 
 ## Current implementation
 
-The current project document is plain UTF-8 JSON tagged
-`pcbcraft-project/2`. Components live in a project-level `components` array;
+The current project document is plain UTF-8 JSON tagged `pcbcraft-project/2`
+for legacy pin links or `pcbcraft-project/3` when authored routes or free endpoints
+are present. Components live in a project-level `components` array;
 the sheet holds unit placements and wires. Every component, placement and wire
 occupies its own line in stable ID order, with blank lines between records.
 
@@ -208,7 +209,7 @@ components, unknown units, duplicate placements and unplaced components are
 rejected. This establishes the ownership model for future multi-unit support
 without enabling multi-unit placement yet.
 
-Component IDs have their own namespace. Placement, wire and footprint IDs share
+Component IDs have their own namespace. Placement, wire, junction and footprint IDs share
 the existing object namespace. A component and its placement may have different
 numeric IDs. Wires still save symbol IDs and pin numbers, so moving a unit edits
 only that unit's line. Editing its fields edits only the component's line.
@@ -216,6 +217,31 @@ A footprint attaches to the component ID, never the designator or placement ID.
 Cross-probing resolves component pins through the unit-placement index.
 Deleting the last placed unit also removes the component and its footprint;
 undo restores the complete snapshot.
+
+### Format 3 wire geometry
+
+Format 3 adds `sheet.junctions`, with one `{id, x_nm, y_nm}` record per free
+endpoint or shared junction. A wire stores `id`, `from`, `to` and an optional
+ordered `bends` array of `{x_nm, y_nm}` points. Endpoints are either the existing
+`{symbol, pin}` reference or `{junction: id}`. Junctions share the object-ID
+namespace and must be referenced by a wire. Duplicate endpoint pairs, dangling
+references, out-of-bounds coordinates and more than 64 bends are rejected.
+
+New routes use `schematic.draw_wire`, which validates nonzero orthogonal legs
+before committing the wire and any new endpoints as one undo step. Reusing an
+endpoint identity joins its net; crossings and coincident but distinct identities
+do not. Each edit advances the session revision past all IDs it allocated, so
+undo followed by a new edit cannot reuse those identities. Deleting a wire prunes
+only junctions no longer referenced by any edge.
+
+Authored bends remain fixed when a connected symbol moves or rotates. The
+renderer adds orthogonal end legs to the moved pins without rewriting the wire
+record, preserving the one-record diff for a symbol move. Legacy wires without
+`bends` retain their automatic display routing. Format 2 continues to serialize
+unchanged for projects containing only those legacy links; formats 1 and 2 refuse
+format 3 geometry. Both JSON and ZIP round trips retain the authored order and
+all endpoint identities. Interior wire splitting and junction dragging are not
+implemented in this slice.
 
 ### Format 1 migration
 

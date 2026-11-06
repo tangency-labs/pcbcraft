@@ -21,16 +21,24 @@ lists the schematic symbols in the starter library under
 connector and 4-pin header. See [docs/symbol-library.md](docs/symbol-library.md) for the file
 format. Type to search, choose Small, Medium, Large or List, and click a part (or
 press **Enter** for the first match) to place it on the grid, or drag parts
-straight onto the sheet. Press **Esc** to close the browser or cancel placing. Choose **Capture → Wire**
-or press **W**, then click two terminal markers to connect them. Press **Esc** or
-right-click and choose **Cancel** to discard an in-progress wire.
+straight onto the sheet. Press **R** to rotate a click-to-place preview before placing it,
+or **Esc** to close the browser or cancel placing. New resistors, capacitors, LEDs and
+two-pin connectors use shorter leads from revision 2 of the starter symbols; saved
+revision 1 parts retain their original geometry.
 
-Click a symbol to select it. Press **R** to rotate it, **E** to edit its
-reference and value, or **Delete** to remove it with its wires; right-click a
-symbol for the same actions, and press **Esc** to clear the selection.
+Choose **Capture → Wire** or press **W**, then click a pin, an existing wire endpoint
+or empty grid space to start. Click to add corners, **Space** to flip the current
+elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
+to finish, or press **Enter** or double-click to finish on empty space. **Esc** or
+right-click → **Cancel** discards the draft. Click a completed wire and press **Delete**
+to remove it. Crossings stay disconnected; joining the interior of a wire is later work.
+
+Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
+**E** edits its reference and value and **Delete** removes it with its wires.
+Right-click a symbol for the same actions, and press **Esc** to clear the selection.
 Reference and value belong to the component; position and rotation belong to
-its placed unit. Native format 2 records these separately, and opening a format 1
-project migrates it on the next save. Footprints link to the component.
+its placed unit. Native formats 2 and 3 record these separately, and opening a format 1
+project migrates it on the next save. Authored wire routes use format 3. Footprints link to the component.
 
 Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
@@ -123,7 +131,13 @@ the project, or `cross_probe` to look up a linked terminal or pad.
 An MCP client can use `schematic.connect_pins` to join two terminals from
 `inspect_project`. Describe the command for its input shape, and send the current
 project revision with the two endpoints. Project inspection returns the wires,
-connected terminal groups and unconnected pins.
+connected terminal groups and unconnected pins. `schematic.draw_wire` accepts
+terminal references, `{"junction":"junction-N"}` references from inspection, or
+new free points as `{"x_nm":0,"y_nm":0}`, plus an ordered `bends` array and
+`expected_revision`. Every leg must be horizontal or vertical. One complete route
+is one undo step; `schematic.delete_wire` removes an inspected wire ID.
+`schematic.place_symbol` also accepts an optional `rotation` of 0, 90, 180 or 270
+counterclockwise degrees, defaulting to 0.
 
 ## Where things go
 

@@ -18,11 +18,12 @@ are original work under the project's MIT OR Apache-2.0 license.
 libraries/starter/
   library.json        manifest: format, id, name, license
   symbols/
-    capacitor.json    one symbol per file
+    capacitor.json    latest symbol revision
     connector.json
     header-4.json
     led.json
     resistor.json
+    *-v1.json         preserved revision 1 definitions
 ```
 
 The manifest:
@@ -30,6 +31,14 @@ The manifest:
 ```json
 {"format": "pcbcraft-library/1", "id": "starter", "name": "PCBcraft starter", "license": "MIT OR Apache-2.0"}
 ```
+
+New placements use the highest loaded revision of each symbol ID. The browser
+lists that revision once; older revisions stay available for projects that pin
+them. Revision 2 shortens the default leads while keeping the pins on the grid:
+resistor endpoints are 5.08 mm from center, capacitor endpoints 2.54 mm, and LED
+and connector endpoints 3.81 mm. The original `*-v1.json` files retain the former
+6.35 mm endpoints. Changing a drawing or pin position requires a new revision
+so reopening an older project cannot silently move its connections.
 
 ## Symbol format `pcbcraft-symbol/1`
 
@@ -67,7 +76,7 @@ downward, before any rotation. The schematic grid is 1.27 mm (1,270,000 nm).
 | Field | Meaning |
 |---|---|
 | `format` | The schema version, which tells PCBcraft how to read the file. A different version is refused with its name. |
-| `id` | Stable ID used by `schematic.place_symbol` and saved in projects: 1 to 64 lowercase letters, digits and inner hyphens, unique in the library. |
+| `id` | Stable ID used by `schematic.place_symbol` and saved in projects: 1 to 64 lowercase letters, digits and inner hyphens, unique together with its revision in the library. |
 | `revision` | The library's revision of this symbol, 1 or more, tracked separately from `format`. Projects pin it on each component. |
 | `name` | Shown in the parts browser, 1 to 64 characters. |
 | `reference_prefix` | 1 to 4 capital letters that start automatic references, such as `R`. |

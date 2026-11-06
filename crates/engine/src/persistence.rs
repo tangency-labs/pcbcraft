@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     MAX_NAME, MAX_OBJECT_ID, MAX_REFERENCE_NUMBER, Project,
     board::{Board, Footprint},
-    schematic::{Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolPlacement, Terminal, Wire, library_symbol, wiring::MAX_WIRES},
+    schematic::{Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolPlacement, Terminal, Wire, WireEndpoint, wiring::MAX_WIRES},
 };
 
 mod archive;
@@ -75,6 +75,8 @@ pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>,
 
 /// Format 2 separates component fields from unit geometry and links footprints to components.
 const FORMAT: &str = "pcbcraft-project/2";
+/// Format 3 adds explicit free endpoint identities and authored wire bends.
+const FORMAT_3: &str = "pcbcraft-project/3";
 /// The first project format, which opens through [`migrate_from_1`].
 const FORMAT_1: &str = "pcbcraft-project/1";
 /// Maximum number of bytes in a plain project document or ZIP project payload.
@@ -96,6 +98,8 @@ struct Document {
 struct Sheet {
     id: Uuid,
     symbols: Vec<Placement<'static>>,
+    #[serde(default, deserialize_with = "present")]
+    junctions: Option<Vec<Junction>>,
     wires: Vec<Connection<'static>>,
 }
 
@@ -183,11 +187,19 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document, String> {
     if legacy.format != FORMAT_1 {
         return Err(format!("unsupported project format {}", legacy.format));
     }
+    if legacy
+        .sheet
+        .wires
+        .iter()
+        .any(|wire| wire.bends.is_some() || !matches!(wire.from, Endpoint::Pin { .. }) || !matches!(wire.to, Endpoint::Pin { .. }))
+    {
+        return Err("format 1 cannot contain authored wire geometry".to_owned());
+    }
     let mut components = Vec::with_capacity(legacy.sheet.symbols.len());
     let mut symbols = Vec::with_capacity(legacy.sheet.symbols.len());
     for record in legacy.sheet.symbols {
-        let definition = library_symbol(&record.definition)
-            .filter(|definition| definition.revision() == record.definition_revision)
+        let definition = crate::library::starter()
+            .symbol_revision(&record.definition, record.definition_revision)
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
         components.push(ComponentRecord {
             id: record.id,
@@ -226,29 +238,50 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document, String> {
         id: legacy.id,
         name: legacy.name,
         components,
-        sheet: Sheet { id: legacy.sheet.id, symbols, wires: legacy.sheet.wires },
+        sheet: Sheet { id: legacy.sheet.id, symbols, junctions: None, wires: legacy.sheet.wires },
         board,
     })
 }
 
+/// Optional geometry may be omitted, but an explicit null is malformed rather than absent.
+/// This keeps old format tags from accepting newer fields by spelling their value as null.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
+/// Stored wire geometry is absent on legacy auto-routed pin links.
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Connection<'a> {
     id: u64,
     from: Endpoint<'a>,
     to: Endpoint<'a>,
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    bends: Option<Vec<Point>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum Endpoint<'a> {
+    Pin { symbol: u64, pin: std::borrow::Cow<'a, str> },
+    Junction { junction: u64 },
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Endpoint<'a> {
-    symbol: u64,
-    pin: std::borrow::Cow<'a, str>,
+struct Junction {
+    id: u64,
+    x_nm: i64,
+    y_nm: i64,
 }
 
-impl From<Terminal> for Endpoint<'static> {
-    fn from(terminal: Terminal) -> Self {
-        Self { symbol: terminal.symbol, pin: terminal.number().into() }
+impl From<WireEndpoint> for Endpoint<'static> {
+    /// Preserve electrical identity independently of route geometry.
+    fn from(endpoint: WireEndpoint) -> Self {
+        match endpoint {
+            WireEndpoint::Terminal(terminal) => Self::Pin { symbol: terminal.symbol, pin: terminal.number().into() },
+            WireEndpoint::Junction(junction) => Self::Junction { junction },
+        }
     }
 }
 
@@ -269,6 +302,8 @@ pub struct Encoder {
     components: u64,
     writing_symbols: bool,
     symbols: usize,
+    junctions: u64,
+    writing_junctions: bool,
     wires: usize,
     writing_wires: bool,
     footprints: usize,
@@ -276,11 +311,12 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    /// Start a native document without walking the schematic.
+    /// Start a native document, using format 3 when authored routes or junctions require it.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
+        let format = if !project.junctions.is_empty() || project.wires.iter().any(|wire| wire.bends.is_some()) { FORMAT_3 } else { FORMAT };
         let mut bytes = Vec::new();
-        write!(bytes, "{{\n  \"format\": \"{FORMAT}\",\n  \"id\": \"{}\",\n  \"name\": {name},\n  \"components\": [\n", project.id)
+        write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {name},\n  \"components\": [\n", project.id)
             .map_err(|error| error.to_string())?;
         Ok(Self {
             project,
@@ -288,6 +324,8 @@ impl Encoder {
             components: 0,
             writing_symbols: false,
             symbols: 0,
+            junctions: 0,
+            writing_junctions: false,
             wires: 0,
             writing_wires: false,
             footprints: 0,
@@ -332,13 +370,28 @@ impl Encoder {
                 self.symbols += 1;
                 continue;
             }
+            if !self.project.junctions.is_empty() {
+                if !self.writing_junctions {
+                    self.bytes.extend_from_slice(b"    ],\n    \"junctions\": [\n");
+                    self.writing_junctions = true;
+                }
+                if let Some((&id, &point)) =
+                    self.project.junctions.range((std::ops::Bound::Excluded(self.junctions), std::ops::Bound::Unbounded)).next()
+                {
+                    let record = Junction { id, x_nm: point.x_nm, y_nm: point.y_nm };
+                    let more = self.project.junctions.last_key_value().is_some_and(|(&last, _)| last != id);
+                    write_record(&mut self.bytes, &record, more)?;
+                    self.junctions = id;
+                    continue;
+                }
+            }
             if !self.writing_wires {
                 self.bytes.extend_from_slice(b"    ],\n    \"wires\": [\n");
                 self.writing_wires = true;
             }
             if let Some(wire) = self.project.wires.get(self.wires) {
-                let [from, to] = wire.terminals();
-                let record = Connection { id: wire.ordinal, from: from.into(), to: to.into() };
+                let [from, to] = wire.endpoints();
+                let record = Connection { id: wire.ordinal, from: from.into(), to: to.into(), bends: wire.bends.clone() };
                 write_record(&mut self.bytes, &record, self.wires + 1 < self.project.wires.len())?;
                 self.wires += 1;
                 continue;
@@ -401,7 +454,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     }
     let header: Header = serde_json::from_slice(bytes).map_err(|error| format!("invalid project JSON: {error}"))?;
     let (document, upgraded_from) = match header.format.as_str() {
-        FORMAT => (serde_json::from_slice::<Document>(bytes).map_err(|error| format!("invalid project JSON: {error}"))?, None),
+        FORMAT | FORMAT_3 => (serde_json::from_slice::<Document>(bytes).map_err(|error| format!("invalid project JSON: {error}"))?, None),
         FORMAT_1 => {
             let legacy = serde_json::from_slice(bytes).map_err(|error| format!("invalid format 1 project: {error}"))?;
             (migrate_from_1(legacy)?, Some(1))
@@ -409,8 +462,14 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         format => return Err(format!("unsupported project format {format}")),
     };
     let Document { format, id, name, components: records, sheet, board } = document;
-    if format != FORMAT {
-        return Err(format!("unsupported project format {format}"));
+    if format == FORMAT
+        && (sheet.junctions.is_some()
+            || sheet
+                .wires
+                .iter()
+                .any(|wire| wire.bends.is_some() || !matches!(wire.from, Endpoint::Pin { .. }) || !matches!(wire.to, Endpoint::Pin { .. })))
+    {
+        return Err("format 2 cannot contain authored wire geometry".to_owned());
     }
     if id.is_nil() || sheet.id.is_nil() || id == sheet.id {
         return Err("invalid project or sheet identity".to_owned());
@@ -429,8 +488,8 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     let mut components = BTreeMap::new();
     for record in records {
         validate_id(&mut component_ids, record.id)?;
-        let definition = library_symbol(&record.definition)
-            .filter(|definition| record.definition_revision == definition.revision())
+        let definition = crate::library::starter()
+            .symbol_revision(&record.definition, record.definition_revision)
             .ok_or_else(|| format!("unavailable definition {} at revision {}", record.definition, record.definition_revision))?;
         if !(1..=MAX_REFERENCE_NUMBER).contains(&record.reference_number)
             || !references.insert((definition.reference_prefix(), record.reference_number))
@@ -486,27 +545,60 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         return Err("component has no placed unit".to_owned());
     }
     symbols.sort_unstable_by_key(|symbol| symbol.ordinal);
-    let resolve = |endpoint: Endpoint<'_>| {
-        symbols
-            .binary_search_by_key(&endpoint.symbol, |symbol| symbol.ordinal)
+    let mut junctions = BTreeMap::new();
+    let junction_records = sheet.junctions.unwrap_or_default();
+    if junction_records.len() > MAX_WIRES * 2 {
+        return Err("project exceeds the junction limit".to_owned());
+    }
+    for record in junction_records {
+        validate_id(&mut ids, record.id)?;
+        let point = Point { x_nm: record.x_nm, y_nm: record.y_nm };
+        if !crate::wire::valid_point(&point) {
+            return Err("junction is outside the schematic bounds".to_owned());
+        }
+        junctions.insert(record.id, point);
+    }
+    let resolve = |endpoint: Endpoint<'_>| match endpoint {
+        Endpoint::Pin { symbol, pin } => symbols
+            .binary_search_by_key(&symbol, |placed| placed.ordinal)
             .ok()
-            .and_then(|index| Terminal::from_number(endpoint.symbol, symbols[index].definition, &endpoint.pin))
-            .ok_or_else(|| format!("wire points to missing pin {} on symbol {}", endpoint.pin, endpoint.symbol))
+            .and_then(|index| Terminal::from_number(symbol, symbols[index].definition, &pin))
+            .map(WireEndpoint::Terminal)
+            .ok_or_else(|| format!("wire points to missing pin {pin} on symbol {symbol}")),
+        Endpoint::Junction { junction } => junctions
+            .contains_key(&junction)
+            .then_some(WireEndpoint::Junction(junction))
+            .ok_or_else(|| format!("wire points to missing junction {junction}")),
     };
-
     let mut pairs = BTreeSet::new();
+    let mut used_junctions = BTreeSet::new();
     let mut wires = Vec::with_capacity(sheet.wires.len());
     for record in sheet.wires {
         validate_id(&mut ids, record.id)?;
-        let mut terminals = [resolve(record.from)?, resolve(record.to)?];
-        terminals.sort_unstable();
-        if terminals[0] == terminals[1] || !pairs.insert(terminals) {
+        let mut endpoints = [resolve(record.from)?, resolve(record.to)?];
+        let mut sorted = endpoints;
+        sorted.sort_unstable();
+        if sorted[0] == sorted[1] || !pairs.insert(sorted) {
             return Err("wire has identical endpoints or duplicates another wire".to_owned());
         }
-        wires.push(Wire { ordinal: record.id, terminals });
+        if let Some(bends) = &record.bends {
+            if bends.len() > crate::wire::MAX_BENDS || bends.iter().any(|point| !crate::wire::valid_point(point)) {
+                return Err("invalid wire bends".to_owned());
+            }
+        } else {
+            endpoints = sorted;
+        }
+        for endpoint in endpoints {
+            if let WireEndpoint::Junction(id) = endpoint {
+                used_junctions.insert(id);
+            }
+        }
+        wires.push(Wire { ordinal: record.id, endpoints, bends: record.bends });
+    }
+    if used_junctions.len() != junctions.len() {
+        return Err("junction has no connected wire".to_owned());
     }
     wires.sort_unstable_by_key(|wire| wire.ordinal);
-
     let mut layout = Board::default();
     if let Some(mut board) = board {
         if board.footprints.len() > components.len() {
@@ -534,6 +626,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         components: Arc::new(components),
         units: Arc::new(units),
         wires: Arc::new(wires),
+        junctions: Arc::new(junctions),
         connectivity: Arc::default(),
         board: Arc::new(layout),
         upgraded_from,
@@ -686,6 +779,20 @@ mod tests {
         let forged = original.replacen("\"y_nm\":0}", "\"y_nm\":0,\"rotation\":90}", 1);
         assert_ne!(forged, original);
         assert!(decode(forged.as_bytes()).unwrap_err().contains("unknown field `rotation`"));
+    }
+
+    /// Explicit null geometry cannot bypass format 1/2's refusal of newer fields.
+    #[test]
+    fn old_formats_refuse_null_wire_geometry() {
+        for fixture in [FORMAT_1_FIXTURE, FORMAT_2_FIXTURE] {
+            let original: serde_json::Value = serde_json::from_slice(fixture).unwrap();
+            let mut bends = original.clone();
+            bends["sheet"]["wires"][0]["bends"] = serde_json::Value::Null;
+            assert!(decode(&serde_json::to_vec(&bends).unwrap()).is_err());
+            let mut junctions = original;
+            junctions["sheet"]["junctions"] = serde_json::Value::Null;
+            assert!(decode(&serde_json::to_vec(&junctions).unwrap()).is_err());
+        }
     }
 
     /// Component fields and unit rotation survive a save, while invalid rotations and
