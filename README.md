@@ -18,6 +18,15 @@ a list of Shortcuts and, on the desktop, the AI page for the Assistant.
 from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
 same points. The opacity applies to both split panes and is kept with your
 preferences, not in the project.
+The **Grid** button at the right of each sheet tab sets that pane's snap spacing:
+100, 50 (the default, where symbol pins sit), 25, 10 or 5 mil, or any other spacing
+typed as mils or millimetres (`20`, `20 mil`, `0.5 mm`, from 0.01 mm to 1000 mil).
+**N** steps the focused pane finer and **Shift+N** coarser. A new spacing never moves
+or rescales anything already drawn, and pins stay reachable at any spacing because
+wires attach to them by clicking. When zooming out thins the dots, the button says
+how far apart the drawn dots are (for example *Grid 10 mil · dots 50 mil*). Each pane
+keeps its own spacing through focus changes, splitting and reopening files; the last
+one chosen is kept with your preferences, not in the project.
 Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays

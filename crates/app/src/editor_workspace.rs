@@ -1,7 +1,7 @@
 //! Two schematic views over one session. Focus moves whole view state, never document state.
 
 use egui::{Rect, Ui};
-use pcbcraft_chrome::{editor, shell, workspace};
+use pcbcraft_chrome::{editor, grid, shell, workspace};
 use pcbcraft_engine::{Session, selection::Selection};
 
 use crate::{Dialog, PcbApp, SchematicView, Tool, ViewId, ViewInput, preferences::SelectionFollow, schematic_canvas};
@@ -45,6 +45,13 @@ impl Default for EditorViews {
 }
 
 impl EditorViews {
+    /// Give both views the same snap spacing, as at startup from the remembered preference.
+    /// An out-of-range spacing leaves both unchanged.
+    pub(super) fn set_grid_everywhere(&mut self, spacing_nm: i64) {
+        self.active.camera.set_snap_nm(spacing_nm);
+        self.other.camera.set_snap_nm(spacing_nm);
+    }
+
     /// Synchronize both views, including the hidden one, after every project change.
     pub(super) fn sync(&mut self, session: &Session) {
         let active_changed = self.active.sync(session);
@@ -158,6 +165,25 @@ impl PcbApp {
         self.views.select(selection, &self.session, self.preferences.selection_follow);
     }
 
+    /// Change one view's snap spacing and remember it for the next start. This is presentation
+    /// only: the project, its revision, its unsaved state and undo history stay as they are,
+    /// nothing moves, and the other view keeps its own spacing. An in-progress gesture is left
+    /// alone; its next snapped point follows the new spacing. Out-of-range values are ignored.
+    pub(super) fn set_view_grid(&mut self, id: ViewId, spacing_nm: i64) {
+        let view = if self.views.active.id() == id { &mut self.views.active } else { &mut self.views.other };
+        if view.camera.set_snap_nm(spacing_nm) {
+            self.preferences.schematic_grid_nm = spacing_nm;
+        }
+    }
+
+    /// Step the active view to the next finer (`finer`) or coarser grid preset, wrapping.
+    pub(super) fn cycle_grid(&mut self, finer: bool) {
+        let current = self.views.active.camera.snap_nm();
+        if let Some(next) = grid::cycle(current, &grid::SCHEMATIC_SPACING_PRESETS_NM, finer) {
+            self.set_view_grid(self.views.active.id(), next);
+        }
+    }
+
     /// Apply the presentation action from the View ribbon. A modal owns input until it closes.
     pub(super) fn split_editors(&mut self, ctx: &egui::Context, split: bool) {
         if self.session.project().is_none() || !matches!(self.dialog, Dialog::None) {
@@ -222,10 +248,20 @@ impl PcbApp {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
                 let view = if active { &self.views.active } else { &self.views.other };
-                if let Some(path) = view.sheet_path(&self.session)
-                    && editor::sheet_tab(ui, &path, active)
-                {
-                    self.activate_editor(ui.ctx(), id);
+                if let Some(path) = view.sheet_path(&self.session) {
+                    let mut spacing = view.camera.snap_nm();
+                    let every = grid::shown_every(view.camera.snap_step()).unwrap_or(1);
+                    let mut changed = false;
+                    let clicked = editor::sheet_tab(ui, &path, active, |ui| {
+                        changed =
+                            grid::spacing_menu(ui, &mut spacing, &grid::SCHEMATIC_SPACING_PRESETS_NM, grid::SCHEMATIC_SPACING_DEFAULT_NM, every);
+                    });
+                    if changed {
+                        self.set_view_grid(id, spacing);
+                    }
+                    if clicked {
+                        self.activate_editor(ui.ctx(), id);
+                    }
                 }
                 let canvas = ui.available_rect_before_wrap();
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);

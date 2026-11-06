@@ -37,7 +37,8 @@ impl Binding {
 }
 
 /// The camera, selection and unfinished interaction for one schematic view. Panels and project
-/// services remain with the application host in this slice; none of these fields are persisted.
+/// services remain with the application host in this slice; none of these fields are persisted,
+/// though the host remembers the last chosen grid spacing as a preference.
 #[derive(Debug)]
 pub(super) struct SchematicView {
     id: ViewId,
@@ -125,12 +126,16 @@ impl SchematicView {
 
     /// Rebind after project replacement or reopening, preserving the view's runtime identity.
     /// Ordinary edits and undo retain the camera and surviving selection, but cancel old drafts.
+    /// A replacement resets navigation and selection but keeps the view's grid spacing.
     /// Return whether the sheet or history root changed. Synchronization never edits the session.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
         let binding = Binding::current(session);
         let changed = self.binding != binding;
         if changed {
+            // The grid is the person's working context, not the file's: it survives reopening.
+            let snap_nm = self.camera.snap_nm();
             *self = Self::new(self.id);
+            self.camera.set_snap_nm(snap_nm);
             self.binding = binding;
         }
         if self.tool.as_ref().is_some_and(|tool| tool.revision() != session.revision()) {

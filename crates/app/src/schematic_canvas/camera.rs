@@ -1,5 +1,5 @@
 use egui::{Event, MouseWheelUnit, PointerButton, Pos2, Rect, Response, Vec2, pos2, vec2};
-use pcbcraft_chrome::theme;
+use pcbcraft_chrome::{grid, theme};
 use pcbcraft_engine::{
     Project,
     schematic::{GRID_NM, MAX_CENTER_NM, MAX_PIN_OFFSET_NM, Point},
@@ -12,7 +12,8 @@ use crate::preferences::{Navigation, ScrollAction, ZoomAround};
 const MIN_ZOOM: f32 = 0.005;
 const MAX_ZOOM: f32 = 8.0;
 
-/// Viewport state in egui points. Navigation stays outside the project and its undo history.
+/// Viewport and snapping state in egui points. Navigation and the snap grid stay outside the
+/// project and its undo history.
 #[derive(Debug)]
 pub(crate) struct Camera {
     zoom: f32,
@@ -20,20 +21,44 @@ pub(crate) struct Camera {
     fit_requested: bool,
     /// Usable canvas rectangle relative to its center, clear of floating cards.
     uncovered: Option<Rect>,
+    /// Spacing of the points the pointer snaps to, in nanometres. It never changes the scale:
+    /// drawing is always in [`GRID_NM`] units, so a new spacing leaves everything where it is.
+    snap_nm: i64,
 }
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { zoom: 1.0, offset: Vec2::ZERO, fit_requested: false, uncovered: None }
+        Self { zoom: 1.0, offset: Vec2::ZERO, fit_requested: false, uncovered: None, snap_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM }
     }
 }
 
 impl Camera {
-    /// Seed another view from the currently displayed transform, leaving its host geometry
-    /// unset. Splitting supersedes any unpainted Fit request so both views start at this zoom.
+    /// Seed another view from the currently displayed transform and grid, leaving its host
+    /// geometry unset. Splitting supersedes any unpainted Fit request so both views start at
+    /// this zoom.
     pub(crate) fn fork_navigation(&mut self) -> Self {
         self.fit_requested = false;
-        Self { zoom: self.zoom, offset: self.offset, ..Self::default() }
+        Self { zoom: self.zoom, offset: self.offset, snap_nm: self.snap_nm, ..Self::default() }
+    }
+
+    /// The snap spacing in nanometres.
+    pub(crate) fn snap_nm(&self) -> i64 {
+        self.snap_nm
+    }
+
+    /// Snap to points `spacing_nm` apart from now on. Values outside [`grid::SPACING_RANGE_NM`]
+    /// are ignored and return false; nothing moves, and the zoom and pan stay as they are.
+    pub(crate) fn set_snap_nm(&mut self, spacing_nm: i64) -> bool {
+        let valid = grid::SPACING_RANGE_NM.contains(&spacing_nm);
+        if valid {
+            self.snap_nm = spacing_nm;
+        }
+        valid
+    }
+
+    /// The on-screen distance between snap points, before the grid thins its dots out.
+    pub(crate) fn snap_step(&self) -> f32 {
+        (f64::from(self.unit_step()) * self.snap_nm as f64 / GRID_NM as f64) as f32
     }
 
     /// Reveal the selected symbols and wire paths if they extend outside the usable canvas.
@@ -45,7 +70,7 @@ impl Camera {
         for symbol in project.symbols().iter().filter(|symbol| selection.symbols.contains(&symbol.id())) {
             let center = self.screen(symbol.position, rect).to_vec2();
             let extent = grid_bounds(&symbol.definition, symbol.turns());
-            let step = self.grid_step();
+            let step = self.unit_step();
             bounds = bounds.union(
                 Rect::from_min_max(pos2(extent.min.x * step, extent.min.y * step), pos2(extent.max.x * step, extent.max.y * step)).translate(center),
             );
@@ -90,7 +115,7 @@ impl Camera {
     /// Pan so a model point sits at the center of the uncovered canvas, keeping the zoom.
     /// Cancels a pending fit, which would otherwise move the view away again.
     pub(crate) fn center_on(&mut self, point: Point) {
-        let scale = self.grid_step() / GRID_NM as f32;
+        let scale = self.unit_step() / GRID_NM as f32;
         self.offset = self.uncovered_center() - vec2(point.x_nm as f32, point.y_nm as f32) * scale;
         self.fit_requested = false;
     }
@@ -101,21 +126,27 @@ impl Camera {
         self.zoom
     }
 
-    /// The visible spacing of the underlying placement grid, before coarsening its drawing.
-    pub(super) fn grid_step(&self) -> f32 {
+    /// The on-screen size of one [`GRID_NM`] drawing unit (50 mil), which symbol geometry is
+    /// measured in. It depends on zoom only, never on the snap spacing.
+    pub(super) fn unit_step(&self) -> f32 {
         theme::SCHEMATIC_GRID_SPACING * self.zoom
     }
 
     /// Convert a model point to a point on the canvas.
     pub(crate) fn screen(&self, point: Point, rect: Rect) -> Pos2 {
-        let scale = self.grid_step() / GRID_NM as f32;
+        let scale = self.unit_step() / GRID_NM as f32;
         rect.center() + self.offset + vec2(point.x_nm as f32, point.y_nm as f32) * scale
     }
 
-    /// Snap the pointer in schematic coordinates, even when the displayed grid is coarser.
+    /// Snap the pointer to the nearest multiple of the snap spacing in schematic coordinates,
+    /// even when the displayed grid is coarser. The division is in `f64`, so points far from
+    /// the origin still land exactly on the grid.
     pub(super) fn snap(&self, pointer: Pos2, rect: Rect) -> Point {
-        let relative = (pointer - rect.center() - self.offset) / self.grid_step();
-        Point { x_nm: relative.x.round() as i64 * GRID_NM, y_nm: relative.y.round() as i64 * GRID_NM }
+        let relative = pointer - rect.center() - self.offset;
+        let nm_per_point = GRID_NM as f64 / f64::from(self.unit_step());
+        let spacing = self.snap_nm.max(1);
+        let snap = |points: f32| (f64::from(points) * nm_per_point / spacing as f64).round() as i64 * spacing;
+        Point { x_nm: snap(relative.x), y_nm: snap(relative.y) }
     }
 
     /// Apply navigation only when the canvas owns input, following the person's settings.
@@ -147,19 +178,19 @@ impl Camera {
             }
         }
         // Keep the view center within reach of the full schematic coordinate range.
-        let limit = Vec2::splat((MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f32 / GRID_NM as f32 * self.grid_step());
+        let limit = Vec2::splat((MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f32 / GRID_NM as f32 * self.unit_step());
         self.offset = self.offset.clamp(-limit, limit);
     }
 
     /// Center symbol and wire bounds, including free routes and a margin for labels, in the part
     /// of the canvas left uncovered by all visible floating cards.
     fn fit(&mut self, project: &Project, rect: Rect) {
-        *self = Self { uncovered: self.uncovered, ..Self::default() };
+        *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
         let mut bounds = Rect::NOTHING;
         for symbol in project.symbols() {
             let center = self.screen(symbol.position, rect) - rect.center();
             let extent = grid_bounds(&symbol.definition, symbol.turns());
-            let step = self.grid_step();
+            let step = self.unit_step();
             let symbol_bounds = Rect::from_min_max(pos2(extent.min.x * step, extent.min.y * step), pos2(extent.max.x * step, extent.max.y * step))
                 .translate(center)
                 .expand(theme::SCHEMATIC_FIT_MARGIN);
@@ -239,6 +270,40 @@ mod tests {
         camera.reveal_bounds(outside);
         assert_eq!(camera.offset, before);
         assert_eq!(camera.zoom, 2.0);
+    }
+
+    /// Snapping follows the chosen spacing without changing where model points are drawn.
+    #[test]
+    fn snapping_follows_the_spacing_and_keeps_the_scale() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mut camera = Camera { zoom: 2.0, offset: vec2(-30.0, 14.0), ..Camera::default() };
+        let mil = grid::NM_PER_MIL;
+        let at = |camera: &Camera, x: i64, y: i64| camera.screen(Point { x_nm: x * mil, y_nm: y * mil }, rect);
+        let pointer = at(&camera, 37, -63);
+        assert_eq!(camera.snap(pointer, rect), Point { x_nm: 50 * mil, y_nm: -50 * mil });
+        let screen_before = at(&camera, 37, -63);
+        assert!(camera.set_snap_nm(25 * mil));
+        assert_eq!(camera.snap(pointer, rect), Point { x_nm: 25 * mil, y_nm: -75 * mil });
+        assert!(camera.set_snap_nm(10 * mil));
+        assert_eq!(camera.snap(pointer, rect), Point { x_nm: 40 * mil, y_nm: -60 * mil });
+        assert!(camera.set_snap_nm(100 * mil));
+        assert_eq!(camera.snap(pointer, rect), Point { x_nm: 0, y_nm: -100 * mil });
+        assert_eq!(at(&camera, 37, -63), screen_before);
+        // The unit is 50 mil, so 100 mil snap points are two units apart.
+        assert_eq!(camera.snap_step(), 2.0 * camera.unit_step());
+        assert!(!camera.set_snap_nm(0) && !camera.set_snap_nm(-mil) && !camera.set_snap_nm(2000 * mil));
+        assert_eq!(camera.snap_nm(), 100 * mil);
+        // Far from the origin the result is still an exact multiple of the spacing.
+        assert!(camera.set_snap_nm(30 * mil));
+        camera.center_on(Point { x_nm: MAX_CENTER_NM - 7 * mil, y_nm: -MAX_CENTER_NM + 3 * mil });
+        let far = camera.snap(at(&camera, MAX_CENTER_NM / mil - 7, -MAX_CENTER_NM / mil + 3), rect);
+        assert_eq!((far.x_nm % (30 * mil), far.y_nm % (30 * mil)), (0, 0));
+        assert!((far.x_nm - (MAX_CENTER_NM - 7 * mil)).abs() <= 15 * mil);
+        // Fit, split and zoom keep the spacing.
+        let mut session = pcbcraft_engine::Session::default();
+        session.execute("project.new", &serde_json::json!({"name": "Grid"})).unwrap();
+        camera.fit(&session.snapshot().unwrap(), rect);
+        assert_eq!((camera.snap_nm(), camera.fork_navigation().snap_nm()), (30 * mil, 30 * mil));
     }
 
     fn scroll(y: f32, command: bool) -> Event {

@@ -1,13 +1,109 @@
-//! The canvas grid: its dots, how they thin out when zoomed out, and how strongly they show.
+//! The canvas grid: its spacing, its dots, how they thin out when zoomed out, and how strongly
+//! they show.
 //!
 //! Opacity is purely a matter of drawing. It never changes the grid's spacing or what the pointer
-//! snaps to, so a hidden grid still places parts on the same points.
+//! snaps to, so a hidden grid still places parts on the same points. Spacing changes where new
+//! points snap; it never rescales the drawing or moves anything already placed.
 
-use std::ops::RangeInclusive;
+use std::{fmt, ops::RangeInclusive};
 
-use egui::{Color32, Painter, Pos2, Rect, Ui, pos2};
+use egui::{Color32, Painter, Pos2, Rect, RichText, Ui, pos2};
 
-use crate::{Tokens, theme};
+use crate::{MenuItem, Tokens, menu, theme};
+
+/// Nanometres in one mil (a thousandth of an inch), exactly.
+pub const NM_PER_MIL: i64 = 25_400;
+/// Nanometres in one millimetre.
+const NM_PER_MM: i64 = 1_000_000;
+/// The schematic grid when nothing has been chosen: 50 mil (1.27 mm), the pitch symbol pins use.
+pub const SCHEMATIC_SPACING_DEFAULT_NM: i64 = 50 * NM_PER_MIL;
+/// The schematic spacings offered in the grid menu, coarsest first.
+pub const SCHEMATIC_SPACING_PRESETS_NM: [i64; 5] = [100 * NM_PER_MIL, 50 * NM_PER_MIL, 25 * NM_PER_MIL, 10 * NM_PER_MIL, 5 * NM_PER_MIL];
+/// The spacings a person can choose: 0.01 mm up to 1000 mil (25.4 mm).
+pub const SPACING_RANGE_NM: RangeInclusive<i64> = 10_000..=1000 * NM_PER_MIL;
+/// Drawn grid points are at least this many times their spacing apart after thinning out.
+const THIN_FACTOR: f32 = 5.0;
+
+/// Why typed grid spacing was not accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpacingError {
+    Empty,
+    NotANumber,
+    /// The text after the number, which is not `mil`, `mm` or `in`.
+    Unit(String),
+    OutOfRange,
+}
+
+impl fmt::Display for SpacingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => write!(f, "Enter a spacing, such as 20 mil or 0.5 mm"),
+            Self::NotANumber => write!(f, "Enter a number, such as 20 mil or 0.5 mm"),
+            Self::Unit(unit) => write!(f, "Unknown unit \"{unit}\". Use mil, mm or in"),
+            Self::OutOfRange => {
+                write!(f, "Use {} to {}", spacing_label(*SPACING_RANGE_NM.start()), spacing_label(*SPACING_RANGE_NM.end()))
+            }
+        }
+    }
+}
+
+/// Read typed grid spacing in whole nanometres. A bare number is in mils; `mil`, `mils`, `th`,
+/// `mm`, `in` and `"` may follow it, with or without a space and in any case. Values round to
+/// the nearest nanometre and must be inside [`SPACING_RANGE_NM`]. Exponents, signs and other
+/// units are refused, so nothing is guessed.
+pub fn parse_spacing(text: &str) -> Result<i64, SpacingError> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(SpacingError::Empty);
+    }
+    let split = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
+    let (number, unit) = text.split_at(split);
+    let nm_per_unit = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "mil" | "mils" | "th" => NM_PER_MIL,
+        "mm" => NM_PER_MM,
+        "in" | "\"" => 1000 * NM_PER_MIL,
+        _ if number.is_empty() => return Err(SpacingError::NotANumber),
+        other => return Err(SpacingError::Unit(other.to_owned())),
+    };
+    let value: f64 = number.parse().map_err(|_| SpacingError::NotANumber)?;
+    let nm = (value * nm_per_unit as f64).round();
+    if !nm.is_finite() || nm < *SPACING_RANGE_NM.start() as f64 || nm > *SPACING_RANGE_NM.end() as f64 {
+        return Err(SpacingError::OutOfRange);
+    }
+    Ok(nm as i64)
+}
+
+/// Describe a spacing as it would be typed: in mils when it is a whole tenth of a mil, otherwise
+/// in millimetres with at most four decimals, so `1_270_000` reads "50 mil" and `500_000` reads
+/// "0.5 mm".
+pub fn spacing_label(nm: i64) -> String {
+    let trim = |text: String| text.trim_end_matches('0').trim_end_matches('.').to_owned();
+    if nm % (NM_PER_MIL / 10) == 0 {
+        format!("{} mil", trim(format!("{:.1}", nm as f64 / NM_PER_MIL as f64)))
+    } else {
+        format!("{} mm", trim(format!("{:.4}", nm as f64 / NM_PER_MM as f64)))
+    }
+}
+
+/// How many grid points apart the drawn dots are when `step` points separate grid points: 1
+/// normally, then 5, 25, … once zooming out would crowd them closer than
+/// [`theme::SCHEMATIC_MIN_GRID_SPACING`]. `None` for a step that isn't a positive finite number.
+pub fn shown_every(step: f32) -> Option<u32> {
+    if !step.is_finite() || step <= 0.0 {
+        return None;
+    }
+    let mut every = 1u32;
+    let mut shown = step;
+    // 5^13 still fits a u32; anything finer than that cannot be drawn usefully anyway.
+    for _ in 0..13 {
+        if shown >= theme::SCHEMATIC_MIN_GRID_SPACING {
+            break;
+        }
+        shown *= THIN_FACTOR;
+        every *= THIN_FACTOR as u32;
+    }
+    Some(every)
+}
 
 /// Grid opacity when nothing has been chosen, in percent: the grid at its full token colour.
 pub const OPACITY_DEFAULT: u8 = 100;
@@ -27,19 +123,16 @@ pub fn color(base: Color32, opacity_percent: u8) -> Option<Color32> {
 }
 
 /// Paint the grid dots that fall inside `rect`, with the grid's zero at `origin` and `step` points
-/// between placement grid points. When zoomed out past [`theme::SCHEMATIC_MIN_GRID_SPACING`] only
-/// every fifth (then 25th, …) point is drawn. Nothing is painted at zero opacity or for a step
-/// that isn't a positive finite number.
-pub fn paint(painter: &Painter, rect: Rect, origin: Pos2, mut step: f32, opacity_percent: u8) {
+/// between placement grid points. When zoomed out, only every [`shown_every`]th point is drawn.
+/// Nothing is painted at zero opacity or for a step that isn't a positive finite number.
+pub fn paint(painter: &Painter, rect: Rect, origin: Pos2, step: f32, opacity_percent: u8) {
     let Some(color) = color(Tokens::get().canvas_grid, opacity_percent) else {
         return;
     };
-    if !step.is_finite() || step <= 0.0 {
+    let Some(every) = shown_every(step) else {
         return;
-    }
-    while step < theme::SCHEMATIC_MIN_GRID_SPACING {
-        step *= 5.0;
-    }
+    };
+    let step = step * every as f32;
     let first_x = ((rect.left() - origin.x) / step).ceil() as i32;
     let last_x = ((rect.right() - origin.x) / step).floor() as i32;
     let first_y = ((rect.top() - origin.y) / step).ceil() as i32;
@@ -65,6 +158,95 @@ pub fn opacity_control(ui: &mut Ui, opacity_percent: &mut u8) -> bool {
         *opacity_percent = OPACITY_DEFAULT;
     }
     *opacity_percent != before
+}
+
+/// The grid button for an editor's tab strip and its menu: the presets, a field for any other
+/// spacing, and the default. `spacing_nm` changes only when a row is picked or valid text is
+/// applied; invalid text shows why under the field and keeps the current spacing. `every` is
+/// [`shown_every`] for the view, so the label says when the dots are sparser than the snap points.
+/// The field's text is kept in egui's temporary memory under the button. Returns true when the
+/// spacing changed.
+pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_nm: i64, every: u32) -> bool {
+    let t = Tokens::get();
+    let before = *spacing_nm;
+    let current = spacing_label(*spacing_nm);
+    let text = if every > 1 {
+        format!("Grid {current} · dots {}", spacing_label(spacing_nm.saturating_mul(i64::from(every))))
+    } else {
+        format!("Grid {current}")
+    };
+    let button = egui::Button::new(RichText::new(text).size(t.font_label)).frame(false);
+    let response = ui.add(button).on_hover_text("Grid spacing (N, Shift+N)");
+    let field_id = response.id.with("custom_spacing");
+    egui::Popup::menu(&response)
+        .frame(menu::frame())
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .align(egui::RectAlign::BOTTOM_END)
+        .show(|ui| {
+            // A fixed width, as Help has: rows fill what they are given, and messages wrap in it.
+            ui.set_width(t.control_height * 8.0);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for &preset in presets {
+                let label = spacing_label(preset);
+                let label = if preset == default_nm { format!("{label} (default)") } else { label };
+                if MenuItem::new(&label).checked(*spacing_nm == preset).show(ui) {
+                    *spacing_nm = preset;
+                }
+            }
+            if !presets.contains(spacing_nm) {
+                MenuItem::new(&format!("{current} (custom)")).checked(true).show(ui);
+            }
+            menu::separator(ui);
+            let (mut draft, mut error) = ui.data(|d| d.get_temp::<(String, Option<String>)>(field_id)).unwrap_or_default();
+            let inset = egui::Margin { left: t.space_8 as i8, right: t.space_8 as i8, top: 0, bottom: t.space_4 as i8 };
+            egui::Frame::new().inner_margin(inset).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = t.space_4;
+                ui.horizontal(|ui| {
+                    let label = ui.label(RichText::new("Custom").size(t.font_label));
+                    let field = egui::TextEdit::singleline(&mut draft).hint_text("20 mil or 0.5 mm").desired_width(t.control_height * 4.0);
+                    let field = ui.add(field).labelled_by(label.id);
+                    let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if field.changed() {
+                        error = None;
+                    }
+                    if ui.button(RichText::new("Apply").size(t.font_label)).clicked() || entered {
+                        match parse_spacing(&draft) {
+                            Ok(nm) => {
+                                *spacing_nm = nm;
+                                draft.clear();
+                                error = None;
+                                ui.close();
+                            }
+                            Err(e) => error = Some(e.to_string()),
+                        }
+                    }
+                });
+                if let Some(error) = &error {
+                    ui.add(egui::Label::new(crate::shell::error(error.as_str())).wrap());
+                }
+                // Some pins fall between the snap points; they still take wires when clicked.
+                if *spacing_nm > 0 && default_nm % *spacing_nm != 0 {
+                    let hint = format!("Pins are on {}; wire to them by clicking the pin.", spacing_label(default_nm));
+                    ui.add(egui::Label::new(crate::shell::dim(hint)).wrap());
+                }
+            });
+            ui.data_mut(|d| d.insert_temp(field_id, (draft, error)));
+        });
+    *spacing_nm != before
+}
+
+/// The preset after `spacing_nm` in `presets` (finer when `finer`, else coarser), wrapping at
+/// either end. A custom spacing moves to the nearest preset in that direction. `None` when there
+/// are no presets.
+pub fn cycle(spacing_nm: i64, presets: &[i64], finer: bool) -> Option<i64> {
+    let mut sorted = presets.to_vec();
+    sorted.sort_unstable();
+    let (first, last) = (*sorted.first()?, *sorted.last()?);
+    Some(if finer {
+        sorted.iter().rev().copied().find(|&p| p < spacing_nm).unwrap_or(last)
+    } else {
+        sorted.iter().copied().find(|&p| p > spacing_nm).unwrap_or(first)
+    })
 }
 
 #[cfg(test)]
@@ -105,5 +287,73 @@ mod tests {
         assert_eq!(dots(rect, 2.0, 5), 121);
         assert_eq!(dots(rect, 0.0, 100), 0);
         assert_eq!(dots(rect, f32::NAN, 100), 0);
+    }
+
+    #[test]
+    fn typed_spacing_reads_mils_millimetres_and_inches() {
+        assert_eq!(parse_spacing("25"), Ok(25 * NM_PER_MIL));
+        assert_eq!(parse_spacing(" 25 mil "), Ok(25 * NM_PER_MIL));
+        assert_eq!(parse_spacing("2.5MILS"), Ok(63_500));
+        assert_eq!(parse_spacing("10th"), Ok(10 * NM_PER_MIL));
+        assert_eq!(parse_spacing("1.27 mm"), Ok(SCHEMATIC_SPACING_DEFAULT_NM));
+        assert_eq!(parse_spacing("0.5mm"), Ok(500_000));
+        assert_eq!(parse_spacing("0.1in"), Ok(100 * NM_PER_MIL));
+        assert_eq!(parse_spacing("0.05\""), Ok(SCHEMATIC_SPACING_DEFAULT_NM));
+        // 100 mil is exactly 2.54 mm; rounding happens once, at the nanometre.
+        assert_eq!(parse_spacing("2.54 mm"), parse_spacing("100 mil"));
+        assert_eq!(parse_spacing("0.0000004 mm"), Err(SpacingError::OutOfRange));
+        assert_eq!(parse_spacing("0.01 mm"), Ok(*SPACING_RANGE_NM.start()));
+        assert_eq!(parse_spacing("1000"), Ok(*SPACING_RANGE_NM.end()));
+    }
+
+    #[test]
+    fn typed_spacing_refuses_what_it_cannot_read() {
+        assert_eq!(parse_spacing("  "), Err(SpacingError::Empty));
+        assert_eq!(parse_spacing("mil"), Err(SpacingError::NotANumber));
+        assert_eq!(parse_spacing("1.2.3"), Err(SpacingError::NotANumber));
+        assert_eq!(parse_spacing("."), Err(SpacingError::NotANumber));
+        assert_eq!(parse_spacing("-5"), Err(SpacingError::NotANumber));
+        assert_eq!(parse_spacing("1e3"), Err(SpacingError::Unit("e3".into())));
+        assert_eq!(parse_spacing("5 cm"), Err(SpacingError::Unit("cm".into())));
+        assert_eq!(parse_spacing("0"), Err(SpacingError::OutOfRange));
+        assert_eq!(parse_spacing("1001 mil"), Err(SpacingError::OutOfRange));
+        assert_eq!(parse_spacing("99999999999999999999999 in"), Err(SpacingError::OutOfRange));
+        assert_eq!(SpacingError::OutOfRange.to_string(), "Use 0.01 mm to 1000 mil");
+    }
+
+    #[test]
+    fn labels_use_the_unit_a_spacing_was_typed_in() {
+        assert_eq!(spacing_label(SCHEMATIC_SPACING_DEFAULT_NM), "50 mil");
+        assert_eq!(spacing_label(63_500), "2.5 mil");
+        assert_eq!(spacing_label(500_000), "0.5 mm");
+        assert_eq!(spacing_label(10_000), "0.01 mm");
+        assert_eq!(spacing_label(1_234_567), "1.2346 mm");
+        for text in ["37 mil", "0.25 mm", "1.5 mil", "0.01 mm"] {
+            assert_eq!(parse_spacing(text).map(spacing_label).as_deref(), Ok(text));
+        }
+    }
+
+    #[test]
+    fn thinning_reports_how_sparse_the_dots_are() {
+        assert_eq!(shown_every(10.0), Some(1));
+        assert_eq!(shown_every(theme::SCHEMATIC_MIN_GRID_SPACING), Some(1));
+        assert_eq!(shown_every(2.0), Some(5));
+        assert_eq!(shown_every(0.1), Some(125));
+        assert_eq!(shown_every(f32::MIN_POSITIVE), Some(5u32.pow(13)));
+        assert_eq!(shown_every(0.0), None);
+        assert_eq!(shown_every(f32::INFINITY), None);
+    }
+
+    #[test]
+    fn cycling_walks_the_presets_and_wraps() {
+        let presets = SCHEMATIC_SPACING_PRESETS_NM;
+        assert_eq!(cycle(50 * NM_PER_MIL, &presets, true), Some(25 * NM_PER_MIL));
+        assert_eq!(cycle(50 * NM_PER_MIL, &presets, false), Some(100 * NM_PER_MIL));
+        assert_eq!(cycle(5 * NM_PER_MIL, &presets, true), Some(100 * NM_PER_MIL));
+        assert_eq!(cycle(100 * NM_PER_MIL, &presets, false), Some(5 * NM_PER_MIL));
+        // A custom 30 mil goes to its neighbours.
+        assert_eq!(cycle(30 * NM_PER_MIL, &presets, true), Some(25 * NM_PER_MIL));
+        assert_eq!(cycle(30 * NM_PER_MIL, &presets, false), Some(50 * NM_PER_MIL));
+        assert_eq!(cycle(30 * NM_PER_MIL, &[], false), None);
     }
 }

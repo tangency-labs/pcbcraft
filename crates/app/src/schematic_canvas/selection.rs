@@ -33,7 +33,7 @@ pub(super) fn boxed(project: &Project, camera: &Camera, canvas: Rect, start: Pos
     for symbol in project.symbols() {
         let body = super::body(&symbol.definition, symbol.turns());
         let center = camera.screen(symbol.position, canvas);
-        let body = Rect::from_min_max(center + body.min.to_vec2() * camera.grid_step(), center + body.max.to_vec2() * camera.grid_step());
+        let body = Rect::from_min_max(center + body.min.to_vec2() * camera.unit_step(), center + body.max.to_vec2() * camera.unit_step());
         if if crossing { window.intersects(body) } else { window.contains_rect(body) } {
             hits.symbols.insert(symbol.id());
         }
