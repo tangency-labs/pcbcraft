@@ -87,7 +87,7 @@ impl ParamKind {
             Self::SymbolDefinition => Err("must identify a symbol in the starter library"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
-            Self::Terminal => Err("must identify a symbol and its terminal number (1 or 2)"),
+            Self::Terminal => Err("must identify a symbol and one of its terminal numbers"),
         }
     }
 }
