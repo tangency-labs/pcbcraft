@@ -68,11 +68,21 @@ fn cross_probe(session: &Session, params: &Value) -> Result<Value, String> {
             Ok(json!({"pad": project.pad_for_terminal(terminal).map(Pad::inspect)}))
         }
         (None, Some(pad)) => {
-            let pad = pad
+            let object = pad
                 .as_object()
-                .filter(|pad| pad.len() == 2)
-                .and_then(|pad| Pad::parse(pad.get("footprint")?.as_str()?, pad.get("pad")?.as_str()?))
+                .filter(|object| object.keys().all(|key| ["board", "footprint", "pad"].contains(&key.as_str())))
                 .ok_or("invalid board pad")?;
+            let board = match object.get("board") {
+                None => project.resolve_board(None),
+                Some(id) => project.resolve_board(Some(id.as_str().ok_or("invalid board ID")?)),
+            }
+            .map_err(|error| error.to_string())?;
+            let pad = Pad::parse(
+                object.get("footprint").and_then(Value::as_str).ok_or("invalid footprint")?,
+                object.get("pad").and_then(Value::as_str).ok_or("invalid pad")?,
+            )
+            .ok_or("invalid board pad")?
+            .on_board(board.board);
             Ok(json!({"terminal": project.terminal_for_pad(pad).map(Terminal::inspect)}))
         }
         _ => Err("provide either a terminal or a pad".to_owned()),

@@ -66,6 +66,10 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
 /// Independent project.new commands generate different UUIDs. Check each sheet's path and
 /// retain its other metadata while comparing commands from these separate projects.
 fn without_sheet_identity(mut state: Value) -> Value {
+    for board in state["project"]["boards"].as_array_mut().unwrap() {
+        assert_eq!(board["id"].as_str().unwrap().len(), 36);
+        board["id"] = Value::Null;
+    }
     for sheet in state["project"]["sheets"].as_array_mut().unwrap() {
         let id = sheet["id"].as_str().unwrap();
         assert_eq!(id.len(), 36);
@@ -242,9 +246,15 @@ fn cross_probe_follows_the_explicit_pin_to_pad_mapping() {
         assert_ne!(result["isError"], true);
     }
     let terminal = json!({"symbol":"symbol-2", "terminal":"1"});
-    let pad = json!({"footprint":"footprint-3", "pad":"2"});
+    let inspected = body(&call(&mut server, "inspect_project", json!({})));
+    let board = inspected["project"]["boards"][0]["id"].clone();
+    let pad = json!({"board":board,"footprint":"footprint-3", "pad":"2"});
     assert_eq!(body(&call(&mut server, "cross_probe", json!({"terminal":terminal}))), json!({"pad":pad}));
     assert_eq!(body(&call(&mut server, "cross_probe", json!({"pad":pad}))), json!({"terminal":terminal}));
+    assert_eq!(body(&call(&mut server, "cross_probe", json!({"pad":{"footprint":"footprint-3","pad":"2"}}))), json!({"terminal":terminal}));
+    let bad = call(&mut server, "cross_probe", json!({"pad":{"board":"00000000-0000-0000-0000-000000000001","footprint":"footprint-3","pad":"2"}}));
+    assert_eq!(bad["isError"], true);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), inspected);
 }
 
 /// MCP exposes rotated placement and authored routes to all library pins, including pin 4;

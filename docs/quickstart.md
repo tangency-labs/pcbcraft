@@ -2,8 +2,8 @@
 
 This guide exercises the schematic editor available today. The
 [capability table](capabilities.md) distinguishes working features from the
-[MVP plan](https://github.com/tangency-labs/pcbcraft/milestone/1); PCB layout and
-visual schematic/board cross-probing are still being built. The two-resistor
+[MVP plan](https://github.com/tangency-labs/pcbcraft/milestone/1); PCB inspection and
+component cross-highlighting are available, while board editing is still being built. The two-resistor
 example below is an original development fixture, not the polished MVP demo or
 a validated circuit design.
 
@@ -101,9 +101,42 @@ any window use the same project history.
 Close the original window while another editor remains: the surviving window
 keeps its views and takes over project dialogs. Closing the last editor window
 prompts for unsaved changes; **Cancel** keeps that window open. **File → Quit**
-from any editor asks once before closing the whole project. Browser builds keep panes inside one tab. Schematic is currently
-the only editable workspace, so these actions show additional views of its one
-sheet; schematic/PCB workspace choices come with the board editor.
+from any editor asks once before closing the whole project. Browser builds keep
+panes inside one tab. Schematic is currently the editable workspace; PCB layout
+inspects existing placements and highlights their schematic counterparts.
+
+## Inspect a board beside its schematic
+
+Generate an original example into a directory that does not already exist:
+
+```sh
+cargo run --locked -p pcbcraft-engine --example board_workspace -- /tmp/pcbcraft-board-example
+```
+
+Open `/tmp/pcbcraft-board-example/board-inspection/project.pc` on desktop, or
+upload the generated `board-inspection.pc.zip` in the browser. The example has a
+resistor, a two-pin connector, two connections and two generic footprint
+placements. It is an inspection fixture, not a fabrication-ready board.
+
+Click the workspace tile and choose **PCB layout** to switch the focused pane,
+or choose **Open beside** under PCB layout to keep the schematic visible. On
+desktop, **New window** under that row opens the board directly in another native
+window; repeat it to open another. Select a symbol or a footprint marker and
+check the counterpart's amber highlight. Each view keeps its own edit selection,
+zoom and position, with optional panning under **View → Settings**.
+
+In the board workspace, Browser picks select and center a footprint. Properties
+shows its stored reference, value, definition and unit-aware coordinate readouts;
+Layers groups copper in physical stack order and retains visibility by layer ID.
+**Layout → Fit** fits the placements, and **Layout → Reveal** brings the current
+counterpart highlight into view without changing zoom. Switching back restores
+the schematic camera. These actions do not modify project data or undo history.
+
+Only pad centers are represented by the current generic footprint model. Pad
+shapes/drills, outline editing, routing, individual pad selection, selection
+filters and Flip view still need implementation. Removing the last schematic
+unit currently removes its footprint too; reviewed board updates are tracked
+separately in #55.
 
 Share the entire project folder or its `.pc.zip` archive, rather than the entry
 point alone. Used symbol definitions are pinned so the recipient does not need

@@ -167,9 +167,12 @@ its panes or resetting its camera. Closing the last editor window, or choosing
 **File → Quit** from any window, uses one **Save / Don’t Save / Cancel** decision
 for the project. Canceling or failing a save leaves the project open. View arrangements last for the app session and do not change
 project files. Browser builds support panes within one tab; native window actions
-are desktop only. The editor still supports one schematic sheet. Mixed-workspace
-splits, schematic-to-board cross-probing and live-MCP view/window controls remain
-planned in #64, #65 and #61.
+are desktop only. The workspace tile can switch to PCB layout, open it beside
+the schematic or create a board window directly. Existing placements render as
+pad-center markers with component counterpart highlights, grouped Layers and
+read-only Properties. The editor still supports one schematic sheet and one
+board; board editing and live-MCP view/window controls remain planned. See the
+[board inspection walkthrough](docs/quickstart.md#inspect-a-board-beside-its-schematic).
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
 Desktop projects default to a folder containing separate project, schematic,
@@ -301,7 +304,7 @@ ownership, #75's unit contract and the proposed shared net/rule model. Its first
 engine supports validated setup commands, custom materials, sourced Tg/Dk/Df
 reports, core/prepreg plies, undo and native persistence. The
 [material contract](docs/board-materials.md) documents these fields; the stackup
-UI, impedance estimator, board canvas and rule resolver remain follow-up work.
+UI, impedance estimator, editable board canvas and rule resolver remain follow-up work.
 
 ## Checks
 

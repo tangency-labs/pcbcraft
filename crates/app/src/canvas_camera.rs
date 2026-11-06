@@ -6,8 +6,8 @@ use pcbcraft_engine::{
     selection::Selection,
 };
 
-use super::grid_bounds;
 use crate::preferences::{Navigation, ScrollAction, ZoomAround};
+use crate::schematic_canvas::grid_bounds;
 
 const MIN_ZOOM: f32 = 0.005;
 const MAX_ZOOM: f32 = 8.0;
@@ -128,7 +128,7 @@ impl Camera {
 
     /// The on-screen size of one [`GRID_NM`] drawing unit (50 mil), which symbol geometry is
     /// measured in. It depends on zoom only, never on the snap spacing.
-    pub(super) fn unit_step(&self) -> f32 {
+    pub(crate) fn unit_step(&self) -> f32 {
         theme::SCHEMATIC_GRID_SPACING * self.zoom
     }
 
@@ -152,10 +152,44 @@ impl Camera {
     /// Apply navigation only when the canvas owns input, following the person's settings.
     /// The zoom anchor (the pointer, or the view center) stays fixed while zooming. When
     /// scrolling pans, Ctrl or ⌘ with the wheel still zooms, and a pinch always zooms.
-    pub(super) fn navigate(&mut self, response: &Response, rect: Rect, project: &Project, enabled: bool, navigation: Navigation) {
+    pub(crate) fn navigate(&mut self, response: &Response, rect: Rect, project: &Project, enabled: bool, navigation: Navigation) {
         if std::mem::take(&mut self.fit_requested) {
             self.fit(project, rect);
         }
+        self.interact(response, rect, enabled, navigation);
+    }
+
+    /// Navigate a board using its resolved pad centers, without fitting schematic geometry.
+    pub(crate) fn navigate_board(
+        &mut self,
+        response: &Response,
+        rect: Rect,
+        project: pcbcraft_engine::board::view::BoardView<'_>,
+        enabled: bool,
+        navigation: Navigation,
+    ) {
+        if std::mem::take(&mut self.fit_requested) {
+            *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
+            let bounds = project.footprints().flat_map(|footprint| footprint.pads).fold(Rect::NOTHING, |bounds, pad| {
+                bounds.union(Rect::from_pos((self.screen(pad.center, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
+            });
+            self.fit_bounds(bounds, rect);
+        }
+        self.interact(response, rect, enabled, navigation);
+    }
+
+    /// Reveal selected board placements in their own coordinate space without changing zoom.
+    pub(crate) fn reveal_board(&mut self, project: pcbcraft_engine::board::view::BoardView<'_>, selected: &std::collections::BTreeSet<String>) {
+        let bounds = project
+            .footprints()
+            .filter(|footprint| selected.contains(&footprint.id))
+            .flat_map(|footprint| footprint.pads)
+            .fold(Rect::NOTHING, |bounds, pad| bounds.union(Rect::from_pos(self.screen(pad.center, Rect::ZERO)).expand(theme::SCHEMATIC_FIT_MARGIN)));
+        self.reveal_bounds(bounds);
+    }
+
+    /// Apply input navigation independently of the displayed document and its fit geometry.
+    fn interact(&mut self, response: &Response, rect: Rect, enabled: bool, navigation: Navigation) {
         if !enabled {
             return;
         }
@@ -199,6 +233,11 @@ impl Camera {
         for point in project.wires().iter().flat_map(|wire| project.wire_path(wire)) {
             bounds = bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN));
         }
+        self.fit_bounds(bounds, rect);
+    }
+
+    /// Fit resolved document bounds in the unobscured viewport, retaining the grid spacing.
+    fn fit_bounds(&mut self, bounds: Rect, rect: Rect) {
         if bounds.is_finite() {
             let size = self.uncovered.map_or(rect.size(), |clear| clear.size());
             let available = (size - Vec2::splat(2.0 * theme::SCHEMATIC_FIT_MARGIN)).max(Vec2::splat(1.0));

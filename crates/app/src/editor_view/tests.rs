@@ -16,28 +16,28 @@ fn session() -> Session {
 #[test]
 fn views_share_history_but_keep_local_interactions() {
     let mut session = session();
-    let mut first = SchematicView::new(ViewId(1));
-    let mut second = SchematicView::new(ViewId(2));
+    let mut first = EditorView::new(ViewId(1));
+    let mut second = EditorView::new(ViewId(2));
     first.sync(&session);
     second.sync(&session);
     let source = first.input(&session).unwrap();
     let widget = first.widget_id();
     assert!(!second.accepts(source, &session));
     assert_ne!(widget, second.widget_id());
-    first.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
-    first.tool = Some(Tool::Wire { revision: session.revision(), start: None });
-    first.wire_draft.horizontal_first = false;
-    assert!(second.selection.single_symbol().is_none());
-    assert!(second.tool.is_none());
-    assert!(second.wire_draft.horizontal_first);
+    first.schematic.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
+    first.schematic.tool = Some(Tool::Wire { revision: session.revision(), start: None });
+    first.schematic.wire_draft.horizontal_first = false;
+    assert!(second.schematic.selection.single_symbol().is_none());
+    assert!(second.schematic.tool.is_none());
+    assert!(second.schematic.wire_draft.horizontal_first);
 
     session.apply(MOVE_SYMBOL, &json!({"symbol": "symbol-2", "x_nm": 1_270_000, "y_nm": 0, "expected_revision": session.revision()})).unwrap();
     assert!(!first.accepts(source, &session));
     assert!(!first.sync(&session));
     assert!(!second.sync(&session));
-    assert!(first.tool.is_none());
-    assert!(first.wire_draft.horizontal_first);
-    assert_eq!(first.selection.single_symbol(), Some("symbol-2"));
+    assert!(first.schematic.tool.is_none());
+    assert!(first.schematic.wire_draft.horizontal_first);
+    assert_eq!(first.schematic.selection.single_symbol(), Some("symbol-2"));
     assert_eq!(first.widget_id(), widget);
     let after_edit = second.input(&session).unwrap();
     session.apply("edit.undo", &Value::Null).unwrap();
@@ -57,18 +57,18 @@ fn replacement_and_reopening_reset_the_view_without_editing_the_project() {
     let snapshot = session.snapshot().unwrap();
     let bytes = encode(snapshot.clone()).unwrap();
     let target = snapshot.sheet_target();
-    let mut view = SchematicView::new(ViewId(7));
+    let mut view = EditorView::new(ViewId(7));
     view.sync(&session);
     let source = view.input(&session).unwrap();
     let widget = view.widget_id();
-    view.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
-    view.tool = Some(Tool::Wire { revision: session.revision(), start: None });
+    view.schematic.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
+    view.schematic.tool = Some(Tool::Wire { revision: session.revision(), start: None });
     session.open_snapshot(snapshot);
     assert!(view.input(&session).is_none(), "An unrefreshed binding must reject input");
     assert!(view.sync(&session));
     assert_eq!(view.id(), ViewId(7));
-    assert!(view.selection.single_symbol().is_none());
-    assert!(view.tool.is_none());
+    assert!(view.schematic.selection.single_symbol().is_none());
+    assert!(view.schematic.tool.is_none());
     assert!(!view.accepts(source, &session));
     assert_ne!(view.widget_id(), widget);
     assert_eq!(session.project().unwrap().sheet_target(), target);
@@ -96,13 +96,13 @@ fn replacement_and_reopening_reset_the_view_without_editing_the_project() {
 #[test]
 fn undo_prunes_selection_and_unbinds_an_absent_project() {
     let mut session = session();
-    let mut view = SchematicView::default();
+    let mut view = EditorView::default();
     view.sync(&session);
     let target = session.project().unwrap().sheet_target();
-    view.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
+    view.schematic.selection = pcbcraft_engine::selection::Selection::one_symbol("symbol-2".to_owned());
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(!view.sync(&session));
-    assert!(view.selection.single_symbol().is_none());
+    assert!(view.schematic.selection.single_symbol().is_none());
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(view.sync(&session));
     assert!(view.input(&session).is_none());

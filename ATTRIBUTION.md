@@ -247,3 +247,19 @@ window/crossing direction, modifier selection, solid/dashed outlines and hit cou
 follow that reference. Hit testing uses upstream symbol bodies and actual wire
 paths. `crates/engine/src/selection.rs` implements new atomic group commands over
 upstream snapshots; it does not reuse Next's session or document model.
+
+## PCB inspection workspace visual reference
+
+Travis Lowe's FigCraft exports, supplied as visual references on November 6,
+2026, guide the Browser-above-Layers arrangement, grouped layer list, compact
+right-side Properties and copper palette in `crates/app/src/board_panels.rs`
+and `crates/chrome/src/board.rs`. The locally supplied artifacts are
+`designs/exports/workspaces-2026-10-30/03-layout-top.png` (SHA-256
+`e86739bdbffbbff0ea5bd47995642fb4febc750e84fe7841615968f8221663a7`) and
+`04-layout-bottom.png` (SHA-256
+`9353adae0c1da3392752818e751e44e13c69258b9de8579fd29f35a260ec3e6b`).
+These exports are not bundled assets. No depicted circuit geometry, library data
+or external implementation was copied; the example is generated from original
+starter definitions through shared engine commands. The current slice omits the
+reference's routing tools, selection filters, Flip view and fabrication geometry.
+It extends the existing chrome card primitives; their provenance is recorded above.

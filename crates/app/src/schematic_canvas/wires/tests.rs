@@ -60,7 +60,7 @@ fn the_wire_menu_slices_at_the_clicked_grid_point() {
     let before = routes(&h);
     // A little off the wire and between grid points still targets (3, 0).
     right_click(&mut h, grid(3, 0), vec2(2.0, 2.0));
-    assert_eq!(h.state().views.active.selection.single_wire(), Some("wire-4"));
+    assert_eq!(h.state().views.active.schematic.selection.single_wire(), Some("wire-4"));
     h.get_by_label("Break");
     h.get_by_label("Delete Segment");
     h.get_by_label("Delete Wire");
@@ -69,7 +69,7 @@ fn the_wire_menu_slices_at_the_clicked_grid_point() {
     assert_eq!(h.state().message, None);
     assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(3, 0)], vec![grid(3, 0), grid(8, 0), grid(8, 6)]]);
     assert_eq!(h.state().session.project().unwrap().connectivity().nets.len(), nets);
-    assert!(h.state().views.active.selection.is_empty());
+    assert!(h.state().views.active.schematic.selection.is_empty());
     click(&mut h, "Undo");
     assert_eq!(routes(&h), before);
 }
@@ -141,7 +141,7 @@ fn split_harness(narrow: bool) -> Harness<'static, PcbApp> {
 }
 
 /// Resolve the stable pane identity even after it has exchanged focus slots.
-fn view<'a>(h: &'a Harness<'_, PcbApp>, id: u64) -> &'a crate::SchematicView {
+fn view<'a>(h: &'a Harness<'_, PcbApp>, id: u64) -> &'a crate::EditorView {
     let views = &h.state().views;
     views.view(crate::ViewId(id)).unwrap()
 }
@@ -200,8 +200,8 @@ fn split_wire_actions_share_history_and_keep_highlights_view_local() {
                 let original = routes(&h)[0].clone();
                 right_click_in(&mut h, source, grid(8, 3));
                 assert_eq!(h.state().views.active.id(), crate::ViewId(source));
-                assert_eq!(view(&h, source).selection.single_wire(), Some("wire-4"));
-                assert!(view(&h, 1 - source).selection.is_empty());
+                assert_eq!(view(&h, source).schematic.selection.single_wire(), Some("wire-4"));
+                assert!(view(&h, 1 - source).schematic.selection.is_empty());
                 assert_painted(&h, source, &original, ink.schematic_wire);
                 assert_painted(&h, source, &original[1..], ink.accent);
                 assert_painted(&h, 1 - source, &original, ink.schematic_highlight);
@@ -230,7 +230,7 @@ fn split_wire_actions_share_history_and_keep_highlights_view_local() {
                 assert!(h.state().session.revision() > revision);
                 assert_eq!(routes(&h), expected);
                 for id in [0, 1] {
-                    assert!(view(&h, id).selection.is_empty());
+                    assert!(view(&h, id).schematic.selection.is_empty());
                     assert!(h.state().views.highlight_for(crate::ViewId(id), &h.state().session).is_empty());
                     for route in &expected {
                         assert_painted(&h, id, route, ink.schematic_wire);
@@ -354,7 +354,7 @@ fn dragging_a_selected_segment_slides_it() {
     assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(11, 0), grid(11, 6), grid(8, 6)]]);
     assert_eq!(h.state().session.revision(), revision + 1);
     assert_eq!(h.state().session.project().unwrap().wires()[0].endpoints(), ends);
-    assert_eq!(h.state().views.active.selection.single_wire(), Some("wire-4"));
+    assert_eq!(h.state().views.active.schematic.selection.single_wire(), Some("wire-4"));
     click(&mut h, "Undo");
     assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(8, 0), grid(8, 6)]]);
 }

@@ -20,6 +20,7 @@ pub(super) struct EditorWindows {
 /// Presentation actions address an existing view, independently of its current render slot.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ViewAction {
+    Workspace { workspace: crate::editor_view::Workspace, placement: pcbcraft_chrome::workspace::Placement },
     OpenWindow,
     Detach,
     Dock,
@@ -95,6 +96,7 @@ impl PcbApp {
                 continue;
             }
             match action {
+                ViewAction::Workspace { workspace, placement } => self.apply_workspace(source.view(), workspace, placement),
                 ViewAction::OpenWindow => {
                     self.views.open_window(source.view());
                 }

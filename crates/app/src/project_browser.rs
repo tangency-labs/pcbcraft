@@ -321,13 +321,13 @@ mod tests {
 
         click(&mut harness, "Expand Symbols");
         click(&mut harness, "R2  1k");
-        assert_eq!(harness.state().views.active.selection.single_symbol(), Some("symbol-3"));
-        assert_eq!(harness.state().views.active.selection.single_wire(), None);
+        assert_eq!(harness.state().views.active.schematic.selection.single_symbol(), Some("symbol-3"));
+        assert_eq!(harness.state().views.active.schematic.selection.single_wire(), None);
 
         click(&mut harness, "Expand Nets");
         click(&mut harness, "Net 1");
-        assert_eq!(harness.state().views.active.selection.single_symbol(), None);
-        assert_eq!(harness.state().views.active.selection.single_wire(), Some("wire-4"));
+        assert_eq!(harness.state().views.active.schematic.selection.single_symbol(), None);
+        assert_eq!(harness.state().views.active.schematic.selection.single_wire(), Some("wire-4"));
         assert_eq!(harness.state().session.revision(), 4);
 
         click(&mut harness, "Collapse Symbols");

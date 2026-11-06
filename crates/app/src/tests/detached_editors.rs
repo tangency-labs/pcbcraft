@@ -356,7 +356,7 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
             assert_ne!(h.state().views.active.id(), id, "the root owns the remaining view");
             assert!(peer.borrow().frames > 0);
             assert!(!h.state().views.view(id).unwrap().accepts(old, &h.state().session));
-            assert_eq!(h.state().views.view(id).unwrap().selection.single_symbol(), Some("symbol-2"));
+            assert_eq!(h.state().views.view(id).unwrap().schematic.selection.single_symbol(), Some("symbol-2"));
             assert_eq!(h.state().views.view(id).unwrap().camera.snap_nm(), 500_000);
             let root_id = h.state().views.active.id();
             let child_input = h.state().views.view(id).unwrap().input(&h.state().session).unwrap();
@@ -380,7 +380,7 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
             } else {
                 let child = h.state().views.view(id).unwrap();
                 assert!(!child.accepts(child_input, &h.state().session));
-                assert_eq!(child.selection.single_symbol(), Some("symbol-2"));
+                assert_eq!(child.schematic.selection.single_symbol(), Some("symbol-2"));
                 assert_eq!(child.camera.snap_nm(), 500_000);
             }
             assert!(matches!(h.state().dialog, Dialog::None));
@@ -444,7 +444,7 @@ fn detached_fields_dialog_keeps_its_target_and_blocks_other_input() {
     child_key(&mut h, &peer, Key::Delete, Modifiers::NONE);
     let part = child_rect(&peer, "Resistor").center();
     child_click_at(&mut h, &peer, part);
-    assert!(h.state().views.view(id).unwrap().tool.is_none(), "a floating card in the child must respect the root modal");
+    assert!(h.state().views.view(id).unwrap().schematic.tool.is_none(), "a floating card in the child must respect the root modal");
     assert_eq!(h.state().session.inspect(), before);
     focus(&mut h, &peer, false);
     h.get_by_label("Reference").click();
@@ -571,19 +571,19 @@ fn detached_text_input_and_focus_do_not_leak_canvas_commands() {
     h.run();
     child_key(&mut h, &peer, Key::W, Modifiers::NONE);
     child_key(&mut h, &peer, Key::R, Modifiers::NONE);
-    assert!(h.state().views.view(id).unwrap().tool.is_none());
+    assert!(h.state().views.view(id).unwrap().schematic.tool.is_none());
     assert!(!h.state().parts.open, "child Parts does not open the root panel");
     assert!(peer.borrow().nodes.values().any(|node| node.value() == Some("wr")));
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     child_key(&mut h, &peer, Key::Escape, Modifiers::NONE);
     child_key(&mut h, &peer, Key::W, Modifiers::NONE);
-    assert!(matches!(h.state().views.view(id).unwrap().tool, Some(Tool::Wire { .. })));
+    assert!(matches!(h.state().views.view(id).unwrap().schematic.tool, Some(Tool::Wire { .. })));
     focus(&mut h, &peer, false);
-    assert!(h.state().views.view(id).unwrap().tool.is_none());
+    assert!(h.state().views.view(id).unwrap().schematic.tool.is_none());
     focus(&mut h, &peer, true);
     let rect = child_rect(&peer, "Schematic canvas");
     child_click_at(&mut h, &peer, rect.right_bottom() - vec2(40.0, 40.0));
-    assert!(h.state().views.view(id).unwrap().tool.is_none());
+    assert!(h.state().views.view(id).unwrap().schematic.tool.is_none());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
@@ -615,7 +615,7 @@ fn detached_selection_follow_reaches_either_host_once() {
         let view = h.state().views.view(target).unwrap();
         assert!(target_rect.contains(view.camera.screen(origin, target_rect)));
         assert_eq!(view.camera.zoom(), zoom);
-        assert!(view.selection.is_empty());
+        assert!(view.schematic.selection.is_empty());
         assert_eq!(peer.borrow().focused, child_source);
         h.state_mut().views.bind(target);
         h.state_mut().views.active.camera.center_on(far);
@@ -707,7 +707,7 @@ fn split_and_multiple_native_windows_coexist_and_share_edits() {
     assert_eq!(h.state().views.hosts[&HostId(1)].focused, editing);
     for id in root_panes.iter().copied().chain([child_panes[0], h.state().views.hosts[&HostId(2)].focused]) {
         assert_eq!(h.state().views.highlight_for(id, &h.state().session).single_symbol(), Some("symbol-2"));
-        assert!(h.state().views.view(id).unwrap().selection.is_empty());
+        assert!(h.state().views.view(id).unwrap().schematic.selection.is_empty());
     }
     child_key(&mut h, &first, Key::R, Modifiers::NONE);
     let edited = h.state().session.snapshot().unwrap();
@@ -838,7 +838,7 @@ fn selection_follow_fans_out_across_hosts_without_focus_or_selection_transfer() 
                 policy == Both || (policy == SecondaryFollowsPrimary && source_primary) || (policy == PrimaryFollowsSecondary && id == primary);
             let view = h.state().views.view(id).unwrap();
             assert_eq!(rect.contains(view.camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)), follows, "{policy:?} for {id:?}");
-            assert!(view.selection.is_empty());
+            assert!(view.schematic.selection.is_empty());
             assert_eq!(view.camera.zoom(), 1.0);
             assert_eq!(h.state().views.highlight_for(id, &h.state().session).single_symbol(), Some("symbol-2"));
             h.state_mut().views.view_mut(id).unwrap().camera.center_on(far);
@@ -1081,4 +1081,41 @@ fn a_pending_save_survives_original_window_close_and_cancel_from_the_last_window
     h.run();
     assert!(h.state().close_allowed);
     assert!(matches!(h.state().dialog, Dialog::None));
+}
+
+/// New-window workspace choices use the existing viewport lifecycle without an intermediate
+/// split. Board selection highlights the schematic and closing one child leaves its peers intact.
+#[test]
+fn board_windows_open_directly_and_share_counterpart_highlights() {
+    let (mut h, peers) = many_windows();
+    let app = h.state_mut();
+    app.run(pcbcraft_engine::PLACE_FOOTPRINT,&json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}));
+    h.run();
+    let before = h.state().session.inspect();
+    for _ in 0..2 {
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout — New window");
+        h.get_by_label("Schematic canvas");
+        assert!(!h.state().views.is_split());
+    }
+    let hosts = h.state().views.detached_hosts();
+    assert_eq!(hosts.len(), 2);
+    let child = h.state().views.hosts[&hosts[0]].focused;
+    let peer = peers.borrow()[&editor_windows::viewport(hosts[0])].clone();
+    child_rect(&peer, "Layout");
+    h.get_by_label("Capture");
+    let canvas = child_rect(&peer, "PCB canvas");
+    child_click_at(&mut h, &peer, canvas.center());
+    assert!(h.state().views.view(child).unwrap().board.selection.contains("footprint-3"));
+    h.get_by_label("Capture");
+    child_rect(&peer, "Layout");
+    assert_eq!(h.state().views.highlight_for(ViewId(0), &h.state().session).single_symbol(), Some("symbol-2"));
+    child_key(&mut h, &peer, Key::Delete, Modifiers::NONE);
+    assert_eq!(h.state().session.inspect(), before);
+    peer.borrow_mut().close = true;
+    h.run();
+    assert_eq!(h.state().views.detached_hosts(), vec![hosts[1]]);
+    assert!(!h.state().views.is_split());
+    assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
+    assert_eq!(h.state().session.inspect(), before);
 }

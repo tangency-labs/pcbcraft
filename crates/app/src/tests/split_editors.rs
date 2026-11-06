@@ -16,7 +16,7 @@ fn split_harness<'a>() -> Harness<'a, PcbApp> {
 }
 
 /// Resolve a view by identity rather than by the slot currently holding keyboard focus.
-fn view<'a>(h: &'a Harness<'_, PcbApp>, id: u64) -> &'a SchematicView {
+fn view<'a>(h: &'a Harness<'_, PcbApp>, id: u64) -> &'a EditorView {
     let views = &h.state().views;
     views.view(ViewId(id)).unwrap()
 }
@@ -66,8 +66,8 @@ fn linked_highlights_are_visible_without_becoming_edit_selections() {
         let centers = [view(&h, 0).camera.screen(origin, canvas(&h, 0)), view(&h, 1).camera.screen(origin, canvas(&h, 1))];
         click_point(&mut h, source, origin);
         assert_eq!(h.state().views.active.id(), ViewId(source));
-        assert!(view(&h, target).selection.is_empty());
-        assert_eq!(h.state().views.highlight_for(ViewId(target), &h.state().session), view(&h, source).selection);
+        assert!(view(&h, target).schematic.selection.is_empty());
+        assert_eq!(h.state().views.highlight_for(ViewId(target), &h.state().session), view(&h, source).schematic.selection);
         assert_eq!(reference_color(&h, source, "R1"), Tokens::get().accent);
         assert_eq!(reference_color(&h, target, "R1"), Tokens::get().schematic_highlight);
         for id in [0, 1] {
@@ -130,8 +130,8 @@ fn browser_highlights_prune_deleted_targets_and_reset_on_reopen() {
     h.run();
     let app = h.state_mut();
     app.view_click(source, Click::SelectItems(Selection::one_symbol("symbol-2".to_owned())));
-    assert!(app.views.active.selection.is_empty());
-    assert!(app.views.view(ViewId(0)).unwrap().selection.is_empty());
+    assert!(app.views.active.schematic.selection.is_empty());
+    assert!(app.views.view(ViewId(0)).unwrap().schematic.selection.is_empty());
     assert!(app.views.highlight_for(ViewId(0), &app.session).is_empty());
 }
 
@@ -147,8 +147,8 @@ fn split_views_keep_navigation_and_selection_but_share_undo() {
     assert!(canvas(&h, 0).right() < canvas(&h, 1).left());
     click_point(&mut h, 1, Point { x_nm: 0, y_nm: 0 });
     assert_eq!(h.state().views.active.id(), ViewId(1));
-    assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
-    assert!(view(&h, 0).selection.single_symbol().is_none());
+    assert_eq!(view(&h, 1).schematic.selection.single_symbol(), Some("symbol-2"));
+    assert!(view(&h, 0).schematic.selection.single_symbol().is_none());
     h.hover_at(canvas(&h, 1).center());
     h.run();
     h.event(egui::Event::MouseWheel {
@@ -172,8 +172,8 @@ fn split_views_keep_navigation_and_selection_but_share_undo() {
     h.key_press(Key::Delete);
     h.run();
     assert!(h.state().session.project().unwrap().symbols().is_empty());
-    assert!(view(&h, 0).selection.single_symbol().is_none());
-    assert!(view(&h, 1).selection.single_symbol().is_none());
+    assert!(view(&h, 0).schematic.selection.single_symbol().is_none());
+    assert!(view(&h, 1).schematic.selection.single_symbol().is_none());
     focus_tab(&mut h, 0);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
@@ -195,15 +195,15 @@ fn returning_to_a_pane_does_not_revive_its_wire_gesture() {
     h.run();
     click_point(&mut h, 0, Point { x_nm: 12_700_000, y_nm: 0 });
     let source = h.state().views.active.input(&h.state().session).unwrap();
-    assert!(matches!(view(&h, 0).tool, Some(Tool::Wire { start: Some(_), .. })));
+    assert!(matches!(view(&h, 0).schematic.tool, Some(Tool::Wire { start: Some(_), .. })));
     let before = h.state().session.inspect();
     focus_tab(&mut h, 1);
-    assert!(view(&h, 0).tool.is_none());
+    assert!(view(&h, 0).schematic.tool.is_none());
     focus_tab(&mut h, 0);
     let app = h.state_mut();
     assert!(!app.views.active.accepts(source, &app.session));
     app.view_click(source, Click::Select(Some("symbol-2".to_owned())));
-    assert!(app.views.active.selection.single_symbol().is_none());
+    assert!(app.views.active.schematic.selection.single_symbol().is_none());
     assert_eq!(app.session.inspect(), before);
 }
 
@@ -218,7 +218,7 @@ fn split_layout_preserves_views_and_fits_narrow_windows() {
     h.get_by_label("Schematic canvas");
     assert_eq!(h.state().views.active.id(), ViewId(1));
     click(&mut h, "Split editor views");
-    assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
+    assert_eq!(view(&h, 1).schematic.selection.single_symbol(), Some("symbol-2"));
     h.set_size(egui::vec2(640.0, 800.0));
     h.run();
     assert!(canvas(&h, 0).bottom() < canvas(&h, 1).top());
@@ -317,7 +317,7 @@ fn modal_and_replacement_keep_both_views_on_the_current_project() {
     let reopened = h.state().session.inspect();
     h.run();
     for id in [0, 1] {
-        assert!(view(&h, id).selection.single_symbol().is_none());
+        assert!(view(&h, id).schematic.selection.single_symbol().is_none());
     }
     h.key_press(Key::Delete);
     h.run();
@@ -349,7 +349,7 @@ fn parts_drag_cannot_place_into_an_inactive_pane() {
     h.run();
     h.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
     h.run();
-    assert!(view(&h, 1).tool.is_none(), "Typing in search must not start a canvas tool");
+    assert!(view(&h, 1).schematic.tool.is_none(), "Typing in search must not start a canvas tool");
     click(&mut h, "Capacitor");
     click(&mut h, "Close Parts library");
     click_point(&mut h, 1, Point { x_nm: 12_700_000, y_nm: 0 });
@@ -373,8 +373,8 @@ fn browser_and_home_preserve_view_identity_and_project_state() {
     click(&mut h, "Toggle Browser");
     click(&mut h, "Expand Symbols");
     click(&mut h, "R1  1k");
-    assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
-    assert!(view(&h, 0).selection.single_symbol().is_none());
+    assert_eq!(view(&h, 1).schematic.selection.single_symbol(), Some("symbol-2"));
+    assert!(view(&h, 0).schematic.selection.single_symbol().is_none());
     assert_eq!(view(&h, 0).camera.screen(origin, canvas(&h, 0)), first_origin);
     let source = h.state().views.active.input(&h.state().session).unwrap();
     open_home(&mut h);
@@ -382,7 +382,7 @@ fn browser_and_home_preserve_view_identity_and_project_state() {
     h.run();
     assert!(h.state().views.is_split());
     assert_eq!(h.state().views.active.id(), ViewId(1));
-    assert_eq!(view(&h, 1).selection.single_symbol(), Some("symbol-2"));
+    assert_eq!(view(&h, 1).schematic.selection.single_symbol(), Some("symbol-2"));
     assert!(!h.state().views.active.accepts(source, &h.state().session));
     assert_eq!(h.state().session.inspect(), before);
 }
@@ -416,7 +416,7 @@ fn an_overlay_does_not_activate_the_pane_under_its_text_field() {
     h.get_by_label("Overlay input").type_text("WAR");
     h.run();
     assert_eq!(h.state().views.active.id(), ViewId(0));
-    assert!(h.state().views.active.tool.is_none());
+    assert!(h.state().views.active.schematic.tool.is_none());
     assert_eq!(h.state().session.inspect(), before);
 }
 
@@ -536,9 +536,9 @@ fn box_selection_and_atomic_group_edits_work_in_each_pane() {
                 h.run();
                 h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
                 h.run();
-                assert_eq!(view(&h, id).selection.len(), count);
-                assert!(view(&h, 1 - id).selection.is_empty());
-                assert_eq!(h.state().views.highlight_for(ViewId(1 - id), &h.state().session), view(&h, id).selection);
+                assert_eq!(view(&h, id).schematic.selection.len(), count);
+                assert!(view(&h, 1 - id).schematic.selection.is_empty());
+                assert_eq!(h.state().views.highlight_for(ViewId(1 - id), &h.state().session), view(&h, id).schematic.selection);
                 assert_eq!(h.state().session.revision(), revision);
             }
             let from = view(&h, id).camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas(&h, id));
@@ -547,7 +547,7 @@ fn box_selection_and_atomic_group_edits_work_in_each_pane() {
             h.run();
             h.hover_at(to);
             h.run();
-            assert!(matches!(view(&h, id).tool, Some(Tool::MoveItems { .. })));
+            assert!(matches!(view(&h, id).schematic.tool, Some(Tool::MoveItems { .. })));
             h.drop_at(to);
             h.run();
             assert_eq!(h.state().session.revision(), revision + 1);
@@ -629,7 +629,7 @@ fn selection_follow_respects_direction_and_never_locks_the_camera() {
             assert_eq!(rect.contains(after), allowed[source as usize], "{policy:?}, source {source}");
             assert_eq!(view(&h, target).camera.zoom(), zoom);
             assert_eq!(h.state().views.active.id(), ViewId(source));
-            assert!(view(&h, target).selection.is_empty());
+            assert!(view(&h, target).schematic.selection.is_empty());
             assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
             // An already visible counterpart stays exactly where it is.
             click_point(&mut h, source, origin);
@@ -680,7 +680,7 @@ fn delayed_selection_reveals_are_discarded_when_their_context_changes() {
         }
         h.run();
         if case == 1 {
-            assert!(view(&h, 0).selection.is_empty());
+            assert!(view(&h, 0).schematic.selection.is_empty());
             assert!(view(&h, 0).camera.screen(origin, target).distance(target.center()) < 0.01);
         } else {
             assert_eq!(view(&h, 0).camera.screen(origin, target), before, "case {case}");
@@ -742,7 +742,7 @@ fn browser_follow_reveals_wire_bounds_in_the_uncovered_target() {
     for point in project.wire_path(&project.wires()[0]) {
         assert!(uncovered.contains(view(&h, 1).camera.screen(point, rect)));
     }
-    assert!(view(&h, 1).selection.is_empty());
+    assert!(view(&h, 1).schematic.selection.is_empty());
     assert_eq!(h.state().views.active.id(), ViewId(0));
 }
 
@@ -832,8 +832,8 @@ fn grid_opacity_reaches_both_views_without_changing_editor_state() {
                     }
                     assert_eq!(reference_color(&h, 0, "R1"), Tokens::get().accent);
                     assert_eq!(reference_color(&h, 1, "R1"), Tokens::get().schematic_highlight);
-                    assert_eq!(view(&h, 0).selection.single_symbol(), Some("symbol-2"));
-                    assert!(view(&h, 1).selection.is_empty());
+                    assert_eq!(view(&h, 0).schematic.selection.single_symbol(), Some("symbol-2"));
+                    assert!(view(&h, 1).schematic.selection.is_empty());
                 }
                 assert_eq!(h.state().session.revision(), revision);
                 assert_eq!(h.state().files.dirty(&h.state().session), dirty);

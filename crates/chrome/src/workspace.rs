@@ -117,6 +117,22 @@ pub struct Workspace<'a> {
 pub struct Workspaces<'a> {
     pub entries: &'a [Workspace<'a>],
     pub footer: &'a str,
+    pub native_windows: bool,
+}
+
+/// How a chosen workspace is presented; document state remains owned by the application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    Here,
+    Beside,
+    Window,
+}
+
+/// A picker action identifies both a workspace entry and its requested placement.
+#[derive(Clone, Copy, Debug)]
+pub struct WorkspacePick {
+    pub index: usize,
+    pub placement: Placement,
 }
 
 /// Put a tabbed command strip above the viewport. `tabs` names the ribbon tabs and `tab` is the
@@ -124,9 +140,8 @@ pub struct Workspaces<'a> {
 /// shown, whose index it receives, including a tab clicked this frame. At compact widths the workspace title moves into the strip, and the actions can scroll
 /// horizontally when they exceed the available space.
 ///
-/// The workspace tile opens a picker listing `workspaces`. Returns the index of an available
-/// workspace other than the current one when it is picked; picking the current one just closes
-/// the picker.
+/// The workspace tile returns a workspace/placement request. Picking the current row closes
+/// the picker; its Open beside and New window actions still create another view.
 pub fn ribbon(
     ui: &mut Ui,
     workspace: &str,
@@ -134,7 +149,7 @@ pub fn ribbon(
     tab: &mut usize,
     workspaces: Workspaces<'_>,
     add: impl FnOnce(&mut Ui, usize),
-) -> Option<usize> {
+) -> Option<WorkspacePick> {
     let t = Tokens::get();
     let height = RIBBON_HEIGHT;
     // Let the app bar color show behind the two rounded workspace corners.
@@ -157,7 +172,16 @@ pub fn ribbon(
                 if wide {
                     // Read before the tile can toggle it, so the picker knows the frame it opens on.
                     let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id());
-                    let tile = card(t, t.space_8).show(ui, |ui| workspace_tile(ui, workspace, height)).inner;
+                    let tile = card(t, t.space_8)
+                        .show(ui, |ui| {
+                            workspace_tile(
+                                ui,
+                                workspace,
+                                workspaces.entries.iter().find(|entry| entry.current).map_or(WorkspaceIcon::Schematic, |entry| entry.icon),
+                                height,
+                            )
+                        })
+                        .inner;
                     picked = picker(ui, &tile, workspaces, !was_open);
                 }
 
@@ -191,7 +215,7 @@ pub fn ribbon(
 
 /// Draw the workspace tile: the accent rule, icon, workspace name and a "Workspace" caption with
 /// a caret that points up while the picker is open. The tile is a button that toggles the picker.
-fn workspace_tile(ui: &mut Ui, workspace: &str, height: f32) -> Response {
+fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32) -> Response {
     let t = Tokens::get();
     let inset = t.space_8 + 1.0;
     let (rect, response) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH - 2.0 * inset, height - 2.0 * inset), Sense::click());
@@ -203,7 +227,7 @@ fn workspace_tile(ui: &mut Ui, workspace: &str, height: f32) -> Response {
         p.rect_filled(rect.expand(inset - 1.0), t.radius_md, t.hover);
     }
     p.hline(rect.x_range(), rect.top() - t.space_6, Stroke::new(t.space_2, t.accent));
-    paint_workspace_glyph(p, WorkspaceIcon::Schematic, center - vec2(0.0, t.space_16), t.control_height + t.space_2, t, true);
+    paint_workspace_glyph(p, icon, center - vec2(0.0, t.space_16), t.control_height + t.space_2, t, true);
     p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, fonts::interface_heading(ui, t.font_button), t.text);
     let caption = p.layout_no_wrap("Workspace".to_owned(), FontId::proportional(t.font_small), t.text_dim);
     let caret = t.space_4 + t.space_3;
@@ -226,9 +250,9 @@ fn picker_id() -> egui::Id {
 /// Show the workspace picker under the tile while it's open. Clicking an available row, or
 /// Enter or Space for the current one, closes it; a planned row never responds. `opening` is
 /// true on the frame the tile opens it, when Enter or Space is the key that opened it and must
-/// not also pick a row. Returns the index of an available workspace other than the current one
-/// when it is picked.
-fn picker(ui: &Ui, tile: &Response, workspaces: Workspaces<'_>, opening: bool) -> Option<usize> {
+/// not also pick a row. Returns the requested workspace and placement, including new views of
+/// the current workspace.
+fn picker(ui: &Ui, tile: &Response, workspaces: Workspaces<'_>, opening: bool) -> Option<WorkspacePick> {
     let t = Tokens::get();
     // SolidCraft's picker width, kept inside narrow windows.
     let width =
@@ -248,9 +272,10 @@ fn picker(ui: &Ui, tile: &Response, workspaces: Workspaces<'_>, opening: bool) -
         .and_then(|shown| shown.inner)
 }
 
-/// The picker's heading, rows and footer. Arrow, Enter and Space keys are always consumed;
-/// Enter and Space pick a row except while `opening`.
-fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32, opening: bool) -> Option<usize> {
+/// The picker's heading, rows and footer. Arrows cycle available workspace rows; Tab can focus
+/// placement actions. Enter and Space activate the focused choice (or current row), except on
+/// the opening frame. Consumed keys never reach the canvas underneath.
+fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32, opening: bool) -> Option<WorkspacePick> {
     let t = Tokens::get();
     ui.set_width(width);
     ui.spacing_mut().item_spacing.y = 0.0;
@@ -259,26 +284,71 @@ fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32,
     ui.add_space(t.space_8);
     // Keys stay in the picker so they don't reach the canvas underneath.
     let (navigate, activate) = ui.input_mut(|i| {
-        let navigate = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+        let navigate = if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+            Some(true)
+        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+            Some(false)
+        } else {
+            None
+        };
         let activate = i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
         (navigate, activate && !opening)
     });
     let mut picked = None;
+    let mut choices = Vec::new();
     ScrollArea::vertical().id_salt("workspace_rows").max_height((height - 116.0).max(60.0)).show(ui, |ui| {
         for (index, entry) in workspaces.entries.iter().enumerate() {
             let response = workspace_row(ui, entry, width);
-            if entry.current && navigate {
-                response.request_focus();
-            }
-            let chosen = response.clicked() || (activate && (response.has_focus() || entry.current));
-            if entry.tabs.is_some() && chosen {
+            if entry.tabs.is_some() && response.clicked() {
                 if !entry.current {
-                    picked = Some(index);
+                    picked = Some(WorkspacePick { index, placement: Placement::Here });
                 }
                 ui.close();
             }
+            if entry.tabs.is_some() {
+                choices.push((WorkspacePick { index, placement: Placement::Here }, response));
+                ui.horizontal(|ui| {
+                    for (placement, label, available) in
+                        [(Placement::Beside, "Open beside", true), (Placement::Window, "New window", workspaces.native_windows)]
+                    {
+                        if !available {
+                            continue;
+                        }
+                        let button = ui.small_button(label);
+                        button.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("{} — {}", entry.title, label)));
+                        if button.clicked() {
+                            picked = Some(WorkspacePick { index, placement });
+                            ui.close();
+                        }
+                        choices.push((WorkspacePick { index, placement }, button));
+                    }
+                });
+                ui.add_space(t.space_6);
+            }
         }
     });
+    let current = workspaces.entries.iter().position(|entry| entry.current);
+    let focused = choices.iter().find(|(_, response)| response.has_focus());
+    if let Some(forward) = navigate {
+        // egui computes directional focus before widgets consume keys; this picker owns that move.
+        ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+        let rows: Vec<_> = choices.iter().filter(|(pick, _)| pick.placement == Placement::Here).collect();
+        if !rows.is_empty() {
+            let from = focused.map(|(pick, _)| pick.index).or(current);
+            let position = rows.iter().position(|(pick, _)| Some(pick.index) == from).unwrap_or(0);
+            let next = if forward { (position + 1) % rows.len() } else { (position + rows.len() - 1) % rows.len() };
+            rows[next].1.request_focus();
+            rows[next].1.scroll_to_me(None);
+        }
+    }
+    if activate
+        && let Some((pick, _)) = focused.or_else(|| choices.iter().find(|(pick, _)| Some(pick.index) == current && pick.placement == Placement::Here))
+    {
+        if pick.placement != Placement::Here || Some(pick.index) != current {
+            picked = Some(*pick);
+        }
+        ui.close();
+    }
     ui.add_space(t.space_6);
     ui.separator();
     ui.add_space(t.space_6);
@@ -575,14 +645,22 @@ pub(crate) fn paint_menu_glyph(p: &egui::Painter, icon: ToolIcon, center: Pos2, 
 /// Paint after the canvas so the text overlays it without reserving space or taking input.
 pub fn sheet_heading(p: &egui::Painter, canvas: Rect, browser: Rect, title: &str, count: &str) {
     let t = Tokens::get();
-    let left = if browser.is_finite() { browser.right() + FLOATING_GAP } else { canvas.left() + FLOATING_GAP };
+    canvas_heading(p, canvas, browser, Rect::NOTHING, title, count, [t.text, t.text_dim]);
+}
+
+/// Keep document labels clear of edge panels, using the displayed workspace's canvas ink.
+pub fn canvas_heading(p: &egui::Painter, canvas: Rect, left_panel: Rect, right_panel: Rect, title: &str, count: &str, ink: [Color32; 2]) {
+    let t = Tokens::get();
+    let left = if left_panel.is_finite() { left_panel.right() + FLOATING_GAP } else { canvas.left() + FLOATING_GAP };
+    let right = if right_panel.is_finite() { right_panel.left() - FLOATING_GAP } else { canvas.right() - FLOATING_GAP };
     let y = canvas.top() + FLOATING_GAP + FLOATING_HEADER / 2.0 + FLOATING_MARGIN;
-    let count_width = p.layout_no_wrap(count.to_owned(), FontId::proportional(t.font_body), t.text_dim).size().x;
-    let right = canvas.right() - FLOATING_GAP;
+    let count_width = p.layout_no_wrap(count.to_owned(), FontId::proportional(t.font_body), ink[1]).size().x;
     let width = (right - count_width - t.space_24 - left).max(0.0);
-    let galley = elided(p, title, FontId::proportional(t.font_button + 1.0), t.text, width);
-    p.galley(pos2(left, y - galley.size().y / 2.0), galley, t.text);
-    p.text(pos2(right, y), Align2::RIGHT_CENTER, count, FontId::proportional(t.font_body), t.text_dim);
+    let galley = elided(p, title, FontId::proportional(t.font_button + 1.0), ink[0], width);
+    p.galley(pos2(left, y - galley.size().y / 2.0), galley, ink[0]);
+    if right - count_width >= left {
+        p.text(pos2(right, y), Align2::RIGHT_CENTER, count, FontId::proportional(t.font_body), ink[1]);
+    }
 }
 
 /// Dock a card at the right edge of the canvas and keep its body scrollable.
@@ -627,15 +705,34 @@ fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, cl
 /// rectangle and whether the header was clicked, which should toggle `collapsed`. Inherits
 /// the host's enabled state, including when a project dialog lives in another native window.
 pub fn floating_card(ui: &Ui, id: &'static str, title: &str, area: Rect, collapsed: bool, add: impl FnOnce(&mut Ui)) -> (Rect, bool) {
+    floating_card_with_id(ui, egui::Id::new(id), title, area, collapsed, add)
+}
+
+/// Render a floating card with an explicit host identity, allowing independent native windows.
+pub fn floating_card_with_id(ui: &Ui, id: egui::Id, title: &str, area: Rect, collapsed: bool, add: impl FnOnce(&mut Ui)) -> (Rect, bool) {
+    floating_card_aligned(ui, id, title, area, collapsed, false, add)
+}
+
+/// Anchor a workspace card to either canvas edge, retaining shared dimensions and collapse behavior.
+#[allow(clippy::too_many_arguments)]
+pub fn floating_card_aligned(
+    ui: &Ui,
+    id: egui::Id,
+    title: &str,
+    area: Rect,
+    collapsed: bool,
+    right: bool,
+    add: impl FnOnce(&mut Ui),
+) -> (Rect, bool) {
     let t = Tokens::get();
     let width = (area.width() * 0.4).min(260.0);
     let height = (area.height() - 2.0 * FLOATING_GAP).max(FLOATING_HEADER + 2.0 * FLOATING_MARGIN);
     let body_height = (height - 2.0 * (FLOATING_MARGIN + 1.0) - FLOATING_HEADER - t.space_8).max(TREE_ROW_HEIGHT);
     let frame = floating_frame();
-    let shown = egui::Area::new(egui::Id::new(id))
+    let shown = egui::Area::new(id)
         .enabled(ui.is_enabled())
         .order(egui::Order::Middle)
-        .fixed_pos(area.min + vec2(FLOATING_GAP, FLOATING_GAP))
+        .fixed_pos(pos2(if right { area.right() - width - FLOATING_GAP } else { area.left() + FLOATING_GAP }, area.top() + FLOATING_GAP))
         .constrain(false)
         .show(ui.ctx(), |ui| {
             // An area otherwise offers only last frame's size, so rows just unfolded would

@@ -3,7 +3,10 @@
 The first PCB milestone should support a small editable board in both a split
 window and separate desktop windows. Both arrangements have equal priority.
 They share one open project, command path, undo history and save lifecycle,
-while each view keeps its own camera and editing context. Cross-probing connects
+while each view keeps its own camera and editing context. Each window has its
+own ribbon and contextual panels, determined by its focused pane; focusing a
+PCB window does not replace another window's schematic ribbon. A split within
+one window shares that window's ribbon, with an explicit active-pane indicator. Cross-probing connects
 the views through explicit component and terminal identities.
 
 This is the proposed architecture and acceptance plan for
@@ -25,10 +28,11 @@ without changing its layout. Closing the last editor or explicitly choosing Quit
 uses one project-level **Save / Don’t Save / Cancel** decision. Layout transitions expire
 old input without editing the document, and closed view/host IDs are never reused.
 Highlighting and optional selection following reach compatible views across all
-hosts while preserving edit selection, zoom and focus. Board rendering,
-schematic-to-board cross-probing and live-MCP presentation actions remain
-unimplemented. The engine still exposes one sheet, so this hosting slice does not
-yet offer a different workspace or sheet as the target of a new pane.
+hosts while preserving edit selection, zoom and focus. The first PCB inspection
+view now renders existing footprint pad centers, with schematic/board workspace
+choices and component counterpart highlights. It shares the same single-sheet,
+single-board session; board editing, individual pad/pin selection and live-MCP
+presentation actions remain incomplete.
 
 ## Existing foundation
 
@@ -36,8 +40,8 @@ At `b028afa555bba85e2ad479d83c268aaf6e2bce8b`, the engine separates components
 from schematic placements and supports a generic two-pad footprint with explicit
 pin-to-pad lookup. The [storage format](native-project-storage.md) separates
 `project.pc`, sheets, `board.json` and pinned symbol definitions while retaining
-one runtime project. General footprint definitions and the board canvas remain
-to be built.
+one runtime project. General footprint definitions and an editable board canvas
+remain to be built; the inspection view does not infer pad shapes or drills.
 
 The desktop Assistant already opens a secondary native viewport with access to
 the same session. Editor focus, canvas input, repainting and close behavior need
@@ -86,8 +90,8 @@ place. The same workspace row should offer **Open beside** and desktop-only
 **Open in new window** as explicit alternatives, so either arrangement is
 available directly from a single schematic view. Opening a board in another host
 must leave the current schematic visible without briefly splitting or switching
-it as an intermediate step. These are planned interactions for the board canvas;
-the current schematic-only **View → Detach** already works without splitting first.
+it as an intermediate step. These choices now work for the inspection canvas;
+**View → Detach** also works without splitting first.
 
 | Choice | Result |
 | --- | --- |
@@ -122,7 +126,7 @@ native window actions are omitted.
 
 ### Hosting foundation and next #64 step
 
-The registry and per-window layouts are implemented for schematic views. Layout
+The registry and per-window layouts support schematic and PCB inspection views. Layout
 nodes refer to stable view IDs; the view's document binding is independent of
 its placement. A render slot is exchanged synchronously while each host paints,
 without changing another host's focus or creating a project copy. Closing a host
@@ -136,12 +140,21 @@ qualification remains separate from those input/render-callback tests.
 
 The [representation foundation](pcb-representation.md) defines layer identity,
 physical stackup, units and the proposed shared net/rule contracts before the
-board renderer makes those relationships visible. The next workspace step is to add the board view state and renderer, then wire
-workspace/document target choices into the shared placement handlers. The picker
-interactions above are still planned: current Split/Open beside/New window actions
-create another view of the addressed schematic. Acceptance must include schematic
-beside PCB, plus another detached board view, before #64 is complete. Live-MCP
-presentation discovery and dispatch remain under #61.
+board renderer makes those relationships visible. The inspection slice adds a
+board-addressed renderer, direct workspace/placement choices, a footprint Browser,
+grouped Layers and read-only Properties following the FigCraft exports. PCB
+views have a dedicated near-black canvas and subdued line grid, including with
+light application chrome, and a Layout ribbon independent of schematic Capture. Copper
+markers use visible layers; active layer, layer visibility and document ownership
+remain distinct. The current model has no pad shape, drill, outline or copper
+tracks, so the view shows pad-center markers rather than fabrication geometry.
+Selection filters, Flip view and the broader layout ribbon remain future work.
+
+The next authored-layout step is #92's pinned footprint definitions and mapping,
+then outline and placement tools using shared commands. Before adding a normal
+schematic-to-board editing workflow, #55 must replace immediate footprint removal
+with reviewed updates. Live-MCP presentation discovery and dispatch remain #61;
+this slice does not complete #54, #64 or #65.
 
 The focused view determines where editing shortcuts and contextual controls act.
 Text fields and dialogs retain keyboard ownership. A tool gesture captures its
@@ -207,19 +220,21 @@ closing that view transfers the role to the main window’s focused view. Explic
 per-view follow links remain a refinement for mixed workspaces. Highlight-only is
 the default, and closing or rebinding either endpoint invalidates pending navigation.
 
-For the current same-sheet views, the latest explicit selection supplies the
+The latest explicit schematic or board selection supplies the
 counterpart highlight, with amber ink distinguishing it from local blue edit
 selection. Focus changes retain the source without emitting a selection event.
-Both view bindings must match the current project opening and sheet; deletion
-prunes the live source selection, and reopening resets it. This handles symbols
-and wire identities on one sheet, without claiming board correspondence or
-project-wide net identity. Pending navigation captures both view input addresses
+Both view bindings must resolve in the current project opening; deletion
+prunes the live source selection, and reopening resets it. Same-sheet views share
+symbol/wire identities; schematic/board views resolve component-to-placement
+correspondence through the engine. Board-to-board highlights also require the
+same board ID. Individual pin/pad selection and project-wide net identity remain
+future work. Pending navigation captures both view input addresses
 and the policy at selection. Revision changes, reopening, focus changes, modal
 input, Home, a collapsed split, and changed preferences discard it. Target host
 geometry is supplied before consuming the request, so selection coordination
 does not depend on native-window coordinates. The native host supplies independent
-input streams and invalidates gestures on focus/host changes. A PCB target still
-needs component/pad correspondence and its own geometry adapter.
+input streams and invalidates gestures on focus/host changes. Board fitting and
+following use resolved board coordinates through a separate geometry adapter.
 
 Distinguish unassigned footprints, assigned but unplaced footprints, unresolved
 mappings and targets removed since selection. Represent one-to-many matches or
@@ -249,7 +264,13 @@ footprint removal and remapping require review.
 
 Use #54 to coordinate these deliverables, with small implementation PRs. The
 order describes acceptance dependencies rather than requiring whole backlog
-issues to finish before the next step can start.
+issues to finish before the next step can start. The read-only inspection slice
+now proves the mixed-view part of steps 4–5 ahead of authored placement tools.
+Manufacturer profiles, impedance calculation and advanced setup dialogs remain
+later additions; plugin interfaces and explicit SolidCraft links must remain
+possible without making those additions prerequisites for the first editable board.
+[#122](https://github.com/tangency-labs/pcbcraft/issues/122) adds the board-identity
+requirement described in the [representation plan](pcb-representation.md#board-addresses-and-multiboard-migration).
 
 | Step | Issue | Reviewable result |
 | --- | --- | --- |

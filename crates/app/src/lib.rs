@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
+mod board_canvas;
+mod board_panels;
+mod board_workspace;
+mod canvas_camera;
 mod editor_layout;
 mod editor_view;
 mod editor_windows;
@@ -23,7 +27,7 @@ mod project_files;
 mod schematic_canvas;
 mod unsaved;
 
-use editor_view::{SchematicView, ViewId, ViewInput};
+use editor_view::{EditorView, ViewId, ViewInput, Workspace};
 use editor_windows::EditorWindows;
 use editor_workspace::EditorViews;
 use schematic_canvas::{Click, PartDrag, SymbolAction, Tool};
@@ -196,8 +200,8 @@ pub struct PcbApp {
 const RIBBON_TABS: [&str; 2] = ["Capture", "View"];
 const VIEW_TAB: usize = 1;
 
-/// The workspaces the ribbon's tile lists. One electronics project spans them; only Schematic
-/// exists yet, and the rest show as planned.
+/// Built-in workspace contributions. The picker handles presentation only; each document
+/// renderer and input handler retain their own state over the shared session.
 const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
     entries: &[
         workspace::Workspace {
@@ -209,8 +213,8 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
         },
         workspace::Workspace {
             title: "PCB layout",
-            description: "Place components, route copper and define the board",
-            tabs: None,
+            description: "Inspect footprint placements and linked schematic components",
+            tabs: Some("Layout · View"),
             icon: workspace::WorkspaceIcon::Layout,
             current: false,
         },
@@ -229,7 +233,8 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             current: false,
         },
     ],
-    footer: "One electronics project across workspaces. PCB layout, 3D rendering and simulation are planned, not implemented.",
+    footer: "One project across workspaces. Board placement and routing tools are still in development.",
+    native_windows: !IN_BROWSER,
 };
 
 impl PcbApp {
@@ -279,17 +284,23 @@ impl PcbApp {
 
     /// Start a symbol preview at the current project revision.
     fn begin_placement(&mut self, definition: Arc<SymbolDefinition>) {
+        if self.views.active.workspace != Workspace::Schematic {
+            return;
+        }
         self.views.sync(&self.session);
         self.message = None;
-        self.views.active.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
+        self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
     }
 
     /// Start a fresh wire draft at the current revision, accepting empty space or existing endpoints.
     fn begin_wire(&mut self) {
+        if self.views.active.workspace != Workspace::Schematic {
+            return;
+        }
         self.views.sync(&self.session);
         self.message = None;
-        self.views.active.wire_draft = schematic_canvas::Draft::default();
-        self.views.active.tool = Some(Tool::Wire { revision: self.session.revision(), start: None });
+        self.views.active.schematic.wire_draft = schematic_canvas::Draft::default();
+        self.views.active.schematic.tool = Some(Tool::Wire { revision: self.session.revision(), start: None });
     }
 
     /// Start a new project, first asking whether to save any unsaved changes it would replace.
@@ -402,15 +413,18 @@ impl PcbApp {
     /// The selected symbol's shown reference, if it still exists.
     fn selected_reference(&self) -> Option<String> {
         let project = self.session.project()?;
-        let id = self.views.active.selection.single_symbol()?;
+        let id = self.views.active.schematic.selection.single_symbol()?;
         project.symbols().iter().find(|symbol| symbol.id() == id).map(|symbol| project.reference(symbol))
     }
 
     /// Rotate, delete or open Edit Fields for the selected symbol through the shared commands.
     /// Deleting clears the selection; a failed command shows in the status bar.
     fn edit_selected(&mut self, action: SymbolAction) {
+        if self.views.active.workspace != Workspace::Schematic {
+            return;
+        }
         self.views.sync(&self.session);
-        let Some(id) = self.views.active.selection.single_symbol().map(str::to_owned) else { return };
+        let Some(id) = self.views.active.schematic.selection.single_symbol().map(str::to_owned) else { return };
         let revision = self.session.revision();
         match action {
             SymbolAction::Rotate => self.run(ROTATE_SYMBOL, &json!({"symbol": id, "expected_revision": revision})),
@@ -440,7 +454,7 @@ impl PcbApp {
             WireAction::SelectWire => {
                 if leg.revision == self.session.revision() {
                     self.select(Selection::one_wire(leg.wire.clone()));
-                    self.views.active.whole_wire_drag = true;
+                    self.views.active.schematic.whole_wire_drag = true;
                 }
                 return;
             }
@@ -474,7 +488,7 @@ impl PcbApp {
         };
         let mut params = params;
         params["expected_revision"] = json!(revision);
-        let selected_segment = self.views.active.selected_leg.is_some();
+        let selected_segment = self.views.active.schematic.selected_leg.is_some();
         self.run(command, &params);
         if self.message.is_none() && selected_segment {
             if let pcbcraft_engine::wire::Reshape::Segment { wire, .. } = &drag.edit
@@ -491,11 +505,14 @@ impl PcbApp {
     /// Delete the selected segment, or the complete item selection when there is no segment.
     /// Both paths use revision-checked shared commands; failures retain the valid selection.
     fn delete_selection(&mut self) {
-        if let Some(leg) = self.views.active.selected_leg.clone() {
+        if self.views.active.workspace != Workspace::Schematic {
+            return;
+        }
+        if let Some(leg) = self.views.active.schematic.selected_leg.clone() {
             self.edit_wire(schematic_canvas::WireAction::DeleteSegment, &leg);
             return;
         }
-        self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.views.active.selection,"expected_revision":self.session.revision()}));
+        self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.views.active.schematic.selection,"expected_revision":self.session.revision()}));
         if self.message.is_none() {
             self.select(Selection::default());
         }
@@ -635,15 +652,32 @@ impl PcbApp {
     /// the panel toggles and fit on View. The workspace picker is on its tile.
     fn ribbon(&mut self, ui: &mut Ui) {
         let mut tab = self.ribbon_tab;
-        // Schematic is the only workspace so far, so picking it just closes the picker.
-        workspace::ribbon(ui, "Schematic", &RIBBON_TABS, &mut tab, WORKSPACES, |ui, shown| {
-            if shown == VIEW_TAB {
-                self.view_tab(ui);
-            } else {
-                self.capture_tab(ui);
-            }
-        });
+        let current = self.views.active.workspace;
+        let mut entries = WORKSPACES.entries.to_vec();
+        entries[0].current = current == Workspace::Schematic;
+        entries[1].current = current == Workspace::Board;
+        let tabs = if current == Workspace::Board { ["Layout", "View"] } else { RIBBON_TABS };
+        let picked =
+            workspace::ribbon(ui, current.title(), &tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, |ui, shown| {
+                if shown == VIEW_TAB {
+                    self.view_tab(ui);
+                } else if current == Workspace::Board {
+                    self.board_tab(ui);
+                } else {
+                    self.capture_tab(ui);
+                }
+            });
         self.ribbon_tab = tab;
+        if let Some(pick) = picked {
+            let target = match pick.index {
+                0 => Some(Workspace::Schematic),
+                1 => Some(Workspace::Board),
+                _ => None,
+            };
+            if let Some(target) = target {
+                self.open_workspace(target, pick.placement, ui.ctx());
+            }
+        }
     }
 
     /// The View tab: show or hide contextual panels, fit the active view, and toggle the split.
@@ -652,14 +686,15 @@ impl PcbApp {
         use workspace::{RibbonTool, ToolIcon};
 
         let has_project = self.session.project().is_some();
-        let parts = self.session.available(PLACE_SYMBOL);
+        let schematic = self.views.active.workspace == Workspace::Schematic;
+        let parts = schematic && self.session.available(PLACE_SYMBOL);
         let panels = [
             RibbonTool {
                 icon: ToolIcon::Browser,
                 label: "Browser",
                 description: "Toggle Browser",
                 shortcut: "",
-                enabled: has_project,
+                enabled: has_project && schematic,
                 active: has_project && self.browser.open,
                 toggle: true,
             },
@@ -677,7 +712,7 @@ impl PcbApp {
                 label: "Nets",
                 description: "Toggle Net Inspector",
                 shortcut: "",
-                enabled: has_project,
+                enabled: has_project && schematic,
                 active: has_project && self.net_inspector.open,
                 toggle: true,
             },
@@ -698,7 +733,7 @@ impl PcbApp {
         let navigate = [RibbonTool {
             icon: ToolIcon::Fit,
             label: "Fit",
-            description: "Fit schematic",
+            description: if schematic { "Fit schematic" } else { "Fit board" },
             shortcut: "",
             enabled: has_project,
             active: false,
@@ -769,7 +804,7 @@ impl PcbApp {
             description: "Add symbol (A)",
             shortcut: "A",
             enabled: self.session.available(PLACE_SYMBOL),
-            active: matches!(self.views.active.tool, Some(Tool::PlaceSymbol { .. })),
+            active: matches!(self.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
             toggle: false,
         }];
         if workspace::ribbon_group(ui, "Place", &place).is_some() {
@@ -782,7 +817,7 @@ impl PcbApp {
             description: "Draw wire (W)",
             shortcut: "W",
             enabled: self.session.available(CONNECT_PINS),
-            active: matches!(self.views.active.tool, Some(Tool::Wire { .. })),
+            active: matches!(self.views.active.schematic.tool, Some(Tool::Wire { .. })),
             toggle: false,
         }];
         if workspace::ribbon_group(ui, "Connect", &connect).is_some() {
@@ -819,7 +854,11 @@ impl PcbApp {
     /// Select and center a Browser pick only in its originating view and revision. Selection is
     /// view state, so the project and its revision are unchanged; stale picks do not move a camera.
     fn show_pick(&mut self, source: ViewInput, pick: project_browser::Pick) {
-        if self.home || !matches!(self.dialog, Dialog::None) || !self.views.active.accepts(source, &self.session) {
+        if self.views.active.workspace != Workspace::Schematic
+            || self.home
+            || !matches!(self.dialog, Dialog::None)
+            || !self.views.active.accepts(source, &self.session)
+        {
             return;
         }
         self.select(if pick.wire { Selection::one_wire(pick.id) } else { Selection::one_symbol(pick.id) });
@@ -845,11 +884,13 @@ impl PcbApp {
                 ui.label(dim(name));
                 if let Some(message) = message {
                     ui.label(shell::error(message));
-                } else if self.views.active.tool.is_none() && self.views.active.selection.len() > 1 {
-                    ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.selection.len())));
-                } else if let (None, Some(reference)) = (&self.views.active.tool, self.selected_reference()) {
+                } else if self.views.active.workspace == Workspace::Board {
+                    ui.label(dim("Board inspection · Pad centers"));
+                } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
+                    ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
+                } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
-                } else if let Some(tool) = &self.views.active.tool {
+                } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
@@ -859,10 +900,10 @@ impl PcbApp {
                         Tool::Wire { start: None, .. } => dim("Wire · Click a start point"),
                         Tool::Wire { start: Some(_), .. } => dim("Wire · Click corners · Enter finish · Space flip · Esc cancel"),
                     });
-                } else if self.views.active.selected_leg.is_some() {
+                } else if self.views.active.schematic.selected_leg.is_some() {
                     ui.label(dim("Wire segment selected · Del delete"));
-                } else if self.views.active.selection.single_wire().is_some() {
-                    ui.label(dim(if self.views.active.whole_wire_drag {
+                } else if self.views.active.schematic.selection.single_wire().is_some() {
+                    ui.label(dim(if self.views.active.schematic.whole_wire_drag {
                         "Whole wire selected · Drag to move · Del delete"
                     } else {
                         "Wire selected · Drag a segment, corner or free end to reshape · Del delete"
@@ -918,7 +959,10 @@ impl PcbApp {
                     {
                         self.pointer_next = Some(point);
                     }
-                    if std::mem::take(&mut self.views.active.rotate_requested) && input_enabled && self.views.active.selection.len() <= 1 {
+                    if std::mem::take(&mut self.views.active.schematic.rotate_requested)
+                        && input_enabled
+                        && self.views.active.schematic.selection.len() <= 1
+                    {
                         let rect = ui.available_rect_before_wrap();
                         let hovered = self.session.project().and_then(|project| {
                             let pointer = ui.input(|input| input.pointer.hover_pos())?;
@@ -927,7 +971,7 @@ impl PcbApp {
                                 .flatten()
                                 .map(|(symbol, _)| symbol.id())
                         });
-                        if let Some(symbol) = hovered.or_else(|| self.views.active.selection.single_symbol().map(str::to_owned)) {
+                        if let Some(symbol) = hovered.or_else(|| self.views.active.schematic.selection.single_symbol().map(str::to_owned)) {
                             self.select(Selection::one_symbol(symbol));
                             self.edit_selected(SymbolAction::Rotate);
                         }
@@ -939,15 +983,15 @@ impl PcbApp {
                             project,
                             self.session.revision(),
                             &mut self.views.active.camera,
-                            self.views.active.tool.clone(),
-                            &self.views.active.selection,
-                            self.views.active.selected_leg.as_ref(),
-                            self.views.active.whole_wire_drag,
+                            self.views.active.schematic.tool.clone(),
+                            &self.views.active.schematic.selection,
+                            self.views.active.schematic.selected_leg.as_ref(),
+                            self.views.active.schematic.whole_wire_drag,
                             &highlight,
                             input_enabled,
                             self.preferences.navigation,
                             self.preferences.grid_opacity_percent,
-                            &self.views.active.wire_draft,
+                            &self.views.active.schematic.wire_draft,
                             &label,
                         );
                     }
@@ -959,7 +1003,7 @@ impl PcbApp {
                 })
             })
             .inner;
-        self.views.active.wire_draft.finish_requested = false;
+        self.views.active.schematic.wire_draft.finish_requested = false;
         if let (Some(source), Some(click)) = (source, click) {
             self.view_click(source, click);
             // Selection can change after the other pane was painted, without a document edit.
@@ -970,16 +1014,20 @@ impl PcbApp {
     /// Apply canvas input only to its originating view, sheet and revision. The shared session
     /// remains the sole mutation authority; stale input cannot alter selection or a new preview.
     fn view_click(&mut self, source: ViewInput, click: Click) {
-        if self.home || !matches!(self.dialog, Dialog::None) || !self.views.active.accepts(source, &self.session) {
+        if self.views.active.workspace != Workspace::Schematic
+            || self.home
+            || !matches!(self.dialog, Dialog::None)
+            || !self.views.active.accepts(source, &self.session)
+        {
             return;
         }
-        match (self.views.active.tool.clone(), click) {
+        match (self.views.active.schematic.tool.clone(), click) {
             (Some(Tool::PlaceSymbol { definition, revision, turns }), Click::Place(point)) => {
-                self.views.active.tool = None;
+                self.views.active.schematic.tool = None;
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}));
             }
             (Some(Tool::Wire { revision, start: None }), Click::WirePoint(anchor, _)) => {
-                self.views.active.tool = Some(Tool::Wire { revision, start: Some(anchor) });
+                self.views.active.schematic.tool = Some(Tool::Wire { revision, start: Some(anchor) });
             }
             (Some(Tool::Wire { revision, start: Some(from) }), Click::WirePoint(to, finish)) => {
                 if let Some(project) = self.session.project()
@@ -987,28 +1035,28 @@ impl PcbApp {
                     && a != b
                 {
                     if finish || matches!(to, pcbcraft_engine::wire::Anchor::Existing(_)) {
-                        let path = self.views.active.wire_draft.path(a, b);
+                        let path = self.views.active.schematic.wire_draft.path(a, b);
                         self.run(
                             pcbcraft_engine::DRAW_WIRE,
                             &json!({"from": from.inspect(), "to": to.inspect(), "bends": &path[1..path.len()-1], "expected_revision": revision}),
                         );
                         if self.message.is_none() {
-                            self.views.active.tool = None;
+                            self.views.active.schematic.tool = None;
                         }
-                    } else if !self.views.active.wire_draft.corner(a, b) {
+                    } else if !self.views.active.schematic.wire_draft.corner(a, b) {
                         self.message = Some("Wire has too many corners; finish it before continuing.".to_owned());
                     }
                 }
             }
             (None, Click::Grab(symbol, offset)) => {
                 self.select(Selection::one_symbol(symbol.id()));
-                self.views.active.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
+                self.views.active.schematic.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
             }
             (None, Click::StartBox(drag)) => {
-                self.views.active.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
+                self.views.active.schematic.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
             }
             (None | Some(Tool::BoxSelect { .. }), Click::SelectItems(items)) => {
-                self.views.active.tool = None;
+                self.views.active.schematic.tool = None;
                 self.select(items);
             }
             (None, Click::Select(symbol)) => {
@@ -1016,13 +1064,13 @@ impl PcbApp {
             }
             (None, Click::SelectLeg(leg)) => self.select_leg(leg),
             (None, Click::GrabItems(items, origin)) => {
-                let whole_wire_drag = self.views.active.whole_wire_drag && items.single_wire().is_some();
+                let whole_wire_drag = self.views.active.schematic.whole_wire_drag && items.single_wire().is_some();
                 self.select(items.clone());
-                self.views.active.whole_wire_drag = whole_wire_drag;
-                self.views.active.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
+                self.views.active.schematic.whole_wire_drag = whole_wire_drag;
+                self.views.active.schematic.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
             }
             (Some(Tool::MoveItems { items, revision, .. }), Click::FinishItems(delta)) => {
-                self.views.active.tool = None;
+                self.views.active.schematic.tool = None;
                 if let Some(delta) = delta {
                     self.run(pcbcraft_engine::MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"expected_revision":revision}));
                 }
@@ -1039,10 +1087,10 @@ impl PcbApp {
                 } else {
                     self.select(Selection::one_wire(drag.wire.clone()));
                 }
-                self.views.active.tool = Some(Tool::Reshape { drag, revision: self.session.revision() });
+                self.views.active.schematic.tool = Some(Tool::Reshape { drag, revision: self.session.revision() });
             }
             (Some(Tool::Reshape { drag, revision }), Click::FinishReshape(to)) => {
-                self.views.active.tool = None;
+                self.views.active.schematic.tool = None;
                 if let Some(to) = to {
                     self.reshape_wire(&drag, to, revision);
                 }
@@ -1053,7 +1101,7 @@ impl PcbApp {
                     return;
                 }
                 let revision = drag_source.revision;
-                self.views.active.tool = None;
+                self.views.active.schematic.tool = None;
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
             (None, Click::WireEdit(action, leg)) => self.edit_wire(action, &leg),
@@ -1062,7 +1110,7 @@ impl PcbApp {
                 self.edit_selected(action);
             }
             (Some(Tool::Move { symbol, revision, .. }), Click::FinishMove(position)) => {
-                self.views.active.tool = None;
+                self.views.active.schematic.tool = None;
                 if let Some(point) = position {
                     self.run(
                         MOVE_SYMBOL,
@@ -1073,7 +1121,7 @@ impl PcbApp {
                 }
             }
             (Some(Tool::Wire { .. }), Click::CancelWire) => {
-                self.views.active.tool = None;
+                self.views.active.schematic.tool = None;
                 self.message = None;
             }
             _ => {}
@@ -1088,8 +1136,14 @@ impl PcbApp {
         if view != self.views.active.id() || !ctx.input(|input| input.focused) || self.project_action_pending() {
             return;
         }
-        self.views.active.rotate_requested = false;
-        if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.parts.take_escape(ctx) {
+        self.views.active.schematic.rotate_requested = false;
+        if !self.home
+            && self.views.active.workspace == Workspace::Schematic
+            && !assistant_keys
+            && matches!(self.dialog, Dialog::None)
+            && !egui::Popup::is_any_open(ctx)
+            && self.parts.take_escape(ctx)
+        {
             return;
         }
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
@@ -1100,38 +1154,48 @@ impl PcbApp {
             if !egui::Popup::is_any_open(ctx) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
                 self.home = false;
             }
+        } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+                self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);
+            }
+            if pressed(&COARSER_GRID) {
+                self.cycle_grid(false);
+            } else if pressed(&FINER_GRID) {
+                self.cycle_grid(true);
+            }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
                 // Escape cancels the tool first, then clears the selection.
-                if self.views.active.tool.take().is_some() {
+                if self.views.active.schematic.tool.take().is_some() {
                     self.message = None;
                 } else {
                     self.select(Selection::default());
                 }
             }
-            if let Some(Tool::Wire { start, .. }) = &mut self.views.active.tool {
+            if let Some(Tool::Wire { start, .. }) = &mut self.views.active.schematic.tool {
                 if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
-                    self.views.active.wire_draft.horizontal_first = !self.views.active.wire_draft.horizontal_first;
+                    self.views.active.schematic.wire_draft.horizontal_first = !self.views.active.schematic.wire_draft.horizontal_first;
                 }
-                if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace)) && !self.views.active.wire_draft.back() {
+                if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace)) && !self.views.active.schematic.wire_draft.back() {
                     *start = None;
                 }
-                self.views.active.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                self.views.active.schematic.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
             }
-            if self.views.active.tool.is_none()
-                && !self.views.active.selection.is_empty()
+            if self.views.active.schematic.tool.is_none()
+                && !self.views.active.schematic.selection.is_empty()
                 && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace))
             {
                 self.delete_selection();
             }
             if pressed(&ROTATE) {
-                if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.tool {
+                if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.schematic.tool {
                     *turns = (*turns + 1) % 4;
-                } else if self.views.active.tool.is_none() {
-                    self.views.active.rotate_requested = true;
+                } else if self.views.active.schematic.tool.is_none() {
+                    self.views.active.schematic.rotate_requested = true;
                 }
             }
-            if self.views.active.tool.is_none() && self.views.active.selection.single_symbol().is_some() && pressed(&EDIT_FIELDS) {
+            if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.single_symbol().is_some() && pressed(&EDIT_FIELDS)
+            {
                 self.edit_selected(SymbolAction::EditFields);
             }
             // Shift+N first: an unshifted pattern also matches a shifted key.

@@ -5,7 +5,7 @@ contracts that still need implementation. It extends the [board workspace
 plan](board-workspace-plan.md), [native storage contract](native-project-storage.md)
 and [library proposal](library-sources.md) merged in #118. The implementation
 status below distinguishes the layer/stackup and material slices from later work; this
-document does not claim a working board canvas, router or design-rule checker.
+document does not claim an editable board canvas, router or design-rule checker.
 
 The model should support a small board soon while allowing richer constructions
 without making names, array positions or today's UI controls into permanent
@@ -13,6 +13,45 @@ electrical identities. Start the foundations of [#76](https://github.com/tangenc
 and [#77](https://github.com/tangency-labs/pcbcraft/issues/77) before finishing
 footprint placement in #54. Coordinate every numeric input with
 [#75](https://github.com/tangency-labs/pcbcraft/issues/75).
+
+## Board addresses and multiboard migration
+
+[#122](https://github.com/tangency-labs/pcbcraft/issues/122) requires physical
+boards to have identities before additional board features depend on them. The
+inspection canvas therefore resolves a `BoardTarget { project, board }` through
+an immutable `BoardView`. Placements and cross-probe pad results include their
+board address; project inspection lists available boards even when empty. The
+existing `pcb.*` commands accept an optional `board` UUID, defaulting only under
+the current single-board compatibility model. Unknown IDs fail before mutation.
+New renderers consume the resolved board, not a global project placement list.
+
+This is an address bridge, not the full #122 storage migration. Formats 1–5 and
+`board.json` remain unchanged. Their board UUID is derived deterministically from
+SHA-256 of the UTF-8 bytes `pcbcraft:legacy-board:1` followed by a zero byte and
+the saved project UUID's 16 bytes. The first 16 digest bytes use UUID v8 version
+and standard variant bits. This keeps the address stable through rename, edits,
+reopening and no-op saves. It is only the legacy-board identity rule; additional
+boards need independently allocated, persisted IDs. The native format must retain
+this compatibility ID when that board becomes an explicitly stored record.
+
+The proposed next storage change, for public review before adoption, is an
+ordered `boards` list alongside `sheets` in a new project-format version, with
+stable ID, display name and document reference per board. Whether the first board
+retains `board.json` or moves to `boards/<uuid>.json` remains a format decision.
+The migration must preserve every placement, pin mapping, layer, material report
+and stackup, and become byte-stable after the first migrated save. Readers that
+cannot handle multiple boards must refuse them instead of truncating the list.
+
+Component-to-board assignment must become an explicit project-model choice,
+including assigned but unplaced components. The current legacy model still has
+one implicit owner, and this slice does not change it. Each physical board owns
+its outline, stackup/materials, placements, routing, local rule/output settings
+and results. Shared electrical intent remains project-owned; connectors/cables,
+a system netlist and assembly transforms are later contracts. Board duplication
+for panelization and assembly variants remain separate concepts. More than one
+board must make an omitted command target ambiguous rather than select the first
+board silently. Board creation, rename/reorder/delete, ownership assignment and
+per-board outputs remain open under #122 and its linked issues.
 
 ## Ownership
 
