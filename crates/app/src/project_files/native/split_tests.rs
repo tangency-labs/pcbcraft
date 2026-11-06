@@ -300,13 +300,35 @@ impl Drop for ReadOnlyDirectory {
     }
 }
 
+/// Probe the actual filesystem rather than assuming mode bits constrain this process. Privileged
+/// containers may still create files; restore permissions and remove the probe in either case.
+#[cfg(unix)]
+fn directory_permissions_enforced(path: &Path) -> bool {
+    let read_only = ReadOnlyDirectory::new(path);
+    let probe = tempfile::Builder::new().prefix(".permission-probe-").tempfile_in(path);
+    drop(read_only);
+    match probe {
+        Ok(file) => {
+            file.close().unwrap();
+            false
+        }
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => true,
+        Err(error) => panic!("Could not probe directory permissions: {error}"),
+    }
+}
+
 /// Desktop and headless readers accept read-only locations, while saves and pending recovery
-/// still require a writable lock. A blocked recovery leaves every published byte unchanged.
+/// still require a writable lock. Skip when directory modes are not enforced; otherwise a blocked
+/// recovery must leave every published byte unchanged.
 #[cfg(unix)]
 #[test]
 fn read_only_folders_open_without_creating_locks_but_cannot_recover_or_save() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
+    if !directory_permissions_enforced(dir.path()) {
+        eprintln!("Skipping read-only assertions: this process can write through directory mode 0o555.");
+        return;
+    }
     let root = dir.path().join("project");
     let lock = dir.path().join(".project.pcbcraft-lock");
     let mut s = session();
