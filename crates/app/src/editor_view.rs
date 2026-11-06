@@ -9,7 +9,7 @@ use crate::schematic_canvas::{Camera, Draft, LegTarget, Tool};
 mod tests;
 
 /// Runtime identity assigned by the host, independent of a sheet or native window.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct ViewId(pub(super) u64);
 
 /// Address of input captured in a view at a particular document revision. Delayed actions must
@@ -83,6 +83,12 @@ impl SchematicView {
             wire_draft: Draft::default(),
             rotate_requested: false,
         }
+    }
+
+    /// Create another view of this target at the same navigation transform. Input epochs,
+    /// selection and unfinished gestures are new; the project remains owned by the session.
+    pub(super) fn fork(&mut self, id: ViewId) -> Self {
+        Self { binding: self.binding, camera: self.camera.fork_navigation(), ..Self::new(id) }
     }
 
     /// Identify this view for input routing and egui widget scopes, regardless of its host.

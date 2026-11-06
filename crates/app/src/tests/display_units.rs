@@ -169,9 +169,14 @@ fn the_readout_follows_the_pointer_in_both_split_panes() {
     }
     // Move only the unfocused pane's view, so its own camera, not the focused one, decides the point.
     let target = pcbcraft_engine::schematic::Point { x_nm: 200 * grid::NM_PER_MIL, y_nm: -100 * grid::NM_PER_MIL };
-    h.state_mut().views.other.camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 500 * grid::NM_PER_MIL, y_nm: 0 });
+    h.state_mut()
+        .views
+        .view_mut(crate::ViewId(1))
+        .unwrap()
+        .camera
+        .center_on(pcbcraft_engine::schematic::Point { x_nm: 500 * grid::NM_PER_MIL, y_nm: 0 });
     h.run();
-    let at = h.state().views.other.camera.screen(target, h.get_by_label("Schematic canvas 2").rect());
+    let at = h.state().views.view(crate::ViewId(1)).unwrap().camera.screen(target, h.get_by_label("Schematic canvas 2").rect());
     h.hover_at(at);
     h.run();
     assert_eq!(readout(&h).as_deref(), Some("X 200.00  Y -100.00"));

@@ -44,10 +44,22 @@ pub fn tab_height() -> f32 {
     t.space_24 + t.space_8
 }
 
+/// A document tab addresses its own view, regardless of keyboard focus.
+#[derive(Clone, Copy, Debug)]
+pub enum PaneAction {
+    OpenBeside,
+    OpenWindow,
+    Detach,
+    Dock,
+    Close,
+}
+
 /// Show the sheet path on a document tab. Focus changes its underline, leaving the tab and
 /// surrounding workspace stationary. Long paths elide from the left to retain the sheet name;
-/// accessibility and hover text always contain the complete path. The host supplies stable IDs.
-pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool) -> bool {
+/// accessibility and hover text always contain the complete path. Return a focus click and
+/// an optional view action; native placement rows are omitted for browser hosts. The host
+/// supplies stable IDs and applies actions after rendering.
+pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool, native: bool, detached: bool) -> (bool, Option<PaneAction>) {
     let t = Tokens::get();
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), tab_height()), Sense::hover());
     let font = FontId::proportional(t.font_label);
@@ -73,5 +85,23 @@ pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool) -> bool {
     painter.rect_filled(tab, 0, t.canvas);
     painter.galley(pos2(tab.left() + t.space_12, tab.center().y - galley.size().y / 2.0), galley, t.text);
     painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(2.0, if active { t.accent } else { t.border }));
-    response.on_hover_text(path).clicked()
+    let mut action = None;
+    response.context_menu(|ui| {
+        let mut choices = vec![("Open beside", PaneAction::OpenBeside)];
+        if native {
+            choices.push(("Open in new window", PaneAction::OpenWindow));
+            choices.push(("Detach view", PaneAction::Detach));
+            if detached {
+                choices.push(("Dock in main window", PaneAction::Dock));
+            }
+        }
+        choices.push(("Close view", PaneAction::Close));
+        for (label, choice) in choices {
+            if ui.button(label).clicked() {
+                action = Some(choice);
+                ui.close();
+            }
+        }
+    });
+    (response.on_hover_text(path).clicked(), action)
 }

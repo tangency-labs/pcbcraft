@@ -1,12 +1,17 @@
 //! Exercise the real immediate-viewport callback with independent native-style input streams.
 //! OS window creation/focus is verified separately; these tests cover shared application state.
 
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
+};
 
 use egui::{Event, PointerButton, Pos2, Rect, ViewportCommand, ViewportId, pos2, vec2};
 use pcbcraft_engine::{persistence::encode, schematic::Point};
 
 use super::*;
+use crate::editor_layout::HostId;
 
 #[derive(Default)]
 struct Peer {
@@ -43,13 +48,23 @@ impl Peer {
 /// Use egui's native viewport callback with separate input and output, not an embedded window.
 /// Only the platform rendering backend is replaced; both hosts borrow the actual PcbApp.
 fn multi_window() -> (Harness<'static, PcbApp>, Rc<RefCell<Peer>>) {
+    let (h, peers) = many_windows();
+    let peer = peers.borrow_mut().entry(editor_windows::viewport(HostId(1))).or_default().clone();
+    (h, peer)
+}
+
+type Peers = Rc<RefCell<HashMap<ViewportId, Rc<RefCell<Peer>>>>>;
+
+/// Give every host its own input stream, accessibility tree and paint output.
+fn many_windows() -> (Harness<'static, PcbApp>, Peers) {
     let mut h = harness();
     h.set_size(vec2(1400.0, 900.0));
     resistor_at_origin(&mut h);
     h.state_mut().browser.open = false;
-    let peer = Rc::new(RefCell::new(Peer::default()));
-    let state = peer.clone();
+    let peers = Peers::default();
+    let state = peers.clone();
     egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
+        let state = state.borrow_mut().entry(viewport.ids.this).or_default().clone();
         let mut input = egui::RawInput {
             viewport_id: viewport.ids.this,
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1100.0, 760.0))),
@@ -79,7 +94,7 @@ fn multi_window() -> (Harness<'static, PcbApp>, Rc<RefCell<Peer>>) {
     });
     h.ctx.set_embed_viewports(false);
     h.run();
-    (h, peer)
+    (h, peers)
 }
 
 /// Find a child control from its actual accessible output, not an assumed pixel location.
@@ -128,7 +143,7 @@ fn child_key(h: &mut Harness<'_, PcbApp>, peer: &Rc<RefCell<Peer>>, key: Key, mo
 fn detach(h: &mut Harness<'_, PcbApp>) {
     click(h, "View");
     click(h, "Detach active editor view");
-    assert!(h.state().views.detached.is_some());
+    assert!(!h.state().views.detached_hosts().is_empty());
 }
 
 /// A direct detach inherits the primary window's chrome policy. Integrated controls address
@@ -138,7 +153,7 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
     for integrated in [false, true] {
         let (mut h, peer) = multi_window();
         h.state_mut().integrated_titlebar = integrated;
-        assert!(!h.state().views.split, "detaching does not require splitting first");
+        assert!(!h.state().views.is_split(), "detaching does not require splitting first");
         let before = h.state().session.snapshot().unwrap();
         detach(&mut h);
         assert_eq!(peer.borrow().decorations, Some(!integrated));
@@ -162,15 +177,18 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
                     });
                     h.step();
                 }
-                assert!(h.output().viewport_output[&editor_windows::viewport()].commands.contains(&command), "{label} targets the child window");
+                assert!(
+                    h.output().viewport_output[&editor_windows::viewport(HostId(1))].commands.contains(&command),
+                    "{label} targets the child window"
+                );
                 assert!(!h.output().viewport_output[&ViewportId::ROOT].commands.contains(&command));
                 assert!(!h.state().project_action_pending());
             }
             // The OS acknowledges the child Close command as a close request on the next frame.
             peer.borrow_mut().close = true;
             h.run();
-            assert!(h.state().views.detached.is_none());
-            assert!(!h.state().views.split);
+            assert!(h.state().views.detached_hosts().is_empty());
+            assert!(!h.state().views.is_split());
             assert!(matches!(h.state().dialog, Dialog::None));
         }
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
@@ -178,7 +196,7 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
     }
 }
 
-/// Either split view can detach, then close or explicitly dock from either host. Close keeps
+/// Either split view can detach, then close or explicitly dock from its native host. Close keeps
 /// the root alone; Dock restores the split. All transitions preserve navigation and project
 /// bytes while invalidating callbacks captured before the transition. Child Close never prompts to save.
 #[test]
@@ -186,11 +204,10 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
     #[derive(Debug, PartialEq)]
     enum Finish {
         Close,
-        DockRoot,
         DockChild,
     }
     for id in [ViewId(0), ViewId(1)] {
-        for action in [Finish::Close, Finish::DockRoot, Finish::DockChild] {
+        for action in [Finish::Close, Finish::DockChild] {
             let (mut h, peer) = multi_window();
             let ctx = h.ctx.clone();
             h.state_mut().split_editors(&ctx, true);
@@ -207,7 +224,7 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
             let positions = [ViewId(0), ViewId(1)].map(|id| app.views.view(id).unwrap().camera.screen(origin, Rect::ZERO));
             let old = app.views.active.input(&app.session).unwrap();
             detach(&mut h);
-            assert_eq!(h.state().views.detached, Some(id));
+            assert_eq!(h.state().views.owner(id), Some(HostId(1)));
             assert_ne!(h.state().views.active.id(), id, "the root owns the remaining view");
             assert!(peer.borrow().frames > 0);
             assert!(!h.state().views.view(id).unwrap().accepts(old, &h.state().session));
@@ -220,7 +237,6 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
                     peer.borrow_mut().close = true;
                     h.run();
                 }
-                Finish::DockRoot => click(&mut h, "Dock editor view"),
                 Finish::DockChild => {
                     let view_tab = child_rect(&peer, "View").center();
                     child_click_at(&mut h, &peer, view_tab);
@@ -228,15 +244,22 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
                     child_click_at(&mut h, &peer, dock);
                 }
             }
-            assert!(h.state().views.detached.is_none());
-            assert_eq!(h.state().views.split, action != Finish::Close, "{action:?}");
+            assert!(h.state().views.detached_hosts().is_empty());
+            assert_eq!(h.state().views.is_split(), action != Finish::Close, "{action:?}");
             assert_eq!(h.state().views.active.id(), if action == Finish::Close { root_id } else { id });
-            assert!(!h.state().views.view(id).unwrap().accepts(child_input, &h.state().session));
-            assert_eq!(h.state().views.view(id).unwrap().selection.single_symbol(), Some("symbol-2"));
-            assert_eq!(h.state().views.view(id).unwrap().camera.snap_nm(), 500_000);
+            if action == Finish::Close {
+                assert!(h.state().views.view(id).is_none());
+            } else {
+                let child = h.state().views.view(id).unwrap();
+                assert!(!child.accepts(child_input, &h.state().session));
+                assert_eq!(child.selection.single_symbol(), Some("symbol-2"));
+                assert_eq!(child.camera.snap_nm(), 500_000);
+            }
             assert!(matches!(h.state().dialog, Dialog::None));
             for (index, id) in [ViewId(0), ViewId(1)].into_iter().enumerate() {
-                assert_eq!(h.state().views.view(id).unwrap().camera.screen(origin, Rect::ZERO), positions[index]);
+                if let Some(view) = h.state().views.view(id) {
+                    assert_eq!(view.camera.screen(origin, Rect::ZERO), positions[index]);
+                }
             }
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
             assert_eq!(h.state().session.revision(), revision);
@@ -251,7 +274,7 @@ fn detach_close_and_dock_preserve_views_without_copying_the_project() {
 fn detached_editing_highlights_and_history_share_one_session() {
     let (mut h, peer) = multi_window();
     detach(&mut h);
-    let id = h.state().views.detached.unwrap();
+    let id = h.state().views.hosts[&HostId(1)].focused;
     let root = h.state().views.active.id();
     let origin = h.state().views.view(id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, child_rect(&peer, "Schematic canvas"));
     child_click_at(&mut h, &peer, origin);
@@ -282,7 +305,7 @@ fn detached_editing_highlights_and_history_share_one_session() {
 fn detached_fields_dialog_keeps_its_target_and_blocks_other_input() {
     let (mut h, peer) = multi_window();
     detach(&mut h);
-    let id = h.state().views.detached.unwrap();
+    let id = h.state().views.hosts[&HostId(1)].focused;
     let origin = h.state().views.view(id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, child_rect(&peer, "Schematic canvas"));
     child_click_at(&mut h, &peer, origin);
     child_key(&mut h, &peer, Key::A, Modifiers::NONE);
@@ -313,7 +336,7 @@ fn detached_fields_dialog_keeps_its_target_and_blocks_other_input() {
 fn closing_a_detached_view_invalidates_its_pending_fields_dialog() {
     let (mut h, peer) = multi_window();
     detach(&mut h);
-    let child = h.state().views.detached.unwrap();
+    let child = h.state().views.hosts[&HostId(1)].focused;
     let root = h.state().views.active.id();
     let origin = h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, child_rect(&peer, "Schematic canvas"));
     child_click_at(&mut h, &peer, origin);
@@ -328,8 +351,8 @@ fn closing_a_detached_view_invalidates_its_pending_fields_dialog() {
     h.run();
     peer.borrow_mut().close = true;
     h.run();
-    assert!(h.state().views.detached.is_none());
-    assert!(!h.state().views.split);
+    assert!(h.state().views.detached_hosts().is_empty());
+    assert!(!h.state().views.is_split());
     assert_eq!(h.state().views.active.id(), root);
     click(&mut h, "OK");
     assert_eq!(h.state().session.inspect(), before);
@@ -358,7 +381,7 @@ fn closing_the_project_prompts_once_and_cancel_keeps_both_editors() {
     focus(&mut h, &peer, false);
     click(&mut h, "Cancel");
     assert!(!h.state().project_action_pending());
-    assert!(h.state().views.detached.is_some());
+    assert!(!h.state().views.detached_hosts().is_empty());
     assert!(!h.output().viewport_output[&ViewportId::ROOT].commands.contains(&ViewportCommand::Close));
     close_root(&mut h);
     h.get_by_label("Don't Save").click();
@@ -373,14 +396,14 @@ fn closing_the_project_prompts_once_and_cancel_keeps_both_editors() {
 fn detached_project_actions_use_the_primary_unsaved_changes_flow() {
     let (mut h, peer) = multi_window();
     detach(&mut h);
-    let child = h.state().views.detached.unwrap();
+    let child = h.state().views.hosts[&HostId(1)].focused;
     let before = h.state().session.snapshot().unwrap();
     let old = h.state().views.view(child).unwrap().input(&h.state().session).unwrap();
     focus(&mut h, &peer, true);
     peer.borrow_mut().events.push(Event::Key { key: Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
     h.step();
     assert!(h.output().viewport_output[&ViewportId::ROOT].commands.contains(&ViewportCommand::Close));
-    assert!(!h.output().viewport_output[&editor_windows::viewport()].commands.contains(&ViewportCommand::Close));
+    assert!(!h.output().viewport_output[&editor_windows::viewport(HostId(1))].commands.contains(&ViewportCommand::Close));
     peer.borrow_mut().events.push(Event::Key { key: Key::Q, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::COMMAND });
     h.run();
     close_root(&mut h);
@@ -396,7 +419,7 @@ fn detached_project_actions_use_the_primary_unsaved_changes_flow() {
     assert!(matches!(h.state().dialog, Dialog::SaveChanges(unsaved::Then::New)));
     focus(&mut h, &peer, false);
     click(&mut h, "Don't Save");
-    assert_eq!(h.state().views.detached, Some(child));
+    assert_eq!(h.state().views.owner(child), Some(HostId(1)));
     assert!(!h.state().session.snapshot().unwrap().same_document(&before));
     assert!(!h.state().views.view(child).unwrap().accepts(old, &h.state().session));
     assert!(h.state().views.active.shares_sheet(h.state().views.view(child).unwrap(), &h.state().session));
@@ -408,7 +431,7 @@ fn detached_project_actions_use_the_primary_unsaved_changes_flow() {
 fn detached_text_input_and_focus_do_not_leak_canvas_commands() {
     let (mut h, peer) = multi_window();
     detach(&mut h);
-    let id = h.state().views.detached.unwrap();
+    let id = h.state().views.hosts[&HostId(1)].focused;
     let before = h.state().session.snapshot().unwrap();
     child_key(&mut h, &peer, Key::A, Modifiers::NONE);
     peer.borrow_mut().events.push(Event::Text("wr".to_owned()));
@@ -441,7 +464,7 @@ fn detached_selection_follow_reaches_either_host_once() {
         focus(&mut h, &peer, child_source);
         h.state_mut().preferences.selection_follow = preferences::SelectionFollow::Both;
         let root = h.state().views.active.id();
-        let child = h.state().views.detached.unwrap();
+        let child = h.state().views.hosts[&HostId(1)].focused;
         let (source, target) = if child_source { (child, root) } else { (root, child) };
         let far = Point { x_nm: 1_270_000_000, y_nm: 0 };
         h.state_mut().views.bind(target);
@@ -484,7 +507,7 @@ fn child_readout(peer: &Rc<RefCell<Peer>>) -> Option<String> {
 fn detached_units_and_pointer_readouts_preserve_the_display_units_workflow() {
     let (mut h, peer) = multi_window();
     detach(&mut h);
-    let child = h.state().views.detached.unwrap();
+    let child = h.state().views.hosts[&HostId(1)].focused;
     let before = h.state().session.inspect();
     let root_rect = h.get_by_label("Schematic canvas").rect();
     let point = h.state().views.active.camera.screen(Point { x_nm: 2_540_000, y_nm: -3_810_000 }, root_rect);
@@ -507,4 +530,257 @@ fn detached_units_and_pointer_readouts_preserve_the_display_units_workflow() {
     h.run();
     assert_eq!(child_readout(&peer), None);
     assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Transfer OS-style focus between several native hosts, never duplicating keyboard input.
+fn focus_host(h: &mut Harness<'_, PcbApp>, peers: &Peers, host: HostId) {
+    h.input_mut().focused = host == HostId::ROOT;
+    for (id, peer) in peers.borrow().iter() {
+        peer.borrow_mut().focused = *id == editor_windows::viewport(host);
+    }
+    h.run();
+}
+
+/// Keep a root split while creating two additional windows and splitting one of those too.
+/// Edits, highlights and undo share one session; closing a window cannot collapse another host.
+#[test]
+fn split_and_multiple_native_windows_coexist_and_share_edits() {
+    let (mut h, peers) = many_windows();
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    let root_panes = h.state().views.hosts[&HostId::ROOT].layout.views();
+    let before = h.state().session.snapshot().unwrap();
+    let root_camera = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, Rect::ZERO);
+    click(&mut h, "Open another editor window");
+    click(&mut h, "Open another editor window");
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(1), HostId(2)]);
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.views(), root_panes);
+    assert_eq!(h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, Rect::ZERO), root_camera);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    let first = peers.borrow()[&editor_windows::viewport(HostId(1))].clone();
+    let second = peers.borrow()[&editor_windows::viewport(HostId(2))].clone();
+    focus_host(&mut h, &peers, HostId(1));
+    let view_tab = child_rect(&first, "View").center();
+    child_click_at(&mut h, &first, view_tab);
+    let split = child_rect(&first, "Split editor views").center();
+    child_click_at(&mut h, &first, split);
+    let child_panes = h.state().views.hosts[&HostId(1)].layout.views();
+    assert_eq!(child_panes.len(), 2);
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.views(), root_panes);
+    let editing = child_panes[1];
+    let rect = child_rect(&first, &format!("Schematic canvas {}", editing.0 + 1));
+    let point = h.state().views.view(editing).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+    child_click_at(&mut h, &first, point);
+    assert_eq!(h.state().views.hosts[&HostId(1)].focused, editing);
+    for id in root_panes.iter().copied().chain([child_panes[0], h.state().views.hosts[&HostId(2)].focused]) {
+        assert_eq!(h.state().views.highlight_for(id, &h.state().session).single_symbol(), Some("symbol-2"));
+        assert!(h.state().views.view(id).unwrap().selection.is_empty());
+    }
+    child_key(&mut h, &first, Key::R, Modifiers::NONE);
+    let edited = h.state().session.snapshot().unwrap();
+    assert!(!Arc::ptr_eq(&before, &edited));
+    focus_host(&mut h, &peers, HostId::ROOT);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    focus_host(&mut h, &peers, HostId(2));
+    child_key(&mut h, &second, Key::Y, Modifiers::COMMAND);
+    assert!(Arc::ptr_eq(&edited, &h.state().session.snapshot().unwrap()));
+    let second_view = h.state().views.hosts[&HostId(2)].focused;
+    let second_camera = h.state().views.view(second_view).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, Rect::ZERO);
+    first.borrow_mut().close = true;
+    h.run();
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(2)]);
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.views(), root_panes);
+    assert!(child_panes.iter().all(|id| h.state().views.view(*id).is_none()));
+    assert_eq!(h.state().views.view(second_view).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, Rect::ZERO), second_camera);
+    assert!(Arc::ptr_eq(&edited, &h.state().session.snapshot().unwrap()));
+    focus_host(&mut h, &peers, HostId::ROOT);
+    click(&mut h, "Open another editor window");
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(2), HostId(3)], "closed host IDs are never reused");
+    assert!(h.state().views.hosts[&HostId(3)].focused > editing);
+}
+
+/// Dock a pane into an already split root without displacing its panes or another window.
+/// Closing an individual pane similarly changes only the branch that contained it.
+#[test]
+fn docking_into_an_existing_split_preserves_other_views() {
+    let (mut h, peers) = many_windows();
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    click(&mut h, "Open another editor window");
+    click(&mut h, "Open another editor window");
+    let root = h.state().views.hosts[&HostId::ROOT].layout.views();
+    let docked = h.state().views.hosts[&HostId(1)].focused;
+    let other = h.state().views.hosts[&HostId(2)].focused;
+    let before = h.state().session.inspect();
+    let first = peers.borrow()[&editor_windows::viewport(HostId(1))].clone();
+    focus_host(&mut h, &peers, HostId(1));
+    let tab = child_rect(&first, "View").center();
+    child_click_at(&mut h, &first, tab);
+    let dock = child_rect(&first, "Dock editor view").center();
+    child_click_at(&mut h, &first, dock);
+    let layout = h.state().views.hosts[&HostId::ROOT].layout.views();
+    assert_eq!(layout.len(), 3);
+    assert!(root.iter().all(|id| layout.contains(id)));
+    assert!(layout.contains(&docked));
+    focus_host(&mut h, &peers, HostId::ROOT);
+    click(&mut h, "Split editor views");
+    assert!(!h.state().views.is_split());
+    click(&mut h, "Split editor views");
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.views(), layout, "restore the entire split tree in its original order");
+
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(2)]);
+    assert_eq!(h.state().views.hosts[&HostId(2)].focused, other);
+    let ctx = h.ctx.clone();
+    h.state_mut().queue_view_action(&ctx, docked, editor_windows::ViewAction::Close);
+    h.run();
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.views(), root);
+    assert!(h.state().views.view(docked).is_none());
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// A queued action cannot resurrect a closed view or act on a replacement project, even if
+/// a new window has since opened. Those presentation operations do not add electrical edits.
+#[test]
+fn queued_host_actions_reject_closed_and_reopened_view_addresses() {
+    for replace_project in [false, true] {
+        let (mut h, _) = many_windows();
+        click(&mut h, "View");
+        click(&mut h, "Open another editor window");
+        let child = h.state().views.hosts[&HostId(1)].focused;
+        let ctx = h.ctx.clone();
+        h.state_mut().queue_view_action(&ctx, child, editor_windows::ViewAction::Dock);
+        if replace_project {
+            let snapshot = h.state().session.snapshot().unwrap();
+            h.state_mut().session.open_snapshot(snapshot);
+        } else {
+            h.state_mut().views.close_host(HostId(1));
+        }
+        h.run();
+        assert!(!h.state().views.is_split());
+        assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.views(), vec![ViewId(0)]);
+    }
+}
+
+/// Navigation fans out once to each eligible view, with stable primary-directed policies.
+/// Manual navigation is not repeatedly undone, and each recipient keeps its edit selection.
+#[test]
+fn selection_follow_fans_out_across_hosts_without_focus_or_selection_transfer() {
+    use preferences::SelectionFollow::{Both, Off, PrimaryFollowsSecondary, SecondaryFollowsPrimary};
+    for (policy, source_primary) in [
+        (Both, true),
+        (Both, false),
+        (Off, true),
+        (SecondaryFollowsPrimary, true),
+        (SecondaryFollowsPrimary, false),
+        (PrimaryFollowsSecondary, false),
+    ] {
+        let (mut h, peers) = many_windows();
+        click(&mut h, "View");
+        click(&mut h, "Open another editor window");
+        click(&mut h, "Open another editor window");
+        focus_host(&mut h, &peers, if source_primary { HostId::ROOT } else { HostId(1) });
+        let primary = ViewId(0);
+        let first = h.state().views.hosts[&HostId(1)].focused;
+        let second = h.state().views.hosts[&HostId(2)].focused;
+        let source = if source_primary { primary } else { first };
+        let far = Point { x_nm: 1_270_000_000, y_nm: 0 };
+        for id in [primary, first, second].into_iter().filter(|id| *id != source) {
+            h.state_mut().views.view_mut(id).unwrap().camera.center_on(far);
+        }
+        h.state_mut().preferences.selection_follow = policy;
+        h.run();
+        let before = h.state().session.inspect();
+        h.state_mut().views.bind(source);
+        h.state_mut().select(Selection::one_symbol("symbol-2".to_owned()));
+        h.state_mut().views.bind_root();
+        h.run();
+        for (host, id) in [(HostId::ROOT, primary), (HostId(1), first), (HostId(2), second)].into_iter().filter(|(_, id)| *id != source) {
+            let rect = if host == HostId::ROOT {
+                h.get_by_label("Schematic canvas").rect()
+            } else {
+                child_rect(&peers.borrow()[&editor_windows::viewport(host)], "Schematic canvas")
+            };
+            let follows =
+                policy == Both || (policy == SecondaryFollowsPrimary && source_primary) || (policy == PrimaryFollowsSecondary && id == primary);
+            let view = h.state().views.view(id).unwrap();
+            assert_eq!(rect.contains(view.camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)), follows, "{policy:?} for {id:?}");
+            assert!(view.selection.is_empty());
+            assert_eq!(view.camera.zoom(), 1.0);
+            assert_eq!(h.state().views.highlight_for(id, &h.state().session).single_symbol(), Some("symbol-2"));
+            h.state_mut().views.view_mut(id).unwrap().camera.center_on(far);
+            h.run();
+            assert!(!rect.contains(h.state().views.view(id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)));
+        }
+        assert_eq!(h.state().session.inspect(), before);
+        assert_eq!(h.state().views.hosts[&HostId::ROOT].focused, primary);
+        assert_eq!(peers.borrow()[&editor_windows::viewport(HostId(1))].borrow().focused, !source_primary);
+    }
+}
+
+/// The tab menu addresses the clicked pane, including an inactive one. It can create another
+/// pane and close just that pane without stealing the existing pane's camera or selection.
+#[test]
+fn tab_actions_open_and_close_the_addressed_view() {
+    let (mut h, _) = many_windows();
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
+    let before = h.state().session.inspect();
+    let original = h.state().views.hosts[&HostId::ROOT].layout.views();
+    let tab = h.get_all_by_label(&path).nth(1).unwrap().rect().center();
+    h.hover_at(tab);
+    h.run();
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: tab, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    click(&mut h, "Open beside");
+    let panes = h.state().views.hosts[&HostId::ROOT].layout.views();
+    assert_eq!(panes.len(), 3);
+    assert_eq!(&panes[..2], &original);
+    assert_eq!(h.state().views.active.id(), original[1], "the context click focuses its addressed pane");
+    let tab = h.get_all_by_label(&path).nth(2).unwrap().rect().center();
+    h.hover_at(tab);
+    h.run();
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: tab, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    click(&mut h, "Close view");
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.views(), original);
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Closing an unrelated host during a modal must not expire the dialog's surviving view.
+/// Closing the originating host is covered separately and still rejects the captured edit.
+#[test]
+fn closing_another_window_keeps_a_surviving_fields_dialog_valid() {
+    let (mut h, peers) = many_windows();
+    click(&mut h, "View");
+    click(&mut h, "Open another editor window");
+    click(&mut h, "Open another editor window");
+    let first = peers.borrow()[&editor_windows::viewport(HostId(1))].clone();
+    let second = peers.borrow()[&editor_windows::viewport(HostId(2))].clone();
+    let id = h.state().views.hosts[&HostId(2)].focused;
+    focus_host(&mut h, &peers, HostId(2));
+    let rect = child_rect(&second, "Schematic canvas");
+    let origin = h.state().views.view(id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+    child_click_at(&mut h, &second, origin);
+    child_key(&mut h, &second, Key::E, Modifiers::NONE);
+    assert!(matches!(h.state().dialog, Dialog::EditFields { .. }));
+    focus_host(&mut h, &peers, HostId::ROOT);
+    h.get_by_label("Reference").click();
+    h.run();
+    clear_name(&mut h);
+    h.get_by_label("Reference").type_text("R42");
+    h.run();
+    first.borrow_mut().close = true;
+    h.run();
+    click(&mut h, "OK");
+    assert_eq!(h.state().message, None);
+    let project = h.state().session.project().unwrap();
+    assert_eq!(project.reference(&project.symbols()[0]), "R42");
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(2)]);
 }

@@ -67,8 +67,8 @@ impl Navigation {
     }
 }
 
-/// Which view may pan to reveal a selection made in its counterpart. Highlighting remains
-/// enabled in every mode; primary and secondary refer to view identity, not keyboard focus.
+/// Which views may pan to reveal a selection. The serialized names retain compatibility with
+/// the original two-view settings; secondary now means every view except the primary role.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SelectionFollow {
     #[default]
@@ -76,18 +76,6 @@ pub enum SelectionFollow {
     Both,
     SecondaryFollowsPrimary,
     PrimaryFollowsSecondary,
-}
-
-impl SelectionFollow {
-    /// Whether a selection from this stable role may navigate its counterpart.
-    pub(crate) fn allows(self, source_is_primary: bool) -> bool {
-        match self {
-            Self::Off => false,
-            Self::Both => true,
-            Self::SecondaryFollowsPrimary => source_is_primary,
-            Self::PrimaryFollowsSecondary => !source_is_primary,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -375,7 +363,7 @@ fn views(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(
         ui,
         "Views",
-        "Following pans an out-of-view selection into view without changing zoom. Primary is the left or top pane; secondary is the right or bottom pane, regardless of focus.",
+        "Following reveals selections without changing zoom. Primary is the original view, even when detached; closing it transfers that role to the main window’s focused view.",
     );
     settings::section(ui, "Selection", |ui| {
         settings::row_with_keywords(ui, "Follow selection", &["split", "pan", "highlight", "primary", "secondary"], |ui| {
@@ -385,9 +373,9 @@ fn views(ui: &mut Ui, data: &mut PageData<'_>) {
                 &mut data.preferences.selection_follow,
                 &[
                     (SelectionFollow::Off, "Highlight only"),
-                    (SelectionFollow::Both, "Both views"),
-                    (SelectionFollow::SecondaryFollowsPrimary, "Secondary follows primary"),
-                    (SelectionFollow::PrimaryFollowsSecondary, "Primary follows secondary"),
+                    (SelectionFollow::Both, "All views"),
+                    (SelectionFollow::SecondaryFollowsPrimary, "Other views follow primary"),
+                    (SelectionFollow::PrimaryFollowsSecondary, "Primary follows other views"),
                 ],
             );
         });

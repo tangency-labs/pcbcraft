@@ -9,24 +9,25 @@ the views through explicit component and terminal identities.
 This is the proposed architecture and acceptance plan for
 [#54](https://github.com/tangency-labs/pcbcraft/issues/54), with editor hosting in
 [#64](https://github.com/tangency-labs/pcbcraft/issues/64) and cross-probing in
-[#65](https://github.com/tangency-labs/pcbcraft/issues/65). Two schematic views now
-share one session through **View → Split** and desktop **View → Detach**, with independent cameras and edit
-selections, stationary workspace controls and shared undo. Sheet tabs display
-the project and sheet hierarchy with chevrons; runtime view numbers never stand
-in for sheet identity. Pane changes invalidate pending input without editing the
-document. The native host borrows the same application on the UI thread, retaining
-one file controller and command history. Each window keeps its own panels;
-closing the child leaves the primary view in place, while closing the root uses
-one project-level **Save / Don’t Save / Cancel** decision. Board rendering and schematic-to-board cross-probing
-remain unimplemented. Selection highlighting between two views of the same schematic
-is implemented, using separate paint state from each view's edit selection.
-Opening a split seeds the other camera from the active view. View settings now
-provide optional selection following in both directions or either stable role
-direction, preserving zoom and focus. Presentation actions are not exposed through
-live MCP yet. The current host has two fixed schematic views and at most one
-detached editor window; it cannot yet combine a split with additional detached
-views. Replacing that limit is the next hosting step in #64, before PCB workspace
-controls are built.
+[#65](https://github.com/tangency-labs/pcbcraft/issues/65). Schematic views now
+share one session through **View → Split**, **New window**, **Detach** and **Dock**.
+A view registry and per-window split trees replace the original fixed pair.
+Multiple detached windows can coexist with a split, and detached windows can
+contain splits too. Each host retains its focused view and stationary panels;
+each view retains its document binding, camera, grid and edit selection. Sheet
+tabs display project and sheet paths with chevrons, never runtime view numbers.
+Tab menus can open beside, open a new window, detach, dock or close a specific view.
+
+The native hosts borrow the same application on the UI thread, retaining one
+file controller, command history and service owner. Closing a secondary window
+dismisses its views without changing other layouts; closing the root uses one
+project-level **Save / Don’t Save / Cancel** decision. Layout transitions expire
+old input without editing the document, and closed view/host IDs are never reused.
+Highlighting and optional selection following reach compatible views across all
+hosts while preserving edit selection, zoom and focus. Board rendering,
+schematic-to-board cross-probing and live-MCP presentation actions remain
+unimplemented. The engine still exposes one sheet, so this hosting slice does not
+yet offer a different workspace or sheet as the target of a new pane.
 
 ## Existing foundation
 
@@ -118,23 +119,26 @@ from moving an existing view. GUI and live-MCP callers must use those same
 handlers under #61. Browser builds offer in-place switching and Open beside;
 native window actions are omitted.
 
-### Next hosting step in #64
+### Hosting foundation and next #64 step
 
-Replace the `active`/`other` pair and single detached viewport with the view
-registry and per-window layouts above. Workspace/document targets belong to
-views; layout nodes refer to view IDs. Each window owns its focused view and
-contextual panels, while one project controller owns edits, files, dialogs and
-services. Closing a host removes its placement and cancels its outstanding input;
-it does not reconstruct another host's layout. Stable IDs must not be reused in a
-way that lets an old gesture or live request address a new view.
+The registry and per-window layouts are implemented for schematic views. Layout
+nodes refer to stable view IDs; the view's document binding is independent of
+its placement. A render slot is exchanged synchronously while each host paints,
+without changing another host's focus or creating a project copy. Closing a host
+removes its views and invalidates delayed input, including pending fields dialogs.
 
-Prove the host model with a split plus at least two detached schematic views,
-including splitting within a detached window, before adding board controls.
-Opening, moving, closing and focusing one view must leave the others' navigation
-and selection intact. Then bind the board renderer to the same view/target model
-and exercise a schematic/board split alongside another detached board view.
-This replaces the fixed-pair assumption rather than adding a board-specific
-exception to it.
+Interaction tests exercise a main split with two detached windows, a split inside
+one of those windows, docking into an existing split, shared edits/history,
+highlight/follow fan-out, and closing one host without collapsing another.
+Whole split arrangements survive a Split off/on cycle. Native platform
+qualification remains separate from those input/render-callback tests.
+
+The next workspace step is to add the board view state and renderer, then wire
+workspace/document target choices into the shared placement handlers. The picker
+interactions above are still planned: current Split/Open beside/New window actions
+create another view of the addressed schematic. Acceptance must include schematic
+beside PCB, plus another detached board view, before #64 is complete. Live-MCP
+presentation discovery and dispatch remain under #61.
 
 The focused view determines where editing shortcuts and contextual controls act.
 Text fields and dialogs retain keyboard ownership. A tool gesture captures its
@@ -177,8 +181,8 @@ missing or unsupported mappings explicitly. General mappings cannot be inferred
 from the current hard-coded two-pad case or matching pin and pad numbers.
 
 A user selection projects highlights into counterpart views without changing
-their focus. By default cameras stay put; **View → Settings** allows both views
-to follow selections, only secondary to follow primary, or the reverse. These
+their focus. By default cameras stay put; **View → Settings** allows all views
+to follow selections, other views to follow primary, or primary to follow other views. These
 roles remain stable across focus changes. Following pans only when the selected
 bounds extend outside the usable canvas, preserving zoom; an oversized group is
 centered without zooming out. A reveal is consumed once, and subsequent manual
@@ -187,11 +191,12 @@ planned. Only the focused view’s actual edit selection receives destructive
 commands. Receiving a highlight must not emit another selection event.
 
 With more than two views, highlights project into every compatible visible target
-without changing its edit selection. Follow settings must address source and
-destination views by stable ID, independently of which window hosts them; the
-current primary/secondary pair is insufficient. Keep highlight-only as the
-default, support directed following, and invalidate pending navigation when a
-source or target closes or changes document.
+without changing its edit selection. Pending follow requests address source and
+destination views by stable ID, independently of which window hosts them. The
+current global policies distinguish the original primary view from all others;
+closing that view transfers the role to the main window’s focused view. Explicit
+per-view follow links remain a refinement for mixed workspaces. Highlight-only is
+the default, and closing or rebinding either endpoint invalidates pending navigation.
 
 For the current same-sheet views, the latest explicit selection supplies the
 counterpart highlight, with amber ink distinguishing it from local blue edit

@@ -127,44 +127,47 @@ the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
 Inspector panels, and fits the view. Each ribbon group's caption, such as
 **Place ⌄**, opens a menu of the same actions. A project has one sheet so far.
 
-**View → Split** opens two views of that schematic. Click a pane or its sheet tab
-to activate it; the tab underline marks the active view. Browser, Parts and Net
-Inspector keep their workspace positions while their actions target that view.
-Both tabs show the same sheet path when they display the same sheet. Each view
-keeps its own camera and selection, including box and modifier selections, while edits, undo,
-redo and saving use the same project. Changing panes cancels unfinished gestures.
-Selecting symbols or wires highlights their counterparts in the other pane in
-amber; blue remains that pane's own edit selection. Highlights follow the latest
-selection, including Browser picks and box selections, without changing focus.
-**View → Settings → Follow selection** controls automatic panning: highlight only
-(the default), both views, secondary follows primary, or primary follows secondary.
-Following reveals out-of-view items once per selection while keeping zoom; it
-does not repeatedly override manual panning. Primary is the left/top pane and
-secondary the right/bottom pane, regardless of focus. Switching tabs alone keeps
-the highlight; Delete acts only on the focused pane’s own selection. Clearing the
-source selection clears its highlight.
-Drag the divider to resize the panes; narrow windows stack them vertically.
-Opening Split copies the active view’s current zoom and position into the other
-pane. Turning Split off keeps the active view; reopening copies its camera again
-while retaining each view’s separate edit selection.
-On the desktop, **View → Detach** moves the active view into a separate native
-window; splitting first is not required. It uses the same title-bar style as the
-primary window. Detaching from a single view seeds the remaining view with the same zoom
-and position; detaching from a split keeps both cameras. Each window has its own
-Browser, Parts and Net Inspector panels, while edits, highlights, selection
-following, undo and saving still use one project. Primary/secondary follow roles
-stay with their original views when either is detached. **View → Dock** returns
-it to a split with both cameras and selections retained. Closing the detached
-window leaves the primary view in place without opening a split or prompting
-to save. Unfinished gestures are canceled when focus or hosting changes.
+**View → Split** opens another view of the current schematic in that window.
+Each pane keeps its camera, grid and edit selection while sharing the project's
+commands, undo history and saving. Click a pane or its sheet tab to activate it;
+the tab underline marks that window's focused view. Browser, Parts and Net
+Inspector stay in place and target that view. Tabs show the sheet path rather
+than a runtime view number.
 
-Closing the primary window or choosing **File → Quit** uses one **Save / Don’t Save / Cancel**
-decision for the project. A canceled or failed save keeps both editors open.
-The arrangement lasts for the app session and does not change project files.
-Browser builds support Split within one tab; detached windows are desktop only.
-This currently supports two schematic views and one detached editor window.
-Mixed-workspace splits, multiple detached editors, schematic-to-board
-cross-probing and live-MCP window controls remain planned.
+On the desktop, **View → New window** opens another view without moving an
+existing one. Multiple native windows and splits can coexist, and each detached
+window can have its own split. **Detach** moves the active pane to a new window;
+when moving the only primary pane, another view remains at the same zoom and
+position. **Dock** in a detached window moves its focused pane beside the main
+window's focused pane, preserving the other panes and windows. Closing a native
+window dismisses only its views, without a save prompt or an implicit split
+elsewhere. Each window uses the same title-bar style and has its own panels.
+
+Right-click a sheet tab for **Open beside**, **Open in new window**, **Detach
+view**, **Dock in main window** or **Close view**, as applicable. These actions
+target that tab. Dividers resize panes, with narrow areas stacking vertically.
+Opening another view copies the source camera and grid without copying its edit
+selection. Turning Split off keeps the focused pane; turning it back on restores
+the window's remembered split arrangement, seeding restored cameras from the
+focused view. Layout and focus changes cancel unfinished gestures.
+
+Selecting symbols or wires highlights their counterparts in every other visible
+view in amber; blue remains each view's own edit selection. Highlights follow the
+latest selection without taking focus. **View → Settings → Follow selection**
+offers highlight only (the default), all views, other views following primary,
+or primary following other views. Following reveals out-of-view items once while
+preserving zoom. Primary is the original view even if detached; closing it
+transfers that role to the main window's focused view. Delete acts only on the
+focused view's own selection, and clearing the source selection clears its
+highlights.
+
+Closing the primary window or choosing **File → Quit** uses one **Save / Don’t
+Save / Cancel** decision for the project. Canceling or failing a save leaves the
+project open. View arrangements last for the app session and do not change
+project files. Browser builds support panes within one tab; native window actions
+are desktop only. The editor still supports one schematic sheet. Mixed-workspace
+splits, schematic-to-board cross-probing and live-MCP view/window controls remain
+planned in #64, #65 and #61.
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
 Desktop projects default to a folder containing separate project, schematic,
