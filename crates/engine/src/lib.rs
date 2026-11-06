@@ -9,6 +9,7 @@ pub mod board;
 pub mod library;
 pub mod persistence;
 pub mod schematic;
+pub mod wire;
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -18,7 +19,7 @@ use std::{
 };
 
 use schematic::{
-    Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, library_symbol,
+    Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, WireEndpoint, library_symbol,
     wiring::{Connectivity, MAX_WIRES},
 };
 use serde_json::{Map, Value, json};
@@ -42,6 +43,10 @@ enum ParamKind {
     Coordinate,
     Revision,
     Terminal,
+    Rotation,
+    WireAnchor,
+    WireBends,
+    WireId,
 }
 
 impl ParamKind {
@@ -56,6 +61,12 @@ impl ParamKind {
                 json!({"type": "string", "enum": library::starter().symbols().iter().map(|definition| definition.id.as_str()).collect::<Vec<_>>()})
             }
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
+            Self::WireId => json!({"type": "string", "pattern": "^wire-[1-9][0-9]*$"}),
+            Self::WireAnchor => json!({"oneOf": [ParamKind::Terminal.schema(), {
+                "type": "object", "properties": {"junction": {"type": "string", "pattern": "^junction-[1-9][0-9]*$"}}, "required": ["junction"], "additionalProperties": false
+            }, point_schema()]}),
+            Self::WireBends => json!({"type": "array", "maxItems": wire::MAX_BENDS, "items": point_schema()}),
+            Self::Rotation => json!({"type": "integer", "enum": [0, 90, 180, 270]}),
             Self::Revision => json!({"type": "integer", "minimum": 0}),
             Self::Terminal => json!({
                 "type": "object",
@@ -79,6 +90,10 @@ impl ParamKind {
             Self::SymbolDefinition if value.as_str().and_then(library_symbol).is_some() => Ok(()),
             Self::Coordinate if value.as_i64().is_some_and(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Revision if value.as_u64().is_some() => Ok(()),
+            Self::WireId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "wire-")).is_some() => Ok(()),
+            Self::WireAnchor if wire::Anchor::parse(value).is_some() => Ok(()),
+            Self::WireBends if wire::parse_bends(value).is_some() => Ok(()),
+            Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition => Err("must identify the built-in footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
@@ -87,14 +102,25 @@ impl ParamKind {
             Self::SymbolDefinition => Err("must identify a symbol in the starter library"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
+            Self::WireId => Err("must identify a wire"),
+            Self::WireAnchor => Err("must identify a terminal, junction or bounded free point"),
+            Self::WireBends => Err("must contain at most 64 bounded points"),
+            Self::Rotation => Err("must be 0, 90, 180 or 270 degrees"),
             Self::Terminal => Err("must identify a symbol and one of its terminal numbers"),
         }
     }
 }
 
+/// Publish the strict bounded point representation used by free wire endpoints and bends.
+fn point_schema() -> Value {
+    json!({"type": "object", "properties": {"x_nm": ParamKind::Coordinate.schema(), "y_nm": ParamKind::Coordinate.schema()}, "required": ["x_nm", "y_nm"], "additionalProperties": false})
+}
+
 /// A parameter of a command.
 #[derive(Clone, Copy, Debug)]
 pub struct Param {
+    /// Whether omission is rejected before the command executes.
+    pub required: bool,
     pub name: &'static str,
     pub summary: &'static str,
     kind: ParamKind,
@@ -107,7 +133,7 @@ pub struct Command {
     /// What a menu calls it.
     pub title: &'static str,
     pub summary: &'static str,
-    /// All required.
+    /// Required and optional inputs published by command discovery.
     pub params: &'static [Param],
 }
 
@@ -123,7 +149,7 @@ impl Command {
                 (p.name.to_owned(), schema)
             })
             .collect();
-        let required: Vec<&str> = self.params.iter().map(|p| p.name).collect();
+        let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
         json!({
             "id": self.id,
             "title": self.title,
@@ -133,13 +159,17 @@ impl Command {
     }
 }
 
-const NAME: Param = Param { name: "name", summary: "The project's name", kind: ParamKind::Name };
+const NAME: Param = Param { required: true, name: "name", summary: "The project's name", kind: ParamKind::Name };
 /// Compatibility command for callers that placed resistors before the symbol picker.
 pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
 /// Place the specified starter library symbol on the schematic.
 pub const PLACE_SYMBOL: &str = "schematic.place_symbol";
 /// The command that joins two inspected symbol terminals with an undoable wire.
 pub const CONNECT_PINS: &str = "schematic.connect_pins";
+/// Draw a complete orthogonal wire between terminals, junctions or new free endpoints.
+pub const DRAW_WIRE: &str = "schematic.draw_wire";
+/// Remove one wire while preserving all other edges in its net.
+pub const DELETE_WIRE: &str = "schematic.delete_wire";
 /// Move an existing symbol without changing its terminals or wiring.
 pub const MOVE_SYMBOL: &str = "schematic.move_symbol";
 /// Turn a symbol a quarter turn counterclockwise.
@@ -150,11 +180,14 @@ pub const DELETE_SYMBOL: &str = "schematic.delete_symbol";
 pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
-const EXPECTED_REVISION: Param = Param { name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
+const EXPECTED_REVISION: Param =
+    Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
 
-const SYMBOL: Param = Param { name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId };
-const SYMBOL_X: Param = Param { name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate };
-const SYMBOL_Y: Param = Param { name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate };
+const SYMBOL: Param = Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId };
+const SYMBOL_X: Param =
+    Param { required: true, name: "x_nm", summary: "Symbol center X in nanometers, increasing right", kind: ParamKind::Coordinate };
+const SYMBOL_Y: Param =
+    Param { required: true, name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 
 const CATALOG: &[Command] = &[
     Command { id: "project.new", title: "New Project", summary: "Start a new empty project, replacing the open one. Undoable.", params: &[NAME] },
@@ -170,19 +203,37 @@ const CATALOG: &[Command] = &[
         title: "Place Symbol",
         summary: "Place a starter library symbol on the open schematic. Undoable.",
         params: &[
-            Param { name: "definition", summary: "ID of a symbol in the starter library", kind: ParamKind::SymbolDefinition },
+            Param { required: true, name: "definition", summary: "ID of a symbol in the starter library", kind: ParamKind::SymbolDefinition },
+            Param { required: false, name: "rotation", summary: "Counterclockwise degrees; defaults to 0", kind: ParamKind::Rotation },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
         ],
     },
     Command {
+        id: DRAW_WIRE,
+        title: "Draw Wire",
+        summary: "Draw an orthogonal wire with explicit endpoint identities and bends. One undoable edit.",
+        params: &[
+            Param { required: true, name: "from", summary: "Existing endpoint or new free point", kind: ParamKind::WireAnchor },
+            Param { required: true, name: "to", summary: "Existing endpoint or new free point", kind: ParamKind::WireAnchor },
+            Param { required: true, name: "bends", summary: "Intermediate orthogonal route points, excluding endpoints", kind: ParamKind::WireBends },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: DELETE_WIRE,
+        title: "Delete Wire",
+        summary: "Delete one wire and unused free endpoints. Undoable.",
+        params: &[Param { required: true, name: "wire", summary: "Wire ID from inspection", kind: ParamKind::WireId }, EXPECTED_REVISION],
+    },
+    Command {
         id: CONNECT_PINS,
         title: "Connect Pins",
         summary: "Join two existing schematic terminals. Undoable.",
         params: &[
-            Param { name: "from", summary: "First symbol ID and terminal number from project inspection", kind: ParamKind::Terminal },
-            Param { name: "to", summary: "Second symbol ID and terminal number from project inspection", kind: ParamKind::Terminal },
+            Param { required: true, name: "from", summary: "First symbol ID and terminal number from project inspection", kind: ParamKind::Terminal },
+            Param { required: true, name: "to", summary: "Second symbol ID and terminal number from project inspection", kind: ParamKind::Terminal },
             EXPECTED_REVISION,
         ],
     },
@@ -191,7 +242,7 @@ const CATALOG: &[Command] = &[
         title: "Move Symbol",
         summary: "Move an existing symbol and preserve its connections. Undoable.",
         params: &[
-            Param { name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
+            Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
@@ -215,8 +266,8 @@ const CATALOG: &[Command] = &[
         summary: "Set the reference and value shown for a symbol. References are unique and have no spaces. Undoable.",
         params: &[
             SYMBOL,
-            Param { name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
-            Param { name: "value", summary: "Value text, such as 4.7k", kind: ParamKind::Text },
+            Param { required: true, name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
+            Param { required: true, name: "value", summary: "Value text, such as 4.7k", kind: ParamKind::Text },
             EXPECTED_REVISION,
         ],
     },
@@ -225,11 +276,11 @@ const CATALOG: &[Command] = &[
         title: "Place Footprint",
         summary: "Place the supported two-pad footprint for a schematic component and map its pins. Undoable.",
         params: &[
-            Param { name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
-            Param { name: "definition", summary: "Pinned built-in footprint definition", kind: ParamKind::FootprintDefinition },
-            Param { name: "pin_1_pad", summary: "Physical pad for schematic pin 1", kind: ParamKind::PadNumber },
-            Param { name: "x_nm", summary: "Footprint center X in nanometers", kind: ParamKind::Coordinate },
-            Param { name: "y_nm", summary: "Footprint center Y in nanometers", kind: ParamKind::Coordinate },
+            Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
+            Param { required: true, name: "definition", summary: "Pinned built-in footprint definition", kind: ParamKind::FootprintDefinition },
+            Param { required: true, name: "pin_1_pad", summary: "Physical pad for schematic pin 1", kind: ParamKind::PadNumber },
+            Param { required: true, name: "x_nm", summary: "Footprint center X in nanometers", kind: ParamKind::Coordinate },
+            Param { required: true, name: "y_nm", summary: "Footprint center Y in nanometers", kind: ParamKind::Coordinate },
             EXPECTED_REVISION,
         ],
     },
@@ -279,6 +330,7 @@ pub struct Project {
     /// Derived index of each placed component unit to its symbol ID.
     units: Arc<BTreeMap<(u64, &'static str), u64>>,
     wires: Arc<Vec<Wire>>,
+    junctions: Arc<BTreeMap<u64, Point>>,
     connectivity: Arc<OnceLock<Connectivity>>,
     board: Arc<Board>,
     /// The older format this snapshot was migrated from when it was opened, if any.
@@ -350,7 +402,8 @@ impl Project {
     pub fn inspect_schematic(&self) -> Value {
         json!({
             "symbols": self.symbols.iter().map(|symbol| symbol.inspect(&self.reference(symbol), self.value(symbol))).collect::<Vec<_>>(),
-            "wires": self.wires.iter().copied().map(Wire::inspect).collect::<Vec<_>>(),
+            "wires": self.wires.iter().map(Wire::inspect).collect::<Vec<_>>(),
+            "junctions": self.junctions().map(|(id, point)| json!({"id": format!("junction-{id}"), "x_nm": point.x_nm, "y_nm": point.y_nm})).collect::<Vec<_>>(),
             "netlist": self.connectivity().inspect(),
         })
     }
@@ -416,6 +469,7 @@ impl Session {
             .map_or(0, |symbol| symbol.ordinal)
             .max(project.components.last_key_value().map_or(0, |(&id, _)| id))
             .max(project.wires.last().map_or(0, |wire| wire.ordinal))
+            .max(project.junctions.last_key_value().map_or(0, |(&id, _)| id))
             .max(project.board.footprints().last().map_or(0, |footprint| footprint.id));
         self.revision = self.revision.max(highest) + 1;
         self.project = Some(project);
@@ -432,7 +486,7 @@ impl Session {
         match id {
             "project.new" => true,
             "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-            | PLACE_FOOTPRINT => self.project.is_some(),
+            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -476,7 +530,7 @@ impl Session {
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
                 "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-                | PLACE_FOOTPRINT => "no project is open".to_owned(),
+                | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -491,6 +545,7 @@ impl Session {
                 components: Arc::default(),
                 units: Arc::default(),
                 wires: Arc::default(),
+                junctions: Arc::default(),
                 connectivity: Arc::default(),
                 board: Arc::default(),
                 upgraded_from: None,
@@ -516,6 +571,8 @@ impl Session {
                 self.place_symbol(definition, params)?;
             }
             CONNECT_PINS => self.connect_pins(params)?,
+            DRAW_WIRE => self.draw_wire(params)?,
+            DELETE_WIRE => self.delete_wire(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
             ROTATE_SYMBOL => self.rotate_symbol(params)?,
             DELETE_SYMBOL => self.delete_symbol(params)?,
@@ -574,7 +631,7 @@ impl Session {
             component: ordinal,
             unit: definition.unit_id(),
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
-            rotation: 0,
+            rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
         });
         project.connectivity = Arc::default();
         self.change(project);
@@ -630,7 +687,8 @@ impl Session {
         let ordinal = symbol.ordinal;
         let mut project = project.clone();
         Arc::make_mut(&mut project.symbols).remove(index);
-        Arc::make_mut(&mut project.wires).retain(|wire| wire.terminals.iter().all(|terminal| terminal.symbol != ordinal));
+        Arc::make_mut(&mut project.wires).retain(|wire| wire.terminals().iter().all(|terminal| terminal.symbol != ordinal));
+        project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit));
         if !project.symbols.iter().any(|other| other.component == symbol.component) {
             Arc::make_mut(&mut project.components).remove(&symbol.component);
@@ -701,14 +759,21 @@ impl Session {
         if terminals[0] == terminals[1] {
             return Err(CommandError::InvalidParams("a wire needs two distinct terminals".to_owned()));
         }
-        if project.wires.iter().any(|wire| wire.terminals == terminals) {
+        if project.wires.iter().any(|wire| {
+            wire.endpoints == terminals.map(WireEndpoint::Terminal)
+                || wire.endpoints == [WireEndpoint::Terminal(terminals[1]), WireEndpoint::Terminal(terminals[0])]
+        }) {
             return Err(CommandError::InvalidParams("these terminals are already joined by a wire".to_owned()));
         }
         if project.wires.len() >= MAX_WIRES {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_WIRES} wires")));
         }
         let mut project = project.clone();
-        Arc::make_mut(&mut project.wires).push(Wire { ordinal: self.next_object_id()?, terminals });
+        Arc::make_mut(&mut project.wires).push(Wire {
+            ordinal: self.next_object_id()?,
+            endpoints: terminals.map(WireEndpoint::Terminal),
+            bends: None,
+        });
         project.connectivity = Arc::default();
         self.change(project);
         Ok(())
@@ -730,14 +795,16 @@ impl Session {
         Ok(())
     }
 
-    /// Commit a snapshot and bound undo history. New edits clear redo.
+    /// Commit a snapshot and bound undo history. New edits clear redo; revisions advance
+    /// past every ID allocated by a compound wire edit, preventing reuse after undo.
     fn change(&mut self, project: Project) {
+        let highest = project.wires.last().map_or(0, |wire| wire.ordinal).max(project.junctions.last_key_value().map_or(0, |(&id, _)| id));
         self.undo.push(self.project.replace(Arc::new(project)));
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
         }
         self.redo.clear();
-        self.revision += 1;
+        self.revision = (self.revision + 1).max(highest);
     }
 
     /// Restore an existing snapshot, advancing the revision in either direction.
@@ -757,7 +824,7 @@ fn fresh_id() -> Result<uuid::Uuid, CommandError> {
     Ok(uuid::Builder::from_random_bytes(bytes).into_uuid())
 }
 
-/// Params must be an object (or nothing) holding exactly the command's params.
+/// Validate declared inputs, requiring mandatory parameters and rejecting unknown or invalid values.
 fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
     let empty = Map::new();
     let given = match params {
@@ -769,6 +836,9 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
         return Err(CommandError::InvalidParams(format!("`{}` has no parameter `{extra}`", command.id)));
     }
     for param in command.params {
+        if !param.required && !given.contains_key(param.name) {
+            continue;
+        }
         let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
         param.kind.validate(value).map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
     }
@@ -826,9 +896,9 @@ mod tests {
         let symbol = &s.inspect()["project"]["schematic"]["symbols"][0];
         assert_eq!(symbol["rotation"], 90);
         // A quarter turn counterclockwise takes pin 2 from the right to the top.
-        assert_eq!((symbol["pins"][1]["x_nm"].clone(), symbol["pins"][1]["y_nm"].clone()), (json!(0), json!(-schematic::PIN_OFFSET_NM)));
+        assert_eq!((symbol["pins"][1]["x_nm"].clone(), symbol["pins"][1]["y_nm"].clone()), (json!(0), json!(-(4 * schematic::GRID_NM))));
         let terminal = s.project().unwrap().wires()[0].terminals()[0];
-        assert_eq!(s.project().unwrap().terminal_position(terminal), Some(Point { x_nm: 0, y_nm: -schematic::PIN_OFFSET_NM }));
+        assert_eq!(s.project().unwrap().terminal_position(terminal), Some(Point { x_nm: 0, y_nm: -(4 * schematic::GRID_NM) }));
 
         let fields = |s: &mut Session, reference: &str, value: &str| {
             let params = json!({"symbol": "symbol-3", "reference": reference, "value": value, "expected_revision": s.revision()});
@@ -902,7 +972,7 @@ mod tests {
         let symbol = &state["project"]["schematic"]["symbols"][0];
         assert_ne!(symbol["id"], symbol["component_id"]);
         assert_eq!(symbol["reference"], "R1");
-        assert_eq!(symbol["pins"][0], json!({"number": "1", "electrical_type": "passive", "x_nm": 500 - schematic::PIN_OFFSET_NM, "y_nm": -200}));
+        assert_eq!(symbol["pins"][0], json!({"number": "1", "electrical_type": "passive", "x_nm": 500 - (4 * schematic::GRID_NM), "y_nm": -200}));
         s.execute("project.rename", &json!({"name": "renamed"})).unwrap();
         assert_eq!(&s.inspect()["project"]["schematic"]["symbols"][0], symbol);
         s.execute("edit.undo", &Value::Null).unwrap();
@@ -951,8 +1021,8 @@ mod tests {
         assert_eq!(
             symbols[1]["pins"],
             json!([
-                {"number": "1", "name": "Anode", "electrical_type": "passive", "x_nm": -schematic::PIN_OFFSET_NM, "y_nm": 0},
-                {"number": "2", "name": "Cathode", "electrical_type": "passive", "x_nm": schematic::PIN_OFFSET_NM, "y_nm": 0},
+                {"number": "1", "name": "Anode", "electrical_type": "passive", "x_nm": -(3 * schematic::GRID_NM), "y_nm": 0},
+                {"number": "2", "name": "Cathode", "electrical_type": "passive", "x_nm": (3 * schematic::GRID_NM), "y_nm": 0},
             ])
         );
         assert_eq!(schematic["netlist"]["unconnected"].as_array().unwrap().len(), 8);

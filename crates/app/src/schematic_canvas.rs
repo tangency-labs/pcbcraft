@@ -5,20 +5,22 @@ mod wires;
 mod tests;
 
 pub(crate) use camera::Camera;
+pub(crate) use wires::Draft;
 
 use crate::preferences::Navigation;
 use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
+use pcbcraft_engine::wire::Anchor;
 use pcbcraft_engine::{
     Project,
-    schematic::{GRID_NM, MAX_CENTER_NM, Point, Shape, SymbolDefinition, SymbolPlacement, Terminal, TextAlign},
+    schematic::{GRID_NM, MAX_CENTER_NM, Point, Shape, SymbolDefinition, SymbolPlacement, TextAlign},
 };
 
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Tool {
-    PlaceSymbol { definition: &'static SymbolDefinition, revision: u64 },
-    Wire { revision: u64, start: Option<Terminal> },
+    PlaceSymbol { definition: &'static SymbolDefinition, revision: u64, turns: u8 },
+    Wire { revision: u64, start: Option<Anchor> },
     Move { symbol: SymbolPlacement, offset: Vec2, revision: u64 },
 }
 
@@ -34,7 +36,8 @@ impl Tool {
 /// A placement, pin selection, or cancellation requested through the canvas.
 pub(crate) enum Click {
     Place(Point),
-    Pin(Terminal),
+    WirePoint(Anchor, bool),
+    SelectWire(String),
     CancelWire,
     Grab(SymbolPlacement, Vec2),
     FinishMove(Option<Point>),
@@ -79,15 +82,16 @@ pub(crate) enum SymbolAction {
 /// while canvas input is blocked.
 ///
 /// With canvas input enabled and no drag in progress, a primary click during
-/// placement returns `Click::Place` at a valid snapped point. In Wire mode, a
-/// primary click that hits a terminal returns `Click::Pin`.
+/// placement returns `Click::Place` at a valid snapped point. In Wire mode,
+/// primary clicks return `Click::WirePoint` for pins, junctions or snapped free points;
+/// double-click or a queued Enter request marks the route complete.
 /// A browser part dragged over the canvas previews at the snapped pointer position; releasing
 /// it returns `Click::Drop`. Blocked input or an out-of-bounds position suppresses both.
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
 ///
 /// With no tool, a primary click returns `Click::Select` for the symbol under it, or `None` in
-/// it for empty canvas. A secondary click selects the symbol under it and opens its menu; a row
+/// it for empty canvas. Wire strokes return `Click::SelectWire` when no symbol is hit. A secondary click selects the symbol under it and opens its menu; a row
 /// picked there returns `Click::Edit`. `selected` is drawn in the accent colour.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
@@ -98,6 +102,8 @@ pub(crate) fn show(
     selected: Option<&str>,
     input_enabled: bool,
     navigation: Navigation,
+    draft: &Draft,
+    selected_wire: Option<&str>,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
@@ -120,7 +126,7 @@ pub(crate) fn show(
             .filter(|(_, point)| valid_position(*point)),
         _ => None,
     };
-    wires::paint(&painter, rect, project, camera, moved);
+    wires::paint(&painter, rect, project, camera, moved, selected_wire);
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
         let position = moved.filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| point);
@@ -148,7 +154,7 @@ pub(crate) fn show(
             return Some(Click::CancelWire);
         }
         let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
-        wires::preview(&painter, rect, project, camera, Some(start), anchor);
+        wires::preview(&painter, rect, project, camera, Some(start), draft, anchor);
         return None;
     }
 
@@ -214,11 +220,21 @@ pub(crate) fn show(
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
-        return Some(Click::Select(symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id())));
+        let symbol = symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id());
+        if symbol.is_none()
+            && let Some(wire) = wires::at(project, camera, rect, pointer)
+        {
+            return Some(Click::SelectWire(wire));
+        }
+        return Some(Click::Select(symbol));
     }
     match tool? {
-        Tool::PlaceSymbol { definition, .. } => placement_preview(&painter, rect, response, camera, tokens, definition).map(Click::Place),
-        Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start).map(Click::Pin),
+        Tool::PlaceSymbol { definition, turns, .. } => {
+            placement_preview(&painter, rect, response, camera, tokens, definition, turns).map(Click::Place)
+        }
+        Tool::Wire { start, .. } => {
+            wires::pick(&painter, rect, &response, project, camera, start, draft).map(|(anchor, finish)| Click::WirePoint(anchor, finish))
+        }
         Tool::Move { .. } => None,
     }
 }
@@ -230,7 +246,7 @@ fn grab_symbol(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) ->
 }
 
 /// The symbol whose body is under the pointer, nearest center first, with its screen center.
-fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<(&'a SymbolPlacement, Pos2)> {
+pub(super) fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<(&'a SymbolPlacement, Pos2)> {
     project
         .symbols()
         .iter()
@@ -274,6 +290,7 @@ fn placement_preview(
     camera: &Camera,
     tokens: Tokens,
     definition: &SymbolDefinition,
+    turns: u8,
 ) -> Option<Point> {
     let screen = |point| camera.screen(point, rect);
     let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos())?;
@@ -281,7 +298,7 @@ fn placement_preview(
     if !valid_position(point) {
         return None;
     }
-    paint_symbol(painter, definition, screen(point), camera.grid_step(), 0, tokens.accent, None);
+    paint_symbol(painter, definition, screen(point), camera.grid_step(), turns, tokens.accent, None);
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
 }
 

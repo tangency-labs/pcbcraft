@@ -1,7 +1,7 @@
 {
   "format": "pcbcraft-symbol/1",
   "id": "resistor",
-  "revision": 1,
+  "revision": 2,
   "name": "Resistor",
   "reference_prefix": "R",
   "default_value": "1k",
@@ -13,13 +13,13 @@
     {
       "id": "main",
       "drawing": [
-        {"type": "line", "from_nm": [-6350000, 0], "to_nm": [-3175000, 0]},
-        {"type": "line", "from_nm": [3175000, 0], "to_nm": [6350000, 0]},
+        {"type": "line", "from_nm": [-5080000, 0], "to_nm": [-3175000, 0]},
+        {"type": "line", "from_nm": [3175000, 0], "to_nm": [5080000, 0]},
         {"type": "polyline", "points_nm": [[-3175000, 0], [-2540000, -1143000], [-1524000, 1143000], [-508000, -1143000], [508000, 1143000], [1524000, -1143000], [2540000, 1143000], [3175000, 0]]}
       ],
       "pins": [
-        {"terminal": "1", "at_nm": [-6350000, 0]},
-        {"terminal": "2", "at_nm": [6350000, 0]}
+        {"terminal": "1", "at_nm": [-5080000, 0]},
+        {"terminal": "2", "at_nm": [5080000, 0]}
       ]
     }
   ]

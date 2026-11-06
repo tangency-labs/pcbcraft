@@ -33,7 +33,10 @@ impl Snapshot {
                 .join(", ")
         };
         let connectivity = project.connectivity();
-        Self { nets: connectivity.nets.iter().map(|net| pin_labels(net)).collect(), unconnected: pin_labels(&connectivity.unconnected) }
+        Self {
+            nets: connectivity.nets.iter().map(|net| if net.is_empty() { "Free wire".to_owned() } else { pin_labels(net) }).collect(),
+            unconnected: pin_labels(&connectivity.unconnected),
+        }
     }
 
     /// List connected groups and isolated pins independently. Net numbers are local to the view.

@@ -318,11 +318,9 @@ fn the_wire_tool_connects_multi_pin_library_symbols() {
             .unwrap();
     }
     harness.run();
-    let step = pcbcraft_chrome::theme::SCHEMATIC_GRID_SPACING;
     click(&mut harness, "Draw wire (W)");
-    // The header's pin 4 sits at (-5, 3) grid steps; the LED's anode at (15, 0).
-    click_canvas_offset(&mut harness, egui::vec2(-5.0, 3.0) * step);
-    click_canvas_offset(&mut harness, egui::vec2(15.0, 0.0) * step);
+    click_pin(&mut harness, 0, 3);
+    click_pin(&mut harness, 1, 0);
     let wires = harness.state().session().inspect()["project"]["schematic"]["wires"].clone();
     assert_eq!(wires[0]["from"], json!({"symbol": "symbol-2", "terminal": "4"}));
     assert_eq!(wires[0]["to"], json!({"symbol": "symbol-3", "terminal": "1"}));
@@ -648,7 +646,7 @@ fn canvas_placement_uses_the_shared_command_and_snaps_to_the_grid() {
     click(&mut harness, "Add symbol (A)");
     select_symbol(&mut harness, "Resistor");
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
-    harness.get_by_label("Place Resistor · Esc to cancel");
+    harness.get_by_label("Place Resistor · R rotate · Esc to cancel");
 
     // A click near the center snaps to the schematic origin.
     click_canvas(&mut harness);
@@ -680,7 +678,7 @@ fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
     harness.key_press(Key::A);
     harness.run();
     select_symbol(&mut harness, "Resistor");
-    harness.get_by_label("Place Resistor · Esc to cancel");
+    harness.get_by_label("Place Resistor · R rotate · Esc to cancel");
     harness.key_press(Key::Escape);
     harness.run();
     click_canvas(&mut harness);
@@ -770,6 +768,18 @@ fn zoom_to_fit_on_an_empty_sheet_restores_the_default_origin() {
     assert_eq!(harness.state().session().project().unwrap().symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
 }
 
+/// Resolve the actual library pin through the canvas camera so fixture geometry can evolve.
+fn pin_screen(harness: &Harness<'_, PcbApp>, symbol: usize, pin: usize) -> egui::Pos2 {
+    let point = harness.state().session().project().unwrap().symbols()[symbol].pins()[pin];
+    harness.state().camera.screen(point, harness.get_by_label("Schematic canvas").rect())
+}
+
+/// Click an exact pin without assuming a particular symbol-library revision.
+fn click_pin(harness: &mut Harness<'_, PcbApp>, symbol: usize, pin: usize) {
+    let point = pin_screen(harness, symbol, pin);
+    click_canvas_at(harness, point);
+}
+
 /// Place a resistor and LED through the canvas so their exact terminal positions are known.
 fn wiring_project(harness: &mut Harness<'_, PcbApp>) {
     new_project(harness, "wiring");
@@ -778,7 +788,7 @@ fn wiring_project(harness: &mut Harness<'_, PcbApp>) {
     click_canvas(harness);
     click(harness, "Add symbol (A)");
     select_symbol(harness, "LED");
-    harness.get_by_label("Place LED · Esc to cancel");
+    harness.get_by_label("Place LED · R rotate · Esc to cancel");
     click_canvas_offset(harness, egui::vec2(203.2, 60.96));
     assert_eq!(harness.state().session().project().unwrap().symbols()[1].definition.id, "led");
 }
@@ -789,10 +799,10 @@ fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
     let mut harness = harness();
     wiring_project(&mut harness);
     click(&mut harness, "Draw wire (W)");
-    click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
-    harness.get_by_label("Wire · Click the destination pin");
+    click_pin(&mut harness, 0, 1);
+    harness.get_by_label("Wire · Click corners · Enter finish · Space flip · Esc cancel");
     assert_eq!(harness.state().session().revision(), 3);
-    click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
+    click_pin(&mut harness, 1, 0);
 
     let inspected = harness.state().session().inspect();
     let schematic = &inspected["project"]["schematic"];
@@ -802,6 +812,7 @@ fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
             "id": "wire-4",
             "from": {"symbol": "symbol-2", "terminal": "2"},
             "to": {"symbol": "symbol-3", "terminal": "1"},
+            "bends": [{"x_nm": 21_590_000, "y_nm": 0}],
         }])
     );
     assert_eq!(schematic["netlist"]["nets"].as_array().unwrap().len(), 1);
@@ -831,9 +842,8 @@ fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
     }
     harness.get_by_label("Draw wire (W)").click();
     harness.run();
-    for x in [-30.48, 30.48] {
-        click_canvas_offset(&mut harness, egui::vec2(x, 0.0));
-    }
+    click_pin(&mut harness, 0, 1);
+    click_pin(&mut harness, 1, 0);
     let wired = harness.state().session().inspect();
     assert_eq!(wired["project"]["schematic"]["wires"].as_array().unwrap().len(), 1);
 
@@ -852,18 +862,18 @@ fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
 }
 
 #[test]
-fn wiring_ignores_empty_space_and_escape_discards_the_preview() {
+fn wiring_accepts_empty_space_and_escape_discards_the_preview() {
     let mut harness = harness();
     wiring_project(&mut harness);
     let before = harness.state().session().inspect();
     harness.key_press(Key::W);
     harness.run();
-    click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
+    click_pin(&mut harness, 0, 1);
     click_canvas_offset(&mut harness, egui::vec2(100.0, 36.0));
-    harness.get_by_label("Wire · Click the destination pin");
+    harness.get_by_label("Wire · Click corners · Enter finish · Space flip · Esc cancel");
     harness.key_press(Key::Escape);
     harness.run();
-    click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
+    click_pin(&mut harness, 1, 0);
     assert_eq!(harness.state().session().inspect(), before);
 }
 
@@ -884,7 +894,7 @@ fn the_parts_browser_searches_and_places_parts() {
     harness.key_press(Key::Enter);
     harness.run();
     assert!(!harness.state().parts.open);
-    harness.get_by_label("Place Capacitor · Esc to cancel");
+    harness.get_by_label("Place Capacitor · R rotate · Esc to cancel");
     click_canvas(&mut harness);
     assert_eq!(first_symbol(&harness, "kind"), "capacitor");
 
@@ -1121,13 +1131,13 @@ fn dismissing_the_wire_menu_over_a_pin_does_not_commit() {
     wiring_project(&mut harness);
     harness.key_press(Key::W);
     harness.run();
-    click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
+    click_pin(&mut harness, 0, 1);
     open_wire_context(&mut harness);
-    let destination = canvas_center(&harness) + egui::vec2(152.4, 60.96);
+    let destination = pin_screen(&harness, 1, 0);
     click_canvas_at(&mut harness, destination);
     assert!(harness.query_by_label("Cancel").is_none());
     assert!(harness.state().session().project().unwrap().wires().is_empty());
-    harness.get_by_label("Wire · Click the destination pin");
+    harness.get_by_label("Wire · Click corners · Enter finish · Space flip · Esc cancel");
     click_canvas_at(&mut harness, destination);
     assert_eq!(harness.state().session().project().unwrap().wires().len(), 1);
 }
@@ -1141,7 +1151,7 @@ fn the_wire_menu_cancel_button_and_escape_both_discard_the_preview() {
     for escape in [false, true] {
         harness.key_press(Key::W);
         harness.run();
-        click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
+        click_pin(&mut harness, 0, 1);
         open_wire_context(&mut harness);
         if escape {
             harness.key_press(Key::Escape);
@@ -1150,8 +1160,8 @@ fn the_wire_menu_cancel_button_and_escape_both_discard_the_preview() {
         }
         harness.run();
         assert!(harness.query_by_label("Cancel").is_none());
-        assert!(harness.query_by_label("Wire · Click the destination pin").is_none());
-        click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
+        assert!(harness.query_by_label("Wire · Click corners · Enter finish · Space flip · Esc cancel").is_none());
+        click_pin(&mut harness, 1, 0);
         assert_eq!(harness.state().session().inspect(), before);
     }
 }
@@ -1163,8 +1173,8 @@ fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
     let mut harness = harness();
     wiring_project(&mut harness);
     click(&mut harness, "Draw wire (W)");
-    click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
-    click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
+    click_pin(&mut harness, 0, 1);
+    click_pin(&mut harness, 1, 0);
     let before = harness.state().session().snapshot().unwrap();
     let revision = harness.state().session().revision();
     let start = canvas_center(&harness);
@@ -1253,8 +1263,8 @@ mod live_mcp {
         assert!(harness.state().live_control.is_none());
         wiring_project(&mut harness);
         click(&mut harness, "Draw wire (W)");
-        click_canvas_offset(&mut harness, egui::vec2(50.8, 0.0));
-        click_canvas_offset(&mut harness, egui::vec2(152.4, 60.96));
+        click_pin(&mut harness, 0, 1);
+        click_pin(&mut harness, 1, 0);
         let before_wire = painted_wire(&harness);
 
         choose(&mut harness, "Help", "Connect AI assistants…");
@@ -1307,5 +1317,107 @@ mod live_mcp {
         assert!(harness.state().live_control.is_none());
         let disconnected = tool(&mut harness, connection, "inspect_project", json!({}));
         assert_eq!(disconnected["isError"], true);
+    }
+}
+
+/// A placement preview rotates without editing history, and hovering another part takes priority
+/// over a previous selection when R is pressed on the canvas.
+#[test]
+fn placement_and_hover_rotation_use_one_shared_edit_each() {
+    let mut harness = harness();
+    new_project(&mut harness, "Rotation");
+    click(&mut harness, "Add symbol (A)");
+    select_symbol(&mut harness, "Resistor");
+    let before = harness.state().session().inspect();
+    for _ in 0..2 {
+        harness.key_press(Key::R);
+        harness.run();
+    }
+    assert_eq!(harness.state().session().inspect(), before);
+    click_canvas(&mut harness);
+    assert_eq!(first_symbol(&harness, "rotation"), 180);
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+    harness.run();
+    let revision = harness.state().session().revision();
+    harness.state_mut().session.apply(PLACE_SYMBOL, &json!({"definition":"led","x_nm":25_400_000,"y_nm":0,"expected_revision":revision})).unwrap();
+    harness.run();
+    click_canvas(&mut harness);
+    let point = canvas_center(&harness) + egui::vec2(203.2, 0.0);
+    harness.hover_at(point);
+    harness.run();
+    harness.key_press(Key::R);
+    harness.run();
+    let project = harness.state().session().project().unwrap();
+    assert_eq!(project.symbols()[0].turns(), 2);
+    assert_eq!(project.symbols()[1].turns(), 1);
+}
+
+/// Empty-space routes freeze corners locally, support backtracking/elbow flips, and commit once.
+/// Selection and Delete remove the edge; one undo restores its geometry and endpoint identities.
+#[test]
+fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
+    let mut harness = harness();
+    new_project(&mut harness, "Free routes");
+    harness.key_press(Key::W);
+    harness.run();
+    click_canvas_offset(&mut harness, egui::vec2(-101.6, -101.6));
+    click_canvas_offset(&mut harness, egui::vec2(0.0, -50.8));
+    assert_eq!(harness.state().session().revision(), 1);
+    harness.key_press(Key::Backspace);
+    harness.run();
+    harness.key_press(Key::Space);
+    harness.run();
+    let finish = canvas_center(&harness) + egui::vec2(101.6, 101.6);
+    harness.hover_at(finish);
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(harness.state().tool.is_none());
+    let before = harness.state().session().snapshot().unwrap();
+    assert_eq!(before.wires().len(), 1);
+    let path = before.wire_path(&before.wires()[0]);
+    assert_eq!(path.len(), 3);
+    assert_eq!(path[0].x_nm, path[1].x_nm, "Space selects the vertical first elbow");
+    let bytes = pcbcraft_engine::persistence::encode(before.clone()).unwrap();
+    let reopened = pcbcraft_engine::persistence::decode(&bytes).unwrap();
+    assert_eq!(reopened.inspect_schematic(), before.inspect_schematic());
+    click_canvas_offset(&mut harness, egui::vec2(-101.6, 0.0));
+    assert!(harness.state().selected_wire.is_some());
+    harness.key_press(Key::Delete);
+    harness.run();
+    assert!(harness.state().session().project().unwrap().wires().is_empty());
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!(harness.state().session().project().unwrap().inspect_schematic(), before.inspect_schematic());
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert!(harness.state().session().project().unwrap().wires().is_empty());
+}
+
+/// A concurrent command cancels an unfinished route, while Escape leaves no authored objects.
+#[test]
+fn stale_or_cancelled_free_wire_drafts_never_commit() {
+    let mut harness = harness();
+    new_project(&mut harness, "Stale route");
+    for stale in [false, true] {
+        harness.key_press(Key::W);
+        harness.run();
+        click_canvas_offset(&mut harness, egui::vec2(-101.6, 0.0));
+        click_canvas_offset(&mut harness, egui::vec2(0.0, 50.8));
+        if stale {
+            harness.state_mut().session.apply("project.rename", &json!({"name":"Changed"})).unwrap();
+        } else {
+            harness.key_press(Key::Escape);
+        }
+        harness.run();
+        let before = harness.state().session().inspect();
+        harness.key_press(Key::Enter);
+        harness.run();
+        assert!(harness.state().tool.is_none());
+        assert_eq!(harness.state().session().inspect(), before);
+        assert_eq!(harness.state().session().project().unwrap().junctions().count(), 0);
     }
 }

@@ -43,7 +43,7 @@ impl Camera {
     }
 
     /// Convert a model point to a point on the canvas.
-    pub(super) fn screen(&self, point: Point, rect: Rect) -> Pos2 {
+    pub(crate) fn screen(&self, point: Point, rect: Rect) -> Pos2 {
         let scale = self.grid_step() / GRID_NM as f32;
         rect.center() + self.offset + vec2(point.x_nm as f32, point.y_nm as f32) * scale
     }
@@ -87,7 +87,7 @@ impl Camera {
         self.offset = self.offset.clamp(-limit, limit);
     }
 
-    /// Center the bounds of the symbols and their leads, including a margin for labels.
+    /// Center symbol and wire bounds, including free routes and a margin for labels.
     fn fit(&mut self, project: &Project, rect: Rect) {
         *self = Self::default();
         let mut bounds = Rect::NOTHING;
@@ -99,6 +99,9 @@ impl Camera {
                 .translate(center)
                 .expand(theme::SCHEMATIC_FIT_MARGIN);
             bounds = bounds.union(symbol_bounds);
+        }
+        for point in project.wires().iter().flat_map(|wire| project.wire_path(wire)) {
+            bounds = bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN));
         }
         if bounds.is_finite() {
             let available = (rect.size() - Vec2::splat(2.0 * theme::SCHEMATIC_FIT_MARGIN)).max(Vec2::splat(1.0));

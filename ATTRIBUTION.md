@@ -8,6 +8,7 @@ PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhe
 
 | PCBCraft file | SolidCraft source | What changed |
 |---|---|---|
+| `crates/engine/src/wire.rs`, `crates/engine/src/schematic/wiring.rs`, `crates/app/src/schematic_canvas/wires.rs`, `crates/app/src/lib.rs` | `docs/wire-editing.md`, `docs/desktop-guide.md` (behavior only) | Followed free-space route starts, orthogonal corners, elbow flipping, cancellation and placement/hover rotation. The explicit endpoint graph, format 3 codec and shared commands are new implementation; no prototype implementation was copied for this change. |
 | `crates/chrome/src/theme.rs` | `assets/styles/ui/palettes.rs`, `crates/ui-egui/src/theme.rs` | Kept the core palette values, token names and widget styling. Dropped theme files and color vision modes. Added canvas and error tokens. |
 | `crates/chrome/src/fonts.rs` | `crates/ui-egui/src/fonts.rs` | Kept the Plex setup, at two weights. Dropped language fallbacks and overrides. |
 | `crates/chrome/src/menu.rs` | `crates/ui-egui/src/ui_kit/menu.rs` | Kept the popup surface and row layout. Dropped icons, flyouts, checks and translation. |

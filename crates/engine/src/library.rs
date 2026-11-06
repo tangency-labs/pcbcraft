@@ -44,6 +44,7 @@ pub struct Library {
     pub name: String,
     pub license: String,
     symbols: Vec<SymbolDefinition>,
+    revisions: Vec<SymbolDefinition>,
     problems: Vec<String>,
 }
 
@@ -56,8 +57,10 @@ pub fn starter() -> &'static Library {
 
 impl Library {
     /// Read a manifest and its symbol files, given as (file name, contents) pairs. A file that
-    /// fails a check, or repeats an earlier symbol's ID, is left out and named in
+    /// fails a check, or repeats an earlier symbol's ID and revision, is left out and named in
     /// [`Self::problems`], so one bad file never hides the rest of the library.
+    /// The newest revision of each ID is offered for placement; older revisions remain available
+    /// for reopening projects without changing their drawings or terminal positions.
     pub fn load(manifest: &str, files: &[(&str, &str)]) -> Self {
         let mut problems = Vec::new();
         let (id, name, license) = match parse_manifest(manifest) {
@@ -68,25 +71,40 @@ impl Library {
             }
         };
         let mut ids = BTreeSet::new();
-        let mut symbols = Vec::with_capacity(files.len());
+        let mut symbols: Vec<SymbolDefinition> = Vec::with_capacity(files.len());
+        let mut revisions = Vec::new();
         for (file, text) in files {
             match parse_symbol(text) {
-                Ok(symbol) if ids.insert(symbol.id.clone()) => symbols.push(symbol),
-                Ok(symbol) => problems.push(format!("{file}: another symbol already has the ID {}", symbol.id)),
+                Ok(mut symbol) if ids.insert((symbol.id.clone(), symbol.revision)) => {
+                    if let Some(current) = symbols.iter_mut().find(|current| current.id == symbol.id) {
+                        if symbol.revision > current.revision {
+                            std::mem::swap(current, &mut symbol);
+                        }
+                        revisions.push(symbol);
+                    } else {
+                        symbols.push(symbol);
+                    }
+                }
+                Ok(symbol) => problems.push(format!("{file}: another symbol already has the ID {} at revision {}", symbol.id, symbol.revision)),
                 Err(error) => problems.push(format!("{file}: {error}")),
             }
         }
-        Self { id, name, license, symbols, problems }
+        Self { id, name, license, symbols, revisions, problems }
     }
 
-    /// Every symbol that loaded, in file-name order.
+    /// The latest revision of each loaded symbol, ordered by the first file for that ID.
     pub fn symbols(&self) -> &[SymbolDefinition] {
         &self.symbols
     }
 
-    /// The symbol with exactly this ID, if it loaded.
+    /// The latest loaded revision of exactly this ID, for new placements.
     pub fn symbol(&self, id: &str) -> Option<&SymbolDefinition> {
         self.symbols.iter().find(|symbol| symbol.id == id)
+    }
+
+    /// Resolve the exact revision pinned in a project without upgrading its geometry.
+    pub fn symbol_revision(&self, id: &str, revision: u32) -> Option<&SymbolDefinition> {
+        self.symbols.iter().chain(&self.revisions).find(|symbol| symbol.id == id && symbol.revision == revision)
     }
 
     /// One message per manifest or symbol file that was left out, naming the file and the reason.
@@ -242,17 +260,18 @@ fn check_pin_number(number: &str) -> Result<(), String> {
     if valid { Ok(()) } else { Err(format!("terminal ID {number:?} must be 1 to 8 letters, digits, +, - or _")) }
 }
 
-/// The pin number as spelled by some starter library symbol, borrowed for the program's
+/// The pin number as spelled by any retained starter library revision, borrowed for the program's
 /// lifetime so terminals can hold it. Whether a given symbol has that pin is checked against
 /// its own definition.
 pub(crate) fn pin_number(number: &str) -> Option<&'static str> {
-    starter().symbols().iter().flat_map(|symbol| &symbol.pins).map(|pin| pin.number.as_str()).find(|known| *known == number)
+    starter().symbols.iter().chain(&starter().revisions).flat_map(|symbol| &symbol.pins).map(|pin| pin.number.as_str()).find(|known| *known == number)
 }
 
-/// Every pin number the starter library uses, once each, shortest first and then in text order,
+/// Every pin number the retained starter library revisions use, once each, shortest first and then in text order,
 /// so `"2"` comes before `"10"`. The terminal schema offers these.
 pub fn all_pin_numbers() -> Vec<&'static str> {
-    let mut numbers: Vec<_> = starter().symbols().iter().flat_map(|symbol| &symbol.pins).map(|pin| pin.number.as_str()).collect();
+    let mut numbers: Vec<_> =
+        starter().symbols.iter().chain(&starter().revisions).flat_map(|symbol| &symbol.pins).map(|pin| pin.number.as_str()).collect();
     numbers.sort_unstable_by_key(|number| (number.len(), *number));
     numbers.dedup();
     numbers
@@ -338,6 +357,28 @@ mod tests {
         assert_eq!(led.reference_prefix(), "D");
     }
 
+    /// New placements use compact revision 2; older pinned revisions retain every original pin.
+    #[test]
+    fn compact_revisions_preserve_old_projects_and_choose_newest_in_any_order() {
+        for symbol in starter().symbols().iter().filter(|symbol| symbol.id != "header-4") {
+            assert_eq!(symbol.revision(), 2);
+            let old = starter().symbol_revision(&symbol.id, 1).unwrap();
+            for (new, old) in symbol.pins().iter().zip(old.pins()) {
+                assert_eq!(old.offset.x_nm.abs(), PIN_OFFSET_NM);
+                assert!(new.offset.x_nm.abs() < old.offset.x_nm.abs());
+                assert_eq!(new.offset.x_nm % GRID_NM, 0);
+            }
+        }
+        let files = starter_files::SYMBOLS.iter().rev().copied().collect::<Vec<_>>();
+        let reversed = Library::load(starter_files::MANIFEST, &files);
+        assert!(reversed.problems().is_empty());
+        assert_eq!(reversed.symbol("resistor").unwrap().revision(), 2);
+        assert_eq!(reversed.symbol_revision("resistor", 1).unwrap().pins()[1].offset.x_nm, PIN_OFFSET_NM);
+        assert!(reversed.symbol_revision("resistor", 3).is_none());
+        let old = crate::persistence::decode(include_bytes!("../../app/tests/fixtures/two-resistors.pc")).unwrap();
+        assert_eq!(old.symbols()[0].pins()[1].x_nm, PIN_OFFSET_NM);
+    }
+
     fn resistor() -> Value {
         serde_json::from_str(starter_files::SYMBOLS.iter().find(|(file, _)| *file == "resistor.json").unwrap().1).unwrap()
     }
@@ -366,7 +407,7 @@ mod tests {
         assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([6_350_001, 0])).contains("grid"));
         assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([13_970_000, 0])).contains("within 12.7 mm"));
         assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([i64::MIN, 0])).contains("within 12.7 mm"));
-        assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([-6_350_000, 0])).contains("shares a position"));
+        assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([-5_080_000, 0])).contains("shares a position"));
         assert!(error(|file| file["units"][0]["pins"][1]["terminal"] = json!("1")).contains("exactly one pin"));
         assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([12_700_001, 0])).contains("12.7 mm"));
         assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([i64::MIN, 0])).contains("12.7 mm"));

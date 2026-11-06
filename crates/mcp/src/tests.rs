@@ -193,3 +193,41 @@ fn cross_probe_follows_the_explicit_pin_to_pad_mapping() {
     assert_eq!(body(&call(&mut server, "cross_probe", json!({"terminal":terminal}))), json!({"pad":pad}));
     assert_eq!(body(&call(&mut server, "cross_probe", json!({"pad":pad}))), json!({"terminal":terminal}));
 }
+
+/// MCP exposes rotated placement and authored routes to all library pins, including pin 4;
+/// the resulting route can be deleted through the shared catalog.
+#[test]
+fn mcp_draws_free_routes_to_multi_pin_symbols() {
+    let mut server = server();
+    let command = body(&call(&mut server, "describe_command", json!({"command":pcbcraft_engine::DRAW_WIRE})));
+    assert_eq!(command["params"]["properties"]["from"]["oneOf"][0]["properties"]["terminal"]["enum"], json!(["1", "2", "3", "4"]));
+    body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Free to header"}})));
+    let placed = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":PLACE_SYMBOL,"params":{
+            "definition":"header-4","x_nm":0,"y_nm":0,"rotation":90,"expected_revision":1
+        }}),
+    ));
+    assert_eq!(placed["project"]["schematic"]["symbols"][0]["rotation"], 90);
+    let pin = &placed["project"]["schematic"]["symbols"][0]["pins"][3];
+    let state = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DRAW_WIRE,"params":{
+            "from":{"x_nm":pin["x_nm"],"y_nm":12_700_000},
+            "to":{"symbol":"symbol-2","terminal":"4"}, "bends":[],"expected_revision":placed["revision"]
+        }}),
+    ));
+    assert_eq!(state["project"]["schematic"]["netlist"]["nets"][0]["terminals"], json!([{"symbol":"symbol-2","terminal":"4"}]));
+    let wire = &state["project"]["schematic"]["wires"][0]["id"];
+    let deleted = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DELETE_WIRE,"params":{
+            "wire":wire,"expected_revision":state["revision"]
+        }}),
+    ));
+    assert_eq!(deleted["project"]["schematic"]["wires"], json!([]));
+    assert_eq!(deleted["project"]["schematic"]["junctions"], json!([]));
+}

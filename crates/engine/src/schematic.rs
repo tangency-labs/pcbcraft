@@ -2,12 +2,12 @@
 
 pub(crate) mod wiring;
 
-pub use wiring::{Connectivity, Terminal, Wire};
+pub use wiring::{Connectivity, Terminal, Wire, WireEndpoint, orthogonal_path};
 
 use serde_json::{Value, json};
 
 pub const GRID_NM: i64 = 1_270_000;
-/// Where a two-pin starter symbol's pins sit from its center.
+/// Original two-pin starter lead extent, retained by revision 1 definitions.
 pub const PIN_OFFSET_NM: i64 = 5 * GRID_NM;
 /// How far a library pin may sit from its symbol's center on either axis.
 pub const MAX_PIN_OFFSET_NM: i64 = 2 * PIN_OFFSET_NM;
@@ -27,7 +27,8 @@ pub(crate) fn parse_symbol_id(id: &str) -> Option<u64> {
     (number != 0 && !digits.starts_with('0') && digits.bytes().all(|byte| byte.is_ascii_digit())).then_some(number)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Point {
     pub x_nm: i64,
     pub y_nm: i64,
