@@ -195,7 +195,7 @@ impl EditorViews {
     }
 
     /// Explicitly dock one native view beside the primary host's focused pane. Existing panes
-    /// and other windows stay in place; only an emptied source host disappears.
+    /// and other windows stay in place; an emptied source host and its parked views are pruned.
     pub(super) fn dock_view(&mut self, id: ViewId) {
         let Some(source) = self.owner(id).filter(|host| *host != HostId::ROOT) else {
             return;
@@ -211,6 +211,7 @@ impl EditorViews {
         }
         self.suspend();
         self.bind_root();
+        self.prune_closed();
     }
 
     /// Restore the primary render slot after a synchronous child callback or layout action.

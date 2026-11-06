@@ -640,10 +640,9 @@ fn docking_into_an_existing_split_preserves_other_views() {
     assert_eq!(h.state().session.inspect(), before);
 }
 
-/// A queued action cannot resurrect a closed view or act on a replacement project, even if
-/// a new window has since opened. Those presentation operations do not add electrical edits.
+/// A queued action cannot resurrect a closed view or act on a replacement project.
 #[test]
-fn queued_host_actions_reject_closed_and_reopened_view_addresses() {
+fn queued_host_actions_reject_closed_views_and_replacement_projects() {
     for replace_project in [false, true] {
         let (mut h, _) = many_windows();
         click(&mut h, "View");
@@ -783,4 +782,37 @@ fn closing_another_window_keeps_a_surviving_fields_dialog_valid() {
     let project = h.state().session.project().unwrap();
     assert_eq!(project.reference(&project.symbols()[0]), "R42");
     assert_eq!(h.state().views.detached_hosts(), vec![HostId(2)]);
+}
+
+/// Docking the only visible pane discards that host's collapsed panes. If one of those held
+/// the primary follow role, both directional policies must immediately use the surviving view.
+#[test]
+fn docking_prunes_a_parked_primary_before_directional_following() {
+    use preferences::SelectionFollow::{PrimaryFollowsSecondary, SecondaryFollowsPrimary};
+    let (mut h, _) = many_windows();
+    let ctx = h.ctx.clone();
+    let child = h.state_mut().views.detach_view(ViewId(0)).unwrap();
+    let docked = h.state_mut().views.open_beside(ViewId(0)).unwrap();
+    h.state_mut().views.host = child;
+    h.state_mut().views.bind(docked);
+    h.state_mut().split_editors(&ctx, false);
+    h.state_mut().views.bind_root();
+    h.state_mut().views.dock_view(docked);
+    h.run();
+    assert!(h.state().views.view(ViewId(0)).is_none());
+    assert!(h.state().views.detached_hosts().is_empty());
+    let before = h.state().session.inspect();
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let far = Point { x_nm: 1_270_000_000, y_nm: 0 };
+    for (policy, source, target) in [(SecondaryFollowsPrimary, docked, ViewId(1)), (PrimaryFollowsSecondary, ViewId(1), docked)] {
+        h.state_mut().preferences.selection_follow = policy;
+        h.state_mut().views.view_mut(target).unwrap().camera.center_on(far);
+        h.state_mut().views.bind(source);
+        h.state_mut().select(Selection::one_symbol("symbol-2".to_owned()));
+        h.state_mut().views.bind_root();
+        h.run();
+        let rect = h.get_by_label(&format!("Schematic canvas {}", target.0 + 1)).rect();
+        assert!(rect.contains(h.state().views.view(target).unwrap().camera.screen(origin, rect)), "{policy:?}");
+        assert_eq!(h.state().session.inspect(), before);
+    }
 }
