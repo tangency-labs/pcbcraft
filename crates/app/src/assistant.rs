@@ -258,6 +258,17 @@ impl Assistant {
         if self.visibility == Visibility::Minimized { chrome::rail_clearance() } else { 0.0 }
     }
 
+    /// The card covering this workspace, excluding a detached window or hidden feature.
+    /// Uses current geometry so a resize does not leave Fit targeting last frame's bounds.
+    pub(super) fn covered_rect(&self, workspace: Rect) -> Rect {
+        match self.visibility {
+            _ if !self.settings.show_features => Rect::NOTHING,
+            Visibility::Minimized => chrome::entry_bounds(workspace),
+            Visibility::Open if !self.popped => chrome::drawer_bounds(workspace, self.dock),
+            _ => Rect::NOTHING,
+        }
+    }
+
     /// Open the last-used view, or hide it if currently open.
     pub(super) fn toggle(&mut self, ctx: &Context) {
         if self.visibility == Visibility::Open {

@@ -128,17 +128,34 @@ pub struct MenuItem<'a> {
     pub shortcut: &'a str,
     pub enabled: bool,
     icon: Option<MenuIcon>,
+    /// A ribbon glyph in the leading column, for rows that repeat a ribbon action.
+    tool: Option<crate::workspace::ToolIcon>,
+    /// `Some` for a row that toggles: a check mark in the leading column when on, nothing when off.
+    checked: Option<bool>,
 }
 
 impl<'a> MenuItem<'a> {
     /// Start with an enabled text row. Use the builders to add a glyph or shortcut.
     pub fn new(label: &'a str) -> Self {
-        Self { label, shortcut: "", enabled: true, icon: None }
+        Self { label, shortcut: "", enabled: true, icon: None, tool: None, checked: None }
     }
 
     /// Add a theme-aware glyph in the row's leading column.
     pub fn icon(mut self, icon: MenuIcon) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Show a ribbon action's glyph in the leading column, as its ribbon group menu does.
+    pub fn tool_icon(mut self, icon: crate::workspace::ToolIcon) -> Self {
+        self.tool = Some(icon);
+        self
+    }
+
+    /// Make the row a toggle: the leading column shows a check mark while `checked`, in place
+    /// of any glyph, as PCBcraft Next's menus do.
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
         self
     }
 
@@ -168,8 +185,9 @@ impl<'a> MenuItem<'a> {
     /// Truncate long labels before the shortcut and preserve the full accessible label.
     fn row(&self, ui: &mut Ui) -> Response {
         let t = Tokens::get();
-        let icon_column = if self.icon.is_some() { t.space_16 + t.space_8 } else { 0.0 };
-        let height = if self.icon.is_some() { t.control_height + t.space_2 } else { t.control_height };
+        let leading = self.icon.is_some() || self.tool.is_some() || self.checked.is_some();
+        let icon_column = if leading { t.space_16 + t.space_8 } else { 0.0 };
+        let height = if leading { t.control_height + t.space_2 } else { t.control_height };
         // Popups first measure their content. Filling the provisional width would keep them wide.
         let width = if ui.is_sizing_pass() {
             let measure = |text: &str, font: FontId| ui.painter().layout_no_wrap(text.to_owned(), font, t.text).size().x;
@@ -191,8 +209,16 @@ impl<'a> MenuItem<'a> {
         if hot {
             painter.rect_filled(r, t.control_radius, t.accent_soft);
         }
-        if let Some(icon) = self.icon {
-            icon.paint(&painter, pos2(r.left() + t.space_16, r.center().y), t, hot);
+        let lead = pos2(r.left() + t.space_16, r.center().y);
+        match (self.checked, self.tool, self.icon) {
+            (Some(true), ..) => {
+                let ink = egui::Stroke::new(1.5, t.accent);
+                painter.add(egui::Shape::line(vec![lead + vec2(-5.0, 0.0), lead + vec2(-1.0, 4.0), lead + vec2(6.0, -4.0)], ink));
+            }
+            (Some(false), ..) => {}
+            (None, Some(tool), _) => crate::workspace::paint_menu_glyph(&painter, tool, lead, t.space_16),
+            (None, None, Some(icon)) => icon.paint(&painter, lead, t, hot),
+            (None, None, None) => {}
         }
         let mut right = r.right() - t.space_8;
         if !self.shortcut.is_empty() {

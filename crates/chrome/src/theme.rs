@@ -22,6 +22,11 @@ pub const SCHEMATIC_MIN_GRID_SPACING: f32 = 5.0;
 /// Space around the contents when fitting the schematic to its viewport.
 pub const SCHEMATIC_FIT_MARGIN: f32 = 28.0;
 pub const SCHEMATIC_SYMBOL_STROKE: f32 = 1.6;
+/// PCBcraft Next's minimum catalog extent, in schematic grid units, and maximum scale.
+pub const SCHEMATIC_PREVIEW_EXTENT: egui::Vec2 = egui::vec2(10.0, 64.0 / SCHEMATIC_GRID_SPACING);
+pub const SCHEMATIC_PREVIEW_MAX_STEP: f32 = 1.4 * SCHEMATIC_GRID_SPACING;
+/// Fine symbol strokes in the library; canvas and placement feedback keep their own weight.
+pub const SCHEMATIC_PREVIEW_STROKE: f32 = 1.1;
 /// Radius of a terminal marker while the Wire tool is active.
 pub const SCHEMATIC_PIN_RADIUS: f32 = 3.0;
 /// Distance at which the Wire tool snaps to a terminal.
@@ -47,6 +52,8 @@ pub struct Tokens {
     pub canvas_ink: Color32,
     pub canvas_grid: Color32,
     pub schematic_wire: Color32,
+    /// Symbol ink on the Parts library's raised preview tiles.
+    pub catalog_symbol: Color32,
     /// Home page: page fill, card surface and border, and secondary text. These and the rail and
     /// primary tile colours below are derived from the rest of the palette by [`Tokens::with_home`].
     pub file_background: Color32,
@@ -74,6 +81,8 @@ pub struct Tokens {
     /// Icon artwork roles, from SolidCraft's icon palette: outlines drawn over a face, three
     /// passive faces from lightest to darkest, and three active blues from palest to strongest.
     pub icon_ink: Color32,
+    /// Line art drawn straight on the interface background, such as ribbon and Browser glyphs.
+    pub icon_line: Color32,
     pub icon_face_1: Color32,
     pub icon_face_2: Color32,
     pub icon_face_3: Color32,
@@ -151,6 +160,7 @@ impl Tokens {
             canvas_ink: Color32::from_rgb(110, 116, 128),
             canvas_grid: Color32::from_rgb(194, 201, 211),
             schematic_wire: Color32::from_rgb(20, 112, 75),
+            catalog_symbol: Color32::from_rgb(55, 95, 130),
             // Placeholders until `with_home` derives them from the colours above.
             file_background: Color32::PLACEHOLDER,
             file_surface: Color32::PLACEHOLDER,
@@ -169,6 +179,7 @@ impl Tokens {
             form_primary: Color32::PLACEHOLDER,
             form_dim: Color32::PLACEHOLDER,
             icon_ink: Color32::from_rgb(0x34, 0x46, 0x5b),
+            icon_line: Color32::from_rgb(0x34, 0x46, 0x5b),
             icon_face_1: Color32::from_rgb(0xe2, 0xe8, 0xef),
             icon_face_2: Color32::from_rgb(0xb8, 0xc3, 0xcf),
             icon_face_3: Color32::from_rgb(0x8e, 0x9f, 0xaf),
@@ -240,7 +251,9 @@ impl Tokens {
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
+        t.catalog_symbol = Color32::from_rgb(143, 176, 205);
         t.icon_ink = Color32::from_rgb(0x1f, 0x20, 0x21);
+        t.icon_line = Color32::from_rgb(0xdb, 0xe4, 0xee);
         t.icon_face_1 = Color32::from_rgb(0x8d, 0xa3, 0xc3);
         t.icon_face_2 = Color32::from_rgb(0x6d, 0x81, 0xa2);
         t.icon_face_3 = Color32::from_rgb(0x54, 0x67, 0x82);

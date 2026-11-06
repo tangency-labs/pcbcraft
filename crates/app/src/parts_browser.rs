@@ -1,43 +1,23 @@
-//! The parts browser: a card docked at the left of the canvas that lists the starter library's symbols as
+//! The parts browser: a movable card floating over the canvas that lists the starter library's symbols as
 //! searchable thumbnails, in place of the old Place Symbol dialog. Click a part to place it, or
 //! drag parts onto the sheet one after another. Browsing never edits the project; placing goes through the same
 //! `schematic.place_symbol` command as before. Adapted from PCBcraft Next's parts browser.
 
 use std::sync::Arc;
 
-use egui::{Align2, FontId, Rect, Response, Sense, Ui, pos2, vec2};
-use pcbcraft_chrome::{Tokens, workspace};
+use egui::{Rect, Ui};
+use pcbcraft_chrome::workspace::catalog::{self, View};
 use pcbcraft_engine::{library, schematic::SymbolDefinition};
 
 use crate::schematic_canvas::{PartDrag, paint_preview};
-
-/// How the browser lays out parts, as PCBcraft Next offers them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum View {
-    Small,
-    #[default]
-    Medium,
-    Large,
-    List,
-}
-
-impl View {
-    /// The square thumbnail size in points; the list uses a small one beside each name.
-    fn thumbnail(self) -> f32 {
-        match self {
-            Self::Small => 56.0,
-            Self::Medium => 84.0,
-            Self::Large => 116.0,
-            Self::List => 30.0,
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub(crate) struct PartsBrowser {
     pub(crate) open: bool,
     query: String,
     view: View,
+    panel: catalog::Panel,
+    rect: Option<Rect>,
     /// Focus the search field on the next frame, as after pressing A.
     focus: bool,
     /// Whether the search field had focus at the end of the last frame. egui drops focus on
@@ -47,147 +27,415 @@ pub(crate) struct PartsBrowser {
 
 impl PartsBrowser {
     /// Open the browser with an empty, focused search, as Capture › Symbol and A do. If it's
-    /// already open, keep the search and just focus it.
+    /// already open, keep the search. A collapsed card expands before focusing it.
     pub(crate) fn open_and_focus(&mut self) {
         if !self.open {
             self.query.clear();
         }
         self.open = true;
+        self.panel.expand();
         self.focus = true;
     }
 
     /// Close the browser on Escape when its search had focus or workspace keys are available.
     /// Call after giving dialogs, popups and the assistant priority, but before tool cancellation.
-    /// Return true when the key was consumed and the browser closed.
+    /// A panel drag first restores its original position. Returns true when either action consumes Escape.
     pub(crate) fn take_escape(&mut self, ctx: &egui::Context) -> bool {
         if self.open
             && (self.search_focused || !ctx.egui_wants_keyboard_input())
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
+            if self.panel.cancel_drag() {
+                ctx.request_repaint();
+                return true;
+            }
             self.open = false;
+            egui::DragAndDrop::clear_payload(ctx);
             self.search_focused = false;
+            ctx.request_repaint();
             return true;
         }
         false
     }
 
     /// The starter library's symbols whose name or ID contains the search text, or whose reference
-    /// prefix is it, in library order. Matching ignores case; an empty search lists every symbol.
+    /// prefix is it. Matching ignores case; an empty search lists every symbol.
     fn matches(&self) -> Vec<Arc<SymbolDefinition>> {
-        let query = self.query.trim().to_lowercase();
-        library::starter()
-            .symbols()
-            .iter()
-            .filter(|definition| {
-                query.is_empty()
-                    || definition.name.to_lowercase().contains(&query)
-                    || definition.id.contains(&query)
-                    || definition.reference_prefix().eq_ignore_ascii_case(&query)
-            })
-            .cloned()
-            .collect()
+        matches(&self.query)
     }
 
-    /// Draw the browser while it's open and return the part clicked, or the first match when
-    /// Enter is pressed in the search field. Either closes the browser.
-    /// New drags capture `revision` so intervening edits can cancel them before placement.
-    /// `placing` is the part being placed, which is highlighted. See [`Self::take_escape`].
-    pub(crate) fn show(&mut self, ui: &mut Ui, placing: Option<&Arc<SymbolDefinition>>, revision: u64) -> Option<Arc<SymbolDefinition>> {
+    /// The current card rectangle, absent while hidden. Used for fitting and pointer exclusion.
+    pub(crate) fn rect(&self) -> Rect {
+        if self.open { self.rect.unwrap_or(Rect::NOTHING) } else { Rect::NOTHING }
+    }
+
+    /// Reserve vertical room for a left-anchored library by limiting the Browser's card only.
+    pub(crate) fn browser_area(&self, canvas: Rect) -> Rect {
+        if self.open { self.panel.browser_area(canvas) } else { canvas }
+    }
+
+    /// Draw the floating library; clicking a part or pressing Enter closes it and starts placement.
+    /// Drag payloads retain the current revision so intervening edits cancel placement. A short
+    /// dock temporarily uses List while preserving the preferred view for a taller card.
+    pub(crate) fn show(
+        &mut self,
+        ui: &Ui,
+        canvas: Rect,
+        browser: Rect,
+        placing: Option<&Arc<SymbolDefinition>>,
+        revision: u64,
+    ) -> Option<Arc<SymbolDefinition>> {
         if !self.open {
+            self.rect = None;
             return None;
         }
         let mut picked = None;
-        let closed = workspace::left_card(ui, "parts_browser", "Parts", |ui| {
-            let t = Tokens::get();
-            let search = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search parts").desired_width(f32::INFINITY));
-            if std::mem::take(&mut self.focus) {
+        let count = self.matches().len();
+        let Self { panel, query, view, focus, search_focused, .. } = self;
+        let (rect, closed) = panel.show(ui, canvas, browser, |ui, compact| {
+            catalog::source(ui, "Built-in symbols", count);
+            let search = catalog::search(ui, query);
+            if std::mem::take(focus) {
                 search.request_focus();
             }
-            self.search_focused = search.has_focus();
+            *search_focused = search.has_focus();
             let enter = search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            ui.add_space(t.space_4);
-            // Compact toggles: the card is narrower than a Preferences row.
-            ui.horizontal(|ui| {
-                for (view, label, tip) in
-                    [(View::Small, "S", "Small"), (View::Medium, "M", "Medium"), (View::Large, "L", "Large"), (View::List, "List", "List")]
-                {
-                    ui.selectable_value(&mut self.view, view, label).on_hover_text(tip);
-                }
-            });
-            ui.add_space(t.space_6);
-            let parts = self.matches();
-            // Enter in the search places the first match, as Enter does in KiCad's chooser.
+            let view = catalog::view_picker(ui, view, compact);
+            let parts = matches(query);
             if enter {
                 picked = parts.first().cloned();
             }
-            if parts.is_empty() {
-                ui.label(pcbcraft_chrome::shell::dim(format!("No parts match “{}”", self.query.trim())));
-            }
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(t.space_6, t.space_6);
-                for definition in parts {
-                    if part(ui, &definition, self.view, placing.is_some_and(|placing| Arc::ptr_eq(placing, &definition)), revision).clicked() {
-                        picked = Some(definition);
-                    }
+            catalog::grid(ui, view, &parts, |ui, definition, width| {
+                let item = catalog::Item {
+                    name: &definition.name,
+                    value: definition.default_value(),
+                    selected: placing.is_some_and(|placing| Arc::ptr_eq(placing, definition)),
+                };
+                let response = catalog::tile(ui, view, width, item, |painter, rect, ink| paint_preview(painter, definition, rect, ink));
+                response.dnd_set_drag_payload(PartDrag { definition: definition.clone(), revision });
+                if response.clicked() {
+                    picked = Some(definition.clone());
                 }
             });
         });
-        // Clicking a part closes the browser and hands the canvas its room back, as the Place
-        // Symbol dialog and KiCad's chooser do. Dragging leaves it open for the next part.
+        if panel.is_collapsed() {
+            *search_focused = false;
+        }
+        self.rect = Some(rect);
         if closed || picked.is_some() {
             self.open = false;
+            self.search_focused = false;
+            egui::DragAndDrop::clear_payload(ui.ctx());
+            ui.ctx().request_repaint();
         }
         picked
     }
 }
 
-/// One part: a thumbnail tile, or a row with a small thumbnail beside its name and reference
-/// prefix. Clicking reports it; dragging carries it and the starting project revision to the canvas.
-fn part(ui: &mut Ui, definition: &Arc<SymbolDefinition>, view: View, selected: bool, revision: u64) -> Response {
-    let t = Tokens::get();
-    let thumb = view.thumbnail();
-    let size = match view {
-        View::List => vec2(ui.available_width(), thumb + t.space_6),
-        View::Small => vec2(thumb, thumb),
-        View::Medium | View::Large => vec2(thumb, thumb + t.space_16),
-    };
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, &definition.name));
-    response.dnd_set_drag_payload(PartDrag { definition: definition.clone(), revision });
-    let hot = response.hovered() || response.has_focus() || response.dragged();
-    if selected || hot {
-        ui.painter().rect_filled(rect, t.radius_sm, if selected { t.accent_soft } else { t.hover });
-    }
-    let ink = if selected { t.ribbon_tab_text } else { t.text };
-    let painter = ui.painter().with_clip_rect(rect);
-    match view {
-        View::List => {
-            let preview = Rect::from_min_size(rect.min + vec2(t.space_4, t.space_3), vec2(thumb, thumb));
-            paint_preview(&painter, definition, preview.shrink(t.space_2), ink);
-            let text = pos2(preview.right() + t.space_8, rect.center().y);
-            painter.text(text, Align2::LEFT_CENTER, &definition.name, FontId::proportional(t.font_label), ink);
-            let prefix = format!("{}?", definition.reference_prefix());
-            painter.text(rect.right_center() - vec2(t.space_6, 0.0), Align2::RIGHT_CENTER, prefix, FontId::monospace(t.font_small), t.text_dim);
-        }
-        View::Small => paint_preview(&painter, definition, rect.shrink(t.space_6), ink),
-        View::Medium | View::Large => {
-            let preview = Rect::from_min_size(rect.min, vec2(thumb, thumb)).shrink(t.space_6);
-            paint_preview(&painter, definition, preview, ink);
-            // Long names end in an ellipsis inside the tile; the tooltip has the full name.
-            let mut job = egui::text::LayoutJob::simple_singleline(definition.name.clone(), FontId::proportional(t.font_small), ink);
-            job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - t.space_4);
-            let galley = painter.layout_job(job);
-            let at = pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - t.space_2 - galley.size().y);
-            painter.galley(at, galley, ink);
-        }
-    }
-    let tip = format!("{} · drag onto the sheet or click to place", definition.name);
-    response.on_hover_text(tip)
+/// Find symbols by name, ID or reference prefix. Familiar starter parts lead in the prototype's
+/// order; any additional definitions retain their library order after them.
+fn matches(query: &str) -> Vec<Arc<SymbolDefinition>> {
+    let query = query.trim().to_lowercase();
+    let mut parts: Vec<_> = library::starter()
+        .symbols()
+        .iter()
+        .filter(|definition| {
+            query.is_empty()
+                || definition.name.to_lowercase().contains(&query)
+                || definition.id.contains(&query)
+                || definition.reference_prefix().eq_ignore_ascii_case(&query)
+        })
+        .cloned()
+        .collect();
+    let order = ["resistor", "capacitor", "led", "connector"];
+    parts.sort_by_key(|part| order.iter().position(|id| *id == part.id).unwrap_or(order.len()));
+    parts
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{PcbApp, tests::click};
+    use egui::{Key, Modifiers, Vec2, pos2, vec2};
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::{PLACE_RESISTOR, schematic::Point};
+    use serde_json::json;
+
+    /// Open a project with two separated symbols, so Fit has real extents to protect.
+    fn harness() -> Harness<'static, PcbApp> {
+        let mut app = PcbApp::default();
+        app.session.execute("project.new", &json!({"name":"Library layout"})).unwrap();
+        for (x, revision) in [(0, 1), (60_960_000, 2)] {
+            app.session.execute(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":revision})).unwrap();
+        }
+        let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(20).build_ui_state(|ui, app| app.frame(ui), app);
+        h.run();
+        h
+    }
+
+    /// Use the accessible position menu, allowing geometry to settle after each choice.
+    fn position(h: &mut Harness<'_, PcbApp>, label: &str) {
+        click(h, "Parts library position");
+        click(h, label);
+    }
+
+    /// Both edge anchors and free placement keep the full canvas. Fit and Browser picks target
+    /// clear space, and these UI operations leave the session unchanged.
+    #[test]
+    fn floating_library_preserves_canvas_and_navigation_avoids_both_cards() {
+        let mut h = harness();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let origin = h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+        let before = h.state().session.inspect();
+        h.key_press(Key::A);
+        h.run();
+        assert_eq!(h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin, "opening must not pan");
+        for anchor in ["Dock left", "Dock right", "Float"] {
+            position(&mut h, anchor);
+            assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
+            let cards = [h.state().browser.rect(), h.state().parts.rect()];
+            assert!(canvas.contains_rect(cards[1]));
+            assert!(!cards[0].intersects(cards[1]));
+            click(&mut h, "Fit schematic");
+            let clear = catalog::uncovered(canvas, &cards);
+            for symbol in h.state().session.project().unwrap().symbols() {
+                let at = h.state().camera.screen(symbol.position, canvas);
+                assert!(clear.contains(at), "{anchor}: {at:?} not inside {clear:?}");
+            }
+        }
+        click(&mut h, "Expand Symbols");
+        click(&mut h, "R2  1k");
+        let app = h.state();
+        let clear = catalog::uncovered(canvas, &[app.browser.rect(), app.parts.rect()]);
+        let at = app.camera.screen(app.session.project().unwrap().symbols()[1].position, canvas);
+        assert!(at.distance(clear.center()) < 0.1, "pick must use this frame's card bounds");
+        assert_eq!(app.session.inspect(), before);
+    }
+
+    /// The Assistant's floating drawer participates in the same Fit target as Browser and Parts.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fit_also_avoids_the_assistant() {
+        let mut h = harness();
+        h.key_press(Key::A);
+        h.run();
+        click(&mut h, "Assistant");
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let assistant = h.state().assistant.covered_rect(canvas);
+        assert!(assistant.is_positive());
+        click(&mut h, "Fit schematic");
+        let clear = catalog::uncovered(canvas, &[h.state().browser.rect(), h.state().parts.rect(), assistant]);
+        for symbol in h.state().session.project().unwrap().symbols() {
+            assert!(clear.contains(h.state().camera.screen(symbol.position, canvas)));
+        }
+    }
+
+    /// A short left dock uses a scrollable list; returning to Float restores the chosen density.
+    /// Narrow windows keep the card's header on the canvas, including after an anchor change.
+    #[test]
+    fn short_dock_uses_list_and_resizing_keeps_controls_reachable() {
+        let mut h = harness();
+        h.key_press(Key::A);
+        h.run();
+        click(&mut h, "Large");
+        h.set_size(vec2(1000.0, 700.0));
+        h.run();
+        position(&mut h, "Dock left");
+        assert!(h.query_by_label("Large").is_none());
+        assert!((h.get_by_label("Resistor").rect().height() - 58.0).abs() < 0.1);
+        h.get_by_label("4-pin header").scroll_to_me();
+        h.run();
+        let last = h.get_by_label("4-pin header").rect();
+        assert!(h.state().parts.rect().contains_rect(last));
+        position(&mut h, "Float");
+        assert_eq!(h.state().parts.view, View::Large);
+        assert!((h.get_by_label("Resistor").rect().height() - 180.0).abs() < 0.1);
+        h.set_size(vec2(420.0, 520.0));
+        h.run();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        assert!(canvas.contains_rect(h.state().parts.rect()));
+        assert!(canvas.contains_rect(h.get_by_label("Close Parts library").rect()));
+        position(&mut h, "Dock right");
+        assert!(canvas.contains_rect(h.state().parts.rect()));
+    }
+
+    /// Collapsing releases canvas space at every anchor without losing the query or view.
+    /// Fit uses the smaller header, and A reveals and focuses the retained search.
+    #[test]
+    fn collapse_preserves_catalog_state_and_a_expands_search() {
+        let mut h = harness();
+        h.key_press(Key::A);
+        h.run();
+        click(&mut h, "Large");
+        h.get_by_role(egui::accesskit::Role::TextInput).click();
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
+        h.run();
+        let before = h.state().session.inspect();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        for anchor in ["Float", "Dock left", "Dock right"] {
+            position(&mut h, anchor);
+            let expanded = h.state().parts.rect();
+            let origin = h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+            click(&mut h, "Collapse Parts library");
+            let collapsed = h.state().parts.rect();
+            assert!(h.state().parts.open);
+            assert!(collapsed.height() < 60.0);
+            assert_eq!(collapsed.min, expanded.min);
+            assert_eq!(collapsed.width(), expanded.width());
+            assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
+            assert_eq!(h.state().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
+            assert!(h.query_by_label("Capacitor").is_none());
+            assert!(h.query_by_label("Large").is_none());
+            click(&mut h, "Fit schematic");
+            let clear = catalog::uncovered(canvas, &[h.state().browser.rect(), collapsed]);
+            for symbol in h.state().session.project().unwrap().symbols() {
+                assert!(clear.contains(h.state().camera.screen(symbol.position, canvas)));
+            }
+            click(&mut h, "Expand Parts library");
+            assert_eq!(h.state().parts.rect(), expanded);
+            h.get_by_label("Capacitor");
+            assert_eq!(h.state().parts.view, View::Large);
+            assert_eq!(h.state().parts.query, "cap");
+            click(&mut h, "Collapse Parts library");
+            h.key_press(Key::A);
+            h.run();
+            assert_eq!(h.state().parts.rect(), expanded);
+            assert!(h.state().parts.search_focused);
+            assert_eq!(h.state().parts.query, "cap");
+        }
+        assert_eq!(h.state().session.inspect(), before);
+    }
+
+    /// A collapsed library still moves, snaps and handles its menu/Escape, while wheel input
+    /// over its former body reaches the sheet instead of an invisible catalog.
+    #[test]
+    fn collapsed_card_keeps_controls_and_releases_pointer_input() {
+        let mut h = harness();
+        h.key_press(Key::A);
+        h.run();
+        let body = h.state().parts.rect().center();
+        click(&mut h, "Collapse Parts library");
+        h.hover_at(body);
+        h.run();
+        let zoom = h.state().camera.zoom();
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -50.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+        assert_ne!(h.state().camera.zoom(), zoom);
+        let from = h.get_by_label("Move Parts library").rect().center();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let to = pos2(canvas.right() - 20.0, canvas.center().y);
+        h.drag_at(from);
+        h.run();
+        h.hover_at(to);
+        h.run();
+        h.drop_at(to);
+        h.run();
+        assert!((canvas.right() - h.state().parts.rect().right() - 12.0).abs() < 0.1);
+        assert!(h.state().parts.rect().height() < 60.0);
+        position(&mut h, "Dock left");
+        assert!(h.state().parts.rect().height() < 60.0);
+        h.set_size(vec2(420.0, 520.0));
+        h.run();
+        assert!(h.get_by_label("Schematic canvas").rect().contains_rect(h.state().parts.rect()));
+        click(&mut h, "Parts library position");
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().parts.open);
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(!h.state().parts.open);
+        h.key_press(Key::A);
+        h.run();
+        h.get_by_label("Collapse Parts library");
+        assert!(h.state().parts.search_focused);
+    }
+
+    /// A title drag snaps on release; Escape restores its origin before closing the library.
+    #[test]
+    fn header_drags_snap_to_edges_and_escape_restores_the_previous_position() {
+        let mut h = harness();
+        h.key_press(Key::A);
+        h.run();
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        let original = h.state().parts.rect();
+        let from = h.get_by_label("Move Parts library").rect().center();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(from + vec2(100.0, 80.0));
+        h.run();
+        assert_ne!(h.state().parts.rect(), original);
+        h.key_press(Key::Escape);
+        h.run();
+        assert_eq!(h.state().parts.rect(), original);
+        h.drop_at(from + vec2(100.0, 80.0));
+        h.run();
+        assert!(h.state().parts.open);
+        for right in [true, false] {
+            let from = h.get_by_label("Move Parts library").rect().center();
+            let to = pos2(if right { canvas.right() - 20.0 } else { canvas.left() + 20.0 }, canvas.center().y);
+            h.drag_at(from);
+            h.run();
+            for i in 1..=4 {
+                h.hover_at(from + (to - from) * (i as f32 / 4.0));
+                h.run();
+            }
+            h.drop_at(to);
+            h.run();
+            let rect = h.state().parts.rect();
+            assert!(canvas.contains_rect(rect));
+            let gap = if right { canvas.right() - rect.right() } else { rect.left() - canvas.left() };
+            assert!((gap - 12.0).abs() < 0.1, "edge anchor: {rect:?}");
+        }
+    }
+
+    /// Library scrolling does not zoom the sheet, part drops over a card do not place, and the
+    /// position popup consumes Escape before the library does.
+    #[test]
+    fn library_takes_pointer_input_and_leaves_escape_to_its_menu() {
+        let mut h = harness();
+        h.key_press(Key::A);
+        h.run();
+        let before = h.state().session.inspect();
+        click(&mut h, "Medium");
+        let from = h.get_by_label("Capacitor").rect().center();
+        h.hover_at(from);
+        h.run();
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -50.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+        assert_eq!(h.state().camera.zoom(), 1.0);
+        h.get_by_label("Capacitor").scroll_to_me();
+        h.run();
+        let from = h.get_by_label("Capacitor").rect().center();
+        let to = h.state().browser.rect().center();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(from + Vec2::splat(10.0));
+        h.run();
+        h.hover_at(to);
+        h.run();
+        h.drop_at(to);
+        h.run();
+        assert_eq!(h.state().session.inspect(), before);
+        click(&mut h, "Parts library position");
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.query_by_label("Dock left").is_none());
+        assert!(h.state().parts.open);
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(!h.state().parts.open);
+    }
 
     #[test]
     fn search_matches_names_ids_and_prefixes_ignoring_case() {

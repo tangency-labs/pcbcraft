@@ -27,7 +27,10 @@ fn choose(harness: &mut Harness<'_, PcbApp>, menu: &str, item: &str) {
     click(harness, item);
 }
 
+/// Scroll a catalog tile into view before activating it with a real pointer click.
 fn select_symbol(harness: &mut Harness<'_, PcbApp>, name: &str) {
+    harness.get_by_label(name).scroll_to_me();
+    harness.run();
     harness.get_by_label(name).click();
     harness.run();
 }
@@ -55,15 +58,15 @@ fn the_empty_workspace_stays_centered_after_undo_with_the_inspector_open() {
     let original = harness.get_by_label(empty).rect().center();
     harness.get_by_label("Toggle Net Inspector").click();
     harness.run();
-    assert!(harness.query_by_label("Close").is_none());
+    assert!(harness.query_by_label("Close Net Inspector").is_none());
 
     new_project(&mut harness, "blinky");
     harness.get_by_label("Toggle Net Inspector").click();
     harness.run();
-    harness.get_by_label("Close");
+    harness.get_by_label("Close Net Inspector");
     click(&mut harness, "Undo");
 
-    assert!(harness.query_by_label("Close").is_none());
+    assert!(harness.query_by_label("Close Net Inspector").is_none());
     assert_eq!(harness.get_by_label(empty).rect().center(), original);
 }
 
@@ -829,6 +832,10 @@ fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
     harness.set_size(egui::vec2(400.0, 600.0));
     harness.run();
     new_project(&mut harness, "compact");
+    // The floating Browser would cover the narrow canvas where the parts go.
+    click(&mut harness, "View");
+    click(&mut harness, "Toggle Browser");
+    click(&mut harness, "Capture");
 
     // In a narrow window the parts list scrolls, so search for each part and press Enter.
     for (name, x) in [("Resistor", -81.28), ("LED", 81.28)] {
@@ -852,7 +859,7 @@ fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
     harness.run();
     harness.get_by_label("R1.2, D1.1");
     let canvas = harness.get_by_label("Schematic canvas").rect();
-    let close = harness.get_by_label("Close");
+    let close = harness.get_by_label("Close Net Inspector");
     assert!(canvas.width() >= 0.6 * full_width - 1.0, "canvas: {canvas:?}");
     assert!(close.rect().left() >= canvas.right());
     close.click();
@@ -964,7 +971,7 @@ fn dragging_a_part_onto_the_sheet_places_it() {
     harness.key_press(Key::A);
     harness.run();
     let from = harness.get_by_label("Capacitor").rect().center();
-    let to = canvas_center(&harness) + egui::vec2(52.0, 3.0);
+    let to = canvas_center(&harness) + egui::vec2(306.0, 3.0);
     harness.event(egui::Event::PointerMoved(from));
     harness.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     harness.run();
@@ -987,13 +994,13 @@ fn dragging_a_part_onto_the_sheet_places_it() {
         })
         .reduce(|a, b| a.union(b))
         .expect("The dragged part must have a visible preview before release");
-    let snapped = canvas.center() + egui::vec2(50.8, 0.0);
+    let snapped = canvas.center() + egui::vec2(304.8, 0.0);
     assert!(preview.center().distance(snapped) < 0.1, "The preview must snap to the placement grid: {preview:?}");
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
     harness.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     harness.run();
     assert_eq!(first_symbol(&harness, "kind"), "capacitor");
-    assert_eq!(first_symbol(&harness, "x_nm"), 5 * pcbcraft_engine::schematic::GRID_NM);
+    assert_eq!(first_symbol(&harness, "x_nm"), 30 * pcbcraft_engine::schematic::GRID_NM);
     assert_eq!(first_symbol(&harness, "y_nm"), 0);
     assert!(harness.state().parts.open);
 }
@@ -1006,7 +1013,7 @@ fn an_intervening_edit_cancels_a_browser_drag() {
     harness.key_press(Key::A);
     harness.run();
     let from = harness.get_by_label("Capacitor").rect().center();
-    let to = canvas_center(&harness) + egui::vec2(50.8, 0.0);
+    let to = canvas_center(&harness) + egui::vec2(304.8, 0.0);
     harness.drag_at(from);
     harness.run();
     harness.hover_at(from + egui::vec2(8.0, 0.0));
@@ -1420,6 +1427,27 @@ fn stale_or_cancelled_free_wire_drafts_never_commit() {
         assert_eq!(harness.state().session().inspect(), before);
         assert_eq!(harness.state().session().project().unwrap().junctions().count(), 0);
     }
+}
+
+/// Each ribbon group's caption opens a menu of the same actions, as in PCBcraft Next: the
+/// Panels menu toggles the Browser and the Connect menu starts the Wire tool, without
+/// editing the project.
+#[test]
+fn ribbon_group_menus_run_their_actions() {
+    let mut harness = harness();
+    new_project(&mut harness, "menus");
+    harness.get_by_label("Collapse Browser");
+
+    click(&mut harness, "View");
+    choose(&mut harness, "Panels menu", "Browser");
+    assert!(harness.query_by_label("Collapse Browser").is_none());
+    choose(&mut harness, "Panels menu", "Browser");
+    harness.get_by_label("Collapse Browser");
+
+    click(&mut harness, "Capture");
+    choose(&mut harness, "Connect menu", "Wire");
+    assert!(matches!(harness.state().tool, Some(Tool::Wire { .. })));
+    assert_eq!(harness.state().session().revision(), 1);
 }
 
 /// Independently created projects have distinct UUIDs; compare the shared command results

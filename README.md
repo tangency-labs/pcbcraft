@@ -26,6 +26,15 @@ or **Esc** to close the browser or cancel placing. New resistors, capacitors, LE
 two-pin connectors use shorter leads from revision 2 of the starter symbols; saved
 revision 1 parts retain their original geometry.
 
+The **Parts library** floats beside the Browser without resizing or panning the
+canvas. Drag its title to move it; releasing near either edge snaps it there.
+The **…** menu also offers **Float**, **Dock left** and **Dock right**. A short
+dock uses a scrollable list, and returning to a taller card restores the chosen
+preview size. **Esc** cancels a panel drag before closing the library. **Fit** and
+Browser selections keep their targets clear of both floating cards.
+The header chevron collapses Parts to its title bar and expands it again, keeping
+the search, preview size and position. **A** also expands it and focuses search.
+
 Choose **Capture → Wire** or press **W**, then click a pin, an existing wire endpoint
 or empty grid space to start. Click to add corners, **Space** to flip the current
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
@@ -42,6 +51,16 @@ project migrates it on the next save. Authored wire routes use format 3. Footpri
 
 Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
+
+The **Browser** floats over the left of the canvas and shows the project as
+**Project → Sheets → Main → Symbols / Nets**, with the sheet's path and count
+beside it. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
+items, and click one to select it and center the view on it. A net row selects
+one of its wires. Click the Browser's title to fold it. Browsing never changes the
+project, and the canvas keeps its full size; **Fit** keeps the drawing clear of
+the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
+Inspector panels, and fits the view. Each ribbon group's caption, such as
+**Place ⌄**, opens a menu of the same actions. A project has one sheet so far.
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
 Desktop projects default to a folder containing separate project, schematic,
