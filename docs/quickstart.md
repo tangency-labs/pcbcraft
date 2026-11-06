@@ -103,7 +103,8 @@ Right-click a sheet tab to open beside it or close that pane. Closing a detached
 window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
-The project name stays separate from the top **Design** arrangement tab. Use the
+The project name stays separate from the top **Views** arrangement tab. Its tooltip
+explains the arrangement and its right-click actions. Use the
 **+** beside it to name a setup, starting with the current views and windows or a
 single view. Right-click any arrangement tab for **Rename…**, **Duplicate…** or
 **Delete…**. Renaming or deleting an inactive tab leaves the current setup in

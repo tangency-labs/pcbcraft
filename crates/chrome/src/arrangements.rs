@@ -1,4 +1,4 @@
-//! Named working setups in the title bar; documents keep their own pane tabs.
+//! Named arrangements of project views and windows in the title bar.
 
 use egui::{Ui, WidgetInfo, WidgetType};
 
@@ -14,6 +14,7 @@ pub enum Intent {
 
 /// Show only arrangement tabs and a plus. Opening a tab’s context menu does not select
 /// that arrangement; each action carries the clicked tab’s identity to the host.
+/// Tab tooltips explain the remembered view layout and available context actions.
 pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> {
     if tabs.is_empty() {
         return None;
@@ -46,7 +47,12 @@ pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> 
                                     }
                                 }
                             });
-                            if response.clicked() {
+                            if response
+                                .on_hover_text(
+                                    "An arrangement of this project's workspaces, split panes and windows. Right-click to rename, duplicate or delete.",
+                                )
+                                .clicked()
+                            {
                                 intent = Some(Intent::Select(*id));
                             }
                         });

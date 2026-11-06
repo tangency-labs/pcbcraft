@@ -155,9 +155,9 @@ pub(crate) struct ProjectArrangements {
 }
 
 impl ProjectArrangements {
-    /// New projects start with one named arrangement of their current views.
+    /// New projects start with a Views arrangement; restored records retain their saved names.
     pub(crate) fn new(snapshot: Snapshot) -> Self {
-        Self { version: 1, active: 1, arrangements: vec![Arrangement { id: 1, name: "Design".into(), snapshot }] }
+        Self { version: 1, active: 1, arrangements: vec![Arrangement { id: 1, name: "Views".into(), snapshot }] }
     }
 
     /// Validate the complete record before restoring any of its windows.

@@ -44,7 +44,7 @@ fn save(h: &mut Harness<'_, PcbApp>, path: &std::path::Path, save_as: bool) {
 #[test]
 fn arrangement_tabs_preserve_views_cameras_and_shared_edits() {
     let mut h = harness();
-    h.get_by_label("Arrangement Design");
+    h.get_by_label("Arrangement Views");
     click(&mut h, "Choose workspace");
     click(&mut h, "Open PCB layout beside current view");
     click(&mut h, "Choose workspace");
@@ -66,7 +66,7 @@ fn arrangement_tabs_preserve_views_cameras_and_shared_edits() {
     h.state_mut().views.active.camera.center_on(Point { x_nm: -30_000_000, y_nm: 0 });
     h.run();
     let routing = h.state().arrangement_snapshot().unwrap();
-    click(&mut h, "Arrangement Design");
+    click(&mut h, "Arrangement Views");
     assert_eq!(h.state().arrangement_snapshot().unwrap(), original);
     click(&mut h, "Arrangement Routing");
     assert_eq!(h.state().arrangement_snapshot().unwrap(), routing);
@@ -383,7 +383,7 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     h.run();
     click(&mut h, "Create");
     h.get_by_label("Use a name of 1–80 characters on one line.");
-    h.get_by_label("Arrangement name").type_text("Design");
+    h.get_by_label("Arrangement name").type_text("Views");
     h.run();
     click(&mut h, "Create");
     h.get_by_label("An arrangement already uses that name.");
@@ -393,7 +393,7 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     active_tab_menu(&mut h);
     click(&mut h, "Duplicate…");
     click(&mut h, "Create");
-    h.get_by_label("Arrangement Design copy");
+    h.get_by_label("Arrangement Views copy");
     let before = h.state().arrangement_snapshot().unwrap();
     active_tab_menu(&mut h);
     click(&mut h, "Delete…");
@@ -403,7 +403,7 @@ fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
     active_tab_menu(&mut h);
     click(&mut h, "Delete…");
     click(&mut h, "Delete");
-    h.get_by_label("Arrangement Design");
+    h.get_by_label("Arrangement Views");
     assert_eq!(h.state().arrangements.tabs().len(), 1);
 }
 
@@ -418,7 +418,7 @@ fn new_single_view_arrangement_keeps_the_previous_setup() {
     click(&mut h, "Single view in one window");
     click(&mut h, "Create");
     assert!(!h.state().views.is_split());
-    click(&mut h, "Arrangement Design");
+    click(&mut h, "Arrangement Views");
     assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
 }
 
@@ -458,7 +458,7 @@ fn inactive_tab_context_actions_preserve_the_working_arrangement() {
     let view = h.state().views.active.id();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
 
-    h.get_by_label("Arrangement Design").click_secondary();
+    h.get_by_label("Arrangement Views").click_secondary();
     h.run();
     assert_eq!(h.state().arrangements.active(), active);
     click(&mut h, "Rename…");

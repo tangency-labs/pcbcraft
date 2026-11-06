@@ -88,7 +88,9 @@ undo history.
 Named arrangements now separate the project's working setups from the documents
 shown inside them. The title bar contains the project name and dirty indicator,
 followed by arrangement tabs and a single **+** for creation. Every project starts
-with **Design**. Right-click a tab for **Rename…**, **Duplicate…** or **Delete…**.
+with **Views**; previously saved arrangement names stay intact. Hovering a tab
+explains that it represents the project's workspaces, split panes and windows.
+Right-click a tab for **Rename…**, **Duplicate…** or **Delete…**.
 Context actions address that tab by ID without activating it first: renaming or
 deleting an inactive arrangement leaves the working layout and windows in place.
 Duplicating an inactive tab activates a copy of that tab’s saved setup.
@@ -100,7 +102,7 @@ Closing that editor discards its unfinished form.
 | UI location | Meaning | Example |
 | --- | --- | --- |
 | Project name and dirty indicator | The shared project | Controller |
-| Top tabs | Named arrangements of its windows and panes | Design, Routing, Review |
+| Top tabs | Named arrangements of its windows and panes | Views, Routing, Review |
 | Split pane header | The document currently shown in that pane | Controller › Main, Controller › Board |
 | Browser sheet selection | Show that sheet in the focused pane | Main |
 | Workspace picker | Open a document here, beside it, or in a native window | PCB layout |

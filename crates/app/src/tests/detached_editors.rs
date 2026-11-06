@@ -1186,7 +1186,7 @@ fn arrangement_forms_in_detached_windows_preserve_native_addresses() {
     let hosts: Vec<_> = h.state().views.hosts.keys().copied().collect();
     let snapshot = h.state().arrangement_snapshot().unwrap();
     let revision = h.state().session.revision();
-    child_tab_menu(&mut h, &peer, "Arrangement Design");
+    child_tab_menu(&mut h, &peer, "Arrangement Views");
     let at = child_rect(&peer, "Rename…").center();
     window_click(&mut h, Some(&peer), at);
     h.run();
