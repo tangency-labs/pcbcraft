@@ -708,31 +708,16 @@ impl Session {
         self.history_root_revision
     }
 
-    /// Whether the command can run now, for greying out a menu item. Unknown ids can't.
+    /// Whether the command can run now, for greying out a menu item. Setup initialization
+    /// requires an empty, unconfigured board; setup edits require existing setup. Unknown ids can't.
     pub fn available(&self, id: &str) -> bool {
         match id {
             "project.new" => true,
-            "project.rename"
-            | PLACE_RESISTOR
-            | PLACE_SYMBOL
-            | CONNECT_PINS
-            | MOVE_SYMBOL
-            | ROTATE_SYMBOL
-            | DELETE_SYMBOL
-            | SET_SYMBOL_FIELDS
-            | PLACE_FOOTPRINT
-            | DRAW_WIRE
-            | DELETE_WIRE
-            | SLICE_WIRE
-            | BREAK_WIRE
-            | DELETE_WIRE_SEGMENT
-            | MOVE_WIRE_SEGMENT
-            | MOVE_WIRE_CORNER
-            | MOVE_JUNCTION
-            | MOVE_ITEMS
-            | DELETE_ITEMS
-            | INITIALIZE_BOARD_SETUP
-            | SET_BOARD_SETUP => self.project.is_some(),
+            "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
+            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT | MOVE_WIRE_CORNER
+            | MOVE_JUNCTION | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
+            INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none() && p.board.footprints().is_empty()),
+            SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -779,10 +764,13 @@ impl Session {
 
     /// Run the shared command without building an inspection snapshot. Returns the current
     /// revision, which remains unchanged on a no-op. Failed commands leave the project intact.
+    /// Setup handlers retain their revision checks and specific state diagnostics even when
+    /// availability disables the command on an open project.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        if !self.available(id) {
+        let setup_handler_checks_state = self.project.is_some() && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP);
+        if !setup_handler_checks_state && !self.available(id) {
             return Err(CommandError::Unavailable(match id {
                 "project.rename"
                 | PLACE_RESISTOR

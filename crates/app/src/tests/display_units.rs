@@ -110,6 +110,7 @@ fn board_setup_survives_unit_switching_without_an_electrical_edit() {
     h.run();
     let snapshot = h.state().session.snapshot().unwrap();
     let inspected = h.state().session.inspect();
+    assert_eq!(inspected["project"]["board"]["setup"]["stackup"]["strata"][1]["thickness_nm"], json!(2_540_000));
     let dirty = h.state().files.dirty(&h.state().session);
     let documents = encode_documents(snapshot.clone()).unwrap();
     for _ in 0..5 {

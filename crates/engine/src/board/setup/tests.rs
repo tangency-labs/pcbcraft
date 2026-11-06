@@ -46,6 +46,57 @@ fn reject(s: &mut Session, command: &str, params: Value) {
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }
 
+/// Availability follows initialization, undo, reopen and legacy footprints, while execution
+/// keeps state-specific diagnostics and stale-revision errors without changing the session.
+#[test]
+fn setup_availability_follows_board_state() {
+    let mut s = Session::default();
+    let candidate = setup(&session(2));
+    let unavailable = |s: &mut Session, command, mut params: Value, expected: &str| {
+        assert!(!s.available(command));
+        params["expected_revision"] = json!(s.revision());
+        let before = s.inspect();
+        assert_eq!(s.apply(command, &params).unwrap_err().to_string(), expected);
+        assert_eq!(s.inspect(), before);
+    };
+    unavailable(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}), "no project is open");
+    unavailable(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}), "no project is open");
+    s.apply("project.new", &json!({})).unwrap();
+    assert!(s.available(INITIALIZE_BOARD_SETUP));
+    unavailable(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}), "initialize board setup first");
+    let stale_revision = s.revision();
+    apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    assert!(s.available(SET_BOARD_SETUP));
+    unavailable(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}), "board setup already exists; edit it with pcb.set_board_setup");
+    let stale = s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":stale_revision})).unwrap_err();
+    assert!(stale.to_string().contains("project changed"));
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert!(s.available(INITIALIZE_BOARD_SETUP));
+    assert!(!s.available(SET_BOARD_SETUP));
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert!(!s.available(INITIALIZE_BOARD_SETUP));
+    assert!(s.available(SET_BOARD_SETUP));
+    let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    s.open_snapshot(persistence::decode_documents(&documents).unwrap());
+    assert!(!s.available(INITIALIZE_BOARD_SETUP));
+    assert!(s.available(SET_BOARD_SETUP));
+    populate(&mut s);
+    assert!(!s.available(INITIALIZE_BOARD_SETUP));
+    assert!(s.available(SET_BOARD_SETUP), "populated boards still permit metadata edits");
+
+    s.apply("project.new", &json!({})).unwrap();
+    populate(&mut s);
+    unavailable(
+        &mut s,
+        INITIALIZE_BOARD_SETUP,
+        json!({"copper_layers":2}),
+        "initial board setup requires an empty board; migrating existing footprint layer bindings is not supported yet",
+    );
+    unavailable(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}), "initialize board setup first");
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert!(s.available(INITIALIZE_BOARD_SETUP), "undoing the footprint restores initialization availability");
+}
+
 /// Presets introduce stable identities without claiming a material or thickness specification.
 #[test]
 fn presets_are_unknown_until_specified_and_undo_atomically() {
