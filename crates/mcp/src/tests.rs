@@ -77,8 +77,8 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
                 schema["properties"]["definition"],
                 json!({
                     "type": "string",
-                    "enum": ["resistor", "led", "capacitor", "connector"],
-                    "description": "ID of the built-in symbol definition",
+                    "enum": ["capacitor", "connector", "led", "resistor"],
+                    "description": "ID of a symbol in the starter library",
                 })
             );
             assert_eq!(schema["required"], json!(["definition", "x_nm", "y_nm", "expected_revision"]));
