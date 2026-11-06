@@ -12,6 +12,9 @@ use crate::{
     },
 };
 
+mod reshape;
+pub use reshape::Reshape;
+
 /// Maximum intermediate points accepted in a single authored wire.
 pub const MAX_BENDS: usize = 64;
 

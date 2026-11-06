@@ -49,6 +49,7 @@ enum ParamKind {
     WireAnchor,
     WireBends,
     WireId,
+    JunctionId,
     /// A bounded point in nanometers.
     Point,
     Selection,
@@ -72,6 +73,7 @@ impl ParamKind {
             Self::Displacement => json!({"type": "integer", "minimum": -2 * MAX_CENTER_NM, "maximum": 2 * MAX_CENTER_NM}),
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
             Self::WireId => json!({"type": "string", "pattern": "^wire-[1-9][0-9]*$"}),
+            Self::JunctionId => json!({"type": "string", "pattern": "^junction-[1-9][0-9]*$"}),
             Self::WireAnchor => json!({"oneOf": [ParamKind::Terminal.schema(), {
                 "type": "object", "properties": {"junction": {"type": "string", "pattern": "^junction-[1-9][0-9]*$"}}, "required": ["junction"], "additionalProperties": false
             }, point_schema()]}),
@@ -104,6 +106,7 @@ impl ParamKind {
             Self::Displacement if value.as_i64().is_some_and(|n| (-2 * MAX_CENTER_NM..=2 * MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Revision if value.as_u64().is_some() => Ok(()),
             Self::WireId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "wire-")).is_some() => Ok(()),
+            Self::JunctionId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "junction-")).is_some() => Ok(()),
             Self::WireAnchor if wire::Anchor::parse(value).is_some() => Ok(()),
             Self::WireBends if wire::parse_bends(value).is_some() => Ok(()),
             Self::Point if serde_json::from_value::<schematic::Point>(value.clone()).ok().is_some_and(|point| wire::valid_point(&point)) => Ok(()),
@@ -119,6 +122,7 @@ impl ParamKind {
             Self::Displacement => Err("must be a whole displacement within twice the schematic coordinate bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
             Self::WireId => Err("must identify a wire"),
+            Self::JunctionId => Err("must identify a junction or free endpoint"),
             Self::WireAnchor => Err("must identify a terminal, junction or bounded free point"),
             Self::WireBends => Err("must contain at most 64 bounded points"),
             Self::Point => Err("must be a point with whole-nanometer x_nm and y_nm within the schematic bounds"),
@@ -189,6 +193,9 @@ pub const DRAW_WIRE: &str = "schematic.draw_wire";
 pub const DELETE_WIRE: &str = "schematic.delete_wire";
 /// Split a wire into two at a point on it, still connected through a new junction.
 pub const SLICE_WIRE: &str = "schematic.slice_wire";
+pub const MOVE_WIRE_SEGMENT: &str = "schematic.move_wire_segment";
+pub const MOVE_WIRE_CORNER: &str = "schematic.move_wire_corner";
+pub const MOVE_JUNCTION: &str = "schematic.move_junction";
 /// Separate one straight leg of a wire from the legs beside it, leaving free ends at the gaps.
 pub const BREAK_WIRE: &str = "schematic.break_wire";
 /// Remove one straight leg of a wire, leaving the rest of its route with free ends.
@@ -284,6 +291,38 @@ const CATALOG: &[Command] = &[
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: MOVE_WIRE_SEGMENT,
+        title: "Move Wire Segment",
+        summary: "Slide the straight leg of a wire that contains a point across its direction. The wire's endpoints stay put, gaining orthogonal legs as needed; connections are unchanged. Undoable.",
+        params: &[
+            WIRE,
+            Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
+            Param { required: true, name: "to", summary: "Where that point goes; it may differ from at only across the leg", kind: ParamKind::Point },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: MOVE_WIRE_CORNER,
+        title: "Move Wire Corner",
+        summary: "Move an interior corner of a wire; the two legs meeting there slide with it and the wire's endpoints stay put. Connections are unchanged. Undoable.",
+        params: &[
+            WIRE,
+            Param { required: true, name: "at", summary: "An interior corner of the wire's drawn route", kind: ParamKind::Point },
+            Param { required: true, name: "to", summary: "The corner's new position", kind: ParamKind::Point },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: MOVE_JUNCTION,
+        title: "Move Junction",
+        summary: "Move a free endpoint or junction; the end leg of each attached wire slides to keep its direction. Connections are unchanged. Undoable.",
+        params: &[
+            Param { required: true, name: "junction", summary: "Junction or free endpoint ID from inspection", kind: ParamKind::JunctionId },
+            Param { required: true, name: "to", summary: "The new position", kind: ParamKind::Point },
             EXPECTED_REVISION,
         ],
     },
@@ -590,9 +629,8 @@ impl Session {
         match id {
             "project.new" => true,
             "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_ITEMS | DELETE_ITEMS => {
-                self.project.is_some()
-            }
+            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT | MOVE_WIRE_CORNER
+            | MOVE_JUNCTION | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -640,9 +678,8 @@ impl Session {
         if !self.available(id) {
             return Err(CommandError::Unavailable(match id {
                 "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-                | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_ITEMS | DELETE_ITEMS => {
-                    "no project is open".to_owned()
-                }
+                | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT
+                | MOVE_WIRE_CORNER | MOVE_JUNCTION | MOVE_ITEMS | DELETE_ITEMS => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -687,6 +724,9 @@ impl Session {
             DRAW_WIRE => self.draw_wire(params)?,
             DELETE_WIRE => self.delete_wire(params)?,
             SLICE_WIRE => self.slice_wire(params)?,
+            MOVE_WIRE_SEGMENT => self.move_wire_segment(params)?,
+            MOVE_WIRE_CORNER => self.move_wire_corner(params)?,
+            MOVE_JUNCTION => self.move_junction(params)?,
             BREAK_WIRE => self.break_wire(params)?,
             DELETE_WIRE_SEGMENT => self.delete_wire_segment(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
