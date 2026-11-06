@@ -27,6 +27,8 @@ struct Panels {
     parts: crate::parts_browser::PartsBrowser,
     nets: crate::net_inspector::NetInspector,
     ribbon: usize,
+    pointer: Option<pcbcraft_engine::schematic::Point>,
+    pointer_next: Option<pcbcraft_engine::schematic::Point>,
 }
 
 /// Stable native host identity, independent of which schematic view it currently contains.
@@ -198,6 +200,8 @@ impl PcbApp {
         std::mem::swap(&mut self.parts, &mut self.windows.secondary.parts);
         std::mem::swap(&mut self.net_inspector, &mut self.windows.secondary.nets);
         std::mem::swap(&mut self.ribbon_tab, &mut self.windows.secondary.ribbon);
+        std::mem::swap(&mut self.pointer, &mut self.windows.secondary.pointer);
+        std::mem::swap(&mut self.pointer_next, &mut self.windows.secondary.pointer_next);
     }
 
     /// Route child-window input to its bound view, then draw the same editing controls. Global
@@ -207,6 +211,7 @@ impl PcbApp {
     fn secondary_editor_frame(&mut self, ui: &mut egui::Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
         let revision = self.session.revision();
+        self.pointer = self.pointer_next.take();
         let had_dialog = !matches!(self.dialog, Dialog::None);
         let was_home = self.home;
         self.editor_window_focus(&ctx);
@@ -226,6 +231,11 @@ impl PcbApp {
         }
         self.status(ui);
         self.editor_workspace(ui, ui.available_rect_before_wrap());
+        if self.pointer != self.pointer_next {
+            // The status bar precedes the canvas; paint once more to publish this host's readout.
+            ctx.request_repaint();
+            ctx.request_repaint_of(ViewportId::ROOT);
+        }
         if integrated_titlebar {
             pcbcraft_chrome::shell::resize_window_edges(ui);
         }

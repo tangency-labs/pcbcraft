@@ -448,3 +448,42 @@ fn detached_selection_follow_reaches_either_host_once() {
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     }
 }
+
+/// Read the child's current painted coordinates, excluding stale accessibility-cache nodes.
+fn child_readout(peer: &Rc<RefCell<Peer>>) -> Option<String> {
+    peer.borrow().output.shapes.iter().find_map(|shape| match &shape.shape {
+        egui::Shape::Text(text) if text.galley.job.text.starts_with("X ") => Some(text.galley.job.text.clone()),
+        _ => None,
+    })
+}
+
+/// The merged mil/mm controls remain shared while each host keeps its own pointer readout.
+/// Moving the pointer between windows cannot show coordinates from the other host's camera.
+#[test]
+fn detached_units_and_pointer_readouts_preserve_the_display_units_workflow() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let child = h.state().views.detached.unwrap();
+    let before = h.state().session.inspect();
+    let root_rect = h.get_by_label("Schematic canvas").rect();
+    let point = h.state().views.active.camera.screen(Point { x_nm: 2_540_000, y_nm: -3_810_000 }, root_rect);
+    h.hover_at(point);
+    h.run();
+    assert_eq!(h.state().pointer, Some(Point { x_nm: 2_540_000, y_nm: -3_810_000 }));
+    assert_eq!(child_readout(&peer), None);
+    h.event(Event::PointerGone);
+    focus(&mut h, &peer, true);
+    let rect = child_rect(&peer, "Schematic canvas");
+    let at = h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 6_350_000, y_nm: 2_540_000 }, rect);
+    peer.borrow_mut().events.push(Event::PointerMoved(at));
+    h.run();
+    assert_eq!(h.state().pointer, None);
+    assert_eq!(child_readout(&peer).as_deref(), Some("X 250.00  Y 100.00"));
+    child_key(&mut h, &peer, Key::U, Modifiers::COMMAND);
+    h.get_by_label("Units: mm");
+    assert_eq!(child_readout(&peer).as_deref(), Some("X 6.3500  Y 2.5400"));
+    peer.borrow_mut().events.push(Event::PointerGone);
+    h.run();
+    assert_eq!(child_readout(&peer), None);
+    assert_eq!(h.state().session.inspect(), before);
+}
