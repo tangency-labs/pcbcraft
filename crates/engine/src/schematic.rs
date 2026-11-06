@@ -34,6 +34,9 @@ pub struct Point {
 pub enum SymbolKind {
     Resistor,
     Led,
+    Capacitor,
+    /// A two-pin connector: a body with a contact for each pin.
+    Connector,
 }
 
 /// An in-memory schematic definition with a stable command ID and two numbered pins.
@@ -63,6 +66,22 @@ pub static BUILTIN_SYMBOLS: &[&SymbolDefinition] = &[
         reference_prefix: 'D',
         value: "LED",
         pin_names: [Some("Anode"), Some("Cathode")],
+    },
+    &SymbolDefinition {
+        id: "capacitor",
+        name: "Capacitor",
+        kind: SymbolKind::Capacitor,
+        reference_prefix: 'C',
+        value: "100nF",
+        pin_names: [None, None],
+    },
+    &SymbolDefinition {
+        id: "connector",
+        name: "2-pin connector",
+        kind: SymbolKind::Connector,
+        reference_prefix: 'J',
+        value: "Input",
+        pin_names: [None, None],
     },
 ];
 
