@@ -12,10 +12,14 @@ use super::*;
 
 const MIL: i64 = NM_PER_MIL;
 
-/// Pick a row in the grid menu of the `pane`th sheet tab (0 when not split).
-fn choose_grid(h: &mut Harness<'_, PcbApp>, pane: usize, row: &str) {
-    let button = h.query_all(egui_kittest::kittest::by().predicate(|node| node.label().is_some_and(|l| l.starts_with("Grid ")))).nth(pane).unwrap();
-    button.click();
+/// The status bar's grid button, whatever spacing it shows. There is exactly one.
+fn grid_button<'a>(h: &'a Harness<'_, PcbApp>) -> egui_kittest::Node<'a> {
+    h.get_by(|node| node.label().is_some_and(|label| label.starts_with("Grid ")))
+}
+
+/// Pick a row in the status bar's grid menu, which acts on the focused pane.
+fn choose_grid(h: &mut Harness<'_, PcbApp>, row: &str) {
+    grid_button(h).click();
     h.run();
     click(h, row);
 }
@@ -49,12 +53,12 @@ fn grid_menu_changes_snapping_without_touching_the_project() {
     new_project(&mut h, "grid");
     let before = project_state(&h);
     assert_eq!(h.state().views.active.camera.snap_nm(), 50 * MIL);
-    choose_grid(&mut h, 0, "25 mil");
+    choose_grid(&mut h, "25 mil");
     h.get_by_label("Grid 25 mil");
     assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
     assert_eq!(h.state().preferences.schematic_grid_nm, 25 * MIL);
-    choose_grid(&mut h, 0, "10 mil");
-    choose_grid(&mut h, 0, "25 mil");
+    choose_grid(&mut h, "10 mil");
+    choose_grid(&mut h, "25 mil");
     assert_eq!(project_state(&h), before);
 
     // At the default zoom 50 mil is 10.16 points, so 25 mil is 5.08.
@@ -152,7 +156,7 @@ fn off_grid_items_stay_put_and_keep_their_offset_when_moved() {
     let connected = nets(&h);
     let before = project_state(&h);
     for row in ["100 mil", "10 mil", "25 mil"] {
-        choose_grid(&mut h, 0, row);
+        choose_grid(&mut h, row);
     }
     assert_eq!(project_state(&h), before);
 
@@ -204,7 +208,7 @@ fn the_grid_button_reports_thinned_dots() {
     let mut h = harness();
     new_project(&mut h, "thin");
     // 10 mil is about 2 points at the default zoom: every fifth dot is drawn.
-    choose_grid(&mut h, 0, "10 mil");
+    choose_grid(&mut h, "10 mil");
     h.get_by_label("Grid 10 mil · dots 50 mil");
     h.hover_at(canvas_center(&h));
     h.run();
@@ -233,7 +237,7 @@ fn each_pane_keeps_its_own_grid() {
     h.set_size(egui::vec2(1400.0, 900.0));
     new_project(&mut h, "panes");
     h.state_mut().browser.open = false;
-    choose_grid(&mut h, 0, "25 mil");
+    choose_grid(&mut h, "25 mil");
     click(&mut h, "View");
     click(&mut h, "Split editor views");
     let spacing = |h: &Harness<'_, PcbApp>, id: u64| {
@@ -243,13 +247,20 @@ fn each_pane_keeps_its_own_grid() {
     };
     assert_eq!((spacing(&h, 0), spacing(&h, 1)), (25, 25));
 
-    choose_grid(&mut h, 1, "100 mil");
+    // The status bar edits the focused pane: focus the second one through its sheet tab.
+    let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
+    h.get_all_by_label(&path).nth(1).unwrap().click();
+    h.run();
+    assert_eq!(h.state().views.active.id(), ViewId(1));
+    h.get_by_label("Grid 25 mil");
+    choose_grid(&mut h, "100 mil");
     assert_eq!((spacing(&h, 0), spacing(&h, 1)), (25, 100));
     assert_eq!(h.state().preferences.schematic_grid_nm, 100 * MIL);
     let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
     h.get_all_by_label(&path).next().unwrap().click();
     h.run();
     assert_eq!(h.state().views.active.id(), ViewId(0));
+    h.get_by_label("Grid 25 mil");
     h.key_press(Key::N);
     h.run();
     assert_eq!((spacing(&h, 0), spacing(&h, 1)), (10, 100));
@@ -275,4 +286,39 @@ fn startup_seeds_both_panes_from_the_preference() {
     assert_eq!((views.active.camera.snap_nm(), views.other.camera.snap_nm()), (GRID_NM, GRID_NM));
     views.set_grid_everywhere(-5);
     assert_eq!(views.active.camera.snap_nm(), GRID_NM);
+}
+
+/// The grid control lives in the bottom status bar, not in the sheet headers. Changing the
+/// spacing or zooming leaves the ribbon and sheet tabs where they were, and a long status
+/// message truncates before the control instead of running under it.
+#[test]
+fn the_grid_control_sits_in_the_status_bar() {
+    let mut h = harness();
+    new_project(&mut h, "layout");
+    let canvas = h.get_by_label("Schematic canvas").rect();
+    let button = grid_button(&h).rect();
+    assert!(button.min.y >= canvas.max.y, "below the canvas: {button:?} vs {canvas:?}");
+    assert!(button.max.x > canvas.center().x, "at the right end");
+    let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
+    let tab = h.get_by_label(&path).rect();
+    let ribbon = h.get_by_label("Capture").rect();
+    choose_grid(&mut h, "10 mil");
+    h.get_by_label("Grid 10 mil · dots 50 mil");
+    assert_eq!((h.get_by_label(&path).rect(), h.get_by_label("Capture").rect()), (tab, ribbon));
+    assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
+
+    // The menu opens upward and stays on screen.
+    grid_button(&h).click();
+    h.run();
+    let row = h.get_by_label("100 mil").rect();
+    assert!(row.max.y <= grid_button(&h).rect().min.y && row.min.y >= 0.0, "{row:?}");
+    h.key_press(Key::Escape);
+    h.run();
+
+    h.state_mut().message = Some("A very long error message that would otherwise run all the way across the bar ".repeat(8));
+    h.run();
+    let button = grid_button(&h).rect();
+    // Labels report their text as a value; the first match is the label, then its text run.
+    let message = h.query_all_by(|node| node.value().is_some_and(|text| text.starts_with("A very long error"))).next().unwrap().rect();
+    assert!(message.max.x < button.min.x, "{message:?} runs into {button:?}");
 }

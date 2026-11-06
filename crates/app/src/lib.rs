@@ -27,7 +27,7 @@ use schematic_canvas::{Click, PartDrag, SymbolAction, Tool};
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use pcbcraft_chrome::{
-    MenuItem, Tokens, fonts,
+    MenuItem, Tokens, fonts, grid,
     menu::{self, MenuIcon},
     shell::{self, dim},
     theme, workspace,
@@ -745,10 +745,16 @@ impl PcbApp {
         self.views.active.camera.center_on(pick.at);
     }
 
-    /// Show the command error or placement hint alongside the project name.
-    fn status(&self, ui: &mut Ui) {
+    /// Show the command error or placement hint alongside the project name, and at the right
+    /// the focused view's grid spacing, which can be changed there. Home has no canvas, so it
+    /// shows no grid.
+    fn status(&mut self, ui: &mut Ui) {
         let name = self.session.project().map_or("No project open", |p| p.name.as_str()).to_owned();
         let message = self.message.clone();
+        let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
+        let mut spacing = self.views.active.camera.snap_nm();
+        let every = grid::shown_every(self.views.active.camera.snap_step()).unwrap_or(1);
+        let mut grid_changed = false;
         shell::status_bar(
             ui,
             |ui| {
@@ -777,13 +783,20 @@ impl PcbApp {
                     ui.label(dim(notice.as_str()));
                 }
             },
-            |_ui| {
+            |ui| {
+                if grid_view.is_some() {
+                    grid_changed =
+                        grid::spacing_menu(ui, &mut spacing, &grid::SCHEMATIC_SPACING_PRESETS_NM, grid::SCHEMATIC_SPACING_DEFAULT_NM, every);
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.live_control.is_some() {
-                    _ui.label(dim("Local MCP enabled"));
+                    ui.label(dim("Local MCP enabled"));
                 }
             },
         );
+        if let Some(id) = grid_view.filter(|_| grid_changed) {
+            self.set_view_grid(id, spacing);
+        }
     }
 
     /// Draw the schematic and send completed edits through the shared command catalog using each

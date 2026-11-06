@@ -160,7 +160,7 @@ pub fn opacity_control(ui: &mut Ui, opacity_percent: &mut u8) -> bool {
     *opacity_percent != before
 }
 
-/// The grid button for an editor's tab strip and its menu: the presets, a field for any other
+/// The grid button for the status bar and its menu, which opens upward: the presets, a field for any other
 /// spacing, and the default. `spacing_nm` changes only when a row is picked or valid text is
 /// applied; invalid text shows why under the field and keeps the current spacing. `every` is
 /// [`shown_every`] for the view, so the label says when the dots are sparser than the snap points.
@@ -176,12 +176,14 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
         format!("Grid {current}")
     };
     let button = egui::Button::new(RichText::new(text).size(t.font_label)).frame(false);
-    let response = ui.add(button).on_hover_text("Grid spacing (N, Shift+N)");
+    let response = ui.add(button).on_hover_text("Grid spacing of the focused view (N, Shift+N)");
     let field_id = response.id.with("custom_spacing");
     egui::Popup::menu(&response)
         .frame(menu::frame())
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .align(egui::RectAlign::BOTTOM_END)
+        // The button sits on the bottom edge, so the menu rises from it, right-aligned.
+        .align(egui::RectAlign::TOP_END)
+        .align_alternatives(&[egui::RectAlign::TOP_START, egui::RectAlign::TOP])
         .show(|ui| {
             // A fixed width, as Help has: rows fill what they are given, and messages wrap in it.
             ui.set_width(t.control_height * 8.0);
