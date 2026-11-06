@@ -1,0 +1,152 @@
+//! The display unit is the person's view setting: it changes how lengths read and how bare typed
+//! numbers are taken, never the geometry stored in the project.
+
+use egui::accesskit::Role;
+use pcbcraft_chrome::units::Unit;
+use pcbcraft_engine::{CONNECT_PINS, PLACE_SYMBOL, persistence::encode};
+
+use super::*;
+
+/// Revision, unsaved state, undo availability and saved bytes: everything a view setting must leave alone.
+fn project_state(h: &Harness<'_, PcbApp>) -> (u64, bool, bool, Value, Vec<u8>) {
+    let app = h.state();
+    let bytes = encode(app.session.snapshot().unwrap()).unwrap();
+    (app.session.revision(), app.files.dirty(&app.session), app.session.available("edit.undo"), app.session.inspect(), bytes)
+}
+
+/// The status bar's coordinate readout, if one is shown.
+fn readout(h: &Harness<'_, PcbApp>) -> Option<String> {
+    h.query_all_by_role(Role::Label).filter_map(|node| node.accesskit_node().value()).find(|text| text.starts_with("X "))
+}
+
+/// Two connected resistors, so switching units has wiring and connectivity to keep.
+fn wired_project() -> Harness<'static, PcbApp> {
+    let mut h = harness();
+    new_project(&mut h);
+    for x_nm in [0, 25_400_000] {
+        let revision = h.state().session().revision();
+        h.state_mut().run(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": x_nm, "y_nm": -1_270_000, "expected_revision": revision}));
+    }
+    let revision = h.state().session().revision();
+    let link = json!({"from": {"symbol": "symbol-2", "terminal": "2"}, "to": {"symbol": "symbol-3", "terminal": "1"}, "expected_revision": revision});
+    h.state_mut().run(CONNECT_PINS, &link);
+    h.run();
+    h
+}
+
+/// The readout shows the grid point under the pointer in the display unit, with Y increasing
+/// down as the schematic stores it, and disappears off the canvas. The status bar's unit button
+/// and Ctrl+U both switch, and the readout follows without the pointer moving.
+#[test]
+fn the_readout_follows_the_pointer_in_the_display_unit() {
+    let h = harness();
+    assert!(h.query_by_label("Units: mil").is_none(), "nothing to measure without a schematic");
+    let mut h = wired_project();
+    assert_eq!(readout(&h), None, "no readout before the pointer reaches the canvas");
+    let step = h.state().views.active.camera.snap_step();
+    h.hover_at(canvas_center(&h) + egui::vec2(2.0 * step, -3.0 * step));
+    h.run();
+    assert_eq!(readout(&h).as_deref(), Some("X 100.00  Y -150.00"));
+    h.get_by_label("Units: mil");
+
+    h.key_press_modifiers(Modifiers::COMMAND, Key::U);
+    h.run();
+    assert_eq!(h.state().preferences.units, Unit::Mm);
+    assert_eq!(readout(&h).as_deref(), Some("X 2.5400  Y -3.8100"), "100 mil is 2.54 mm");
+    h.get_by_label("Grid 1.27 mm");
+
+    // The button switches back; the pointer is on it, off the canvas, until it returns.
+    click(&mut h, "Units: mm");
+    assert_eq!(h.state().preferences.units, Unit::Mil);
+    h.get_by_label("Grid 50 mil");
+    h.hover_at(canvas_center(&h) + egui::vec2(2.0 * step, -3.0 * step));
+    h.run();
+    assert_eq!(readout(&h).as_deref(), Some("X 100.00  Y -150.00"));
+
+    // Off the canvas, over the app bar, there is no grid point to report.
+    h.hover_at(h.get_by_label("File").rect().center());
+    h.run();
+    assert_eq!(readout(&h), None);
+}
+
+/// Switching units back and forth leaves the project's geometry, connectivity, revision,
+/// history, unsaved state and saved bytes exactly as they were, and keeps the grid spacing.
+#[test]
+fn switching_units_never_touches_the_project() {
+    let mut h = wired_project();
+    let before = project_state(&h);
+    let spacing = h.state().views.active.camera.snap_nm();
+    for _ in 0..5 {
+        let button = format!("Units: {}", h.state().preferences.units.symbol());
+        click(&mut h, &button);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::U);
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::U);
+        h.run();
+    }
+    assert_eq!(h.state().preferences.units, Unit::Mm, "an odd number of switches lands on mm");
+    assert_eq!(project_state(&h), before);
+    assert_eq!(h.state().views.active.camera.snap_nm(), spacing);
+}
+
+/// A bare number typed for the grid is read in the display unit; a typed unit overrides it, so
+/// metric values can be entered while showing mils and the other way round.
+#[test]
+fn typed_spacing_reads_bare_numbers_in_the_display_unit() {
+    let mut h = wired_project();
+    let custom = |h: &mut Harness<'_, PcbApp>, open: &str, text: &str| {
+        click(h, open);
+        let field = h.get_by_role_and_label(Role::TextInput, "Custom");
+        field.click();
+        field.type_text(text);
+        h.run();
+        click(h, "Apply");
+    };
+    custom(&mut h, "Grid 50 mil", "25");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 25 * grid::NM_PER_MIL);
+    custom(&mut h, "Grid 25 mil", "0.635 mm");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 25 * grid::NM_PER_MIL, "0.635 mm is 25 mil");
+
+    click(&mut h, "Units: mil");
+    custom(&mut h, "Grid 0.635 mm", "0.5");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 500_000);
+    custom(&mut h, "Grid 0.5 mm · dots 2.5 mm", "100 mil");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 2_540_000);
+    h.get_by_label("Grid 2.54 mm");
+}
+
+/// The Appearance page chooses the unit too; it shows at once and Cancel puts it back.
+#[test]
+fn preferences_choose_the_unit() {
+    let mut h = wired_project();
+    click(&mut h, "Preferences");
+    h.get_by_label("Units");
+    click(&mut h, "mm");
+    assert_eq!(h.state().preferences.units, Unit::Mm, "changes show at once");
+    h.get_by_label("Grid 1.27 mm");
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().preferences.units, Unit::Mil, "Cancel puts the unit back");
+}
+
+/// At a narrow window the readout, grid button and unit button stay inside the status bar without
+/// overlapping, even far from the origin in millimetres.
+#[test]
+fn the_status_bar_fits_the_readout_at_narrow_widths() {
+    let mut h = wired_project();
+    h.set_size(egui::vec2(420.0, 600.0));
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::U);
+    h.run();
+    let step = h.state().views.active.camera.snap_step();
+    h.hover_at(canvas_center(&h) + egui::vec2(-10.0 * step, 10.0 * step));
+    h.run();
+    let readout_node =
+        h.query_all_by_role(Role::Label).find(|node| node.accesskit_node().value().is_some_and(|text| text.starts_with("X "))).unwrap();
+    let shown = readout_node.rect();
+    let grid = h.get_by(|node| node.label().is_some_and(|label| label.starts_with("Grid "))).rect();
+    let unit = h.get_by_label("Units: mm").rect();
+    for rect in [shown, grid, unit] {
+        assert!(rect.left() >= 0.0 && rect.right() <= 420.0, "{rect:?}");
+    }
+    assert!(shown.right() <= grid.left() && grid.right() <= unit.left(), "{shown:?} {grid:?} {unit:?}");
+}

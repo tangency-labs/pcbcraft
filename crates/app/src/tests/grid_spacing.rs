@@ -92,10 +92,15 @@ fn custom_spacing_reads_units_and_explains_refusals() {
     type_custom(&mut h, "0.5 mm");
     assert_eq!(h.state().views.active.camera.snap_nm(), 500_000);
     assert!(h.query_by_role_and_label(Role::TextInput, "Custom").is_none(), "an applied spacing closes the menu");
-    // 0.5 mm is about 4 points at the default zoom, so only every fifth dot is drawn.
+    // 0.5 mm is about 4 points at the default zoom, so only every fifth dot is drawn. The grid
+    // shows in the display unit, mils, until the units are switched.
+    h.get_by_label("Grid 19.685 mil · dots 98.4252 mil");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::U);
+    h.run();
     click(&mut h, "Grid 0.5 mm · dots 2.5 mm");
     h.get_by_label("0.5 mm (custom)");
-    h.get_by_label("Pins are on 50 mil; wire to them by clicking the pin.");
+    h.get_by_label("Pins are on 1.27 mm; wire to them by clicking the pin.");
+    assert_eq!(h.state().views.active.camera.snap_nm(), 500_000, "switching units keeps the spacing");
     assert_eq!(project_state(&h), before);
 }
 
@@ -226,7 +231,7 @@ fn the_grid_button_reports_thinned_dots() {
     h.get_by_label("Grid 10 mil");
     let every = zoom(&mut h, 0.25);
     assert!(every >= 25, "{every}");
-    h.get_by_label(&format!("Grid 10 mil · dots {}", grid::spacing_label(10 * MIL * i64::from(every))));
+    h.get_by_label(&format!("Grid 10 mil · dots {}", grid::spacing_label(10 * MIL * i64::from(every), pcbcraft_chrome::units::Unit::Mil)));
 }
 
 /// Each pane keeps its own spacing through focus changes and reopening; opening a split seeds

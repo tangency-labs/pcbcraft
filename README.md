@@ -11,16 +11,22 @@ The app starts on **Home**, where you can create or open a project. It does not
 yet reopen the last project automatically. The app bar shows the project name and an
 unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
-pages for Appearance (theme, interface scale, grid opacity), Navigation (whether the wheel
+pages for Appearance (theme, interface scale, grid opacity, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant.
 **Grid opacity** fades the canvas grid
 from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
 same points. The opacity applies to both split panes and is kept with your
 preferences, not in the project.
-The **Grid** button at the right end of the bottom status bar sets the focused pane's snap spacing:
+The right end of the bottom status bar shows the grid point under the pointer (**X**, **Y**,
+with Y increasing down), the **Grid** button and the display unit. Click the unit, or press
+**Ctrl+U** (**⌘U** on macOS), to switch between **mil** and **mm**; the Appearance page
+chooses it too. Switching only changes how lengths read: geometry, grid spacing and the
+project stay exactly as they were, with no undo step. 100 mil is exactly 2.54 mm.
+The **Grid** button sets the focused pane's snap spacing:
 100, 50 (the default, where symbol pins sit), 25, 10 or 5 mil, or any other spacing
-typed as mils or millimetres (`20`, `20 mil`, `0.5 mm`, from 0.01 mm to 1000 mil).
+typed with or without a unit (`20`, `20 mil`, `0.5 mm`, from 0.01 mm to 1000 mil). A bare
+number is read in the display unit, and a typed unit overrides it.
 **N** steps the focused pane finer and **Shift+N** coarser. A new spacing never moves
 or rescales anything already drawn, and pins stay reachable at any spacing because
 wires attach to them by clicking. When zooming out thins the dots, the button says

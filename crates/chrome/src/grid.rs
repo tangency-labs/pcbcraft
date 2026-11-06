@@ -9,12 +9,12 @@ use std::{fmt, ops::RangeInclusive};
 
 use egui::{Color32, Painter, Pos2, Rect, RichText, Ui, pos2};
 
-use crate::{MenuItem, Tokens, menu, theme};
+use crate::{
+    MenuItem, Tokens, menu, theme,
+    units::{self, LengthError, Unit},
+};
 
-/// Nanometres in one mil (a thousandth of an inch), exactly.
-pub const NM_PER_MIL: i64 = 25_400;
-/// Nanometres in one millimetre.
-const NM_PER_MM: i64 = 1_000_000;
+pub use crate::units::NM_PER_MIL;
 /// The schematic grid when nothing has been chosen: 50 mil (1.27 mm), the pitch symbol pins use.
 pub const SCHEMATIC_SPACING_DEFAULT_NM: i64 = 50 * NM_PER_MIL;
 /// The schematic spacings offered in the grid menu, coarsest first.
@@ -31,7 +31,19 @@ pub enum SpacingError {
     NotANumber,
     /// The text after the number, which is not `mil`, `mm` or `in`.
     Unit(String),
+    /// Zero, negative, or outside [`SPACING_RANGE_NM`].
     OutOfRange,
+}
+
+impl From<LengthError> for SpacingError {
+    fn from(error: LengthError) -> Self {
+        match error {
+            LengthError::Empty => Self::Empty,
+            LengthError::NotANumber => Self::NotANumber,
+            LengthError::Unit(unit) => Self::Unit(unit),
+            LengthError::OutOfRange => Self::OutOfRange,
+        }
+    }
 }
 
 impl fmt::Display for SpacingError {
@@ -41,48 +53,27 @@ impl fmt::Display for SpacingError {
             Self::NotANumber => write!(f, "Enter a number, such as 20 mil or 0.5 mm"),
             Self::Unit(unit) => write!(f, "Unknown unit \"{unit}\". Use mil, mm or in"),
             Self::OutOfRange => {
-                write!(f, "Use {} to {}", spacing_label(*SPACING_RANGE_NM.start()), spacing_label(*SPACING_RANGE_NM.end()))
+                write!(f, "Use {} to {}", units::label(*SPACING_RANGE_NM.start(), Unit::Mm), units::label(*SPACING_RANGE_NM.end(), Unit::Mil))
             }
         }
     }
 }
 
-/// Read typed grid spacing in whole nanometres. A bare number is in mils; `mil`, `mils`, `th`,
-/// `mm`, `in` and `"` may follow it, with or without a space and in any case. Values round to
-/// the nearest nanometre and must be inside [`SPACING_RANGE_NM`]. Exponents, signs and other
-/// units are refused, so nothing is guessed.
-pub fn parse_spacing(text: &str) -> Result<i64, SpacingError> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Err(SpacingError::Empty);
-    }
-    let split = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
-    let (number, unit) = text.split_at(split);
-    let nm_per_unit = match unit.trim().to_ascii_lowercase().as_str() {
-        "" | "mil" | "mils" | "th" => NM_PER_MIL,
-        "mm" => NM_PER_MM,
-        "in" | "\"" => 1000 * NM_PER_MIL,
-        _ if number.is_empty() => return Err(SpacingError::NotANumber),
-        other => return Err(SpacingError::Unit(other.to_owned())),
-    };
-    let value: f64 = number.parse().map_err(|_| SpacingError::NotANumber)?;
-    let nm = (value * nm_per_unit as f64).round();
-    if !nm.is_finite() || nm < *SPACING_RANGE_NM.start() as f64 || nm > *SPACING_RANGE_NM.end() as f64 {
+/// Read typed grid spacing in whole nanometres with [`units::parse_length`]: a bare number is in
+/// `unit`, the display unit, and `mil`, `mm` or `in` after it override that. The spacing must be
+/// inside [`SPACING_RANGE_NM`], so zero and negative values are refused.
+pub fn parse_spacing(text: &str, unit: Unit) -> Result<i64, SpacingError> {
+    let nm = units::parse_length(text, unit)?;
+    if !SPACING_RANGE_NM.contains(&nm) {
         return Err(SpacingError::OutOfRange);
     }
-    Ok(nm as i64)
+    Ok(nm)
 }
 
-/// Describe a spacing as it would be typed: in mils when it is a whole tenth of a mil, otherwise
-/// in millimetres with at most four decimals, so `1_270_000` reads "50 mil" and `500_000` reads
-/// "0.5 mm".
-pub fn spacing_label(nm: i64) -> String {
-    let trim = |text: String| text.trim_end_matches('0').trim_end_matches('.').to_owned();
-    if nm % (NM_PER_MIL / 10) == 0 {
-        format!("{} mil", trim(format!("{:.1}", nm as f64 / NM_PER_MIL as f64)))
-    } else {
-        format!("{} mm", trim(format!("{:.4}", nm as f64 / NM_PER_MM as f64)))
-    }
+/// Describe a spacing as it would be typed in the display unit: `1_270_000` reads "50 mil" or
+/// "1.27 mm".
+pub fn spacing_label(nm: i64, unit: Unit) -> String {
+    units::label(nm, unit)
 }
 
 /// How many grid points apart the drawn dots are when `step` points separate grid points: 1
@@ -164,14 +155,14 @@ pub fn opacity_control(ui: &mut Ui, opacity_percent: &mut u8) -> bool {
 /// spacing, and the default. `spacing_nm` changes only when a row is picked or valid text is
 /// applied; invalid text shows why under the field and keeps the current spacing. `every` is
 /// [`shown_every`] for the view, so the label says when the dots are sparser than the snap points.
-/// The field's text is kept in egui's temporary memory under the button. Returns true when the
-/// spacing changed.
-pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_nm: i64, every: u32) -> bool {
+/// The field's text is kept in egui's temporary memory under the button. Every spacing is shown in
+/// `unit`, and a number typed without a unit is read in it. Returns true when the spacing changed.
+pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_nm: i64, every: u32, unit: Unit) -> bool {
     let t = Tokens::get();
     let before = *spacing_nm;
-    let current = spacing_label(*spacing_nm);
+    let current = spacing_label(*spacing_nm, unit);
     let text = if every > 1 {
-        format!("Grid {current} · dots {}", spacing_label(spacing_nm.saturating_mul(i64::from(every))))
+        format!("Grid {current} · dots {}", spacing_label(spacing_nm.saturating_mul(i64::from(every)), unit))
     } else {
         format!("Grid {current}")
     };
@@ -189,7 +180,7 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
             ui.set_width(t.control_height * 8.0);
             ui.spacing_mut().item_spacing.y = 0.0;
             for &preset in presets {
-                let label = spacing_label(preset);
+                let label = spacing_label(preset, unit);
                 let label = if preset == default_nm { format!("{label} (default)") } else { label };
                 if MenuItem::new(&label).checked(*spacing_nm == preset).show(ui) {
                     *spacing_nm = preset;
@@ -212,7 +203,7 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
                         error = None;
                     }
                     if ui.button(RichText::new("Apply").size(t.font_label)).clicked() || entered {
-                        match parse_spacing(&draft) {
+                        match parse_spacing(&draft, unit) {
                             Ok(nm) => {
                                 *spacing_nm = nm;
                                 draft.clear();
@@ -228,7 +219,7 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
                 }
                 // Some pins fall between the snap points; they still take wires when clicked.
                 if *spacing_nm > 0 && default_nm % *spacing_nm != 0 {
-                    let hint = format!("Pins are on {}; wire to them by clicking the pin.", spacing_label(default_nm));
+                    let hint = format!("Pins are on {}; wire to them by clicking the pin.", spacing_label(default_nm, unit));
                     ui.add(egui::Label::new(crate::shell::dim(hint)).wrap());
                 }
             });
@@ -254,6 +245,11 @@ pub fn cycle(spacing_nm: i64, presets: &[i64], finer: bool) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read a spacing with mils as the display unit, as the grid menu does by default.
+    fn parse_spacing_mil(text: &str) -> Result<i64, SpacingError> {
+        parse_spacing(text, Unit::Mil)
+    }
 
     #[test]
     fn opacity_scales_the_grid_colour_and_zero_hides_it() {
@@ -293,46 +289,52 @@ mod tests {
 
     #[test]
     fn typed_spacing_reads_mils_millimetres_and_inches() {
-        assert_eq!(parse_spacing("25"), Ok(25 * NM_PER_MIL));
-        assert_eq!(parse_spacing(" 25 mil "), Ok(25 * NM_PER_MIL));
-        assert_eq!(parse_spacing("2.5MILS"), Ok(63_500));
-        assert_eq!(parse_spacing("10th"), Ok(10 * NM_PER_MIL));
-        assert_eq!(parse_spacing("1.27 mm"), Ok(SCHEMATIC_SPACING_DEFAULT_NM));
-        assert_eq!(parse_spacing("0.5mm"), Ok(500_000));
-        assert_eq!(parse_spacing("0.1in"), Ok(100 * NM_PER_MIL));
-        assert_eq!(parse_spacing("0.05\""), Ok(SCHEMATIC_SPACING_DEFAULT_NM));
+        assert_eq!(parse_spacing_mil("25"), Ok(25 * NM_PER_MIL));
+        assert_eq!(parse_spacing_mil(" 25 mil "), Ok(25 * NM_PER_MIL));
+        assert_eq!(parse_spacing_mil("2.5MILS"), Ok(63_500));
+        assert_eq!(parse_spacing_mil("10th"), Ok(10 * NM_PER_MIL));
+        assert_eq!(parse_spacing_mil("1.27 mm"), Ok(SCHEMATIC_SPACING_DEFAULT_NM));
+        assert_eq!(parse_spacing_mil("0.5mm"), Ok(500_000));
+        assert_eq!(parse_spacing_mil("0.1in"), Ok(100 * NM_PER_MIL));
+        assert_eq!(parse_spacing_mil("0.05\""), Ok(SCHEMATIC_SPACING_DEFAULT_NM));
         // 100 mil is exactly 2.54 mm; rounding happens once, at the nanometre.
-        assert_eq!(parse_spacing("2.54 mm"), parse_spacing("100 mil"));
-        assert_eq!(parse_spacing("0.0000004 mm"), Err(SpacingError::OutOfRange));
-        assert_eq!(parse_spacing("0.01 mm"), Ok(*SPACING_RANGE_NM.start()));
-        assert_eq!(parse_spacing("1000"), Ok(*SPACING_RANGE_NM.end()));
+        assert_eq!(parse_spacing_mil("2.54 mm"), parse_spacing_mil("100 mil"));
+        assert_eq!(parse_spacing_mil("0.0000004 mm"), Err(SpacingError::OutOfRange));
+        assert_eq!(parse_spacing_mil("0.01 mm"), Ok(*SPACING_RANGE_NM.start()));
+        assert_eq!(parse_spacing_mil("1000"), Ok(*SPACING_RANGE_NM.end()));
     }
 
     #[test]
     fn typed_spacing_refuses_what_it_cannot_read() {
-        assert_eq!(parse_spacing("  "), Err(SpacingError::Empty));
-        assert_eq!(parse_spacing("mil"), Err(SpacingError::NotANumber));
-        assert_eq!(parse_spacing("1.2.3"), Err(SpacingError::NotANumber));
-        assert_eq!(parse_spacing("."), Err(SpacingError::NotANumber));
-        assert_eq!(parse_spacing("-5"), Err(SpacingError::NotANumber));
-        assert_eq!(parse_spacing("1e3"), Err(SpacingError::Unit("e3".into())));
-        assert_eq!(parse_spacing("5 cm"), Err(SpacingError::Unit("cm".into())));
-        assert_eq!(parse_spacing("0"), Err(SpacingError::OutOfRange));
-        assert_eq!(parse_spacing("1001 mil"), Err(SpacingError::OutOfRange));
-        assert_eq!(parse_spacing("99999999999999999999999 in"), Err(SpacingError::OutOfRange));
+        assert_eq!(parse_spacing_mil("  "), Err(SpacingError::Empty));
+        assert_eq!(parse_spacing_mil("mil"), Err(SpacingError::NotANumber));
+        assert_eq!(parse_spacing_mil("1.2.3"), Err(SpacingError::NotANumber));
+        assert_eq!(parse_spacing_mil("."), Err(SpacingError::NotANumber));
+        assert_eq!(parse_spacing_mil("-5"), Err(SpacingError::OutOfRange));
+        assert_eq!(parse_spacing_mil("1e3"), Err(SpacingError::Unit("e3".into())));
+        assert_eq!(parse_spacing_mil("5 cm"), Err(SpacingError::Unit("cm".into())));
+        assert_eq!(parse_spacing_mil("0"), Err(SpacingError::OutOfRange));
+        assert_eq!(parse_spacing_mil("1001 mil"), Err(SpacingError::OutOfRange));
+        assert_eq!(parse_spacing_mil("99999999999999999999999 in"), Err(SpacingError::OutOfRange));
         assert_eq!(SpacingError::OutOfRange.to_string(), "Use 0.01 mm to 1000 mil");
     }
 
+    /// Labels follow the display unit, and a label typed back in that unit gives the same spacing.
     #[test]
-    fn labels_use_the_unit_a_spacing_was_typed_in() {
-        assert_eq!(spacing_label(SCHEMATIC_SPACING_DEFAULT_NM), "50 mil");
-        assert_eq!(spacing_label(63_500), "2.5 mil");
-        assert_eq!(spacing_label(500_000), "0.5 mm");
-        assert_eq!(spacing_label(10_000), "0.01 mm");
-        assert_eq!(spacing_label(1_234_567), "1.2346 mm");
-        for text in ["37 mil", "0.25 mm", "1.5 mil", "0.01 mm"] {
-            assert_eq!(parse_spacing(text).map(spacing_label).as_deref(), Ok(text));
+    fn labels_follow_the_display_unit() {
+        assert_eq!(spacing_label(SCHEMATIC_SPACING_DEFAULT_NM, Unit::Mil), "50 mil");
+        assert_eq!(spacing_label(63_500, Unit::Mil), "2.5 mil");
+        assert_eq!(spacing_label(500_000, Unit::Mm), "0.5 mm");
+        assert_eq!(spacing_label(10_000, Unit::Mm), "0.01 mm");
+        assert_eq!(spacing_label(1_234_567, Unit::Mm), "1.2346 mm");
+        assert_eq!(spacing_label(SCHEMATIC_SPACING_DEFAULT_NM, Unit::Mm), "1.27 mm");
+        assert_eq!(spacing_label(500_000, Unit::Mil), "19.685 mil", "shown rounded; the spacing itself stays exact");
+        for (text, unit) in [("37 mil", Unit::Mil), ("0.25 mm", Unit::Mm), ("1.5 mil", Unit::Mil), ("0.01 mm", Unit::Mm)] {
+            assert_eq!(parse_spacing(text, unit).map(|nm| spacing_label(nm, unit)).as_deref(), Ok(text));
         }
+        // A bare number is read in the display unit.
+        assert_eq!(parse_spacing("0.5", Unit::Mm), Ok(500_000));
+        assert_eq!(parse_spacing("0.5", Unit::Mil), Ok(12_700));
     }
 
     #[test]
