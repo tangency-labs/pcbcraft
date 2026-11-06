@@ -23,7 +23,6 @@ libraries/starter/
     header-4.json
     led.json
     resistor.json
-    voltage-regulator.json
 ```
 
 The manifest:

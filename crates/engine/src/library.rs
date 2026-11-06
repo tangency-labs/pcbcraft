@@ -331,7 +331,7 @@ mod tests {
         assert_eq!(library.problems(), [] as [String; 0]);
         assert_eq!((library.id.as_str(), library.license.as_str()), ("starter", "MIT OR Apache-2.0"));
         let ids: Vec<_> = library.symbols().iter().map(|symbol| symbol.id.as_str()).collect();
-        assert_eq!(ids, ["capacitor", "connector", "header-4", "led", "resistor", "voltage-regulator"]);
+        assert_eq!(ids, ["capacitor", "connector", "header-4", "led", "resistor"]);
         let led = library.symbol("led").unwrap();
         let names: Vec<_> = led.pins().iter().map(|pin| pin.name.as_deref()).collect();
         assert_eq!(names, [Some("Anode"), Some("Cathode")]);
@@ -382,14 +382,12 @@ mod tests {
     /// and text labels load as upright strokes.
     #[test]
     fn multi_pin_symbols_load_in_terminal_order() {
-        let regulator = starter().symbol("voltage-regulator").unwrap();
-        let pins: Vec<_> = regulator.pins().iter().map(|pin| (pin.number.as_str(), pin.name.as_deref(), pin.electrical_type)).collect();
-        assert_eq!(
-            pins,
-            [("1", Some("IN"), ElectricalType::PowerIn), ("2", Some("GND"), ElectricalType::PowerIn), ("3", Some("OUT"), ElectricalType::PowerOut),]
-        );
-        assert!(regulator.drawing.iter().any(|shape| matches!(shape, Shape::Text(_, text, TextAlign::Start) if text == "IN")));
-        assert!(!regulator.fits_two_pad_footprint());
+        let header = starter().symbol("header-4").unwrap();
+        let pins: Vec<_> = header.pins().iter().map(|pin| (pin.number.as_str(), pin.offset.y_nm, pin.electrical_type)).collect();
+        let row = |number, y_nm| (number, y_nm, ElectricalType::Passive);
+        assert_eq!(pins, [row("1", -3_810_000), row("2", -1_270_000), row("3", 1_270_000), row("4", 3_810_000)]);
+        assert!(header.drawing.iter().any(|shape| matches!(shape, Shape::Text(_, text, TextAlign::Middle) if text == "4")));
+        assert!(!header.fits_two_pad_footprint());
         assert!(starter().symbol("resistor").unwrap().fits_two_pad_footprint());
         assert_eq!(all_pin_numbers(), ["1", "2", "3", "4"]);
         assert_eq!(pin_number("3"), Some("3"));

@@ -604,7 +604,6 @@ mod tests {
                 ("header-4", "J2", "Header"),
                 ("led", "D1", "LED"),
                 ("resistor", "R1", "1k"),
-                ("voltage-regulator", "U1", "LDO"),
             ]
             .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
         );
@@ -616,13 +615,13 @@ mod tests {
 
     /// Multi-pin library symbols wire by pin number through the shared command, report every
     /// pin with its name and electrical type, and survive a save and reopen. A pin the symbol
-    /// doesn't have is refused, and the two-pad footprint refuses a three-pin regulator both as a
+    /// doesn't have is refused, and the two-pad footprint refuses a four-pin header both as a
     /// command and in a forged file.
     #[test]
     fn multi_pin_symbols_wire_by_number_and_refuse_missing_pins() {
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "Supply"})).unwrap();
-        for (definition, x_nm) in [("voltage-regulator", 0), ("header-4", 50_800_000)] {
+        for (definition, x_nm) in [("led", 0), ("header-4", 50_800_000)] {
             session
                 .apply(PLACE_SYMBOL, &json!({"definition": definition, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
                 .unwrap();
@@ -637,18 +636,16 @@ mod tests {
                 }),
             )
         };
-        wire(&mut session, "3", "4").unwrap();
-        assert!(wire(&mut session, "4", "1").is_err(), "the regulator has no pin 4");
+        wire(&mut session, "2", "4").unwrap();
+        assert!(wire(&mut session, "4", "1").is_err(), "the LED has no pin 4");
         assert!(wire(&mut session, "9", "1").is_err(), "no library symbol has a pin 9");
         let state = session.inspect();
-        let regulator = &state["project"]["schematic"]["symbols"][0];
-        assert_eq!(regulator["pins"].as_array().unwrap().len(), 3);
-        assert_eq!(
-            regulator["pins"][2],
-            json!({"number": "3", "name": "OUT", "electrical_type": "power_out", "x_nm": 8_890_000, "y_nm": -1_270_000})
-        );
+        let header = &state["project"]["schematic"]["symbols"][1];
+        assert_eq!(header["pins"].as_array().unwrap().len(), 4);
+        assert_eq!(header["pins"][3], json!({"number": "4", "electrical_type": "passive", "x_nm": 44_450_000, "y_nm": 3_810_000}));
+        assert_eq!(state["project"]["schematic"]["symbols"][0]["pins"][1]["name"], "Cathode");
         let net = &state["project"]["schematic"]["netlist"]["nets"][0]["terminals"];
-        assert_eq!(net, &json!([{"symbol": "symbol-2", "terminal": "3"}, {"symbol": "symbol-3", "terminal": "4"}]));
+        assert_eq!(net, &json!([{"symbol": "symbol-2", "terminal": "2"}, {"symbol": "symbol-3", "terminal": "4"}]));
 
         let bytes = encode(session.snapshot().unwrap()).unwrap();
         let mut reopened = Session::default();
@@ -656,13 +653,13 @@ mod tests {
         assert_eq!(reopened.inspect()["project"], state["project"]);
 
         let footprint = json!({
-            "symbol": "symbol-2", "definition": "generic-through-hole-2",
+            "symbol": "symbol-3", "definition": "generic-through-hole-2",
             "pin_1_pad": 1, "x_nm": 0, "y_nm": 0, "expected_revision": session.revision(),
         });
         assert!(session.apply(crate::PLACE_FOOTPRINT, &footprint).unwrap_err().to_string().contains("exactly pins 1 and 2"));
         let mut forged: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         forged["board"] = json!({"footprints": [{
-            "id": 9, "component": 2, "definition": "generic-through-hole-2", "definition_revision": 1, "pin_1_pad": 1, "x_nm": 0, "y_nm": 0
+            "id": 9, "component": 3, "definition": "generic-through-hole-2", "definition_revision": 1, "pin_1_pad": 1, "x_nm": 0, "y_nm": 0
         }]});
         assert!(decode(&serde_json::to_vec(&forged).unwrap()).unwrap_err().contains("exactly pins 1 and 2"));
         let mut missing = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();

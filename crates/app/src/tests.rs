@@ -303,13 +303,13 @@ fn enter_on_the_workspace_tile_opens_the_picker() {
 }
 
 /// The Wire tool reaches a multi-pin symbol's pins where the library draws them, so the
-/// regulator's OUT pin connects to the header's pin 4 through the shared command.
+/// header's pin 4 connects to an LED's anode through the shared command.
 #[test]
 fn the_wire_tool_connects_multi_pin_library_symbols() {
     let mut harness = harness();
     new_project(&mut harness, "supply");
     let grid = pcbcraft_engine::schematic::GRID_NM;
-    for (definition, x_nm) in [("voltage-regulator", 0), ("header-4", 20 * grid)] {
+    for (definition, x_nm) in [("header-4", 0), ("led", 20 * grid)] {
         let revision = harness.state().session().revision();
         harness
             .state_mut()
@@ -320,12 +320,12 @@ fn the_wire_tool_connects_multi_pin_library_symbols() {
     harness.run();
     let step = pcbcraft_chrome::theme::SCHEMATIC_GRID_SPACING;
     click(&mut harness, "Draw wire (W)");
-    // The regulator's OUT pin sits at (7, -1) grid steps; the header's pin 4 at (15, 3).
-    click_canvas_offset(&mut harness, egui::vec2(7.0, -1.0) * step);
-    click_canvas_offset(&mut harness, egui::vec2(15.0, 3.0) * step);
+    // The header's pin 4 sits at (-5, 3) grid steps; the LED's anode at (15, 0).
+    click_canvas_offset(&mut harness, egui::vec2(-5.0, 3.0) * step);
+    click_canvas_offset(&mut harness, egui::vec2(15.0, 0.0) * step);
     let wires = harness.state().session().inspect()["project"]["schematic"]["wires"].clone();
-    assert_eq!(wires[0]["from"], json!({"symbol": "symbol-2", "terminal": "3"}));
-    assert_eq!(wires[0]["to"], json!({"symbol": "symbol-3", "terminal": "4"}));
+    assert_eq!(wires[0]["from"], json!({"symbol": "symbol-2", "terminal": "4"}));
+    assert_eq!(wires[0]["to"], json!({"symbol": "symbol-3", "terminal": "1"}));
 }
 
 /// Below 380 points the ? button gives way, and Home's rail still reaches the same rows.
