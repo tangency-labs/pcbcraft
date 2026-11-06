@@ -99,9 +99,10 @@ window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
 The project name stays separate from the top **Design** arrangement tab. Use the
-**+ New arrangement** beside it to name a setup, starting with the current views
-and windows or a single view. The **…** menu beside the tabs offers **Rename…**,
-**Duplicate…** and **Remove…**. Naming opens a dialog in the window you are using;
+**+** beside it to name a setup, starting with the current views and windows or a
+single view. Right-click any arrangement tab for **Rename…**, **Duplicate…** or
+**Delete…**. Renaming or deleting an inactive tab leaves the current setup in
+place. Naming opens a dialog in the window you are using;
 **Cancel** or **Esc** discards the draft. Each arrangement remembers
 its panes, document tabs, cameras, panels and desktop windows locally; reopening
 the saved project restores the last active arrangement. Selecting a sheet in

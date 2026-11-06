@@ -7,25 +7,23 @@ use egui::{Ui, WidgetInfo, WidgetType};
 pub enum Intent {
     Select(u64),
     New,
-    Duplicate,
-    Rename,
-    Remove,
+    Duplicate(u64),
+    Rename(u64),
+    Remove(u64),
 }
 
-/// Show a direct creation button and a fixed management menu for the active arrangement.
-/// Tabs scroll within their allotted space; compact bars keep the creation button as a plus.
+/// Show only arrangement tabs and a plus. Opening a tab’s context menu does not select
+/// that arrangement; each action carries the clicked tab’s identity to the host.
 pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> {
     if tabs.is_empty() {
         return None;
     }
-    let t = crate::Tokens::get();
     let mut intent = None;
     ui.horizontal(|ui| {
-        let label = if ui.available_width() >= 270.0 { "+ New arrangement" } else { "+" };
-        // Reserve creation before laying out a potentially overflowing row of names.
-        let button_width = ui.painter().layout_no_wrap(label.into(), egui::TextStyle::Button.resolve(ui.style()), t.text).size().x
+        let label = "+";
+        let button_width = ui.painter().layout_no_wrap(label.into(), egui::TextStyle::Button.resolve(ui.style()), ui.visuals().text_color()).size().x
             + 2.0 * ui.spacing().button_padding.x;
-        let width = (ui.available_width() - button_width - t.space_24 - 2.0 * ui.spacing().item_spacing.x).max(0.0);
+        let width = (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(0.0);
         egui::ScrollArea::horizontal()
             .id_salt("arrangement_tabs")
             .max_width(width)
@@ -38,6 +36,16 @@ pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> 
                             let selected = *id == active;
                             let response = ui.selectable_label(selected, name);
                             response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, format!("Arrangement {name}")));
+                            response.context_menu(|ui| {
+                                for (label, pick) in
+                                    [("Rename…", Intent::Rename(*id)), ("Duplicate…", Intent::Duplicate(*id)), ("Delete…", Intent::Remove(*id))]
+                                {
+                                    if ui.add_enabled(!matches!(pick, Intent::Remove(_)) || tabs.len() > 1, egui::Button::new(label)).clicked() {
+                                        intent = Some(pick);
+                                        ui.close_kind(egui::UiKind::Menu);
+                                    }
+                                }
+                            });
                             if response.clicked() {
                                 intent = Some(Intent::Select(*id));
                             }
@@ -45,16 +53,6 @@ pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> 
                     }
                 });
             });
-        let menu = ui.menu_button("…", |ui| {
-            for (label, pick) in [("Rename…", Intent::Rename), ("Duplicate…", Intent::Duplicate), ("Remove…", Intent::Remove)] {
-                if ui.add_enabled(pick != Intent::Remove || tabs.len() > 1, egui::Button::new(label)).clicked() {
-                    intent = Some(pick);
-                    ui.close_kind(egui::UiKind::Menu);
-                }
-            }
-        });
-        menu.response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Arrangement options"));
-        menu.response.on_hover_text("Manage active arrangement");
         let create = ui.button(label);
         create.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "New arrangement"));
         if create.on_hover_text("New arrangement").clicked() {
@@ -98,15 +96,15 @@ impl Form {
     /// editable with the host's error, and Enter submits only from the focused name field.
     pub fn show(&mut self, ctx: &egui::Context) -> Outcome {
         let (title, submit_label) = match self.intent {
-            Intent::Rename => ("Rename arrangement", "Rename"),
-            Intent::Duplicate => ("Duplicate arrangement", "Create"),
-            Intent::Remove => ("Remove arrangement", "Remove"),
+            Intent::Rename(_) => ("Rename arrangement", "Rename"),
+            Intent::Duplicate(_) => ("Duplicate arrangement", "Create"),
+            Intent::Remove(_) => ("Delete arrangement", "Delete"),
             _ => ("New arrangement", "Create"),
         };
         let (mut submit, mut cancel) = (false, false);
         let dismissed = crate::shell::dialog(ctx, "arrangement_dialog", title, |ui| {
-            if self.intent == Intent::Remove {
-                ui.label(format!("Remove “{}” and its saved view setup? Project documents are kept.", self.name));
+            if matches!(self.intent, Intent::Remove(_)) {
+                ui.label(format!("Delete “{}” and its saved view setup? Project documents are kept.", self.name));
             } else {
                 let label = ui.label("Arrangement name");
                 let mut field = egui::TextEdit::singleline(&mut self.name).desired_width(f32::INFINITY).show(ui);

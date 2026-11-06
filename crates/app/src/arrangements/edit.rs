@@ -1,6 +1,6 @@
 //! Transient forms capture project, arrangement and host identities before accepting input.
 
-use super::{Action, Arrangements, valid_name};
+use super::{Action, Arrangements, Start, valid_name};
 use crate::{Dialog, PcbApp, editor_layout::HostId};
 use pcbcraft_chrome::arrangements::{Form, Intent, Outcome};
 
@@ -38,7 +38,7 @@ impl Arrangements {
 
 impl PcbApp {
     /// Open a form in the initiating window, or queue selection directly. Menus never hold
-    /// editable text, and opening a form neither creates an arrangement nor changes its layout.
+    /// editable text. Context actions capture the clicked tab without activating its saved layout.
     pub(crate) fn arrangement_intent(&mut self, ctx: &egui::Context, intent: Intent) {
         if self.home || self.files.busy() || self.project_action_pending() || !matches!(self.dialog, Dialog::None) {
             return;
@@ -50,17 +50,21 @@ impl PcbApp {
         let Some(project) = &self.arrangements.project else { return };
         let tabs = self.arrangements.tabs();
         let active = self.arrangements.active();
-        let Some((_, current)) = tabs.iter().find(|(id, _)| *id == active) else { return };
-        if intent == Intent::Remove && tabs.len() <= 1 {
+        let target = match intent {
+            Intent::Rename(id) | Intent::Duplicate(id) | Intent::Remove(id) => id,
+            _ => active,
+        };
+        let Some((_, current)) = tabs.iter().find(|(id, _)| *id == target) else { return };
+        if matches!(intent, Intent::Remove(_)) && tabs.len() <= 1 {
             return;
         }
-        if matches!(intent, Intent::New | Intent::Duplicate) && tabs.len() >= 32 {
+        if matches!(intent, Intent::New | Intent::Duplicate(_)) && tabs.len() >= 32 {
             self.message = Some("An arrangement collection can contain up to 32 arrangements.".into());
             return;
         }
         let name = match intent {
             Intent::New => self.arrangements.suggested_name("Arrangement"),
-            Intent::Duplicate => self.arrangements.suggested_name(&format!("{current} copy")),
+            Intent::Duplicate(_) => self.arrangements.suggested_name(&format!("{current} copy")),
             _ => current.clone(),
         };
         self.dialog = Dialog::Arrangement(Edit {
@@ -97,8 +101,11 @@ impl PcbApp {
             Outcome::Cancel => {}
             Outcome::Open => self.dialog = Dialog::Arrangement(edit),
             Outcome::Submit => {
-                let except = (edit.form.intent == Intent::Rename).then_some(edit.active);
-                if edit.form.intent != Intent::Remove
+                let except = match edit.form.intent {
+                    Intent::Rename(id) => Some(id),
+                    _ => None,
+                };
+                if !matches!(edit.form.intent, Intent::Remove(_))
                     && let Some(error) = self.arrangements.name_error(&edit.form.name, except)
                 {
                     edit.form.reject(error);
@@ -106,9 +113,10 @@ impl PcbApp {
                     return;
                 }
                 let action = match edit.form.intent {
-                    Intent::Rename => Action::Rename(edit.form.name),
-                    Intent::Remove => Action::Remove,
-                    _ => Action::Create { name: edit.form.name, single_view: edit.form.single_view },
+                    Intent::Rename(id) => Action::Rename { id, name: edit.form.name },
+                    Intent::Remove(id) => Action::Remove(id),
+                    Intent::Duplicate(id) => Action::Create { name: edit.form.name, start: Start::Copy(id) },
+                    _ => Action::Create { name: edit.form.name, start: if edit.form.single_view { Start::SingleView } else { Start::Current } },
                 };
                 self.queue_arrangement(ctx, action);
             }

@@ -33,9 +33,17 @@ impl Default for Store {
 #[derive(Clone, Debug)]
 pub(super) enum Action {
     Select(u64),
-    Create { name: String, single_view: bool },
-    Rename(String),
-    Remove,
+    Create { name: String, start: Start },
+    Rename { id: u64, name: String },
+    Remove(u64),
+}
+
+/// The source of a new arrangement is explicit and independent of the selected tab's name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Start {
+    Current,
+    SingleView,
+    Copy(u64),
 }
 
 #[derive(Debug, Default)]
@@ -224,7 +232,8 @@ impl PcbApp {
     }
 
     /// Apply one validated arrangement transition after native callbacks finish. Replacement
-    /// never invokes project Close, resets history or transfers stale gesture authority.
+    /// never invokes project Close, resets history or transfers stale gesture authority. Rename
+    /// and removal address the requested tab; inactive-tab metadata edits leave live views intact.
     pub(super) fn finish_arrangement_action(&mut self, ctx: &egui::Context) {
         let Some((project, opening, active, action)) = self.arrangements.pending.take() else {
             return;
@@ -257,7 +266,7 @@ impl PcbApp {
                 replacement = Some(arrangement.snapshot.clone());
                 record.active = id;
             }
-            Action::Create { name, single_view } => {
+            Action::Create { name, start } => {
                 if let Some(error) = self.arrangements.name_error(&name, None) {
                     self.message = Some(error.into());
                     return;
@@ -269,12 +278,18 @@ impl PcbApp {
                 let Some(id) = record.arrangements.iter().map(|a| a.id).max().and_then(|id| id.checked_add(1)) else {
                     return;
                 };
-                let Some(mut snapshot) = self.arrangement_snapshot() else {
-                    self.message =
-                        Some("This layout exceeds the arrangement limits; close excess views or windows before creating an arrangement.".into());
+                let source = match start {
+                    Start::Copy(id) if id != record.active => record.arrangements.iter().find(|a| a.id == id).map(|a| a.snapshot.clone()),
+                    _ => self.arrangement_snapshot(),
+                };
+                let Some(mut snapshot) = source else {
+                    self.message = Some("The source arrangement is unavailable or exceeds the supported layout limits.".into());
                     return;
                 };
-                if single_view {
+                if matches!(start, Start::Copy(id) if id != record.active) {
+                    replacement = Some(snapshot.clone());
+                }
+                if start == Start::SingleView {
                     let focused = snapshot.hosts[0].focused;
                     snapshot.views = vec![snapshot.views[focused].clone()];
                     let mut host = snapshot.hosts[0].clone();
@@ -291,23 +306,25 @@ impl PcbApp {
                 record.arrangements.push(Arrangement { id, name: name.trim().into(), snapshot });
                 record.active = id;
             }
-            Action::Rename(name) => {
+            Action::Rename { id, name } => {
                 let name = name.trim();
-                if let Some(error) = self.arrangements.name_error(name, Some(record.active)) {
+                if let Some(error) = self.arrangements.name_error(name, Some(id)) {
                     self.message = Some(error.into());
                     return;
                 }
-                if let Some(current) = record.arrangements.iter_mut().find(|a| a.id == record.active) {
+                if let Some(current) = record.arrangements.iter_mut().find(|a| a.id == id) {
                     current.name = name.into();
                 }
             }
-            Action::Remove => {
-                if record.arrangements.len() <= 1 {
+            Action::Remove(id) => {
+                if record.arrangements.len() <= 1 || !record.arrangements.iter().any(|a| a.id == id) {
                     return;
                 }
-                record.arrangements.retain(|a| a.id != record.active);
-                record.active = record.arrangements[0].id;
-                replacement = Some(record.arrangements[0].snapshot.clone());
+                record.arrangements.retain(|a| a.id != id);
+                if record.active == id {
+                    record.active = record.arrangements[0].id;
+                    replacement = Some(record.arrangements[0].snapshot.clone());
+                }
             }
         }
         if let Some(snapshot) = replacement

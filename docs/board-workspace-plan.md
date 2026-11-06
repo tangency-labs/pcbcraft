@@ -87,9 +87,11 @@ undo history.
 
 Named arrangements now separate the project's working setups from the documents
 shown inside them. The title bar contains the project name and dirty indicator,
-followed by arrangement tabs. Every project starts with **Design**. **+ New
-arrangement** opens a naming dialog; the **…** menu beside the tabs offers **Rename…**,
-**Duplicate…** and **Remove…**. Narrow bars shorten the creation button to **+**.
+followed by arrangement tabs and a single **+** for creation. Every project starts
+with **Design**. Right-click a tab for **Rename…**, **Duplicate…** or **Delete…**.
+Context actions address that tab by ID without activating it first: renaming or
+deleting an inactive arrangement leaves the working layout and windows in place.
+Duplicating an inactive tab activates a copy of that tab’s saved setup.
 These are user names, not fixed editor modes, and all arrangements share the same
 project, edits and undo. Naming forms stay in the initiating window, keep invalid
 or duplicate names editable, and support Enter, Escape and explicit buttons.
@@ -125,7 +127,7 @@ other windows. New defaults to the current views and windows, with an explicit
 choice to start with one view of the main host’s focused document. Creating a
 copy of the current setup and renaming preserve the live host and view identities;
 they do not recreate native windows. Each arrangement automatically remembers its
-latest layout. Removal asks for confirmation and is disabled for the only
+latest layout. Deletion asks for confirmation and is disabled for the only
 remaining arrangement; it does not remove electrical data. Cancelled forms leave
 the saved collection, live layout and project history unchanged.
 

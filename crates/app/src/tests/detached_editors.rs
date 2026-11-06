@@ -1186,11 +1186,10 @@ fn arrangement_forms_in_detached_windows_preserve_native_addresses() {
     let hosts: Vec<_> = h.state().views.hosts.keys().copied().collect();
     let snapshot = h.state().arrangement_snapshot().unwrap();
     let revision = h.state().session.revision();
-    for label in ["Arrangement options", "Rename…"] {
-        let at = child_rect(&peer, label).center();
-        window_click(&mut h, Some(&peer), at);
-        h.run();
-    }
+    child_tab_menu(&mut h, &peer, "Arrangement Design");
+    let at = child_rect(&peer, "Rename…").center();
+    window_click(&mut h, Some(&peer), at);
+    h.run();
     assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
     assert!(peer.borrow().nodes.values().any(|node| node.role() == egui::accesskit::Role::TextInput));
     assert!(h.query_by_label("Arrangement name").is_none());
@@ -1206,7 +1205,8 @@ fn arrangement_forms_in_detached_windows_preserve_native_addresses() {
     assert_eq!(h.state().arrangement_snapshot().unwrap(), snapshot);
     assert_eq!(h.state().session.revision(), revision);
 
-    for label in ["Arrangement options", "Duplicate…", "Create"] {
+    child_tab_menu(&mut h, &peer, "Arrangement Detached review");
+    for label in ["Duplicate…", "Create"] {
         let at = child_rect(&peer, label).center();
         window_click(&mut h, Some(&peer), at);
         h.run();
@@ -1224,4 +1224,17 @@ fn arrangement_forms_in_detached_windows_preserve_native_addresses() {
     assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(h.state().arrangements.tabs().len(), 2);
     assert_eq!(h.state().views.hosts.len(), 1);
+}
+
+/// Open a tab's context menu with native secondary-button events in the addressed child.
+fn child_tab_menu(h: &mut Harness<'_, PcbApp>, peer: &Rc<RefCell<Peer>>, label: &str) {
+    focus(h, peer, true);
+    let pos = child_rect(peer, label).center();
+    peer.borrow_mut().events.push(Event::PointerMoved(pos));
+    h.run();
+    for pressed in [true, false] {
+        peer.borrow_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run();
 }
