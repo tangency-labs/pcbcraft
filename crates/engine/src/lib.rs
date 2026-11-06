@@ -50,6 +50,7 @@ enum ParamKind {
     Terminal,
     Rotation,
     WireAnchor,
+    WireEndpoint,
     WireBends,
     WireId,
     JunctionId,
@@ -86,6 +87,9 @@ impl ParamKind {
             Self::WireAnchor => json!({"oneOf": [ParamKind::Terminal.schema(), {
                 "type": "object", "properties": {"junction": {"type": "string", "pattern": "^junction-[1-9][0-9]*$"}}, "required": ["junction"], "additionalProperties": false
             }, point_schema()]}),
+            Self::WireEndpoint => json!({"oneOf": [ParamKind::Terminal.schema(), {
+                "type": "object", "properties": {"junction": ParamKind::JunctionId.schema()}, "required": ["junction"], "additionalProperties": false
+            }]}),
             Self::WireBends => json!({"type": "array", "maxItems": wire::MAX_BENDS, "items": point_schema()}),
             Self::Point => point_schema(),
             Self::Rotation => json!({"type": "integer", "enum": [0, 90, 180, 270]}),
@@ -120,6 +124,7 @@ impl ParamKind {
             Self::WireId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "wire-")).is_some() => Ok(()),
             Self::JunctionId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "junction-")).is_some() => Ok(()),
             Self::WireAnchor if wire::Anchor::parse(value).is_some() => Ok(()),
+            Self::WireEndpoint if schematic::WireEndpoint::parse(value).is_some() => Ok(()),
             Self::WireBends if wire::parse_bends(value).is_some() => Ok(()),
             Self::Point if serde_json::from_value::<schematic::Point>(value.clone()).ok().is_some_and(|point| wire::valid_point(&point)) => Ok(()),
             Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
@@ -139,6 +144,7 @@ impl ParamKind {
             Self::WireId => Err("must identify a wire"),
             Self::JunctionId => Err("must identify a junction or free endpoint"),
             Self::WireAnchor => Err("must identify a terminal, junction or bounded free point"),
+            Self::WireEndpoint => Err("must identify an existing terminal or junction"),
             Self::WireBends => Err("must contain at most 64 bounded points"),
             Self::Point => Err("must be a point with whole-nanometer x_nm and y_nm within the schematic bounds"),
             Self::Rotation => Err("must be 0, 90, 180 or 270 degrees"),
@@ -212,6 +218,8 @@ pub const SLICE_WIRE: &str = "schematic.slice_wire";
 pub const MOVE_WIRE_SEGMENT: &str = "schematic.move_wire_segment";
 pub const MOVE_WIRE_CORNER: &str = "schematic.move_wire_corner";
 pub const MOVE_JUNCTION: &str = "schematic.move_junction";
+/// Attach a free endpoint or junction and all its routes to an existing terminal or junction.
+pub const ATTACH_JUNCTION: &str = "schematic.attach_junction";
 /// Separate one straight leg of a wire from the legs beside it, leaving free ends at the gaps.
 pub const BREAK_WIRE: &str = "schematic.break_wire";
 /// Remove one straight leg of a wire, leaving the rest of its route with free ends.
@@ -354,6 +362,16 @@ const CATALOG: &[Command] = &[
         params: &[
             Param { required: true, name: "junction", summary: "Junction or free endpoint ID from inspection", kind: ParamKind::JunctionId },
             Param { required: true, name: "to", summary: "The new position", kind: ParamKind::Point },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: ATTACH_JUNCTION,
+        title: "Attach Junction",
+        summary: "Move a free endpoint or junction onto an existing pin or junction and connect every attached wire to it. Refuses collapsed or duplicate connections. Undoable.",
+        params: &[
+            Param { required: true, name: "junction", summary: "Junction or free endpoint ID from inspection", kind: ParamKind::JunctionId },
+            Param { required: true, name: "to", summary: "Existing terminal or junction to connect to", kind: ParamKind::WireEndpoint },
             EXPECTED_REVISION,
         ],
     },
@@ -735,7 +753,7 @@ impl Session {
             "project.new" => true,
             "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
             | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT | MOVE_WIRE_CORNER
-            | MOVE_JUNCTION | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
+            | MOVE_JUNCTION | ATTACH_JUNCTION | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none() && p.board.footprints().is_empty()),
             SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
             "edit.undo" => !self.undo.is_empty(),
@@ -813,6 +831,7 @@ impl Session {
                 | MOVE_WIRE_SEGMENT
                 | MOVE_WIRE_CORNER
                 | MOVE_JUNCTION
+                | ATTACH_JUNCTION
                 | MOVE_ITEMS
                 | DELETE_ITEMS
                 | INITIALIZE_BOARD_SETUP
@@ -864,6 +883,7 @@ impl Session {
             MOVE_WIRE_SEGMENT => self.move_wire_segment(params)?,
             MOVE_WIRE_CORNER => self.move_wire_corner(params)?,
             MOVE_JUNCTION => self.move_junction(params)?,
+            ATTACH_JUNCTION => self.attach_junction(params)?,
             BREAK_WIRE => self.break_wire(params)?,
             DELETE_WIRE_SEGMENT => self.delete_wire_segment(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,

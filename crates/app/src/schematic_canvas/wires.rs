@@ -65,6 +65,35 @@ pub(crate) struct ReshapeDrag {
 }
 
 impl ReshapeDrag {
+    /// Resolve a drag destination using drawing's unambiguous pin/junction hit test for a
+    /// movable endpoint. Other handles and empty space keep their snapped pointer travel.
+    /// The source itself is never an attachment target; coincident candidates cancel the drop.
+    pub(crate) fn destination(&self, project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Anchor> {
+        if !rect.contains(pointer) {
+            return None;
+        }
+        if let Reshape::Junction(id) = self.edit {
+            let anchor = anchor_at(&endpoints(project, camera, rect), camera, rect, pointer)?;
+            if let Anchor::Existing(endpoint) = anchor
+                && endpoint != WireEndpoint::Junction(id)
+            {
+                return Some(anchor);
+            }
+        }
+        let point = self.target(camera.snap(pointer, rect));
+        super::valid_position(point).then_some(Anchor::Free(point))
+    }
+
+    /// Validate a disposable preview with the same engine operation used on release.
+    /// Only a junction handle can attach; invalid geometry or topology yields no preview.
+    pub(crate) fn preview(&self, project: &Project, to: Anchor) -> Option<Project> {
+        match (&self.edit, to) {
+            (Reshape::Junction(id), Anchor::Existing(endpoint)) => project.attached_junction(*id, endpoint).ok(),
+            (_, Anchor::Free(point)) => project.reshaped(&self.edit, point).ok(),
+            _ => None,
+        }
+    }
+
     /// Where the grabbed point goes with the pointer snapped at `pointer`: moved by the snapped
     /// travel, and only across a segment's direction.
     pub(crate) fn target(&self, pointer: Point) -> Point {
@@ -345,37 +374,8 @@ pub(super) fn preview(
     pointer: Option<Pos2>,
 ) -> Option<Anchor> {
     let tokens = Tokens::get();
-    let endpoints: Vec<_> = project
-        .symbols()
-        .iter()
-        .flat_map(|symbol| symbol.terminals().into_iter().map(WireEndpoint::Terminal).zip(symbol.pins()))
-        .chain(project.junctions().map(|(id, point)| (WireEndpoint::Junction(id), point)))
-        .map(|(endpoint, point)| (endpoint, camera.screen(point, rect)))
-        .filter(|(_, pos)| rect.contains(*pos))
-        .collect();
-    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| {
-        let mut nearest = None;
-        let mut distance = theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
-        let mut ambiguous = false;
-        for &(endpoint, pos) in &endpoints {
-            let candidate = at.distance_sq(pos);
-            if candidate < distance {
-                nearest = Some(endpoint);
-                distance = candidate;
-                ambiguous = false;
-            } else if candidate == distance && nearest.is_some() {
-                ambiguous = true;
-            }
-        }
-        if ambiguous {
-            None
-        } else if let Some(endpoint) = nearest {
-            Some(Anchor::Existing(endpoint))
-        } else {
-            let point = camera.snap(at, rect);
-            super::valid_position(point).then_some(Anchor::Free(point))
-        }
-    });
+    let endpoints = endpoints(project, camera, rect);
+    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| anchor_at(&endpoints, camera, rect, at));
     if let Some(from) = start.and_then(|anchor| anchor.position(project))
         && let Some(to) = target.and_then(|anchor| anchor.position(project))
     {
@@ -387,6 +387,51 @@ pub(super) fn preview(
         paint_pin(painter, pos, if active { tokens.accent } else { tokens.canvas_ink });
     }
     target
+}
+
+/// Project visible, explicitly connectable identities to screen space for drawing and dragging.
+fn endpoints(project: &Project, camera: &Camera, rect: Rect) -> Vec<(WireEndpoint, Pos2)> {
+    project
+        .symbols()
+        .iter()
+        .flat_map(|symbol| symbol.terminals().into_iter().map(WireEndpoint::Terminal).zip(symbol.pins()))
+        .chain(project.junctions().map(|(id, point)| (WireEndpoint::Junction(id), point)))
+        .map(|(endpoint, point)| (endpoint, camera.screen(point, rect)))
+        .filter(|(_, pos)| rect.contains(*pos))
+        .collect()
+}
+
+/// Pick the nearest explicit endpoint within the shared hit radius, refusing equal-distance
+/// targets. Empty space resolves to a bounded grid point; overlapping geometry never joins.
+fn anchor_at(endpoints: &[(WireEndpoint, Pos2)], camera: &Camera, rect: Rect, at: Pos2) -> Option<Anchor> {
+    let mut nearest = None;
+    let mut distance = theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
+    let mut ambiguous = false;
+    for &(endpoint, pos) in endpoints {
+        let candidate = at.distance_sq(pos);
+        if candidate < distance {
+            nearest = Some(endpoint);
+            distance = candidate;
+            ambiguous = false;
+        } else if candidate == distance && nearest.is_some() {
+            ambiguous = true;
+        }
+    }
+    if ambiguous {
+        None
+    } else if let Some(endpoint) = nearest {
+        Some(Anchor::Existing(endpoint))
+    } else {
+        let point = camera.snap(at, rect);
+        super::valid_position(point).then_some(Anchor::Free(point))
+    }
+}
+
+/// Mark a validated attachment destination using the same pin ring as the wire drawing tool.
+pub(super) fn paint_attachment(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, endpoint: WireEndpoint) {
+    if let Some(point) = project.endpoint_position(endpoint) {
+        paint_pin(painter, camera.screen(point, rect), Tokens::get().accent);
+    }
 }
 
 /// Return the closest wire stroke under the pointer, leaving symbol picking to the caller.

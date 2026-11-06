@@ -492,19 +492,24 @@ impl PcbApp {
     /// Commit a finished reshape drag through the matching shared command at the revision the
     /// drag began on, so an edit made meanwhile makes it fail visibly. Segments rebind to the
     /// new geometry when unambiguous, otherwise clear; corner/junction edits keep the wire selected.
-    fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::schematic::Point, revision: u64) {
-        use pcbcraft_engine::wire::Reshape;
-        let (command, params) = match &drag.edit {
-            Reshape::Segment { wire, at } => (pcbcraft_engine::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": at, "to": to})),
-            Reshape::Corner { wire, at } => (pcbcraft_engine::MOVE_WIRE_CORNER, json!({"wire": wire, "at": at, "to": to})),
-            Reshape::Junction(id) => (pcbcraft_engine::MOVE_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to})),
+    /// Dropping a junction on an explicit endpoint attaches it; free positions only reshape it.
+    fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::wire::Anchor, revision: u64) {
+        use pcbcraft_engine::wire::{Anchor, Reshape};
+        let (command, params) = match (&drag.edit, to) {
+            (Reshape::Segment { wire, at }, Anchor::Free(to)) => (pcbcraft_engine::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": at, "to": to})),
+            (Reshape::Corner { wire, at }, Anchor::Free(to)) => (pcbcraft_engine::MOVE_WIRE_CORNER, json!({"wire": wire, "at": at, "to": to})),
+            (Reshape::Junction(id), Anchor::Free(to)) => (pcbcraft_engine::MOVE_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to})),
+            (Reshape::Junction(id), Anchor::Existing(to)) => {
+                (pcbcraft_engine::ATTACH_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to.inspect()}))
+            }
+            _ => return,
         };
         let mut params = params;
         params["expected_revision"] = json!(revision);
         let selected_segment = self.views.active.schematic.selected_leg.is_some();
         self.run(command, &params);
         if self.message.is_none() && selected_segment {
-            if let pcbcraft_engine::wire::Reshape::Segment { wire, .. } = &drag.edit
+            if let (Reshape::Segment { wire, .. }, Anchor::Free(to)) = (&drag.edit, to)
                 && let Some(leg) =
                     self.session.project().and_then(|project| schematic_canvas::LegTarget::at_model(project, wire, to, self.session.revision()))
             {

@@ -99,11 +99,17 @@ Selecting a segment also shows square handles on its wire’s corners and free e
 to reshape it in place: a straight segment slides across its direction, a corner drags the
 two legs that meet there, and a free end or junction drags the end leg of every wire attached
 to it. The wire's other ends stay put, gaining an orthogonal leg where needed; pins never leave
-their parts, and connections don't change. The drag moves by the grid's snapped travel, so an
-off-grid wire stays off the grid by the same amount. Release to commit one undoable edit;
+their parts. Dropping a free end or junction on a highlighted pin or existing endpoint connects
+every wire at that junction to the target, using its exact position even on a different grid.
+Coincident targets and attachments that would collapse or duplicate a connection are refused.
+To connect into the middle of a wire, **Slice** it first to create a connection point.
+Other drags preserve connections and move by the grid's snapped travel, so an off-grid wire
+stays off the grid by the same amount. Release to commit one undoable edit;
 **Esc**, releasing outside the sheet, or an edit made meanwhile cancels it. Multi-item
 selections and explicit **Select Wire** selections still move whole routes. Agents use `schematic.move_wire_segment`,
-`schematic.move_wire_corner` and `schematic.move_junction`. Overlapping or doubled-back runs
+`schematic.move_wire_corner` and `schematic.move_junction`. For an explicit connection, use
+`schematic.attach_junction` with `junction`, an existing pin or junction as `to`, and
+`expected_revision`. Overlapping or doubled-back runs
 are not yet merged automatically.
 
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,

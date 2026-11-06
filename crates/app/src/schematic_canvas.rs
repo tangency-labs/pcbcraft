@@ -82,8 +82,8 @@ pub(crate) enum Click {
     FinishItems(Option<Point>),
     /// A drag started on a wire segment, corner or free end; the handler selects its target.
     GrabReshape(wires::ReshapeDrag),
-    /// The reshape drag ended: where the grabbed point goes, or `None` to cancel.
-    FinishReshape(Option<Point>),
+    /// The reshape drag ended: a free position or explicit attachment target, or `None` to cancel.
+    FinishReshape(Option<Anchor>),
     DeleteItems,
     WirePoint(Anchor, bool),
     CancelWire,
@@ -143,6 +143,7 @@ pub(crate) enum SymbolAction {
 /// Draw the schematic and its active preview, and report a requested tool action.
 /// A primary drag reshapes one wire, grabs a symbol or moves an explicitly selected whole-wire/group; empty-space and secondary drags draw
 /// selection boxes. Move previews end on release, with no edit outside the canvas or after focus loss.
+/// Junction handles preview explicit pin/junction attachment through the engine before release.
 ///
 /// Return `Click::CancelWire` when Cancel or Escape dismisses an in-progress wire
 /// through its context menu. An open wire menu can handle cancellation even
@@ -203,12 +204,14 @@ pub(crate) fn show(
         _ => None,
     };
     let reshape_target = match &tool {
-        Some(Tool::Reshape { drag, .. }) => ui.input(|input| input.pointer.hover_pos()).map(|pointer| drag.target(camera.snap(pointer, rect))),
+        Some(Tool::Reshape { drag, .. }) => {
+            ui.input(|input| input.pointer.hover_pos()).and_then(|pointer| drag.destination(project, camera, rect, pointer))
+        }
         _ => None,
     };
     let group_preview = match (&tool, group_delta, reshape_target) {
         (Some(Tool::MoveItems { items, .. }), Some(delta), _) => items.moved(project, delta).ok(),
-        (Some(Tool::Reshape { drag, .. }), _, Some(to)) => project.reshaped(&drag.edit, to).ok(),
+        (Some(Tool::Reshape { drag, .. }), _, Some(to)) => drag.preview(project, to),
         _ => None,
     };
     let project = group_preview.as_ref().unwrap_or(project);
@@ -231,9 +234,14 @@ pub(crate) fn show(
         whole_wires.remove(&leg.wire);
     }
     wires::paint(&painter, rect, project, camera, moved.clone(), &whole_wires, &highlighted.wires);
+    if group_preview.is_some()
+        && let Some(Anchor::Existing(endpoint)) = reshape_target
+    {
+        wires::paint_attachment(&painter, rect, project, camera, endpoint);
+    }
     if let Some(leg) = selected_leg {
         let offset = match (&tool, reshape_target) {
-            (Some(Tool::Reshape { drag, .. }), Some(to)) if group_preview.is_some() => {
+            (Some(Tool::Reshape { drag, .. }), Some(Anchor::Free(to))) if group_preview.is_some() => {
                 if leg.horizontal() {
                     to.y_nm - drag.grabbed.y_nm
                 } else {

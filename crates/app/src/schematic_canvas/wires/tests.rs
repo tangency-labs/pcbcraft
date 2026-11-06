@@ -1,3 +1,4 @@
+mod attachment;
 mod segments;
 
 use crate::{PcbApp, tests::click};

@@ -327,6 +327,37 @@ fn mcp_slides_wire_segments_and_rejects_stale_retries() {
     assert_eq!(undone["project"], drawn["project"]);
 }
 
+/// Headless MCP discovers the strict attachment schema and connects explicit endpoints through
+/// the shared command; stale retries fail without affecting the one-step undo history.
+#[test]
+fn mcp_attaches_junctions_and_rejects_stale_retries() {
+    let mut server = server();
+    let command = pcbcraft_engine::ATTACH_JUNCTION;
+    let description = body(&call(&mut server, "describe_command", json!({"command":command})));
+    assert_eq!(description["params"]["required"], json!(["junction", "to", "expected_revision"]));
+    assert_eq!(description["params"]["properties"]["to"]["oneOf"].as_array().unwrap().len(), 2);
+    let mut state = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Attach"}})));
+    let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
+    for y in [0, 6] {
+        state = body(&call(
+            &mut server,
+            "execute",
+            json!({"command":pcbcraft_engine::DRAW_WIRE,
+            "params":{"from":point(0,y),"to":point(8,y),"bends":[],"expected_revision":state["revision"]}}),
+        ));
+    }
+    let wires = &state["project"]["schematic"]["wires"];
+    let request =
+        json!({"command":command,"params":{"junction":wires[0]["to"]["junction"],"to":wires[1]["to"],"expected_revision":state["revision"]}});
+    let attached = body(&call(&mut server, "execute", request.clone()));
+    let after = &attached["project"]["schematic"]["wires"];
+    assert_eq!(after[0]["to"], after[1]["to"]);
+    assert_eq!(call(&mut server, "execute", request)["isError"], true);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), attached);
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"], state["project"]);
+}
+
 /// MCP discovers the wire slice, break and segment deletion through the shared catalog and runs
 /// them: a slice keeps the route connected through a new junction, and deleting a leg leaves
 /// free ends.

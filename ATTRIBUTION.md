@@ -300,3 +300,16 @@ an opt-in WGPU root-window retirement request so a surviving editor keeps its
 native window when the original closes. The patch boundary and upgrade procedure
 are recorded in [vendor/eframe/PATCH.md](vendor/eframe/PATCH.md). Document/session
 ownership and the close/save policy remain in PCBcraft.
+
+## Wire endpoint attachment
+
+Endpoint drops in `crates/app/src/schematic_canvas/wires.rs` and
+`crates/app/src/schematic_canvas.rs` follow the interaction described in PCBcraft
+Next's `docs/wire-editing.md` and implemented by the junction-drop path and
+`attachment_target` in `src/desktop/canvas.rs` at
+`568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0). The new upstream
+implementation reuses its drawing tool's pin/junction hit test, rejects ambiguous
+targets and previews the connection before release. `crates/engine/src/wire/reshape.rs`
+implements attachment against upstream snapshots through a shared command; it does
+not reuse Next's document or session model. Attaching inside a wire segment and
+automatic wire healing remain separate work.
