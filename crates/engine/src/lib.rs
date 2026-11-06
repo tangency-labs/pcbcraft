@@ -494,8 +494,10 @@ impl Session {
     }
 
     /// Return the current project, revision, and undo and redo availability as JSON.
-    /// The schematic's `wires` list identifies each link by its two terminal references.
-    /// The `netlist` groups terminals joined by those wires and lists terminals with no wire as `unconnected`.
+    /// Each schematic wire reports terminal or junction endpoints and optional authored `bends`.
+    /// The schematic's `junctions` list provides endpoint IDs and positions; its `netlist`
+    /// groups connected terminals and junctions, including junction-only nets, and lists
+    /// terminals without a wire as `unconnected`.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
