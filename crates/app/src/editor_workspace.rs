@@ -99,6 +99,21 @@ impl EditorViews {
         }
     }
 
+    /// Dismiss the detached host while keeping the remaining view in place. The hidden view
+    /// retains its navigation and selection, but old gestures and pending reveals expire.
+    /// Closing a view never changes the project or implicitly opens a split.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn close_detached(&mut self) {
+        if let Some(id) = self.detached.take() {
+            self.suspend();
+            if self.active.id() == id {
+                self.bind(self.other.id());
+            }
+            self.split = false;
+            self.rects = [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)];
+        }
+    }
+
     /// Give both views the same snap spacing, as at startup from the remembered preference.
     /// An out-of-range spacing leaves both unchanged.
     pub(super) fn set_grid_everywhere(&mut self, spacing_nm: i64) {

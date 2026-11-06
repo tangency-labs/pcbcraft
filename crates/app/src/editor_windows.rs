@@ -62,7 +62,7 @@ impl PcbApp {
         self.repaint_editors(ctx);
     }
 
-    /// Finish a queued close/redock after the child has returned its render slot and panels.
+    /// Finish an explicit Dock after the child has returned its render slot and panels.
     /// No save prompt is needed: the view returns to the same still-open project.
     pub(super) fn finish_redock(&mut self, ctx: &Context) {
         if std::mem::take(&mut self.windows.dock_requested) {
@@ -97,7 +97,7 @@ impl PcbApp {
     }
 
     /// Route File → Quit and Ctrl+Q from either host to the primary project-close handler.
-    /// The child's own window Close command instead redocks its view.
+    /// The child's own window Close command only dismisses its view.
     pub(super) fn request_project_close(&self, ctx: &Context) {
         if !IN_BROWSER {
             ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
@@ -139,8 +139,9 @@ impl PcbApp {
 
     /// Render a secondary native viewport by borrowing this same PcbApp. Window-local panels
     /// and the view slot are exchanged only for this synchronous callback, then restored.
-    /// Closing the child redocks its view; the browser never invokes this host. Native windows
-    /// use the primary host's decoration policy; embedded fallback windows keep their own frame.
+    /// Closing the child dismisses its view without changing the root layout; only Dock opens
+    /// a split. The browser never invokes this host. Native windows use the primary host's
+    /// decoration policy; embedded fallback windows keep their own frame.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn detached_editor(&mut self, ctx: &Context) {
         let Some(id) = self.views.detached else {
@@ -170,7 +171,11 @@ impl PcbApp {
                     self.windows.placement = Some((outer.min, inner.size()));
                 }
                 if close {
-                    self.windows.dock_requested = true;
+                    // This callback has not exchanged view slots or panels yet, so the root
+                    // still owns the active slot. Closing must not take the Dock path below.
+                    self.views.close_detached();
+                    egui::DragAndDrop::clear_payload(ui.ctx());
+                    ui.ctx().request_repaint_of(ViewportId::ROOT);
                     return;
                 }
             }

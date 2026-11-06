@@ -16,14 +16,17 @@ the project and sheet hierarchy with chevrons; runtime view numbers never stand
 in for sheet identity. Pane changes invalidate pending input without editing the
 document. The native host borrows the same application on the UI thread, retaining
 one file controller and command history. Each window keeps its own panels;
-closing the child redocks its view, while closing the root uses one project-level
-**Save / Don’t Save / Cancel** decision. Board rendering and schematic-to-board cross-probing
+closing the child leaves the primary view in place, while closing the root uses
+one project-level **Save / Don’t Save / Cancel** decision. Board rendering and schematic-to-board cross-probing
 remain unimplemented. Selection highlighting between two views of the same schematic
 is implemented, using separate paint state from each view's edit selection.
 Opening a split seeds the other camera from the active view. View settings now
 provide optional selection following in both directions or either stable role
 direction, preserving zoom and focus. Presentation actions are not exposed through
-live MCP yet.
+live MCP yet. The current host has two fixed schematic views and at most one
+detached editor window; it cannot yet combine a split with additional detached
+views. Replacing that limit is the next hosting step in #64, before PCB workspace
+controls are built.
 
 ## Existing foundation
 
@@ -61,9 +64,10 @@ the opposite side of the board.
 | Owner | State and responsibilities |
 | --- | --- |
 | Open project session | Authoritative schematic and board data, components, definitions and mappings, revision, document commands, undo and redo |
-| Project controller | Save and dirty state, project replacement and close decisions, live MCP attachment, coordinated selection and view registry |
+| Project controller | Save and dirty state, project replacement and close decisions, live MCP attachment and coordinated selection |
+| View registry | Views addressed by stable runtime IDs, independent of their workspace target or host |
 | Editor view | Stable runtime view ID, schematic or PCB target, camera, active layer, visibility and selection filters, local tool draft |
-| Window | Shared ribbon and panels anchored to the window, targeting the focused editor |
+| Window | Stable host ID, pane layout, focused view, ribbon and panels anchored to that window |
 | Split pane | View placement and sizing, sheet-path tabs, keyboard and pointer focus |
 
 Moving a view between a pane and a native window retains its target and camera
@@ -86,24 +90,51 @@ the current schematic-only **View → Detach** already works without splitting f
 | Choice | Result |
 | --- | --- |
 | Select Schematic or PCB layout | Change the focused view's workspace in its current pane or window |
-| Open beside | Keep the current view and place the requested workspace in the companion pane |
-| Open in new window | Keep the current view and place the requested workspace in a separate native window |
-| Detach / Dock an existing view | Move that view with its target, camera and selection intact |
+| Split / Open beside | Choose a workspace and document for a new pane beside the focused view; duplicating the current target is an explicit choice |
+| Open in new window | Create another view of the requested workspace in a new native window, leaving existing views in place |
+| Detach an existing view | Move that view to its own window with its target, camera and selection intact |
+| Dock an existing view | Move that view into a chosen window and pane position |
+| Close a secondary window | Dismiss its views without changing the layout, cameras or selections in other windows |
 
-Opening beside or in a window should reuse a matching companion view when one
-exists, moving or focusing it as requested instead of creating an accidental
-duplicate. Switching a view back to a workspace restores that view's prior
-camera, layers and filters for the workspace. A switch cancels unfinished input;
-it does not replace the project or reset the other view. Tabs identify sheet
-paths or the board, while the focused view determines its window's ribbon and
-panels. Detach/Dock should also be available from a view's tab menu so the target
-is explicit when several views are visible.
+Splitting must not force another view of the active workspace. The target chooser
+can open the schematic beside the board, another sheet beside the current sheet,
+or a second view of the same document. Opening beside or in a new window creates
+a view; focusing or moving an existing view is a separate action. A matching
+workspace elsewhere must not be silently moved or prevent another window from
+opening. Multiple detached windows and a split can coexist, and a detached window
+can itself contain a split. A new view of the same document starts at the source
+view's zoom and position; a different document uses its own navigation state.
+
+Switching a view back to a workspace restores that view's prior camera, layers
+and filters for the workspace. A switch cancels unfinished input; it does not
+replace the project or reset another view. Tabs identify sheet paths or the board,
+while the focused view determines its window's ribbon and panels. Detach/Dock
+should also be available from a view's tab menu so the target is explicit when
+several views are visible.
 
 Keep workspace target and host placement separate in the presentation handlers:
 opening a target in the current view, beside it or in another window is distinct
 from moving an existing view. GUI and live-MCP callers must use those same
 handlers under #61. Browser builds offer in-place switching and Open beside;
-native window actions are omitted. The existing close policy below still applies.
+native window actions are omitted.
+
+### Next hosting step in #64
+
+Replace the `active`/`other` pair and single detached viewport with the view
+registry and per-window layouts above. Workspace/document targets belong to
+views; layout nodes refer to view IDs. Each window owns its focused view and
+contextual panels, while one project controller owns edits, files, dialogs and
+services. Closing a host removes its placement and cancels its outstanding input;
+it does not reconstruct another host's layout. Stable IDs must not be reused in a
+way that lets an old gesture or live request address a new view.
+
+Prove the host model with a split plus at least two detached schematic views,
+including splitting within a detached window, before adding board controls.
+Opening, moving, closing and focusing one view must leave the others' navigation
+and selection intact. Then bind the board renderer to the same view/target model
+and exercise a schematic/board split alongside another detached board view.
+This replaces the fixed-pair assumption rather than adding a board-specific
+exception to it.
 
 The focused view determines where editing shortcuts and contextual controls act.
 Text fields and dialogs retain keyboard ownership. A tool gesture captures its
@@ -120,8 +151,10 @@ a live editor rather than silently succeeding.
 
 The proposed initial desktop policy has one primary project window and
 detachable secondary editor windows in the same process. Closing a secondary
-window returns its view to the primary window. Closing the primary window uses
-the project's save or discard decision once and closes its secondary views.
+window dismisses its views; only an explicit Dock moves them into another host.
+This supersedes the original #64 proposal to return a closed view to the primary
+window, following user review of the unexpected split. Closing the primary
+window uses the project's save or discard decision once and closes its secondary views.
 Root-window promotion and independent-process editing can follow separately.
 Browser acceptance covers switching and splitting inside one tab; separate
 browser windows need another coordination design.
@@ -152,6 +185,13 @@ centered without zooming out. A reveal is consumed once, and subsequent manual
 navigation does not trigger another. Reveal counterpart across sheets remains
 planned. Only the focused view’s actual edit selection receives destructive
 commands. Receiving a highlight must not emit another selection event.
+
+With more than two views, highlights project into every compatible visible target
+without changing its edit selection. Follow settings must address source and
+destination views by stable ID, independently of which window hosts them; the
+current primary/secondary pair is insufficient. Keep highlight-only as the
+default, support directed following, and invalidate pending navigation when a
+source or target closes or changes document.
 
 For the current same-sheet views, the latest explicit selection supplies the
 counterpart highlight, with amber ink distinguishing it from local blue edit
@@ -199,7 +239,7 @@ issues to finish before the next step can start.
 
 | Step | Issue | Reviewable result |
 | --- | --- | --- |
-| 1 | #64, with #28 and #55 contracts | Separate project ownership from view state; settle target addresses, assignment versus placement and pending board removals. |
+| 1 | #64, with #28 and #55 contracts | Separate project ownership from view state, replace the fixed pair with a view registry and per-window layouts, and prove a split plus multiple detached views; settle target addresses, assignment versus placement and pending board removals. |
 | 2 | [#28](https://github.com/tangency-labs/pcbcraft/issues/28) | Pin an original footprint definition and mapping; assign before or during layout; reopen offline and reject incompatible mappings. |
 | 3 | #54, with [#50](https://github.com/tangency-labs/pcbcraft/issues/50) and [#53](https://github.com/tangency-labs/pcbcraft/issues/53) | Board canvas, simple closed outline, basic layers, footprint placement/move/rotation, Properties, grid and selection controls, undo and persistence. |
 | 4 | #64 and #65 | The same schematic and board views work in a split and in separate native windows, with independent cameras and bidirectional highlighting. |
@@ -225,7 +265,7 @@ two explicit connections and compatible footprints on a rectangular two-layer
 board. This is a behavior fixture, not a validated electrical reference design.
 
 - Place, move and rotate a footprint through shared engine commands. Each completed gesture is one undo step; cancellation makes no edit.
-- Switch workspaces, split schematic and board, detach either editor, and return it. Preserve independent cameras and the same open project throughout.
+- Switch workspaces, split schematic and board, and open at least two additional native editor windows without moving the existing views. Exercise a split inside a detached window, another view of the same board, explicit Detach/Dock, and secondary Close without an implicit split elsewhere. Preserve independent cameras and the same open project throughout.
 - Select a component, pin, footprint and pad from either side. Highlight the exact counterpart without focus theft or selection loops; cameras stay put by default, with optional directed selection following that preserves zoom. Reveal counterpart navigates explicitly.
 - Rename a reference and change placement without breaking correspondence. Exercise an unassigned component and reject an incompatible mapping without partial mutation.
 - Undo and redo from either editor, then inspect through live MCP. Both views and MCP report the same revision and electrical state.

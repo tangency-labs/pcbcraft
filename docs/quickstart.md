@@ -92,10 +92,12 @@ To compare views, choose **View → Split**, pan one pane, and select a symbol:
 the other pane highlights it while keeping its own selection. **View → Settings**
 can also pan the counterpart into view. On the desktop, **View → Detach** moves
 the active view to another native window. Edit there and undo in the primary
-window to check the shared history. **View → Dock**, or closing the detached
-window, returns both views to a split without resetting their cameras. Closing
-the primary window prompts once for unsaved changes; **Cancel** leaves both
-windows open. Browser builds keep both views inside one tab.
+window to check the shared history. **View → Dock** returns both views to a split
+without resetting their cameras. Closing the detached window instead leaves
+only the primary view, with its camera and selection intact. Closing the primary
+window prompts once for unsaved changes; **Cancel** leaves the editors open.
+The current implementation supports two schematic views and one detached editor;
+browser builds keep both views inside one tab.
 
 Share the entire project folder or its `.pc.zip` archive, rather than the entry
 point alone. Used symbol definitions are pinned so the recipient does not need

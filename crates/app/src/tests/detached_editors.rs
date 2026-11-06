@@ -111,7 +111,7 @@ fn detach(h: &mut Harness<'_, PcbApp>) {
 }
 
 /// A direct detach inherits the primary window's chrome policy. Integrated controls address
-/// only the child viewport, whose close event redocks the view without asking to close the project.
+/// only the child viewport, whose close event dismisses the view without changing the root layout.
 #[test]
 fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
     for integrated in [false, true] {
@@ -149,7 +149,7 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
             peer.borrow_mut().close = true;
             h.run();
             assert!(h.state().views.detached.is_none());
-            assert!(h.state().views.split);
+            assert!(!h.state().views.split);
             assert!(matches!(h.state().dialog, Dialog::None));
         }
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
@@ -157,44 +157,70 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
     }
 }
 
-/// Either existing split view can move out and back. Host transitions retain camera, grid,
-/// selection and encoded project bytes, while invalidating callbacks from the previous host.
+/// Either split view can detach, then close or explicitly dock from either host. Close keeps
+/// the root alone; Dock restores the split. All transitions preserve navigation and project
+/// bytes while invalidating callbacks captured before the transition.
 #[test]
-fn detach_and_close_preserve_both_views_without_copying_the_project() {
+fn detach_close_and_dock_preserve_views_without_copying_the_project() {
+    #[derive(Debug, PartialEq)]
+    enum Finish {
+        Close,
+        DockRoot,
+        DockChild,
+    }
     for id in [ViewId(0), ViewId(1)] {
-        let (mut h, peer) = multi_window();
-        let ctx = h.ctx.clone();
-        h.state_mut().split_editors(&ctx, true);
-        h.state_mut().views.bind(id);
-        h.state_mut().views.active.camera.center_on(Point { x_nm: 5_080_000, y_nm: 2_540_000 });
-        h.state_mut().set_view_grid(id, 500_000);
-        h.state_mut().select(Selection::one_symbol("symbol-2".to_owned()));
-        h.run();
-        let app = h.state();
-        let before = app.session.snapshot().unwrap();
-        let revision = app.session.revision();
-        let bytes = encode(before.clone()).unwrap();
-        let origin = Point { x_nm: 0, y_nm: 0 };
-        let positions = [ViewId(0), ViewId(1)].map(|id| app.views.view(id).unwrap().camera.screen(origin, Rect::ZERO));
-        let old = app.views.active.input(&app.session).unwrap();
-        detach(&mut h);
-        assert_eq!(h.state().views.detached, Some(id));
-        assert_ne!(h.state().views.active.id(), id, "the root owns the remaining view");
-        assert!(peer.borrow().frames > 0);
-        assert!(!h.state().views.view(id).unwrap().accepts(old, &h.state().session));
-        assert_eq!(h.state().views.view(id).unwrap().selection.single_symbol(), Some("symbol-2"));
-        assert_eq!(h.state().views.view(id).unwrap().camera.snap_nm(), 500_000);
-        peer.borrow_mut().close = true;
-        h.run();
-        assert!(h.state().views.detached.is_none());
-        assert!(h.state().views.split);
-        assert_eq!(h.state().views.active.id(), id);
-        for (index, id) in [ViewId(0), ViewId(1)].into_iter().enumerate() {
-            assert_eq!(h.state().views.view(id).unwrap().camera.screen(origin, Rect::ZERO), positions[index]);
+        for action in [Finish::Close, Finish::DockRoot, Finish::DockChild] {
+            let (mut h, peer) = multi_window();
+            let ctx = h.ctx.clone();
+            h.state_mut().split_editors(&ctx, true);
+            h.state_mut().views.bind(id);
+            h.state_mut().views.active.camera.center_on(Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+            h.state_mut().set_view_grid(id, 500_000);
+            h.state_mut().select(Selection::one_symbol("symbol-2".to_owned()));
+            h.run();
+            let app = h.state();
+            let before = app.session.snapshot().unwrap();
+            let revision = app.session.revision();
+            let bytes = encode(before.clone()).unwrap();
+            let origin = Point { x_nm: 0, y_nm: 0 };
+            let positions = [ViewId(0), ViewId(1)].map(|id| app.views.view(id).unwrap().camera.screen(origin, Rect::ZERO));
+            let old = app.views.active.input(&app.session).unwrap();
+            detach(&mut h);
+            assert_eq!(h.state().views.detached, Some(id));
+            assert_ne!(h.state().views.active.id(), id, "the root owns the remaining view");
+            assert!(peer.borrow().frames > 0);
+            assert!(!h.state().views.view(id).unwrap().accepts(old, &h.state().session));
+            assert_eq!(h.state().views.view(id).unwrap().selection.single_symbol(), Some("symbol-2"));
+            assert_eq!(h.state().views.view(id).unwrap().camera.snap_nm(), 500_000);
+            let root_id = h.state().views.active.id();
+            let child_input = h.state().views.view(id).unwrap().input(&h.state().session).unwrap();
+            match action {
+                Finish::Close => {
+                    peer.borrow_mut().close = true;
+                    h.run();
+                }
+                Finish::DockRoot => click(&mut h, "Dock editor view"),
+                Finish::DockChild => {
+                    let view_tab = child_rect(&peer, "View").center();
+                    child_click_at(&mut h, &peer, view_tab);
+                    let dock = child_rect(&peer, "Dock editor view").center();
+                    child_click_at(&mut h, &peer, dock);
+                }
+            }
+            assert!(h.state().views.detached.is_none());
+            assert_eq!(h.state().views.split, action != Finish::Close, "{action:?}");
+            assert_eq!(h.state().views.active.id(), if action == Finish::Close { root_id } else { id });
+            assert!(!h.state().views.view(id).unwrap().accepts(child_input, &h.state().session));
+            assert_eq!(h.state().views.view(id).unwrap().selection.single_symbol(), Some("symbol-2"));
+            assert_eq!(h.state().views.view(id).unwrap().camera.snap_nm(), 500_000);
+            assert!(matches!(h.state().dialog, Dialog::None));
+            for (index, id) in [ViewId(0), ViewId(1)].into_iter().enumerate() {
+                assert_eq!(h.state().views.view(id).unwrap().camera.screen(origin, Rect::ZERO), positions[index]);
+            }
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            assert_eq!(h.state().session.revision(), revision);
+            assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
         }
-        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
-        assert_eq!(h.state().session.revision(), revision);
-        assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
     }
 }
 
@@ -258,6 +284,35 @@ fn detached_fields_dialog_keeps_its_target_and_blocks_other_input() {
     assert_eq!(h.state().message, None);
     let project = h.state().session.project().unwrap();
     assert_eq!(project.reference(&project.symbols()[0]), "R42");
+}
+
+/// A dialog cannot edit through a dismissed child's captured address. Closing that child
+/// during the modal leaves the root alone and rejects a later submission without an edit.
+#[test]
+fn closing_a_detached_view_invalidates_its_pending_fields_dialog() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let child = h.state().views.detached.unwrap();
+    let root = h.state().views.active.id();
+    let origin = h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, child_rect(&peer, "Schematic canvas"));
+    child_click_at(&mut h, &peer, origin);
+    child_key(&mut h, &peer, Key::E, Modifiers::NONE);
+    assert!(matches!(h.state().dialog, Dialog::EditFields { .. }));
+    let before = h.state().session.inspect();
+    focus(&mut h, &peer, false);
+    h.get_by_label("Reference").click();
+    h.run();
+    clear_name(&mut h);
+    h.get_by_label("Reference").type_text("R42");
+    h.run();
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(h.state().views.detached.is_none());
+    assert!(!h.state().views.split);
+    assert_eq!(h.state().views.active.id(), root);
+    click(&mut h, "OK");
+    assert_eq!(h.state().session.inspect(), before);
+    assert!(h.state().message.is_some(), "the stale dialog reports why its edit was rejected");
 }
 
 /// Simulate the OS acknowledging a root Close command as a close request on its input stream.
