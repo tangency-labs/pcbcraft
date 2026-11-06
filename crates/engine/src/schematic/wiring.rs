@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::{SymbolPlacement, parse_symbol_id, symbol_id};
+use super::{SymbolDefinition, SymbolPlacement, parse_symbol_id, symbol_id};
 
 pub(crate) const MAX_WIRES: usize = 4096;
 
@@ -14,28 +14,21 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Return the numbered terminal pair for a placed symbol.
-    pub(super) fn for_symbol(symbol: u64) -> [Self; 2] {
-        ["1", "2"].map(|number| Self { symbol, number })
-    }
-
-    /// Index the symbol's pin coordinates in terminal-number order.
-    pub(crate) fn pin_index(self) -> usize {
-        usize::from(self.number == "2")
+    /// Return a placed symbol's terminals, one per pin of its definition, in pin order.
+    pub(super) fn for_symbol(symbol: u64, definition: &'static SymbolDefinition) -> Vec<Self> {
+        definition.pins.iter().map(|pin| Self { symbol, number: pin.number.as_str() }).collect()
     }
 
     /// Read the two required fields and reject IDs that cannot come from project inspection.
+    /// The pin number must be one some library symbol uses; whether this symbol has that pin is
+    /// checked against the project, as [`crate::Project::terminal_position`] does.
     pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
         let symbol = parse_symbol_id(object.get("symbol")?.as_str()?)?;
         if object.len() != 2 {
             return None;
         }
-        let number = match object.get("terminal")?.as_str()? {
-            "1" => "1",
-            "2" => "2",
-            _ => return None,
-        };
+        let number = crate::library::pin_number(object.get("terminal")?.as_str()?)?;
         Some(Self { symbol, number })
     }
 
@@ -44,9 +37,10 @@ impl Terminal {
         self.number
     }
 
-    /// Resolve a stored pin number for a symbol ID.
-    pub(crate) fn from_number(symbol: u64, number: &str) -> Option<Self> {
-        Self::for_symbol(symbol).into_iter().find(|pin| pin.number == number)
+    /// Resolve a stored pin number on a placed symbol, or `None` when its definition has no such pin.
+    pub(crate) fn from_number(symbol: u64, definition: &'static SymbolDefinition, number: &str) -> Option<Self> {
+        let pin = definition.pins.iter().find(|pin| pin.number == number)?;
+        Some(Self { symbol, number: pin.number.as_str() })
     }
 
     /// Publish the terminal reference in the same shape that the command accepts.

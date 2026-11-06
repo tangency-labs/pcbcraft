@@ -61,7 +61,7 @@ impl ParamKind {
                 "type": "object",
                 "properties": {
                     "symbol": {"type": "string", "pattern": "^symbol-[1-9][0-9]*$"},
-                    "terminal": {"type": "string", "enum": ["1", "2"]},
+                    "terminal": {"type": "string", "enum": library::all_pin_numbers()},
                 },
                 "required": ["symbol", "terminal"],
                 "additionalProperties": false,
@@ -87,7 +87,7 @@ impl ParamKind {
             Self::SymbolDefinition => Err("must identify a symbol in the starter library"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
-            Self::Terminal => Err("must identify a symbol and its terminal number (1 or 2)"),
+            Self::Terminal => Err("must identify a symbol and one of its terminal numbers"),
         }
     }
 }
@@ -315,7 +315,7 @@ impl Project {
     pub(crate) fn component_terminal(&self, component: u64, pin: &str) -> Option<Terminal> {
         let definition = self.components.get(&component)?.definition;
         let symbol = self.units.get(&(component, definition.unit_id()))?;
-        Terminal::from_number(*symbol, pin)
+        Terminal::from_number(*symbol, definition, pin)
     }
 
     /// The older project format this was migrated from when it was opened, such as 1. Saving
@@ -336,7 +336,9 @@ impl Project {
 
     /// Resolve the current coordinates of a terminal in this snapshot.
     pub fn terminal_position(&self, terminal: Terminal) -> Option<Point> {
-        Some(self.terminal_symbol(terminal)?.pins()[terminal.pin_index()])
+        let symbol = self.terminal_symbol(terminal)?;
+        let index = symbol.definition.pin_index(terminal.number())?;
+        symbol.pins().get(index).copied()
     }
 
     /// Return the cached connected groups for this topology. Geometry-only edits share this cache.
@@ -672,6 +674,9 @@ impl Session {
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
         let component = project.symbols[index].component;
+        if !project.symbols[index].definition.fits_two_pad_footprint() {
+            return Err(CommandError::InvalidParams("the two-pad footprint only fits symbols with exactly pins 1 and 2".to_owned()));
+        }
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let mut project = project.clone();
         let pin_1_pad = params["pin_1_pad"].as_u64().unwrap_or_default() as u8;

@@ -302,6 +302,32 @@ fn enter_on_the_workspace_tile_opens_the_picker() {
     assert!(harness.query_by_label("PCB layout").is_none());
 }
 
+/// The Wire tool reaches a multi-pin symbol's pins where the library draws them, so the
+/// header's pin 4 connects to an LED's anode through the shared command.
+#[test]
+fn the_wire_tool_connects_multi_pin_library_symbols() {
+    let mut harness = harness();
+    new_project(&mut harness, "supply");
+    let grid = pcbcraft_engine::schematic::GRID_NM;
+    for (definition, x_nm) in [("header-4", 0), ("led", 20 * grid)] {
+        let revision = harness.state().session().revision();
+        harness
+            .state_mut()
+            .session
+            .apply(PLACE_SYMBOL, &json!({"definition": definition, "x_nm": x_nm, "y_nm": 0, "expected_revision": revision}))
+            .unwrap();
+    }
+    harness.run();
+    let step = pcbcraft_chrome::theme::SCHEMATIC_GRID_SPACING;
+    click(&mut harness, "Draw wire (W)");
+    // The header's pin 4 sits at (-5, 3) grid steps; the LED's anode at (15, 0).
+    click_canvas_offset(&mut harness, egui::vec2(-5.0, 3.0) * step);
+    click_canvas_offset(&mut harness, egui::vec2(15.0, 0.0) * step);
+    let wires = harness.state().session().inspect()["project"]["schematic"]["wires"].clone();
+    assert_eq!(wires[0]["from"], json!({"symbol": "symbol-2", "terminal": "4"}));
+    assert_eq!(wires[0]["to"], json!({"symbol": "symbol-3", "terminal": "1"}));
+}
+
 /// Below 380 points the ? button gives way, and Home's rail still reaches the same rows.
 #[test]
 fn narrow_bars_reach_help_rows_from_home() {

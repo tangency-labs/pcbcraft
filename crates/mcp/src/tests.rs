@@ -77,7 +77,7 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
                 schema["properties"]["definition"],
                 json!({
                     "type": "string",
-                    "enum": ["capacitor", "connector", "led", "resistor"],
+                    "enum": ["capacitor", "connector", "header-4", "led", "resistor"],
                     "description": "ID of a symbol in the starter library",
                 })
             );
@@ -159,7 +159,7 @@ fn the_wiring_command_describes_exact_terminal_references() {
     let schema = &body(&result)["params"];
     assert_eq!(schema["properties"]["from"]["type"], "object");
     assert_eq!(schema["properties"]["from"]["required"], json!(["symbol", "terminal"]));
-    assert_eq!(schema["properties"]["to"]["properties"]["terminal"]["enum"], json!(["1", "2"]));
+    assert_eq!(schema["properties"]["to"]["properties"]["terminal"]["enum"], json!(["1", "2", "3", "4"]));
 }
 
 /// Bulk command callers may skip inspection and fetch the project separately.

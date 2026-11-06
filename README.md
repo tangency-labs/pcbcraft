@@ -17,8 +17,8 @@ project's direction.
 
 Choose **Capture → Symbol** or press **A** to open the **Parts** browser, which
 lists the schematic symbols in the starter library under
-[`libraries/starter`](libraries/starter): a resistor, LED, capacitor and two-pin
-connector. See [docs/symbol-library.md](docs/symbol-library.md) for the file
+[`libraries/starter`](libraries/starter): a resistor, LED, capacitor, two-pin
+connector and 4-pin header. See [docs/symbol-library.md](docs/symbol-library.md) for the file
 format. Type to search, choose Small, Medium, Large or List, and click a part (or
 press **Enter** for the first match) to place it on the grid, or drag parts
 straight onto the sheet. Press **Esc** to close the browser or cancel placing. Choose **Capture → Wire**

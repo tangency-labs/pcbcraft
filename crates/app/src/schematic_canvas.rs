@@ -11,7 +11,7 @@ use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense,
 use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
 use pcbcraft_engine::{
     Project,
-    schematic::{GRID_NM, MAX_CENTER_NM, Point, Shape, SymbolDefinition, SymbolPlacement, Terminal},
+    schematic::{GRID_NM, MAX_CENTER_NM, Point, Shape, SymbolDefinition, SymbolPlacement, Terminal, TextAlign},
 };
 
 /// The active canvas interaction, bound to the revision at which it began.
@@ -236,7 +236,11 @@ fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, pointer: Pos
         .iter()
         .rev()
         .map(|symbol| (symbol, camera.screen(symbol.position, rect)))
-        .filter(|(symbol, center)| Rect::from_center_size(*center, body_size(symbol.turns()) * camera.grid_step()).contains(pointer))
+        .filter(|(symbol, center)| {
+            body(symbol.definition, symbol.turns())
+                .translate(center.to_vec2() / camera.grid_step())
+                .contains((pointer.to_vec2() / camera.grid_step()).to_pos2())
+        })
         .min_by(|(_, a), (_, b)| a.distance_sq(pointer).total_cmp(&b.distance_sq(pointer)))
 }
 
@@ -333,13 +337,29 @@ fn drawing_bounds(definition: &SymbolDefinition) -> Rect {
             Shape::Line(from, to) | Shape::Rect(from, to) => point(from).union(point(to)),
             Shape::Polyline(points) => points.iter().map(point).fold(Rect::NOTHING, Rect::union),
             Shape::Circle(center, radius) => point(center).expand(*radius as f32 / GRID),
+            Shape::Text(at, _, _) => point(at),
         })
     })
 }
 
-/// The grabbable body of a symbol in grid steps after its turns: the area around its drawing.
-fn body_size(turns: u8) -> Vec2 {
-    if turns % 2 == 1 { vec2(4.0, 5.0) } else { vec2(5.0, 4.0) }
+/// Where an upright label sits on its anchor after the symbol turns. Half a turn swaps start
+/// and end so a label inside a body edge stays inside; a quarter turn centers it.
+fn text_anchor(align: TextAlign, turns: u8) -> Align2 {
+    match (align, turns % 4) {
+        (TextAlign::Middle, _) | (_, 1 | 3) => Align2::CENTER_CENTER,
+        (TextAlign::Start, 0) | (TextAlign::End, 2) => Align2::LEFT_CENTER,
+        _ => Align2::RIGHT_CENTER,
+    }
+}
+
+/// The grabbable area of a symbol in grid steps around its center, after its turns: a 5 by 4
+/// step box at the center, grown to the drawing's strokes so a large part can be picked by its
+/// body. Pins stay outside it unless a stroke reaches them.
+fn body(definition: &SymbolDefinition, turns: u8) -> Rect {
+    let core = Rect::from_center_size(Pos2::ZERO, vec2(5.0, 4.0));
+    let drawing = drawing_bounds(definition);
+    let unturned = if drawing.is_positive() { core.union(drawing.shrink2(vec2(1.0, 0.0)).intersect(drawing)) } else { core };
+    turn_rect(unturned, turns)
 }
 
 /// Draw the symbol's library strokes around its center, with one grid step of `step` points,
@@ -375,24 +395,30 @@ fn paint_symbol(
             Shape::Circle(at, radius) => {
                 painter.circle_stroke(xy(at), *radius as f32 / GRID * step, stroke);
             }
+            Shape::Text(at, text, align) => {
+                if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
+                    let font = FontId::proportional((step * 1.1).clamp(Tokens::get().font_small * 0.8, Tokens::get().font_button));
+                    painter.text(xy(at), text_anchor(*align, turns), text, font, color);
+                }
+            }
         }
     }
-    // Text clears the drawing by a little under half a grid step.
-    let bounds = drawing_bounds(definition);
-    let (reference_offset, value_offset) = if bounds.is_positive() { (0.4 - bounds.min.y, bounds.max.y + 0.4) } else { (1.0, 1.0) };
     if let Some((reference, value)) = label {
+        // Text clears the turned drawing by a little under half a grid step.
+        let drawing = drawing_bounds(definition);
+        let bounds = if drawing.is_positive() { turn_rect(drawing, turns) } else { Rect::from_center_size(Pos2::ZERO, vec2(2.0, 2.0)) };
         let t = Tokens::get();
         let font = FontId::proportional(t.font_button);
         if turns % 2 == 1 {
             // Upright parts carry their text at the side, as KiCad places it.
-            let side = center + vec2((step * reference_offset.max(value_offset)).max(t.space_12), 0.0);
+            let side = center + vec2((step * (bounds.max.x + 0.4)).max(t.space_12), step * bounds.center().y);
             painter.text(side - vec2(0.0, t.space_2), Align2::LEFT_BOTTOM, reference, font.clone(), color);
             painter.text(side + vec2(0.0, t.space_2), Align2::LEFT_TOP, value, font, color);
         } else {
-            let label_offset = |grid_steps: f32| egui::vec2(0.0, (step * grid_steps).max(t.space_12));
-            let (above, below) = if turns % 4 == 2 { (value_offset, reference_offset) } else { (reference_offset, value_offset) };
-            painter.text(center - label_offset(above), Align2::CENTER_BOTTOM, reference, font.clone(), color);
-            painter.text(center + label_offset(below), Align2::CENTER_TOP, value, font, color);
+            let above = (step * (0.4 - bounds.min.y)).max(t.space_12);
+            let below = (step * (bounds.max.y + 0.4)).max(t.space_12);
+            painter.text(center - vec2(0.0, above), Align2::CENTER_BOTTOM, reference, font.clone(), color);
+            painter.text(center + vec2(0.0, below), Align2::CENTER_TOP, value, font, color);
         }
     }
 }

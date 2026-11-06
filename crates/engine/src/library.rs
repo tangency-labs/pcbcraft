@@ -12,7 +12,9 @@ use std::{collections::BTreeSet, sync::LazyLock};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::schematic::{ElectricalType, GRID_NM, PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, check_value};
+use crate::schematic::{
+    ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, TextAlign, check_value,
+};
 
 mod starter_files {
     include!(concat!(env!("OUT_DIR"), "/starter_library.rs"));
@@ -29,6 +31,10 @@ const MAX_SHAPES: usize = 256;
 const MAX_POINTS: usize = 64;
 /// How far a drawing may reach from the symbol's center on either axis, in nanometers.
 const MAX_DRAWING_NM: i64 = 2 * PIN_OFFSET_NM;
+/// Most terminals in one symbol.
+const MAX_TERMINALS: usize = 128;
+/// Longest text label in a drawing, in characters.
+const MAX_LABEL: usize = 16;
 
 /// A loaded symbol library: its identity and license from the manifest, the symbols that passed
 /// every check in file-name order, and a message for each file that didn't.
@@ -146,6 +152,7 @@ enum ShapeFile {
     Polyline { points_nm: Vec<[i64; 2]> },
     Rect { min_nm: [i64; 2], max_nm: [i64; 2] },
     Circle { center_nm: [i64; 2], radius_nm: i64 },
+    Text { at_nm: [i64; 2], text: String, align: TextAlign },
 }
 
 #[derive(Deserialize)]
@@ -157,11 +164,11 @@ struct PinFile {
 
 /// Parse and check one symbol file.
 ///
-/// The file must be [`SYMBOL_FORMAT`] with no unknown fields. This build places symbols with
-/// exactly two terminals, `"1"` then `"2"`, and one unit with one pin per terminal. Pins sit on
-/// the 1.27 mm grid, at most 6.35 mm from the center on each axis and apart from each other.
-/// Drawings have at most 256 strokes within 12.7 mm of the center. Errors name the first
-/// problem found.
+/// The file must be [`SYMBOL_FORMAT`] with no unknown fields. Terminals, 1 to 128 of them, have
+/// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. This build places symbols with one unit
+/// that has exactly one pin per terminal. Pins sit on the 1.27 mm grid, at most 12.7 mm from the
+/// center on each axis and apart from each other. Drawings have at most 256 strokes within
+/// 12.7 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
     let file: SymbolFile = serde_json::from_value(versioned(text, SYMBOL_FORMAT, "symbol")?).map_err(|error| error.to_string())?;
     check_id(&file.id)?;
@@ -173,39 +180,50 @@ pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
         return Err("`reference_prefix` must be 1 to 4 capital letters".to_owned());
     }
     check_value(&file.default_value).map_err(|error| error.replace("`value`", "`default_value`"))?;
-    let [first, second] =
-        <[TerminalFile; 2]>::try_from(file.terminals).map_err(|_| "this build places symbols with exactly two terminals".to_owned())?;
-    if first.id != "1" || second.id != "2" {
-        return Err("the two terminals must be \"1\" then \"2\"".to_owned());
+    if !(1..=MAX_TERMINALS).contains(&file.terminals.len()) {
+        return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals"));
     }
-    for name in [&first.name, &second.name].into_iter().flatten() {
-        check_text("terminal name", name, 32)?;
+    let mut numbers = BTreeSet::new();
+    for terminal in &file.terminals {
+        check_pin_number(&terminal.id)?;
+        if !numbers.insert(terminal.id.as_str()) {
+            return Err(format!("terminal {} appears twice", terminal.id));
+        }
+        if let Some(name) = &terminal.name {
+            check_text("terminal name", name, 32)?;
+        }
     }
     let [unit] = <[UnitFile; 1]>::try_from(file.units).map_err(|_| "this build places symbols with exactly one unit".to_owned())?;
     check_id(&unit.id).map_err(|error| format!("unit {error}"))?;
-    let offset = |terminal: &str| -> Result<Point, String> {
-        let mut pins = unit.pins.iter().filter(|pin| pin.terminal == terminal);
-        let (Some(pin), None) = (pins.next(), pins.next()) else {
-            return Err(format!("terminal {terminal} needs exactly one pin"));
+    if let Some(pin) = unit.pins.iter().find(|pin| !numbers.contains(pin.terminal.as_str())) {
+        return Err(format!("pin {} names no terminal", pin.terminal));
+    }
+    let mut positions = BTreeSet::new();
+    let mut pins = Vec::with_capacity(file.terminals.len());
+    for terminal in file.terminals {
+        let mut placed = unit.pins.iter().filter(|pin| pin.terminal == terminal.id);
+        let (Some(pin), None) = (placed.next(), placed.next()) else {
+            return Err(format!("terminal {} needs exactly one pin", terminal.id));
         };
         let [x_nm, y_nm] = pin.at_nm;
-        if x_nm % GRID_NM != 0 || y_nm % GRID_NM != 0 || x_nm.abs() > PIN_OFFSET_NM || y_nm.abs() > PIN_OFFSET_NM {
-            return Err(format!("pin {terminal} must sit on the 1.27 mm grid within 6.35 mm of the center"));
+        let reach = -MAX_PIN_OFFSET_NM..=MAX_PIN_OFFSET_NM;
+        if !reach.contains(&x_nm) || !reach.contains(&y_nm) || x_nm % GRID_NM != 0 || y_nm % GRID_NM != 0 {
+            return Err(format!("pin {} must sit on the 1.27 mm grid within 12.7 mm of the center", terminal.id));
         }
-        Ok(Point { x_nm, y_nm })
-    };
-    let offsets = [offset("1")?, offset("2")?];
-    if unit.pins.len() != 2 {
-        return Err("every pin must belong to terminal 1 or 2".to_owned());
-    }
-    if offsets[0] == offsets[1] {
-        return Err("the two pins can't share a position".to_owned());
+        if !positions.insert((x_nm, y_nm)) {
+            return Err(format!("pin {} shares a position with another pin", terminal.id));
+        }
+        pins.push(PinDefinition {
+            number: terminal.id,
+            offset: Point { x_nm, y_nm },
+            name: terminal.name,
+            electrical_type: terminal.electrical_type,
+        });
     }
     if unit.drawing.len() > MAX_SHAPES {
         return Err(format!("a drawing has at most {MAX_SHAPES} strokes"));
     }
     let drawing = unit.drawing.into_iter().map(shape).collect::<Result<Vec<_>, _>>()?;
-    let pin = |terminal: TerminalFile, offset| PinDefinition { offset, name: terminal.name, electrical_type: terminal.electrical_type };
     Ok(SymbolDefinition {
         id: file.id,
         name: file.name,
@@ -213,9 +231,31 @@ pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
         reference_prefix: file.reference_prefix,
         value: file.default_value,
         unit: unit.id,
-        pins: [pin(first, offsets[0]), pin(second, offsets[1])],
+        pins,
         drawing,
     })
+}
+
+/// Pin numbers are 1 to 8 ASCII letters, digits, `+`, `-` or `_`, such as `1`, `A3` or `VCC`.
+fn check_pin_number(number: &str) -> Result<(), String> {
+    let valid = (1..=8).contains(&number.len()) && number.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'_'));
+    if valid { Ok(()) } else { Err(format!("terminal ID {number:?} must be 1 to 8 letters, digits, +, - or _")) }
+}
+
+/// The pin number as spelled by some starter library symbol, borrowed for the program's
+/// lifetime so terminals can hold it. Whether a given symbol has that pin is checked against
+/// its own definition.
+pub(crate) fn pin_number(number: &str) -> Option<&'static str> {
+    starter().symbols().iter().flat_map(|symbol| &symbol.pins).map(|pin| pin.number.as_str()).find(|known| *known == number)
+}
+
+/// Every pin number the starter library uses, once each, shortest first and then in text order,
+/// so `"2"` comes before `"10"`. The terminal schema offers these.
+pub fn all_pin_numbers() -> Vec<&'static str> {
+    let mut numbers: Vec<_> = starter().symbols().iter().flat_map(|symbol| &symbol.pins).map(|pin| pin.number.as_str()).collect();
+    numbers.sort_unstable_by_key(|number| (number.len(), *number));
+    numbers.dedup();
+    numbers
 }
 
 /// Parse JSON and check its `format` before the strict read, so an older or newer file reports
@@ -254,6 +294,10 @@ fn shape(file: ShapeFile) -> Result<Shape, String> {
             }
             Shape::Circle(point(center_nm)?, radius_nm)
         }
+        ShapeFile::Text { at_nm, text, align } => {
+            check_text("text", &text, MAX_LABEL)?;
+            Shape::Text(point(at_nm)?, text, align)
+        }
     })
 }
 
@@ -287,9 +331,10 @@ mod tests {
         assert_eq!(library.problems(), [] as [String; 0]);
         assert_eq!((library.id.as_str(), library.license.as_str()), ("starter", "MIT OR Apache-2.0"));
         let ids: Vec<_> = library.symbols().iter().map(|symbol| symbol.id.as_str()).collect();
-        assert_eq!(ids, ["capacitor", "connector", "led", "resistor"]);
+        assert_eq!(ids, ["capacitor", "connector", "header-4", "led", "resistor"]);
         let led = library.symbol("led").unwrap();
-        assert_eq!(led.pins().each_ref().map(|pin| pin.name.as_deref()), [Some("Anode"), Some("Cathode")]);
+        let names: Vec<_> = led.pins().iter().map(|pin| pin.name.as_deref()).collect();
+        assert_eq!(names, [Some("Anode"), Some("Cathode")]);
         assert_eq!(led.reference_prefix(), "D");
     }
 
@@ -312,17 +357,41 @@ mod tests {
         assert!(error(|file| file["id"] = json!("Resistor")).contains("lowercase"));
         assert!(error(|file| file["revision"] = json!(0)).contains("revision"));
         assert!(error(|file| file["reference_prefix"] = json!("r")).contains("capital"));
-        assert!(error(|file| file["terminals"].as_array_mut().unwrap().truncate(1)).contains("two terminals"));
+        assert!(error(|file| file["terminals"].as_array_mut().unwrap().truncate(1)).contains("pin 2 names no terminal"));
+        assert!(error(|file| file["terminals"] = json!([])).contains("1 to 128 terminals"));
+        assert!(error(|file| file["terminals"][1]["id"] = json!("1")).contains("terminal 1 appears twice"));
+        assert!(error(|file| file["terminals"][1]["id"] = json!("pin two")).contains("1 to 8 letters"));
         assert!(error(|file| file["terminals"][1]["electrical_type"] = json!("magic")).contains("unknown variant"));
         assert!(error(|file| file["units"] = json!([])).contains("one unit"));
         assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([6_350_001, 0])).contains("grid"));
-        assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([7_620_000, 0])).contains("within 6.35 mm"));
+        assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([13_970_000, 0])).contains("within 12.7 mm"));
+        assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([i64::MIN, 0])).contains("within 12.7 mm"));
+        assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([-6_350_000, 0])).contains("shares a position"));
         assert!(error(|file| file["units"][0]["pins"][1]["terminal"] = json!("1")).contains("exactly one pin"));
         assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([12_700_001, 0])).contains("12.7 mm"));
         assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([i64::MIN, 0])).contains("12.7 mm"));
         assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([0, i64::MIN])).contains("12.7 mm"));
         assert!(error(|file| file["units"][0]["drawing"][0] = json!({"type": "circle", "center_nm": [0, 0], "radius_nm": 0})).contains("radius"));
         assert!(error(|file| file["units"][0]["drawing"][0] = json!({"type": "arc"})).contains("unknown variant"));
+        let label = |text: &str| json!({"type": "text", "at_nm": [0, 0], "text": text, "align": "middle"});
+        assert!(error(|file| file["units"][0]["drawing"][0] = label("")).contains("`text`"));
+        assert!(error(|file| file["units"][0]["drawing"][0] = label("seventeen letters")).contains("`text`"));
+    }
+
+    /// Multi-pin symbols keep their terminals in file order with names, numbers and positions,
+    /// and text labels load as upright strokes.
+    #[test]
+    fn multi_pin_symbols_load_in_terminal_order() {
+        let header = starter().symbol("header-4").unwrap();
+        let pins: Vec<_> = header.pins().iter().map(|pin| (pin.number.as_str(), pin.offset.y_nm, pin.electrical_type)).collect();
+        let row = |number, y_nm| (number, y_nm, ElectricalType::Passive);
+        assert_eq!(pins, [row("1", -3_810_000), row("2", -1_270_000), row("3", 1_270_000), row("4", 3_810_000)]);
+        assert!(header.drawing.iter().any(|shape| matches!(shape, Shape::Text(_, text, TextAlign::Middle) if text == "4")));
+        assert!(!header.fits_two_pad_footprint());
+        assert!(starter().symbol("resistor").unwrap().fits_two_pad_footprint());
+        assert_eq!(all_pin_numbers(), ["1", "2", "3", "4"]);
+        assert_eq!(pin_number("3"), Some("3"));
+        assert_eq!(pin_number("99"), None);
     }
 
     /// Extreme coordinates report a file error without preventing later valid files from loading.

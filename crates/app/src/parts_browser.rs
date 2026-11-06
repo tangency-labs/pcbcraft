@@ -194,7 +194,7 @@ mod tests {
         browser.query = "CAP".to_owned();
         assert_eq!(names(&browser), ["Capacitor"]);
         browser.query = "j".to_owned();
-        assert_eq!(names(&browser), ["2-pin connector"], "J is the connector's prefix");
+        assert_eq!(names(&browser), ["2-pin connector", "4-pin header"], "J is the connectors' prefix");
         browser.query = "zzz".to_owned();
         assert!(names(&browser).is_empty());
     }
