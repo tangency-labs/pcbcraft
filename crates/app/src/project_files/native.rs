@@ -106,7 +106,9 @@ fn load_folder(root: &Path) -> Result<Saved, String> {
     })
 }
 
-/// Save in the existing file’s encoding, or pick a destination for the requested encoding.
+/// Save a non-legacy target in place when no format is requested. Otherwise, including every
+/// legacy target, ask for a new destination in the requested format (a folder by default).
+/// Unchanged documents retain their bytes; dismissing the picker returns `Outcome::Cancelled`.
 pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Target)>, format: Option<SaveFormat>) -> Result<Outcome, String> {
     if let Some((old, target)) = previous.as_ref().filter(|(_, target)| format.is_none() && !target.legacy) {
         return save_target(snapshot, Some(old), target.clone(), &mut |_| Ok(()));

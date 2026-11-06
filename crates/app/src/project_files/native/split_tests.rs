@@ -60,6 +60,10 @@ fn every_interrupted_folder_save_reopens_as_old_or_new() {
         let root = dir.path().join("project");
         folder::save(&root, None, &before, &mut |_| Ok(())).unwrap();
         fs::write(root.join("README.md"), b"keep me").unwrap();
+        let metadata = ["sheets/.DS_Store", "library/Thumbs.db", "library/symbols/starter/desktop.ini"];
+        for path in metadata {
+            fs::write(root.join(path), b"OS metadata").unwrap();
+        }
         let mut index = 0;
         assert!(
             folder::save(&root, Some(&before), &after, &mut |_| {
@@ -74,6 +78,9 @@ fn every_interrupted_folder_save_reopens_as_old_or_new() {
         assert_eq!(&reopened, expected, "after {phase}");
         assert!(!root.join(".pcbcraft-save").exists());
         assert_eq!(fs::read(root.join("README.md")).unwrap(), b"keep me");
+        for path in metadata {
+            assert_eq!(fs::read(root.join(path)).unwrap(), b"OS metadata");
+        }
     }
 }
 
@@ -98,6 +105,7 @@ fn unchanged_documents_are_never_rewritten() {
     let mut d = encode_documents(session().snapshot().unwrap()).unwrap();
     d.get_mut(ENTRY_POINT).unwrap().extend_from_slice(b"\n  ");
     folder::save(&root, None, &d, &mut |_| Ok(())).unwrap();
+    fs::write(root.join("sheets/.DS_Store"), b"OS metadata").unwrap();
     let loaded = load(&root).unwrap();
     let old = loaded.snapshot.clone();
     let target = loaded.target;
@@ -114,6 +122,7 @@ fn unchanged_documents_are_never_rewritten() {
     let changed: Vec<_> = d.keys().filter(|path| d[*path] != after[*path]).collect();
     assert_eq!(changed.len(), 1);
     assert!(changed[0].starts_with("sheets/"));
+    assert_eq!(fs::read(root.join("sheets/.DS_Store")).unwrap(), b"OS metadata");
 }
 
 /// External changes and incomplete documents cannot replace the active project or clear edits.
@@ -123,6 +132,11 @@ fn failed_folder_opens_and_stale_saves_preserve_the_session() {
     let root = dir.path().join("project");
     let d = encode_documents(session().snapshot().unwrap()).unwrap();
     folder::save(&root, None, &d, &mut |_| Ok(())).unwrap();
+    assert_eq!(
+        folder::save(&root, None, &d, &mut |_| panic!("Save As must not overwrite a project")).unwrap_err(),
+        "That folder already contains a project. Choose a new or empty folder."
+    );
+    assert_eq!(folder::load(&root).unwrap(), d);
     let mut s = Session::default();
     let mut files = ProjectFiles::default();
     complete(&mut files, &mut s, load(&root).map(Outcome::Opened));
@@ -135,7 +149,10 @@ fn failed_folder_opens_and_stale_saves_preserve_the_session() {
     assert_eq!(s.revision(), revision);
     assert!(files.dirty(&s));
     let saved = files.saved.as_ref().unwrap();
-    assert!(save_target(snapshot, Some(&saved.snapshot), saved.target.clone(), &mut |_| Ok(())).is_err());
+    assert_eq!(
+        save_target(snapshot, Some(&saved.snapshot), saved.target.clone(), &mut |_| Ok(())).err().unwrap(),
+        "Project folder changed on disk. Use Save As to keep your edits in a separate folder."
+    );
     assert_eq!(fs::read(root.join("board.json")).unwrap(), b"broken");
 }
 
@@ -245,6 +262,11 @@ fn unknown_owned_files_and_symlinks_are_refused() {
     fs::remove_file(root.join("sheets/notes.txt")).unwrap();
     #[cfg(unix)]
     {
+        let hidden = root.join("sheets/.DS_Store");
+        std::os::unix::fs::symlink(root.join(ENTRY_POINT), &hidden).unwrap();
+        assert!(load(&root).is_err());
+        assert!(folder::save(&root, Some(&d), &d, &mut |_| Ok(())).is_err());
+        fs::remove_file(hidden).unwrap();
         fs::remove_file(root.join("board.json")).unwrap();
         let outside = dir.path().join("outside");
         fs::write(&outside, &d["board.json"]).unwrap();
@@ -253,6 +275,96 @@ fn unknown_owned_files_and_symlinks_are_refused() {
         assert!(folder::save(&root, Some(&d), &d, &mut |_| Ok(())).is_err());
         assert_eq!(fs::read(outside).unwrap(), d["board.json"]);
     }
+}
+
+/// Restore directory permissions on assertion failures too, so temporary projects can be removed.
+#[cfg(unix)]
+struct ReadOnlyDirectory(PathBuf, fs::Permissions);
+
+#[cfg(unix)]
+impl ReadOnlyDirectory {
+    /// Deny lock-file creation while allowing traversal and reads of the project beneath it.
+    fn new(path: &Path) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = fs::metadata(path).unwrap().permissions();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o555)).unwrap();
+        Self(path.to_owned(), permissions)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReadOnlyDirectory {
+    /// Restore the original mode before the enclosing temporary directory is cleaned up.
+    fn drop(&mut self) {
+        fs::set_permissions(&self.0, self.1.clone()).unwrap();
+    }
+}
+
+/// Desktop and headless readers accept read-only locations, while saves and pending recovery
+/// still require a writable lock. A blocked recovery leaves every published byte unchanged.
+#[cfg(unix)]
+#[test]
+fn read_only_folders_open_without_creating_locks_but_cannot_recover_or_save() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let lock = dir.path().join(".project.pcbcraft-lock");
+    let mut s = session();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    folder::save(&root, None, &before, &mut |_| Ok(())).unwrap();
+    fs::remove_file(&lock).unwrap();
+    let read_only = ReadOnlyDirectory::new(dir.path());
+    assert_eq!(load(&root).unwrap().target.documents.as_deref(), Some(&before));
+    assert_eq!(encode_documents(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap()).unwrap(), before);
+    assert!(!lock.exists());
+    assert!(folder::save(&root, Some(&before), &before, &mut |_| panic!("read-only save must not stage")).is_err());
+    drop(read_only);
+
+    // An existing lock remains authoritative even if it can only be opened for reading.
+    let held = OpenOptions::new().read(true).write(true).create_new(true).open(&lock).unwrap();
+    held.try_lock().unwrap();
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o444)).unwrap();
+    let read_only = ReadOnlyDirectory::new(dir.path());
+    assert!(folder::load(&root).unwrap_err().contains("Could not lock"));
+    held.unlock().unwrap();
+    assert_eq!(folder::load(&root).unwrap(), before);
+    assert!(folder::save(&root, Some(&before), &before, &mut |_| panic!("read-only save must not stage")).is_err());
+    drop(read_only);
+    drop(held);
+    fs::remove_file(&lock).unwrap();
+
+    replacement(&mut s);
+    let after = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert!(folder::save(&root, Some(&before), &after, &mut |phase| if phase == "journal" { Err("crash".to_owned()) } else { Ok(()) }).is_err());
+    fs::remove_file(&lock).unwrap();
+    let read_only = ReadOnlyDirectory::new(dir.path());
+    assert!(folder::load(&root).unwrap_err().contains("needs recovery"));
+    assert!(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap_err().contains("needs recovery"));
+    for (path, bytes) in &before {
+        assert_eq!(&fs::read(root.join(path)).unwrap(), bytes);
+    }
+    assert!(root.join(".pcbcraft-save/journal.json").is_file());
+    assert!(!lock.exists());
+    drop(read_only);
+    assert_eq!(folder::load(&root).unwrap(), after);
+}
+
+/// Contention and invalid lock paths must not be mistaken for a read-only project location.
+#[test]
+fn folder_load_never_bypasses_a_busy_or_invalid_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let path = dir.path().join(".project.pcbcraft-lock");
+    let documents = encode_documents(session().snapshot().unwrap()).unwrap();
+    folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+    let lock = OpenOptions::new().read(true).write(true).open(&path).unwrap();
+    lock.try_lock().unwrap();
+    assert!(folder::load(&root).unwrap_err().contains("Could not lock"));
+    lock.unlock().unwrap();
+    drop(lock);
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert!(folder::load(&root).unwrap_err().contains("not a regular file"));
 }
 
 /// No-op archive saves retain exact imported bytes, and folder/archive conversion retains IDs.

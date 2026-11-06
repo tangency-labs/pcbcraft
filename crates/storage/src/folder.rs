@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -37,12 +37,20 @@ struct Payload {
     sha256: String,
 }
 
-/// Load only after recovering a published journal under the same lock used by writers.
+/// Recover and read under the writer lock. If opening the lock file is denied by filesystem
+/// permissions, allow a read without recovery only while no committed journal exists.
 pub fn load(root: &Path) -> Result<Documents, String> {
     regular_directory(root)?;
-    let _lock = lock(root)?;
-    recover(root, &mut |_| Ok(()))?;
+    let lock = lock(root, true)?;
+    if lock.can_recover {
+        recover(root, &mut |_| Ok(()))?;
+    } else {
+        require_no_journal(root)?;
+    }
     let documents = read_documents(root, false)?;
+    if !lock.can_recover {
+        require_no_journal(root)?;
+    }
     decode_documents(&documents)?;
     Ok(documents)
 }
@@ -57,7 +65,7 @@ pub fn save(
     checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
 ) -> Result<(), String> {
     decode_documents(documents)?;
-    let _lock = lock(root)?;
+    let _lock = lock(root, false)?;
     if !root.exists() {
         fs::create_dir(root).map_err(error)?;
         sync_dir(root.parent().ok_or("missing project parent")?)?;
@@ -65,8 +73,12 @@ pub fn save(
     regular_directory(root)?;
     recover(root, &mut |_| Ok(()))?;
     let baseline = read_documents(root, false)?;
-    if expected.map_or(!baseline.is_empty(), |expected| expected != &baseline) {
-        return Err("Project folder changed on disk. Use Save As to keep your edits in a separate folder.".to_owned());
+    match expected {
+        None if !baseline.is_empty() => return Err("That folder already contains a project. Choose a new or empty folder.".to_owned()),
+        Some(expected) if expected != &baseline => {
+            return Err("Project folder changed on disk. Use Save As to keep your edits in a separate folder.".to_owned());
+        }
+        _ => {}
     }
     if &baseline == documents {
         return Ok(());
@@ -196,7 +208,8 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
 }
 
 /// Read the managed files only. Root-level README/Git files are left alone; files under
-/// sheets, library and assets must belong to the supported schema, with no links or special files.
+/// sheets, library and assets must belong to the supported schema, apart from regular OS metadata
+/// files. Links and special files are refused even when named like OS metadata.
 fn read_documents(root: &Path, recovering: bool) -> Result<Documents, String> {
     // An interrupted save may temporarily contain both removed and added definitions.
     let multiplier = if recovering { 2 } else { 1 };
@@ -222,7 +235,8 @@ fn read_documents(root: &Path, recovering: bool) -> Result<Documents, String> {
     Ok(documents)
 }
 
-/// Walk only bounded owned subdirectories and refuse any unexpected file before reading it.
+/// Walk bounded owned subdirectories, leaving ordinary OS metadata untouched and refusing
+/// every other unexpected file before reading it. Ignored files still count toward the scan bound.
 fn scan(root: &Path, directory: &Path, documents: &mut Documents, depth: usize, multiplier: usize, entries: &mut usize) -> Result<(), String> {
     regular_directory(directory)?;
     if depth > 3 {
@@ -240,6 +254,9 @@ fn scan(root: &Path, directory: &Path, documents: &mut Documents, depth: usize, 
             continue;
         }
         let relative = path.strip_prefix(root).map_err(error)?.to_str().ok_or("Invalid document filename")?.replace(std::path::MAIN_SEPARATOR, "/");
+        if metadata.is_file() && matches!(path.file_name().and_then(|name| name.to_str()), Some(".DS_Store" | "Thumbs.db" | "desktop.ini")) {
+            continue;
+        }
         if !is_document_path(&relative) || !metadata.is_file() {
             return Err(format!("{relative}: unexpected project file"));
         }
@@ -251,8 +268,11 @@ fn scan(root: &Path, directory: &Path, documents: &mut Documents, depth: usize, 
     Ok(())
 }
 
-/// Hold a nonblocking sibling lock across recovery, baseline checks and publication.
-fn lock(root: &Path) -> Result<FolderLock, String> {
+/// Hold a nonblocking sibling lock across recovery, baseline checks and publication. Loading
+/// may use an existing read-only lock in shared mode, or read unlocked if it cannot be created.
+/// Either fallback requires a permission/read-only error and no journal; contention and unsafe
+/// lock paths remain fatal, and a shared lock never authorizes recovery.
+fn lock(root: &Path, allow_read_only: bool) -> Result<FolderLock, String> {
     let parent = root.parent().ok_or("Project folder has no parent")?;
     let name = root.file_name().ok_or("Project folder has no name")?;
     let mut lock_name = std::ffi::OsString::from(".");
@@ -264,19 +284,48 @@ fn lock(root: &Path) -> Result<FolderLock, String> {
     {
         return Err("Save lock is not a regular file.".to_owned());
     }
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(error)?;
+    let file = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path) {
+        Ok(file) => file,
+        Err(e) if allow_read_only && matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem) => {
+            require_no_journal(root)?;
+            return match File::open(&path) {
+                Ok(file) => {
+                    file.try_lock_shared().map_err(|e| format!("Could not lock project folder: {e}"))?;
+                    Ok(FolderLock { file: Some(file), can_recover: false })
+                }
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(FolderLock { file: None, can_recover: false }),
+                Err(e) => Err(error(e)),
+            };
+        }
+        Err(e) => return Err(error(e)),
+    };
     file.try_lock().map_err(|e| format!("Could not lock project folder: {e}"))?;
-    Ok(FolderLock(file))
+    Ok(FolderLock { file: Some(file), can_recover: true })
+}
+
+/// Refuse an unlocked read if recovery is pending or its absence cannot be established.
+/// Use symlink metadata so even a dangling journal link is treated as an obstruction.
+fn require_no_journal(root: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(root.join(TRANSACTION)) {
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(error(e)),
+        Ok(_) => Err("Project folder needs recovery, but its save lock is not writable. Open a writable copy to recover it.".to_owned()),
+    }
 }
 
 /// Explicit unlock prevents a concurrently forked child retaining our advisory lock after
 /// the save finishes; closing this process's descriptor alone need not release that lock.
-struct FolderLock(File);
+struct FolderLock {
+    file: Option<File>,
+    can_recover: bool,
+}
 
 impl Drop for FolderLock {
     /// Release the lock on every success and error path, including interrupted staging.
     fn drop(&mut self) {
-        let _ = self.0.unlock();
+        if let Some(file) = &self.file {
+            let _ = file.unlock();
+        }
     }
 }
 

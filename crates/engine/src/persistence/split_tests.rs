@@ -218,6 +218,42 @@ fn accepts_missing_manifest_and_adds_one_on_export() {
     }
 }
 
+/// OS-created sidecars are ignored only after ZIP validation and never become project documents.
+#[test]
+fn manifestless_archives_ignore_os_metadata_before_root_discovery() {
+    let expected = documents(&session());
+    for prefix in ["", "my-board/"] {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        if !prefix.is_empty() {
+            writer.add_directory(prefix, options).unwrap();
+        }
+        for directory in ["__MACOSX/", "__MACOSX/my-board/", "__MACOSX/my-board/sheets/"] {
+            writer.add_directory(directory, options).unwrap();
+        }
+        for (path, bytes) in &expected {
+            writer.start_file(format!("{prefix}{path}"), options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        let mut metadata =
+            vec!["__MACOSX/._my-board".to_owned(), "__MACOSX/project.pc".to_owned(), "__MACOSX/my-board/sheets/._sheet.json".to_owned()];
+        for name in [".DS_Store", "Thumbs.db", "desktop.ini"] {
+            metadata.extend([name.to_owned(), format!("{prefix}sheets/{name}"), format!("{prefix}library/symbols/starter/{name}")]);
+        }
+        for path in metadata {
+            writer.start_file(path, options).unwrap();
+            writer.write_all(b"OS metadata").unwrap();
+        }
+        let opened = decode_packed(&writer.finish().unwrap().into_inner()).unwrap();
+        assert!(opened.needs_manifest);
+        assert_eq!(opened.documents.as_ref(), Some(&expected));
+        let saved = encode_packed_documents(opened.documents.unwrap()).unwrap();
+        let reopened = decode_packed(&saved).unwrap();
+        assert!(!reopened.needs_manifest);
+        assert_eq!(reopened.documents.as_ref(), Some(&expected));
+    }
+}
+
 /// A present manifest is authoritative: corrupted claims never fall back to hand-ZIP mode.
 #[test]
 fn rejects_bad_manifests_and_extra_archive_entries() {
@@ -240,7 +276,19 @@ fn rejects_bad_manifests_and_extra_archive_entries() {
         bad.insert("manifest.json".to_owned(), manifest.to_vec());
         assert!(decode_packed(&zip_files(&bad, "", false)).is_err());
     }
-    for path in ["notes.txt", "../evil", "/evil", "C:/evil", "library/symbols/starter/unused.r1.json", "second/project.pc"] {
+    for prefix in ["", "wrapped/"] {
+        for path in [".DS_Store", "sheets/Thumbs.db", "library/desktop.ini", "__MACOSX/._project.pc"] {
+            let mut bad = d.clone();
+            bad.insert(path.to_owned(), b"OS metadata".to_vec());
+            assert!(decode_packed(&zip_files(&bad, prefix, false)).is_err(), "manifest must reject {prefix}{path}");
+        }
+    }
+    let mut unsupported = d.clone();
+    edit(&mut unsupported, "manifest.json", |value| {
+        value["assets"] = json!([{"path":format!("assets/{}", "0".repeat(64)), "size_bytes":0, "sha256":"0".repeat(64)}]);
+    });
+    assert!(decode_packed(&zip_files(&unsupported, "", false)).err().unwrap().contains("bundled assets are not yet supported"));
+    for path in ["notes.txt", "__MACOSX", "../evil", "/evil", "C:/evil", "library/symbols/starter/unused.r1.json", "second/project.pc"] {
         let mut bad = documents(&session());
         bad.insert(path.to_owned(), b"{}".to_vec());
         assert!(decode_packed(&zip_files(&bad, "", false)).is_err());
@@ -252,17 +300,29 @@ fn rejects_bad_manifests_and_extra_archive_entries() {
     extra.remove("manifest.json");
     extra.insert("outside.json".to_owned(), b"{}".to_vec());
     assert!(decode_packed(&zip_files(&extra, "wrapped/", false)).is_err());
+    let mut asset = documents(&session());
+    asset.insert(format!("assets/{}", "0".repeat(64)), Vec::new());
+    assert!(decode_packed(&zip_files(&asset, "", false)).is_err());
 }
 
 /// ZIP links and payloads over per-part limits are refused before document adoption.
 #[test]
 fn rejects_links_oversized_parts_and_truncated_archives() {
-    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-    writer.add_symlink("project.pc", "/tmp/elsewhere", SimpleFileOptions::default()).unwrap();
-    assert!(decode_packed(&writer.finish().unwrap().into_inner()).is_err());
-    let mut d = documents(&session());
-    d.insert("board.json".to_owned(), vec![b' '; MAX_DOCUMENT_BYTES + 1]);
-    assert!(decode_packed(&zip_files(&d, "", false)).is_err());
+    for path in ["project.pc", "__MACOSX/._project.pc", "sheets/.DS_Store"] {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer.add_symlink(path, "/tmp/elsewhere", SimpleFileOptions::default()).unwrap();
+        assert!(decode_packed(&writer.finish().unwrap().into_inner()).err().unwrap().contains("unsupported ZIP entry"));
+    }
+    for path in ["board.json", "__MACOSX/._project.pc", "sheets/.DS_Store"] {
+        let mut d = documents(&session());
+        d.insert(path.to_owned(), vec![b' '; MAX_DOCUMENT_BYTES + 1]);
+        assert!(decode_packed(&zip_files(&d, "", false)).err().unwrap().contains("size limit"));
+    }
+    for path in ["__MACOSX/../outside", "sheets/../.DS_Store"] {
+        let mut d = documents(&session());
+        d.insert(path.to_owned(), b"metadata".to_vec());
+        assert!(decode_packed(&zip_files(&d, "", false)).err().unwrap().contains("unsafe ZIP path"));
+    }
     let packed = encode_packed(session().snapshot().unwrap()).unwrap();
     assert!(decode_packed(&packed[..packed.len() - 1]).is_err());
 }
@@ -287,4 +347,15 @@ fn rejects_zip64_duplicates_and_crc_corruption() {
     let position = corrupt.windows(13).position(|bytes| bytes == b"Two resistors").unwrap();
     corrupt[position] = b'X';
     assert!(decode_packed(&corrupt).is_err());
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let mut d = documents(&session());
+    d.insert("sheets/.DS_Store".to_owned(), b"unique metadata payload".to_vec());
+    for (path, bytes) in d {
+        writer.start_file(path, SimpleFileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+    let mut corrupt = writer.finish().unwrap().into_inner();
+    let position = corrupt.windows(23).position(|bytes| bytes == b"unique metadata payload").unwrap();
+    corrupt[position] = b'X';
+    assert!(decode_packed(&corrupt).err().unwrap().contains(".DS_Store"));
 }

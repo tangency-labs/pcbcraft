@@ -12,6 +12,9 @@ entry point, a `.pc.zip` archive or a legacy project. Save keeps the opened form
 Save As offers a project folder and a packed project. The folder destination is
 a new or empty project directory, while archive Save As requires an unused file.
 Unrelated root files such as `README.md` and `.git` remain untouched.
+Regular `.DS_Store`, `Thumbs.db` and `desktop.ini` files are also left alone inside
+project subdirectories; they are not project documents and are never published
+or removed by a save. Other unknown files in managed subdirectories are refused.
 
 ```text
 my-board/
@@ -128,8 +131,11 @@ the open. A broken manifest never falls back to manifest-less loading.
 A hand-zipped project **without a manifest** is accepted when it contains exactly
 a valid project layout. An optional single top-level folder, such as
 `my-board/project.pc`, is stripped; multiple roots and unrelated files are
-refused. Ordinary directory entries are accepted. ZIP CRC validation and all
-path, size, schema and cross-document checks still apply. The open notice says
+refused. Ordinary directory entries are accepted. In archives without a manifest,
+`__MACOSX/` sidecar trees and regular `.DS_Store`, `Thumbs.db` and `desktop.ini`
+files are discarded before locating the project root. They still undergo ZIP
+path, type, CRC and size checks. A present manifest disables these exceptions.
+All document schema and cross-document checks still apply. The open notice says
 that the next save or download will add a manifest. PCBcraft always writes one.
 
 Writers use Store, fixed timestamps, fixed permissions and a deterministic entry
@@ -159,6 +165,11 @@ The shared `pcbcraft-storage` crate also gives the headless CLI the same folder
 reader and recovery behavior. A nonblocking sibling advisory lock serializes
 cooperating opens and saves, and saved baseline bytes detect stale writers.
 A busy lock produces an error instead of leaving another operation waiting.
+If filesystem permissions prevent opening the lock file for writing, an open
+uses an existing readable lock in shared mode, or reads without a lock if none
+exists. Both fallbacks require no recovery journal before and after reading;
+saves and recovery always require the writer lock. This permits opening a
+read-only project and using Save As to place edits in a writable location.
 
 A save stages only changed or removed documents. It writes their new bytes and
 old backups into a temporary directory, flushes them, and writes a journal with

@@ -134,7 +134,8 @@ fn options() -> SimpleFileOptions {
 }
 
 /// Read containers v1/v2 or a hand-zipped folder. A missing manifest is allowed, but malformed
-/// or mismatched manifests are never ignored. All ZIP and document checks precede adoption.
+/// or mismatched manifests are never ignored. Only manifest-less archives discard ordinary OS
+/// metadata, after validating its ZIP paths, types, CRCs and size limits along with every entry.
 pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
     if bytes.len() > MAX_ARCHIVE_BYTES {
         return Err("project ZIP exceeds its size limit".to_owned());
@@ -200,6 +201,13 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
             return Ok(PackedProject { project, documents: None, needs_manifest: false, legacy: true });
         }
     }
+    // Any manifest prevents metadata filtering, including malformed or misplaced manifests.
+    // Filter before root discovery so Apple's sidecar tree cannot masquerade as a second root.
+    let has_manifest = entries.keys().any(|name| name.rsplit('/').next() == Some(MANIFEST));
+    if !has_manifest {
+        entries.retain(|name, _| !is_apple_metadata(name) && !matches!(name.rsplit('/').next(), Some(".DS_Store" | "Thumbs.db" | "desktop.ini")));
+        directories.retain(|name| !is_apple_metadata(name));
+    }
     let prefix = if entries.contains_key(super::ENTRY_POINT) {
         String::new()
     } else {
@@ -248,6 +256,11 @@ pub fn decode_packed(bytes: &[u8]) -> Result<PackedProject, String> {
     }
     let project = decode_documents(&documents)?;
     Ok(PackedProject { project, documents: Some(documents), needs_manifest: manifest.is_none(), legacy: false })
+}
+
+/// Recognize Apple's reserved sidecar directory at the archive root or inside its wrapper.
+fn is_apple_metadata(path: &str) -> bool {
+    path.rsplit_once('/').is_some_and(|(parents, _)| parents.split('/').any(|component| component == "__MACOSX"))
 }
 
 /// Bound central-directory allocation, reject multi-disk/ZIP64 and require a complete ordinary
