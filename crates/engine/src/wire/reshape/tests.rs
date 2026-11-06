@@ -125,6 +125,18 @@ fn pin_routes_keep_their_terminals() {
     assert_eq!(route.len(), 4, "a diagonal pin link has a middle vertical leg");
     let middle = Point { x_nm: route[1].x_nm, y_nm: (route[1].y_nm + route[2].y_nm) / 2 };
     let kept = identities(&session);
+
+    // Moves to the grabbed point keep the automatic route: no authored bends, revision or undo step.
+    let (snapshot, revision) = (session.snapshot().unwrap(), session.revision());
+    run(&mut session, crate::MOVE_WIRE_SEGMENT, json!({"wire": wire.id(), "at": middle, "to": middle})).unwrap();
+    run(&mut session, crate::MOVE_WIRE_CORNER, json!({"wire": wire.id(), "at": route[1], "to": route[1]})).unwrap();
+    assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert!(session.project().unwrap().wires()[0].bends().is_none());
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(session.project().unwrap().wires().is_empty(), "the only undo step is still Connect Pins");
+    session.apply("edit.redo", &Value::Null).unwrap();
+
     let to = Point { x_nm: middle.x_nm + 2 * GRID_NM, y_nm: middle.y_nm };
     run(&mut session, crate::MOVE_WIRE_SEGMENT, json!({"wire": wire.id(), "at": middle, "to": to})).unwrap();
     assert_eq!(identities(&session), kept);

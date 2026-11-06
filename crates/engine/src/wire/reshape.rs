@@ -89,7 +89,8 @@ impl Project {
     /// command, without changing this snapshot. A segment moves only across its direction, so
     /// `to` must keep `at`'s coordinate along the leg. A corner must be an interior corner, not
     /// a route end. Every endpoint keeps its identity, so connectivity is unchanged. Moving to
-    /// the grabbed point returns an identical project. Missing wires or junctions, points off
+    /// the grabbed point is checked like any other move, then returns this project unchanged,
+    /// even for an automatic route. Missing wires or junctions, points off
     /// the route, results out of bounds and routes over [`MAX_BENDS`] are refused.
     pub fn reshaped(&self, edit: &Reshape, to: Point) -> Result<Project, CommandError> {
         if !valid_point(&to) {
@@ -149,6 +150,11 @@ impl Project {
                 }
                 Arc::make_mut(&mut next.junctions).insert(*id, to);
             }
+        }
+        // A move to the grabbed point is valid but changes nothing. Return this project as it
+        // is, so an automatic route isn't rewritten as authored bends and no undo step is added.
+        if edit.origin(self) == Some(to) {
+            return Ok(self.clone());
         }
         next.connectivity = Arc::default();
         Ok(next)
