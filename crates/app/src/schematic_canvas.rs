@@ -13,7 +13,7 @@ pub(crate) use wires::Draft;
 
 use crate::preferences::Navigation;
 use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
-use pcbcraft_chrome::{MenuItem, Tokens, menu, theme};
+use pcbcraft_chrome::{MenuItem, Tokens, grid as canvas_grid, menu, theme};
 use pcbcraft_engine::wire::Anchor;
 use pcbcraft_engine::{
     Project,
@@ -112,6 +112,8 @@ pub(crate) enum SymbolAction {
 /// picked there returns `Click::Edit`. `selected` items are drawn in the accent colour. Both mouse buttons can start a box;
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
+/// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
+/// where points snap.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
@@ -121,6 +123,7 @@ pub(crate) fn show(
     selected: &Selection,
     input_enabled: bool,
     navigation: Navigation,
+    grid_opacity: u8,
     draft: &Draft,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
@@ -147,7 +150,7 @@ pub(crate) fn show(
     let screen = |point| camera.screen(point, rect);
     let origin = screen(Point { x_nm: 0, y_nm: 0 });
     let grid_step = camera.grid_step();
-    paint_grid(&painter, rect, origin, tokens, grid_step);
+    canvas_grid::paint(&painter, rect, origin, grid_step, grid_opacity);
     let moved = match &tool {
         Some(Tool::Move { symbol, offset, .. }) => response
             .interact_pointer_pos()
@@ -380,23 +383,6 @@ fn placement_preview(
     }
     paint_symbol(painter, definition, screen(point), camera.grid_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
-}
-
-/// Draw visible grid intersections around the same origin used for snapping.
-fn paint_grid(painter: &Painter, rect: Rect, origin: Pos2, tokens: Tokens, mut step: f32) {
-    while step < theme::SCHEMATIC_MIN_GRID_SPACING {
-        step *= 5.0;
-    }
-    let first_x = ((rect.left() - origin.x) / step).ceil() as i32;
-    let last_x = ((rect.right() - origin.x) / step).floor() as i32;
-    let first_y = ((rect.top() - origin.y) / step).ceil() as i32;
-    let last_y = ((rect.bottom() - origin.y) / step).floor() as i32;
-    for x in first_x..=last_x {
-        for y in first_y..=last_y {
-            let center = pos2(origin.x + x as f32 * step, origin.y + y as f32 * step);
-            painter.circle_filled(center, theme::SCHEMATIC_GRID_DOT_RADIUS, tokens.canvas_grid);
-        }
-    }
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.

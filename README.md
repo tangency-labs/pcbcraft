@@ -7,9 +7,11 @@ The app starts on **Home**, where you can create or open a project. It does not
 yet reopen the last project automatically. The app bar shows the project name and an
 unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
-pages for Appearance (theme, interface scale), Navigation (whether the wheel
+pages for Appearance (theme, interface scale, grid opacity), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor), a list of Shortcuts and, on
-the desktop, the AI page for the Assistant.
+the desktop, the AI page for the Assistant. **Grid opacity** fades the canvas grid
+from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
+same points, and the setting is kept with your preferences, not in the project.
 Search finds any setting; changes show at once, and **Cancel** puts them back. The house button beside the brand opens
 **Home**, with New Project, Open, Save, Preferences and About in its rail. Press
 **Esc** or choose **Back to** the project to return to the schematic, which stays

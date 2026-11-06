@@ -4,6 +4,7 @@
 
 use egui::Ui;
 use pcbcraft_chrome::{
+    grid,
     menu::MenuIcon,
     settings::{self, Footer, Page, WindowState},
 };
@@ -71,17 +72,22 @@ pub struct Preferences {
     pub theme: ThemeChoice,
     pub scale_percent: u16,
     pub navigation: Navigation,
+    /// How strongly the canvas grid shows, in percent; 0 hides it. One setting for every canvas
+    /// in every window: it only changes drawing, never snapping or the project, so it makes no
+    /// undo step. Per-view overrides belong with split and detached views (#64).
+    pub grid_opacity_percent: u8,
 }
 
 impl Default for Preferences {
     fn default() -> Self {
-        Self { theme: ThemeChoice::default(), scale_percent: 100, navigation: Navigation::default() }
+        Self { theme: ThemeChoice::default(), scale_percent: 100, navigation: Navigation::default(), grid_opacity_percent: grid::OPACITY_DEFAULT }
     }
 }
 
 impl Preferences {
     /// Read saved settings. Anything unreadable falls back to the defaults rather than stopping the
-    /// app from starting, and a scale or zoom speed off its range or step goes back to 100%.
+    /// app from starting, a scale or zoom speed off its range or step goes back to 100%, and a
+    /// grid opacity above 100% goes back to the default.
     pub fn parse(text: &str) -> Self {
         let mut preferences: Self = serde_json::from_str(text).unwrap_or_else(|e| {
             log::warn!("preferences: ignoring what was saved: {e}");
@@ -93,6 +99,9 @@ impl Preferences {
         let speed = preferences.navigation.zoom_speed_percent;
         if !ZOOM_SPEED_RANGE.contains(&speed) || !speed.is_multiple_of(10) {
             preferences.navigation.zoom_speed_percent = 100;
+        }
+        if !grid::OPACITY_RANGE.contains(&preferences.grid_opacity_percent) {
+            preferences.grid_opacity_percent = grid::OPACITY_DEFAULT;
         }
         preferences
     }
@@ -232,13 +241,14 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
         APPEARANCE => {
             preferences.theme = defaults.theme;
             preferences.scale_percent = defaults.scale_percent;
+            preferences.grid_opacity_percent = defaults.grid_opacity_percent;
         }
         NAVIGATION => preferences.navigation = defaults.navigation,
         _ => {}
     }
 }
 
-/// Theme and interface scale.
+/// Theme, interface scale and grid opacity.
 fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(ui, "Appearance", "How PCBCraft looks. Changes show at once; Cancel puts them back.");
     let preferences = &mut *data.preferences;
@@ -264,6 +274,12 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
                 }
             }
         });
+    });
+    settings::section(ui, "Canvas", |ui| {
+        settings::row_with_keywords(ui, "Grid opacity", &["transparency", "fade", "dots"], |ui| {
+            grid::opacity_control(ui, &mut preferences.grid_opacity_percent);
+        });
+        settings::hint(ui, "Only the grid fades. Snapping still follows the grid at 0%.");
     });
 }
 
@@ -340,8 +356,11 @@ mod tests {
             theme: ThemeChoice::Light,
             scale_percent: 110,
             navigation: Navigation { scroll: ScrollAction::Pan, reverse_zoom: true, zoom_speed_percent: 150, zoom_around: ZoomAround::Center },
+            grid_opacity_percent: 35,
         };
         assert_eq!(Preferences::parse(&preferences.to_text()), preferences);
+        let hidden = Preferences { grid_opacity_percent: 0, ..Preferences::default() };
+        assert_eq!(Preferences::parse(&hidden.to_text()), hidden);
     }
 
     #[test]
@@ -355,6 +374,9 @@ mod tests {
         // Settings saved before Navigation existed keep their theme and scale.
         let older = Preferences::parse("{\"theme\":\"Light\",\"scale_percent\":125}");
         assert_eq!((older.theme, older.scale_percent, older.navigation), (ThemeChoice::Light, 125, Navigation::default()));
+        assert_eq!(older.grid_opacity_percent, grid::OPACITY_DEFAULT);
+        assert_eq!(Preferences::parse("{\"grid_opacity_percent\":101}").grid_opacity_percent, grid::OPACITY_DEFAULT);
+        assert_eq!(Preferences::parse("{\"grid_opacity_percent\":-1}"), Preferences::default());
     }
 
     #[test]
@@ -368,11 +390,15 @@ mod tests {
 
     #[test]
     fn page_defaults_reset_only_that_page() {
-        let mut preferences =
-            Preferences { theme: ThemeChoice::Light, scale_percent: 150, navigation: Navigation { reverse_zoom: true, ..Navigation::default() } };
+        let mut preferences = Preferences {
+            theme: ThemeChoice::Light,
+            scale_percent: 150,
+            navigation: Navigation { reverse_zoom: true, ..Navigation::default() },
+            grid_opacity_percent: 20,
+        };
         restore_page_defaults(&mut preferences, NAVIGATION);
         assert_eq!(preferences.navigation, Navigation::default());
-        assert_eq!((preferences.theme, preferences.scale_percent), (ThemeChoice::Light, 150));
+        assert_eq!((preferences.theme, preferences.scale_percent, preferences.grid_opacity_percent), (ThemeChoice::Light, 150, 20));
         restore_page_defaults(&mut preferences, APPEARANCE);
         assert_eq!(preferences, Preferences::default());
     }

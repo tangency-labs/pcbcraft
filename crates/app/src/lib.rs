@@ -732,6 +732,7 @@ impl PcbApp {
                     &self.selection,
                     input_enabled,
                     self.preferences.navigation,
+                    self.preferences.grid_opacity_percent,
                     &self.wire_draft,
                 );
             }
