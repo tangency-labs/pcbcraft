@@ -67,7 +67,7 @@ pub fn decode_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
 }
 
 /// Encode a legacy single-document project or container v1, retained for migration fixtures.
-/// Normal saves use [`encode_documents`] or [`encode_packed`].
+/// Configured boards are refused; normal saves use [`encode_documents`] or [`encode_packed`].
 pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>, String> {
     let bytes = encode(project)?;
     match encoding {
@@ -379,7 +379,7 @@ impl From<WireEndpoint> for Endpoint<'static> {
 }
 
 /// Encode legacy format 4 as deterministic JSON for migration fixtures and diagnostic tools.
-/// Normal project saves use [`encode_documents`] and do not combine all data in one file.
+/// Configured boards are refused. Normal saves use [`encode_documents`] or [`encode_packed`].
 pub fn encode(project: Arc<Project>) -> Result<Vec<u8>, String> {
     let mut encoder = Encoder::new(project)?;
     loop {
@@ -410,8 +410,12 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    /// Start a native document in the current format without walking the schematic.
+    /// Start a legacy single document without walking the schematic. Configured boards need
+    /// split documents or a packed archive; refusing them here prevents lossy legacy export.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.board.setup.is_some() {
+            return Err("legacy single-file encoding cannot represent board setup; use split documents or a packed archive".to_owned());
+        }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
         let mut bytes = Vec::new();
         write!(bytes, "{{\n  \"format\": \"{FORMAT}\",\n  \"id\": \"{}\",\n  \"name\": {name},\n  \"symbol_definitions\": [\n", project.id)

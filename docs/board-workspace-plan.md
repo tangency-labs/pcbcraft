@@ -134,7 +134,9 @@ highlight/follow fan-out, and closing one host without collapsing another.
 Whole split arrangements survive a Split off/on cycle. Native platform
 qualification remains separate from those input/render-callback tests.
 
-The next workspace step is to add the board view state and renderer, then wire
+The [representation foundation](pcb-representation.md) defines layer identity,
+physical stackup, units and the proposed shared net/rule contracts before the
+board renderer makes those relationships visible. The next workspace step is to add the board view state and renderer, then wire
 workspace/document target choices into the shared placement handlers. The picker
 interactions above are still planned: current Split/Open beside/New window actions
 create another view of the addressed schematic. Acceptance must include schematic
@@ -252,11 +254,12 @@ issues to finish before the next step can start.
 | Step | Issue | Reviewable result |
 | --- | --- | --- |
 | 1 | #64, with #28 and #55 contracts | Separate project ownership from view state, replace the fixed pair with a view registry and per-window layouts, and prove a split plus multiple detached views; settle target addresses, assignment versus placement and pending board removals. |
-| 2 | [#28](https://github.com/tangency-labs/pcbcraft/issues/28) | Pin an original footprint definition and mapping; assign before or during layout; reopen offline and reject incompatible mappings. |
-| 3 | #54, with [#50](https://github.com/tangency-labs/pcbcraft/issues/50) and [#53](https://github.com/tangency-labs/pcbcraft/issues/53) | Board canvas, simple closed outline, basic layers, footprint placement/move/rotation, Properties, grid and selection controls, undo and persistence. |
-| 4 | #64 and #65 | The same schematic and board views work in a split and in separate native windows, with independent cameras and bidirectional highlighting. |
-| 5 | #55 | Preview and atomically apply a bounded schematic-to-board update; show unrouted connections as ratsnest lines with current membership. |
-| 6 | #61 and #54 acceptance | Perform board edits through live MCP in the open project, then verify both views, history and save/reopen. |
+| 2 | #76, #77 and #75 | Establish stable layer IDs and physical stackup with exact lengths, commands and persistence. Specify durable net identity and shared rule resolution before saving class assignments; expose unit-aware setup through a shared parser. See the [representation plan](pcb-representation.md) for implemented versus proposed contracts. |
+| 3 | [#92](https://github.com/tangency-labs/pcbcraft/issues/92), with #28 | Pin an original footprint definition and mapping, following #118's symbol/footprint/part separation; assign before or during layout; reopen offline and reject incompatible mappings. |
+| 4 | #54, with [#50](https://github.com/tangency-labs/pcbcraft/issues/50) and [#53](https://github.com/tangency-labs/pcbcraft/issues/53) | Board canvas, simple closed outline, basic layers, footprint placement/move/rotation, Properties, grid and selection controls, undo and persistence. |
+| 5 | #64 and #65 | The same schematic and board views work in a split and in separate native windows, with independent cameras and bidirectional highlighting. |
+| 6 | #55 | Preview and atomically apply a bounded schematic-to-board update; show unrouted connections as ratsnest lines with current membership. |
+| 7 | #61 and #54 acceptance | Perform board edits through live MCP in the open project, then verify both views, history and save/reopen. |
 
 View extraction can begin with schematic views; final acceptance uses the board
 canvas. Live MCP work can progress alongside board commands. General hierarchy,

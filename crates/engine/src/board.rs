@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 
 use crate::schematic::{MAX_CENTER_NM, Point, Terminal};
 
+pub mod setup;
+
 pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
 pub(crate) const FOOTPRINT_REVISION: u32 = 1;
 const HALF_PAD_PITCH_NM: i64 = 1_270_000;
@@ -106,6 +108,7 @@ impl Footprint {
 /// Board placements with indexes in both directions. The indexes are rebuilt from saved links.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Board {
+    pub(crate) setup: Option<setup::BoardSetup>,
     footprints: Vec<Footprint>,
     by_component: BTreeMap<u64, usize>,
 }

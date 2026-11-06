@@ -89,6 +89,43 @@ fn switching_units_never_touches_the_project() {
     assert_eq!(h.state().views.active.camera.snap_nm(), spacing);
 }
 
+/// Mixed-unit stackup lengths enter canonical commands; switching display units preserves
+/// their exact values, connectivity, saved bytes, dirty state and the pending redo step.
+#[test]
+fn board_setup_survives_unit_switching_without_an_electrical_edit() {
+    use pcbcraft_chrome::units::parse_length;
+    use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, SET_BOARD_SETUP, persistence::encode_documents};
+
+    let mut h = wired_project();
+    let revision = h.state().session.revision();
+    h.state_mut().run(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
+    let mut setup = h.state().session.inspect()["project"]["board"]["setup"].clone();
+    let thickness = parse_length("100 mil", Unit::Mm).unwrap();
+    assert_eq!(thickness, parse_length("2.54 mm", Unit::Mil).unwrap());
+    setup["stackup"]["strata"][1]["thickness_nm"] = json!(thickness);
+    let revision = h.state().session.revision();
+    h.state_mut().run(SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":revision}));
+    h.state_mut().run("project.rename", &json!({"name":"An undoable rename"}));
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    let snapshot = h.state().session.snapshot().unwrap();
+    let inspected = h.state().session.inspect();
+    assert_eq!(inspected["project"]["board"]["setup"]["stackup"]["strata"][1]["thickness_nm"], json!(2_540_000));
+    let dirty = h.state().files.dirty(&h.state().session);
+    let documents = encode_documents(snapshot.clone()).unwrap();
+    for _ in 0..5 {
+        let button = format!("Units: {}", h.state().preferences.units.symbol());
+        click(&mut h, &button);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::U);
+        h.run();
+    }
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.inspect(), inspected);
+    assert_eq!(h.state().files.dirty(&h.state().session), dirty);
+    assert!(h.state().session.available("edit.redo"));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), documents);
+}
+
 /// A bare number typed for the grid is read in the display unit; a typed unit overrides it, so
 /// metric values can be entered while showing mils and the other way round.
 #[test]

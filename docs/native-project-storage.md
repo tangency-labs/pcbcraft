@@ -35,7 +35,8 @@ A project rename changes the name in `project.pc`, without renaming its files.
 The browser uploads packed projects and legacy single-file projects and downloads
 `.pc.zip`. It cannot reconstruct a folder from an uploaded entry point alone.
 Download encoding runs in batches of 256 records and archive hashing/copying in
-256 KiB chunks, allowing the editor to yield between batches. A requested download
+256 KiB chunks, allowing the editor to yield between batches. The board-header
+phase also writes its bounded setup of at most 128 layers and 127 strata. A requested download
 does not confirm a durable write and does not clear the editor's dirty state.
 
 ## Document ownership
@@ -44,7 +45,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/5` | Project UUID, name, ordered sheet list and shared components |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` | Sheet UUID, unit placements, junctions and wires |
-| `board.json` | `pcbcraft-board/1` | Footprints linked to shared components |
+| `board.json` | `pcbcraft-board/1` or `/2` | Footprints linked to shared components; version 2 also requires layer/stackup setup |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
@@ -59,6 +60,35 @@ Wires retain terminal or junction endpoints and optional authored bends; legacy
 auto-routed pin links may omit bends. The sheet always has a junction array.
 Footprints retain their component link, definition/revision, pin-to-pad mapping
 and position. Empty projects still have sheet and board documents.
+
+An unconfigured board retains version 1 and its existing encoding. Initializing
+setup uses version 2, whose required `setup` contains a `layers` catalog and a
+`stackup` profile. Layers have UUIDs, names, typed purposes and optional surface
+sides; the profile has a UUID and front-to-back `strata`. Copper strata reference
+catalog layer UUIDs, while dielectric strata own UUIDs and optional material
+names. Profile, layer and dielectric IDs must be non-nil and mutually unique.
+Catalog order is canonical UUID order; physical order belongs only to strata.
+The material name is descriptive text only: this version has no structured
+FR-4 product identity, Tg, core/prepreg role or multi-ply construction. The
+[material proposal](pcb-representation.md#materials-core-and-prepreg) records
+those next requirements and the need for an explicit schema migration.
+
+The current uniform rigid profile alternates copper and dielectric, with front
+and back copper at its ends and every catalog copper layer appearing once.
+There are at most 128 catalog layers and 64 copper layers. Names are unique
+case-insensitively, unpadded, nonblank, control-free and at most 80 characters;
+material names use the same text bounds but need not be unique. Optional
+`thickness_nm` is an integer from 1 through 100,000,000; the sum of specified
+thicknesses cannot exceed 100,000,000 nm. Omission means unknown; explicit null
+is rejected. The derived laminate thickness remains unknown until all strata
+are specified, and is never stored as a second independently editable value.
+
+Version 1 refuses setup, and version 2 refuses missing setup. Unknown fields,
+purposes, references and unsupported versions fail before project adoption.
+Legacy single-document encoders refuse configured boards instead of losing
+their setup; ordinary folder/archive saves use the current split-document
+codecs. The [representation plan](pcb-representation.md) explains future regions,
+footprint bindings, shared rules and the unit contract with #75.
 
 Saved symbol copies include all terminals, strokes and pins. A project opens
 without its source library. Loading never upgrades a pinned definition to the

@@ -56,12 +56,16 @@ enum ParamKind {
     /// A bounded point in nanometers.
     Point,
     Selection,
+    BoardSetup,
+    CopperLayers,
 }
 
 impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::BoardSetup => board::setup::BoardSetup::schema(),
+            Self::CopperLayers => json!({"type":"integer", "enum":[2,4]}),
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()}
@@ -99,6 +103,8 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::BoardSetup if value.is_object() => Ok(()),
+            Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition if value.as_str() == Some(FOOTPRINT_DEFINITION) => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
@@ -116,6 +122,8 @@ impl ParamKind {
             Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::Selection => Err("must contain bounded unique symbol and wire ID lists"),
+            Self::BoardSetup => Err("must contain a board setup object"),
+            Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
             Self::FootprintDefinition => Err("must identify the built-in footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name | Self::Text => Err("must be a string"),
@@ -214,6 +222,10 @@ pub const DELETE_SYMBOL: &str = "schematic.delete_symbol";
 pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
+/// Initialize an empty board's stable layers and rigid stackup without specifying materials.
+pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
+/// Atomically replace a validated board setup while retaining its profile identity.
+pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
 const EXPECTED_REVISION: Param =
     Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
 
@@ -409,6 +421,29 @@ const CATALOG: &[Command] = &[
         summary: "Remove symbols, selected and incident wires, and unused components/footprints. One undoable edit.",
         params: &[ITEMS, EXPECTED_REVISION],
     },
+    Command {
+        id: INITIALIZE_BOARD_SETUP,
+        title: "Initialize Board Setup",
+        summary: "Create stable layers and a rigid stackup on an empty board. Thickness and materials remain unspecified. Undoable.",
+        params: &[
+            Param { required: true, name: "copper_layers", summary: "Initial two- or four-layer topology", kind: ParamKind::CopperLayers },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: SET_BOARD_SETUP,
+        title: "Set Board Setup",
+        summary: "Validate and replace layer names and physical stackup in one undo step. Populated boards reject topology changes.",
+        params: &[
+            Param {
+                required: true,
+                name: "setup",
+                summary: "Complete setup from inspection; lengths are exact integer nanometers",
+                kind: ParamKind::BoardSetup,
+            },
+            EXPECTED_REVISION,
+        ],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -473,6 +508,12 @@ pub struct Project {
 }
 
 impl Project {
+    /// The board's validated layer catalog and uniform rigid stackup, if explicitly initialized.
+    /// Legacy projects retain an unspecified setup until a supported initialization is requested.
+    pub fn board_setup(&self) -> Option<&board::setup::BoardSetup> {
+        self.board.setup.as_ref()
+    }
+
     /// Address the single supported sheet without exposing or deriving identity from its name.
     pub fn sheet_target(&self) -> SheetTarget {
         SheetTarget { project: self.id, sheet: self.sheet_id }
@@ -667,13 +708,16 @@ impl Session {
         self.history_root_revision
     }
 
-    /// Whether the command can run now, for greying out a menu item. Unknown ids can't.
+    /// Whether the command can run now, for greying out a menu item. Setup initialization
+    /// requires an empty, unconfigured board; setup edits require existing setup. Unknown ids can't.
     pub fn available(&self, id: &str) -> bool {
         match id {
             "project.new" => true,
             "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
             | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT | MOVE_WIRE_CORNER
             | MOVE_JUNCTION | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
+            INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none() && p.board.footprints().is_empty()),
+            SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -686,6 +730,7 @@ impl Session {
     /// groups connected terminals and junctions, including junction-only nets, and lists
     /// terminals without a wire as `unconnected`. `sheets` reports ordered sheet identities,
     /// display names and relative document paths (currently one editable sheet).
+    /// A configured board also reports setup and laminate thickness (null when unspecified).
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
@@ -694,8 +739,12 @@ impl Session {
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": p.inspect_schematic(),
             });
-            if !p.board.footprints().is_empty() {
+            if p.board.setup.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
+                if let Some(setup) = &p.board.setup {
+                    inspected["board"]["setup"] = json!(setup);
+                    inspected["board"]["laminate_thickness_nm"] = json!(setup.laminate_thickness_nm());
+                }
             }
             inspected
         });
@@ -715,14 +764,35 @@ impl Session {
 
     /// Run the shared command without building an inspection snapshot. Returns the current
     /// revision, which remains unchanged on a no-op. Failed commands leave the project intact.
+    /// Setup handlers retain their revision checks and specific state diagnostics even when
+    /// availability disables the command on an open project.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        if !self.available(id) {
+        let setup_handler_checks_state = self.project.is_some() && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP);
+        if !setup_handler_checks_state && !self.available(id) {
             return Err(CommandError::Unavailable(match id {
-                "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-                | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT
-                | MOVE_WIRE_CORNER | MOVE_JUNCTION | MOVE_ITEMS | DELETE_ITEMS => "no project is open".to_owned(),
+                "project.rename"
+                | PLACE_RESISTOR
+                | PLACE_SYMBOL
+                | CONNECT_PINS
+                | MOVE_SYMBOL
+                | ROTATE_SYMBOL
+                | DELETE_SYMBOL
+                | SET_SYMBOL_FIELDS
+                | PLACE_FOOTPRINT
+                | DRAW_WIRE
+                | DELETE_WIRE
+                | SLICE_WIRE
+                | BREAK_WIRE
+                | DELETE_WIRE_SEGMENT
+                | MOVE_WIRE_SEGMENT
+                | MOVE_WIRE_CORNER
+                | MOVE_JUNCTION
+                | MOVE_ITEMS
+                | DELETE_ITEMS
+                | INITIALIZE_BOARD_SETUP
+                | SET_BOARD_SETUP => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -779,6 +849,8 @@ impl Session {
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
             PLACE_FOOTPRINT => self.place_footprint(params)?,
+            INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
+            SET_BOARD_SETUP => self.set_board_setup(params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),
@@ -1023,7 +1095,7 @@ impl Session {
     }
 }
 
-/// Generate a persistent project or sheet ID and report unavailable system entropy.
+/// Generate a persistent document or board-record ID and report unavailable system entropy.
 fn fresh_id() -> Result<uuid::Uuid, CommandError> {
     let mut bytes = [0; 16];
     getrandom::fill(&mut bytes).map_err(|error| CommandError::Unavailable(format!("could not create a project identity: {error}")))?;

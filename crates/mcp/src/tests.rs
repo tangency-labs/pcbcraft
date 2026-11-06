@@ -101,6 +101,33 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
     }
 }
 
+/// Headless clients discover the strict setup schema and edit the same revisioned model.
+#[test]
+fn board_setup_commands_are_discoverable_and_atomic() {
+    use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, SET_BOARD_SETUP};
+    let mut s = server();
+    let description = body(&call(&mut s, "describe_command", json!({"command":SET_BOARD_SETUP})));
+    let schema = &description["params"]["properties"]["setup"];
+    assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["properties"]["stackup"]["properties"]["strata"]["items"]["oneOf"][0]["properties"]["thickness_nm"]["type"], "integer");
+    let created = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let initialized = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":INITIALIZE_BOARD_SETUP,"params":{"copper_layers":2,"expected_revision":created["revision"]}}),
+    ));
+    let mut setup = initialized["project"]["board"]["setup"].clone();
+    setup["stackup"]["strata"][1]["thickness_nm"] = json!(2_540_000);
+    let params = json!({"setup":setup,"expected_revision":initialized["revision"]});
+    let updated = body(&call(&mut s, "execute", json!({"command":SET_BOARD_SETUP,"params":params})));
+    assert_eq!(updated["project"]["board"]["setup"]["stackup"]["strata"][1]["thickness_nm"], 2_540_000);
+    let stale = call(&mut s, "execute", json!({"command":SET_BOARD_SETUP,"params":params}));
+    assert_eq!(stale["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), updated);
+    let undone = body(&call(&mut s, "execute", json!({"command":"edit.undo"})));
+    assert_eq!(undone["project"], initialized["project"]);
+}
+
 #[test]
 fn a_refused_command_is_a_tool_error_the_agent_can_read() {
     let result = call(&mut server(), "execute", json!({"command": "edit.undo"}));
