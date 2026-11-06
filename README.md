@@ -18,7 +18,7 @@ a list of Shortcuts and, on the desktop, the AI page for the Assistant.
 from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
 same points. The opacity applies to both split panes and is kept with your
 preferences, not in the project.
-The **Grid** button at the right of each sheet tab sets that pane's snap spacing:
+The **Grid** button at the right end of the bottom status bar sets the focused pane's snap spacing:
 100, 50 (the default, where symbol pins sit), 25, 10 or 5 mil, or any other spacing
 typed as mils or millimetres (`20`, `20 mil`, `0.5 mm`, from 0.01 mm to 1000 mil).
 **N** steps the focused pane finer and **Shift+N** coarser. A new spacing never moves

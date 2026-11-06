@@ -256,20 +256,10 @@ impl PcbApp {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
                 let view = if active { &self.views.active } else { &self.views.other };
-                if let Some(path) = view.sheet_path(&self.session) {
-                    let mut spacing = view.camera.snap_nm();
-                    let every = grid::shown_every(view.camera.snap_step()).unwrap_or(1);
-                    let mut changed = false;
-                    let clicked = editor::sheet_tab(ui, &path, active, |ui| {
-                        changed =
-                            grid::spacing_menu(ui, &mut spacing, &grid::SCHEMATIC_SPACING_PRESETS_NM, grid::SCHEMATIC_SPACING_DEFAULT_NM, every);
-                    });
-                    if changed {
-                        self.set_view_grid(id, spacing);
-                    }
-                    if clicked {
-                        self.activate_editor(ui.ctx(), id);
-                    }
+                if let Some(path) = view.sheet_path(&self.session)
+                    && editor::sheet_tab(ui, &path, active)
+                {
+                    self.activate_editor(ui.ctx(), id);
                 }
                 let canvas = ui.available_rect_before_wrap();
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);

@@ -135,7 +135,9 @@ fn unsaved_marker(ui: &mut Ui, rect: egui::Rect, t: Tokens) {
     response.on_hover_text(LABEL);
 }
 
-/// The status bar along the bottom: left and right ends.
+/// The status bar along the bottom: left and right ends. The right end (controls such as the
+/// grid, and fixed indicators) is laid out first and always keeps its room; the left end's
+/// messages get what remains and truncate with an ellipsis rather than run under it.
 pub fn status_bar(ui: &mut Ui, left: impl FnOnce(&mut Ui), right: impl FnOnce(&mut Ui)) {
     let t = Tokens::get();
     egui::Panel::bottom("chrome_status_bar")
@@ -143,9 +145,17 @@ pub fn status_bar(ui: &mut Ui, left: impl FnOnce(&mut Ui), right: impl FnOnce(&m
         .resizable(false)
         .frame(Frame::new().fill(t.panel).inner_margin(Margin::symmetric(t.space_8 as i8, 0)))
         .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
+            let bar = ui.max_rect();
+            let layout = |layout: egui::Layout, rect: egui::Rect| egui::UiBuilder::new().max_rect(rect).layout(layout);
+            let used = ui.scope_builder(layout(egui::Layout::right_to_left(egui::Align::Center), bar), right).response.rect;
+            let mut room = bar;
+            if used.width() > 0.0 {
+                room.max.x = (used.min.x - t.space_12).max(bar.min.x);
+            }
+            ui.scope_builder(layout(egui::Layout::left_to_right(egui::Align::Center), room), |ui| {
+                ui.set_clip_rect(room.intersect(ui.clip_rect()));
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 left(ui);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), right);
             });
         });
 }
