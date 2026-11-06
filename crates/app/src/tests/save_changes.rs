@@ -117,7 +117,8 @@ fn save_then_close_waits_for_a_successful_save() {
     assert!(finish_closes(&mut h));
     assert_eq!(h.state().session().project().unwrap().name, "board", "the first save named it");
     assert!(!h.state().files.dirty(h.state().session()));
-    assert!(request_close(&mut h));
+    h.state_mut().close_allowed = false;
+    assert!(request_close(&mut h), "a saved project closes without asking");
 
     for error in [None, Some("Disk full")] {
         let mut h = unsaved_project();
@@ -205,4 +206,38 @@ fn open_asks_the_same_question() {
     h.state_mut().files.finish_stand_in(dir.path().join("before-open"));
     settle(&mut h);
     assert!(matches!(h.state().dialog, Dialog::OpenLocation));
+}
+
+/// Don't Save while a save is running waits for it, so Open doesn't replace the running job and
+/// drop its result, then carries on. New Project, which can be asked about mid-save, waits too.
+#[test]
+fn dont_save_waits_for_a_running_save() {
+    let dir = tempfile::tempdir().unwrap();
+    for then in [Then::Open, Then::New] {
+        let mut h = unsaved_project();
+        let original = h.state().session().snapshot().unwrap();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+        settle(&mut h);
+        assert!(h.state().files.busy());
+        h.state_mut().dialog = Dialog::SaveChanges(then);
+        settle(&mut h);
+        press(&mut h, "Don't Save");
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert!(Arc::ptr_eq(&h.state().session().snapshot().unwrap(), &original), "nothing replaced yet");
+        assert_eq!(h.state().file_notice.as_deref(), Some("Continuing when the file operation finishes"));
+
+        h.state_mut().files.finish_stand_in(dir.path().join(format!("{then:?}")));
+        settle(&mut h);
+        match then {
+            Then::Open => {
+                assert!(matches!(h.state().dialog, Dialog::OpenLocation));
+                assert!(!h.state().files.dirty(h.state().session()), "the finished save was recorded");
+            }
+            _ => {
+                assert!(!h.state().session().snapshot().unwrap().same_document(&original));
+                h.state_mut().run("edit.undo", &Value::Null);
+                assert!(!h.state().files.dirty(h.state().session()), "the saved project is clean behind the new one");
+            }
+        }
+    }
 }

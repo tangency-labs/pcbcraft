@@ -26,6 +26,9 @@ pub(crate) enum Waiting {
     ToDecide(Then),
     /// The person answered Save: carry on only if that save leaves nothing unsaved.
     ForSave(Then),
+    /// The person answered Don't Save while a file operation ran: carry on once it ends, so its
+    /// result is still recorded, whatever is left unsaved.
+    Discarding(Then),
 }
 
 /// Longest project name shown in the question before it is shortened with an ellipsis.
@@ -65,7 +68,7 @@ impl PcbApp {
     /// Once the file operation an action waits on has finished, carry it out if nothing is left
     /// unsaved. A close that was waiting to decide asks now when there is. After a Save answer,
     /// unsaved work left behind (a cancelled or failed save, or edits made while it ran) keeps the
-    /// project open; the save's own status explains why.
+    /// project open; the save's own status explains why. After Don't Save, carry on regardless.
     pub(crate) fn finish_waiting(&mut self, ctx: &egui::Context) {
         let Some(waiting) = self.waiting else { return };
         if self.files.busy() {
@@ -75,6 +78,10 @@ impl PcbApp {
         let (then, ask) = match waiting {
             Waiting::ToDecide(then) => (then, true),
             Waiting::ForSave(then) => (then, false),
+            Waiting::Discarding(then) => {
+                self.carry_on(then, ctx);
+                return;
+            }
         };
         if !self.files.dirty(&self.session) {
             self.carry_on(then, ctx);
@@ -97,7 +104,8 @@ impl PcbApp {
 
     /// Draw the question and act on the answer. Save starts the ordinary save, which asks for a
     /// destination for a project never saved, and `then` follows once it succeeds. Don't Save
-    /// carries on without writing anything. Cancel, Escape or a click outside keep working. The
+    /// carries on without writing anything, after any running file operation ends so that its
+    /// result isn't dropped (an Open would replace it). Cancel, Escape or a click outside keep working. The
     /// browser offers no Save here, since a download doesn't confirm the project was kept.
     pub(crate) fn save_changes_dialog(&mut self, ctx: &egui::Context, then: Then) {
         let name = self.session.project().map_or_else(|| "The project".to_owned(), |project| shown_name(&project.name));
@@ -117,6 +125,9 @@ impl PcbApp {
             if self.message.is_none() {
                 self.waiting = Some(Waiting::ForSave(then));
             }
+        } else if discard && self.files.busy() {
+            self.waiting = Some(Waiting::Discarding(then));
+            self.file_notice = Some("Continuing when the file operation finishes".to_owned());
         } else if discard {
             self.carry_on(then, ctx);
         } else if !(cancel || closing) {
