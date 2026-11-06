@@ -115,7 +115,7 @@ impl PcbApp {
     fn home_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::Back => self.home = false,
-            Action::New => self.new_project(),
+            Action::New => self.new_project(ctx),
             Action::Open => self.open_project_file(ctx),
             Action::Save => {
                 self.home = false;

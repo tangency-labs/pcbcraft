@@ -25,10 +25,36 @@ mod native;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+/// Turn the browser's leave-page warning on or off.
+#[cfg(target_arch = "wasm32")]
+pub(super) fn warn_before_leaving(unsaved: bool) {
+    web::set_unsaved(unsaved);
+}
+
 #[derive(Debug, Default)]
 pub(super) struct ProjectFiles {
     saved: Option<Saved>,
     job: Option<Job>,
+    /// In tests, saves wait here for the test to finish them instead of opening a native picker.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    stand_in: Option<StandIn>,
+}
+
+/// A save waiting for a test to say how the person answered the picker.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[derive(Debug, Default)]
+pub(super) struct StandIn {
+    pending: Option<StandInSave>,
+}
+
+/// What a real save worker would have been given, and where to send its result.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[derive(Debug)]
+struct StandInSave {
+    snapshot: Arc<Project>,
+    previous: Option<(Arc<Project>, native::Target)>,
+    format: Option<SaveFormat>,
+    send: mpsc::Sender<Result<Outcome, String>>,
 }
 
 #[derive(Debug)]
@@ -126,14 +152,26 @@ impl ProjectFiles {
                 .as_ref()
                 .filter(|saved| saved.snapshot.same_document(&snapshot))
                 .map(|saved| (Arc::clone(&saved.snapshot), saved.target.clone()));
-            let ctx = ctx.clone();
-            std::thread::Builder::new()
-                .name("pcbcraft-save".to_owned())
-                .spawn(move || {
-                    let _ = send.send(native::save(snapshot, previous, encoding));
-                    ctx.request_repaint();
-                })
-                .map_err(|error| format!("Could not start saving the project: {error}"))?;
+            #[cfg(test)]
+            let send = match &mut self.stand_in {
+                Some(stand_in) => {
+                    stand_in.pending = Some(StandInSave { snapshot: Arc::clone(&snapshot), previous: previous.clone(), format: encoding, send });
+                    None
+                }
+                None => Some(send),
+            };
+            #[cfg(not(test))]
+            let send = Some(send);
+            if let Some(send) = send {
+                let ctx = ctx.clone();
+                std::thread::Builder::new()
+                    .name("pcbcraft-save".to_owned())
+                    .spawn(move || {
+                        let _ = send.send(native::save(snapshot, previous, encoding));
+                        ctx.request_repaint();
+                    })
+                    .map_err(|error| format!("Could not start saving the project: {error}"))?;
+            }
         }
         #[cfg(target_arch = "wasm32")]
         let download = {
@@ -223,5 +261,37 @@ impl ProjectFiles {
             Ok(Outcome::Downloaded) => Some(Update::Message("Project download requested".to_owned())),
             Err(error) => Some(Update::Error(error)),
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl ProjectFiles {
+    /// Send later saves to a stand-in the test finishes, instead of a worker with a native picker.
+    pub(super) fn use_stand_in(&mut self) {
+        self.stand_in = Some(StandIn::default());
+    }
+
+    /// Whether a save is waiting for the test to finish it.
+    pub(super) fn stand_in_waiting(&self) -> bool {
+        self.stand_in.as_ref().is_some_and(|stand_in| stand_in.pending.is_some())
+    }
+
+    /// Finish the waiting save as the worker would: in place when it has a destination, otherwise
+    /// as though the person picked `path` as a new project folder.
+    pub(super) fn finish_stand_in(&mut self, path: std::path::PathBuf) {
+        let Some(StandInSave { snapshot, previous, format, send }) = self.stand_in.as_mut().and_then(|stand_in| stand_in.pending.take()) else {
+            return;
+        };
+        let result = match previous {
+            Some(previous) if format.is_none() && !previous.1.legacy() => native::save(snapshot, Some(previous), None),
+            previous => native::save_new(snapshot, previous.as_ref(), format.unwrap_or_default(), path),
+        };
+        let _ = send.send(result);
+    }
+
+    /// End the waiting save as a dismissed picker (`None`) or a failure with that message.
+    pub(super) fn end_stand_in(&mut self, error: Option<&str>) {
+        let Some(StandInSave { send, .. }) = self.stand_in.as_mut().and_then(|stand_in| stand_in.pending.take()) else { return };
+        let _ = send.send(error.map_or(Ok(Outcome::Cancelled), |error| Err(error.to_owned())));
     }
 }

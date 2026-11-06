@@ -40,6 +40,12 @@ impl Target {
         }
     }
 
+    /// Whether saving needs a new destination because the project was opened from an older format.
+    #[cfg(test)]
+    pub(super) fn legacy(&self) -> bool {
+        self.legacy
+    }
+
     /// Tell the editor whether this save added the archive's first manifest.
     pub(super) fn added_manifest(&self) -> bool {
         self.added_manifest
@@ -138,7 +144,12 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
 /// archive name without it. An Untitled project saved for the first time takes the destination's
 /// name (see [`name_for`]); the outcome then carries the snapshot it renamed. A failure leaves no
 /// name change behind, since only a successful outcome is adopted.
-fn save_new(snapshot: Arc<Project>, previous: Option<&(Arc<Project>, Target)>, format: SaveFormat, mut path: PathBuf) -> Result<Outcome, String> {
+pub(super) fn save_new(
+    snapshot: Arc<Project>,
+    previous: Option<&(Arc<Project>, Target)>,
+    format: SaveFormat,
+    mut path: PathBuf,
+) -> Result<Outcome, String> {
     if format == SaveFormat::Archive && !path.to_string_lossy().ends_with(".pc.zip") {
         if path.extension().is_some_and(|extension| extension == "zip" || extension == "pc") {
             path.set_extension("pc.zip");

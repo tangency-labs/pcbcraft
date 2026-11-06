@@ -37,6 +37,21 @@ export function pickProject(jsonLimit, zipLimit) {
     });
 }
 
+let unsaved = false;
+let warning = false;
+export function setUnsaved(flag) {
+    unsaved = flag;
+    if (!warning) {
+        warning = true;
+        window.addEventListener('beforeunload', (event) => {
+            if (unsaved) {
+                event.preventDefault();
+                event.returnValue = '';
+            }
+        });
+    }
+}
+
 export function downloadProject(bytes, archive) {
     const url = URL.createObjectURL(new Blob([bytes], {type: archive ? 'application/zip' : 'application/json'}));
     const link = document.createElement('a');
@@ -51,6 +66,10 @@ export function downloadProject(bytes, archive) {
 extern "C" {
     #[wasm_bindgen(js_name = pickProject)]
     fn pick_project(json_limit: u32, zip_limit: u32) -> Promise;
+
+    /// Record whether leaving the page would lose unsaved changes, so the browser asks first.
+    #[wasm_bindgen(js_name = setUnsaved)]
+    pub(super) fn set_unsaved(unsaved: bool);
 
     #[wasm_bindgen(catch, js_name = downloadProject)]
     fn download_project(bytes: &[u8], archive: bool) -> Result<(), JsValue>;
