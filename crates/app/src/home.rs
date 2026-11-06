@@ -26,7 +26,7 @@ impl PcbApp {
     /// Show Home and drop any canvas tool preview, which belongs to the hidden schematic.
     pub(super) fn show_home(&mut self) {
         self.home = true;
-        self.tool = None;
+        self.view.cancel_gesture();
     }
 
     /// Draw the Home page in the space below the app bar and apply the chosen action.

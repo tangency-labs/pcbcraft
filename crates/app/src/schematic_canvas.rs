@@ -51,11 +51,11 @@ pub(crate) enum Click {
     Drop(PartDrag, Point),
 }
 
-/// A browser drag bound to the project revision at which the gesture began.
+/// A browser drag bound to the view, sheet and revision at which the gesture began.
 #[derive(Clone, Debug)]
 pub(crate) struct PartDrag {
     pub(crate) definition: Arc<SymbolDefinition>,
-    pub(crate) revision: u64,
+    pub(crate) source: crate::editor_view::ViewInput,
 }
 
 /// Draw a part's preview fitted inside `rect`, for the parts browser's thumbnails. The symbol
