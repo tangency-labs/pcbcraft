@@ -534,7 +534,8 @@ impl PcbApp {
     /// Show the project's title and unsaved state beside the Home, file and history actions.
     /// Undo and Redo dispatch through the same engine commands as their keyboard shortcuts.
     /// The version and bug report are shown when the app bar has space, and About from 380 points.
-    fn app_bar(&mut self, ui: &mut Ui) {
+    /// Disabling application actions leaves the integrated native window controls available.
+    fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut preferences = false;
@@ -552,6 +553,7 @@ impl PcbApp {
             ui,
             title,
             self.integrated_titlebar,
+            actions_enabled,
             |ui| home = menu::quick_action(ui, MenuIcon::Home, "Home", "", true).clicked(),
             |ui| {
                 menu::file(ui, |ui| self.file_menu(ui));
@@ -1456,6 +1458,8 @@ impl PcbApp {
 
     /// Draw the same editor in any visible window. Project dialogs, Home and the assistant
     /// belong to the current main host, whose native identity can survive the original window.
+    /// Blocked project actions disable editor controls, while native window interactions remain
+    /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
         let main = self.views.host == self.views.main;
@@ -1474,11 +1478,9 @@ impl PcbApp {
             self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         }
         let integrated = std::mem::replace(&mut self.integrated_titlebar, integrated_titlebar);
-        ui.scope(|ui| {
-            if self.project_action_pending() || (!main && (self.home || had_dialog)) {
-                ui.disable();
-            }
-            self.app_bar(ui);
+        let enabled = !self.project_action_pending() && (main || (!self.home && !had_dialog));
+        self.app_bar(ui, enabled);
+        ui.add_enabled_ui(enabled, |ui| {
             let workspace = if self.home && main {
                 self.status(ui);
                 self.home_page(ui);
@@ -1512,15 +1514,15 @@ impl PcbApp {
             }
             #[cfg(target_arch = "wasm32")]
             let _ = workspace;
-            if integrated_titlebar {
-                shell::resize_window_edges(ui);
-            }
         });
         self.integrated_titlebar = integrated;
         if main {
             self.project_dialogs(&ctx);
         } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {
             ctx.send_viewport_cmd_to(editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+        }
+        if integrated_titlebar {
+            shell::resize_window_edges(ui);
         }
         self.views.sync(&self.session);
         if ctx.viewport_id() != egui::ViewportId::ROOT && self.pointer != self.pointer_next {

@@ -10,12 +10,15 @@ pub use crate::titlebar::resize_window_edges;
 /// Pass the project name and whether it has unsaved edits, or `None` for the empty workspace.
 /// `home` draws beside the brand, before the separator, and stays at compact widths.
 /// An integrated title bar adds desktop window controls and lets the free space move the window.
+/// `actions_enabled` gates Home, file/history actions and utilities, leaving native controls usable.
+/// Call [`resize_window_edges`] after dialogs to keep native interactions above their backdrop.
 /// The utility callback gets the full bar width to decide which controls fit.
 /// The title shrinks before taking space from the controls and keeps the unsaved marker if it fits.
 pub fn app_bar(
     ui: &mut Ui,
     project: Option<(&str, bool)>,
     integrated: bool,
+    actions_enabled: bool,
     home: impl FnOnce(&mut Ui),
     actions: impl FnOnce(&mut Ui),
     utilities: impl FnOnce(&mut Ui, f32),
@@ -42,11 +45,11 @@ pub fn app_bar(
                         ui.spacing_mut().item_spacing.x = 0.0;
                     }
                     brand(ui, t, !compact);
-                    home(ui);
+                    ui.add_enabled_ui(actions_enabled, home);
                     if !compact {
                         ui.separator();
                     }
-                    actions(ui);
+                    ui.add_enabled_ui(actions_enabled, actions);
                     if !compact {
                         ui.separator();
                     }
@@ -55,12 +58,14 @@ pub fn app_bar(
                     let mut right =
                         ui.new_child(UiBuilder::new().id_salt("app_bar_utilities").max_rect(area).layout(Layout::right_to_left(Align::Center)));
                     if integrated {
-                        titlebar::window_controls(&mut right, t, compact);
+                        right.scope_builder(UiBuilder::new().layer_id(titlebar::interaction_layer()), |ui| {
+                            titlebar::window_controls(ui, t, compact);
+                        });
                         if compact {
                             right.add_space(t.space_2);
                         }
                     }
-                    utilities(&mut right, bar_width);
+                    right.add_enabled_ui(actions_enabled, |ui| utilities(ui, bar_width));
                     let controls_left = right.min_rect().left() - t.space_2;
                     let (name, dirty) = project.unwrap_or(("No project", false));
                     let room = (controls_left - area.left()).max(0.0);

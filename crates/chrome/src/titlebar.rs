@@ -4,12 +4,18 @@ use egui::{CursorIcon, Id, LayerId, Order, PointerButton, Rect, ResizeDirection,
 
 use crate::Tokens;
 
+/// Native window interactions share a layer raised above project modals in each viewport.
+pub(crate) fn interaction_layer() -> LayerId {
+    LayerId::new(Order::Foreground, Id::new("native-window-interactions"))
+}
+
 /// Let the unused span move the window or toggle maximized state on a double click.
-pub(crate) fn drag_area(ui: &Ui, rect: Rect) {
+pub(crate) fn drag_area(ui: &mut Ui, rect: Rect) {
     if !rect.is_positive() {
         return;
     }
-    let response = ui.interact(rect, ui.id().with("window-drag"), Sense::click_and_drag());
+    let native = ui.new_child(egui::UiBuilder::new().layer_id(interaction_layer()).max_rect(rect));
+    let response = native.interact(rect, ui.id().with("window-drag"), Sense::click_and_drag());
     if response.double_clicked() {
         ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!is_maximized(ui)));
     } else if response.drag_started_by(PointerButton::Primary) {
@@ -66,8 +72,11 @@ pub(crate) fn window_controls(ui: &mut Ui, t: Tokens, compact: bool) {
 
 /// Restore OS resizing along the four edges and corners of an undecorated window.
 /// Maximized and fullscreen windows have no active resize zones.
+/// Call on an enabled UI after drawing dialogs so native controls, dragging and resizing remain
+/// above modal backdrops without enabling any application actions behind those dialogs.
 pub fn resize_window_edges(ui: &mut Ui) {
     let ctx = ui.ctx().clone();
+    ctx.move_to_top(interaction_layer());
     if is_maximized(ui) || ui.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
         return;
     }
@@ -86,8 +95,7 @@ pub fn resize_window_edges(ui: &mut Ui) {
         (pos2(l, b - corner), pos2(l + corner, b), SouthWest, CursorIcon::ResizeNeSw),
         (pos2(r - corner, b - corner), pos2(r, b), SouthEast, CursorIcon::ResizeNwSe),
     ];
-    let layer = LayerId::new(Order::Foreground, Id::new("window-resize"));
-    let resize = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(window));
+    let resize = ui.new_child(egui::UiBuilder::new().layer_id(interaction_layer()).max_rect(window));
     for (index, (min, max, direction, cursor)) in zones.into_iter().enumerate() {
         let response = resize.interact(Rect::from_min_max(min, max), Id::new(("window-resize", index)), Sense::drag());
         if response.on_hover_cursor(cursor).drag_started_by(PointerButton::Primary) {

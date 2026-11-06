@@ -196,6 +196,134 @@ fn detached_window_uses_the_primary_chrome_policy_and_child_window_controls() {
     }
 }
 
+/// Deliver native pointer input without waiting for a pending file worker to stop repainting.
+/// Inspect the release frame so one-shot viewport commands have not already been consumed.
+fn window_click(h: &mut Harness<'_, PcbApp>, peer: Option<&Rc<RefCell<Peer>>>, pos: Pos2) {
+    h.input_mut().focused = peer.is_none();
+    if let Some(peer) = peer {
+        peer.borrow_mut().focused = true;
+    }
+    h.run_steps(3);
+    let mut send = |event| {
+        if let Some(peer) = peer {
+            peer.borrow_mut().events.push(event);
+        } else {
+            h.input_mut().events.push(event);
+        }
+        h.step();
+    };
+    send(Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        send(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+}
+
+/// Home, a dialog in the main host and a queued project replacement block child editing and
+/// project actions, but its integrated titlebar must still control that native window.
+#[test]
+fn disabled_editors_keep_native_window_controls_available() {
+    for blocked_by in ["home", "dialog", "pending"] {
+        let (mut h, peer) = multi_window();
+        h.state_mut().integrated_titlebar = true;
+        detach(&mut h);
+        match blocked_by {
+            "home" => h.state_mut().show_home(),
+            "dialog" => h.state_mut().dialog = Dialog::About,
+            _ => {
+                h.state_mut().files.use_stand_in();
+                h.key_press_modifiers(Modifiers::COMMAND, Key::N);
+                h.run();
+                h.get_by_label("Save").click();
+                h.run_steps(3);
+                assert_eq!(h.state().waiting, Some(unsaved::Waiting::ForSave(unsaved::Then::New)));
+            }
+        }
+        h.run_steps(3);
+        let before = h.state().session.inspect();
+        let home = h.state().home;
+        let dialog = std::mem::discriminant(&h.state().dialog);
+        let waiting = h.state().waiting;
+        for label in ["Home", "Preferences", "Undo", "Save Project", "Schematic canvas"] {
+            let pos = child_rect(&peer, label).center();
+            window_click(&mut h, Some(&peer), pos);
+            assert_eq!(h.state().home, home, "{blocked_by}: {label}");
+            assert_eq!(std::mem::discriminant(&h.state().dialog), dialog, "{blocked_by}: {label}");
+            assert_eq!(h.state().waiting, waiting, "{blocked_by}: {label}");
+            assert_eq!(h.state().session.inspect(), before, "{blocked_by}: {label}");
+        }
+        for pressed in [true, false] {
+            peer.borrow_mut().events.push(Event::Key { key: Key::R, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+        }
+        assert_eq!(h.state().session.inspect(), before, "{blocked_by}: rotate shortcut");
+        for (label, command) in [
+            ("Minimize window", ViewportCommand::Minimized(true)),
+            ("Maximize window", ViewportCommand::Maximized(true)),
+            ("Close window", ViewportCommand::Close),
+        ] {
+            let pos = child_rect(&peer, label).center();
+            window_click(&mut h, Some(&peer), pos);
+            assert!(h.output().viewport_output[&editor_windows::viewport(HostId(1))].commands.contains(&command), "{blocked_by}: {label}");
+            assert!(!h.output().viewport_output[&ViewportId::ROOT].commands.contains(&command));
+            assert_eq!(h.state().waiting, waiting);
+        }
+        peer.borrow_mut().close = true;
+        h.run_steps(3);
+        assert_eq!(h.state().views.hosts.len(), 1);
+        assert!(!h.state().close_allowed);
+        assert_eq!(h.state().session.inspect(), before);
+        assert_eq!(h.state().waiting, waiting);
+    }
+}
+
+/// A pending Quit leaves native controls available in the main host, including after promotion.
+/// Titlebar clicks must not dismiss the wait modal or bypass its save/close decision.
+#[test]
+fn native_controls_above_the_wait_dialog_preserve_the_pending_close() {
+    let (mut h, peer) = multi_window();
+    h.state_mut().integrated_titlebar = true;
+    h.state_mut().files.use_stand_in();
+    detach(&mut h);
+    let labels = ["Minimize window", "Maximize window", "Close window"];
+    let positions = labels.map(|label| h.get_by_label(label).rect().center());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::S);
+    h.run_steps(3);
+    let ctx = h.ctx.clone();
+    h.state_mut().begin_project_close(&ctx);
+    h.run_steps(3);
+    let before = h.state().session.inspect();
+    for host in [HostId::ROOT, HostId(1)] {
+        for (index, command) in [ViewportCommand::Minimized(true), ViewportCommand::Maximized(true), ViewportCommand::Close].into_iter().enumerate() {
+            let child = (host != HostId::ROOT).then_some(&peer);
+            let pos = child.map_or(positions[index], |peer| child_rect(peer, labels[index]).center());
+            window_click(&mut h, child, pos);
+            assert!(h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command), "{host:?}: {}", labels[index]);
+            assert_eq!(h.state().waiting, Some(unsaved::Waiting::ToDecide(unsaved::Then::Close)));
+            assert!(h.state().files.stand_in_waiting());
+            assert!(!h.state().close_allowed);
+        }
+        if host == HostId::ROOT {
+            h.input_mut().viewports.entry(ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        } else {
+            peer.borrow_mut().close = true;
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().views.main, HostId(1));
+        assert_eq!(h.state().views.hosts.len(), 1);
+        assert_eq!(h.state().waiting, Some(unsaved::Waiting::ToDecide(unsaved::Then::Close)));
+        assert!(!h.state().close_allowed);
+        assert_eq!(h.state().session.inspect(), before);
+    }
+    let cancel = child_rect(&peer, "Cancel close").center();
+    window_click(&mut h, Some(&peer), cancel);
+    assert_eq!(h.state().waiting, None, "the modal's own controls remain usable");
+    assert!(h.state().files.stand_in_waiting());
+    h.state_mut().files.end_stand_in(Some("Disk full"));
+    h.run();
+    assert!(!h.state().close_allowed);
+    assert_eq!(h.state().session.inspect(), before);
+}
+
 /// Either split view can detach, then close or explicitly dock from its native host. Close keeps
 /// the root alone; Dock restores the split. All transitions preserve navigation and project
 /// bytes while invalidating callbacks captured before the transition. Child Close never prompts to save.
