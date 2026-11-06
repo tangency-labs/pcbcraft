@@ -255,6 +255,7 @@ impl PcbApp {
                                     &highlight,
                                     false,
                                     self.preferences.navigation,
+                                    self.preferences.grid_opacity_percent,
                                     &view.wire_draft,
                                     if id == ViewId(0) { "Schematic canvas 1" } else { "Schematic canvas 2" },
                                 );

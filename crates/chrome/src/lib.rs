@@ -10,6 +10,7 @@
 pub mod assistant;
 pub mod editor;
 pub mod fonts;
+pub mod grid;
 pub mod home;
 pub mod menu;
 pub mod selection;

@@ -676,6 +676,66 @@ fn preferences_search_filters_rows_across_pages() {
     harness.get_by_label("Add symbol");
 }
 
+/// Grid opacity is on Appearance and found by searching "grid". Its slider moves in 5% steps,
+/// Reset returns it to the default, and Cancel puts back what was there when the window opened.
+#[test]
+fn grid_opacity_preference_steps_resets_and_cancels() {
+    let mut harness = harness();
+    harness.state_mut().preferences.grid_opacity_percent = 40;
+    click(&mut harness, "Preferences");
+    harness.get_by_label("Grid opacity");
+    // The percentage box beside it reads "40%"; the slider itself carries the number.
+    harness.get_by_value("40%");
+    let slider = harness.query_all_by_role(egui::accesskit::Role::Slider).find(|node| node.accesskit_node().numeric_value() == Some(40.0));
+    let (target_node, target_tree) = slider.unwrap().accesskit_node().locate();
+    let action = egui::accesskit::Action::Decrement;
+    harness.event(egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest { action, target_node, target_tree, data: None }));
+    harness.run();
+    assert_eq!(harness.state().preferences().grid_opacity_percent, 35);
+    click(&mut harness, "Reset");
+    assert_eq!(harness.state().preferences().grid_opacity_percent, pcbcraft_chrome::grid::OPACITY_DEFAULT);
+    assert!(harness.get_by_label("Reset").accesskit_node().is_disabled());
+    click(&mut harness, "Cancel");
+    assert_eq!(harness.state().preferences().grid_opacity_percent, 40);
+
+    click(&mut harness, "Preferences");
+    harness.get_by_role(egui::accesskit::Role::TextInput).click();
+    harness.run();
+    harness.get_by_role(egui::accesskit::Role::TextInput).type_text("grid");
+    harness.run();
+    harness.run();
+    harness.get_by_label("Grid opacity");
+    assert!(harness.query_by_label("Theme").is_none());
+}
+
+/// Hiding the grid changes neither where a click places a part nor the project: no revision,
+/// no dirty marker, no undo step and the same saved bytes.
+#[test]
+fn hiding_the_grid_keeps_snapping_and_leaves_the_project_untouched() {
+    let mut harness = harness();
+    new_project(&mut harness, "faded");
+    let before = harness.state().session().snapshot().unwrap();
+    let revision = harness.state().session().revision();
+    let dirty = harness.state().files.dirty(&harness.state().session);
+    for percent in [0, 35, 100] {
+        harness.state_mut().preferences.grid_opacity_percent = percent;
+        harness.run();
+        assert_eq!(harness.state().session().revision(), revision);
+        assert_eq!(harness.state().files.dirty(&harness.state().session), dirty);
+    }
+    let after = harness.state().session().snapshot().unwrap();
+    assert_eq!(pcbcraft_engine::persistence::encode(after).unwrap(), pcbcraft_engine::persistence::encode(before).unwrap());
+
+    harness.state_mut().preferences.grid_opacity_percent = 0;
+    click(&mut harness, "Add symbol (A)");
+    select_symbol(&mut harness, "Resistor");
+    click_canvas_offset(&mut harness, egui::vec2(40.64 + 3.0, -2.0));
+    let schematic = harness.state().session().project().unwrap();
+    assert_eq!(schematic.symbols()[0].position, pcbcraft_engine::schematic::Point { x_nm: 4 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 });
+    click(&mut harness, "Undo");
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
+}
+
 /// With scrolling set to pan, the wheel moves the schematic instead of zooming it.
 #[test]
 fn navigation_preferences_change_what_the_wheel_does() {

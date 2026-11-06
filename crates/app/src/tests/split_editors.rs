@@ -713,3 +713,106 @@ fn context_menu_modal_blocks_same_frame_follow() {
     click(&mut h, "Cancel");
     assert_eq!(view(&h, 1).camera.screen(origin, rect), before);
 }
+
+/// Read the actual painted grid dots in one pane, including their colour, so passing the
+/// preference only to the focused canvas cannot satisfy the split-view regression.
+fn grid_dots(h: &Harness<'_, PcbApp>, id: u64) -> Vec<(egui::Pos2, egui::Color32)> {
+    let rect = canvas(h, id);
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Circle(circle)
+                if circle.radius == pcbcraft_chrome::theme::SCHEMATIC_GRID_DOT_RADIUS
+                    && circle.stroke == egui::Stroke::NONE
+                    && rect.contains(circle.center) =>
+            {
+                Some((circle.center, circle.fill))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Opacity reaches both rendering paths at independent zooms, across focus changes, themes and
+/// stacked/side-by-side layouts. Only grid colour changes; navigation, highlights and history stay.
+#[test]
+fn grid_opacity_reaches_both_views_without_changing_editor_state() {
+    for theme in [preferences::ThemeChoice::Dark, preferences::ThemeChoice::Light] {
+        for size in [egui::vec2(1400.0, 900.0), egui::vec2(700.0, 850.0)] {
+            let mut h = split_harness();
+            h.state_mut().preferences.theme = theme;
+            h.set_size(size);
+            h.run();
+            focus_tab(&mut h, 1);
+            h.hover_at(canvas(&h, 1).center());
+            h.run();
+            h.event(egui::Event::Zoom(1.5));
+            h.run();
+            let origin = Point { x_nm: 0, y_nm: 0 };
+            click_point(&mut h, 0, origin);
+            let positions: [Vec<_>; 2] = [0, 1].map(|id| grid_dots(&h, id).iter().map(|(point, _)| *point).collect());
+            assert!(positions.iter().all(|dots| !dots.is_empty()));
+            let cameras = [0, 1].map(|id| (view(&h, id).camera.zoom(), view(&h, id).camera.screen(origin, canvas(&h, id))));
+            assert_ne!(cameras[0].0, cameras[1].0);
+            let snapshot = h.state().session.snapshot().unwrap();
+            let bytes = encode(snapshot.clone()).unwrap();
+            let revision = h.state().session.revision();
+            let dirty = h.state().files.dirty(&h.state().session);
+            for opacity in [100, 35, 0, 100] {
+                h.state_mut().preferences.grid_opacity_percent = opacity;
+                h.run();
+                for focused in [0, 1] {
+                    focus_tab(&mut h, focused);
+                    for id in [0, 1] {
+                        let dots = grid_dots(&h, id);
+                        if let Some(color) = pcbcraft_chrome::grid::color(Tokens::get().canvas_grid, opacity) {
+                            assert_eq!(dots.iter().map(|(point, _)| *point).collect::<Vec<_>>(), positions[id as usize]);
+                            assert!(dots.iter().all(|(_, fill)| *fill == color));
+                        } else {
+                            assert!(dots.is_empty());
+                        }
+                        assert_eq!((view(&h, id).camera.zoom(), view(&h, id).camera.screen(origin, canvas(&h, id))), cameras[id as usize]);
+                    }
+                    assert_eq!(reference_color(&h, 0, "R1"), Tokens::get().accent);
+                    assert_eq!(reference_color(&h, 1, "R1"), Tokens::get().schematic_highlight);
+                    assert_eq!(view(&h, 0).selection.single_symbol(), Some("symbol-2"));
+                    assert!(view(&h, 1).selection.is_empty());
+                }
+                assert_eq!(h.state().session.revision(), revision);
+                assert_eq!(h.state().files.dirty(&h.state().session), dirty);
+                assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+                assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+            }
+        }
+    }
+}
+
+/// Hiding both grids leaves each view's placement coordinates and shared undo intact, even
+/// after the secondary camera zooms independently.
+#[test]
+fn hidden_split_grids_still_snap_in_each_view() {
+    use pcbcraft_engine::schematic::GRID_NM;
+    for id in [0, 1] {
+        let mut h = split_harness();
+        focus_tab(&mut h, id as usize);
+        h.hover_at(canvas(&h, id).center());
+        h.run();
+        h.event(egui::Event::Zoom(1.5));
+        h.run();
+        h.state_mut().preferences.grid_opacity_percent = 0;
+        h.key_press(Key::A);
+        h.run();
+        select_symbol(&mut h, "Resistor");
+        let target = Point { x_nm: 4 * GRID_NM, y_nm: 0 };
+        let pointer = view(&h, id).camera.screen(target, canvas(&h, id)) + egui::vec2(3.0, -2.0);
+        click_canvas_at(&mut h, pointer);
+        let project = h.state().session.project().unwrap();
+        assert_eq!(project.symbols().len(), 2);
+        assert_eq!(project.symbols()[1].position, target);
+        assert!(grid_dots(&h, 0).is_empty());
+        assert!(grid_dots(&h, 1).is_empty());
+        click(&mut h, "Undo");
+        assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
+    }
+}

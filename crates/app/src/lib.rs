@@ -781,6 +781,7 @@ impl PcbApp {
                             &highlight,
                             input_enabled,
                             self.preferences.navigation,
+                            self.preferences.grid_opacity_percent,
                             &self.views.active.wire_draft,
                             label,
                         );
