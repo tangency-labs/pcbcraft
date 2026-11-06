@@ -53,6 +53,16 @@ Reference and value belong to the component; position and rotation belong to
 its placed unit. Native formats 2 and 3 record these separately, and opening a format 1
 project migrates it on the next save. Authored wire routes use format 3. Footprints link to the component.
 
+With no placement or wiring tool active, **left-drag empty canvas** or **right-drag**
+to select a group. Left-to-right draws a solid **Window** box and selects fully
+enclosed symbol bodies and wire paths; right-to-left draws a dashed **Crossing**
+box and selects touched objects. The box shows the hit count. **Shift** adds to
+selection and **Ctrl** toggles items, with either boxes or individual clicks.
+Drag a selected member to move the group, or press **Delete** to remove it;
+each operation is one undo step. Connected pins on unselected components stay
+attached. **Esc** cancels a drag or clears selection, and a stationary right-click
+still opens the context menu. Selection alone does not modify the project.
+
 Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
 
@@ -165,6 +175,12 @@ new free points as `{"x_nm":0,"y_nm":0}`, plus an ordered `bends` array and
 is one undo step; `schematic.delete_wire` removes an inspected wire ID.
 `schematic.place_symbol` also accepts an optional `rotation` of 0, 90, 180 or 270
 counterclockwise degrees, defaulting to 0.
+
+`schematic.move_items` and `schematic.delete_items` perform the same atomic group
+edits as the editor. Both accept `items: {"symbols": ["symbol-2"], "wires": []}`
+and `expected_revision`; moving also takes `dx_nm` and `dy_nm`. Obtain IDs from
+inspection. Missing IDs, stale revisions and invalid geometry reject the complete
+operation. Selecting a group and the live rectangle remain window state.
 
 ## Where things go
 
