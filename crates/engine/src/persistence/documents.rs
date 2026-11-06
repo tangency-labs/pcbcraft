@@ -13,6 +13,7 @@ pub const MAX_DOCUMENTS: usize = 4096;
 const PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
+const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -49,6 +50,8 @@ struct SheetDocument {
 #[serde(deny_unknown_fields)]
 struct BoardDocument {
     format: String,
+    #[serde(default, deserialize_with = "present")]
+    setup: Option<crate::board::setup::BoardSetup>,
     footprints: Vec<Footprint>,
 }
 
@@ -104,8 +107,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
     }
     let board: BoardDocument = parse(documents, "board.json")?;
-    if board.format != BOARD_FORMAT {
-        return Err(format!("board.json: unsupported board format {}", board.format));
+    if !matches!((board.format.as_str(), board.setup.is_some()), (BOARD_FORMAT, false) | (CONFIGURED_BOARD_FORMAT, true)) {
+        return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format));
     }
     let mut used = BTreeSet::from([ENTRY_POINT.to_owned(), sheet_path.clone(), "board.json".to_owned()]);
     let mut definitions = Vec::new();
@@ -139,7 +142,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         board: Some(BoardRecords { footprints: board.footprints }),
     };
     let mut project = validate_document(document, None).map_err(|error| format!("{ENTRY_POINT}, {sheet_path}, board.json: {error}"))?;
-    Arc::make_mut(&mut project).sheet_name.clone_from(&reference.name);
+    let project_data = Arc::make_mut(&mut project);
+    project_data.sheet_name.clone_from(&reference.name);
+    Arc::make_mut(&mut project_data.board).setup = board.setup;
     Ok(project)
 }
 
@@ -193,7 +198,8 @@ impl DocumentsEncoder {
         Self { project, documents: Documents::new(), bytes: Vec::new(), phase: 0, cursor: 0, first: true, definitions: BTreeMap::new() }
     }
 
-    /// Write at most `records` records or phase transitions. Stop after receiving the documents.
+    /// Write at most `records` records or phase transitions. The board-header transition also
+    /// writes its bounded setup (at most 128 layers and 127 strata). Stop on completed documents.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
             match self.phase {
@@ -278,7 +284,7 @@ impl DocumentsEncoder {
                     } else {
                         self.finish_document(format!("sheets/{}.json", self.project.sheet_id))?;
                         self.next();
-                        self.bytes.extend_from_slice(format!("{{\n  \"format\": \"{BOARD_FORMAT}\",\n  \"footprints\": [\n").as_bytes());
+                        board_header(&mut self.bytes, self.project.board.setup.as_ref())?;
                     }
                 }
                 5 => {
@@ -326,6 +332,27 @@ impl DocumentsEncoder {
         self.documents.insert(path, std::mem::take(&mut self.bytes));
         Ok(())
     }
+}
+
+/// Preserve version 1 bytes for unconfigured boards; version 2 keeps each bounded setup
+/// record on its own line. Configuration is at most 128 layers and 127 strata.
+fn board_header(bytes: &mut Vec<u8>, setup: Option<&crate::board::setup::BoardSetup>) -> Result<(), String> {
+    if let Some(setup) = setup {
+        bytes.extend_from_slice(format!("{{\n  \"format\": \"{CONFIGURED_BOARD_FORMAT}\",\n  \"setup\": {{\n    \"layers\": [\n").as_bytes());
+        let mut first = true;
+        for layer in setup.layers() {
+            record(bytes, &mut first, layer)?;
+        }
+        write!(bytes, "    ],\n    \"stackup\": {{\n      \"id\": \"{}\",\n      \"strata\": [\n", setup.stackup().id).map_err(|e| e.to_string())?;
+        first = true;
+        for stratum in &setup.stackup().strata {
+            record(bytes, &mut first, stratum)?;
+        }
+        bytes.extend_from_slice(b"      ]\n    }\n  },\n  \"footprints\": [\n");
+    } else {
+        bytes.extend_from_slice(format!("{{\n  \"format\": \"{BOARD_FORMAT}\",\n  \"footprints\": [\n").as_bytes());
+    }
+    Ok(())
 }
 
 /// Keep commas on their own lines so adding a record never rewrites the previous record.

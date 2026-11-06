@@ -128,6 +128,16 @@ in a terminal waits for MCP input; it is not an interactive command prompt.
 Headless edits change only that process's in-memory session. They do not edit an
 open GUI window or save back to the file.
 
+For the new layer/stackup foundation, use `describe_command` with
+`pcb.initialize_board_setup` and `pcb.set_board_setup`. On a project with no
+footprints, initialize with `copper_layers: 2` (or `4`) and the current
+`expected_revision`. Inspection returns `project.board.setup`; submit an edited
+copy with the current revision to rename layers or specify `thickness_nm`.
+Unspecified thickness stays unknown, and undo restores the previous setup.
+These are headless engine commands for now; there is no board setup dialog or
+live-editor permission for them yet. The [representation plan](pcb-representation.md)
+describes what follows this foundation.
+
 For the open desktop window instead, choose **Help → Connect AI assistants… →
 Enable local connection** and copy its configuration into your MCP client. If
 the CLI is not on PATH, replace the configuration's command with the absolute
