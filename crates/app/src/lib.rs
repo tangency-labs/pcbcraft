@@ -157,6 +157,42 @@ pub struct PcbApp {
     applied: Option<(bool, f32)>,
 }
 
+/// The workspaces the ribbon's tile lists. One electronics project spans them; only Schematic
+/// exists yet, and the rest show as planned.
+const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
+    entries: &[
+        workspace::Workspace {
+            title: "Schematic",
+            description: "Capture circuits, place symbols and connect pins",
+            tabs: Some("Capture"),
+            icon: workspace::WorkspaceIcon::Schematic,
+            current: true,
+        },
+        workspace::Workspace {
+            title: "PCB layout",
+            description: "Place components, route copper and define the board",
+            tabs: None,
+            icon: workspace::WorkspaceIcon::Layout,
+            current: false,
+        },
+        workspace::Workspace {
+            title: "3D render",
+            description: "Inspect the assembled board, layers and components",
+            tabs: None,
+            icon: workspace::WorkspaceIcon::Render,
+            current: false,
+        },
+        workspace::Workspace {
+            title: "Simulate",
+            description: "Set up circuit models, analyses and waveform probes",
+            tabs: None,
+            icon: workspace::WorkspaceIcon::Simulate,
+            current: false,
+        },
+    ],
+    footer: "One electronics project across workspaces. PCB layout, 3D rendering and simulation are planned, not implemented.",
+};
+
 impl PcbApp {
     /// The app as the desktop and browser builds start it.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -448,12 +484,14 @@ impl PcbApp {
         !self.home && self.assistant.shortcuts(ctx)
     }
 
-    /// Show placement, wiring, inspection, and fit actions in the Capture ribbon.
+    /// Show placement, wiring, inspection, and fit actions in the Capture ribbon, with the
+    /// workspace picker on its tile.
     fn ribbon(&mut self, ui: &mut Ui) {
         use workspace::ToolIcon;
 
         let has_project = self.session.project().is_some();
-        workspace::ribbon(ui, "Schematic", "Capture", |ui| {
+        // Schematic is the only workspace so far, so picking it just closes the picker.
+        workspace::ribbon(ui, "Schematic", "Capture", WORKSPACES, |ui| {
             workspace::ribbon_group(ui, "Place", 1, |ui| {
                 let placing = matches!(self.tool, Some(Tool::PlaceSymbol { .. }));
                 if workspace::tool(ui, ToolIcon::Symbol, "Symbol", "Add symbol (A)", self.session.available(PLACE_SYMBOL), placing).clicked() {

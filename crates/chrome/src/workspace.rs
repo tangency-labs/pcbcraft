@@ -20,9 +20,42 @@ pub enum ToolIcon {
     Fit,
 }
 
+/// The drawing on a workspace's tile in the picker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkspaceIcon {
+    Schematic,
+    Layout,
+    Render,
+    Simulate,
+}
+
+/// One row of the workspace picker. The app owns the list; the picker only draws it.
+#[derive(Clone, Copy, Debug)]
+pub struct Workspace<'a> {
+    pub title: &'a str,
+    pub description: &'a str,
+    /// The ribbon tabs the workspace offers. `None` marks a planned workspace, which is drawn
+    /// dimmed with a Planned badge and can't be picked.
+    pub tabs: Option<&'a str>,
+    pub icon: WorkspaceIcon,
+    /// The workspace on screen, drawn with a Current badge.
+    pub current: bool,
+}
+
+/// What the workspace tile offers: the workspaces in order and a note under them.
+#[derive(Clone, Copy, Debug)]
+pub struct Workspaces<'a> {
+    pub entries: &'a [Workspace<'a>],
+    pub footer: &'a str,
+}
+
 /// Put a Capture strip above the viewport. At compact widths the workspace title moves into
 /// the strip, and the actions can scroll horizontally when they exceed the available space.
-pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, add: impl FnOnce(&mut Ui)) {
+///
+/// The workspace tile opens a picker listing `workspaces`. Returns the index of an available
+/// workspace other than the current one when it is picked; picking the current one just closes
+/// the picker.
+pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, workspaces: Workspaces<'_>, add: impl FnOnce(&mut Ui)) -> Option<usize> {
     let t = Tokens::get();
     let height = RIBBON_HEIGHT;
     // Let the app bar color show behind the two rounded workspace corners.
@@ -40,24 +73,11 @@ pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, add: impl FnOnce(&mut U
         )
         .show(ui, |ui| {
             let wide = ui.available_width() >= 480.0;
+            let mut picked = None;
             ui.horizontal_top(|ui| {
                 if wide {
-                    card(t, t.space_8).show(ui, |ui| {
-                        let inset = t.space_8 + 1.0;
-                        let (rect, _) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH - 2.0 * inset, height - 2.0 * inset), Sense::hover());
-                        let center = rect.center();
-                        let p = ui.painter();
-                        p.hline(rect.x_range(), rect.top() - t.space_6, Stroke::new(t.space_2, t.accent));
-                        paint_workspace_icon(p, center - vec2(0.0, t.space_16), t);
-                        p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, fonts::interface_heading(ui, t.font_button), t.text);
-                        p.text(
-                            center + vec2(0.0, t.space_24 + t.space_8),
-                            Align2::CENTER_CENTER,
-                            "Workspace",
-                            FontId::proportional(t.font_small),
-                            t.text_dim,
-                        );
-                    });
+                    let tile = card(t, t.space_8).show(ui, |ui| workspace_tile(ui, workspace, height)).inner;
+                    picked = picker(ui, &tile, workspaces);
                 }
 
                 card(t, t.space_4).show(ui, |ui| {
@@ -80,7 +100,165 @@ pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, add: impl FnOnce(&mut U
                     });
                 });
             });
-        });
+            picked
+        })
+        .inner
+}
+
+/// Draw the workspace tile: the accent rule, icon, workspace name and a "Workspace" caption with
+/// a caret that points up while the picker is open. The tile is a button that toggles the picker.
+fn workspace_tile(ui: &mut Ui, workspace: &str, height: f32) -> Response {
+    let t = Tokens::get();
+    let inset = t.space_8 + 1.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH - 2.0 * inset, height - 2.0 * inset), Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Choose workspace"));
+    let open = egui::Popup::is_id_open(ui.ctx(), picker_id());
+    let center = rect.center();
+    let p = ui.painter();
+    if open || response.hovered() || response.has_focus() {
+        p.rect_filled(rect.expand(inset - 1.0), t.radius_md, t.hover);
+    }
+    p.hline(rect.x_range(), rect.top() - t.space_6, Stroke::new(t.space_2, t.accent));
+    paint_workspace_icon(p, center - vec2(0.0, t.space_16), t.control_height + t.space_2, t, true);
+    p.text(center + vec2(0.0, t.space_12), Align2::CENTER_CENTER, workspace, fonts::interface_heading(ui, t.font_button), t.text);
+    let caption = p.layout_no_wrap("Workspace".to_owned(), FontId::proportional(t.font_small), t.text_dim);
+    let caret = t.space_4 + t.space_3;
+    let caption_center = center + vec2(-caret / 2.0, t.space_24 + t.space_8);
+    let tip = caption_center + vec2(caption.size().x / 2.0 + caret, 0.0);
+    p.galley(caption_center - caption.size() / 2.0, caption, t.text_dim);
+    let direction = if open { -1.0 } else { 1.0 };
+    let arm = t.space_3;
+    p.add(Shape::line(
+        vec![tip + vec2(-arm, -arm / 2.0 * direction), tip + vec2(0.0, arm / 2.0 * direction), tip + vec2(arm, -arm / 2.0 * direction)],
+        Stroke::new(1.2, t.text_dim),
+    ));
+    response.on_hover_text("Choose workspace")
+}
+
+fn picker_id() -> egui::Id {
+    egui::Id::new("workspace_picker")
+}
+
+/// Show the workspace picker under the tile while it's open. Clicking an available row, or
+/// Enter or Space for the current one, closes it; a planned row never responds. Returns the
+/// index of an available workspace other than the current one when it is picked.
+fn picker(ui: &Ui, tile: &Response, workspaces: Workspaces<'_>) -> Option<usize> {
+    let t = Tokens::get();
+    // SolidCraft's picker width, kept inside narrow windows.
+    let width =
+        (t.form_card_width + t.form_label_width * 2.0 + t.space_24 + t.space_16 + t.space_6).min(ui.ctx().content_rect().width() - t.space_24);
+    let height = (ui.ctx().content_rect().bottom() - tile.rect.bottom() - t.space_4).max(160.0);
+    egui::Popup::from_toggle_button_response(tile)
+        .id(picker_id())
+        .kind(egui::PopupKind::Menu)
+        .align(egui::RectAlign::BOTTOM_START)
+        .align_alternatives(&[])
+        .gap(t.space_4)
+        .width(width)
+        .layout(Layout::top_down(Align::Min))
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .frame(crate::menu::frame().inner_margin(Margin::same((t.space_8 + 1.0) as i8)))
+        .show(|ui| picker_rows(ui, workspaces, width, height))
+        .and_then(|shown| shown.inner)
+}
+
+/// The picker's heading, rows and footer.
+fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32) -> Option<usize> {
+    let t = Tokens::get();
+    ui.set_width(width);
+    ui.spacing_mut().item_spacing.y = 0.0;
+    ui.add_space(t.space_4);
+    ui.label(RichText::new("WORKSPACE").font(fonts::interface_heading(ui, t.font_small)).color(t.text_dim));
+    ui.add_space(t.space_8);
+    // Keys stay in the picker so they don't reach the canvas underneath.
+    let (navigate, activate) = ui.input_mut(|i| {
+        let navigate = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+        let activate = i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
+        (navigate, activate)
+    });
+    let mut picked = None;
+    ScrollArea::vertical().id_salt("workspace_rows").max_height((height - 116.0).max(60.0)).show(ui, |ui| {
+        for (index, entry) in workspaces.entries.iter().enumerate() {
+            let response = workspace_row(ui, entry, width);
+            if entry.current && navigate {
+                response.request_focus();
+            }
+            let chosen = response.clicked() || (activate && (response.has_focus() || entry.current));
+            if entry.tabs.is_some() && chosen {
+                if !entry.current {
+                    picked = Some(index);
+                }
+                ui.close();
+            }
+        }
+    });
+    ui.add_space(t.space_6);
+    ui.separator();
+    ui.add_space(t.space_6);
+    ui.add(Label::new(RichText::new(workspaces.footer).size(t.font_small).color(t.text_dim)).wrap());
+    ui.add_space(t.space_4);
+    picked
+}
+
+/// Draw one workspace row, as SolidCraft's picker does: an accent bar, the icon tile, the title
+/// with its Current or Planned badge, the description, and the tabs for available workspaces.
+/// Planned rows are dimmed, only respond to hover, and report themselves disabled.
+fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32) -> Response {
+    let t = Tokens::get();
+    let available = entry.tabs.is_some();
+    let accent = if available { t.accent } else { t.text_dim };
+    let soft = t.panel.lerp_to_gamma(accent, 0.10);
+    let row_height = if available { t.space_24 * 3.0 } else { t.space_24 * 2.0 + t.space_12 };
+    let (rect, response) = ui.allocate_exact_size(vec2(width, row_height), if available { Sense::click() } else { Sense::hover() });
+    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, available, entry.current, entry.title));
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    if entry.current || (available && (response.hovered() || response.has_focus())) {
+        painter.rect_filled(rect, t.control_radius, soft);
+    }
+    if available && (response.hovered() || response.has_focus()) {
+        painter.rect_stroke(rect.shrink(0.5), t.control_radius, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
+    }
+    let bar = Rect::from_min_max(rect.min + vec2(t.space_2, t.space_6 + 1.0), pos2(rect.left() + t.space_6, rect.bottom() - t.space_6 - 1.0));
+    painter.rect_filled(bar, t.radius_sm / 2, accent);
+    let side = t.space_24 + t.space_16 + t.space_4;
+    let tile = Rect::from_center_size(pos2(rect.left() + 40.0, rect.center().y), vec2(side, side));
+    painter.rect_filled(tile, t.radius_md, if available { soft } else { t.panel_header });
+    paint_workspace_glyph(&painter, entry.icon, tile.center(), side - 2.0 * (t.space_6 + 1.0), t, available);
+
+    let ink = if available { t.text } else { t.text_dim };
+    let x = rect.left() + 74.0;
+    let y = rect.top() + 17.0;
+    let title = painter.layout_no_wrap(entry.title.to_owned(), fonts::interface_heading(ui, t.font_heading), ink);
+    let badge_x = x + title.size().x + t.space_8 + 1.0;
+    painter.galley(pos2(x, y - title.size().y / 2.0), title, ink);
+    // The Current badge uses the ribbon tab's accent pair, which keeps small text readable.
+    let (badge_fill, badge_ink) = if entry.current { (t.accent_soft, t.ribbon_tab_text) } else { (soft, accent) };
+    let label = if entry.current {
+        "Current"
+    } else if available {
+        "Available"
+    } else {
+        "Planned"
+    };
+    let badge = painter.layout_no_wrap(label.to_owned(), FontId::proportional(t.font_small), badge_ink);
+    let badge_rect = Rect::from_min_size(pos2(badge_x, y - t.space_8), badge.size() + vec2(t.space_12, t.space_3));
+    painter.rect_filled(badge_rect, t.radius_lg, badge_fill);
+    painter.galley(badge_rect.min + vec2(t.space_6, t.space_3 / 2.0), badge, badge_ink);
+    let line = |text: &str, y: f32| {
+        let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), FontId::proportional(t.font_body), ink);
+        job.wrap.max_width = (rect.right() - x - t.space_6).max(0.0);
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = false;
+        painter.galley(pos2(x, y), painter.layout_job(job), ink);
+    };
+    line(entry.description, rect.top() + 29.0);
+    if let Some(tabs) = entry.tabs {
+        line(tabs, rect.top() + 47.0);
+    }
+    if available && response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
 }
 
 /// Lay out related tools together with a quiet group label below their buttons.
@@ -183,9 +361,61 @@ fn card(t: Tokens, inset: f32) -> Frame {
     Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(inset as i8))
 }
 
-/// Draw the workspace tile's drawing icon using SolidCraft's geometry and the current palette.
-fn paint_workspace_icon(p: &egui::Painter, center: Pos2, t: Tokens) {
-    let scale = (t.control_height + t.space_2) / 64.0;
+/// Draw a workspace's icon, `size` points square, in the current palette. Planned workspaces
+/// (`available` false) draw in the dimmed ink. The schematic sheet uses SolidCraft's geometry;
+/// the board, render and simulation glyphs are new line art on the same 64-unit grid.
+fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, size: f32, t: Tokens, available: bool) {
+    if icon == WorkspaceIcon::Schematic {
+        paint_workspace_icon(p, center, size, t, available);
+        return;
+    }
+    let scale = size / 64.0;
+    let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * scale;
+    let ink = if available { t.text } else { t.text_dim.gamma_multiply(0.7) };
+    let accent = if available { t.accent } else { t.text_dim.gamma_multiply(0.7) };
+    let stroke = Stroke::new(3.0 * scale, ink);
+    let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
+    match icon {
+        WorkspaceIcon::Schematic => {}
+        WorkspaceIcon::Layout => {
+            p.rect_stroke(Rect::from_min_max(at(8.0, 10.0), at(56.0, 54.0)), 2, stroke, egui::StrokeKind::Middle);
+            p.rect_filled(Rect::from_min_max(at(22.0, 22.0), at(40.0, 40.0)), 1, accent);
+            for y in [26.0, 31.0, 36.0] {
+                line(&[(16.0, y), (22.0, y)], stroke);
+                line(&[(40.0, y), (48.0, y)], stroke);
+            }
+            line(&[(48.0, 31.0), (48.0, 46.0), (30.0, 46.0)], Stroke::new(2.0 * scale, accent));
+        }
+        WorkspaceIcon::Render => {
+            p.circle_stroke(at(30.0, 36.0), 18.0 * scale, stroke);
+            p.circle_filled(at(24.0, 30.0), 4.0 * scale, accent);
+            let sparkle = Stroke::new(2.5 * scale, accent);
+            line(&[(50.0, 8.0), (50.0, 20.0)], sparkle);
+            line(&[(44.0, 14.0), (56.0, 14.0)], sparkle);
+        }
+        WorkspaceIcon::Simulate => {
+            line(&[(10.0, 10.0), (10.0, 54.0), (56.0, 54.0)], stroke);
+            let wave: Vec<(f32, f32)> = (0..=24)
+                .map(|k| {
+                    let x = 14.0 + k as f32 * 1.75;
+                    (x, 32.0 - 14.0 * ((k as f32 / 24.0) * std::f32::consts::TAU).sin())
+                })
+                .collect();
+            line(&wave, Stroke::new(3.0 * scale, accent));
+        }
+    }
+}
+
+/// Draw the schematic workspace's sheet icon, `size` points square, using SolidCraft's geometry
+/// and the current palette, dimmed when `available` is false.
+fn paint_workspace_icon(p: &egui::Painter, center: Pos2, size: f32, t: Tokens, available: bool) {
+    let scale = size / 64.0;
+    let t = if available {
+        t
+    } else {
+        let dim = t.text_dim.gamma_multiply(0.7);
+        Tokens { accent: dim, field: dim, text_dim: t.panel_header, accent_soft: t.panel_header, ..t }
+    };
     let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * scale;
     let rect = |x1, y1, x2, y2| Rect::from_min_max(at(x1, y1), at(x2, y2));
     let outline = Stroke::new(2.55 * scale, t.field);
