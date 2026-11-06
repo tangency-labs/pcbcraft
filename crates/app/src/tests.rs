@@ -287,6 +287,21 @@ fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
     harness.get_by_label("Draw wire (W)");
 }
 
+/// Enter on the focused workspace tile opens the picker and leaves it open: the key that opened
+/// it doesn't also pick the current workspace. A second Enter picks Schematic and closes it.
+#[test]
+fn enter_on_the_workspace_tile_opens_the_picker() {
+    let mut harness = harness();
+    harness.get_by_label("Choose workspace").focus();
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(harness.query_by_label("PCB layout").is_some(), "the opening Enter keeps the picker open");
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(harness.query_by_label("PCB layout").is_none());
+}
+
 /// Below 380 points the ? button gives way, and Home's rail still reaches the same rows.
 #[test]
 fn narrow_bars_reach_help_rows_from_home() {

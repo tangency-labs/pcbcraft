@@ -76,8 +76,10 @@ pub fn ribbon(ui: &mut Ui, workspace: &str, group: &str, workspaces: Workspaces<
             let mut picked = None;
             ui.horizontal_top(|ui| {
                 if wide {
+                    // Read before the tile can toggle it, so the picker knows the frame it opens on.
+                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id());
                     let tile = card(t, t.space_8).show(ui, |ui| workspace_tile(ui, workspace, height)).inner;
-                    picked = picker(ui, &tile, workspaces);
+                    picked = picker(ui, &tile, workspaces, !was_open);
                 }
 
                 card(t, t.space_4).show(ui, |ui| {
@@ -140,9 +142,11 @@ fn picker_id() -> egui::Id {
 }
 
 /// Show the workspace picker under the tile while it's open. Clicking an available row, or
-/// Enter or Space for the current one, closes it; a planned row never responds. Returns the
-/// index of an available workspace other than the current one when it is picked.
-fn picker(ui: &Ui, tile: &Response, workspaces: Workspaces<'_>) -> Option<usize> {
+/// Enter or Space for the current one, closes it; a planned row never responds. `opening` is
+/// true on the frame the tile opens it, when Enter or Space is the key that opened it and must
+/// not also pick a row. Returns the index of an available workspace other than the current one
+/// when it is picked.
+fn picker(ui: &Ui, tile: &Response, workspaces: Workspaces<'_>, opening: bool) -> Option<usize> {
     let t = Tokens::get();
     // SolidCraft's picker width, kept inside narrow windows.
     let width =
@@ -158,12 +162,13 @@ fn picker(ui: &Ui, tile: &Response, workspaces: Workspaces<'_>) -> Option<usize>
         .layout(Layout::top_down(Align::Min))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .frame(crate::menu::frame().inner_margin(Margin::same((t.space_8 + 1.0) as i8)))
-        .show(|ui| picker_rows(ui, workspaces, width, height))
+        .show(|ui| picker_rows(ui, workspaces, width, height, opening))
         .and_then(|shown| shown.inner)
 }
 
-/// The picker's heading, rows and footer.
-fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32) -> Option<usize> {
+/// The picker's heading, rows and footer. Arrow, Enter and Space keys are always consumed;
+/// Enter and Space pick a row except while `opening`.
+fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32, opening: bool) -> Option<usize> {
     let t = Tokens::get();
     ui.set_width(width);
     ui.spacing_mut().item_spacing.y = 0.0;
@@ -174,7 +179,7 @@ fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32)
     let (navigate, activate) = ui.input_mut(|i| {
         let navigate = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) || i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
         let activate = i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) || i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
-        (navigate, activate)
+        (navigate, activate && !opening)
     });
     let mut picked = None;
     ScrollArea::vertical().id_salt("workspace_rows").max_height((height - 116.0).max(60.0)).show(ui, |ui| {
