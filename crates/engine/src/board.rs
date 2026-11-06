@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::schematic::{MAX_CENTER_NM, Point, Terminal, symbol_id};
+use crate::schematic::{MAX_CENTER_NM, Point, Terminal};
 
 pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
 pub(crate) const FOOTPRINT_REVISION: u32 = 1;
@@ -42,7 +42,7 @@ impl Pad {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Footprint {
     pub(crate) id: u64,
-    pub(crate) symbol: u64,
+    pub(crate) component: u64,
     pub(crate) definition: String,
     pub(crate) definition_revision: u32,
     pub(crate) pin_1_pad: u8,
@@ -52,10 +52,10 @@ pub(crate) struct Footprint {
 
 impl Footprint {
     /// Construct a placement using the pinned starter definition.
-    pub(crate) fn new(id: u64, symbol: u64, pin_1_pad: u8, position: Point) -> Self {
+    pub(crate) fn new(id: u64, component: u64, pin_1_pad: u8, position: Point) -> Self {
         Self {
             id,
-            symbol,
+            component,
             definition: FOOTPRINT_DEFINITION.to_owned(),
             definition_revision: FOOTPRINT_REVISION,
             pin_1_pad,
@@ -73,10 +73,9 @@ impl Footprint {
             && (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&self.y_nm)
     }
 
-    /// Map a physical pad back to the source terminal. Pin and pad numbering may differ.
-    fn terminal(&self, pad: u8) -> Option<Terminal> {
-        let pin = if pad == self.pin_1_pad { "1" } else { "2" };
-        Terminal::from_number(self.symbol, pin)
+    /// Resolve a physical pad to its component and logical pin, independently of placements.
+    fn component_pin(&self, pad: u8) -> (u64, &'static str) {
+        (self.component, if pad == self.pin_1_pad { "1" } else { "2" })
     }
 
     /// Locate the pad on the pinned two-pad definition's 2.54 mm pitch.
@@ -86,18 +85,17 @@ impl Footprint {
     }
 
     /// Publish the stored association and its exact addresses for clients.
-    pub(crate) fn inspect(&self) -> Value {
+    pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         json!({
             "id": format!("footprint-{}", self.id),
-            "component": format!("component-{}", self.symbol),
-            "symbol": symbol_id(self.symbol),
+            "component": format!("component-{}", self.component),
             "definition": self.definition,
             "definition_revision": self.definition_revision,
             "x_nm": self.x_nm,
             "y_nm": self.y_nm,
             "pins": ([1, 2]).map(|pad| json!({
                 "pad": Pad { footprint: self.id, number: pad }.inspect(),
-                "terminal": self.terminal(pad).map(Terminal::inspect),
+                "terminal": project.component_terminal(self.component, self.component_pin(pad).1).map(Terminal::inspect),
                 "x_nm": self.pad_position(pad).x_nm,
                 "y_nm": self.pad_position(pad).y_nm,
             }))
@@ -109,7 +107,7 @@ impl Footprint {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Board {
     footprints: Vec<Footprint>,
-    by_symbol: BTreeMap<u64, usize>,
+    by_component: BTreeMap<u64, usize>,
 }
 
 impl Board {
@@ -120,29 +118,29 @@ impl Board {
 
     /// Append a footprint in ID order, refusing duplicate or invalid placements.
     pub(crate) fn append(&mut self, footprint: Footprint) -> Result<(), &'static str> {
-        if self.by_symbol.contains_key(&footprint.symbol) {
+        if self.by_component.contains_key(&footprint.component) {
             return Err("component already has a footprint");
         }
         if !footprint.valid() || self.footprints.last().is_some_and(|last| last.id >= footprint.id) {
             return Err("invalid footprint definition, pad mapping, position, or ID");
         }
-        self.by_symbol.insert(footprint.symbol, self.footprints.len());
+        self.by_component.insert(footprint.component, self.footprints.len());
         self.footprints.push(footprint);
         Ok(())
     }
 
-    /// Drop the footprint linked to a deleted symbol, if it has one, and rebuild the index.
-    pub(crate) fn remove_symbol(&mut self, symbol: u64) {
-        if self.by_symbol.remove(&symbol).is_some() {
-            self.footprints.retain(|footprint| footprint.symbol != symbol);
-            self.by_symbol = self.footprints.iter().enumerate().map(|(index, footprint)| (footprint.symbol, index)).collect();
+    /// Drop the footprint linked to a deleted component, if it has one, and rebuild the index.
+    pub(crate) fn remove_component(&mut self, component: u64) {
+        if self.by_component.remove(&component).is_some() {
+            self.footprints.retain(|footprint| footprint.component != component);
+            self.by_component = self.footprints.iter().enumerate().map(|(index, footprint)| (footprint.component, index)).collect();
         }
     }
 
     /// Find a terminal's corresponding physical pad without scanning the layout.
-    pub(crate) fn pad_for(&self, terminal: Terminal) -> Option<Pad> {
-        let footprint = self.footprints.get(*self.by_symbol.get(&terminal.symbol)?)?;
-        let number = if terminal.number() == "1" { footprint.pin_1_pad } else { 3 - footprint.pin_1_pad };
+    pub(crate) fn pad_for(&self, component: u64, pin: &str) -> Option<Pad> {
+        let footprint = self.footprints.get(*self.by_component.get(&component)?)?;
+        let number = if pin == "1" { footprint.pin_1_pad } else { 3 - footprint.pin_1_pad };
         Some(Pad { footprint: footprint.id, number })
     }
 
@@ -151,9 +149,9 @@ impl Board {
         Some(self.footprint_for_pad(pad)?.pad_position(pad.number))
     }
 
-    /// Find a physical pad's corresponding terminal by stable footprint ID.
-    pub(crate) fn terminal_for(&self, pad: Pad) -> Option<Terminal> {
-        self.footprint_for_pad(pad)?.terminal(pad.number)
+    /// Find a physical pad's component and logical pin by stable footprint ID.
+    pub(crate) fn component_pin_for(&self, pad: Pad) -> Option<(u64, &'static str)> {
+        Some(self.footprint_for_pad(pad)?.component_pin(pad.number))
     }
 
     /// Look up a footprint without scanning the board.

@@ -85,6 +85,23 @@ pub static BUILTIN_SYMBOLS: &[&SymbolDefinition] = &[
     },
 ];
 
+impl SymbolDefinition {
+    /// The supported unit identity, stored on placements separately from the component.
+    pub(crate) fn unit_id(&self) -> &str {
+        "main"
+    }
+
+    /// The definition revision pinned by a component.
+    pub(crate) fn revision(&self) -> u32 {
+        1
+    }
+
+    /// The initial value copied into a newly placed component.
+    pub(crate) fn default_value(&self) -> &str {
+        self.value
+    }
+}
+
 /// Resolve an exact built-in definition ID without falling back to another symbol.
 pub(crate) fn builtin_symbol(id: &str) -> Option<&'static SymbolDefinition> {
     BUILTIN_SYMBOLS.iter().copied().find(|definition| definition.id == id)
@@ -110,12 +127,38 @@ pub fn rotate(x: i64, y: i64, turns: u8) -> (i64, i64) {
     }
 }
 
-/// Text a person gave a symbol in place of its automatic reference or its definition's value.
-/// `None` keeps the automatic text, so a project that was never edited saves as it always did.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Labels {
-    pub(crate) reference: Option<String>,
-    pub(crate) value: Option<String>,
+/// One logical component, independent of the position of its schematic unit.
+/// The component owns the definition, designator and value; footprints link to its ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Component {
+    pub definition: &'static SymbolDefinition,
+    pub(crate) ordinal: u64,
+    pub(crate) reference_number: usize,
+    pub(crate) reference: String,
+    pub(crate) value: String,
+}
+
+impl Component {
+    /// Return the component identity, which is independent of any symbol placement ID.
+    pub fn id(&self) -> String {
+        format!("component-{}", self.ordinal)
+    }
+
+    /// Return the designator shared by this component's schematic units and board footprint.
+    pub fn reference(&self) -> &str {
+        &self.reference
+    }
+
+    /// Return the value shared by this component's schematic units.
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    /// Publish component-owned fields independently of schematic placement geometry.
+    pub(crate) fn inspect(&self) -> Value {
+        json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
+            "reference": self.reference, "value": self.value})
+    }
 }
 
 /// Longest edited reference and value, in characters.
@@ -145,14 +188,15 @@ fn check_text(name: &str, text: &str, limit: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// A component and its single schematic symbol, with distinct identities.
-/// The session assigns the ordinal and keeps it stable through undo and redo.
+/// A placed schematic unit referencing a component. The resolved drawing is a cache;
+/// only the component ID, unit ID, placement ID and geometry are saved here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SymbolPlacement {
-    /// Definition selected when the symbol was placed.
+    /// Drawing resolved from the owning component, never separately serialized.
     pub definition: &'static SymbolDefinition,
     pub(crate) ordinal: u64,
-    pub(crate) reference_number: usize,
+    pub(crate) component: u64,
+    pub unit: &'static str,
     pub position: Point,
     /// Quarter turns counterclockwise, 0 to 3.
     pub(crate) rotation: u8,
@@ -164,20 +208,14 @@ impl SymbolPlacement {
         self.rotation
     }
 
-    /// The automatic reference: the definition's prefix and the number assigned during placement.
-    /// [`crate::Project::reference`] returns the text shown, which a person may have edited.
-    pub fn reference(&self) -> String {
-        format!("{}{}", self.definition.reference_prefix, self.reference_number)
+    /// Return the owning component's stable identity, independent of this placement's ID.
+    pub fn component_id(&self) -> String {
+        format!("component-{}", self.component)
     }
 
     /// Return the identifier shared by command clients and the saved schematic.
     pub fn id(&self) -> String {
         symbol_id(self.ordinal)
-    }
-
-    /// Return the definition's default value. [`crate::Project::value`] returns the text shown.
-    pub fn value(&self) -> &'static str {
-        self.definition.value
     }
 
     /// Return the two terminal references in the same order as the pin positions.
@@ -207,7 +245,8 @@ impl SymbolPlacement {
             .collect::<Vec<_>>();
         json!({
             "id": symbol_id(self.ordinal),
-            "component_id": format!("component-{}", self.ordinal),
+            "component_id": self.component_id(),
+            "unit": self.unit,
             "kind": self.definition.id,
             "reference": reference,
             "value": value,

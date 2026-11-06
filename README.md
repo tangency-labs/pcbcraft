@@ -24,6 +24,9 @@ right-click and choose **Cancel** to discard an in-progress wire.
 Click a symbol to select it. Press **R** to rotate it, **E** to edit its
 reference and value, or **Delete** to remove it with its wires; right-click a
 symbol for the same actions, and press **Esc** to clear the selection.
+Reference and value belong to the component; position and rotation belong to
+its placed unit. Native format 2 records these separately, and opening a format 1
+project migrates it on the next save. Footprints link to the component.
 
 Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.

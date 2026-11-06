@@ -11,10 +11,13 @@ pub mod schematic;
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
-use std::sync::{Arc, OnceLock};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 
 use schematic::{
-    BUILTIN_SYMBOLS, MAX_CENTER_NM, MAX_SYMBOLS, Point, RESISTOR, SymbolDefinition, SymbolPlacement, Terminal, Wire, builtin_symbol,
+    BUILTIN_SYMBOLS, Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, RESISTOR, SymbolDefinition, SymbolPlacement, Terminal, Wire, builtin_symbol,
     wiring::{Connectivity, MAX_WIRES},
 };
 use serde_json::{Map, Value, json};
@@ -268,8 +271,10 @@ pub struct Project {
     id: uuid::Uuid,
     sheet_id: uuid::Uuid,
     symbols: Arc<Vec<SymbolPlacement>>,
-    /// Edited references and values by symbol ordinal. Symbols never edited have no entry.
-    labels: Arc<std::collections::BTreeMap<u64, schematic::Labels>>,
+    /// Logical components own their definition, reference and value.
+    components: Arc<BTreeMap<u64, Component>>,
+    /// Derived index of each placed component unit to its symbol ID.
+    units: Arc<BTreeMap<(u64, &'static str), u64>>,
     wires: Arc<Vec<Wire>>,
     connectivity: Arc<OnceLock<Connectivity>>,
     board: Arc<Board>,
@@ -283,14 +288,31 @@ impl Project {
         &self.symbols
     }
 
-    /// The reference shown for a symbol: the text a person gave it, or its automatic reference.
-    pub fn reference(&self, symbol: &SymbolPlacement) -> String {
-        self.labels.get(&symbol.ordinal).and_then(|labels| labels.reference.clone()).unwrap_or_else(|| symbol.reference())
+    /// Return the logical components in stable component ID order.
+    pub fn components(&self) -> impl Iterator<Item = &Component> {
+        self.components.values()
     }
 
-    /// The value shown for a symbol: the text a person gave it, or its definition's value.
-    pub fn value<'a>(&'a self, symbol: &'a SymbolPlacement) -> &'a str {
-        self.labels.get(&symbol.ordinal).and_then(|labels| labels.value.as_deref()).unwrap_or(symbol.value())
+    /// Resolve a placement's owner in this snapshot. Foreign placements may have no component.
+    pub fn component(&self, symbol: &SymbolPlacement) -> Option<&Component> {
+        self.components.get(&symbol.component)
+    }
+
+    /// Return the owning component's reference, or empty text for a foreign placement.
+    pub fn reference(&self, symbol: &SymbolPlacement) -> String {
+        self.component(symbol).map_or_else(String::new, |component| component.reference.clone())
+    }
+
+    /// Return the owning component's value, or empty text for a foreign placement.
+    pub fn value(&self, symbol: &SymbolPlacement) -> &str {
+        self.component(symbol).map_or("", Component::value)
+    }
+
+    /// Resolve a component pin through the unit-placement index. Only one unit is supported today.
+    pub(crate) fn component_terminal(&self, component: u64, pin: &str) -> Option<Terminal> {
+        let definition = self.components.get(&component)?.definition;
+        let symbol = self.units.get(&(component, definition.unit_id()))?;
+        Terminal::from_number(*symbol, pin)
     }
 
     /// The older project format this was migrated from when it was opened, such as 1. Saving
@@ -340,7 +362,7 @@ impl Project {
 
     /// Find the placed board pad for a schematic terminal, if a footprint is assigned.
     pub fn pad_for_terminal(&self, terminal: Terminal) -> Option<Pad> {
-        self.board.pad_for(terminal)
+        self.board.pad_for(self.terminal_symbol(terminal)?.component, terminal.number())
     }
 
     /// Locate a mapped physical pad in board coordinates.
@@ -350,7 +372,8 @@ impl Project {
 
     /// Find the schematic terminal corresponding to a placed board pad.
     pub fn terminal_for_pad(&self, pad: Pad) -> Option<Terminal> {
-        self.board.terminal_for(pad)
+        let (component, pin) = self.board.component_pin_for(pad)?;
+        self.component_terminal(component, pin)
     }
 
     /// Find the stable symbol ID in the ID-ordered placement records.
@@ -386,6 +409,7 @@ impl Session {
             .symbols
             .last()
             .map_or(0, |symbol| symbol.ordinal)
+            .max(project.components.last_key_value().map_or(0, |(&id, _)| id))
             .max(project.wires.last().map_or(0, |wire| wire.ordinal))
             .max(project.board.footprints().last().map_or(0, |footprint| footprint.id));
         self.revision = self.revision.max(highest) + 1;
@@ -417,10 +441,11 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
+                "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": p.inspect_schematic(),
             });
             if !p.board.footprints().is_empty() {
-                inspected["board"] = json!({"footprints": p.board.footprints().iter().map(Footprint::inspect).collect::<Vec<_>>()});
+                inspected["board"] = json!({"footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
             }
             inspected
         });
@@ -458,7 +483,8 @@ impl Session {
                 id: fresh_id()?,
                 sheet_id: fresh_id()?,
                 symbols: Arc::default(),
-                labels: Arc::default(),
+                components: Arc::default(),
+                units: Arc::default(),
                 wires: Arc::default(),
                 connectivity: Arc::default(),
                 board: Arc::default(),
@@ -507,26 +533,37 @@ impl Session {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
         let mut reference_number = project
-            .symbols
-            .iter()
-            .filter(|symbol| symbol.definition.reference_prefix == definition.reference_prefix)
-            .map(|symbol| symbol.reference_number)
+            .components
+            .values()
+            .filter(|component| component.definition.reference_prefix == definition.reference_prefix)
+            .map(|component| component.reference_number)
             .max()
             .unwrap_or_default()
             + 1;
         // An edited reference may already use the next automatic one, such as R1 renamed to R2.
-        let shown: std::collections::BTreeSet<String> = project.symbols.iter().map(|symbol| project.reference(symbol)).collect();
+        let shown: std::collections::BTreeSet<String> = project.components.values().map(|component| component.reference.clone()).collect();
         while shown.contains(&format!("{}{reference_number}", definition.reference_prefix)) {
             reference_number += 1;
         }
         if reference_number > MAX_REFERENCE_NUMBER {
             return Err(CommandError::Unavailable("no more reference numbers are available for this symbol type".to_owned()));
         }
+        let ordinal = self.next_object_id()?;
+        let component = Component {
+            ordinal,
+            definition,
+            reference_number,
+            reference: format!("{}{reference_number}", definition.reference_prefix),
+            value: definition.default_value().to_owned(),
+        };
         let mut project = project.clone();
+        Arc::make_mut(&mut project.components).insert(ordinal, component);
+        Arc::make_mut(&mut project.units).insert((ordinal, definition.unit_id()), ordinal);
         Arc::make_mut(&mut project.symbols).push(SymbolPlacement {
             definition,
-            ordinal: self.next_object_id()?,
-            reference_number,
+            ordinal,
+            component: ordinal,
+            unit: definition.unit_id(),
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
             rotation: 0,
         });
@@ -574,55 +611,50 @@ impl Session {
         Ok(())
     }
 
-    /// Remove a symbol with its wires, edited text and footprint, as one undo step.
+    /// Remove a unit and its wires. Removing the last placed unit also removes its component
+    /// and footprint; undo restores the entire snapshot, including component fields.
     fn delete_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
-        let ordinal = project.symbols[index].ordinal;
+        let symbol = project.symbols[index];
+        let ordinal = symbol.ordinal;
         let mut project = project.clone();
         Arc::make_mut(&mut project.symbols).remove(index);
         Arc::make_mut(&mut project.wires).retain(|wire| wire.terminals.iter().all(|terminal| terminal.symbol != ordinal));
-        if project.labels.contains_key(&ordinal) {
-            Arc::make_mut(&mut project.labels).remove(&ordinal);
+        Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit));
+        if !project.symbols.iter().any(|other| other.component == symbol.component) {
+            Arc::make_mut(&mut project.components).remove(&symbol.component);
+            Arc::make_mut(&mut project.board).remove_component(symbol.component);
         }
-        Arc::make_mut(&mut project.board).remove_symbol(ordinal);
         project.connectivity = Arc::default();
         self.change(project);
         Ok(())
     }
 
-    /// Set the reference and value shown for a symbol. Text equal to the automatic reference or
-    /// the definition's value clears the edit. A reference must be unique, both must be
-    /// non-empty single-line text within their length limits, and an unchanged pair is no step.
+    /// Set component-owned fields through a placed unit. References must be unique across
+    /// components; both fields are bounded single-line text. An unchanged pair is a no-op.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
-        let symbol = &project.symbols[index];
-        // Surrounding spaces are trimmed here, so a person's stray space isn't an error.
+        let component =
+            project.component(&project.symbols[index]).ok_or_else(|| CommandError::InvalidParams("symbol has no component".to_owned()))?;
         let reference = params["reference"].as_str().unwrap_or_default().trim().to_owned();
         let value = params["value"].as_str().unwrap_or_default().trim().to_owned();
         schematic::check_reference(&reference).map_err(CommandError::InvalidParams)?;
         schematic::check_value(&value).map_err(CommandError::InvalidParams)?;
-        if project.symbols.iter().any(|other| other.ordinal != symbol.ordinal && project.reference(other) == reference) {
-            return Err(CommandError::InvalidParams(format!("another symbol is already {reference}")));
+        if project.components.values().any(|other| other.ordinal != component.ordinal && other.reference == reference) {
+            return Err(CommandError::InvalidParams(format!("another component is already {reference}")));
         }
-        let labels = schematic::Labels {
-            reference: (reference != symbol.reference()).then_some(reference),
-            value: (value != symbol.value()).then_some(value),
-        };
-        let ordinal = symbol.ordinal;
-        if project.labels.get(&ordinal).cloned().unwrap_or_default() == labels {
+        if component.reference == reference && component.value == value {
             return Ok(());
         }
+        let mut component = component.clone();
+        component.reference = reference;
+        component.value = value;
         let mut project = project.clone();
-        let table = Arc::make_mut(&mut project.labels);
-        if labels == schematic::Labels::default() {
-            table.remove(&ordinal);
-        } else {
-            table.insert(ordinal, labels);
-        }
+        Arc::make_mut(&mut project.components).insert(component.ordinal, component);
         self.change(project);
         Ok(())
     }
@@ -631,16 +663,13 @@ impl Session {
     fn place_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        let symbol = params["symbol"]
-            .as_str()
-            .and_then(schematic::parse_symbol_id)
-            .filter(|&id| project.symbol_index(id).is_some())
-            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
+        let index = Self::symbol_param(project, params)?;
+        let component = project.symbols[index].component;
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let mut project = project.clone();
         let pin_1_pad = params["pin_1_pad"].as_u64().unwrap_or_default() as u8;
         Arc::make_mut(&mut project.board)
-            .append(Footprint::new(self.next_object_id()?, symbol, pin_1_pad, position))
+            .append(Footprint::new(self.next_object_id()?, component, pin_1_pad, position))
             .map_err(|error| CommandError::InvalidParams(error.to_owned()))?;
         self.change(project);
         Ok(())

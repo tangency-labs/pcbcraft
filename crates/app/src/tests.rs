@@ -873,7 +873,7 @@ fn the_symbol_context_menu_rotates_and_edits() {
     harness.get_all_by_role(egui::accesskit::Role::TextInput).next().unwrap().type_text("R2");
     harness.run();
     click(&mut harness, "OK");
-    harness.get_by_label("another symbol is already R2");
+    harness.get_by_label("another component is already R2");
     assert!(matches!(harness.state().dialog, Dialog::EditFields { .. }));
 }
 

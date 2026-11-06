@@ -96,6 +96,7 @@ impl ProjectFiles {
     }
 
     /// Capture an immutable snapshot. An explicit encoding starts a Save As or browser download.
+    /// Browser exports of migrated files encode the current schema instead of reusing old bytes.
     pub(super) fn save(&mut self, session: &Session, encoding: Option<Encoding>, ctx: &egui::Context) -> Result<(), String> {
         let snapshot = session.snapshot().ok_or("no project open")?;
         let (send, receive) = mpsc::channel();
@@ -121,7 +122,7 @@ impl ProjectFiles {
             let unchanged = self
                 .saved
                 .as_ref()
-                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot))
+                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && snapshot.upgraded_from().is_none())
                 .map(|saved| Arc::clone(&saved.bytes));
             web::Download::new(snapshot, unchanged, encoding, send)?
         };
