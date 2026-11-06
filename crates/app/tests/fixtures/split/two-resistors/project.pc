@@ -1,0 +1,12 @@
+{
+  "format": "pcbcraft-project/5",
+  "id": "519a42d4-d658-4905-90fb-a9483718ac39",
+  "name": "Two resistors",
+  "sheets": [{"id":"0bbcf5e3-dd21-47b3-ae6b-bd66c8f97989","name":"Schematic","file":"sheets/0bbcf5e3-dd21-47b3-ae6b-bd66c8f97989.json"}],
+  "components": [
+    {"id":2,"library":"starter","definition":"resistor","definition_revision":1,"reference_number":1,"reference":"R1","value":"1k"}
+
+    ,
+    {"id":3,"library":"starter","definition":"resistor","definition_revision":1,"reference_number":2,"reference":"R2","value":"1k"}
+  ]
+}

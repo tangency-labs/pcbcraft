@@ -2237,6 +2237,7 @@ dependencies = [
  "pcbcraft-chrome",
  "pcbcraft-engine",
  "pcbcraft-mcp",
+ "pcbcraft-storage",
  "rfd",
  "serde",
  "serde_json",
@@ -2258,6 +2259,7 @@ version = "0.0.0"
 dependencies = [
  "pcbcraft-engine",
  "pcbcraft-mcp",
+ "pcbcraft-storage",
 ]
 
 [[package]]
@@ -2279,6 +2281,17 @@ dependencies = [
  "craft-control",
  "pcbcraft-engine",
  "serde_json",
+]
+
+[[package]]
+name = "pcbcraft-storage"
+version = "0.0.0"
+dependencies = [
+ "pcbcraft-engine",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

@@ -324,6 +324,8 @@ pub struct Project {
     pub name: String,
     id: uuid::Uuid,
     sheet_id: uuid::Uuid,
+    /// Display name persisted in the ordered sheet list; the current editor has one sheet.
+    sheet_name: String,
     symbols: Arc<Vec<SymbolPlacement>>,
     /// Logical components own their definition, reference and value.
     components: Arc<BTreeMap<u64, Component>>,
@@ -370,8 +372,8 @@ impl Project {
         Terminal::from_number(*symbol, definition, pin)
     }
 
-    /// The older project format this was migrated from when it was opened, such as 1. Saving
-    /// writes the current format. `None` for projects made or saved in this format.
+    /// The older single-document format migrated when this snapshot was opened, such as 1.
+    /// Saving does not mutate snapshots; reopening a split project returns `None`.
     pub fn upgraded_from(&self) -> Option<u32> {
         self.upgraded_from
     }
@@ -497,11 +499,13 @@ impl Session {
     /// Each schematic wire reports terminal or junction endpoints and optional authored `bends`.
     /// The schematic's `junctions` list provides endpoint IDs and positions; its `netlist`
     /// groups connected terminals and junctions, including junction-only nets, and lists
-    /// terminals without a wire as `unconnected`.
+    /// terminals without a wire as `unconnected`. `sheets` reports ordered sheet identities,
+    /// display names and relative document paths (currently one editable sheet).
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
+                "sheets": [{"id":p.sheet_id, "name":p.sheet_name, "file":format!("sheets/{}.json", p.sheet_id)}],
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": p.inspect_schematic(),
             });
@@ -543,6 +547,7 @@ impl Session {
                 name: name_param(params)?,
                 id: fresh_id()?,
                 sheet_id: fresh_id()?,
+                sheet_name: "Schematic".to_owned(),
                 symbols: Arc::default(),
                 components: Arc::default(),
                 units: Arc::default(),

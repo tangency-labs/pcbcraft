@@ -17,6 +17,15 @@ use crate::{
 
 mod archive;
 pub use archive::ArchiveEncoder;
+mod documents;
+pub use documents::{
+    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, decode_documents, encode_documents,
+    is_document_path,
+};
+mod packed;
+pub use packed::{PackedEncoder, PackedProject, decode_packed, encode_packed, encode_packed_documents};
+#[cfg(test)]
+mod split_tests;
 
 /// Maximum number of bytes in a supported project ZIP.
 pub const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
@@ -38,7 +47,7 @@ impl Encoding {
     /// Return the input size bound before allocating or decoding the file.
     pub fn input_limit(self) -> usize {
         match self {
-            Self::Json => MAX_PROJECT_BYTES,
+            Self::Json => MAX_DOCUMENT_BYTES,
             Self::Zip => MAX_ARCHIVE_BYTES,
         }
     }
@@ -52,12 +61,13 @@ pub fn decode_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
     }
     let project = match encoding {
         Encoding::Json => decode(bytes)?,
-        Encoding::Zip => decode(&archive::unpack(bytes)?)?,
+        Encoding::Zip => decode_packed(bytes)?.project,
     };
     Ok((project, encoding))
 }
 
-/// Encode a project in the requested native file encoding.
+/// Encode a legacy single-document project or container v1, retained for migration fixtures.
+/// Normal saves use [`encode_documents`] or [`encode_packed`].
 pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>, String> {
     let bytes = encode(project)?;
     match encoding {
@@ -368,7 +378,8 @@ impl From<WireEndpoint> for Endpoint<'static> {
     }
 }
 
-/// Encode a complete snapshot as deterministic JSON with one line per editable record.
+/// Encode legacy format 4 as deterministic JSON for migration fixtures and diagnostic tools.
+/// Normal project saves use [`encode_documents`] and do not combine all data in one file.
 pub fn encode(project: Arc<Project>) -> Result<Vec<u8>, String> {
     let mut encoder = Encoder::new(project)?;
     loop {
@@ -575,6 +586,11 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         }
         format => return Err(format!("unsupported project format {format}")),
     };
+    validate_document(document, upgraded_from)
+}
+
+/// Validate the combined legacy or split records without imposing a single-file size limit.
+fn validate_document(document: Document, upgraded_from: Option<u32>) -> Result<Arc<Project>, String> {
     let Document { format, id, name, symbol_definitions, components: records, sheet, board } = document;
     if format != FORMAT {
         return Err(format!("unsupported project format {format}"));
@@ -752,6 +768,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     Ok(Arc::new(Project {
         id,
         sheet_id: sheet.id,
+        sheet_name: "Schematic".to_owned(),
         name,
         symbols: Arc::new(symbols),
         components: Arc::new(components),

@@ -73,7 +73,7 @@ Files are hard to change once people have real boards saved in them, so we discu
 
 | Topic | Proposal |
 |---|---|
-| Storage | Plain JSON `.pc` is the working format for Git, and ZIP `.pc` carries a portable copy for sharing. The [storage spec](docs/native-project-storage.md#file-encodings-and-save-behavior) defines both encodings. A project directory can follow as projects grow. |
+| Storage | A project folder is the working format for Git, with a plain JSON `project.pc` entry point and separate schematic, board and pinned library documents. A `.pc.zip` archive packages the project for sharing. The [storage spec](docs/native-project-storage.md#file-encodings-and-save-behavior) defines both forms, including archives without a manifest. |
 | Links between things | A link pins a permanent ID and a version. The path is only a hint, and taking the latest version is a deliberate step. |
 | One file or many | Start in one project, then promote a block or part to its own linked item. |
 | Parts and libraries | A part links a symbol, footprint, 3D model and supplier data, each optional until needed. Projects keep a pinned copy, so they open without the library. |

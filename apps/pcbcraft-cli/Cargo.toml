@@ -12,3 +12,4 @@ workspace = true
 [dependencies]
 pcbcraft-engine = { workspace = true }
 pcbcraft-mcp = { workspace = true }
+pcbcraft-storage = { workspace = true }

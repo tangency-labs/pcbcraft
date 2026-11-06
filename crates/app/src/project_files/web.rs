@@ -5,7 +5,7 @@ use std::sync::{Arc, mpsc::Sender};
 use js_sys::{Promise, Uint8Array};
 use pcbcraft_engine::{
     Project,
-    persistence::{ArchiveEncoder, Encoder, Encoding, MAX_ARCHIVE_BYTES, MAX_PROJECT_BYTES, decode_file},
+    persistence::{Documents, DocumentsEncoder, Encoding, MAX_ARCHIVE_BYTES, MAX_PROJECT_BYTES, PackedEncoder, decode_file, decode_packed},
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -17,7 +17,7 @@ export function pickProject(jsonLimit, zipLimit) {
     return new Promise((resolve, reject) => {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.pc,.json';
+        input.accept = '.pc,.zip,.json';
         input.oncancel = () => resolve(null);
         input.onchange = async () => {
             const file = input.files[0];
@@ -41,7 +41,7 @@ export function downloadProject(bytes, archive) {
     const url = URL.createObjectURL(new Blob([bytes], {type: archive ? 'application/zip' : 'application/json'}));
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'project.pc';
+    link.download = 'project.pc.zip';
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -72,20 +72,26 @@ pub(super) async fn open(file: Promise) -> Result<Outcome, String> {
         return Err("project exceeds the native file size limit".to_owned());
     }
     let bytes: Arc<[u8]> = bytes.to_vec().into();
-    let (snapshot, encoding) = decode_file(&bytes)?;
-    Ok(Outcome::Opened(Saved { snapshot, bytes, encoding }))
+    let encoding = Encoding::detect(&bytes);
+    let (snapshot, documents, needs_manifest, legacy) = if encoding == Encoding::Zip {
+        let packed = decode_packed(&bytes)?;
+        (packed.project, packed.documents.map(Arc::new), packed.needs_manifest, packed.legacy)
+    } else {
+        (decode_file(&bytes)?.0, None, false, true)
+    };
+    Ok(Outcome::Opened(Saved { snapshot, bytes, encoding, needs_manifest, legacy, documents }))
 }
 
 pub(super) struct Download {
     source: DownloadSource,
-    encoding: Encoding,
     result: Sender<Result<Outcome, String>>,
 }
 
 enum DownloadSource {
-    Encode(Encoder),
-    Archive(ArchiveEncoder),
+    Encode(DocumentsEncoder),
+    Archive(PackedEncoder),
     Unchanged(Arc<[u8]>),
+    Documents(Arc<Documents>),
 }
 
 impl std::fmt::Debug for Download {
@@ -99,34 +105,40 @@ impl Download {
     pub(super) fn new(
         snapshot: Arc<Project>,
         unchanged: Option<Arc<[u8]>>,
-        encoding: Encoding,
+        documents: Option<Arc<Documents>>,
         result: Sender<Result<Outcome, String>>,
     ) -> Result<Self, String> {
         let source = match unchanged {
             Some(bytes) => DownloadSource::Unchanged(bytes),
-            None => DownloadSource::Encode(Encoder::new(snapshot)?),
+            None => documents.map(DownloadSource::Documents).unwrap_or_else(|| DownloadSource::Encode(DocumentsEncoder::new(snapshot))),
         };
-        Ok(Self { source, encoding, result })
+        Ok(Self { source, result })
     }
 
     /// Encode a bounded batch or download the unchanged bytes. A request cannot confirm a write.
     pub(super) fn advance(&mut self) {
         let result = match &mut self.source {
-            DownloadSource::Unchanged(bytes) => send_download(bytes, self.encoding),
+            DownloadSource::Documents(documents) => match PackedEncoder::new((**documents).clone()) {
+                Ok(archive) => {
+                    self.source = DownloadSource::Archive(archive);
+                    return;
+                }
+                Err(error) => Err(error),
+            },
+            DownloadSource::Unchanged(bytes) => send_download(bytes),
             DownloadSource::Encode(encoder) => match encoder.step(256) {
-                Ok(Some(bytes)) if self.encoding == Encoding::Zip => match ArchiveEncoder::new(bytes) {
+                Ok(Some(documents)) => match PackedEncoder::new(documents) {
                     Ok(archive) => {
                         self.source = DownloadSource::Archive(archive);
                         return;
                     }
                     Err(error) => Err(error),
                 },
-                Ok(Some(bytes)) => send_download(&bytes, self.encoding),
                 Ok(None) => return,
                 Err(error) => Err(error),
             },
             DownloadSource::Archive(encoder) => match encoder.step() {
-                Ok(Some(bytes)) => send_download(&bytes, self.encoding),
+                Ok(Some(bytes)) => send_download(&bytes),
                 Ok(None) => return,
                 Err(error) => Err(error),
             },
@@ -136,10 +148,8 @@ impl Download {
 }
 
 /// Hand the completed payload to the browser's download UI.
-fn send_download(bytes: &[u8], encoding: Encoding) -> Result<Outcome, String> {
-    download_project(bytes, encoding == Encoding::Zip)
-        .map(|()| Outcome::Downloaded)
-        .map_err(|error| format!("Could not download project: {}", error_message(&error)))
+fn send_download(bytes: &[u8]) -> Result<Outcome, String> {
+    download_project(bytes, true).map(|()| Outcome::Downloaded).map_err(|error| format!("Could not download project: {}", error_message(&error)))
 }
 
 /// Show the browser's error message or string rejection in the status bar.

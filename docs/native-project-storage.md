@@ -1,340 +1,230 @@
-# Native project storage specification
+# Native project storage
 
-[PCBCraft's vision](../VISION.md#how-our-files-should-work) sets two observable
-requirements for native projects under version control. Saving an unchanged
-project produces zero diff, and moving one part changes only that part's lines.
-The native `.pc` extension identifies a PCBCraft project. This specification
-defines plain JSON for working files and a ZIP container for sharing. Both encodings carry
-the same project schema. The desktop, browser and MCP CLI can open either one.
+PCBcraft stores a project as independently editable documents. The editor and MCP
+still share one project, command set and undo history; storage boundaries do not
+create separate schematic and board sessions.
 
 ## File encodings and save behavior
 
-| Encoding | Intended use | Contents |
-| --- | --- | --- |
-| Plain JSON `.pc` | Default for new projects and Git-tracked work | One UTF-8 project document tagged `pcbcraft-project/4` |
-| ZIP `.pc` | Portable copy for sharing or bundling assets | A manifest, the same project document, and any bundled asset bytes |
+The working form is a project folder with a plain UTF-8 JSON `project.pc` entry
+point. Desktop New Project defaults to this form. Open accepts the folder, its
+entry point, a `.pc.zip` archive or a legacy project. Save keeps the opened form;
+Save As offers a project folder and a packed project. The folder destination is
+a new or empty project directory, while archive Save As requires an unused file.
+Unrelated root files such as `README.md` and `.git` remain untouched.
+Regular `.DS_Store`, `Thumbs.db` and `desktop.ini` files are also left alone inside
+project subdirectories; they are not project documents and are never published
+or removed by a save. Other unknown files in managed subdirectories are refused.
 
-Open determines the encoding from the file contents. A ZIP signature selects
-the archive reader, which must validate the PCBCraft manifest before accepting
-the project. Other inputs go through the JSON reader, which validates the
-project format tag. A corrupt ZIP or an unrelated ZIP produces a format error
-and leaves the active project intact.
-
-On desktop, **Save** preserves the encoding of the open file. **Save As**
-offers **Plain JSON** and **ZIP archive**, with the same `.pc` extension for
-both. New projects default to plain JSON. The browser offers the same encoding
-choices when downloading and reports a download request. A successful
-download request cannot confirm a durable write.
-
-Converting between encodings preserves project, sheet, component, symbol, wire,
-and footprint identities, along with pinned definitions and connectivity.
-If a project requires assets carried by an archive, conversion to plain JSON
-must keep those assets available under a supported project asset layout or
-fail with a list of the affected dependencies. The first archive reader and
-writer can ship with an empty asset list because schema version 1 has no
-asset references.
-
-## ZIP container version 1
-
-The root entries are `manifest.json` and `project.json`. The manifest is
-UTF-8 JSON. It identifies the container independently of the project schema
-and records the byte length and SHA-256 of each payload. `project.json`
-contains the same versioned JSON the plain reader accepts.
-
-| Manifest field | Meaning |
-| --- | --- |
-| `format` | Exactly `pcbcraft-container/1` |
-| `project` | Object with `size_bytes` and `sha256` for `project.json` |
-| `assets` | Array of objects with `size_bytes` and `sha256`, empty when there are no bundled assets |
-
-A bundled asset is stored at `assets/<sha256>`, using the lowercase
-64-character digest of the exact uncompressed bytes. Write each digest once.
-The project schema owns the asset's role, provenance and license information.
-When that schema supports assets, each bundled asset must match a project
-reference and all required bundled references must resolve before adoption.
-The container does not need to extract anything into the working directory.
-
-The v1 reader accepts regular, unencrypted ZIP entries using Store or
-Deflate. ZIP64 and split archives are unsupported. The current project schema
-permits exactly two entries and requires an empty asset list. It rejects duplicate names, unexpected entries, absolute or
-traversal paths, symlinks, and special files. Enforce declared and actual
-uncompressed byte counts while reading, and verify every payload digest
-before using it. Apply these initial limits to the container and the decoded
-project together.
-
-| Limit | Maximum |
-| --- | --- |
-| Archive file | 64 MiB |
-| Total uncompressed content | 256 MiB |
-| Entries | 1,024 |
-| Manifest | 256 KiB |
-| Project JSON | 4 MiB |
-| Individual asset | 128 MiB |
-
-An unchanged save preserves the original JSON or archive bytes. For a changed
-archive, write manifest and project first, followed by assets in digest
-order. Use fixed archive timestamps and consistent entry metadata. The plain
-encoding remains the Git merge surface, and a ZIP created for sharing can
-be regenerated from the same snapshot.
-
-## What a project preserves
-
-Give the project, sheet, component, placed symbol and wire persistent identities
-that survive reopening, renaming and reordering. A terminal reference identifies
-a symbol and a pin within its resolved definition. A wire between two pins stores
-those references, so moving a symbol keeps the wire attached without rewriting
-the wire record. Derived pin coordinates, displayed routes and the computed
-netlist can be rebuilt when the project opens.
-
-Use a deterministic order for records, keys and unordered endpoint pairs.
-Preserve authored ordering where it carries meaning. Keep placements in
-independently diffable records and store geometry as exact integer coordinates
-in the engine's units. Reopening and saving supported files without an edit
-preserves the tracked bytes, including files changed by a clean merge. Keep
-timestamps, previews, caches, preferences, selections, undo history, session
-revisions, assistant state and credentials outside the tracked project.
-
-Pin each used definition by persistent ID and revision. The first profile can
-resolve a versioned symbol from the embedded starter library offline (see
-[symbol-library.md](symbol-library.md)). If the project must
-carry a copy of a used definition, record it once with its origin, revision and
-license or notice, subject to redistribution approval. An unavailable required
-definition produces a dependency error, since substituting a newer pin layout
-could change connectivity. Large assets, if supported, can live separately
-and be verified by content hash.
-
-## Opening and saving safely
-
-Version the project schema independently of the application. Set limits for
-input bytes, decompressed bytes if packaged, nesting, strings and record
-counts, and enforce them before allocation or during decoding as appropriate.
-Validate IDs, geometry, wire endpoints and required definitions before replacing
-the open project. A newer schema, unsupported authoritative field, duplicate
-ID or dangling endpoint should produce an actionable error and leave the open
-project untouched. A migration is an explicit operation with prior-version
-fixtures. If the format permits asset paths, confine resolution to approved
-project locations and reject traversal, escaping links and special files.
-
-Save a snapshot of one session revision. Validate and stage it before
-publication, and compare the destination against the baseline from open or the
-last successful save as part of publication. Two supported writers starting
-from the same baseline should have at most one successful publication. An
-external change detected before publication should produce a conflict, keeping
-both the user's edits and the external version available. For a multi-file
-layout, choose a commit and recovery mechanism that lets readers see a whole
-old or new snapshot. A sequence of independent file replacements can expose
-a mixed project. For each supported platform, test the publication boundary
-and document its guarantees for other processes writing to the destination.
-
-A canceled or failed save before publication leaves the previous snapshot
-readable and the current edits unsaved. If another edit lands while a save is
-in flight, the save marks only the staged revision as persisted. Desktop,
-browser and MCP should use the same engine snapshot and validation contracts,
-with storage adapters that report their own publication results.
-
-## First fixture and acceptance
-
-Create an original one-sheet fixture with two starter library resistors.
-Place `R1` at `(0, 0)` and `R2` at `(25_400_000, 0)` in nanometers. Give each a
-fixed component and symbol ID, and connect pin `2` of `R1` to pin `1` of `R2`
-with one fixed wire ID. Both symbols use the same pinned definition.
-
-1. Save, reopen and compare the identities, exact positions, definition revision
-   and terminal group. Pins `R1.1` and `R2.2` remain isolated. Save again and
-   compare every tracked byte.
-2. Move `R1` to `(0, 1_270_000)` using the shared editing command. Save and
-   check that the diff is confined to `R1`'s placement record. Reopen and verify
-   the same wire ID and terminal membership. Separately move `R2` in a copy
-   from the common baseline and check that the two edits can merge and reopen.
-3. Try to open variants with an unsupported version, an oversized input and a
-   nonexistent terminal. Check that each fails before it replaces the open
-   project. Simulate a failure before publication and race two writers from
-   the same baseline. Check the destination and dirty state in both cases.
-4. Stage a save after moving `R1`, then move `R2` before publication completes.
-   Reopening the saved snapshot should show only the `R1` move, with the
-   `R2` move still unsaved in the active session.
-
-The plain JSON gate runs in the workspace test suite with the checked-in
-[two-resistor fixture](../crates/app/tests/fixtures/two-resistors.pc) and
-[native storage acceptance tests](../crates/app/src/project_files/native/tests.rs).
-The Git merge case uses the installed `git merge-file` command. The same native
-suite covers ZIP conversion, rejection before adoption, and publication. The
-[ZIP codec tests](../crates/engine/src/persistence/archive.rs) exercise Deflate,
-manifest size and digest validation, and prohibited entries.
-
-## ZIP acceptance and later layout decisions
-
-1. Convert the original resistor fixture from plain JSON to ZIP and back.
-   Confirm that both use `.pc`, load to the same project, and preserve
-   connectivity and footprint mappings. Confirm that Save retains each
-   encoding and that a no-op leaves the original bytes intact.
-2. Reject a foreign ZIP, duplicate entries, unsafe entry names, a mismatched
-   digest, and payloads that exceed declared or allowed bounds. Confirm that
-   each failure leaves the active project and its dirty state intact.
-3. Repeat the interrupted save, competing writer and late edit checks with an
-   archive. Measure packaging and unpacking separately from editor frame time.
-   Keep compression and file IO off the desktop UI thread and bound browser
-   work so the editor can continue responding.
-
-Splitting large projects into a Git-friendly directory, expanding the
-definition capture policy, and setting up migrations for later versions
-remain separate design decisions.
-
-## Current implementation
-
-The current project document is plain UTF-8 JSON tagged
-`pcbcraft-project/4`. A project-level `symbol_definitions` array keeps a full
-copy of every symbol definition the project uses; components live in a
-project-level `components` array; the sheet holds unit placements, junctions and
-wires. Every component, placement, junction and wire occupies its own line in
-stable order, with blank lines between records. A saved definition spans lines
-like its library file: its header fields on the first line, then one line per
-terminal, drawing stroke and pin, so editing one stroke or pin changes one line.
-
-| Record | Stored fields |
-| --- | --- |
-| Saved symbol definition | `library`, then every field of its `pcbcraft-symbol/1` file (see [symbol-library.md](symbol-library.md)) |
-| Component | `id`, `library`, `definition`, `definition_revision`, `reference_number`, `reference`, `value` |
-| Unit placement (`sheet.symbols`) | `id`, `component`, `unit`, `x_nm`, `y_nm`, `rotation` |
-| Footprint | Its own ID, definition/revision, position and pin-to-pad mapping, plus `component` |
-
-The component owns the displayed designator (`reference`) and value. Both are
-explicit, including the initial values supplied at placement. `reference_number`
-retains the automatic numbering allocation when a person edits a designator.
-An edited reference has no spaces and is unique across components; references
-and values are respectively 1 to 32 and 1 to 64 characters on one line.
-Reference-prefix enforcement and unannotated references are later work.
-
-A component names its definition by library ID, symbol ID and revision, and
-that triple must match exactly one saved definition. Components resolve their
-definitions only from these saved copies, never from a library the build or
-desktop has loaded, so a project opens with the same symbols after its library
-changes or is gone. Each saved definition must be used by at least one
-component and must pass every symbol file rule. Placing a part whose library,
-ID and revision the project already saves reuses the project's copy. Saving
-writes one copy per definition in use, sorted by library, ID and revision, so
-an unchanged project saves without a diff and deleting the last part that uses
-a definition drops its copy. Footprints are separate and are not saved here.
-
-A unit placement references the component and a unit in its pinned definition;
-it stores no designator, value, footprint or pad data. Rotation is required,
-in degrees counterclockwise: 0, 90, 180 or 270. The current engine supports one
-unit per component and requires that unit to be placed exactly once. Missing
-components, unknown units, duplicate placements and unplaced components are
-rejected. This establishes the ownership model for future multi-unit support
-without enabling multi-unit placement yet.
-
-Component IDs have their own namespace. Placement, wire, junction and footprint IDs share
-the existing object namespace. A component and its placement may have different
-numeric IDs. Wires still save symbol IDs and pin numbers, so moving a unit edits
-only that unit's line. Editing its fields edits only the component's line.
-A footprint attaches to the component ID, never the designator or placement ID.
-Cross-probing resolves component pins through the unit-placement index.
-Deleting the last placed unit also removes the component and its footprint;
-undo restores the complete snapshot.
-
-### Wire geometry
-
-Format 3 added `sheet.junctions`, with one `{id, x_nm, y_nm}` record per free
-endpoint or shared junction. A wire stores `id`, `from`, `to` and an optional
-ordered `bends` array of `{x_nm, y_nm}` points. Endpoints are either the existing
-`{symbol, pin}` reference or `{junction: id}`. Junctions share the object-ID
-namespace and must be referenced by a wire. Duplicate endpoint pairs, dangling
-references, out-of-bounds coordinates and more than 64 bends are rejected.
-
-New routes use `schematic.draw_wire`, which validates nonzero orthogonal legs
-before committing the wire and any new endpoints as one undo step. Reusing an
-endpoint identity joins its net; crossings and coincident but distinct identities
-do not. Each edit advances the session revision past all IDs it allocated, so
-undo followed by a new edit cannot reuse those identities. Deleting a wire prunes
-only junctions no longer referenced by any edge.
-
-Authored bends remain fixed when a connected symbol moves or rotates. The
-renderer adds orthogonal end legs to the moved pins without rewriting the wire
-record, preserving the one-record diff for a symbol move. Legacy wires without
-`bends` retain their automatic display routing. Formats 1 and 2 refuse format 3
-geometry. Format 4 keeps this wire geometry unchanged. Both JSON and ZIP round trips retain the authored order and
-all endpoint identities. Interior wire splitting and junction dragging are not
-implemented in this slice.
-
-### Format 2 and 3 migration
-
-Opening a `pcbcraft-project/2` or `/3` file runs the explicit `migrate_to_4` path.
-A format 2 file must not carry format 3's wire geometry.
-Each component's named definition must exist in the starter library at its
-saved revision; the document gains one saved copy of each definition used, and
-each component gains the starter library's ID. Everything else is carried over
-and checked by the current validator. The editor reports that the next save
-writes the current format. The migration is tested against
-`crates/app/tests/fixtures/two-resistors-format-2.pc`, which must save as
-exactly `two-resistors.pc`, and a format 2 or 3 file with a `library` field is
-refused by the strict schema for those formats.
-
-### Format 1 migration
-
-Opening a `pcbcraft-project/1` file runs the explicit `migrate_from_1` path.
-Each legacy symbol becomes a component with its pinned definition, automatic
-reference and default value, plus an unrotated unit placement. Both preserve
-their former numeric identities, while wire endpoints remain unchanged. Legacy
-footprint `symbol` links become `component` links with the same mapping.
-
-A format 1 file then continues through the format 2 migration. The editor
-reports that the next save writes the current format. The migration is tested
-against `crates/app/tests/fixtures/two-resistors-format-1.pc`, which must save
-as exactly `two-resistors.pc`. The old fixture stays unchanged; the current
-fixture is generated through the engine's migration and serializer. A format 1
-file containing newer fields is rejected by the strict legacy schema. Format 2
-requires separate component and placement records; the earlier unmerged format 2
-layout is not an additional supported format. An unchanged current-format save
-retains the original bytes in both JSON and ZIP.
-
-The generic two-pad footprint can be assigned through `pcb.place_footprint`,
-which accepts a placed symbol and resolves its component. Board tracks, vias,
-layout editing and reviewed schematic-to-board updates remain later slices.
-
-Object IDs preserve the current command addresses and are scoped to the
-project. Two Git branches can move different placements independently.
-Concurrent additions from the same ancestor can allocate the same numeric ID
-or reference. The loader rejects a resulting collision so it can be resolved
-explicitly. A future allocator can avoid the ID collision without changing
-how terminals refer to placed symbols.
-
-The decoder rejects unknown fields, invalid connections, unknown definition
-revisions, and files over 4 MiB. Unchanged saves and browser re-downloads
-retain the bytes originally opened. Edited snapshots are written in ID order.
-The desktop uses a sibling advisory `.*.pcbcraft-lock` file, which belongs
-outside Git tracking. Cooperating desktop writers check their expected bytes
-under that lock before replacing the file. Save As requires an unused name.
-A separate program that ignores the lock can still race with publication.
-The browser reads the chosen file asynchronously and validates the bounded
-payload before adoption. Downloads yield between batches of JSON encoding and
-256 KiB steps of ZIP hashing or copying. The ZIP writer uses Store, so it
-does not compress the snapshot. The browser owns the final write.
-
-The canvas renders typed project snapshots. A symbol drag previews geometry
-and wire endpoints before committing a single shared move command on release.
-Geometry-only moves retain the cached connectivity index. Desktop saves hold
-an immutable snapshot while edits continue. The release benchmark measures
-this supported model, including indexed pin/pad lookup, independently of GPU
-frame timing.
-
-```sh
-cargo run --release --locked -p pcbcraft-engine --example project_perf
+```text
+my-board/
+  project.pc
+  sheets/<sheet-uuid>.json
+  board.json
+  library/symbols/<library>/<symbol>.r<revision>.json
+  assets/                       # reserved for future asset references
 ```
 
-Pass an output path after `--` to open the same synthetic fixture in the editor.
-The fixture has one sheet with 2,048 symbols, 2,047 wires, and 2,048 linked
-footprints. In one Linux release run on a Ryzen 9 7950X, the p95 was 0.037 ms
-for a move with cached connectivity, 1.23 ms to encode, and 2.77 ms to decode
-and validate. Full MCP inspection took 60.3 ms at p95. A browser smoke test
-preserved the original file bytes and exported an edited snapshot while
-panning. Software-rendered Chromium reported about 33 ms at p95 for animation
-frame intervals, both during export and during pan alone. The 16.7 ms target
-still needs qualification on desktop and hardware-accelerated web. These
-measurements cover the synthetic single-sheet fixture. For the same fixture, ZIP
-packaging of the already encoded JSON took 1.37 ms at p95, and opening the
-ZIP, including JSON validation, took 3.82 ms at p95 in a Linux release run.
-These are engine timings, excluding disk I/O and editor frame time.
+Opening `project.pc` opens the entire project. Copy the folder or export its
+`.pc.zip` to share it; the entry point alone does not contain the other documents.
+A project rename changes the name in `project.pc`, without renaming its files.
+
+The browser uploads packed projects and legacy single-file projects and downloads
+`.pc.zip`. It cannot reconstruct a folder from an uploaded entry point alone.
+Download encoding runs in batches of 256 records and archive hashing/copying in
+256 KiB chunks, allowing the editor to yield between batches. A requested download
+does not confirm a durable write and does not clear the editor's dirty state.
+
+## Document ownership
+
+| File | Format | Contents |
+|---|---|---|
+| `project.pc` | `pcbcraft-project/5` | Project UUID, name, ordered sheet list and shared components |
+| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` | Sheet UUID, unit placements, junctions and wires |
+| `board.json` | `pcbcraft-board/1` | Footprints linked to shared components |
+| `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
+
+A sheet-list entry contains `id`, `name` and `file`. The file and the document's
+UUID must agree. The current engine supports one editable sheet and explicitly
+refuses multiple sheets, so it cannot silently discard them. The list and file
+layout leave room for later multi-sheet editing.
+
+Components own their stable ID, library/definition/revision, reference number,
+displayed reference and value. Unit placements own their ID, component link,
+unit, position in integer nanometers and rotation in degrees (0, 90, 180, 270).
+Wires retain terminal or junction endpoints and optional authored bends; legacy
+auto-routed pin links may omit bends. The sheet always has a junction array.
+Footprints retain their component link, definition/revision, pin-to-pad mapping
+and position. Empty projects still have sheet and board documents.
+
+Saved symbol copies include all terminals, strokes and pins. A project opens
+without its source library. Loading never upgrades a pinned definition to the
+latest revision. The last component using a copy determines its lifetime:
+deleting that component removes the unused copy on the next save. Libraries and
+symbols are identified by their IDs and revisions; paths locate those identities.
+
+All documents reject unknown fields. Required lists and optional wire geometry
+reject explicit null. Before adoption, validation checks the entire project:
+component ownership and references, unit membership, wire endpoints, junction
+usage, footprint mappings, exact definition revisions and unused copies. Object
+IDs are unique across placements, junctions, wires and footprints; component IDs
+have their own namespace. The session derives its next ID from all object types.
+A component without a placed unit is still refused.
+
+## Git behavior
+
+Commit the working folder. Each editable record has a stable ordering and its
+own line; separator commas occupy separate lines so appending a record does not
+rewrite the preceding record. Saved symbol files have one line per terminal,
+stroke and pin. Timestamps, generated hashes, caches and thumbnails stay out of
+the working documents.
+
+Moving or rotating a symbol changes only its sheet record. Editing a reference
+or value changes only its component record in `project.pc`. Board geometry stays
+in `board.json`. Placing a new definition changes the project and sheet documents
+and adds its saved symbol file. A no-op save rewrites no project documents.
+Even after another document changes, unaffected documents retain their original
+bytes, including valid custom formatting.
+
+Independent edits to existing records merge with Git's normal text driver, as
+exercised by a real `git merge-file` regression test. Concurrent additions can
+still conflict at the end of a list and can allocate colliding IDs or references.
+Resolve those conflicts explicitly, preserving distinct identities and updating
+references to any reassigned IDs, then reopen for validation. Blindly retaining
+both records is insufficient when their IDs collide. An ID-aware merge driver is
+outside this change.
+
+```gitattributes
+*.pc text eol=lf
+*.json text eol=lf
+*.pc.zip binary
+```
+
+Ignore `.pcbcraft-save/`, `.pcbcraft-stage-*/` and `.*.pcbcraft-lock`. ZIP exports
+are binary; optional text conversion can make local diffs readable but does not
+provide normal text merging. The folder is the collaboration format.
+
+## Packed projects and manifests
+
+A `.pc.zip` contains the same relative document paths and a root `manifest.json`:
+
+```json
+{
+  "format": "pcbcraft-container/2",
+  "parts": [
+    {"path": "board.json", "size_bytes": 66, "sha256": "<SHA-256 of the exact bytes>"}
+  ],
+  "assets": []
+}
+```
+
+The example is abbreviated: `parts` lists every document except the manifest,
+sorted by path, with its exact size and SHA-256 digest. Assets are reserved;
+nonempty assets and asset files are refused until the engine supports their
+references. The working folder carries no manifest or cross-file hashes, which
+would otherwise change alongside every edit.
+
+A present manifest is authoritative. Missing parts, unlisted files, duplicate
+claims, malformed manifests, unknown versions and size/digest mismatches fail
+the open. A broken manifest never falls back to manifest-less loading.
+
+A hand-zipped project **without a manifest** is accepted when it contains exactly
+a valid project layout. An optional single top-level folder, such as
+`my-board/project.pc`, is stripped; multiple roots and unrelated files are
+refused. Ordinary directory entries are accepted. In archives without a manifest,
+`__MACOSX/` sidecar trees and regular `.DS_Store`, `Thumbs.db` and `desktop.ini`
+files are discarded before locating the project root. They still undergo ZIP
+path, type, CRC and size checks. A present manifest disables these exceptions.
+All document schema and cross-document checks still apply. The open notice says
+that the next save or download will add a manifest. PCBcraft always writes one.
+
+Writers use Store, fixed timestamps, fixed permissions and a deterministic entry
+order (manifest first, then paths in lexical order). Readers accept Store and
+Deflate. Traversal, absolute/drive paths, duplicate or overlapping entries,
+symlinks, special files, encryption, ZIP64 and split archives are refused. Reads
+are bounded by both declared and actual expanded size. A no-op save of a current
+manifested archive preserves its original bytes, including compression and
+comments. A first save of a manifest-less archive intentionally adds the manifest.
+
+| Bound | Limit |
+|---|---|
+| Legacy single JSON document | 4 MiB |
+| Each split JSON document | 16 MiB |
+| All split documents combined | 48 MiB |
+| Project documents | 4,096 |
+| Container v2 manifest | 1 MiB |
+| Packed file | 64 MiB |
+
+These bounds supplement existing symbol, wire, geometry and library-definition
+limits; separating files does not remove those model constraints.
+
+## Folder publication and recovery
+
+Desktop file work runs off the editor thread against an immutable snapshot.
+The shared `pcbcraft-storage` crate also gives the headless CLI the same folder
+reader and recovery behavior. A nonblocking sibling advisory lock serializes
+cooperating opens and saves, and saved baseline bytes detect stale writers.
+A busy lock produces an error instead of leaving another operation waiting.
+If filesystem permissions prevent opening the lock file for writing, an open
+uses an existing readable lock in shared mode, or reads without a lock if none
+exists. Both fallbacks require no recovery journal before and after reading;
+saves and recovery always require the writer lock. This permits opening a
+read-only project and using Save As to place edits in a writable location.
+
+A save stages only changed or removed documents. It writes their new bytes and
+old backups into a temporary directory, flushes them, and writes a journal with
+relative paths, sizes and hashes. After rechecking the baseline, it atomically
+renames the staging directory to `.pcbcraft-save`. This is the commit point:
+interruptions before it retain the old project; after it, the next open completes
+the new project before reading the project into the editor.
+
+Recovery checks every journal path and old/new payload, verifies that affected
+files still contain old or new bytes, and validates the proposed complete project
+before applying remaining replacements and deletions. Unexpected external edits
+or corrupt recovery data stop recovery without overwriting them. New files are
+flushed before replacement, and directories are synced on Unix. Recovery scratch
+files stay inside the transaction directory, so interrupted writes cannot leave
+unrecognized files in `sheets/` or `library/`.
+
+Once all replacements are complete, recovery renames the journal directory out
+of its active location before cleanup. A crash during cleanup therefore cannot
+leave an active journal with missing staging files. Leftover staging directories
+are ignored and may be removed when no save is running. Interrupted initial saves
+can be recovered by opening their folder or entry-point path.
+
+Tests simulate interruption after staging writes, journal publication, each
+replacement/deletion and completion. They verify that reopening yields the full
+old or new state. These are process-interruption tests on Linux, not hardware
+power-loss tests. Directory fsync is currently Unix-specific; other platforms
+retain the journal recovery protocol without the same directory-durability
+claim. Programs that ignore the advisory lock can still race with publication.
+
+Failed opens leave the active project, revision and dirty state unchanged. Edits
+made during a background save stay unsaved when its earlier snapshot completes.
+Archive publication retains the existing single-file staging and baseline check.
+
+## Legacy migration and fixtures
+
+Plain JSON formats 1–4 and container v1 remain readable. Formats 1–3 resolve the
+exact retained starter revisions; format 4 supplies its full symbol copies.
+All migrate in memory to the same split documents without changing IDs, geometry,
+wire connectivity or footprint mappings. Save asks for a new folder destination
+by default; Save As can instead select `.pc.zip`. It never silently replaces a
+legacy text `.pc` with an archive or a folder entry point requiring missing files.
+
+The original `two-resistors-format-1.pc`, `two-resistors-format-2.pc` and
+`two-resistors.pc` (format 4) fixtures remain legacy inputs. Canonical outputs live
+under `crates/app/tests/fixtures/split/`, including the folder, a manifested archive
+and a hand-zipped archive without a manifest. Generate a fresh comparison set with:
+
+```sh
+cargo run --locked -p pcbcraft-engine --example storage_fixtures -- /tmp/new-fixtures
+```
+
+The output directory must not already exist. The generator uses the production
+encoder; regression tests compare migrations, document boundaries, library-copy
+lifetimes and archive round trips. Legacy writers remain available to fixture and
+benchmark code, while normal editor saves use the split format.
 
 ## Design references
 

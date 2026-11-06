@@ -24,6 +24,7 @@ pcbcraft-mcp = { workspace = true }
 eframe = { workspace = true, features = ["wayland", "x11"] }
 rfd = "=0.17.2"
 tempfile = "=3.27.0"
+pcbcraft-storage = { workspace = true }
 
 [dev-dependencies]
 egui_kittest = { workspace = true }

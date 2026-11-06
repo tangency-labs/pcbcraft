@@ -28,12 +28,12 @@ use pcbcraft_chrome::{
     theme, workspace,
 };
 use pcbcraft_engine::{
-    CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, SET_SYMBOL_FIELDS, Session, command, persistence::Encoding,
-    schematic::SymbolDefinition,
+    CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, SET_SYMBOL_FIELDS, Session, command, schematic::SymbolDefinition,
 };
 use serde_json::{Value, json};
 
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
+use project_files::SaveFormat;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUG_REPORT_URL: &str = "https://github.com/tangency-labs/pcbcraft/issues/new";
@@ -117,6 +117,7 @@ enum Dialog {
         focused: bool,
     },
     ConfirmOpen,
+    OpenLocation,
     SaveEncoding,
     #[cfg(not(target_arch = "wasm32"))]
     LocalMcp {
@@ -260,13 +261,22 @@ impl PcbApp {
         if self.files.dirty(&self.session) {
             self.dialog = Dialog::ConfirmOpen;
         } else {
-            self.message = self.files.open(self.session.revision(), ctx).err();
-            self.file_notice = None;
+            self.choose_open_location(ctx);
         }
     }
 
+    /// Desktop users may choose an entry point, archive or folder; browsers pick an upload.
+    fn choose_open_location(&mut self, ctx: &egui::Context) {
+        if IN_BROWSER {
+            self.message = self.files.open(self.session.revision(), ctx, false).err();
+        } else {
+            self.dialog = Dialog::OpenLocation;
+        }
+        self.file_notice = None;
+    }
+
     /// Start a save or download for the current snapshot and report setup failures.
-    fn save_project_file(&mut self, encoding: Option<Encoding>, ctx: &egui::Context) {
+    fn save_project_file(&mut self, encoding: Option<SaveFormat>, ctx: &egui::Context) {
         self.message = self.files.save(&self.session, encoding, ctx).err();
         self.file_notice = None;
     }
@@ -850,10 +860,29 @@ impl PcbApp {
                     });
                 });
                 if proceed {
-                    self.message = self.files.open(self.session.revision(), ctx).err();
-                    self.file_notice = None;
+                    self.choose_open_location(ctx);
                 } else if !(cancel || closing) {
                     self.dialog = Dialog::ConfirmOpen;
+                }
+            }
+            Dialog::OpenLocation => {
+                let mut selected = None;
+                let mut cancel = false;
+                let closing = shell::dialog(ctx, "open_location", "Open Project", |ui| {
+                    ui.vertical(|ui| {
+                        if ui.button("Project file or archive…").clicked() {
+                            selected = Some(false);
+                        }
+                        if ui.button("Project folder…").clicked() {
+                            selected = Some(true);
+                        }
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+                if let Some(folder) = selected {
+                    self.message = self.files.open(self.session.revision(), ctx, folder).err();
+                } else if !(closing || cancel) {
+                    self.dialog = Dialog::OpenLocation;
                 }
             }
             Dialog::SaveEncoding => {
@@ -861,13 +890,12 @@ impl PcbApp {
                 let mut cancel = false;
                 let title = if IN_BROWSER { "Download Project" } else { "Save Project As" };
                 let closing = shell::dialog(ctx, "save_encoding", title, |ui| {
-                    ui.label("File format");
-                    ui.horizontal(|ui| {
-                        if ui.button("Plain JSON").clicked() {
-                            selected = Some(Encoding::Json);
+                    ui.vertical(|ui| {
+                        if !IN_BROWSER && ui.button("Project folder…").clicked() {
+                            selected = Some(SaveFormat::Folder);
                         }
-                        if ui.button("ZIP archive").clicked() {
-                            selected = Some(Encoding::Zip);
+                        if ui.button("Packed project (.pc.zip)…").clicked() {
+                            selected = Some(SaveFormat::Archive);
                         }
                         cancel = ui.button("Cancel").clicked();
                     });
@@ -1010,12 +1038,7 @@ impl PcbApp {
                     self.message = None;
                     self.selected = None;
                     self.selected_wire = None;
-                    // A migrated file says so: its next save writes the current format.
-                    let upgraded = self.session.project().and_then(pcbcraft_engine::Project::upgraded_from);
-                    self.file_notice = Some(match upgraded {
-                        Some(version) => format!("Project opened · format {version} will save in the current format"),
-                        None => "Project opened".to_owned(),
-                    });
+                    self.file_notice = Some(self.files.open_notice());
                 }
                 project_files::Update::Message(text) => self.file_notice = Some(text),
                 project_files::Update::Error(error) => self.message = Some(error),

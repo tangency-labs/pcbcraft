@@ -1,14 +1,14 @@
 //! PCBCraft without a window. `pcbcraft-cli mcp` serves MCP on stdin and stdout.
 
-use std::{ffi::OsString, fs::File, path::Path, process::ExitCode};
+use std::{ffi::OsString, path::Path, process::ExitCode};
 
-use pcbcraft_engine::persistence::{decode_file, read_bytes};
 use pcbcraft_mcp::{
     Backend, Headless, Server,
     live::{Remote, TOKEN_ENV},
 };
 
-const USAGE: &str = "Usage: pcbcraft-cli mcp [--project FILE | --connect PORT]    Serve MCP on stdin and stdout\n       pcbcraft-cli --version";
+const USAGE: &str =
+    "Usage: pcbcraft-cli mcp [--project FILE_OR_FOLDER | --connect PORT]    Serve MCP on stdin and stdout\n       pcbcraft-cli --version";
 
 /// Dispatch the CLI and report file or server errors on stderr.
 fn main() -> ExitCode {
@@ -39,11 +39,7 @@ fn main() -> ExitCode {
 
 /// Validate a bounded native project before making it available to MCP.
 fn load_project(path: &Path) -> Result<Headless, String> {
-    let result = (|| {
-        let file = File::open(path).map_err(|error| error.to_string())?;
-        let bytes = read_bytes(file).map_err(|error| error.to_string())?;
-        decode_file(&bytes).map(|(project, _)| Headless::with_project(project))
-    })();
+    let result = pcbcraft_storage::open(path).map(Headless::with_project);
     result.map_err(|error| format!("could not open {}: {error}", path.display()))
 }
 

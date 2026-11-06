@@ -8,7 +8,17 @@ use std::{
     time::Duration,
 };
 
-use pcbcraft_engine::{Project, Session, persistence::Encoding};
+#[cfg(target_arch = "wasm32")]
+use pcbcraft_engine::persistence::Encoding;
+use pcbcraft_engine::{Project, Session};
+
+/// Desktop working folders and portable archives use the same split documents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum SaveFormat {
+    #[default]
+    Folder,
+    Archive,
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
@@ -30,6 +40,12 @@ struct Saved {
     bytes: Arc<[u8]>,
     #[cfg(target_arch = "wasm32")]
     encoding: Encoding,
+    #[cfg(target_arch = "wasm32")]
+    needs_manifest: bool,
+    #[cfg(target_arch = "wasm32")]
+    legacy: bool,
+    #[cfg(target_arch = "wasm32")]
+    documents: Option<Arc<pcbcraft_engine::persistence::Documents>>,
 }
 
 #[derive(Debug)]
@@ -67,19 +83,20 @@ impl ProjectFiles {
     }
 
     /// Start opening a file. The completed result is ignored if the editor changes in the meantime.
-    pub(super) fn open(&mut self, revision: u64, ctx: &egui::Context) -> Result<(), String> {
+    pub(super) fn open(&mut self, revision: u64, ctx: &egui::Context, folder: bool) -> Result<(), String> {
         let (send, receive) = mpsc::channel();
         let ctx = ctx.clone();
         #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("pcbcraft-open".to_owned())
             .spawn(move || {
-                let _ = send.send(native::open());
+                let _ = send.send(native::open(folder));
                 ctx.request_repaint();
             })
             .map_err(|error| format!("Could not start opening the project: {error}"))?;
         #[cfg(target_arch = "wasm32")]
         {
+            let _ = folder;
             let file = web::pick_file();
             wasm_bindgen_futures::spawn_local(async move {
                 let _ = send.send(web::open(file).await);
@@ -97,7 +114,7 @@ impl ProjectFiles {
 
     /// Capture an immutable snapshot. An explicit encoding starts a Save As or browser download.
     /// Browser exports of migrated files encode the current schema instead of reusing old bytes.
-    pub(super) fn save(&mut self, session: &Session, encoding: Option<Encoding>, ctx: &egui::Context) -> Result<(), String> {
+    pub(super) fn save(&mut self, session: &Session, encoding: Option<SaveFormat>, ctx: &egui::Context) -> Result<(), String> {
         let snapshot = session.snapshot().ok_or("no project open")?;
         let (send, receive) = mpsc::channel();
         #[cfg(not(target_arch = "wasm32"))]
@@ -105,26 +122,28 @@ impl ProjectFiles {
             let previous = self
                 .saved
                 .as_ref()
-                .filter(|saved| encoding.is_none() && saved.snapshot.same_document(&snapshot))
+                .filter(|saved| saved.snapshot.same_document(&snapshot))
                 .map(|saved| (Arc::clone(&saved.snapshot), saved.target.clone()));
             let ctx = ctx.clone();
             std::thread::Builder::new()
                 .name("pcbcraft-save".to_owned())
                 .spawn(move || {
-                    let _ = send.send(native::save(snapshot, previous, encoding.unwrap_or_default()));
+                    let _ = send.send(native::save(snapshot, previous, encoding));
                     ctx.request_repaint();
                 })
                 .map_err(|error| format!("Could not start saving the project: {error}"))?;
         }
         #[cfg(target_arch = "wasm32")]
         let download = {
-            let encoding = encoding.unwrap_or_default();
+            let _ = encoding;
+            let encoding = Encoding::Zip;
             let unchanged = self
                 .saved
                 .as_ref()
-                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && snapshot.upgraded_from().is_none())
+                .filter(|saved| saved.encoding == encoding && Arc::ptr_eq(&saved.snapshot, &snapshot) && !saved.legacy && !saved.needs_manifest)
                 .map(|saved| Arc::clone(&saved.bytes));
-            web::Download::new(snapshot, unchanged, encoding, send)?
+            let documents = self.saved.as_ref().filter(|saved| Arc::ptr_eq(&saved.snapshot, &snapshot)).and_then(|saved| saved.documents.clone());
+            web::Download::new(snapshot, unchanged, documents, send)?
         };
         self.job = Some(Job {
             receiver: receive,
@@ -134,6 +153,22 @@ impl ProjectFiles {
         });
         ctx.request_repaint();
         Ok(())
+    }
+
+    /// Describe migration or manifest generation where it affects the next save.
+    pub(super) fn open_notice(&self) -> String {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.saved.as_ref().map_or_else(|| "Project opened".to_owned(), |saved| saved.target.open_notice())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            match &self.saved {
+                Some(saved) if saved.needs_manifest => "Project opened without a manifest · Download will include one".to_owned(),
+                Some(saved) if saved.legacy => "Project opened · Download will use the split .pc.zip format".to_owned(),
+                _ => "Project opened".to_owned(),
+            }
+        }
     }
 
     /// Accept completed jobs on the editor thread. Keep edits made after the saved revision.
@@ -166,8 +201,15 @@ impl ProjectFiles {
             #[cfg(not(target_arch = "wasm32"))]
             Ok(Outcome::Saved(saved)) => {
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));
+                let added_manifest = saved.target.added_manifest();
                 self.saved = Some(saved);
-                let text = if current { "Project saved" } else { "Earlier version saved. Current edits are unsaved." };
+                let text = if !current {
+                    "Earlier version saved. Current edits are unsaved."
+                } else if added_manifest {
+                    "Project saved with a verified manifest"
+                } else {
+                    "Project saved"
+                };
                 Some(Update::Message(text.to_owned()))
             }
             #[cfg(target_arch = "wasm32")]

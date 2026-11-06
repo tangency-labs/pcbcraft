@@ -111,8 +111,9 @@ The format leaves room for more than the engine places today:
 
 ## Not yet
 
-- **Library folders on desktop.** Projects already keep a full copy of each
-  symbol they use, with its library ID (project format 4; see
+- **Library folders on desktop.** Projects keep a full copy of each
+  symbol they use at `library/symbols/<library>/<symbol>.r<revision>.json`,
+  including its library ID (project format 5; see
   [native-project-storage.md](native-project-storage.md)), so they reopen without
   the library. Loading symbol libraries from folders on disk comes next.
 - **Other libraries.** Library folders, Git, databases and managed libraries,

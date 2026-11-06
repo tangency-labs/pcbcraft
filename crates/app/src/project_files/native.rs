@@ -9,21 +9,47 @@ use std::{
 
 use pcbcraft_engine::{
     Project,
-    persistence::{Encoding, decode_file, encode_file, read_bytes},
+    persistence::{
+        Documents, ENTRY_POINT, Encoding, decode_documents, decode_file, decode_packed, encode_documents, encode_packed_documents, read_bytes,
+    },
 };
 
-use super::{Outcome, Saved};
+use super::{Outcome, SaveFormat, Saved};
+use pcbcraft_storage as folder;
 
 #[derive(Clone, Debug)]
 pub(super) struct Target {
     path: PathBuf,
     bytes: Arc<[u8]>,
     encoding: Encoding,
+    documents: Option<Arc<Documents>>,
+    legacy: bool,
+    needs_manifest: bool,
+    added_manifest: bool,
+}
+
+impl Target {
+    /// Explain the next save when the open form needs migration or manifest generation.
+    pub(super) fn open_notice(&self) -> String {
+        if self.legacy {
+            "Project opened · Save will ask for a project folder or .pc.zip destination".to_owned()
+        } else if self.needs_manifest {
+            "Project opened without a manifest · Save will add a verified manifest".to_owned()
+        } else {
+            "Project opened".to_owned()
+        }
+    }
+
+    /// Tell the editor whether this save added the archive's first manifest.
+    pub(super) fn added_manifest(&self) -> bool {
+        self.added_manifest
+    }
 }
 
 /// Pick and fully validate a project before making it available to the editor.
-pub(super) fn open() -> Result<Outcome, String> {
-    let Some(path) = rfd::FileDialog::new().add_filter("PCBCraft project", &["pc"]).pick_file() else {
+pub(super) fn open(pick_folder: bool) -> Result<Outcome, String> {
+    let dialog = rfd::FileDialog::new().add_filter("PCBCraft project", &["pc", "zip", "json"]);
+    let Some(path) = (if pick_folder { dialog.pick_folder() } else { dialog.pick_file() }) else {
         return Ok(Outcome::Cancelled);
     };
     load(&path).map(Outcome::Opened)
@@ -32,31 +58,166 @@ pub(super) fn open() -> Result<Outcome, String> {
 /// Load a project from a chosen path without changing the active editor.
 fn load(path: &Path) -> Result<Saved, String> {
     let path = normalize(path)?;
+    if path.file_name().is_some_and(|name| name == ENTRY_POINT)
+        && let Some(root) = path.parent()
+        && root.join(".pcbcraft-save").try_exists().map_err(|e| e.to_string())?
+    {
+        return load_folder(root);
+    }
+    if fs::symlink_metadata(&path).map_err(|e| e.to_string())?.is_dir() {
+        return load_folder(&path);
+    }
+    // The extension is only a picker hint. A format-5 header identifies a folder entry point.
     let bytes = read(&path).map_err(|error| format!("Could not read project: {error}"))?;
-    let (snapshot, encoding) = decode_file(&bytes)?;
-    Ok(Saved { snapshot, target: Target { path, bytes: bytes.into(), encoding } })
+    if Encoding::detect(&bytes) == Encoding::Json {
+        let header: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        if header["format"] == "pcbcraft-project/5" {
+            if path.file_name().is_none_or(|name| name != ENTRY_POINT) {
+                return Err("A split project's entry point must be named project.pc.".to_owned());
+            }
+            return load_folder(path.parent().ok_or("Project has no parent folder")?);
+        }
+    }
+    let encoding = Encoding::detect(&bytes);
+    let (snapshot, documents, legacy, needs_manifest) = if encoding == Encoding::Zip {
+        let packed = decode_packed(&bytes)?;
+        (packed.project, packed.documents.map(Arc::new), packed.legacy, packed.needs_manifest)
+    } else {
+        (decode_file(&bytes)?.0, None, true, false)
+    };
+    Ok(Saved { snapshot, target: Target { path, bytes: bytes.into(), encoding, documents, legacy, needs_manifest, added_manifest: false } })
 }
 
-/// Save in the existing file’s encoding, or pick a destination for the requested encoding.
-pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Target)>, encoding: Encoding) -> Result<Outcome, String> {
-    let (path, expected, unchanged, encoding) = if let Some((old, target)) = previous {
-        (target.path, Some(target.bytes), Arc::ptr_eq(&old, &snapshot), target.encoding)
-    } else {
-        let Some(mut path) = rfd::FileDialog::new().add_filter("PCBCraft project", &["pc"]).set_file_name("project.pc").save_file() else {
-            return Ok(Outcome::Cancelled);
-        };
-        if path.extension().is_none() {
-            path.set_extension("pc");
-        }
-        let path = normalize(&path)?;
-        (path, None, false, encoding)
+/// Read and cross-validate all folder documents before returning an adoptable snapshot.
+fn load_folder(root: &Path) -> Result<Saved, String> {
+    let documents = folder::load(root)?;
+    let snapshot = decode_documents(&documents)?;
+    Ok(Saved {
+        snapshot,
+        target: Target {
+            path: root.to_owned(),
+            bytes: Arc::from([]),
+            encoding: Encoding::Json,
+            documents: Some(Arc::new(documents)),
+            legacy: false,
+            needs_manifest: false,
+            added_manifest: false,
+        },
+    })
+}
+
+/// Save a non-legacy target in place when no format is requested. Otherwise, including every
+/// legacy target, ask for a new destination in the requested format (a folder by default).
+/// Unchanged documents retain their bytes; dismissing the picker returns `Outcome::Cancelled`.
+pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Target)>, format: Option<SaveFormat>) -> Result<Outcome, String> {
+    if let Some((old, target)) = previous.as_ref().filter(|(_, target)| format.is_none() && !target.legacy) {
+        return save_target(snapshot, Some(old), target.clone(), &mut |_| Ok(()));
+    }
+    let suggestion = previous.as_ref().and_then(|(_, target)| target.path.file_name()).and_then(|name| name.to_str()).unwrap_or("project");
+    let suggestion = suggestion
+        .strip_suffix(".pc.zip")
+        .or_else(|| suggestion.strip_suffix(".pc"))
+        .or_else(|| suggestion.strip_suffix(".zip"))
+        .unwrap_or(suggestion);
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(parent) = previous.as_ref().and_then(|(_, target)| target.path.parent()) {
+        dialog = dialog.set_directory(parent);
+    }
+    let format = format.unwrap_or_default();
+    let path = match format {
+        SaveFormat::Folder => dialog.set_title("Create project folder").set_file_name(suggestion).save_file(),
+        SaveFormat::Archive => dialog.add_filter("Packed PCBCraft project", &["zip"]).set_file_name(format!("{suggestion}.pc.zip")).save_file(),
     };
-    save_at(snapshot, path, expected, unchanged, encoding, || Ok(()))
+    let Some(mut path) = path else {
+        return Ok(Outcome::Cancelled);
+    };
+    if format == SaveFormat::Archive && !path.to_string_lossy().ends_with(".pc.zip") {
+        if path.extension().is_some_and(|extension| extension == "zip" || extension == "pc") {
+            path.set_extension("pc.zip");
+        } else {
+            let mut name = path.file_name().ok_or("Missing project filename")?.to_os_string();
+            name.push(".pc.zip");
+            path.set_file_name(name);
+        }
+    }
+    let path = normalize(&path)?;
+    let mut target = Target {
+        path,
+        bytes: Arc::from([]),
+        encoding: if format == SaveFormat::Archive { Encoding::Zip } else { Encoding::Json },
+        documents: None,
+        legacy: false,
+        needs_manifest: false,
+        added_manifest: false,
+    };
+    let documents =
+        working_documents(&snapshot, previous.as_ref().map(|(old, _)| old), previous.as_ref().and_then(|(_, target)| target.documents.as_deref()))?;
+    if target.encoding == Encoding::Zip {
+        target.bytes = encode_packed_documents(documents.clone())?.into();
+        publish(&target.path, None, &target.bytes, || Ok(()))?;
+    } else {
+        folder::save(&target.path, None, &documents, &mut |_| Ok(()))?;
+    }
+    target.documents = Some(Arc::new(documents));
+    Ok(Outcome::Saved(Saved { snapshot, target }))
+}
+
+/// Keep exact source bytes for every logically unchanged document, including Save As conversion.
+fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, original: Option<&Documents>) -> Result<Documents, String> {
+    if previous.is_some_and(|old| Arc::ptr_eq(old, snapshot))
+        && let Some(original) = original
+    {
+        return Ok(original.clone());
+    }
+    let mut documents = encode_documents(snapshot.clone())?;
+    if let (Some(old), Some(original)) = (previous, original) {
+        let canonical = encode_documents(old.clone())?;
+        for (path, bytes) in &mut documents {
+            if canonical.get(path) == Some(bytes)
+                && let Some(original) = original.get(path)
+            {
+                bytes.clone_from(original);
+            }
+        }
+    }
+    Ok(documents)
+}
+
+/// Publish a folder or v2 archive while retaining unchanged input bytes. Comparing each old
+/// canonical document preserves custom formatting in files unaffected by the current edit.
+fn save_target(
+    snapshot: Arc<Project>,
+    previous: Option<&Arc<Project>>,
+    mut target: Target,
+    checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
+) -> Result<Outcome, String> {
+    let unchanged = previous.is_some_and(|old| Arc::ptr_eq(old, &snapshot));
+    if target.encoding == Encoding::Zip {
+        let bytes = if unchanged && !target.needs_manifest && !target.legacy {
+            target.bytes.clone()
+        } else {
+            let documents = working_documents(&snapshot, previous, target.documents.as_deref())?;
+            let bytes = encode_packed_documents(documents.clone())?;
+            target.documents = Some(Arc::new(documents));
+            Arc::from(bytes)
+        };
+        publish(&target.path, previous.map(|_| target.bytes.as_ref()), &bytes, || checkpoint("staged"))?;
+        target.added_manifest = target.needs_manifest;
+        target.needs_manifest = false;
+        target.legacy = false;
+        target.bytes = bytes;
+    } else {
+        let documents = working_documents(&snapshot, previous, target.documents.as_deref())?;
+        folder::save(&target.path, target.documents.as_deref(), &documents, checkpoint)?;
+        target.documents = Some(Arc::new(documents));
+    }
+    Ok(Outcome::Saved(Saved { snapshot, target }))
 }
 
 /// Encode and publish the chosen snapshot. The staging callback runs after the
 /// temporary file is flushed and before any replacement of the destination.
 /// Migrated snapshots always encode the current schema, even with no user edits.
+#[cfg(test)]
 fn save_at(
     snapshot: Arc<Project>,
     path: PathBuf,
@@ -68,10 +229,13 @@ fn save_at(
     let bytes = if unchanged && snapshot.upgraded_from().is_none() {
         expected.clone().ok_or("Missing saved project baseline")?
     } else {
-        Arc::from(encode_file(Arc::clone(&snapshot), encoding)?)
+        Arc::from(pcbcraft_engine::persistence::encode_file(Arc::clone(&snapshot), encoding)?)
     };
     publish(&path, expected.as_deref(), &bytes, after_staging)?;
-    Ok(Outcome::Saved(Saved { snapshot, target: Target { path, bytes, encoding } }))
+    Ok(Outcome::Saved(Saved {
+        snapshot,
+        target: Target { path, bytes, encoding, documents: None, legacy: true, needs_manifest: false, added_manifest: false },
+    }))
 }
 
 /// Canonicalize the parent directory so application instances use the same lock for the destination.
@@ -153,5 +317,7 @@ fn publish(path: &Path, expected: Option<&[u8]>, bytes: &[u8], after_staging: im
     Ok(())
 }
 
+#[cfg(test)]
+mod split_tests;
 #[cfg(test)]
 mod tests;
