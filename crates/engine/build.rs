@@ -4,6 +4,9 @@
 
 use std::{env, error::Error, fs, path::Path};
 
+/// Write `starter_library.rs` into `OUT_DIR`, embedding the starter manifest and the JSON symbol
+/// files sorted by path. Environment and filesystem errors fail the build; the engine parses
+/// and validates the embedded contents at startup.
 fn main() -> Result<(), Box<dyn Error>> {
     let library = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../libraries/starter");
     let symbols = library.join("symbols");

@@ -230,10 +230,11 @@ fn versioned(text: &str, format: &str, what: &str) -> Result<Value, String> {
 }
 
 /// Convert one stroke, checking that it stays near the center and that polylines and circles
-/// have something to draw.
+/// have something to draw. Coordinates outside the inclusive drawing bounds, including integer
+/// extremes, return an error without overflowing.
 fn shape(file: ShapeFile) -> Result<Shape, String> {
     let point = |[x_nm, y_nm]: [i64; 2]| -> Result<Point, String> {
-        if x_nm.abs() > MAX_DRAWING_NM || y_nm.abs() > MAX_DRAWING_NM {
+        if !(-MAX_DRAWING_NM..=MAX_DRAWING_NM).contains(&x_nm) || !(-MAX_DRAWING_NM..=MAX_DRAWING_NM).contains(&y_nm) {
             return Err("a drawing must stay within 12.7 mm of the symbol's center".to_owned());
         }
         Ok(Point { x_nm, y_nm })
@@ -318,8 +319,22 @@ mod tests {
         assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([7_620_000, 0])).contains("within 6.35 mm"));
         assert!(error(|file| file["units"][0]["pins"][1]["terminal"] = json!("1")).contains("exactly one pin"));
         assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([12_700_001, 0])).contains("12.7 mm"));
+        assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([i64::MIN, 0])).contains("12.7 mm"));
+        assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([0, i64::MIN])).contains("12.7 mm"));
         assert!(error(|file| file["units"][0]["drawing"][0] = json!({"type": "circle", "center_nm": [0, 0], "radius_nm": 0})).contains("radius"));
         assert!(error(|file| file["units"][0]["drawing"][0] = json!({"type": "arc"})).contains("unknown variant"));
+    }
+
+    /// Extreme coordinates report a file error without preventing later valid files from loading.
+    #[test]
+    fn a_drawing_overflow_leaves_the_rest_of_the_library() {
+        let mut bad = resistor();
+        bad["units"][0]["drawing"][0]["to_nm"] = json!([i64::MIN, 0]);
+        let good = resistor().to_string();
+        let library = Library::load(starter_files::MANIFEST, &[("bad.json", &bad.to_string()), ("good.json", &good)]);
+        assert_eq!(library.symbols().len(), 1);
+        assert!(library.symbol("resistor").is_some());
+        assert_eq!(library.problems(), ["bad.json: a drawing must stay within 12.7 mm of the symbol's center"]);
     }
 
     /// A bad or repeated file is left out with a message, and the rest of the library still loads.
