@@ -64,10 +64,11 @@ struct Lists {
 }
 
 impl Lists {
-    /// List symbols by reference in natural order (R2 before R10), and nets in the Net
-    /// Inspector's order and numbering. A net row selects a wire attached to one of its pins.
+    /// List symbols by reference in natural order (R2 before R10), independent of the value
+    /// displayed beside it. Nets use the Net Inspector's order and numbering; a net row selects
+    /// a wire attached to one of its pins.
     fn read(project: Arc<Project>) -> Self {
-        let mut symbols: Vec<Item> = project
+        let mut symbols: Vec<_> = project
             .symbols()
             .iter()
             .map(|symbol| {
@@ -75,14 +76,16 @@ impl Lists {
                 let value = project.value(symbol);
                 let reference = if reference.is_empty() { symbol.id() } else { reference };
                 // Reference and value, two spaces apart, as PCBcraft Next lists them.
-                Item {
-                    label: if value.is_empty() { reference } else { format!("{reference}  {value}") },
+                let item = Item {
+                    label: if value.is_empty() { reference.clone() } else { format!("{reference}  {value}") },
                     tip: symbol.definition.name.clone(),
                     target: Some((symbol.id(), symbol.position)),
-                }
+                };
+                (reference, item)
             })
             .collect();
-        symbols.sort_by(|a, b| natural(&a.label, &b.label));
+        symbols.sort_by(|a, b| natural(&a.0, &b.0));
+        let symbols = symbols.into_iter().map(|(_, item)| item).collect();
 
         let connectivity = project.connectivity();
         let mut wire_for_net: Vec<Option<(String, Point)>> = vec![None; connectivity.nets.len()];
@@ -263,10 +266,10 @@ mod tests {
     use std::cmp::Ordering;
 
     use egui_kittest::{Harness, kittest::Queryable};
-    use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR};
+    use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, SET_SYMBOL_FIELDS};
     use serde_json::json;
 
-    use super::natural;
+    use super::{Lists, natural};
     use crate::{PcbApp, tests::click};
 
     #[test]
@@ -275,6 +278,30 @@ mod tests {
         references.sort_by(|a, b| natural(a, b));
         assert_eq!(references, ["C1", "LED", "R1", "R2", "R10"]);
         assert_eq!(natural("R01", "R1"), Ordering::Less);
+    }
+
+    /// Real Browser lists order by reference whether the displayed value has a suffix or
+    /// ends in digits. Sorting never reorders the project or changes row targets.
+    #[test]
+    fn symbol_lists_sort_references_independently_of_values() {
+        let mut app = wired_app();
+        for value in ["1k", "1000"] {
+            for (symbol, reference) in [("symbol-2", "R10"), ("symbol-3", "R2")] {
+                app.session
+                    .execute(
+                        SET_SYMBOL_FIELDS,
+                        &json!({"symbol":symbol,"reference":reference,"value":value,"expected_revision":app.session.revision()}),
+                    )
+                    .unwrap();
+            }
+            let before = app.session.inspect();
+            let lists = Lists::read(app.session.snapshot().unwrap());
+            let expected = [format!("R2  {value}"), format!("R10  {value}")];
+            assert_eq!(lists.symbols.iter().map(|item| &item.label).collect::<Vec<_>>(), expected.iter().collect::<Vec<_>>());
+            assert_eq!(lists.symbols[0].target.as_ref().unwrap().0, "symbol-3");
+            assert_eq!(lists.symbols[1].target.as_ref().unwrap().0, "symbol-2");
+            assert_eq!(app.session.inspect(), before);
+        }
     }
 
     /// Two connected resistors, R1 at the origin and R2 to its right.

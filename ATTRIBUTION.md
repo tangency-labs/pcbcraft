@@ -215,9 +215,3 @@ The Parts collapse control uses the chevron and accessible naming of the
 collapsing card header in Next's `src/desktop/panels.rs` at the same revision.
 Applying that control to the Parts card, preserving its search/view/position,
 and expanding it on **A** are upstream additions.
-
-The behavior planning in `docs/sheets-plan.md` references PCBcraft Next's
-`docs/sheet-workflows.md`, `src/desktop/sheets.rs` and `src/desktop/panels.rs`
-at `568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0), alongside
-upstream PR #39's split-storage specification. The document proposes an upstream
-implementation; it does not import the prototype's Session or project model.
