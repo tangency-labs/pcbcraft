@@ -20,9 +20,15 @@ impl PcbApp {
         let mut browser_area = area;
         browser_area.max.y = board::browser_bottom(area);
         let mut pick = None;
+        let mut sheet = None;
         let (browser, collapse) =
             workspace::floating_card_with_id(ui, host.with("browser"), "Browser", browser_area, state.browser_collapsed, |ui| {
                 ui.label(&project.name);
+                egui::CollapsingHeader::new("Sheets").id_salt("board_browser_sheets").default_open(true).show(ui, |ui| {
+                    if ui.selectable_label(false, "Main").clicked() {
+                        sheet = Some(project.sheet_target());
+                    }
+                });
                 egui::CollapsingHeader::new(target.name()).id_salt((target.target, "board")).default_open(true).show(ui, |ui| {
                     egui::CollapsingHeader::new("Footprints").id_salt((target.target, "footprints")).default_open(true).show(ui, |ui| {
                         for footprint in target.footprints() {
@@ -92,6 +98,13 @@ impl PcbApp {
             self.views.select_board(std::collections::BTreeSet::from([id]), &self.session, self.preferences.selection_follow);
             self.views.active.camera.center_on(position);
             self.repaint_editors(ui.ctx());
+        }
+        if let Some(target) = sheet {
+            self.queue_view_action(
+                ui.ctx(),
+                view_id,
+                crate::editor_windows::ViewAction::OpenDocument(crate::editor_view::DocumentTarget::Sheet(target)),
+            );
         }
         [browser, layers, properties]
     }

@@ -100,6 +100,20 @@ pub(super) enum Update {
 }
 
 impl ProjectFiles {
+    /// Supply a local-copy discriminator only after a project has a successfully adopted file.
+    pub(super) fn arrangement_location(&self, session: &Session) -> Option<String> {
+        let saved = self.saved.as_ref().filter(|saved| session.project().is_some_and(|project| saved.snapshot.same_document(project)))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Some(format!("desktop:{}", saved.target.arrangement_location()))
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = saved;
+            Some("browser".into())
+        }
+    }
+
     /// Whether a file operation is outstanding. Edits may continue during a save.
     pub(super) fn busy(&self) -> bool {
         self.job.is_some()
@@ -269,6 +283,13 @@ impl ProjectFiles {
     /// Send later saves to a stand-in the test finishes, instead of a worker with a native picker.
     pub(super) fn use_stand_in(&mut self) {
         self.stand_in = Some(StandIn::default());
+    }
+
+    /// Deliver the real loader's result through the ordinary completion path without an OS picker.
+    pub(super) fn open_path_for_test(&mut self, path: &std::path::Path, revision: u64) {
+        let (send, receiver) = mpsc::channel();
+        let _ = send.send(native::load(path).map(Outcome::Opened));
+        self.job = Some(Job { receiver, revision });
     }
 
     /// Whether a save is waiting for the test to finish it.

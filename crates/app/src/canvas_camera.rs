@@ -12,6 +12,24 @@ use crate::schematic_canvas::grid_bounds;
 const MIN_ZOOM: f32 = 0.005;
 const MAX_ZOOM: f32 = 8.0;
 
+/// Persistent navigation excludes viewport geometry and pending input.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CameraState {
+    zoom: f32,
+    center_nm: [f64; 2],
+    snap_nm: i64,
+}
+
+impl CameraState {
+    /// Validate navigation before adopting a saved arrangement.
+    pub(super) fn valid(&self) -> bool {
+        (MIN_ZOOM..=MAX_ZOOM).contains(&self.zoom)
+            && grid::SPACING_RANGE_NM.contains(&self.snap_nm)
+            && self.center_nm.iter().all(|n| n.is_finite() && n.abs() <= (MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f64 + 1.0)
+    }
+}
+
 /// Viewport and snapping state in egui points. Navigation and the snap grid stay outside the
 /// project and its undo history.
 #[derive(Debug)]
@@ -33,6 +51,24 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// Capture world-space navigation independently of pane size and transient fit requests.
+    pub(super) fn saved_state(&self) -> CameraState {
+        let scale = f64::from(self.unit_step()) / GRID_NM as f64;
+        // The runtime offset is f32; rounding at the navigation boundary must not invalidate
+        // an otherwise valid snapshot when converted back to nanometres.
+        let limit = (MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f64;
+        let center_nm = [self.offset.x, self.offset.y].map(|offset| (-f64::from(offset) / scale).clamp(-limit, limit));
+        CameraState { zoom: self.zoom, center_nm, snap_nm: self.snap_nm }
+    }
+
+    /// Restore validated navigation with fresh host geometry and no deferred fit.
+    pub(super) fn from_state(state: &CameraState) -> Self {
+        let mut camera = Self { zoom: state.zoom, snap_nm: state.snap_nm, ..Self::default() };
+        let scale = f64::from(camera.unit_step()) / GRID_NM as f64;
+        camera.offset = vec2((-state.center_nm[0] * scale) as f32, (-state.center_nm[1] * scale) as f32);
+        camera
+    }
+
     /// Seed another view from the currently displayed transform and grid, leaving its host
     /// geometry unset. Splitting supersedes any unpainted Fit request so both views start at
     /// this zoom.

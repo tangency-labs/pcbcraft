@@ -71,7 +71,7 @@ the opposite side of the board.
 | --- | --- |
 | Open project session | Authoritative schematic and board data, components, definitions and mappings, revision, document commands, undo and redo |
 | Project controller | Save and dirty state, project replacement and close decisions, live MCP attachment and coordinated selection |
-| Named arrangement (planned) | Remembered window/pane/tab configuration and view presentation state for this project |
+| Named arrangement | Remembered window/pane/tab configuration and view presentation state for this project |
 | View registry | Views addressed by stable runtime IDs, independent of their workspace target or host |
 | Editor view | Stable runtime view ID, schematic or PCB target, camera, active layer, visibility and selection filters, local tool draft |
 | Window | Stable host ID, pane layout, focused view, ribbon and panels anchored to that window |
@@ -85,138 +85,129 @@ undo history.
 
 ### Named arrangements and reopening a project
 
-Following the November 6 UI discussion, named arrangements are part of the
-workspace direction, including restoration when a project reopens. This changes
-the earlier recommendation to keep only document tabs: top tabs have a separate
-purpose when they select remembered arrangements. The current implementation
-still has a project-title pill and one view per pane; arrangement tabs, tab
-groups and editor-layout persistence are not implemented. App storage currently
-retains preferences and the Assistant's layout only.
-
-The proposed relationship is:
+Named arrangements now separate the project's working setups from the documents
+shown inside them. The title bar contains the project name and dirty indicator,
+followed by arrangement tabs. Every project starts with **Design**; the **+** menu
+creates, duplicates, renames or removes arrangements. These are user names, not
+fixed editor modes, and all arrangements share the same project, edits and undo.
 
 | UI location | Meaning | Example |
 | --- | --- | --- |
-| Plain project title and dirty indicator | The shared project, independent of the active arrangement | Controller |
-| Top tabs | Named arrangements of that project's views | Design, Routing, Review |
-| Tabs within a pane | Views of specific documents, with sheet paths or board names | Main, Power › Regulators, Controller PCB |
-| Workspace picker | Editor type and placement for a document view | Schematic here, PCB beside, PCB in a new window |
+| Project name and dirty indicator | The shared project | Controller |
+| Top tabs | Named arrangements of its windows and panes | Design, Routing, Review |
+| Tabs within a pane | Independent views of documents | Controller › Main, Controller › Board |
+| Browser sheet selection | Open or activate that sheet in the focused pane | Main |
+| Workspace picker | Open a document here, beside it, or in a native window | PCB layout |
 
-Names such as Design or Routing are user labels, not fixed editor modes. An
-arrangement can mix schematic sheets, boards and future provider-backed views.
-A board is a peer document to a schematic, not a subview owned by that schematic.
-Two views of the same document can have independent cameras while sharing its
-data, undo history and correspondence. Multiple boards use their distinct board
-IDs; neither an arrangement nor a tab implies a second project session.
+Selecting a Browser sheet reuses its tab in the focused pane or adds one there.
+A view of that sheet elsewhere stays independent, and the top arrangement tab
+stays selected. The board Browser includes the current schematic sheet so this
+navigation works from either workspace. The engine currently exposes one editable
+sheet and one legacy board; the typed targets carry sheet and board identity,
+but the UI does not imply that hierarchical or multiple-board editing has shipped.
+Future sheet tabs should show occurrence paths such as **Power › Regulators**.
 
-The proposed arrangement scope is the whole project working setup, including
-its detached windows. Selecting an arrangement explicitly restores that setup;
-ordinary pane focus and document-tab clicks never switch arrangements or
-reconfigure other windows. Each window keeps its own focused pane, ribbon and
-panels, and shows the same active arrangement identity. The existing independent
-window-close behavior remains in effect within the active arrangement. This
-scope should be demonstrated in the UI before implementing arrangement switching,
-because changing arrangements can intentionally affect more than one window.
+A pane keeps its tab order and active document. Its **×** closes that view,
+without deleting the document or closing other views of it; closing the last tab
+in a secondary pane removes that pane. The main host retains one document view.
+Native window Close still dismisses only that window while another survives, and
+the final window uses the project's save decision. A lone document keeps the
+compact canvas breadcrumb; tab strips appear for split panes or multiple tabs.
 
-Within an arrangement, a pane owns an ordered group of document-view tabs and
-one active tab. Clicking a tab activates its view in that pane. Its **×** closes
-that view, without deleting the document or closing another view of it. Removing
-the last tab from a secondary pane collapses that pane; the last window retains
-the existing project-level close decision. New, Duplicate and Rename arrangement
-actions manage arrangements separately from document-view close controls.
-Switching arrangements does not discard project edits or prompt to save them.
-An arrangement remembers its latest state automatically; Duplicate creates a
-separate starting layout over the same project data. Whether arrangement removal
-uses a separate menu action or a top-tab close control remains a UI detail to
-review, rather than reusing the lower **×** without a clear meaning.
+The arrangement covers the whole project working setup, including detached
+windows. Selecting a different top tab explicitly restores that setup and can
+change the window set. Ordinary document selection and pane focus do not change
+other windows. Duplicate starts with the same setup, while New starts with one
+view of the main host's focused document. Each arrangement automatically remembers
+its latest layout. Arrangement removal is a separate menu action, disabled for
+the only remaining arrangement; it does not remove electrical data.
 
-An arrangement snapshot should capture the following presentation state:
+Version 1 records contain window membership, split ratios, tab order, active
+views, focus, stable document targets, both workspace cameras and grids, board
+layer visibility/selection, and supported panel visibility, collapse and
+placement. Desktop bounds are recorded separately from cameras. Runtime view
+and host IDs are freshly allocated on activation. Gestures, selections,
+highlights, pending probe requests, modal dialogs and electrical history are
+excluded, so restoration cannot grant a delayed edit authority or roll back
+project data. Tree-row expansion, provider payloads, view orientation and filters
+are not yet persisted.
 
-- Stable arrangement identity, name, ordering and the last active arrangement.
-- Window membership, pane splits and ratios, tab ordering, active tabs and focus.
-- Stable document targets, including project, sheet or board identity, rather
-  than display names or runtime view IDs.
-- Per-view world-space camera position and zoom, grid state, active layer,
-  visible layers and applicable filters or view orientation.
-- Per-window panel visibility, collapse and placement, together with usable
-  desktop window bounds and display hints.
+Records live under `pcbcraft.project_arrangements` in eframe's user-local storage,
+not in the electrical project. Desktop keys combine the project UUID with the
+normalized saved path's OS bytes, encoded without lossy Unicode conversion.
+Separate checkout paths therefore have separate records. In the browser the
+key uses the project UUID, because the file picker provides no durable location;
+copies with the same UUID share that browser-local record. Unsaved projects keep
+arrangements in memory until a successful first Save. Successful Save As copies
+the collection to the new location while retaining the original record; failed
+or cancelled saves do not rebind it. Portable export and cross-device sharing
+remain separate future features.
 
-The distinction between current and future editor capabilities still applies:
-record only state a provider actually supports. In-progress tool gestures,
-preview edits, modal dialogs, transient highlights, pending cross-probe requests,
-transport handles and electrical undo history do not belong in this snapshot.
-The project remains the authority for authored content; an arrangement cannot
-restore an older version of a board or resurrect deleted geometry.
+Checkpoints capture the outgoing setup before project or arrangement transitions
+and after settled frame changes. Storage is flushed after pointer release or a
+one-second change interval, and through the normal application save hook.
+Restoration follows successful project load; failed Open leaves the existing
+arrangement active. Modal dialogs and pending file/project transitions block
+arrangement actions. Validation happens before replacing the live host graph,
+and stale requests are rejected by project-opening and view input identities.
 
-Use a versioned per-project record in user-local app storage for automatic
-restoration. The project UUID identifies the design, while a local location or
-copy discriminator keeps two checkouts of that UUID from overwriting one
-another's arrangements. Paths are location hints, not document identities.
-Unsaved projects keep their arrangement in memory; a successful first Save
-associates it with the saved project. A successful Save As copies the current
-arrangements to the destination's local record without deleting the original's
-record. Cancelled or failed saves do not rebind either record. Portable,
-explicitly exported arrangements can be added separately; automatic window and
-camera updates must not rewrite `project.pc`, board or sheet files, change their
-format versions, or create electrical undo entries. The exact local key and
-schema need a bounded implementation review before adoption.
+The store is bounded to 8 MiB and 128 projects, with up to 32 arrangements per
+project, 16 windows and 128 views per snapshot. Invalid or newer records are
+preserved instead of being overwritten by fallback state; missing documents
+remain identifiable, closeable placeholders that cannot authorize edits. Size
+and validation failures leave the project usable. Eframe's storage API does not
+return write/flush errors, so disk or browser-storage failure reporting is still
+a limitation rather than a confirmed durability guarantee.
 
-Keep the last successfully stored record until its replacement is written.
-A layout-storage failure must leave editing usable and report that arrangement
-changes were not retained, independently of whether the electrical project saved.
+Native restoration constrains size to the reported monitor and rejects positions
+it cannot establish as reachable, leaving those windows at their OS-selected
+location. Egui does not expose a full monitor map here, so exact placement across
+negative-coordinate or secondary monitors is not yet qualified. Wayland does not
+provide window positions through this integration, so the current bounds record
+cannot capture its native window geometry; the view arrangement and cameras still
+restore, while the compositor chooses window placement. Browser-native
+window creation is unsupported. If a record containing native hosts reaches the
+browser, it is preserved and a usable local layout is opened; flattening that
+record into browser panes without losing desktop placement remains future work.
+Unknown plugin schemas likewise require a future versioned provider contract;
+restoring arrangements neither installs plugins nor grants capabilities.
 
-Save the outgoing arrangement before activation and checkpoint settled layout
-changes during use, with a final flush on an accepted project close or switch.
-Capture the working setup before native windows are torn down so shutdown does
-not replace it with an empty arrangement. A cancelled close keeps the current
-setup active. Restore only after the corresponding project has loaded and been
-validated; a failed Open leaves the existing project and its arrangement intact.
-An arrangement change must respect the owner of an open modal or project
-transition. Prepare and validate the replacement before retiring its old hosts;
-this is not a last-window project close. Activation failure must leave a usable
-arrangement and the shared project intact.
-Use fresh runtime host/view identities and invalidate old input when activating
-an arrangement. The persistent arrangement and document identities must not
-authorize a delayed gesture or request from a previous activation.
+The shared presentation handlers own navigation and layout intent independently
+of widgets. They are suitable for a future live MCP adapter under #61, but this
+slice does not expose new MCP tools, and a headless session cannot restore native
+windows. Acceptance checks cover mixed arrangements, local document navigation,
+independent cameras, tab close/detach, production save/reopen, cancelled/failed
+file operations, missing targets, malformed/newer records, stale input, and
+unchanged electrical bytes and revision. Native-window verification on Linux
+X11 with software rendering exercised three
+hosts, switching to a one-host arrangement and back, and restoration of a moved
+child's bounds. The real X11 app also retained the second window's native ID,
+position and size after closing the original with both displaying Main, then
+handled Cancel and a PCB workspace switch. The isolated Wayland lifecycle test
+uses real native windows, while the full-app automation there did not complete.
+Windows, macOS and physical multi-monitor placement are unqualified.
 
-Restoration must tolerate changed circumstances. Clamp window bounds to available
-displays and keep controls reachable after monitor or scale changes. Keep a
-missing document or unavailable provider identifiable instead of silently
-opening a different sheet, board or plugin view; permit closing or replacing
-that unavailable view. If no usable view remains, offer the ordinary document
-chooser. Invalid local state must not prevent opening a valid project, and an
-unsupported newer record must not be overwritten by a fallback layout. A
-provider's optional state needs a namespaced, versioned, bounded payload, with
-unknown state preserved until the user explicitly removes that view. Restoring
-layout state must not install or grant capabilities to plugins.
-
-Browser restoration uses the same arrangement concepts within one browser tab,
-without assuming automatic file access or permission to create other windows.
-After the user reopens the project, unsupported detached hosts need an explicit
-in-tab fallback that retains their document views and does not destroy the saved
-desktop placement. Cross-device sharing and browser-tab coordination remain
-separate from remembering a project's local arrangements.
-
-The next view-management slice should establish arrangement and tab-group
-ownership before adding storage, then prove the complete reopen flow through the
-shared presentation handlers. These handlers also serve live MCP under #61;
-headless sessions must not claim to have restored native windows. Acceptance
-includes switching two differently named mixed-workspace arrangements, reopening
-the last active arrangement, duplicate document views with independent cameras,
-multiple native windows, a removed monitor, missing documents/providers,
-malformed or newer local state, failed and cancelled Open/Save, stale queued
-input, and unchanged electrical bytes, revision and undo history. Native window
-restoration needs actual desktop qualification in addition to state and UI tests.
+Backend selection remains unchanged, including native Wayland. The local
+[eframe lifecycle patch](../vendor/eframe/PATCH.md) separates its logical root
+viewport from the native window. Closing the original editor releases that
+window's native resources and continues driving the shared session through the
+remaining editors, which retain their own host, viewport and OS window IDs.
+No editor contents move between windows, and no hidden original window remains.
+Selecting an arrangement can recreate a root window when its layout needs one.
+Native regression runs on isolated Wayland and X11 displays verify original
+window destruction, survivor identity/rendering, root recreation and shutdown.
+Headless application tests additionally cover matching/mixed documents, tabs,
+cameras and the last-window save/cancel policy. Windows and macOS use the same
+lifecycle path but have not been verified on those operating systems.
 
 ### Workspace selection and placement
 
-The controls below describe the current inspection implementation. The named
-arrangement design above adds tab groups and restoration; it does not require
-splitting before opening a different workspace or a detached window.
+The controls below describe the current inspection implementation. Opening a
+different workspace or a detached window does not require splitting first.
 
 The workspace picker should be the common entry point for changing what a view
-shows and where it opens. Selecting **PCB layout** switches the focused view in
-place. Each available workspace card contains a split icon and a desktop-only window
+shows and where it opens. Selecting **PCB layout** opens or activates its
+document tab in the focused pane. Each available workspace card contains a split icon and a desktop-only window
 icon, with tooltips naming the target and placement, so either arrangement is
 available directly from a single schematic view. Opening a board in another host
 must leave the current schematic visible without briefly splitting or switching
@@ -267,7 +258,7 @@ one of those windows, docking into an existing split, shared edits/history,
 highlight/follow fan-out, and closing one host without collapsing another.
 Whole split arrangements survive a Split off/on cycle. Native platform
 qualification remains separate from those input/render-callback tests. This is
-runtime retention, not the named-arrangement or reopen persistence planned above.
+runtime retention as well as the named-arrangement persistence described above.
 
 The [representation foundation](pcb-representation.md) defines layer identity,
 physical stackup, units and the proposed shared net/rule contracts before the
@@ -304,9 +295,9 @@ Desktop windows share one process and one project owner. Closing any editor
 window dismisses its views while other editor windows remain; only explicit Dock
 moves them into another host. When the main window closes, a surviving native
 window takes over project dialogs, Home and the Assistant while retaining its ID,
-position, layout, camera and selection. The framework's original root shell stays
-hidden to drive the shared services and immediate viewports; it has no editor
-views and is not counted as an open project window. Closing the last editor, or
+position, layout, camera and selection. The original native window is released;
+the framework's logical root continues to coordinate shared services and
+immediate viewports without an OS surface. Closing the last editor, or
 choosing File → Quit from any window, runs one save/discard decision. Cancel or
 save failure keeps the last editor available. A save already in progress remains
 owned and can finish after the original window closes. This supersedes both the

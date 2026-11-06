@@ -1,5 +1,8 @@
 //! PCB presentation actions share the existing session and editor host lifecycle.
-use crate::{Dialog, PcbApp, ViewId, editor_view::Workspace};
+use crate::{
+    Dialog, PcbApp, ViewId,
+    editor_view::{DocumentTarget, Workspace},
+};
 use egui::Ui;
 use pcbcraft_chrome::{
     shell,
@@ -19,6 +22,18 @@ impl PcbApp {
     /// Apply a validated placement request only after all hosts finish rendering. Layout creation
     /// and target changes share the same queue and stale-input checks as Detach and Dock.
     pub(super) fn apply_workspace(&mut self, source: ViewId, workspace: Workspace, placement: Placement) {
+        if placement == Placement::Here {
+            if let Some(project) = self.session.project() {
+                let target = match workspace {
+                    Workspace::Schematic => DocumentTarget::Sheet(project.sheet_target()),
+                    Workspace::Board => DocumentTarget::Board(project.board_target()),
+                };
+                self.views.open_document(source, target, &self.session);
+            }
+            self.pointer = None;
+            self.pointer_next = None;
+            return;
+        }
         let id = match placement {
             Placement::Here => Some(source),
             Placement::Beside => self.views.open_beside(source),

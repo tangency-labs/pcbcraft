@@ -493,7 +493,8 @@ impl std::error::Error for CommandError {}
 
 /// The persistent address of a schematic sheet within a project. Names and file paths are not
 /// identities; this address survives edits and saves, but does not identify a runtime opening.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SheetTarget {
     project: uuid::Uuid,
     sheet: uuid::Uuid,

@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+mod arrangements;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
 mod board_canvas;
@@ -159,6 +160,7 @@ enum Dialog {
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
+    arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,
     integrated_titlebar: bool,
@@ -248,6 +250,7 @@ impl PcbApp {
         views.set_grid_everywhere(preferences.schematic_grid_nm);
         Self {
             home: true,
+            arrangements: arrangements::Arrangements::from_storage(cc.storage.and_then(|storage| storage.get_string(arrangements::STORAGE_KEY))),
             preferences,
             views,
             #[cfg(not(target_arch = "wasm32"))]
@@ -312,6 +315,7 @@ impl PcbApp {
     /// to the first save, and enter the workspace. The open project is replaced as an undoable
     /// step, as for an agent; a failure shows in the status bar and leaves Home as it was.
     fn start_new_project(&mut self) {
+        self.checkpoint_arrangements();
         self.run("project.new", &Value::Null);
         if self.message.is_none() {
             self.home = false;
@@ -553,6 +557,14 @@ impl PcbApp {
     /// The version and bug report are shown when the app bar has space, and About from 380 points.
     /// Disabling application actions leaves the integrated native window controls available.
     fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
+        let tabs = if self.home { Vec::new() } else { self.arrangements.tabs() };
+        let active_arrangement = self.arrangements.active();
+        let mut rename = self
+            .arrangements
+            .rename_text
+            .take()
+            .unwrap_or_else(|| tabs.iter().find(|(id, _)| *id == active_arrangement).map_or(String::new(), |(_, name)| name.clone()));
+        let mut arrangement_action = None;
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
         let mut preferences = false;
@@ -591,6 +603,7 @@ impl PcbApp {
                     }
                 }
             },
+            |ui| arrangement_action = pcbcraft_chrome::editor::arrangement_tabs(ui, &tabs, active_arrangement, &mut rename),
             |ui, width| {
                 if width >= 560.0 {
                     ui.label(dim(format!("v{VERSION}")));
@@ -612,6 +625,21 @@ impl PcbApp {
                 }
             },
         );
+        self.arrangements.rename_text = Some(rename);
+        if let Some(action) = arrangement_action {
+            use arrangements::Action;
+            use pcbcraft_chrome::editor::ArrangementAction as Pick;
+            self.queue_arrangement(
+                ui.ctx(),
+                match action {
+                    Pick::Select(id) => Action::Select(id),
+                    Pick::New => Action::New,
+                    Pick::Duplicate => Action::Duplicate,
+                    Pick::Rename(name) => Action::Rename(name),
+                    Pick::Remove => Action::Remove,
+                },
+            );
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if assistant_clicked {
             self.toggle_assistant(ui.ctx());
@@ -654,8 +682,8 @@ impl PcbApp {
         let mut tab = self.ribbon_tab;
         let current = self.views.active.workspace;
         let mut entries = WORKSPACES.entries.to_vec();
-        entries[0].current = current == Workspace::Schematic;
-        entries[1].current = current == Workspace::Board;
+        entries[0].current = current == Workspace::Schematic && !self.views.active.unavailable();
+        entries[1].current = current == Workspace::Board && !self.views.active.unavailable();
         let tabs = if current == Workspace::Board { ["Layout", "View"] } else { RIBBON_TABS };
         let picked =
             workspace::ribbon(ui, current.title(), &tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, |ui, shown| {
@@ -1486,6 +1514,7 @@ impl PcbApp {
         let ctx = ui.ctx().clone();
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
         self.sync_style(&ctx);
+        self.checkpoint_arrangements();
         self.handle_close_request(&ctx);
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
@@ -1507,6 +1536,7 @@ impl PcbApp {
         #[cfg(target_arch = "wasm32")]
         self.warn_before_leaving();
         self.views.sync(&self.session);
+        self.sync_arrangements(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_live_control();
         if self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
@@ -1515,6 +1545,11 @@ impl PcbApp {
         #[cfg(not(target_arch = "wasm32"))]
         self.detached_editor(&ctx);
         self.finish_view_actions(&ctx);
+        self.finish_arrangement_action(&ctx);
+        self.checkpoint_arrangements();
+        if let Some(notice) = self.arrangements.notice.take() {
+            self.message = Some(notice);
+        }
         if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home) {
             self.repaint_editors(&ctx);
         }
@@ -1526,6 +1561,7 @@ impl PcbApp {
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
+        self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
         let had_dialog = !matches!(self.dialog, Dialog::None);
@@ -1643,20 +1679,38 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
 }
 
 impl eframe::App for PcbApp {
+    /// Run shared project logic and visible hosts, then release a dismissed native root and
+    /// flush changed presentation settings without adding an electrical edit or save.
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
         let before = self.preferences;
         self.frame(ui);
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
+            // Release the native surface after the frame; surviving host/window IDs stay put.
+            frame.retire_root_window();
+        }
         let changed = self.preferences != before;
         #[cfg(not(target_arch = "wasm32"))]
         let changed = self.assistant.take_settings_changed() || changed;
         // eframe's own save runs every 30 seconds, too late if the page reloads right after a change.
-        if changed && let Some(storage) = frame.storage_mut() {
+        let store_layout =
+            self.arrangements.dirty && ui.ctx().input(|input| input.time - self.arrangements.last_flush >= 1.0 || input.pointer.any_released());
+        if (changed || store_layout)
+            && let Some(storage) = frame.storage_mut()
+        {
             self.save(storage);
             storage.flush();
+            self.arrangements.dirty = false;
+            self.arrangements.last_flush = ui.ctx().input(|input| input.time);
         }
     }
 
+    /// Persist validated user-local presentation state; unsupported arrangement records stay intact.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.checkpoint_arrangements();
+        if let Some(text) = self.arrangements.storage_text() {
+            storage.set_string(arrangements::STORAGE_KEY, text);
+        }
         storage.set_string(PREFERENCES_KEY, self.preferences.to_text());
         #[cfg(not(target_arch = "wasm32"))]
         {

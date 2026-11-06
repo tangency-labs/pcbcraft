@@ -49,10 +49,47 @@ impl ViewInput {
 }
 
 /// Document identity is distinct from the local view and display name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum DocumentTarget {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub(super) enum DocumentTarget {
     Sheet(SheetTarget),
     Board(BoardTarget),
+}
+
+impl DocumentTarget {
+    /// Resolve only an explicitly addressed document in this project; names are not identities.
+    pub(super) fn available(self, session: &Session) -> bool {
+        session.project().is_some_and(|project| match self {
+            Self::Sheet(target) => target == project.sheet_target(),
+            Self::Board(target) => project.board_view(target).is_some(),
+        })
+    }
+}
+
+/// Serializable presentation for an explicitly addressed document, excluding edit authority.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ViewState {
+    target: DocumentTarget,
+    title: String,
+    camera: crate::canvas_camera::CameraState,
+    parked_camera: crate::canvas_camera::CameraState,
+    board: Option<BoardTarget>,
+    hidden_layers: std::collections::BTreeSet<String>,
+    active_layer: Option<String>,
+    layers_collapsed: bool,
+    browser_collapsed: bool,
+    properties_collapsed: bool,
+}
+
+impl ViewState {
+    /// Bound layer data and validate transforms before replacing live views.
+    pub(super) fn valid(&self) -> bool {
+        self.title.len() <= 1024
+            && self.camera.valid()
+            && self.parked_camera.valid()
+            && self.hidden_layers.len() <= 128
+            && self.hidden_layers.iter().chain(self.active_layer.iter()).all(|id| id.len() <= 128)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -108,6 +145,7 @@ pub(super) struct EditorView {
     parked_camera: Camera,
     pub(super) schematic: SchematicState,
     pub(super) board: BoardState,
+    unavailable: Option<ViewState>,
 }
 
 impl Default for EditorView {
@@ -117,6 +155,71 @@ impl Default for EditorView {
 }
 
 impl EditorView {
+    /// Return the resolved document identity, excluding unavailable placeholders.
+    pub(super) fn target(&self) -> Option<DocumentTarget> {
+        self.binding.map(|binding| binding.target)
+    }
+
+    /// Explicitly retarget a view after the host validates the document's existence.
+    pub(super) fn open_document(&mut self, target: DocumentTarget, session: &Session) {
+        match target {
+            DocumentTarget::Sheet(_) => self.switch(Workspace::Schematic, session),
+            DocumentTarget::Board(board) => {
+                self.switch(Workspace::Board, session);
+                self.board.target = Some(board);
+                self.sync(session);
+            }
+        }
+    }
+
+    /// Capture presentation only; unresolved saved targets remain intact instead of being rebound.
+    pub(super) fn saved_state(&self, session: &Session) -> Option<ViewState> {
+        if let Some(state) = &self.unavailable {
+            return Some(state.clone());
+        }
+        Some(ViewState {
+            target: self.binding?.target,
+            title: self.sheet_path(session)?,
+            camera: self.camera.saved_state(),
+            parked_camera: self.parked_camera.saved_state(),
+            board: self.board.target,
+            hidden_layers: self.board.hidden_layers.clone(),
+            active_layer: self.board.active_layer.clone(),
+            layers_collapsed: self.board.layers_collapsed,
+            browser_collapsed: self.board.browser_collapsed,
+            properties_collapsed: self.board.properties_collapsed,
+        })
+    }
+
+    /// Resolve a saved target with a fresh runtime identity and no selection or gesture.
+    /// Missing targets retain their snapshot and cannot authorize editing another document.
+    pub(super) fn from_state(id: ViewId, state: &ViewState, session: &Session) -> Self {
+        let mut view = Self::new(id);
+        view.workspace = match state.target {
+            DocumentTarget::Sheet(_) => Workspace::Schematic,
+            DocumentTarget::Board(_) => Workspace::Board,
+        };
+        view.board.target = state.board;
+        view.sync(session);
+        if view.binding.is_none_or(|binding| binding.target != state.target) {
+            view.binding = None;
+            view.unavailable = Some(state.clone());
+        }
+        view.camera = Camera::from_state(&state.camera);
+        view.parked_camera = Camera::from_state(&state.parked_camera);
+        view.board.hidden_layers = state.hidden_layers.clone();
+        view.board.active_layer = state.active_layer.clone();
+        view.board.layers_collapsed = state.layers_collapsed;
+        view.board.browser_collapsed = state.browser_collapsed;
+        view.board.properties_collapsed = state.properties_collapsed;
+        view
+    }
+
+    /// Unavailable saved documents occupy a closeable view but never become an editing target.
+    pub(super) fn unavailable(&self) -> bool {
+        self.unavailable.is_some()
+    }
+
     /// Create an unbound schematic presentation with fresh navigation and interaction state.
     pub(super) fn new(id: ViewId) -> Self {
         Self {
@@ -128,6 +231,7 @@ impl EditorView {
             parked_camera: Camera::default(),
             schematic: SchematicState::default(),
             board: BoardState::default(),
+            unavailable: None,
         }
     }
 
@@ -139,6 +243,7 @@ impl EditorView {
             workspace: self.workspace,
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
+            unavailable: self.unavailable.clone(),
             board: BoardState {
                 target: self.board.target,
                 layers_collapsed: self.board.layers_collapsed,
@@ -155,6 +260,10 @@ impl EditorView {
     /// Switch only this view and restore that workspace's navigation. Old input remains invalid
     /// even when switching back without any document edit.
     pub(super) fn switch(&mut self, workspace: Workspace, session: &Session) {
+        if self.unavailable.is_some() {
+            *self = Self::new(self.id);
+            self.sync(session);
+        }
         if self.workspace == workspace || session.project().is_none() {
             return;
         }
@@ -171,6 +280,9 @@ impl EditorView {
 
     /// Resolve the document breadcrumb; a runtime view number is never a sheet name.
     pub(super) fn sheet_path(&self, session: &Session) -> Option<String> {
+        if let Some(state) = &self.unavailable {
+            return Some(format!("{} (unavailable)", state.title));
+        }
         self.input(session)?;
         let name = match self.workspace {
             Workspace::Schematic => "Main",
@@ -200,6 +312,18 @@ impl EditorView {
         Some(ViewInput { view: self.id, target: binding.target, input_epoch: self.input_epoch, revision: session.revision() })
     }
 
+    /// Permit placement/close controls for an unavailable view without granting edit authority.
+    pub(super) fn control_input(&self, session: &Session) -> Option<ViewInput> {
+        self.input(session).or_else(|| {
+            self.unavailable.as_ref().map(|state| ViewInput {
+                view: self.id,
+                target: state.target,
+                input_epoch: self.input_epoch,
+                revision: session.revision(),
+            })
+        })
+    }
+
     /// Refuse another view's, old workspace's or stale revision's action.
     pub(super) fn accepts(&self, input: ViewInput, session: &Session) -> bool {
         self.input(session) == Some(input)
@@ -222,6 +346,9 @@ impl EditorView {
     /// prune removed selections/layers. A stale segment clears its whole selection so Delete
     /// cannot widen into a wire deletion; no synchronization mutates the session.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
+        if self.unavailable.is_some() {
+            return false;
+        }
         let board_target = self
             .board
             .target

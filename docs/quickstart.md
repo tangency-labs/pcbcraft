@@ -98,10 +98,15 @@ Right-click a sheet tab to open beside it or close that pane. Closing a detached
 window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
-Editor panes and detached windows are not restored after reopening a project yet.
-[Named arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
-are planned to remember these views, their cameras and the active arrangement;
-the current title-bar project label is not an arrangement tab.
+The project name stays separate from the top **Design** arrangement tab. Use the
+**+** beside it to create, duplicate, rename or remove arrangements. Each remembers
+its panes, document tabs, cameras, panels and desktop windows locally; reopening
+the saved project restores the last active arrangement. Selecting a sheet in
+Browser or a workspace opens or activates its document tab in the focused pane,
+without switching arrangements or moving views elsewhere. Tab **×** closes that
+view. The engine currently exposes one editable sheet and one legacy board.
+See [arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
+for storage and monitor-restoration limits.
 
 Close the original window while another editor remains: the surviving window
 keeps its views and takes over project dialogs. Closing the last editor window
@@ -109,6 +114,12 @@ prompts for unsaved changes; **Cancel** keeps that window open. **File → Quit*
 from any editor asks once before closing the whole project. Browser builds keep
 panes inside one tab. Schematic is currently the editable workspace; PCB layout
 inspects existing placements and highlights their schematic counterparts.
+
+Desktop Close releases the addressed native window, including the original
+window. A surviving editor keeps its native identity and position even when both
+windows show the same document. There is no hidden original editor or automatic
+switch away from Wayland. Native close/reopen verification currently covers Linux
+Wayland and X11; Windows and macOS still need platform qualification.
 
 ## Inspect a board beside its schematic
 

@@ -14,6 +14,8 @@ pub use crate::titlebar::resize_window_edges;
 /// Call [`resize_window_edges`] after dialogs to keep native interactions above their backdrop.
 /// The utility callback gets the full bar width to decide which controls fit.
 /// The title shrinks before taking space from the controls and keeps the unsaved marker if it fits.
+/// `tabs` fills remaining title-bar space with project arrangements, independently of the project label.
+#[allow(clippy::too_many_arguments)]
 pub fn app_bar(
     ui: &mut Ui,
     project: Option<(&str, bool)>,
@@ -21,6 +23,7 @@ pub fn app_bar(
     actions_enabled: bool,
     home: impl FnOnce(&mut Ui),
     actions: impl FnOnce(&mut Ui),
+    tabs: impl FnOnce(&mut Ui),
     utilities: impl FnOnce(&mut Ui, f32),
 ) {
     let t = Tokens::get();
@@ -71,13 +74,20 @@ pub fn app_bar(
                     let room = (controls_left - area.left()).max(0.0);
                     let marker_room = if dirty { t.space_6 } else { 0.0 };
                     let drag_room = if integrated { (room - marker_room).clamp(0.0, t.space_12) } else { 0.0 };
-                    let title_room = (room - drag_room).min(200.0);
+                    let title_room = ((room - drag_room) * 0.3).min(160.0).max(marker_room).min(room - drag_room);
                     if !compact && title_room > t.space_24 {
                         project_title(ui, name, dirty, project.is_some(), title_room, t);
+                        ui.separator();
                     } else if dirty && title_room >= marker_room {
                         let (rect, _) = ui.allocate_exact_size(vec2(title_room.min(t.space_12), t.control_height), Sense::hover());
                         unsaved_marker(ui, rect, t);
                     }
+                    let mut tabs_area = ui.available_rect_before_wrap();
+                    tabs_area.max.x = (controls_left - drag_room).max(tabs_area.left());
+                    ui.scope_builder(UiBuilder::new().id_salt("arrangements").max_rect(tabs_area), |ui| {
+                        ui.set_clip_rect(tabs_area.intersect(ui.clip_rect()));
+                        ui.add_enabled_ui(actions_enabled, tabs);
+                    });
                     if integrated {
                         let mut gap = ui.available_rect_before_wrap();
                         gap.max.x = controls_left;
@@ -112,23 +122,20 @@ fn brand(ui: &mut Ui, t: Tokens, show_name: bool) {
     ui.add_space(t.space_4);
 }
 
-/// Fit the project tab to its title, with space for the unsaved marker even when the text truncates.
+/// Fit the plain project label, reserving space for its unsaved marker when text truncates.
 fn project_title(ui: &mut Ui, title: &str, dirty: bool, has_project: bool, room: f32, t: Tokens) {
     let font = if has_project { fonts::interface_heading(ui, t.font_button) } else { egui::FontId::proportional(t.font_button) };
     let color = if has_project { t.text } else { t.text_dim };
     let text_width = ui.painter().layout_no_wrap(title.to_owned(), font.clone(), color).size().x;
     let width = (text_width + 2.0 * t.space_8 + if dirty { t.space_12 } else { 0.0 }).min(room);
     let (rect, _) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_2), Sense::hover());
-    if has_project {
-        ui.painter().rect_filled(rect, t.radius_sm, t.app_bar_tab);
-    }
     let mut label_rect = rect.shrink2(vec2(t.space_8, 0.0));
     if dirty {
         let marker = egui::Rect::from_center_size(label_rect.right_center() - vec2(t.space_2, 0.0), vec2(t.space_8, rect.height()));
         unsaved_marker(ui, marker, t);
         label_rect.max.x -= t.space_8;
     }
-    ui.put(label_rect, Label::new(RichText::new(title).font(font).color(color)).truncate()).on_hover_text(title);
+    ui.place(label_rect, Label::new(RichText::new(title).font(font).color(color)).truncate()).on_hover_text(title);
 }
 
 /// Draw the unsaved indicator and expose its meaning to pointer and assistive technology users.

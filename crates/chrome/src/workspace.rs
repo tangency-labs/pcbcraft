@@ -351,6 +351,7 @@ fn picker_rows(ui: &mut Ui, workspaces: Workspaces<'_>, width: f32, height: f32,
 /// with its Current or Planned badge, the description, and the tabs for available workspaces.
 /// Planned rows are dimmed, only respond to hover, and report themselves disabled. Available
 /// rows reserve separate hit targets for in-card split/window icons; those never activate the row.
+/// Icon tooltips leave room below the button for the pointer's visible cursor.
 fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -> (Response, Vec<(Placement, Response)>) {
     let t = Tokens::get();
     let available = entry.tabs.is_some();
@@ -430,7 +431,10 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -
                 painter.rect_filled(target, t.control_radius, t.hover);
             }
             paint_icon(&painter, icon, target.center(), t.space_16, t, true);
-            actions.push((placement, action.on_hover_text(label)));
+            egui::Tooltip::for_enabled(&action).gap(t.space_24 + t.space_8).show(|ui| {
+                ui.label(&label);
+            });
+            actions.push((placement, action));
         }
     }
     (response, actions)

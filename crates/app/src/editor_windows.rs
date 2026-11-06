@@ -10,6 +10,8 @@ use crate::{Dialog, IN_BROWSER, PcbApp, ViewInput, editor_layout::HostId};
 /// Window presentation and queued view actions never own project data, files or services.
 #[derive(Debug, Default)]
 pub(super) struct EditorWindows {
+    pub(super) bounds: std::collections::BTreeMap<HostId, crate::arrangements::WindowBounds>,
+    restore_bounds: std::collections::BTreeSet<HostId>,
     focused: Option<ViewportId>,
     #[cfg(not(target_arch = "wasm32"))]
     panels: BTreeMap<HostId, Panels>,
@@ -20,6 +22,7 @@ pub(super) struct EditorWindows {
 /// Presentation actions address an existing view, independently of its current render slot.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ViewAction {
+    OpenDocument(crate::editor_view::DocumentTarget),
     Workspace { workspace: crate::editor_view::Workspace, placement: pcbcraft_chrome::workspace::Placement },
     OpenWindow,
     Detach,
@@ -47,6 +50,89 @@ pub(super) fn viewport(host: HostId) -> ViewportId {
 }
 
 impl PcbApp {
+    /// Read host presentation without exchanging its render slot or cached document objects.
+    pub(super) fn saved_editor_panels(&self, host: HostId) -> crate::arrangements::PanelState {
+        if host == self.views.host {
+            return crate::arrangements::PanelState {
+                browser: self.browser.saved_state(),
+                parts: self.parts.saved_state(),
+                nets: self.net_inspector.open,
+                ribbon: self.ribbon_tab,
+            };
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(panels) = self.windows.panels.get(&host) {
+            return crate::arrangements::PanelState {
+                browser: panels.browser.saved_state(),
+                parts: panels.parts.saved_state(),
+                nets: panels.nets.open,
+                ribbon: panels.ribbon,
+            };
+        }
+        crate::arrangements::PanelState::default()
+    }
+
+    /// Restore contextual controls with empty caches, invalidating queued placement actions.
+    pub(super) fn restore_editor_panels(&mut self, state: &crate::arrangements::Snapshot) {
+        self.windows = EditorWindows::default();
+        for (id, host) in self.views.host_order().into_iter().zip(&state.hosts) {
+            if let Some(bounds) = &host.bounds {
+                self.windows.bounds.insert(id, bounds.clone());
+                self.windows.restore_bounds.insert(id);
+            }
+            let browser = crate::project_browser::ProjectBrowser::from_state(host.panels.browser);
+            let parts = crate::parts_browser::PartsBrowser::from_state(&host.panels.parts);
+            let mut nets = crate::net_inspector::NetInspector::default();
+            nets.open = host.panels.nets;
+            if id == self.views.host {
+                self.browser = browser;
+                self.parts = parts;
+                self.net_inspector = nets;
+                self.ribbon_tab = host.panels.ribbon;
+                self.pointer = None;
+                self.pointer_next = None;
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.windows.panels.insert(id, Panels { browser, parts, nets, ribbon: host.panels.ribbon, ..Panels::default() });
+            }
+        }
+    }
+
+    /// Remember settled native bounds. Restored windows are constrained to the currently
+    /// reported monitor; positions that cannot be verified fall back beside the visible host.
+    pub(super) fn editor_window_geometry(&mut self, ctx: &Context) {
+        if IN_BROWSER {
+            return;
+        }
+        let host = self.views.host;
+        let info = ctx.input(|input| input.viewport().clone());
+        let (Some(outer), Some(inner)) = (info.outer_rect, info.inner_rect) else {
+            return;
+        };
+        if self.windows.restore_bounds.remove(&host) {
+            if let Some(saved) = self.windows.bounds.get(&host) {
+                let monitor = info.monitor_size.unwrap_or(inner.size());
+                let size = egui::vec2(saved.size[0], saved.size[1]).min(monitor).max(egui::vec2(100.0, 100.0));
+                let desired = egui::Rect::from_min_size(egui::pos2(saved.position[0], saved.position[1]), size);
+                let reachable = egui::Rect::from_min_size(egui::Pos2::ZERO, monitor).contains_rect(desired);
+                let position = if reachable { desired.min } else { outer.min };
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(position));
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(size));
+                ctx.send_viewport_cmd(ViewportCommand::Maximized(saved.maximized));
+                ctx.request_repaint();
+            }
+            return;
+        }
+        let bounds = crate::arrangements::WindowBounds {
+            position: [outer.min.x, outer.min.y],
+            size: [inner.width(), inner.height()],
+            maximized: info.maximized.unwrap_or(false),
+        };
+        if bounds.valid() {
+            self.windows.bounds.insert(host, bounds);
+        }
+    }
+
     /// Repaint every visible editor after a shared edit or selection intent.
     pub(super) fn repaint_editors(&self, ctx: &Context) {
         for host in self.views.hosts.keys() {
@@ -65,7 +151,7 @@ impl PcbApp {
             return;
         }
         if self.views.owner(id).is_some()
-            && let Some(source) = self.views.view(id).and_then(|view| view.input(&self.session))
+            && let Some(source) = self.views.view(id).and_then(|view| view.control_input(&self.session))
         {
             self.windows.pending.push((source, action));
             ctx.request_repaint_of(ViewportId::ROOT);
@@ -91,11 +177,14 @@ impl PcbApp {
             if self.home
                 || self.project_action_pending()
                 || !matches!(self.dialog, Dialog::None)
-                || !self.views.view(source.view()).is_some_and(|view| view.accepts(source, &self.session))
+                || !self.views.view(source.view()).is_some_and(|view| view.control_input(&self.session) == Some(source))
             {
                 continue;
             }
             match action {
+                ViewAction::OpenDocument(target) => {
+                    self.views.open_document(source.view(), target, &self.session);
+                }
                 ViewAction::Workspace { workspace, placement } => self.apply_workspace(source.view(), workspace, placement),
                 ViewAction::OpenWindow => {
                     self.views.open_window(source.view());
@@ -262,11 +351,8 @@ impl PcbApp {
         }
         self.views.close_host(host);
         self.windows.panels.remove(&host);
-        if host == HostId::ROOT {
-            // eframe requires its root to stay alive to drive immediate viewports. Hide only
-            // that native shell; the surviving editor owns all visible project interaction.
-            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Visible(false));
-        }
+        self.windows.bounds.remove(&host);
+        self.windows.restore_bounds.remove(&host);
         egui::DragAndDrop::clear_payload(ctx);
         ctx.send_viewport_cmd_to(viewport(self.views.main), ViewportCommand::Focus);
         ctx.request_repaint_of(ViewportId::ROOT);

@@ -6,7 +6,8 @@ use uuid::Uuid;
 
 /// A board address distinguishes its project and physical board, independently of names,
 /// stackup identity and runtime opening. Legacy files have one deterministically addressed board.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BoardTarget {
     pub project: Uuid,
     pub board: Uuid,

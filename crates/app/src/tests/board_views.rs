@@ -34,7 +34,10 @@ fn switching_workspaces_restores_navigation_and_rejects_stale_schematic_input() 
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
     assert_eq!(h.state().views.active.workspace, Workspace::Board);
-    assert_eq!(h.state().views.board_highlight_for(ViewId(0), &h.state().session), std::collections::BTreeSet::from(["footprint-3".into()]));
+    assert_eq!(
+        h.state().views.board_highlight_for(h.state().views.active.id(), &h.state().session),
+        std::collections::BTreeSet::from(["footprint-3".into()])
+    );
     assert!(h.state().views.active.board.selection.is_empty());
     h.state_mut().views.active.camera.center_on(Point { x_nm: 50_000_000, y_nm: 10_000_000 });
     let board_camera = h.state().views.active.camera.screen(origin, rect);
@@ -169,10 +172,12 @@ fn board_browser_properties_and_layers_share_stable_addresses() {
     h.state_mut().run(pcbcraft_engine::SET_BOARD_SETUP, &json!({"setup":setup,"board":target.board,"expected_revision":revision}));
     h.run();
     assert_eq!(h.get_by_label("Show layer Signal top").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    let original_id = h.state().views.active.id();
     click(&mut h, "Choose workspace");
     click(&mut h, "Open PCB layout beside current view");
-    let original = h.state().views.view(ViewId(0)).unwrap();
-    let duplicate = h.state().views.view(ViewId(2)).unwrap();
+    let duplicate_id = h.state().views.hosts[&h.state().views.main].layout.visible_views()[1];
+    let original = h.state().views.view(original_id).unwrap();
+    let duplicate = h.state().views.view(duplicate_id).unwrap();
     let point = Point { x_nm: 0, y_nm: 0 };
     assert_eq!(original.camera.screen(point, egui::Rect::ZERO), duplicate.camera.screen(point, egui::Rect::ZERO));
     assert_eq!(original.board.target, duplicate.board.target);
@@ -180,7 +185,7 @@ fn board_browser_properties_and_layers_share_stable_addresses() {
     assert!(duplicate.board.selection.is_empty());
     click(&mut h, "Show layer Signal top");
     assert!(!h.state().views.active.board.hidden_layers.contains(&top));
-    assert!(h.state().views.view(ViewId(2)).unwrap().board.hidden_layers.contains(&top));
+    assert!(h.state().views.view(duplicate_id).unwrap().board.hidden_layers.contains(&top));
     click(&mut h, "Collapse Layers");
     assert!(h.query_by_label("Show layer Signal top").is_none());
     click(&mut h, "Expand Layers");
@@ -250,7 +255,8 @@ fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     h.key_press(Key::Enter);
     h.run();
     h.get_by_label("Schematic canvas 1");
-    h.get_by_label("PCB canvas 3");
+    let board = h.state().views.hosts[&h.state().views.main].layout.visible_views()[1];
+    h.get_by_label(&format!("PCB canvas {}", board.0 + 1));
     assert_eq!(h.state().session.inspect(), before);
 }
 

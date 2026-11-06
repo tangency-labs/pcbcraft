@@ -494,6 +494,61 @@ fn close_root(h: &mut Harness<'_, PcbApp>) {
     h.run();
 }
 
+/// Matching document targets never stand in for native host identity. Closing either window
+/// keeps the other's view IDs and camera; closing the original never rehosts a surviving tab group.
+#[test]
+fn closing_matching_or_mixed_windows_keeps_the_addressed_survivor() {
+    for board in [false, true] {
+        for close_original in [false, true] {
+            let (mut h, peers) = many_windows();
+            let original = h.state().views.active.id();
+            let child = h.state_mut().views.open_window(original).unwrap();
+            h.run();
+            let peer = peers.borrow()[&editor_windows::viewport(child)].clone();
+            focus_host(&mut h, &peers, child);
+            if board {
+                let at = child_rect(&peer, "Choose workspace").center();
+                child_click_at(&mut h, &peer, at);
+                let at = child_rect(&peer, "PCB layout").center();
+                child_click_at(&mut h, &peer, at);
+            }
+            let survivor = if close_original { child } else { HostId::ROOT };
+            let closed = if close_original { HostId::ROOT } else { child };
+            let focused = h.state().views.hosts[&survivor].focused;
+            let views = h.state().views.hosts[&survivor].layout.views();
+            let camera = h.state().views.view(focused).unwrap().camera.saved_state();
+            let before = encode(h.state().session.snapshot().unwrap()).unwrap();
+            if close_original {
+                focus_host(&mut h, &peers, HostId::ROOT);
+                close_root(&mut h);
+            } else {
+                peer.borrow_mut().close = true;
+                h.run();
+            }
+            assert_eq!(h.state().views.main, survivor);
+            assert_eq!(h.state().views.hosts.len(), 1);
+            assert!(!h.state().views.hosts.contains_key(&closed));
+            assert_eq!(h.state().views.hosts[&survivor].layout.views(), views);
+            assert_eq!(h.state().views.hosts[&survivor].focused, focused);
+            assert_eq!(h.state().views.view(focused).unwrap().camera.saved_state(), camera);
+            assert!(matches!(h.state().dialog, Dialog::None));
+            assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), before);
+            if close_original {
+                child_rect(&peer, if board { "PCB canvas" } else { "Schematic canvas" });
+                peer.borrow_mut().close = true;
+                h.run();
+                assert!(matches!(h.state().dialog, Dialog::SaveChanges(unsaved::Then::Close)));
+                focus_host(&mut h, &peers, survivor);
+                let at = child_rect(&peer, "Cancel").center();
+                child_click_at(&mut h, &peer, at);
+                assert_eq!(h.state().views.main, survivor);
+            } else {
+                h.get_by_label("Schematic canvas");
+            }
+        }
+    }
+}
+
 /// Explicit Quit uses one decision even with several windows; Cancel preserves them all.
 #[test]
 fn closing_the_project_prompts_once_and_cancel_keeps_both_editors() {

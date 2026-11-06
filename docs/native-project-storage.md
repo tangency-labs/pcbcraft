@@ -112,11 +112,12 @@ A component without a placed unit is still refused.
 
 ## Git behavior
 
-The planned [named arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
-restore document views, panes and windows from per-project user-local state.
-They do not add layout or camera records to these electrical file formats.
-Automatic editor-layout restoration is not implemented yet; an explicit portable
-arrangement export would be a separate format and feature.
+[Named arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
+are kept in versioned user-local application storage. Camera, pane, tab and window
+changes do not rewrite electrical project files or create undo entries. Successful
+Save As copies the local arrangement record to the destination association;
+failed or cancelled saves retain the original. Portable arrangement export remains
+a separate future format and feature.
 
 Commit the working folder. Each editable record has a stable ordering and its
 own line; separator commas occupy separate lines so appending a record does not

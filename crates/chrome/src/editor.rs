@@ -4,6 +4,69 @@ use egui::{FontId, Rect, Sense, Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2};
 
 use crate::Tokens;
 
+/// User intent from the arrangement tab strip, applied by the project host after rendering.
+#[derive(Clone, Debug)]
+pub enum ArrangementAction {
+    Select(u64),
+    New,
+    Duplicate,
+    Rename(String),
+    Remove,
+}
+
+/// Draw named arrangements within the title bar, with document-view controls remaining in panes.
+/// Overflow scrolls horizontally; naming and removal stay in the explicit arrangement menu.
+pub fn arrangement_tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64, rename: &mut String) -> Option<ArrangementAction> {
+    if tabs.is_empty() {
+        return None;
+    }
+    let t = Tokens::get();
+    let mut action = None;
+    ui.horizontal(|ui| {
+        let width = (ui.available_width() - t.space_24 - t.space_8).max(0.0);
+        egui::ScrollArea::horizontal()
+            .id_salt("arrangement_tabs")
+            .max_width(width)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (id, name) in tabs {
+                        let response = ui.selectable_label(*id == active, name);
+                        response
+                            .widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, *id == active, format!("Arrangement {name}")));
+                        if response.clicked() {
+                            action = Some(ArrangementAction::Select(*id));
+                        }
+                    }
+                });
+            });
+        let menu = ui.menu_button("+", |ui| {
+            if ui.button("New arrangement").clicked() {
+                action = Some(ArrangementAction::New);
+                ui.close();
+            }
+            if ui.button("Duplicate arrangement").clicked() {
+                action = Some(ArrangementAction::Duplicate);
+                ui.close();
+            }
+            ui.menu_button("Rename arrangement", |ui| {
+                ui.text_edit_singleline(rename).labelled_by(ui.label("Name").id);
+                if ui.button("Apply name").clicked() {
+                    action = Some(ArrangementAction::Rename(rename.clone()));
+                    ui.close();
+                }
+            });
+            if ui.add_enabled(tabs.len() > 1, egui::Button::new("Remove arrangement")).clicked() {
+                action = Some(ArrangementAction::Remove);
+                ui.close();
+            }
+        });
+        menu.response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Arrangement options"));
+        menu.response.on_hover_text("Arrangements");
+    });
+    action
+}
+
 /// Lay out two panes with a draggable divider. Narrow windows stack them vertically so each
 /// retains usable width. The ratio is presentation state; dragging clamps it to 25–75 percent.
 pub fn split(ui: &mut Ui, ratio: &mut f32) -> [Rect; 2] {
@@ -46,8 +109,8 @@ pub fn tab_height() -> f32 {
 
 /// Keep shared edge cards below the top pane headers and above any lower row of panes.
 /// Their horizontal anchors span the host and do not move when a different pane takes focus.
-pub fn panel_area(mut area: Rect, panes: &[Rect], spacing: f32) -> Rect {
-    if panes.len() > 1 {
+pub fn panel_area(mut area: Rect, panes: &[Rect], headers: bool, spacing: f32) -> Rect {
+    if headers {
         let top = area.top();
         for pane in panes {
             if pane.top() > top {
@@ -69,12 +132,54 @@ pub enum PaneAction {
     Close,
 }
 
+/// Draw one pane's document tabs with stable view identities and horizontal overflow.
+/// Selecting or closing a tab returns intent for that view, independently of the host's focus.
+pub fn document_tabs(
+    ui: &mut Ui,
+    tabs: &[(u64, String)],
+    selected: u64,
+    focused: bool,
+    native: bool,
+    detached: bool,
+) -> (Option<u64>, Option<(u64, PaneAction)>) {
+    let t = Tokens::get();
+    let mut picked = None;
+    let mut action = None;
+    egui::ScrollArea::horizontal()
+        .id_salt("documents")
+        .max_height(tab_height())
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.horizontal(|ui| {
+                for (id, path) in tabs {
+                    let width = ui.painter().layout_no_wrap(path.clone(), FontId::proportional(t.font_label), t.text).size().x
+                        + 2.0 * t.space_12
+                        + t.space_24;
+                    let width = width.min(t.space_24 * 12.0);
+                    ui.push_id(id, |ui| {
+                        ui.allocate_ui_with_layout(vec2(width, tab_height()), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            let (click, intent) = sheet_tab(ui, path, *id == selected, focused, native, detached);
+                            if click {
+                                picked = Some(*id);
+                            }
+                            if let Some(intent) = intent {
+                                action = Some((*id, intent));
+                            }
+                        });
+                    });
+                }
+            });
+        });
+    (picked, action)
+}
+
 /// Show the sheet path on a document tab. Focus changes its underline, leaving the tab and
 /// surrounding workspace stationary. Long paths elide from the left to retain the sheet name;
 /// accessibility and hover text always contain the complete path. Return a focus click and
 /// an optional view action; the close button dismisses only this pane, and native placement
 /// rows are omitted for browser hosts. The host supplies stable IDs and applies actions after rendering.
-pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool, native: bool, detached: bool) -> (bool, Option<PaneAction>) {
+pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool, focused: bool, native: bool, detached: bool) -> (bool, Option<PaneAction>) {
     let t = Tokens::get();
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), tab_height()), Sense::hover());
     let font = FontId::proportional(t.font_label);
@@ -99,9 +204,9 @@ pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool, native: bool, detached: 
     ui.painter().rect_filled(strip, 0, t.panel);
     ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, t.border));
     let painter = ui.painter_at(tab);
-    painter.rect_filled(tab, 0, t.canvas);
+    painter.rect_filled(tab, 0, if active { t.canvas } else { t.panel });
     painter.galley(pos2(tab.left() + t.space_12, tab.center().y - galley.size().y / 2.0), galley, t.text);
-    painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(2.0, if active { t.accent } else { t.border }));
+    painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(2.0, if active && focused { t.accent } else { t.border }));
     let close = ui.interact(close_rect, ui.id().with("close_pane"), Sense::click());
     close.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("Close view {path}")));
     if close.hovered() || close.has_focus() {

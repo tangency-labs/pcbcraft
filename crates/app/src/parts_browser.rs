@@ -28,7 +28,33 @@ pub(crate) struct PartsBrowser {
     search_focused: bool,
 }
 
+/// Remember catalog visibility and presentation, without search focus or drag payloads.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PartsState {
+    open: bool,
+    view: View,
+    panel: catalog::PanelState,
+}
+
+impl PartsState {
+    /// Validate saved placement before it reaches the chrome layout.
+    pub(super) fn valid(&self) -> bool {
+        self.panel.valid()
+    }
+}
+
 impl PartsBrowser {
+    /// Capture layout without retaining search text or an unfinished placement.
+    pub(super) fn saved_state(&self) -> PartsState {
+        PartsState { open: self.open, view: self.view, panel: self.panel.saved_state() }
+    }
+
+    /// Recreate presentation with fresh interaction ownership.
+    pub(super) fn from_state(state: &PartsState) -> Self {
+        Self { open: state.open, view: state.view, panel: catalog::Panel::from_state(&state.panel), ..Self::default() }
+    }
+
     /// Release the shared search field when another editor takes input ownership. The query,
     /// view mode and panel position remain available to the newly focused pane.
     pub(super) fn release_focus(&mut self, ctx: &egui::Context) {
