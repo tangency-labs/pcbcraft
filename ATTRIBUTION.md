@@ -145,3 +145,20 @@ that match.
 ## Dependencies
 
 `Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. A notices file for release binaries is still to do, and is needed before the first release.
+
+The workspace picker on the ribbon's workspace tile (`crates/chrome/src/workspace.rs`,
+`picker` and `workspace_row`) follows SolidCraft's `workspace_menu` in
+`crates/ui-egui/src/ui_kit/menu.rs` at `c553365a2197a689e749389a6fbf707a38df9b61`
+(MIT OR Apache-2.0, copyright (c) 2026 SolidCraft contributors): its width, row
+heights, accent bar, icon tile, badges and footer. The tile's caret, the entries'
+wording and the keyboard handling follow PCBcraft Next's `src/desktop/workspace.rs`
+at `568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0), itself adapted
+from the same SolidCraft revision. The workspace icons are drawn with the theme's
+icon colour roles (`icon_ink`, `icon_face_*`, `icon_active_*` in
+`crates/chrome/src/theme.rs`), whose light and dark values come from SolidCraft's
+icon palette as carried in PCBcraft Next's `assets/family/icon-palette.toml`. The
+schematic sheet and render sphere follow SolidCraft's `workspace-schematic.svg`
+and `workspace-render.svg` from the same file set; the PCB layout and simulation
+glyphs follow PCBcraft Next's original `assets/original/workspace-layout.svg` and
+`simulate.svg`. The Current badge uses the Home rail's accent pair, which keeps
+its small text readable.

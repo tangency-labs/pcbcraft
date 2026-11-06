@@ -73,6 +73,18 @@ pub struct Tokens {
     pub form_primary: Color32,
     /// Hints and section titles in forms.
     pub form_dim: Color32,
+    /// Icon artwork roles, from SolidCraft's icon palette: outlines drawn over a face, three
+    /// passive faces from lightest to darkest, and three active blues from palest to strongest.
+    pub icon_ink: Color32,
+    pub icon_face_1: Color32,
+    pub icon_face_2: Color32,
+    pub icon_face_3: Color32,
+    pub icon_active_1: Color32,
+    pub icon_active_2: Color32,
+    pub icon_active_3: Color32,
+    /// A small solid accent label, such as the workspace picker's Current badge, and its text.
+    pub badge: Color32,
+    pub badge_ink: Color32,
 
     pub space_2: f32,
     pub space_3: f32,
@@ -158,6 +170,15 @@ impl Tokens {
             selected_bg: Color32::PLACEHOLDER,
             form_primary: Color32::PLACEHOLDER,
             form_dim: Color32::PLACEHOLDER,
+            icon_ink: Color32::from_rgb(0x34, 0x46, 0x5b),
+            icon_face_1: Color32::from_rgb(0xe2, 0xe8, 0xef),
+            icon_face_2: Color32::from_rgb(0xb8, 0xc3, 0xcf),
+            icon_face_3: Color32::from_rgb(0x8e, 0x9f, 0xaf),
+            icon_active_1: Color32::from_rgb(0xb9, 0xdd, 0xf8),
+            icon_active_2: Color32::from_rgb(0x32, 0x8b, 0xd3),
+            icon_active_3: Color32::from_rgb(0x23, 0x6e, 0xad),
+            badge: Color32::PLACEHOLDER,
+            badge_ink: Color32::PLACEHOLDER,
 
             space_2: 2.0,
             space_3: 3.0,
@@ -221,6 +242,13 @@ impl Tokens {
         t.canvas_ink = Color32::from_rgb(148, 155, 168);
         t.canvas_grid = Color32::from_rgb(85, 93, 108);
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
+        t.icon_ink = Color32::from_rgb(0x1f, 0x20, 0x21);
+        t.icon_face_1 = Color32::from_rgb(0x8d, 0xa3, 0xc3);
+        t.icon_face_2 = Color32::from_rgb(0x6d, 0x81, 0xa2);
+        t.icon_face_3 = Color32::from_rgb(0x54, 0x67, 0x82);
+        t.icon_active_1 = Color32::from_rgb(0x4e, 0xa1, 0xdc);
+        t.icon_active_2 = Color32::from_rgb(0x32, 0x87, 0xd1);
+        t.icon_active_3 = Color32::from_rgb(0x29, 0x76, 0xb8);
         t.with_home(true).with_dialogs(true)
     }
 
@@ -255,6 +283,9 @@ impl Tokens {
         self.file_primary = self.accent_soft;
         self.file_primary_ink = self.ribbon_tab_text;
         self.file_primary_border = self.accent;
+        // Badges share the rail's accent pair, which keeps small text readable on solid accent.
+        self.badge = self.file_rail;
+        self.badge_ink = self.file_rail_ink;
         self
     }
 
@@ -358,6 +389,7 @@ mod tests {
         for t in [Tokens::dark(), Tokens::light()] {
             for (ink, surface) in [
                 (t.file_rail_ink, t.file_rail),
+                (t.badge_ink, t.badge),
                 (t.file_rail_ink, t.file_rail_hover),
                 (t.file_primary_ink, t.file_primary),
                 (t.text, t.file_surface),

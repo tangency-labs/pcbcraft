@@ -251,6 +251,57 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
     harness.get_by_label("Enable local connection");
 }
 
+/// The workspace tile opens a picker that lists Schematic as current and the planned
+/// workspaces as disabled rows. Clicking a planned row does nothing; Escape, a click outside and
+/// choosing Schematic each close the picker. Keys pressed in the picker don't reach the canvas.
+#[test]
+fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
+    let mut harness = harness();
+    let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB layout").is_some();
+    click(&mut harness, "Choose workspace");
+    assert!(picker_open(&harness));
+    harness.get_by_label("One electronics project across workspaces. PCB layout, 3D rendering and simulation are planned, not implemented.");
+    for planned in ["PCB layout", "3D render", "Simulate"] {
+        assert!(harness.get_by_label(planned).accesskit_node().is_disabled(), "{planned} is planned");
+    }
+    assert!(!harness.get_by_label("Schematic").accesskit_node().is_disabled());
+
+    harness.get_by_label("PCB layout").click();
+    harness.run();
+    assert!(picker_open(&harness), "a planned row doesn't close the picker");
+    harness.key_press(Key::Escape);
+    harness.run();
+    assert!(!picker_open(&harness));
+
+    click(&mut harness, "Choose workspace");
+    harness.get_by_label("Schematic").click();
+    harness.run();
+    assert!(!picker_open(&harness));
+
+    new_project(&mut harness, "picker");
+    click(&mut harness, "Choose workspace");
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(!picker_open(&harness), "Enter picks the current workspace");
+    assert!(harness.state().session().project().unwrap().symbols().is_empty());
+    harness.get_by_label("Draw wire (W)");
+}
+
+/// Enter on the focused workspace tile opens the picker and leaves it open: the key that opened
+/// it doesn't also pick the current workspace. A second Enter picks Schematic and closes it.
+#[test]
+fn enter_on_the_workspace_tile_opens_the_picker() {
+    let mut harness = harness();
+    harness.get_by_label("Choose workspace").focus();
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(harness.query_by_label("PCB layout").is_some(), "the opening Enter keeps the picker open");
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert!(harness.query_by_label("PCB layout").is_none());
+}
+
 /// Below 380 points the ? button gives way, and Home's rail still reaches the same rows.
 #[test]
 fn narrow_bars_reach_help_rows_from_home() {
