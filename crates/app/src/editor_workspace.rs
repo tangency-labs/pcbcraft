@@ -110,29 +110,50 @@ impl PcbApp {
         }
     }
 
-    /// Render one or two panes in stable ID order. Inactive panes draw the same snapshot but
-    /// cannot consume editing input. A document edit requests another frame for all panes.
+    /// Render sheet tabs and canvases in stable view order. Workspace panels stay at their
+    /// window positions and address the focused view; their geometry never follows focus.
     pub(super) fn editor_workspace(&mut self, ui: &mut Ui, workspace: Rect) {
-        if !self.views.split || self.session.project().is_none() {
-            self.active_editor(ui, workspace);
+        if self.session.project().is_none() {
+            self.canvas(ui);
             return;
         }
-        let panes = editor::split(ui, &mut self.views.ratio);
-        self.views.rects = [(ViewId(0), panes[0]), (ViewId(1), panes[1])];
-        for (index, rect) in panes.into_iter().enumerate() {
-            let id = ViewId(index as u64);
+        let mut pick = self.editor_panels(ui);
+        let panes = if self.views.split {
+            let panes = editor::split(ui, &mut self.views.ratio);
+            self.views.rects = [(ViewId(0), panes[0]), (ViewId(1), panes[1])];
+            self.views.rects.to_vec()
+        } else {
+            vec![(self.views.active.id(), ui.available_rect_before_wrap())]
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let assistant = self.assistant.covered_rect(workspace);
+        #[cfg(target_arch = "wasm32")]
+        let assistant = {
+            let _ = workspace;
+            Rect::NOTHING
+        };
+        let covered = [self.browser.rect(), self.parts.rect(), assistant];
+        for (id, rect) in panes {
             ui.scope_builder(egui::UiBuilder::new().id_salt(("editor_pane", id)).max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
-                if editor::header(ui, if index == 0 { "Schematic 1" } else { "Schematic 2" }, active) {
+                let view = if active { &self.views.active } else { &self.views.other };
+                if let Some(path) = view.sheet_path(&self.session)
+                    && editor::sheet_tab(ui, &path, active)
+                {
                     self.activate_editor(ui.ctx(), id);
                 }
+                let canvas = ui.available_rect_before_wrap();
+                let uncovered = workspace::catalog::uncovered(canvas, &covered);
                 if self.views.active.id() == id {
-                    self.active_editor(ui, workspace);
+                    self.views.active.camera.set_uncovered(canvas, uncovered);
+                    if let Some((source, pick)) = pick.take() {
+                        self.show_pick(source, pick);
+                    }
+                    self.canvas(ui);
                 } else {
                     let view = &mut self.views.other;
-                    let canvas = ui.available_rect_before_wrap();
-                    view.camera.set_uncovered(canvas, canvas);
+                    view.camera.set_uncovered(canvas, uncovered);
                     ui.push_id(view.widget_id(), |ui| {
                         shell::canvas(ui, |ui| {
                             if let Some(project) = self.session.project() {
@@ -154,46 +175,26 @@ impl PcbApp {
             });
         }
     }
-}
 
-impl PcbApp {
-    /// Draw the contextual panels and canvas for the active view, preserving the single-view
-    /// layout. Panels follow focus; their actions carry this view’s input address.
-    fn active_editor(&mut self, ui: &mut Ui, _workspace: Rect) {
-        if let Some(source) = self.views.active.input(&self.session) {
-            #[cfg(not(target_arch = "wasm32"))]
-            let clearance = self.assistant.rail_clearance();
-            #[cfg(target_arch = "wasm32")]
-            let clearance = 0.0;
-            self.net_inspector.show(ui, &self.session, clearance);
-            let canvas = ui.available_rect_before_wrap();
-            let browser_area = self.parts.browser_area(canvas);
-            let pick = self.browser.show(ui, browser_area, &self.session, &self.views.active.selection);
-            let placing = match &self.views.active.tool {
-                Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
-                _ => None,
-            };
-            if let Some(definition) = self.parts.show(ui, canvas, self.browser.rect(), placing.as_ref(), source) {
-                self.begin_placement(definition);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            let assistant = self.assistant.covered_rect(_workspace);
-            #[cfg(target_arch = "wasm32")]
-            let assistant = egui::Rect::NOTHING;
-            self.views
-                .active
-                .camera
-                .set_uncovered(canvas, workspace::catalog::uncovered(canvas, &[self.browser.rect(), self.parts.rect(), assistant]));
-            if let Some(pick) = pick {
-                self.show_pick(source, pick);
-            }
+    /// Draw shared panels once against the workspace bounds. Return a Browser pick with its
+    /// originating view address so centering can use that pane's actual uncovered canvas.
+    fn editor_panels(&mut self, ui: &mut Ui) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
+        let source = self.views.active.input(&self.session)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let clearance = self.assistant.rail_clearance();
+        #[cfg(target_arch = "wasm32")]
+        let clearance = 0.0;
+        self.net_inspector.show(ui, &self.session, clearance);
+        let mut area = ui.available_rect_before_wrap();
+        area.min.y = (area.min.y + editor::tab_height() + ui.spacing().item_spacing.y).min(area.max.y);
+        let pick = self.browser.show(ui, self.parts.browser_area(area), &self.session, &self.views.active.selection);
+        let placing = match &self.views.active.tool {
+            Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
+            _ => None,
+        };
+        if let Some(definition) = self.parts.show(ui, area, self.browser.rect(), placing.as_ref(), source) {
+            self.begin_placement(definition);
         }
-        let canvas = ui.available_rect_before_wrap();
-        self.canvas(ui);
-        if let Some(project) = self.session.project() {
-            // Beside the floating Browser, as in PCBcraft Next; one sheet so far.
-            let left = canvas.left() + self.browser.covered_width() + 12.0;
-            workspace::sheet_heading(ui.painter(), canvas, left, &format!("{}  /  Main", project.name), "1 / 1");
-        }
+        pick.map(|pick| (source, pick))
     }
 }

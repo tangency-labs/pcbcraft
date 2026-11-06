@@ -67,8 +67,8 @@ Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
 
 The **Browser** floats over the left of the canvas and shows the project as
-**Project → Sheets → Main → Symbols / Nets**, with the sheet's path and count
-beside it. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
+**Project → Sheets → Main → Symbols / Nets**. The tab above each canvas shows
+its sheet path, such as **Power controller / Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
 items, and click one to select it and center the view on it. A net row selects
 one of its wires. Click the Browser's title to fold it. Browsing never changes the
 project, and the canvas keeps its full size; **Fit** keeps the drawing clear of
@@ -76,9 +76,11 @@ the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
 Inspector panels, and fits the view. Each ribbon group's caption, such as
 **Place ⌄**, opens a menu of the same actions. A project has one sheet so far.
 
-**View → Split** opens two views of that schematic. Click a pane or its title to
-activate it; the ribbon, Browser, Parts and Net Inspector follow the active
-pane. Each view keeps its own camera and edit selection, while edits, undo,
+**View → Split** opens two views of that schematic. Click a pane or its sheet tab
+to activate it; the tab underline marks the active view. Browser, Parts and Net
+Inspector keep their workspace positions while their actions target that view.
+Both tabs show the same sheet path when they display the same sheet. Each view
+keeps its own camera and selection, including box and modifier selections, while edits, undo,
 redo and saving use the same project. Changing panes cancels unfinished gestures.
 Drag the divider to resize the panes; narrow windows stack them vertically.
 Turning Split off keeps the active view and retains the hidden view for later.

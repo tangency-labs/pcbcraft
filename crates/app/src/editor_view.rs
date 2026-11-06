@@ -76,6 +76,14 @@ impl SchematicView {
         self.id
     }
 
+    /// Resolve the displayed sheet path from the current binding, never from the runtime view
+    /// number. The engine currently has one sheet, Main; hierarchy will extend this resolution.
+    /// Renaming the project updates the label without changing the view or sheet identity.
+    pub(super) fn sheet_path(&self, session: &Session) -> Option<String> {
+        self.input(session)?;
+        Some(format!("{} / Main", session.project()?.name))
+    }
+
     /// Scope egui interactions to this view's current opening. A held pointer or context menu
     /// from an earlier project must not attach itself to a replacement with the same object IDs.
     pub(super) fn widget_id(&self) -> egui::Id {

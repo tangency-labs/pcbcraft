@@ -1,6 +1,6 @@
 //! Editor pane layout and focus presentation. The host owns views, focus and document state.
 
-use egui::{Align2, FontId, Rect, Sense, Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2};
+use egui::{FontId, Rect, Sense, Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2};
 
 use crate::Tokens;
 
@@ -38,17 +38,40 @@ pub fn split(ui: &mut Ui, ratio: &mut f32) -> [Rect; 2] {
     }
 }
 
-/// Identify a pane and mark keyboard ownership. Clicking its title requests focus without
-/// changing the view's selection or camera. All colors and dimensions follow the chrome theme.
-pub fn header(ui: &mut Ui, title: &str, active: bool) -> bool {
+/// Height of a document tab strip, also used to keep workspace cards below the first strip.
+pub fn tab_height() -> f32 {
     let t = Tokens::get();
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), t.space_24 + t.space_6), Sense::click());
-    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, active, title));
-    ui.painter().rect_filled(rect, 0, if active { t.accent_soft } else { t.panel });
-    ui.painter().text(rect.left_center() + vec2(t.space_8, 0.0), Align2::LEFT_CENTER, title, FontId::proportional(t.font_label), t.text);
-    ui.painter().line_segment(
-        [rect.left_bottom(), rect.right_bottom()],
-        Stroke::new(if active { 2.0 } else { 1.0 }, if active { t.accent } else { t.border }),
-    );
-    response.clicked()
+    t.space_24 + t.space_8
+}
+
+/// Show the sheet path on a document tab. Focus changes its underline, leaving the tab and
+/// surrounding workspace stationary. Long paths elide from the left to retain the sheet name;
+/// accessibility and hover text always contain the complete path. The host supplies stable IDs.
+pub fn sheet_tab(ui: &mut Ui, path: &str, active: bool) -> bool {
+    let t = Tokens::get();
+    let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), tab_height()), Sense::hover());
+    let font = FontId::proportional(t.font_label);
+    let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text);
+    let available = (strip.width() - 2.0 * t.space_12).max(0.0);
+    let mut label = path.to_owned();
+    if measure(&label).size().x > available {
+        for (index, _) in path.char_indices().skip(1) {
+            label = format!("…{}", &path[index..]);
+            if measure(&label).size().x <= available {
+                break;
+            }
+        }
+    }
+    let galley = measure(&label);
+    let width = (galley.size().x + 2.0 * t.space_12).min(strip.width());
+    let tab = Rect::from_min_size(strip.min, vec2(width, strip.height()));
+    let response = ui.interact(tab, ui.id().with("sheet_tab"), Sense::click());
+    response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, active, path));
+    ui.painter().rect_filled(strip, 0, t.panel);
+    ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, t.border));
+    let painter = ui.painter_at(tab);
+    painter.rect_filled(tab, 0, t.canvas);
+    painter.galley(pos2(tab.left() + t.space_12, tab.center().y - galley.size().y / 2.0), galley, t.text);
+    painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(2.0, if active { t.accent } else { t.border }));
+    response.on_hover_text(path).clicked()
 }

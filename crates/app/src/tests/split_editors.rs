@@ -26,6 +26,13 @@ fn canvas(h: &Harness<'_, PcbApp>, id: u64) -> egui::Rect {
     h.get_by_label(&format!("Schematic canvas {}", id + 1)).rect()
 }
 
+/// Two views of one sheet have the same path; their stable pane order distinguishes the tabs.
+fn focus_tab(h: &mut Harness<'_, PcbApp>, id: usize) {
+    let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
+    h.get_all_by_label(&path).nth(id).unwrap().click();
+    h.run();
+}
+
 /// Click a model point in the specified pane, allowing its first press to activate the view.
 fn click_point(h: &mut Harness<'_, PcbApp>, id: u64, point: Point) {
     let at = view(h, id).camera.screen(point, canvas(h, id));
@@ -58,25 +65,25 @@ fn split_views_keep_navigation_and_selection_but_share_undo() {
     let second_zoom = view(&h, 1).camera.zoom();
     assert!(second_zoom > 1.0);
     assert_eq!(view(&h, 0).camera.zoom(), 1.0);
-    click(&mut h, "Schematic 1");
+    focus_tab(&mut h, 0);
     h.key_press(Key::Delete);
     h.run();
     assert_eq!(h.state().session.inspect(), before);
     assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
     assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
     assert_eq!(h.state().files.dirty(&h.state().session), dirty);
-    click(&mut h, "Schematic 2");
+    focus_tab(&mut h, 1);
     h.key_press(Key::Delete);
     h.run();
     assert!(h.state().session.project().unwrap().symbols().is_empty());
     assert!(view(&h, 0).selection.single_symbol().is_none());
     assert!(view(&h, 1).selection.single_symbol().is_none());
-    click(&mut h, "Schematic 1");
+    focus_tab(&mut h, 0);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
     assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
     assert_eq!(view(&h, 1).camera.zoom(), second_zoom);
-    click(&mut h, "Schematic 2");
+    focus_tab(&mut h, 1);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Y);
     h.run();
     assert!(h.state().session.project().unwrap().symbols().is_empty());
@@ -94,9 +101,9 @@ fn returning_to_a_pane_does_not_revive_its_wire_gesture() {
     let source = h.state().views.active.input(&h.state().session).unwrap();
     assert!(matches!(view(&h, 0).tool, Some(Tool::Wire { start: Some(_), .. })));
     let before = h.state().session.inspect();
-    click(&mut h, "Schematic 2");
+    focus_tab(&mut h, 1);
     assert!(view(&h, 0).tool.is_none());
-    click(&mut h, "Schematic 1");
+    focus_tab(&mut h, 0);
     let app = h.state_mut();
     assert!(!app.views.active.accepts(source, &app.session));
     app.view_click(source, Click::Select(Some("symbol-2".to_owned())));
@@ -185,7 +192,7 @@ fn parts_drag_cannot_place_into_an_inactive_pane() {
     h.drop_at(to);
     h.run();
     assert_eq!(h.state().session.inspect(), before);
-    click(&mut h, "Schematic 2");
+    focus_tab(&mut h, 1);
     h.key_press(Key::A);
     h.run();
     h.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
@@ -195,18 +202,18 @@ fn parts_drag_cannot_place_into_an_inactive_pane() {
     click(&mut h, "Close Parts library");
     click_point(&mut h, 1, Point { x_nm: 12_700_000, y_nm: 0 });
     assert_eq!(h.state().session.project().unwrap().symbols().len(), 2);
-    click(&mut h, "Schematic 1");
+    focus_tab(&mut h, 0);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
     assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
 }
 
-/// The one Browser follows focus, and its explicit reveal action centers only that pane.
+/// The stationary Browser targets the focused view, and its reveal action centers only that pane.
 /// Home suspends both panes without altering their project, local selection or view layout.
 #[test]
 fn browser_and_home_preserve_view_identity_and_project_state() {
     let mut h = split_harness();
-    click(&mut h, "Schematic 2");
+    focus_tab(&mut h, 1);
     let first_rect = canvas(&h, 0);
     let origin = Point { x_nm: 0, y_nm: 0 };
     let first_origin = view(&h, 0).camera.screen(origin, first_rect);
@@ -293,8 +300,118 @@ fn moving_in_the_second_pane_repaints_both_canvases() {
             .unwrap();
         assert!((text.pos.x + text.galley.size().x * 0.5 - expected.x).abs() < 1.0);
     }
-    click(&mut h, "Schematic 1");
+    focus_tab(&mut h, 0);
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
     assert_eq!(h.state().session.project().unwrap().symbols()[0].position, Point { x_nm: 0, y_nm: 0 });
+}
+
+/// Changing focus must not move panels, resize canvases, or pan either view. The same sheet
+/// has the same path on both tabs, and a project rename updates both without rebinding them.
+#[test]
+fn panels_stay_put_and_tabs_name_the_sheet_in_both_views() {
+    let mut h = split_harness();
+    click(&mut h, "Toggle Browser");
+    click(&mut h, "Toggle Parts");
+    click(&mut h, "Toggle Net Inspector");
+    let panel_rects = (h.state().browser.rect(), h.state().parts.rect(), h.get_by_label("Net Inspector").rect());
+    let canvases = [canvas(&h, 0), canvas(&h, 1)];
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let centers = [view(&h, 0).camera.screen(origin, canvases[0]), view(&h, 1).camera.screen(origin, canvases[1])];
+    let before = h.state().session.inspect();
+    for id in [1, 0, 1] {
+        focus_tab(&mut h, id);
+        assert_eq!(h.state().views.active.id(), ViewId(id as u64));
+        assert_eq!(panel_rects, (h.state().browser.rect(), h.state().parts.rect(), h.get_by_label("Net Inspector").rect()));
+        for id in [0, 1] {
+            assert_eq!(canvas(&h, id), canvases[id as usize]);
+            assert_eq!(view(&h, id).camera.screen(origin, canvas(&h, id)), centers[id as usize]);
+        }
+    }
+    assert_eq!(h.state().session.inspect(), before);
+    assert_eq!(h.get_all_by_label("edits / Main").count(), 2);
+    assert!(h.query_by_label("Schematic 1").is_none());
+    assert!(h.query_by_label("Schematic 2").is_none());
+    let targets = [view(&h, 0).input(&h.state().session).unwrap(), view(&h, 1).input(&h.state().session).unwrap()];
+    h.state_mut().run("project.rename", &json!({"name":"Power controller"}));
+    h.run();
+    assert_eq!(h.get_all_by_label("Power controller / Main").count(), 2);
+    assert!(h.query_by_label("edits / Main").is_none());
+    for id in [0, 1] {
+        assert_eq!(view(&h, id).id(), ViewId(id));
+        assert!(!view(&h, id).accepts(targets[id as usize], &h.state().session));
+    }
+    focus_tab(&mut h, 0);
+    click(&mut h, "Undo");
+    assert_eq!(h.get_all_by_label("edits / Main").count(), 2);
+}
+
+/// PR #71's selection modifiers, both box directions/buttons and group edits remain available
+/// in either pane. Its multi-selection belongs to that view, while move/delete undo is shared.
+#[test]
+fn box_selection_and_atomic_group_edits_work_in_each_pane() {
+    use egui::PointerButton;
+    use pcbcraft_engine::schematic::GRID_NM;
+    for id in [0, 1] {
+        for button in [PointerButton::Primary, PointerButton::Secondary] {
+            let mut h = split_harness();
+            h.state_mut().run(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":20*GRID_NM,"y_nm":0,"expected_revision":2}));
+            h.state_mut().run(
+                pcbcraft_engine::DRAW_WIRE,
+                &json!({"from":{"symbol":"symbol-2","terminal":"2"},"to":{"symbol":"symbol-3","terminal":"1"},"bends":[],"expected_revision":3}),
+            );
+            h.run();
+            let before = h.state().session.snapshot().unwrap();
+            let revision = h.state().session.revision();
+            // The first drag also activates an initially inactive pane.
+            for (a, b, modifiers, count) in [
+                ((-7, -7), (7, 7), Modifiers::NONE, 1),
+                ((13, -7), (27, 7), Modifiers::SHIFT, 2),
+                ((-7, -7), (7, 7), Modifiers::CTRL, 1),
+                ((-1, -5), (1, 5), Modifiers::NONE, 0),
+                ((1, -5), (-1, 5), Modifiers::NONE, 1),
+                ((-7, -7), (27, 7), Modifiers::NONE, 3),
+            ] {
+                let from = view(&h, id).camera.screen(Point { x_nm: a.0 * GRID_NM, y_nm: a.1 * GRID_NM }, canvas(&h, id));
+                let to = view(&h, id).camera.screen(Point { x_nm: b.0 * GRID_NM, y_nm: b.1 * GRID_NM }, canvas(&h, id));
+                h.event(egui::Event::ModifiersChanged(modifiers));
+                h.event(egui::Event::PointerMoved(from));
+                h.event(egui::Event::PointerButton { pos: from, button, pressed: true, modifiers });
+                h.run();
+                h.hover_at(to);
+                h.run();
+                h.event(egui::Event::PointerButton { pos: to, button, pressed: false, modifiers });
+                h.run();
+                h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+                h.run();
+                assert_eq!(view(&h, id).selection.len(), count);
+                assert!(view(&h, 1 - id).selection.is_empty());
+                assert_eq!(h.state().session.revision(), revision);
+            }
+            let from = view(&h, id).camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas(&h, id));
+            let to = from + egui::vec2(20.0, 30.0);
+            h.drag_at(from);
+            h.run();
+            h.hover_at(to);
+            h.run();
+            assert!(matches!(view(&h, id).tool, Some(Tool::MoveItems { .. })));
+            h.drop_at(to);
+            h.run();
+            assert_eq!(h.state().session.revision(), revision + 1);
+            for (old, new) in before.symbols().iter().zip(h.state().session.project().unwrap().symbols()) {
+                assert_eq!(new.position, Point { x_nm: old.position.x_nm + 2 * GRID_NM, y_nm: old.position.y_nm + 3 * GRID_NM });
+            }
+            focus_tab(&mut h, (1 - id) as usize);
+            click(&mut h, "Undo");
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            focus_tab(&mut h, id as usize);
+            h.key_press(Key::Delete);
+            h.run();
+            assert!(h.state().session.project().unwrap().symbols().is_empty());
+            assert!(h.state().session.project().unwrap().wires().is_empty());
+            focus_tab(&mut h, (1 - id) as usize);
+            click(&mut h, "Undo");
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        }
+    }
 }

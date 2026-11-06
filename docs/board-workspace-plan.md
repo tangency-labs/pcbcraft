@@ -11,7 +11,9 @@ This is the proposed architecture and acceptance plan for
 [#64](https://github.com/tangency-labs/pcbcraft/issues/64) and cross-probing in
 [#65](https://github.com/tangency-labs/pcbcraft/issues/65). Two schematic views now
 share one session through **View → Split**, with independent cameras and edit
-selections, contextual controls and shared undo. Pane changes invalidate pending
+selections, stationary workspace controls and shared undo. Sheet tabs display
+the project/sheet path; runtime view numbers never stand in for sheet identity.
+Pane changes invalidate pending
 input without editing the document. This is the first host for exercising view
 ownership; board rendering, detached editor windows and cross-probing remain
 unimplemented. Presentation actions are not exposed through live MCP yet.
@@ -54,7 +56,8 @@ the opposite side of the board.
 | Open project session | Authoritative schematic and board data, components, definitions and mappings, revision, document commands, undo and redo |
 | Project controller | Save and dirty state, project replacement and close decisions, live MCP attachment, coordinated selection and view registry |
 | Editor view | Stable runtime view ID, schematic or PCB target, camera, active layer, visibility and selection filters, local tool draft |
-| Window or split pane | View placement and sizing, keyboard and pointer focus, contextual ribbon and panels |
+| Window | Shared ribbon and panels anchored to the window, targeting the focused editor |
+| Split pane | View placement and sizing, sheet-path tabs, keyboard and pointer focus |
 
 Moving a view between a pane and a native window retains its target and camera
 without opening another copy of the project. Different projects may have
