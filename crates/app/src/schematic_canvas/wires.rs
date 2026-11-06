@@ -8,6 +8,9 @@ use pcbcraft_engine::{
 
 use super::Camera;
 
+#[cfg(test)]
+mod tests;
+
 /// Uncommitted route corners and elbow preference; this never changes a project snapshot.
 #[derive(Debug)]
 pub(crate) struct Draft {
@@ -47,7 +50,10 @@ impl Draft {
     }
 }
 
-/// Paint resolved paths, including a disposable symbol move, and explicit junction markers.
+/// Paint resolved paths, including a disposable symbol move, and free-point markers. As in
+/// KiCad, a free point on one wire end is unconnected and drawn as a small open square; where two
+/// wire ends meet the route reads as continuous, so nothing is drawn; three or more get a filled
+/// junction dot.
 /// Local selection takes precedence over a counterpart highlight; neither changes connectivity.
 pub(super) fn paint(
     painter: &Painter,
@@ -83,11 +89,113 @@ pub(super) fn paint(
         };
         paint_route(painter, rect, camera, pcbcraft_engine::wire::wire_path(wire, from, to), color);
     }
-    for (_, point) in project.junctions() {
-        let pos = camera.screen(point, rect);
-        if rect.contains(pos) {
-            paint_pin(painter, pos, tokens.schematic_wire);
+    let mut ends = std::collections::BTreeMap::<u64, usize>::new();
+    for endpoint in project.wires().iter().flat_map(|wire| wire.endpoints()) {
+        if let WireEndpoint::Junction(id) = endpoint {
+            *ends.entry(id).or_default() += 1;
         }
+    }
+    for (id, point) in project.junctions() {
+        let pos = camera.screen(point, rect);
+        if !rect.contains(pos) {
+            continue;
+        }
+        match ends.get(&id).copied().unwrap_or_default() {
+            2 => {}
+            0 | 1 => paint_dangling(painter, pos, tokens.schematic_wire),
+            _ => {
+                painter.circle_filled(pos, theme::SCHEMATIC_JUNCTION_RADIUS, tokens.schematic_wire);
+            }
+        }
+    }
+}
+
+/// A wire leg captured under a right-click for the wire context menu.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LegTarget {
+    pub(crate) wire: String,
+    /// The wire's drawn route when the menu opened.
+    pub(crate) route: Vec<Point>,
+    /// Index of the leg's first point in `route`.
+    pub(crate) leg: usize,
+    /// The grid point where Slice splits the wire, if the leg has one away from both ends.
+    pub(crate) split: Option<Point>,
+    /// The revision the menu was opened at; an edit after another change is refused.
+    pub(crate) revision: u64,
+}
+
+impl LegTarget {
+    /// A point strictly inside the leg, naming it for Break and Delete Segment. Legs join grid points, so
+    /// their midpoint is a whole number of nanometers.
+    pub(crate) fn inside(&self) -> Point {
+        let (a, b) = (self.route[self.leg], self.route[self.leg + 1]);
+        Point { x_nm: a.x_nm + (b.x_nm - a.x_nm) / 2, y_nm: a.y_nm + (b.y_nm - a.y_nm) / 2 }
+    }
+}
+
+/// Find the wire leg nearest the pointer, within the wire hit radius, and the grid point on it
+/// where Slice would split: the snapped pointer projected onto the leg, kept away from the
+/// route's two ends. A split point at a leg's end uses that corner if it is inside the route.
+/// Returns `None` off every wire.
+pub(super) fn leg_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, revision: u64) -> Option<LegTarget> {
+    let id = at(project, camera, rect, pointer)?;
+    let wire = project.wires().iter().find(|wire| wire.id() == id)?;
+    let route = project.wire_path(wire);
+    let leg = route
+        .windows(2)
+        .map(|pair| distance_sq(pointer, camera.screen(pair[0], rect), camera.screen(pair[1], rect)))
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(&b.1))?
+        .0;
+    let (a, b) = (route[leg], route[leg + 1]);
+    let snapped = camera.snap(pointer, rect);
+    let on_leg = if a.x_nm == b.x_nm {
+        Point { x_nm: a.x_nm, y_nm: snapped.y_nm.clamp(a.y_nm.min(b.y_nm), a.y_nm.max(b.y_nm)) }
+    } else {
+        Point { x_nm: snapped.x_nm.clamp(a.x_nm.min(b.x_nm), a.x_nm.max(b.x_nm)), y_nm: a.y_nm }
+    };
+    let ends = [route.first().copied(), route.last().copied()];
+    let split = (!ends.contains(&Some(on_leg))).then_some(on_leg);
+    Some(LegTarget { wire: id, route, leg, split, revision })
+}
+
+/// Squared screen distance from `pointer` to the segment `a`–`b`.
+fn distance_sq(pointer: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let delta = b - a;
+    let t = ((pointer - a).dot(delta) / delta.length_sq().max(f32::EPSILON)).clamp(0.0, 1.0);
+    pointer.distance_sq(a + delta * t)
+}
+
+/// What the hovered row of a wire's menu will change: the whole route or one leg in the error
+/// colour for deletion, a ring where Slice will split it, or the leg in the accent colour with
+/// unconnected-end squares where Break will separate it. With no row hovered, the leg under the
+/// click is drawn in the accent colour. Previews use a heavier stroke, so they stand out from
+/// the selection highlight the right-click also gives the wire.
+pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, target: &LegTarget, hovered: Option<super::WireAction>) {
+    let tokens = Tokens::get();
+    let paint_route = |painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32| {
+        paint_stroke(painter, rect, camera, points, Stroke::new(2.0 * theme::SCHEMATIC_SYMBOL_STROKE, color));
+    };
+    let leg = target.route[target.leg..=target.leg + 1].to_vec();
+    match hovered {
+        Some(super::WireAction::Delete) => paint_route(painter, rect, camera, target.route.clone(), tokens.error),
+        Some(super::WireAction::DeleteSegment) => paint_route(painter, rect, camera, leg, tokens.error),
+        Some(super::WireAction::Slice) => {
+            if let Some(point) = target.split {
+                let pos = camera.screen(point, rect);
+                painter.circle_stroke(pos, theme::SCHEMATIC_BREAK_MARK_RADIUS, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
+            }
+        }
+        Some(super::WireAction::Break) => {
+            paint_route(painter, rect, camera, leg.clone(), tokens.accent);
+            let last = target.route.len() - 1;
+            for (index, point) in [(target.leg, leg[0]), (target.leg + 1, leg[1])] {
+                if index != 0 && index != last {
+                    paint_dangling(painter, camera.screen(point, rect), tokens.accent);
+                }
+            }
+        }
+        None => paint_route(painter, rect, camera, leg, tokens.accent),
     }
 }
 
@@ -173,18 +281,17 @@ pub(super) fn at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) 
         .iter()
         .filter_map(|wire| {
             let points: Vec<_> = project.wire_path(wire).into_iter().map(|point| camera.screen(point, rect)).collect();
-            let distance = points
-                .windows(2)
-                .map(|pair| {
-                    let delta = pair[1] - pair[0];
-                    let t = ((pointer - pair[0]).dot(delta) / delta.length_sq().max(f32::EPSILON)).clamp(0.0, 1.0);
-                    pointer.distance_sq(pair[0] + delta * t)
-                })
-                .min_by(f32::total_cmp)?;
+            let distance = points.windows(2).map(|pair| distance_sq(pointer, pair[0], pair[1])).min_by(f32::total_cmp)?;
             (distance < theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2)).then(|| (distance, wire.id()))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, id)| id)
+}
+
+/// Mark an unconnected wire end with a small open square, as KiCad does.
+fn paint_dangling(painter: &Painter, pos: Pos2, color: Color32) {
+    let half = theme::SCHEMATIC_DANGLING_HALF_SIZE;
+    painter.rect_stroke(Rect::from_center_size(pos, egui::vec2(2.0 * half, 2.0 * half)), 0, Stroke::new(1.0, color), egui::StrokeKind::Middle);
 }
 
 /// Mark an explicit connectable endpoint with the shared schematic pin styling.
@@ -194,10 +301,12 @@ fn paint_pin(painter: &Painter, pos: Pos2, color: Color32) {
 
 /// Paint a model-space polyline through the canvas clip using shared wire styling.
 fn paint_route(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32) {
+    paint_stroke(painter, rect, camera, points, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+}
+
+/// Paint a model-space polyline with `stroke`; fewer than two points paints nothing.
+fn paint_stroke(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, stroke: Stroke) {
     if points.len() >= 2 {
-        painter.add(Shape::line(
-            points.into_iter().map(|point| camera.screen(point, rect)).collect(),
-            Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color),
-        ));
+        painter.add(Shape::line(points.into_iter().map(|point| camera.screen(point, rect)).collect(), stroke));
     }
 }

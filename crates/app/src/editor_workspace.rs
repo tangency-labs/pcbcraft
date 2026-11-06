@@ -249,6 +249,7 @@ impl PcbApp {
                                 schematic_canvas::show(
                                     ui,
                                     project,
+                                    self.session.revision(),
                                     &mut view.camera,
                                     None,
                                     &view.selection,
