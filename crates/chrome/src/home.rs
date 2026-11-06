@@ -233,6 +233,77 @@ pub fn action_tile(ui: &mut Ui, id: &str, width: f32, tile: Tile<'_>) -> Respons
     response.on_hover_text(format!("{label}\n{caption}"))
 }
 
+/// A bordered group of recent project rows. Rows share the surface and have no layout gaps.
+pub fn recent_list(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let t = Tokens::get();
+    Frame::new().fill(t.file_surface).stroke(Stroke::new(1.0, t.file_border)).corner_radius(t.radius_lg).inner_margin(t.space_4).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 0.0;
+        add(ui);
+    });
+}
+
+/// The separate actions in a recent project row; removing never activates opening.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RecentAction {
+    pub open: bool,
+    pub remove: bool,
+}
+
+/// A compact family-style row with a title, elided path and separate removal control. The full
+/// path is included in assistive labels and hover text, distinguishing projects with equal names.
+/// A running file job disables opening while removal remains available.
+pub fn recent_row(ui: &mut Ui, id: &str, title: &str, path: &str, separator: bool, enabled: bool) -> RecentAction {
+    let t = Tokens::get();
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, t.file_recent_height), Sense::hover());
+    let remove_size = t.space_24 + t.space_4;
+    let remove_rect = Rect::from_center_size(pos2(rect.right() - t.space_8 - remove_size / 2.0, rect.center().y), vec2(remove_size, remove_size));
+    let open_rect = Rect::from_min_max(rect.min, pos2(remove_rect.left() - t.space_4, rect.bottom()));
+    let label = format!("Open {title} ({path})");
+    let response = ui.interact(open_rect, ui.make_persistent_id(("recent:open", id)), if enabled { Sense::click() } else { Sense::hover() });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &label));
+    if enabled && (response.hovered() || response.has_focus()) {
+        ui.painter().rect_filled(open_rect, t.radius_md, t.hover);
+    }
+    if separator {
+        ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, t.file_border));
+    }
+    let inner = open_rect.shrink2(vec2(t.space_12, t.space_4));
+    let icon_size = t.space_24.min(inner.width());
+    let ink = if enabled { t.text } else { t.text.gamma_multiply(0.5) };
+    MenuIcon::Open.paint_sized(ui.painter(), pos2(inner.left() + icon_size / 2.0, inner.center().y), icon_size * 0.75, t, enabled);
+    let left = (inner.left() + icon_size + t.space_12).min(inner.right());
+    text(ui, Rect::from_min_max(pos2(left, inner.top()), pos2(inner.right(), inner.center().y)), title, fonts::semibold(t.font_button), ink);
+    text(ui, Rect::from_min_max(pos2(left, inner.center().y), inner.max), path, FontId::monospace(t.font_small), t.file_dim);
+    let remove = ui.interact(remove_rect, ui.make_persistent_id(("recent:remove", id)), Sense::click());
+    let remove_label = format!("Remove {title} ({path}) from recent projects");
+    remove.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &remove_label));
+    if remove.hovered() || remove.has_focus() {
+        ui.painter().rect_filled(remove_rect, t.radius_md, t.hover);
+    }
+    MenuIcon::Close.paint_sized(ui.painter(), remove_rect.center(), t.space_12, t, true);
+    if (enabled && response.hovered()) || remove.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let picked = RecentAction { open: response.clicked(), remove: remove.clicked() };
+    response.on_hover_text(path);
+    remove.on_hover_text("Remove from recent projects");
+    picked
+}
+
+/// Show the empty history without adding an inactive project row.
+pub fn empty_recents(ui: &mut Ui) {
+    let t = Tokens::get();
+    ui.label(egui::RichText::new("No recent projects yet").size(t.font_heading).color(t.file_dim));
+}
+
+/// Forget all history, without deleting project files.
+pub fn clear_recents(ui: &mut Ui) -> Response {
+    ui.add_space(Tokens::get().space_8);
+    ui.button("Clear recent projects")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

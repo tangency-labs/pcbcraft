@@ -147,10 +147,10 @@ fn repeated_close_preserves_the_pending_save_decision() {
         let mut app = app();
         let (send, receiver) = mpsc::channel();
         app.files.job = Some(Job { receiver, revision: app.session.revision() });
-        app.waiting = Some(waiting);
+        app.waiting = Some(waiting.clone());
         let ctx = egui::Context::default();
         request_close(&mut app, &ctx);
-        assert_eq!(app.waiting, Some(waiting));
+        assert_eq!(app.waiting, Some(waiting.clone()));
         assert!(app.files.busy());
         send.send(Ok(Outcome::Cancelled)).unwrap();
         app.files.poll(&mut app.session, &ctx);

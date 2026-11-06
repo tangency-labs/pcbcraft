@@ -17,6 +17,12 @@ enum Action {
     SaveAs,
     Preferences,
     About,
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenRecent(usize),
+    #[cfg(not(target_arch = "wasm32"))]
+    RemoveRecent(usize),
+    #[cfg(not(target_arch = "wasm32"))]
+    ClearRecent,
     /// Connect AI assistants, the Help row the narrow app bar gives way to. Desktop only.
     #[cfg(not(target_arch = "wasm32"))]
     Connect,
@@ -78,7 +84,7 @@ impl PcbApp {
         }
     }
 
-    /// The Start section: tiles for a new project and for opening one.
+    /// The Start section: project actions, followed by desktop history from successful file jobs.
     fn home_start(&self, ui: &mut Ui, action: &mut Option<Action>) {
         home::heading(ui, "Start", "Create a schematic project, or open a .pc project you saved.");
         let open_caption = if IN_BROWSER {
@@ -107,6 +113,28 @@ impl PcbApp {
                 }
             });
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        home::section(ui, "Recent projects", |ui| {
+            let entries = self.files.recent.entries();
+            if entries.is_empty() {
+                home::empty_recents(ui);
+                return;
+            }
+            home::recent_list(ui, |ui| {
+                for (index, entry) in entries.iter().enumerate() {
+                    let path = entry.path.to_string_lossy();
+                    let picked = home::recent_row(ui, &path, &entry.name, &path, index > 0, !self.files.busy());
+                    if picked.open {
+                        *action = Some(Action::OpenRecent(index));
+                    } else if picked.remove {
+                        *action = Some(Action::RemoveRecent(index));
+                    }
+                }
+            });
+            if home::clear_recents(ui).clicked() {
+                *action = Some(Action::ClearRecent);
+            }
+        });
     }
 
     /// Apply a Home action. New opens an Untitled project in the workspace at once. Open keeps Home
@@ -127,6 +155,23 @@ impl PcbApp {
             }
             Action::Preferences => self.open_preferences(),
             Action::About => self.dialog = Dialog::About,
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::OpenRecent(index) => {
+                if !self.files.busy()
+                    && let Some(entry) = self.files.recent.entries().get(index)
+                {
+                    self.unless_unsaved(super::unsaved::Then::OpenRecent(entry.path.clone()), ctx);
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::RemoveRecent(index) => {
+                if let Some(entry) = self.files.recent.entries().get(index) {
+                    let path = entry.path.clone();
+                    self.files.recent.remove(&path);
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::ClearRecent => self.files.recent.clear(),
             #[cfg(not(target_arch = "wasm32"))]
             Action::Connect => self.dialog = Dialog::LocalMcp { error: None, copied: false },
         }

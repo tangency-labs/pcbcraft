@@ -114,8 +114,8 @@ navigation rail, back row, navigation rows, separators, tile grid and action
 tile layout, and the `file_*` sizes come from `assets/styles/ui/palettes.rs`
 at that revision. The `file_*` colours are derived from PCBCraft's palette the
 way SolidCraft's `crates/ui-egui/src/theme_files.rs` fills them in for theme
-files that leave them out, with a deeper hover on the light rail. PCBCraft dropped recent
-designs, samples, recovery, export and thumbnails, stacks the rail above the
+files that leave them out, with a deeper hover on the light rail. PCBCraft omits
+samples, recovery, export and thumbnails, stacks the rail above the
 content at narrow widths, and wires the rows to its own project dialogs and
 commands. The house glyph in `crates/chrome/src/menu/icons.rs` is a simplified,
 theme-colored drawing of `assets/icons/ui/design/svg/flat/home.svg` at the same
@@ -155,6 +155,18 @@ The single-view layout in `crates/app/src/editor_workspace.rs` restores the exis
 `src/desktop/canvas.rs` and `src/desktop/panels.rs` at the same revision. Its path
 and count share the canvas with the floating Browser; tab strips and their panel
 clearance are reserved for split views. Heading insets remain in chrome.
+
+The recent-project list in `crates/chrome/src/home.rs` and its `file_recent_height`
+metric in `crates/chrome/src/theme.rs` adapt `ui_kit/file_view.rs::recent_row` at
+SolidCraft revision `c553365a2197a689e749389a6fbf707a38df9b61` (MIT OR Apache-2.0,
+copyright (c) 2026 SolidCraft contributors): shared list surface, 52-point rows,
+separators, title/path presentation, hover/focus and path tooltips. PCBCraft uses
+its existing folder glyph, a two-line layout at every width, and a separate remove
+button, without thumbnails or optional metadata. The 12-entry history bound and
+promote/forget behavior follow `home.rs::HomeState` at that same revision.
+`crates/app/src/recent_projects.rs`, `home.rs` and `project_files.rs` implement new
+application-storage history and reopen through upstream's revision-checked file
+worker and unsaved-changes controller; no SolidCraft session or file model is reused.
 
 ## Bundled fonts
 

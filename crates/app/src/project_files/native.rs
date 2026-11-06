@@ -34,6 +34,11 @@ impl Target {
         self.path.as_os_str().as_encoded_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    /// The normalized folder, archive or legacy file that the worker successfully opened/saved.
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Explain the next save when the open form needs migration or manifest generation.
     pub(super) fn open_notice(&self) -> String {
         if self.legacy {

@@ -15,6 +15,8 @@ mod detached_editors;
 mod display_units;
 mod editor_views;
 mod grid_spacing;
+#[cfg(not(target_arch = "wasm32"))]
+mod recent_projects;
 mod save_changes;
 mod split_editors;
 

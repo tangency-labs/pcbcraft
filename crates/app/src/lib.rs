@@ -25,6 +25,8 @@ mod parts_browser;
 mod preferences;
 mod project_browser;
 mod project_files;
+#[cfg(not(target_arch = "wasm32"))]
+mod recent_projects;
 mod schematic_canvas;
 mod unsaved;
 
@@ -53,6 +55,8 @@ use project_files::SaveFormat;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUG_REPORT_URL: &str = "https://github.com/tangency-labs/pcbcraft/issues/new";
 const PREFERENCES_KEY: &str = "pcbcraft.preferences";
+#[cfg(not(target_arch = "wasm32"))]
+const RECENT_PROJECTS_KEY: &str = "pcbcraft.recent_projects";
 /// App bar width below which the Help menu gives way, leaving About and Connect AI assistants
 /// to the Home page.
 const COMPACT_APP_BAR: f32 = 380.0;
@@ -242,7 +246,8 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
 };
 
 impl PcbApp {
-    /// Start desktop and browser builds on Home with no project loaded, restoring app settings.
+    /// Start on Home with no project loaded, restoring settings and desktop recent paths.
+    /// Restoring history does not read project files.
     /// Successful New/Open actions enter the workspace; cancelling them leaves Home visible.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Home uses custom fonts on its first frame; installing during that frame is too late.
@@ -255,6 +260,8 @@ impl PcbApp {
             arrangements: arrangements::Arrangements::from_storage(cc.storage.and_then(|storage| storage.get_string(arrangements::STORAGE_KEY))),
             preferences,
             views,
+            #[cfg(not(target_arch = "wasm32"))]
+            files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
             #[cfg(not(target_arch = "wasm32"))]
             assistant: assistant::Assistant::from_setting(
                 cc.storage.and_then(|s| s.get_string(ASSISTANT_AGENT_KEY)).as_deref(),
@@ -1682,7 +1689,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
 
 impl eframe::App for PcbApp {
     /// Run shared project logic and visible hosts, then release a dismissed native root and
-    /// flush changed presentation settings without adding an electrical edit or save.
+    /// flush changed presentation settings and desktop history without an electrical edit or save.
     fn ui(&mut self, ui: &mut Ui, frame: &mut Frame) {
         let before = self.preferences;
         self.frame(ui);
@@ -1694,6 +1701,8 @@ impl eframe::App for PcbApp {
         let changed = self.preferences != before;
         #[cfg(not(target_arch = "wasm32"))]
         let changed = self.assistant.take_settings_changed() || changed;
+        #[cfg(not(target_arch = "wasm32"))]
+        let changed = self.files.recent.take_changed() || changed;
         // eframe's own save runs every 30 seconds, too late if the page reloads right after a change.
         let store_layout =
             self.arrangements.dirty && ui.ctx().input(|input| input.time - self.arrangements.last_flush >= 1.0 || input.pointer.any_released());
@@ -1707,7 +1716,7 @@ impl eframe::App for PcbApp {
         }
     }
 
-    /// Persist validated user-local presentation state; unsupported arrangement records stay intact.
+    /// Persist presentation state and desktop history; unsupported arrangement records stay intact.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.checkpoint_arrangements();
         if let Some(text) = self.arrangements.storage_text() {
@@ -1716,6 +1725,7 @@ impl eframe::App for PcbApp {
         storage.set_string(PREFERENCES_KEY, self.preferences.to_text());
         #[cfg(not(target_arch = "wasm32"))]
         {
+            storage.set_string(RECENT_PROJECTS_KEY, self.files.recent.to_text());
             storage.set_string(ASSISTANT_SETTINGS_KEY, self.assistant.settings_text());
             storage.set_string(ASSISTANT_LAYOUT_KEY, self.assistant.layout_setting());
         }

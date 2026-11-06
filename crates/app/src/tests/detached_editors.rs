@@ -242,7 +242,7 @@ fn disabled_editors_keep_native_window_controls_available() {
         let before = h.state().session.inspect();
         let home = h.state().home;
         let dialog = std::mem::discriminant(&h.state().dialog);
-        let waiting = h.state().waiting;
+        let waiting = h.state().waiting.clone();
         for label in ["Home", "Preferences", "Undo", "Save Project", "Schematic canvas"] {
             let pos = child_rect(&peer, label).center();
             window_click(&mut h, Some(&peer), pos);
