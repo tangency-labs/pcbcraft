@@ -80,6 +80,12 @@ may reveal an active task even when no PR exists. Use your own topic branch or
 worktree from current `origin/main`; preserve other people's working files. Keep
 a broad parent issue open when delivering only one of its slices.
 
+When opening an issue, follow the [label policy](AGENTS.md#opening-issues): use
+an existing classification label and relevant area labels, then verify the result.
+With the CLI, pass labels through `gh issue create --label`; inspect the current
+catalog with `gh label list`. Contributors without label permissions can describe
+the affected area in the issue so a maintainer can classify it.
+
 Production Rust must not use `unsafe`, `unwrap`, `expect`, `panic!` or placeholder
 branches. Add `///` documentation for public APIs and changed functions with
 branching logic, explaining input constraints, errors and state changes. Put
