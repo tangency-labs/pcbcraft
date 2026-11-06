@@ -87,9 +87,13 @@ undo history.
 
 Named arrangements now separate the project's working setups from the documents
 shown inside them. The title bar contains the project name and dirty indicator,
-followed by arrangement tabs. Every project starts with **Design**; the **+** menu
-creates, duplicates, renames or removes arrangements. These are user names, not
-fixed editor modes, and all arrangements share the same project, edits and undo.
+followed by arrangement tabs. Every project starts with **Design**. **+ New
+arrangement** opens a naming dialog; the **…** menu beside the tabs offers **Rename…**,
+**Duplicate…** and **Remove…**. Narrow bars shorten the creation button to **+**.
+These are user names, not fixed editor modes, and all arrangements share the same
+project, edits and undo. Naming forms stay in the initiating window, keep invalid
+or duplicate names editable, and support Enter, Escape and explicit buttons.
+Closing that editor discards its unfinished form.
 
 | UI location | Meaning | Example |
 | --- | --- | --- |
@@ -117,10 +121,13 @@ compact canvas breadcrumb; tab strips appear for split panes or multiple tabs.
 The arrangement covers the whole project working setup, including detached
 windows. Selecting a different top tab explicitly restores that setup and can
 change the window set. Ordinary document selection and pane focus do not change
-other windows. Duplicate starts with the same setup, while New starts with one
-view of the main host's focused document. Each arrangement automatically remembers
-its latest layout. Arrangement removal is a separate menu action, disabled for
-the only remaining arrangement; it does not remove electrical data.
+other windows. New defaults to the current views and windows, with an explicit
+choice to start with one view of the main host’s focused document. Creating a
+copy of the current setup and renaming preserve the live host and view identities;
+they do not recreate native windows. Each arrangement automatically remembers its
+latest layout. Removal asks for confirmation and is disabled for the only
+remaining arrangement; it does not remove electrical data. Cancelled forms leave
+the saved collection, live layout and project history unchanged.
 
 Version 1 records contain window membership, split ratios, tab order, active
 views, focus, stable document targets, both workspace cameras and grids, board
@@ -185,6 +192,12 @@ child's bounds. The real X11 app also retained the second window's native ID,
 position and size after closing the original with both displaying Main, then
 handled Cancel and a PCB workspace switch. The isolated Wayland lifecycle test
 uses real native windows, while the full-app automation there did not complete.
+The arrangement-control rework was also exercised in the real X11 app: Rename
+and New kept both native IDs and window bounds, and Rename continued to work in
+the surviving editor after the original closed. UI regression tests cover form
+cancellation, invalid/duplicate names, compact controls, detached form ownership
+and closing the form’s owner. The failure-path review also traced project
+replacement, queued actions, layout limits and last-window save handling.
 Windows, macOS and physical multi-monitor placement are unqualified.
 
 Backend selection remains unchanged, including native Wayland. The local

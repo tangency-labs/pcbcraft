@@ -1,7 +1,9 @@
 //! Named project arrangements coordinate presentation and user-local restoration.
 //! The engine remains the sole owner of electrical data and undo history.
 
+mod edit;
 mod model;
+pub(super) use edit::Edit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 use crate::{Dialog, PcbApp};
@@ -31,8 +33,7 @@ impl Default for Store {
 #[derive(Clone, Debug)]
 pub(super) enum Action {
     Select(u64),
-    New,
-    Duplicate,
+    Create { name: String, single_view: bool },
     Rename(String),
     Remove,
 }
@@ -51,7 +52,6 @@ pub(super) struct Arrangements {
     pub(super) last_flush: f64,
     pending: Option<(String, u64, u64, Action)>,
     pub(super) notice: Option<String>,
-    pub(super) rename_text: Option<String>,
 }
 
 impl Arrangements {
@@ -127,7 +127,7 @@ impl Arrangements {
 
 impl PcbApp {
     /// Capture the main host and detached hosts after their contextual panels have been returned.
-    fn arrangement_snapshot(&self) -> Option<Snapshot> {
+    pub(super) fn arrangement_snapshot(&self) -> Option<Snapshot> {
         let mut state = self.views.saved_state(&self.session)?;
         for (host, saved) in self.views.host_order().into_iter().zip(&mut state.hosts) {
             saved.panels = self.saved_editor_panels(host);
@@ -206,7 +206,9 @@ impl PcbApp {
         self.arrangements.opening = opening;
         self.arrangements.key = key;
         self.arrangements.pending = None;
-        self.arrangements.rename_text = None;
+        if matches!(self.dialog, Dialog::Arrangement(_)) {
+            self.dialog = Dialog::None;
+        }
         self.arrangements.remember();
     }
 
@@ -255,7 +257,11 @@ impl PcbApp {
                 replacement = Some(arrangement.snapshot.clone());
                 record.active = id;
             }
-            Action::Duplicate | Action::New => {
+            Action::Create { name, single_view } => {
+                if let Some(error) = self.arrangements.name_error(&name, None) {
+                    self.message = Some(error.into());
+                    return;
+                }
                 if record.arrangements.len() >= 32 {
                     self.message = Some("An arrangement collection can contain up to 32 arrangements.".into());
                     return;
@@ -263,11 +269,12 @@ impl PcbApp {
                 let Some(id) = record.arrangements.iter().map(|a| a.id).max().and_then(|id| id.checked_add(1)) else {
                     return;
                 };
-                let Some(current) = record.arrangements.iter().find(|a| a.id == record.active) else {
+                let Some(mut snapshot) = self.arrangement_snapshot() else {
+                    self.message =
+                        Some("This layout exceeds the arrangement limits; close excess views or windows before creating an arrangement.".into());
                     return;
                 };
-                let mut snapshot = current.snapshot.clone();
-                if matches!(action, Action::New) {
+                if single_view {
                     let focused = snapshot.hosts[0].focused;
                     snapshot.views = vec![snapshot.views[focused].clone()];
                     let mut host = snapshot.hosts[0].clone();
@@ -277,15 +284,17 @@ impl PcbApp {
                     host.collapsed = None;
                     snapshot.hosts = vec![host];
                     snapshot.primary = 0;
+                    replacement = Some(snapshot.clone());
                 }
-                replacement = Some(snapshot.clone());
-                record.arrangements.push(Arrangement { id, name: format!("Arrangement {id}"), snapshot });
+                // Naming a copy of the current setup does not recreate its native windows
+                // or invalidate views. Only an explicitly different layout is restored.
+                record.arrangements.push(Arrangement { id, name: name.trim().into(), snapshot });
                 record.active = id;
             }
             Action::Rename(name) => {
                 let name = name.trim();
-                if !valid_name(name) {
-                    self.message = Some("Use an arrangement name of 1–80 characters on one line.".into());
+                if let Some(error) = self.arrangements.name_error(name, Some(record.active)) {
+                    self.message = Some(error.into());
                     return;
                 }
                 if let Some(current) = record.arrangements.iter_mut().find(|a| a.id == record.active) {
@@ -308,7 +317,6 @@ impl PcbApp {
             return;
         }
         self.arrangements.current = Some(record);
-        self.arrangements.rename_text = None;
         self.arrangements.remember();
         self.repaint_editors(ctx);
     }

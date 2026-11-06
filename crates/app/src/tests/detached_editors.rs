@@ -1174,3 +1174,54 @@ fn board_windows_open_directly_and_share_counterpart_highlights() {
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
     assert_eq!(h.state().session.inspect(), before);
 }
+
+/// Arrangement naming belongs to the initiating host and must neither rehost nor close it.
+#[test]
+fn arrangement_forms_in_detached_windows_preserve_native_addresses() {
+    let (mut h, peer) = multi_window();
+    h.state_mut().integrated_titlebar = true;
+    let source = h.state().views.active.id();
+    h.state_mut().views.open_window(source).unwrap();
+    h.run();
+    let hosts: Vec<_> = h.state().views.hosts.keys().copied().collect();
+    let snapshot = h.state().arrangement_snapshot().unwrap();
+    let revision = h.state().session.revision();
+    for label in ["Arrangement options", "Rename…"] {
+        let at = child_rect(&peer, label).center();
+        window_click(&mut h, Some(&peer), at);
+        h.run();
+    }
+    assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
+    assert!(peer.borrow().nodes.values().any(|node| node.role() == egui::accesskit::Role::TextInput));
+    assert!(h.query_by_label("Arrangement name").is_none());
+    assert!(h.get_by_label("File").accesskit_node().is_disabled());
+    peer.borrow_mut().events.push(Event::Text("Detached review".into()));
+    h.run();
+    let rename = child_rect(&peer, "Rename").center();
+    window_click(&mut h, Some(&peer), rename);
+    assert!(!h.output().viewport_output.values().any(|output| output.commands.contains(&ViewportCommand::Close)));
+    h.run();
+    assert_eq!(h.state().arrangements.tabs()[0].1, "Detached review");
+    assert_eq!(h.state().views.hosts.keys().copied().collect::<Vec<_>>(), hosts);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), snapshot);
+    assert_eq!(h.state().session.revision(), revision);
+
+    for label in ["Arrangement options", "Duplicate…", "Create"] {
+        let at = child_rect(&peer, label).center();
+        window_click(&mut h, Some(&peer), at);
+        h.run();
+    }
+    assert_eq!(h.state().arrangements.tabs().len(), 2);
+    assert_eq!(h.state().views.hosts.keys().copied().collect::<Vec<_>>(), hosts);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), snapshot);
+
+    let at = child_rect(&peer, "New arrangement").center();
+    window_click(&mut h, Some(&peer), at);
+    h.run();
+    assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().arrangements.tabs().len(), 2);
+    assert_eq!(h.state().views.hosts.len(), 1);
+}

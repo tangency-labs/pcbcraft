@@ -4,69 +4,6 @@ use egui::{FontId, Rect, Sense, Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2};
 
 use crate::Tokens;
 
-/// User intent from the arrangement tab strip, applied by the project host after rendering.
-#[derive(Clone, Debug)]
-pub enum ArrangementAction {
-    Select(u64),
-    New,
-    Duplicate,
-    Rename(String),
-    Remove,
-}
-
-/// Draw named arrangements within the title bar, with document-view controls remaining in panes.
-/// Overflow scrolls horizontally; naming and removal stay in the explicit arrangement menu.
-pub fn arrangement_tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64, rename: &mut String) -> Option<ArrangementAction> {
-    if tabs.is_empty() {
-        return None;
-    }
-    let t = Tokens::get();
-    let mut action = None;
-    ui.horizontal(|ui| {
-        let width = (ui.available_width() - t.space_24 - t.space_8).max(0.0);
-        egui::ScrollArea::horizontal()
-            .id_salt("arrangement_tabs")
-            .max_width(width)
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (id, name) in tabs {
-                        let response = ui.selectable_label(*id == active, name);
-                        response
-                            .widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, *id == active, format!("Arrangement {name}")));
-                        if response.clicked() {
-                            action = Some(ArrangementAction::Select(*id));
-                        }
-                    }
-                });
-            });
-        let menu = ui.menu_button("+", |ui| {
-            if ui.button("New arrangement").clicked() {
-                action = Some(ArrangementAction::New);
-                ui.close();
-            }
-            if ui.button("Duplicate arrangement").clicked() {
-                action = Some(ArrangementAction::Duplicate);
-                ui.close();
-            }
-            ui.menu_button("Rename arrangement", |ui| {
-                ui.text_edit_singleline(rename).labelled_by(ui.label("Name").id);
-                if ui.button("Apply name").clicked() {
-                    action = Some(ArrangementAction::Rename(rename.clone()));
-                    ui.close();
-                }
-            });
-            if ui.add_enabled(tabs.len() > 1, egui::Button::new("Remove arrangement")).clicked() {
-                action = Some(ArrangementAction::Remove);
-                ui.close();
-            }
-        });
-        menu.response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Arrangement options"));
-        menu.response.on_hover_text("Arrangements");
-    });
-    action
-}
-
 /// Lay out two panes with a draggable divider. Narrow windows stack them vertically so each
 /// retains usable width. The ratio is presentation state; dragging clamps it to 25–75 percent.
 pub fn split(ui: &mut Ui, ratio: &mut f32) -> [Rect; 2] {

@@ -45,10 +45,11 @@ fn arrangement_tabs_preserve_views_cameras_and_shared_edits() {
     let revision = h.state().session.revision();
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Arrangement options");
-    click(&mut h, "Duplicate arrangement");
+    click(&mut h, "Duplicate…");
+    click(&mut h, "Create");
     assert_eq!(h.state().arrangements.tabs().len(), 2);
     assert_eq!(h.state().arrangement_snapshot().unwrap(), original);
-    assert!(h.state().views.view(stale.view()).is_none());
+    assert!(h.state().views.view(stale.view()).is_some());
     action(&mut h, Action::Rename("Routing".into()));
     h.get_by_label("Arrangement Routing");
     h.state_mut().views.active.camera.center_on(Point { x_nm: -30_000_000, y_nm: 0 });
@@ -76,7 +77,7 @@ fn saved_project_restores_arrangement_windows_and_panels_without_electrical_chan
     let source = h.state().views.active.id();
     h.state_mut().views.open_window(source).unwrap();
     h.run();
-    action(&mut h, Action::Duplicate);
+    action(&mut h, Action::Create { name: "Review setup".into(), single_view: false });
     action(&mut h, Action::Rename("Review".into()));
     h.state_mut().browser.open = false;
     h.state_mut().views.active.camera.center_on(Point { x_nm: 21_000_000, y_nm: -5_000_000 });
@@ -242,12 +243,12 @@ fn document_tabs_survive_split_toggle_detach_and_local_close() {
 #[test]
 fn stale_or_modal_arrangement_intents_do_not_run() {
     let mut h = harness();
-    h.state_mut().queue_arrangement(&egui::Context::default(), Action::Duplicate);
+    h.state_mut().queue_arrangement(&egui::Context::default(), Action::Create { name: "Review setup".into(), single_view: false });
     h.state_mut().run("project.new", &json!({"name":"Replacement"}));
     h.run();
     assert_eq!(h.state().arrangements.tabs().len(), 1);
     h.state_mut().dialog = Dialog::About;
-    h.state_mut().queue_arrangement(&egui::Context::default(), Action::Duplicate);
+    h.state_mut().queue_arrangement(&egui::Context::default(), Action::Create { name: "Review setup".into(), single_view: false });
     h.run();
     assert_eq!(h.state().arrangements.tabs().len(), 1);
 }
@@ -276,4 +277,135 @@ fn exceeding_host_limit_preserves_saved_arrangements_and_reports_once() {
     assert!(!h.state().arrangements.snapshot_limited);
     assert_ne!(h.state().arrangements.storage_text().unwrap(), before);
     assert_eq!(h.state().session.inspect(), project);
+}
+
+/// Creating and renaming use stable forms, and naming an existing setup preserves all live IDs.
+#[test]
+fn arrangement_forms_keep_windows_and_views_alive() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    h.state_mut().integrated_titlebar = true;
+    h.run();
+    let view = h.state().views.active.id();
+    let revision = h.state().session.revision();
+    let before = h.state().arrangement_snapshot().unwrap();
+    click(&mut h, "New arrangement");
+    h.get_by_label("Arrangement name");
+    h.get_by_label("Cancel").hover();
+    h.run_steps(30);
+    assert!(matches!(h.state().dialog, Dialog::Arrangement(_)));
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().arrangements.tabs().len(), 1);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
+
+    click(&mut h, "New arrangement");
+    h.get_by_label("Arrangement name").type_text("Routing");
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().arrangements.tabs().len(), 2);
+    h.get_by_label("Arrangement Routing");
+    assert_eq!(h.state().views.active.id(), view);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
+
+    click(&mut h, "Arrangement options");
+    click(&mut h, "Rename…");
+    h.get_by_label("Arrangement name").type_text("Review");
+    h.run();
+    // Enter commits the name; neither a native close nor a new-project shortcut may escape.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Q);
+    h.run();
+    assert!(!h.state().windows.quit_requested);
+    assert!(!h.state().close_allowed);
+    h.get_by_label("Rename").click();
+    h.step();
+    assert!(!h.output().viewport_output.values().any(|output| output.commands.contains(&egui::ViewportCommand::Close)));
+    h.run();
+    h.get_by_label("Arrangement Review");
+    assert_eq!(h.state().views.active.id(), view);
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
+
+    click(&mut h, "Arrangement options");
+    click(&mut h, "Rename…");
+    h.get_by_label("Arrangement name").type_text("Uncommitted");
+    h.run();
+    h.key_press(Key::Escape);
+    h.run();
+    h.get_by_label("Arrangement Review");
+    assert!(matches!(h.state().dialog, Dialog::None));
+}
+
+/// Invalid and duplicate names stay editable; removal needs an explicit confirmation.
+#[test]
+fn arrangement_form_validation_and_removal_preserve_cancelled_work() {
+    use egui::{Key, Modifiers};
+    let mut h = harness();
+    click(&mut h, "New arrangement");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.key_press(Key::Backspace);
+    h.run();
+    click(&mut h, "Create");
+    h.get_by_label("Use a name of 1–80 characters on one line.");
+    h.get_by_label("Arrangement name").type_text("Design");
+    h.run();
+    click(&mut h, "Create");
+    h.get_by_label("An arrangement already uses that name.");
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().arrangements.tabs().len(), 1);
+
+    click(&mut h, "Arrangement options");
+    click(&mut h, "Duplicate…");
+    click(&mut h, "Create");
+    h.get_by_label("Arrangement Design copy");
+    let before = h.state().arrangement_snapshot().unwrap();
+    click(&mut h, "Arrangement options");
+    click(&mut h, "Remove…");
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().arrangements.tabs().len(), 2);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
+    click(&mut h, "Arrangement options");
+    click(&mut h, "Remove…");
+    click(&mut h, "Remove");
+    h.get_by_label("Arrangement Design");
+    assert_eq!(h.state().arrangements.tabs().len(), 1);
+}
+
+/// A deliberately single-view setup can be created without losing the original split layout.
+#[test]
+fn new_single_view_arrangement_keeps_the_previous_setup() {
+    let mut h = harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB layout beside current view");
+    let before = h.state().arrangement_snapshot().unwrap();
+    click(&mut h, "New arrangement");
+    click(&mut h, "Single view in one window");
+    click(&mut h, "Create");
+    assert!(!h.state().views.is_split());
+    click(&mut h, "Arrangement Design");
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), before);
+}
+
+/// Compact title bars keep both arrangement actions outside the scrolling names and native controls.
+#[test]
+fn compact_arrangement_controls_stay_reachable() {
+    let mut h = harness();
+    h.state_mut().integrated_titlebar = true;
+    action(&mut h, Action::Create { name: "A deliberately long arrangement name for board review".into(), single_view: false });
+    for width in [640.0, 760.0, 1280.0] {
+        h.set_size(egui::vec2(width, 600.0));
+        h.run();
+        let options = h.get_by_label("Arrangement options").rect();
+        let new = h.get_by_label("New arrangement").rect();
+        let utilities = h.get_by_label("Preferences").rect();
+        assert!(options.right() <= new.left());
+        assert!(new.right() < utilities.left());
+        assert!(h.get_by_label("Close window").rect().right() <= width);
+        click(&mut h, "Arrangement options");
+        click(&mut h, "Rename…");
+        h.get_by_label("Arrangement name");
+        click(&mut h, "Cancel");
+        click(&mut h, "New arrangement");
+        click(&mut h, "Cancel");
+    }
 }

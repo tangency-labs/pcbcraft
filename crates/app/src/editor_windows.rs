@@ -238,8 +238,8 @@ impl PcbApp {
         }
     }
 
-    /// Draw project dialogs once in the primary window. A fields dialog temporarily binds its
-    /// originating editor for revision validation, without moving either camera or stealing selection.
+    /// Draw project dialogs once in their owner window (normally the main host). A fields dialog
+    /// temporarily binds its originating editor for revision validation, without moving either camera or stealing selection.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
         let previous = self.views.active.id();
         if let Dialog::EditFields { source, .. } = &self.dialog {
@@ -334,8 +334,9 @@ impl PcbApp {
         }
     }
 
-    /// Close just the addressed native window while another survives. The final window uses
-    /// the shared unsaved-changes controller; neither dismissal nor promotion changes the project.
+    /// Close just the addressed native window and discard its unfinished arrangement form while
+    /// another survives. The final window uses the shared unsaved-changes controller; neither
+    /// dismissal nor promotion changes the project.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn close_editor_host(&mut self, host: HostId, ctx: &Context) {
         if !self.views.hosts.contains_key(&host) {
@@ -350,6 +351,9 @@ impl PcbApp {
             self.bind_editor_host(next);
         }
         self.views.close_host(host);
+        if self.arrangement_dialog_host() == Some(host) {
+            self.dialog = Dialog::None;
+        }
         self.windows.panels.remove(&host);
         self.windows.bounds.remove(&host);
         self.windows.restore_bounds.remove(&host);

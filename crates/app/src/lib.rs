@@ -128,6 +128,8 @@ enum Dialog {
         error: Option<String>,
         focused: bool,
     },
+    /// Names and manages a captured arrangement in the window that opened the form.
+    Arrangement(arrangements::Edit),
     /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
     EditFields {
         source: ViewInput,
@@ -559,11 +561,6 @@ impl PcbApp {
     fn app_bar(&mut self, ui: &mut Ui, actions_enabled: bool) {
         let tabs = if self.home { Vec::new() } else { self.arrangements.tabs() };
         let active_arrangement = self.arrangements.active();
-        let mut rename = self
-            .arrangements
-            .rename_text
-            .take()
-            .unwrap_or_else(|| tabs.iter().find(|(id, _)| *id == active_arrangement).map_or(String::new(), |(_, name)| name.clone()));
         let mut arrangement_action = None;
         let project = self.session.project().map(|project| (project.name.clone(), self.files.dirty(&self.session)));
         let title = project.as_ref().map(|(name, dirty)| (name.as_str(), *dirty));
@@ -603,9 +600,9 @@ impl PcbApp {
                     }
                 }
             },
-            |ui| arrangement_action = pcbcraft_chrome::editor::arrangement_tabs(ui, &tabs, active_arrangement, &mut rename),
+            |ui| arrangement_action = pcbcraft_chrome::arrangements::tabs(ui, &tabs, active_arrangement),
             |ui, width| {
-                if width >= 560.0 {
+                if width >= 950.0 {
                     ui.label(dim(format!("v{VERSION}")));
                     ui.add_space(Tokens::get().space_8);
                     if menu::labeled_action(ui, MenuIcon::Bug, "Report a bug").clicked() {
@@ -625,20 +622,8 @@ impl PcbApp {
                 }
             },
         );
-        self.arrangements.rename_text = Some(rename);
-        if let Some(action) = arrangement_action {
-            use arrangements::Action;
-            use pcbcraft_chrome::editor::ArrangementAction as Pick;
-            self.queue_arrangement(
-                ui.ctx(),
-                match action {
-                    Pick::Select(id) => Action::Select(id),
-                    Pick::New => Action::New,
-                    Pick::Duplicate => Action::Duplicate,
-                    Pick::Rename(name) => Action::Rename(name),
-                    Pick::Remove => Action::Remove,
-                },
-            );
+        if let Some(intent) = arrangement_action {
+            self.arrangement_intent(ui.ctx(), intent);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if assistant_clicked {
@@ -1277,6 +1262,7 @@ impl PcbApp {
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
             Dialog::None => {}
+            Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {
                 let title = command(id).map_or(id, |c| c.title);
                 let (mut submit, mut cancel) = (false, false);
@@ -1557,6 +1543,7 @@ impl PcbApp {
 
     /// Draw the same editor in any visible window. Project dialogs, Home and the assistant
     /// belong to the current main host, whose native identity can survive the original window.
+    /// Arrangement forms stay in their initiating host and block edits in every window.
     /// Blocked project actions disable editor controls, while native window interactions remain
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
@@ -1578,7 +1565,7 @@ impl PcbApp {
             self.shortcuts(&ctx, assistant_keys, self.views.active.id());
         }
         let integrated = std::mem::replace(&mut self.integrated_titlebar, integrated_titlebar);
-        let enabled = !self.project_action_pending() && (main || (!self.home && !had_dialog));
+        let enabled = !self.project_action_pending() && (main || (!self.home && !had_dialog)) && self.arrangement_dialog_host().is_none();
         self.app_bar(ui, enabled);
         ui.add_enabled_ui(enabled, |ui| {
             let workspace = if self.home && main {
@@ -1616,10 +1603,11 @@ impl PcbApp {
             let _ = workspace;
         });
         self.integrated_titlebar = integrated;
-        if main {
+        let dialog_host = self.arrangement_dialog_host().unwrap_or(self.views.main);
+        if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
         } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {
-            ctx.send_viewport_cmd_to(editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+            ctx.send_viewport_cmd_to(editor_windows::viewport(dialog_host), egui::ViewportCommand::Focus);
         }
         if integrated_titlebar {
             shell::resize_window_edges(ui);
