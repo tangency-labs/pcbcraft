@@ -1,6 +1,9 @@
 mod camera;
 mod wires;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use camera::Camera;
 
 use crate::preferences::Navigation;
@@ -280,6 +283,7 @@ fn body_size(turns: u8) -> Vec2 {
 
 /// Draw the symbol around its center, with one grid step of `step` points and its pins at ±5
 /// steps, turned with the symbol. At overview zoom use a simpler outline.
+/// Horizontal labels follow the rotated drawing's upper and lower clearance, including LED arrows.
 fn paint_symbol(
     painter: &Painter,
     definition: &SymbolDefinition,
@@ -367,8 +371,9 @@ fn paint_symbol(
             painter.text(side + vec2(0.0, t.space_2), Align2::LEFT_TOP, value, font, color);
         } else {
             let label_offset = |grid_steps: f32| egui::vec2(0.0, (step * grid_steps).max(t.space_12));
-            painter.text(center - label_offset(reference_offset), Align2::CENTER_BOTTOM, reference, font.clone(), color);
-            painter.text(center + label_offset(value_offset), Align2::CENTER_TOP, value, font, color);
+            let (above, below) = if turns % 4 == 2 { (value_offset, reference_offset) } else { (reference_offset, value_offset) };
+            painter.text(center - label_offset(above), Align2::CENTER_BOTTOM, reference, font.clone(), color);
+            painter.text(center + label_offset(below), Align2::CENTER_TOP, value, font, color);
         }
     }
 }
