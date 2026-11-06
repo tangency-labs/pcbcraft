@@ -229,9 +229,9 @@ fn canvas_keys_do_nothing_on_home() {
     harness.get_by_label("Back to the workspace");
 }
 
-/// The New Project tile and the navigation row both run `project.new` at once and show the new
-/// Untitled schematic. Over an open project, each new one is its own document and undo brings
-/// the previous one back.
+/// The New Project tile and the navigation row both run `project.new` and show the new Untitled
+/// schematic. Over unsaved work they first ask, as Open does: Cancel keeps the project and Home,
+/// and discarding starts a new document whose replacement undo brings back. Ctrl+N asks too.
 #[test]
 fn home_new_project_tile_creates_the_project_and_returns_to_it() {
     let mut harness = harness();
@@ -240,20 +240,36 @@ fn home_new_project_tile_creates_the_project_and_returns_to_it() {
     new_project_tile(&harness).click();
     harness.run();
     assert!(!harness.state().home);
-    assert!(matches!(harness.state().dialog, Dialog::None));
+    assert!(matches!(harness.state().dialog, Dialog::None), "nothing to lose, so no question");
     assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
     harness.get_by_label("Toggle Net Inspector");
     let first = harness.state().session().snapshot().unwrap();
 
     open_home(&mut harness);
     let area = |node: &egui_kittest::Node<'_>| node.rect().area();
-    harness.query_all_by_label("New Project").min_by(|a, b| area(a).total_cmp(&area(b))).unwrap().click();
-    harness.run();
+    let rail = |harness: &mut Harness<'_, PcbApp>| {
+        harness.query_all_by_label("New Project").min_by(|a, b| area(a).total_cmp(&area(b))).unwrap().click();
+        harness.run();
+    };
+    rail(&mut harness);
+    harness.get_by_label("Starting a new project will discard unsaved changes.");
+    click(&mut harness, "Cancel");
+    assert!(harness.state().home);
+    assert!(Arc::ptr_eq(&harness.state().session().snapshot().unwrap(), &first));
+
+    rail(&mut harness);
+    click(&mut harness, "Discard and start new");
     assert!(!harness.state().home);
     let second = harness.state().session().snapshot().unwrap();
     assert_eq!(second.name, "Untitled");
     assert!(!second.same_document(&first));
     click(&mut harness, "Undo");
+    assert!(Arc::ptr_eq(&harness.state().session().snapshot().unwrap(), &first));
+
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::N);
+    harness.run();
+    assert!(matches!(harness.state().dialog, Dialog::ConfirmNew));
+    click(&mut harness, "Cancel");
     assert!(Arc::ptr_eq(&harness.state().session().snapshot().unwrap(), &first));
 }
 

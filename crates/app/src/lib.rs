@@ -127,6 +127,8 @@ enum Dialog {
         focused: bool,
     },
     ConfirmOpen,
+    /// Asks before New Project replaces a project with unsaved changes.
+    ConfirmNew,
     OpenLocation,
     SaveEncoding,
     #[cfg(not(target_arch = "wasm32"))]
@@ -272,10 +274,20 @@ impl PcbApp {
         self.views.active.tool = Some(Tool::Wire { revision: self.session.revision(), start: None });
     }
 
-    /// Open an editable Untitled project at once through `project.new`, leaving naming and a
-    /// destination to the first save, and enter the workspace. The open project is replaced as an
-    /// undoable step, as for an agent; a failure shows in the status bar and leaves Home as it was.
+    /// Protect unsaved edits before New Project replaces them, as Open does: with unsaved changes
+    /// ask to discard them first, otherwise start the new project at once.
     fn new_project(&mut self) {
+        if self.files.dirty(&self.session) {
+            self.dialog = Dialog::ConfirmNew;
+        } else {
+            self.start_new_project();
+        }
+    }
+
+    /// Open an editable Untitled project through `project.new`, leaving naming and a destination
+    /// to the first save, and enter the workspace. The open project is replaced as an undoable
+    /// step, as for an agent; a failure shows in the status bar and leaves Home as it was.
+    fn start_new_project(&mut self) {
         self.run("project.new", &Value::Null);
         if self.message.is_none() {
             self.home = false;
@@ -1206,6 +1218,21 @@ impl PcbApp {
                     self.choose_open_location(ctx);
                 } else if !(cancel || closing) {
                     self.dialog = Dialog::ConfirmOpen;
+                }
+            }
+            Dialog::ConfirmNew => {
+                let (mut proceed, mut cancel) = (false, false);
+                let closing = shell::dialog(ctx, "confirm_new", "New Project", |ui| {
+                    ui.label("Starting a new project will discard unsaved changes.");
+                    ui.horizontal(|ui| {
+                        proceed = ui.button("Discard and start new").clicked();
+                        cancel = ui.button("Cancel").clicked();
+                    });
+                });
+                if proceed {
+                    self.start_new_project();
+                } else if !(cancel || closing) {
+                    self.dialog = Dialog::ConfirmNew;
                 }
             }
             Dialog::OpenLocation => {
