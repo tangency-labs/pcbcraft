@@ -39,6 +39,102 @@ fn click_point(h: &mut Harness<'_, PcbApp>, id: u64, point: Point) {
     click_canvas_at(h, at);
 }
 
+/// Inspect the rendered symbol ink, so highlight tests cover paint and repaint, not just state.
+fn reference_color(h: &Harness<'_, PcbApp>, id: u64, reference: &str) -> egui::Color32 {
+    let rect = canvas(h, id);
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == reference && rect.contains(text.pos) => Some(text.fallback_color),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// A selection projects in either direction without taking focus, moving cameras, dirtying the
+/// document or acquiring an edit selection in the receiver. Tab focus cannot turn it into Delete.
+#[test]
+fn linked_highlights_are_visible_without_becoming_edit_selections() {
+    for source in [0, 1] {
+        let mut h = split_harness();
+        let target = 1 - source;
+        let snapshot = h.state().session.snapshot().unwrap();
+        let bytes = encode(snapshot.clone()).unwrap();
+        let revision = h.state().session.revision();
+        let origin = Point { x_nm: 0, y_nm: 0 };
+        let centers = [view(&h, 0).camera.screen(origin, canvas(&h, 0)), view(&h, 1).camera.screen(origin, canvas(&h, 1))];
+        click_point(&mut h, source, origin);
+        assert_eq!(h.state().views.active.id(), ViewId(source));
+        assert!(view(&h, target).selection.is_empty());
+        assert_eq!(h.state().views.highlight_for(ViewId(target), &h.state().session), view(&h, source).selection);
+        assert_eq!(reference_color(&h, source, "R1"), Tokens::get().accent);
+        assert_eq!(reference_color(&h, target, "R1"), Tokens::get().schematic_highlight);
+        for id in [0, 1] {
+            assert_eq!(view(&h, id).camera.screen(origin, canvas(&h, id)), centers[id as usize]);
+        }
+        focus_tab(&mut h, target as usize);
+        assert_eq!(reference_color(&h, target, "R1"), Tokens::get().schematic_highlight);
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(h.state().session.revision(), revision);
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+        assert_eq!(encode(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+        // Selecting the counterpart deliberately becomes the new source, with no feedback loop.
+        click_point(&mut h, target, origin);
+        assert!(h.state().views.highlight_for(ViewId(target), &h.state().session).is_empty());
+        assert_eq!(h.state().views.highlight_for(ViewId(source), &h.state().session).single_symbol(), Some("symbol-2"));
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().views.highlight_for(ViewId(source), &h.state().session).is_empty());
+        assert_eq!(reference_color(&h, target, "R1"), Tokens::get().text);
+    }
+}
+
+/// Browser picks use the same projection, including wires. Shared edits prune it, undo does
+/// not revive a removed selection, and reopening rejects both the highlight and delayed input.
+#[test]
+fn browser_highlights_prune_deleted_targets_and_reset_on_reopen() {
+    let mut h = split_harness();
+    h.state_mut().run(
+        pcbcraft_engine::DRAW_WIRE,
+        &json!({"from":{"symbol":"symbol-2","terminal":"2"},"to":{"x_nm":12_700_000,"y_nm":0},"bends":[],"expected_revision":2}),
+    );
+    let wire = h.state().session.project().unwrap().wires()[0].id();
+    h.run();
+    focus_tab(&mut h, 1);
+    click(&mut h, "Toggle Browser");
+    click(&mut h, "Expand Symbols");
+    click(&mut h, "R1  1k");
+    assert_eq!(reference_color(&h, 0, "R1"), Tokens::get().schematic_highlight);
+    click(&mut h, "Expand Nets");
+    click(&mut h, "Net 1");
+    assert_eq!(h.state().views.highlight_for(ViewId(0), &h.state().session).single_wire(), Some(wire.as_str()));
+    let rect = canvas(&h, 0);
+    assert!(h.output().shapes.iter().any(|shape| match &shape.shape {
+        egui::Shape::Path(path) =>
+            path.stroke.color == egui::epaint::ColorMode::Solid(Tokens::get().schematic_highlight)
+                && path.points.iter().all(|point| rect.contains(*point)),
+        _ => false,
+    }));
+    let revision = h.state().session.revision();
+    h.state_mut().session.apply(pcbcraft_engine::DELETE_WIRE, &json!({"wire":wire,"expected_revision":revision})).unwrap();
+    h.run();
+    assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
+    click(&mut h, "Undo");
+    assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
+    click(&mut h, "R1  1k");
+    let source = h.state().views.active.input(&h.state().session).unwrap();
+    let snapshot = h.state().session.snapshot().unwrap();
+    h.state_mut().session.open_snapshot(snapshot);
+    h.run();
+    let app = h.state_mut();
+    app.view_click(source, Click::SelectItems(Selection::one_symbol("symbol-2".to_owned())));
+    assert!(app.views.active.selection.is_empty());
+    assert!(app.views.other.selection.is_empty());
+    assert!(app.views.highlight_for(ViewId(0), &app.session).is_empty());
+}
+
 /// Each pane selects and navigates independently. Both issue edits through one history, and
 /// switching panes must never send Delete to the other pane's retained selection.
 #[test]
@@ -329,21 +425,21 @@ fn panels_stay_put_and_tabs_name_the_sheet_in_both_views() {
         }
     }
     assert_eq!(h.state().session.inspect(), before);
-    assert_eq!(h.get_all_by_label("edits / Main").count(), 2);
+    assert_eq!(h.get_all_by_label("edits › Main").count(), 2);
     assert!(h.query_by_label("Schematic 1").is_none());
     assert!(h.query_by_label("Schematic 2").is_none());
     let targets = [view(&h, 0).input(&h.state().session).unwrap(), view(&h, 1).input(&h.state().session).unwrap()];
     h.state_mut().run("project.rename", &json!({"name":"Power controller"}));
     h.run();
-    assert_eq!(h.get_all_by_label("Power controller / Main").count(), 2);
-    assert!(h.query_by_label("edits / Main").is_none());
+    assert_eq!(h.get_all_by_label("Power controller › Main").count(), 2);
+    assert!(h.query_by_label("edits › Main").is_none());
     for id in [0, 1] {
         assert_eq!(view(&h, id).id(), ViewId(id));
         assert!(!view(&h, id).accepts(targets[id as usize], &h.state().session));
     }
     focus_tab(&mut h, 0);
     click(&mut h, "Undo");
-    assert_eq!(h.get_all_by_label("edits / Main").count(), 2);
+    assert_eq!(h.get_all_by_label("edits › Main").count(), 2);
 }
 
 /// PR #71's selection modifiers, both box directions/buttons and group edits remain available
@@ -386,6 +482,7 @@ fn box_selection_and_atomic_group_edits_work_in_each_pane() {
                 h.run();
                 assert_eq!(view(&h, id).selection.len(), count);
                 assert!(view(&h, 1 - id).selection.is_empty());
+                assert_eq!(h.state().views.highlight_for(ViewId(1 - id), &h.state().session), view(&h, id).selection);
                 assert_eq!(h.state().session.revision(), revision);
             }
             let from = view(&h, id).camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas(&h, id));

@@ -68,7 +68,7 @@ the circuit into view and **Nets** to open the Net Inspector.
 
 The **Browser** floats over the left of the canvas and shows the project as
 **Project → Sheets → Main → Symbols / Nets**. The tab above each canvas shows
-its sheet path, such as **Power controller / Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
+its sheet hierarchy, such as **Power controller › Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
 items, and click one to select it and center the view on it. A net row selects
 one of its wires. Click the Browser's title to fold it. Browsing never changes the
 project, and the canvas keeps its full size; **Fit** keeps the drawing clear of
@@ -82,6 +82,11 @@ Inspector keep their workspace positions while their actions target that view.
 Both tabs show the same sheet path when they display the same sheet. Each view
 keeps its own camera and selection, including box and modifier selections, while edits, undo,
 redo and saving use the same project. Changing panes cancels unfinished gestures.
+Selecting symbols or wires highlights their counterparts in the other pane in
+amber; blue remains that pane's own edit selection. Highlights follow the latest
+selection, including Browser picks and box selections, without changing cameras
+or focus. Switching tabs alone keeps the highlight; Delete acts only on the
+focused pane's own selection. Clearing the source selection clears its highlight.
 Drag the divider to resize the panes; narrow windows stack them vertically.
 Turning Split off keeps the active view and retains the hidden view for later.
 The arrangement lasts for the app session and does not change project files.

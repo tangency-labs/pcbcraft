@@ -113,6 +113,8 @@ pub(crate) enum SymbolAction {
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
 /// `label` distinguishes simultaneously visible canvases in accessibility output.
+/// `highlighted` marks counterparts selected in another view. It affects paint only; hit
+/// testing, group moves and deletion use `selected`, which takes visual precedence on overlap.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
@@ -120,6 +122,7 @@ pub(crate) fn show(
     camera: &mut Camera,
     tool: Option<Tool>,
     selected: &Selection,
+    highlighted: &Selection,
     input_enabled: bool,
     navigation: Navigation,
     draft: &Draft,
@@ -158,7 +161,7 @@ pub(crate) fn show(
             .filter(|(_, point)| valid_position(*point)),
         _ => None,
     };
-    wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires);
+    wires::paint(&painter, rect, project, camera, moved.clone(), &selected.wires, &highlighted.wires);
     let visible = rect.expand((grid_step * 5.0).max(theme::SCHEMATIC_FIT_MARGIN));
     for symbol in project.symbols() {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
@@ -166,7 +169,13 @@ pub(crate) fn show(
         if visible.contains(center) {
             let reference = (grid_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
             let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
-            let color = if selected.symbols.contains(&symbol.id()) { tokens.accent } else { tokens.text };
+            let color = if selected.symbols.contains(&symbol.id()) {
+                tokens.accent
+            } else if highlighted.symbols.contains(&symbol.id()) {
+                tokens.schematic_highlight
+            } else {
+                tokens.text
+            };
             paint_symbol(&painter, &symbol.definition, center, grid_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
         }
     }

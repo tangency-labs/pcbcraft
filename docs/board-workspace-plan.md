@@ -12,11 +12,13 @@ This is the proposed architecture and acceptance plan for
 [#65](https://github.com/tangency-labs/pcbcraft/issues/65). Two schematic views now
 share one session through **View → Split**, with independent cameras and edit
 selections, stationary workspace controls and shared undo. Sheet tabs display
-the project/sheet path; runtime view numbers never stand in for sheet identity.
-Pane changes invalidate pending
-input without editing the document. This is the first host for exercising view
-ownership; board rendering, detached editor windows and cross-probing remain
-unimplemented. Presentation actions are not exposed through live MCP yet.
+the project and sheet hierarchy with chevrons; runtime view numbers never stand
+in for sheet identity. Pane changes invalidate pending input without editing the
+document. This is the first host for exercising view ownership; board rendering,
+detached editor windows and schematic-to-board cross-probing remain
+unimplemented. Selection highlighting between two views of the same schematic
+is implemented, using separate paint state from each view's edit selection.
+Presentation actions are not exposed through live MCP yet.
 
 ## Existing foundation
 
@@ -108,6 +110,14 @@ their focus or cameras. Reveal counterpart explicitly navigates to the object
 and its sheet; automatic following can be a later preference. Only the focused
 view's actual edit selection receives destructive commands. Receiving a
 highlight must not emit another selection event.
+
+For the current same-sheet views, the latest explicit selection supplies the
+counterpart highlight, with amber ink distinguishing it from local blue edit
+selection. Focus changes retain the source without emitting a selection event.
+Both view bindings must match the current project opening and sheet; deletion
+prunes the live source selection, and reopening resets it. This handles symbols
+and wire identities on one sheet, without claiming board correspondence or
+project-wide net identity.
 
 Distinguish unassigned footprints, assigned but unplaced footprints, unresolved
 mappings and targets removed since selection. Represent one-to-many matches or

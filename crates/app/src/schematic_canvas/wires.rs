@@ -48,6 +48,7 @@ impl Draft {
 }
 
 /// Paint resolved paths, including a disposable symbol move, and explicit junction markers.
+/// Local selection takes precedence over a counterpart highlight; neither changes connectivity.
 pub(super) fn paint(
     painter: &Painter,
     rect: Rect,
@@ -55,6 +56,7 @@ pub(super) fn paint(
     camera: &Camera,
     moved: Option<(SymbolPlacement, Point)>,
     selected: &std::collections::BTreeSet<String>,
+    highlighted: &std::collections::BTreeSet<String>,
 ) {
     let tokens = Tokens::get();
     let preview = moved.map(|(symbol, point)| (symbol.terminals(), symbol.definition.pin_positions(point, symbol.turns())));
@@ -72,7 +74,13 @@ pub(super) fn paint(
         let [Some(from), Some(to)] = wire.endpoints().map(position) else {
             continue;
         };
-        let color = if selected.contains(&wire.id()) { tokens.accent } else { tokens.schematic_wire };
+        let color = if selected.contains(&wire.id()) {
+            tokens.accent
+        } else if highlighted.contains(&wire.id()) {
+            tokens.schematic_highlight
+        } else {
+            tokens.schematic_wire
+        };
         paint_route(painter, rect, camera, pcbcraft_engine::wire::wire_path(wire, from, to), color);
     }
     for (_, point) in project.junctions() {

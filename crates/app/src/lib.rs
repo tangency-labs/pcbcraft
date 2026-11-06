@@ -379,7 +379,7 @@ impl PcbApp {
             SymbolAction::Delete => {
                 self.run(DELETE_SYMBOL, &json!({"symbol": id, "expected_revision": revision}));
                 if self.message.is_none() {
-                    self.views.active.selection = Selection::default();
+                    self.views.select(Selection::default());
                 }
             }
             SymbolAction::EditFields => {
@@ -396,7 +396,7 @@ impl PcbApp {
     fn delete_selection(&mut self) {
         self.run(pcbcraft_engine::DELETE_ITEMS, &json!({"items":self.views.active.selection,"expected_revision":self.session.revision()}));
         if self.message.is_none() {
-            self.views.active.selection = Selection::default();
+            self.views.select(Selection::default());
         }
     }
 
@@ -684,7 +684,7 @@ impl PcbApp {
         if self.home || !matches!(self.dialog, Dialog::None) || !self.views.active.accepts(source, &self.session) {
             return;
         }
-        self.views.active.selection = if pick.wire { Selection::one_wire(pick.id) } else { Selection::one_symbol(pick.id) };
+        self.views.select(if pick.wire { Selection::one_wire(pick.id) } else { Selection::one_symbol(pick.id) });
         self.views.active.camera.center_on(pick.at);
     }
 
@@ -753,17 +753,19 @@ impl PcbApp {
                                 .map(|(symbol, _)| symbol.id())
                         });
                         if let Some(symbol) = hovered.or_else(|| self.views.active.selection.single_symbol().map(str::to_owned)) {
-                            self.views.active.selection = Selection::one_symbol(symbol);
+                            self.views.select(Selection::one_symbol(symbol));
                             self.edit_selected(SymbolAction::Rotate);
                         }
                     }
                     if let Some(project) = self.session.project() {
+                        let highlight = self.views.highlight_for(self.views.active.id(), &self.session);
                         return schematic_canvas::show(
                             ui,
                             project,
                             &mut self.views.active.camera,
                             self.views.active.tool.clone(),
                             &self.views.active.selection,
+                            &highlight,
                             input_enabled,
                             self.preferences.navigation,
                             &self.views.active.wire_draft,
@@ -781,6 +783,8 @@ impl PcbApp {
         self.views.active.wire_draft.finish_requested = false;
         if let (Some(source), Some(click)) = (source, click) {
             self.view_click(source, click);
+            // Selection can change after the other pane was painted, without a document edit.
+            ui.ctx().request_repaint();
         }
     }
 
@@ -818,7 +822,7 @@ impl PcbApp {
                 }
             }
             (None, Click::Grab(symbol, offset)) => {
-                self.views.active.selection = Selection::one_symbol(symbol.id());
+                self.views.select(Selection::one_symbol(symbol.id()));
                 self.views.active.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
             }
             (None, Click::StartBox(drag)) => {
@@ -826,13 +830,13 @@ impl PcbApp {
             }
             (None | Some(Tool::BoxSelect { .. }), Click::SelectItems(items)) => {
                 self.views.active.tool = None;
-                self.views.active.selection = items;
+                self.views.select(items);
             }
             (None, Click::Select(symbol)) => {
-                self.views.active.selection = symbol.map(Selection::one_symbol).unwrap_or_default();
+                self.views.select(symbol.map(Selection::one_symbol).unwrap_or_default());
             }
             (None, Click::GrabItems(items, origin)) => {
-                self.views.active.selection = items.clone();
+                self.views.select(items.clone());
                 self.views.active.tool = Some(Tool::MoveItems { items, origin, revision: self.session.revision() });
             }
             (Some(Tool::MoveItems { items, revision, .. }), Click::FinishItems(delta)) => {
@@ -851,7 +855,7 @@ impl PcbApp {
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
             (None, Click::Edit(action, symbol)) => {
-                self.views.active.selection = Selection::one_symbol(symbol);
+                self.views.select(Selection::one_symbol(symbol));
                 self.edit_selected(action);
             }
             (Some(Tool::Move { symbol, revision, .. }), Click::FinishMove(position)) => {
@@ -899,7 +903,7 @@ impl PcbApp {
                 if self.views.active.tool.take().is_some() {
                     self.message = None;
                 } else {
-                    self.views.active.selection = Selection::default();
+                    self.views.select(Selection::default());
                 }
             }
             if let Some(Tool::Wire { start, .. }) = &mut self.views.active.tool {

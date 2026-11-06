@@ -2,7 +2,7 @@
 
 use egui::{Rect, Ui};
 use pcbcraft_chrome::{editor, shell, workspace};
-use pcbcraft_engine::Session;
+use pcbcraft_engine::{Session, selection::Selection};
 
 use crate::{Dialog, PcbApp, SchematicView, Tool, ViewId, schematic_canvas};
 
@@ -15,6 +15,8 @@ pub(super) struct EditorViews {
     pub(super) split: bool,
     ratio: f32,
     rects: [(ViewId, Rect); 2],
+    /// Last explicit selection intent. Focus changes alone never replace it.
+    selection_source: Option<ViewId>,
 }
 
 impl Default for EditorViews {
@@ -25,6 +27,7 @@ impl Default for EditorViews {
             split: false,
             ratio: 0.5,
             rects: [(ViewId(0), Rect::NOTHING), (ViewId(1), Rect::NOTHING)],
+            selection_source: None,
         }
     }
 }
@@ -32,8 +35,35 @@ impl Default for EditorViews {
 impl EditorViews {
     /// Synchronize both views, including the hidden one, after every project change.
     pub(super) fn sync(&mut self, session: &Session) {
-        self.active.sync(session);
-        self.other.sync(session);
+        let active_changed = self.active.sync(session);
+        let other_changed = self.other.sync(session);
+        if active_changed || other_changed {
+            self.selection_source = None;
+        }
+    }
+
+    /// Record a deliberate selection or clear in the active view. The receiving view keeps
+    /// its edit selection; rendering the projection never becomes another selection intent.
+    pub(super) fn select(&mut self, selection: Selection) {
+        self.active.selection = selection;
+        self.selection_source = Some(self.active.id());
+    }
+
+    /// Project the latest selection into another visible view of the same sheet. Resolve
+    /// against live, pruned view state so deletion, undo and reopening cannot retain stale IDs.
+    /// Focus and cameras are unaffected, and the source view never receives its own projection.
+    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
+        if !self.split {
+            return Selection::default();
+        }
+        let (source, target) = if self.selection_source == Some(self.active.id()) && id == self.other.id() {
+            (&self.active, &self.other)
+        } else if self.selection_source == Some(self.other.id()) && id == self.active.id() {
+            (&self.other, &self.active)
+        } else {
+            return Selection::default();
+        };
+        if source.shares_sheet(target, session) { source.selection.clone() } else { Selection::default() }
     }
 
     /// Cancel previews in every view when a modal or Home takes over input.
@@ -152,6 +182,7 @@ impl PcbApp {
                     }
                     self.canvas(ui);
                 } else {
+                    let highlight = self.views.highlight_for(id, &self.session);
                     let view = &mut self.views.other;
                     view.camera.set_uncovered(canvas, uncovered);
                     ui.push_id(view.widget_id(), |ui| {
@@ -163,6 +194,7 @@ impl PcbApp {
                                     &mut view.camera,
                                     None,
                                     &view.selection,
+                                    &highlight,
                                     false,
                                     self.preferences.navigation,
                                     &view.wire_draft,

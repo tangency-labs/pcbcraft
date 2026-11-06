@@ -81,7 +81,13 @@ impl SchematicView {
     /// Renaming the project updates the label without changing the view or sheet identity.
     pub(super) fn sheet_path(&self, session: &Session) -> Option<String> {
         self.input(session)?;
-        Some(format!("{} / Main", session.project()?.name))
+        Some(format!("{} › Main", session.project()?.name))
+    }
+
+    /// Whether both views resolve to the same sheet in the current opening. Matching object
+    /// strings alone cannot authorize a highlight across projects or a file replacement.
+    pub(super) fn shares_sheet(&self, other: &Self, session: &Session) -> bool {
+        self.input(session).is_some() && self.binding == other.binding
     }
 
     /// Scope egui interactions to this view's current opening. A held pointer or context menu
