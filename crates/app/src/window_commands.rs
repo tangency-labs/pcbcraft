@@ -110,7 +110,15 @@ mod live {
     enum Kind {
         /// A view ID from inspection.
         View,
+        /// A typed engine authoring transaction.
         LibraryAction,
+        /// A runtime document ID from inspect_editor.library_editors.
+        LibraryDocument,
+        /// A library document revision from inspect_editor.library_editors.
+        LibraryRevision,
+        /// A stable primitive ID from library inspection.
+        LibraryPrimitive,
+        /// A bounded group of distinct positive library primitive IDs.
         PrimitiveIds,
         /// A window ID from inspection.
         Window,
@@ -147,7 +155,9 @@ mod live {
                 Self::LibraryAction => {
                     json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
                 }
-                Self::View | Self::Window | Self::Arrangement => json!({"type": "integer", "minimum": 0}),
+                Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
+                    json!({"type": "integer", "minimum": 0})
+                }
                 Self::Object => json!({"type":"string","format":"uuid"}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
@@ -176,7 +186,9 @@ mod live {
                     serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= pcbcraft_engine::authoring::MAX_BYTES)
                         && serde_json::from_value::<pcbcraft_engine::authoring::Action>(value.clone()).is_ok()
                 }
-                Self::View | Self::Window | Self::Arrangement => value.as_u64().is_some(),
+                Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
+                    value.as_u64().is_some()
+                }
                 Self::Name => value.as_str().is_some(),
                 Self::Bool => value.is_boolean(),
                 Self::Color => value.is_null() || value.as_str().is_some_and(|text| crate::board_appearance::parse_color(text).is_ok()),
@@ -193,6 +205,9 @@ mod live {
             Err(match self {
                 Self::PrimitiveIds => "must be a bounded list of distinct positive primitive IDs".into(),
                 Self::LibraryAction => "must be a bounded native authoring Action".into(),
+                Self::LibraryDocument => "must be a library document ID from inspect_editor.library_editors".into(),
+                Self::LibraryRevision => "must be the library document revision from inspect_editor.library_editors".into(),
+                Self::LibraryPrimitive => "must be a primitive ID from library inspection".into(),
                 Self::View => "must be a view ID from inspect_editor".to_owned(),
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
@@ -339,8 +354,13 @@ mod live {
             title: "Edit Library Item",
             summary: "Apply one revision-checked authoring transaction to a library document, using its separate undo history.",
             params: &[
-                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
-                Param { name: "expected_revision", summary: "Library document revision from inspection", required: true, kind: Kind::Window },
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
+                Param {
+                    name: "expected_revision",
+                    summary: "Library document revision from inspection",
+                    required: true,
+                    kind: Kind::LibraryRevision,
+                },
                 Param { name: "action", summary: "Typed authoring Action", required: true, kind: Kind::LibraryAction },
             ],
         },
@@ -348,16 +368,21 @@ mod live {
             id: "app.library_focus",
             title: "Focus Library Workspace",
             summary: "Focus an open library document; omit document to return to the project with library edits retained.",
-            params: &[Param { name: "document", summary: "Runtime library document ID; omit for project", required: false, kind: Kind::Window }],
+            params: &[Param {
+                name: "document",
+                summary: "Runtime library document ID; omit for project",
+                required: false,
+                kind: Kind::LibraryDocument,
+            }],
         },
         WindowCommand {
             id: "app.library_view",
             title: "Library View",
             summary: "Select a library primitive or definition metadata and navigate its canvas without changing authored data or history.",
             params: &[
-                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
                 Param { name: "view", summary: "Definition pane ID; defaults to its current presentation", required: false, kind: Kind::View },
-                Param { name: "selected", summary: "Stable primitive ID from library inspection", required: false, kind: Kind::Window },
+                Param { name: "selected", summary: "Stable primitive ID from library inspection", required: false, kind: Kind::LibraryPrimitive },
                 Param {
                     name: "selected_objects",
                     summary: "Stable IDs for group selection; cannot combine with selected/definition",
@@ -384,7 +409,7 @@ mod live {
             title: "Close Library Item",
             summary: "Close an addressed library document. Unsaved fields or edits require an explicit discard; running file jobs prevent closing.",
             params: &[
-                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
                 Param { name: "discard", summary: "Explicitly discard unsaved library edits", required: false, kind: Kind::Bool },
             ],
         },
@@ -399,7 +424,7 @@ mod live {
             title: "Save Library Copy",
             summary: "Choose a new destination for the captured library document. Export writes its native definition; browser downloads do not confirm durable saving.",
             params: &[
-                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
                 Param { name: "export", summary: "Export native definition rather than editable item", required: false, kind: Kind::Bool },
             ],
         },
@@ -1212,6 +1237,28 @@ mod live {
             assert!(center.check(&json!({"view": 0, "at": {"x_nm": 0}})).is_err());
             assert!(center.check(&json!({"view": -1, "at": {"x_nm": 0, "y_nm": 0}})).is_err());
             assert!(center.check(&json!({"at": {"x_nm": 0, "y_nm": 0}})).is_err());
+        }
+
+        /// Invalid library identifiers must direct recovery to library inspection, with the
+        /// existing nonnegative-integer schema retained for every library command parameter.
+        #[test]
+        fn library_parameter_refusals_identify_the_correct_inspection_state() {
+            for command in CATALOG.iter().filter(|c| c.id.starts_with("app.library_")) {
+                for param in command.params {
+                    let expected = match param.name {
+                        "document" => "must be a library document ID from inspect_editor.library_editors",
+                        "expected_revision" => "must be the library document revision from inspect_editor.library_editors",
+                        "selected" => "must be a primitive ID from library inspection",
+                        _ => continue,
+                    };
+                    assert_eq!(param.kind.schema(), json!({"type":"integer","minimum":0}));
+                    assert!(param.kind.validate(&json!(0)).is_ok());
+                    assert!(param.kind.validate(&json!(u64::MAX)).is_ok());
+                    for bad in [json!(-1), json!("1"), json!(true), json!(1.5), Value::Null] {
+                        assert_eq!(param.kind.validate(&bad).unwrap_err(), expected, "{} {}", command.id, param.name);
+                    }
+                }
+            }
         }
 
         /// The names inspection reports are the names the command takes, and unnamed settings stay.
