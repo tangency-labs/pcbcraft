@@ -23,6 +23,7 @@ mod home;
 mod library_preview;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
+mod native_sources;
 mod net_inspector;
 mod parts_browser;
 mod preferences;
@@ -133,6 +134,7 @@ enum Help {
 enum Dialog {
     #[default]
     None,
+    LibrarySources,
     /// Asks for the name that `project.rename` takes.
     Name {
         command: &'static str,
@@ -172,6 +174,7 @@ enum Dialog {
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
+    library_sources: native_sources::Sources,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,
@@ -264,6 +267,7 @@ impl PcbApp {
         let mut views = EditorViews::default();
         views.set_grid_everywhere(preferences.schematic_grid_nm);
         Self {
+            library_sources: native_sources::Sources::restore(cc.storage.and_then(|s| s.get_string(native_sources::STORAGE_KEY))),
             home: true,
             properties_open: true,
             arrangements: arrangements::Arrangements::from_storage(cc.storage.and_then(|storage| storage.get_string(arrangements::STORAGE_KEY))),
@@ -1210,7 +1214,10 @@ impl PcbApp {
             (None, Click::HierarchyAction(kind, id, action)) => self.hierarchy_action(source, kind, id, action),
             (Some(Tool::PlaceSymbol { definition, revision, turns }), Click::Place(point)) => {
                 self.views.active.schematic.tool = None;
-                self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}));
+                self.place_catalog_symbol(
+                    &definition,
+                    json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}),
+                );
             }
             (Some(Tool::Wire { revision, start: None }), Click::WirePoint(anchor, _)) => {
                 self.views.active.schematic.tool = Some(Tool::Wire { revision, start: Some(anchor) });
@@ -1298,7 +1305,7 @@ impl PcbApp {
                 }
                 let revision = drag_source.revision;
                 self.views.active.schematic.tool = None;
-                self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
+                self.place_catalog_symbol(&definition, json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
             }
             (None, Click::WireEdit(action, leg)) => self.edit_wire(action, &leg),
             (None, Click::Edit(action, symbol)) => {
@@ -1482,6 +1489,7 @@ impl PcbApp {
     /// Draw the open dialog and retain it until the person finishes or dismisses it.
     fn dialogs(&mut self, ctx: &egui::Context) {
         match std::mem::take(&mut self.dialog) {
+            Dialog::LibrarySources => self.library_sources_dialog(ctx),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
             Dialog::Name { command: id, mut text, mut error, mut focused } => {
@@ -1697,6 +1705,7 @@ impl PcbApp {
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
         self.sync_style(&ctx);
         self.checkpoint_arrangements();
@@ -1904,6 +1913,7 @@ impl eframe::App for PcbApp {
 
     /// Persist presentation state and desktop history; unsupported arrangement records stay intact.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(native_sources::STORAGE_KEY, self.library_sources.storage_text());
         self.checkpoint_arrangements();
         if let Some(text) = self.arrangements.storage_text() {
             storage.set_string(arrangements::STORAGE_KEY, text);

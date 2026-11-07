@@ -15,6 +15,7 @@ pub mod editor;
 pub mod fonts;
 pub mod grid;
 pub mod home;
+pub mod library_sources;
 pub mod menu;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview;

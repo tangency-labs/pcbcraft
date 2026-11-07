@@ -131,7 +131,7 @@ const ANALYZE: &[Group] = &[
 const LIBRARIES: &[Group] = &[Group {
     title: "Library sources",
     tools: &[
-        tool(Action::Sources, "Sources", Icon::Browser, "External library sources are not available yet.", ""),
+        tool(Action::Sources, "Sources", Icon::Browser, "Manage native library sources", ""),
         tool(Action::Updates, "Updates", Icon::Sync, "Library update review is not available yet.", ""),
     ],
     extras: &[],
@@ -155,6 +155,7 @@ impl Action {
         matches!(
             self,
             Self::Symbol
+                | Self::Sources
                 | Self::HierarchicalLabel
                 | Self::NewSheet
                 | Self::Subsheet
@@ -247,6 +248,7 @@ impl PcbApp {
             return;
         }
         match action {
+            Action::Sources => self.dialog = Dialog::LibrarySources,
             Action::Symbol => self.parts.focus_search(),
             Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),

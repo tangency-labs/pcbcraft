@@ -210,6 +210,20 @@ no new rasterizer, SolidCraft mechanical session or project model is included.
 interrupted saves nor create locks or write project files. Preview pictures and
 cache state remain outside native project documents.
 
+## Native library source loading
+
+The native source snapshot/catalog in `crates/engine/src/library/sources.rs`,
+folder adapter in `crates/storage/src/library.rs`, source management UI and
+bundle packager are original PCBcraft code under MIT OR Apache-2.0. They reuse
+the existing upstream symbol/footprint validators and command path, without
+external EDA implementation or prototype source. The Workshop example in
+`examples/native-library` adapts this repository's original starter resistor
+symbol and 0603 footprint from `57ee1e76f047f542c52d16bf3c0db7c119c47a8a`
+retaining MIT OR Apache-2.0 and
+the footprint's existing dimensional provenance. Its library identity and
+display names are changed to demonstrate native source loading. No third-party
+asset or new dependency is introduced.
+
 ## Bundled fonts
 
 | File | Source | License |

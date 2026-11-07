@@ -19,6 +19,8 @@ use crate::schematic::{
     ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, TextAlign, check_value,
 };
 
+pub mod sources;
+
 mod starter_files {
     include!(concat!(env!("OUT_DIR"), "/starter_library.rs"));
 }
@@ -120,16 +122,16 @@ impl Library {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ManifestFile {
+pub(super) struct ManifestFile {
     #[allow(dead_code, reason = "checked before the rest of the manifest is read")]
     format: String,
-    id: String,
-    name: String,
-    license: String,
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) license: String,
 }
 
 /// Read a library manifest after checking its format, ID, name and license text.
-fn parse_manifest(text: &str) -> Result<ManifestFile, String> {
+pub(super) fn parse_manifest(text: &str) -> Result<ManifestFile, String> {
     let value: Value = serde_json::from_str(text).map_err(|error| format!("invalid library JSON: {error}"))?;
     let manifest: ManifestFile = serde_json::from_value(versioned(value, LIBRARY_FORMAT, "library")?).map_err(|error| error.to_string())?;
     check_id(&manifest.id)?;
@@ -256,6 +258,7 @@ fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
     }
     let drawing = unit.drawing.into_iter().map(shape).collect::<Result<Vec<_>, _>>()?;
     Ok(SymbolDefinition {
+        provenance: None,
         library: String::new(),
         id: file.id,
         name: file.name,
@@ -289,7 +292,12 @@ pub(crate) fn read_saved_copy(value: Value) -> Result<Arc<SymbolDefinition>, Str
         _ => return Err("a saved symbol definition needs its `library` ID".to_owned()),
     };
     check_id(&library).map_err(|error| format!("library {error}"))?;
+    let provenance = fields.remove("provenance").map(serde_json::from_value::<sources::Provenance>).transpose().map_err(|e| e.to_string())?;
+    if let Some(provenance) = &provenance {
+        provenance.validate()?;
+    }
     let mut definition = parse_symbol_value(Value::Object(fields))?;
+    definition.provenance = provenance;
     definition.library = library;
     let starter = starter();
     Ok(starter.symbols.iter().chain(&starter.revisions).find(|known| ***known == definition).cloned().unwrap_or_else(|| Arc::new(definition)))
@@ -300,8 +308,8 @@ pub(crate) fn read_saved_copy(value: Value) -> Result<Arc<SymbolDefinition>, Str
 /// stroke or pin changes one line. The JSON is the same as [`saved_copy`] serializes, and the
 /// output depends only on the definition, so an unchanged project saves without a diff.
 pub(crate) fn write_saved_copy(bytes: &mut Vec<u8>, definition: &SymbolDefinition) -> Result<(), String> {
-    let SavedSymbol { library, format, id, revision, name, reference_prefix, default_value, terminals, units } = saved_copy(definition);
-    let header = compact(&SavedHeader { library, format, id, revision, name, reference_prefix, default_value })?;
+    let SavedSymbol { library, format, id, revision, name, reference_prefix, default_value, provenance, terminals, units } = saved_copy(definition);
+    let header = compact(&SavedHeader { library, format, id, revision, name, reference_prefix, default_value, provenance })?;
     // The header object stays open so the lists below continue it.
     let header = header.strip_suffix('}').unwrap_or(&header);
     let list = |bytes: &mut Vec<u8>, indent: &str, items: Vec<String>| {
@@ -341,6 +349,8 @@ struct SavedHeader<'a> {
     name: &'a str,
     reference_prefix: &'a str,
     default_value: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<&'a sources::Provenance>,
 }
 
 /// The saved form of a symbol in a project: its library ID, then the same fields as its
@@ -348,6 +358,7 @@ struct SavedHeader<'a> {
 pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
     let point = |point: &Point| [point.x_nm, point.y_nm];
     SavedSymbol {
+        provenance: definition.provenance.as_ref(),
         library: &definition.library,
         format: SYMBOL_FORMAT,
         id: &definition.id,
@@ -387,6 +398,8 @@ pub(crate) struct SavedSymbol<'a> {
     name: &'a str,
     reference_prefix: &'a str,
     default_value: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<&'a sources::Provenance>,
     terminals: Vec<SavedTerminal<'a>>,
     units: [SavedUnit<'a>; 1],
 }

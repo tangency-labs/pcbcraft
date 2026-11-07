@@ -67,6 +67,11 @@ first **Save** asks for a project folder, and the project takes that folder's na
    result and click the canvas to place it. **R** rotates a placement preview;
    **Esc** cancels it. Parts stays open until you close or hide it. Dragging a
    result directly onto the canvas also places it.
+   **Libraries → Sources** adds native library folders on desktop or uploads a
+   portable library bundle on either platform. Try the original
+   [Workshop source example](native-library-sources.md), then search **Workshop**
+   in Parts. Placed symbols keep their pinned definition and license attribution
+   after the source is removed.
 3. Click an unconnected pin or free wire end to start directly, or hover a pin,
    wire or grid point and press **W** to start there immediately. Connected nodes
    use W or **Capture → Wire**, which waits for a first click. The green wire cursor

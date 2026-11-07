@@ -112,14 +112,17 @@ The format leaves room for more than the engine places today:
   each at its own position. Symbol centers stay 12.7 mm inside the sheet edge so
   every pin stays on the sheet.
 
+## Native sources
+
+**Libraries → Sources** now loads native folders on desktop and portable bundles
+on desktop/browser. The [source guide](native-library-sources.md) covers
+registration, search, revision conflicts and offline pinning. External symbols
+retain their manifest library name and license as portable attribution with
+the saved definition.
+
 ## Not yet
 
-- **Library folders on desktop.** Projects keep a full copy of each
-  symbol they use at `library/symbols/<library>/<symbol>.r<revision>.json`,
-  including its library ID (project format 5; see
-  [native-project-storage.md](native-project-storage.md)), so they reopen without
-  the library. Loading symbol libraries from folders on disk comes next.
-- **Other libraries.** Library folders, Git, databases and managed libraries,
+- **Other libraries.** Git, databases and managed libraries,
   plus import from other formats, are later slices of issue #28.
   [library-sources.md](library-sources.md) proposes the model for them.
 - **Footprint libraries** follow the same approach, as their own format and

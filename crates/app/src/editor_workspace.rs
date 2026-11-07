@@ -951,7 +951,7 @@ impl PcbApp {
             Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
             _ => None,
         };
-        if let Some(definition) = self.parts.show(ui, area, self.browser.rect(), placing.as_ref(), source) {
+        if let Some(definition) = self.parts.show(ui, area, self.browser.rect(), placing.as_ref(), source, self.session.libraries()) {
             self.begin_placement(definition);
         }
         pick.map(|pick| (source, pick))

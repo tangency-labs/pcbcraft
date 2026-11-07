@@ -105,6 +105,8 @@ pub struct PinDefinition {
 /// describes only the schematic symbol; layout footprints are separate definitions.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SymbolDefinition {
+    /// Portable native-source attribution retained with a pinned external definition.
+    pub provenance: Option<crate::library::sources::Provenance>,
     /// The ID of the library this definition came from, such as `starter`. Projects save it with
     /// their copy of the definition.
     pub library: String,
