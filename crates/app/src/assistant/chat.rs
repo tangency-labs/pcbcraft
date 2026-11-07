@@ -522,10 +522,25 @@ impl Chat {
 
 /// Write `secret` to `<new private folder>/<port>.token` for the agent's MCP bridge, which
 /// reads it with `--token-file`, so the credential never goes in the agent's session, arguments
-/// or environment. The folder is the user's alone (`0700` on Unix; on Windows, under the user's
-/// own temporary folder) and the file is made `0600` on Unix before the secret goes in. Dropping
-/// the folder removes both.
+/// or environment. Only the user may read it: on Unix the folder is `0700` and the file `0600`;
+/// on Windows the file's inherited permissions are replaced by one entry for the user
+/// ([`restrict_to_user`]) while it is still empty, since the temporary folder may be shared.
+/// Dropping the folder removes both.
 fn write_token_file(port: u16, secret: &str) -> std::io::Result<(tempfile::TempDir, std::path::PathBuf)> {
+    #[cfg(windows)]
+    let restrict = restrict_to_user;
+    #[cfg(not(windows))]
+    let restrict = |_: &std::path::Path| Ok(());
+    write_token_file_with(port, secret, restrict)
+}
+
+/// [`write_token_file`], with `restrict` limiting the new, empty file to the user (Windows). When
+/// it fails, the file is removed and no secret is written.
+fn write_token_file_with(
+    port: u16,
+    secret: &str,
+    restrict: impl FnOnce(&std::path::Path) -> std::io::Result<()>,
+) -> std::io::Result<(tempfile::TempDir, std::path::PathBuf)> {
     use std::io::Write;
     let dir = tempfile::Builder::new().prefix("pcbcraft-control-").tempdir()?;
     let path = dir.path().join(format!("{port}.token"));
@@ -538,10 +553,56 @@ fn write_token_file(port: u16, secret: &str) -> std::io::Result<(tempfile::TempD
         options.mode(0o600);
     }
     let mut file = options.open(&path)?;
+    if let Err(error) = restrict(&path) {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
     file.write_all(secret.as_bytes())?;
     file.write_all(b"\n")?;
     file.sync_all()?;
     Ok((dir, path))
+}
+
+/// How long `icacls` may take. It finishes at once, but on some computers security software
+/// leaves the new process suspended, and waiting without a limit would freeze the window.
+#[cfg(windows)]
+const ICACLS_LIMIT: Duration = Duration::from_secs(5);
+
+/// Windows: drop the file's inherited entries and grant only the current user full access, with
+/// the system's own `icacls` (by full path, so nothing on PATH stands in for it). As SolidCraft's
+/// token file does, but failing closed: an `icacls` that fails or doesn't finish in time leaves
+/// no token, since nothing is known about who else may read the temporary folder.
+#[cfg(windows)]
+fn restrict_to_user(path: &std::path::Path) -> std::io::Result<()> {
+    use std::{io::Error, os::windows::process::CommandExt};
+    let user = std::env::var("USERNAME").map_err(|_| Error::other("USERNAME is not set"))?;
+    let who = match std::env::var("USERDOMAIN").ok().filter(|domain| !domain.is_empty()) {
+        Some(domain) => format!("{domain}\\{user}"),
+        None => user,
+    };
+    let system = std::env::var_os("SystemRoot").ok_or_else(|| Error::other("SystemRoot is not set"))?;
+    let icacls = std::path::Path::new(&system).join("System32").join("icacls.exe");
+    let mut child = std::process::Command::new(icacls)
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &format!("{who}:F")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(0x0800_0000)
+        .spawn()?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => return Ok(()),
+            Some(_) => return Err(Error::other(format!("icacls could not restrict {}", path.display()))),
+            None if start.elapsed() >= ICACLS_LIMIT => {
+                let _ = child.kill();
+                return Err(Error::new(std::io::ErrorKind::TimedOut, "icacls did not finish in time"));
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
 }
 
 /// `pcbcraft-cli` beside the running app, or on PATH as a fallback when the app's folder can't
@@ -591,5 +652,19 @@ mod tests {
         drop(dir);
         assert!(!path.exists());
         Ok(())
+    }
+
+    /// The file is restricted while empty; when that fails, it is removed and no secret is written.
+    #[test]
+    fn a_token_file_that_could_not_be_restricted_gets_no_secret() {
+        let mut seen = None;
+        let result = write_token_file_with(41234, "0123456789abcdef0123456789abcdef", |path| {
+            seen = Some((path.to_path_buf(), std::fs::read(path)));
+            Err(std::io::Error::other("icacls could not restrict it"))
+        });
+        assert!(result.is_err());
+        let (path, contents) = seen.unwrap_or_else(|| panic!("the file was not restricted"));
+        assert_eq!(contents.ok(), Some(Vec::new()), "restricted before the secret goes in");
+        assert!(!path.exists(), "an unrestricted file is removed");
     }
 }
