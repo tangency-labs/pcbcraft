@@ -13,6 +13,7 @@ pub mod schematic;
 pub mod selection;
 pub mod sheets;
 pub mod wire;
+pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -73,6 +74,9 @@ enum ParamKind {
     Selection,
     BoardSetup,
     SilkscreenSettings,
+    DrawingPoints,
+    DrawingId,
+    Closed,
     BoardId,
     SheetId,
     CopperLayers,
@@ -93,6 +97,9 @@ impl ParamKind {
             }
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint"]}),
+            Self::DrawingPoints => board::drawing::geometry_schema(),
+            Self::DrawingId => json!({"type":"string","format":"uuid"}),
+            Self::Closed => json!({"type":"boolean"}),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
@@ -172,6 +179,16 @@ impl ParamKind {
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol or footprint"),
+            Self::DrawingPoints
+                if value.as_array().is_some_and(|v| (2..=256).contains(&v.len()) && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
+            {
+                Ok(())
+            }
+            Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
+            Self::Closed if value.is_boolean() => Ok(()),
+            Self::DrawingPoints => Err("must contain 2–256 bounded vertices"),
+            Self::DrawingId => Err("must identify a drawing or layer by non-nil UUID"),
+            Self::Closed => Err("must be a boolean"),
             Self::HierarchyId
                 if value.as_str().is_some_and(|s| {
                     schematic::wiring::parse_id(s, "label-").is_some() || schematic::wiring::parse_id(s, "sheet-symbol-").is_some()
@@ -817,6 +834,40 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[1],
     library::sources::COMMANDS[2],
     library::sources::COMMANDS[3],
+    Command {
+        id: ADD_DRAWING,
+        title: "Draw Board Edge",
+        summary: "Add one open or closed graphic on a Board Edge layer, with one undo step.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "layer", required: true, summary: "Board Edge layer UUID from inspection", kind: ParamKind::DrawingId },
+            Param { name: "points", required: true, summary: "Ordered vertices in integer nanometers", kind: ParamKind::DrawingPoints },
+            Param { name: "closed", required: true, summary: "Join the last vertex to the first", kind: ParamKind::Closed },
+        ],
+    },
+    Command {
+        id: SET_DRAWING,
+        title: "Edit Board Drawing",
+        summary: "Replace one layer graphic's vertices without changing its identity or layer.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "drawing", required: true, summary: "Drawing UUID from inspection", kind: ParamKind::DrawingId },
+            Param { name: "points", required: true, summary: "Replacement vertices in integer nanometers", kind: ParamKind::DrawingPoints },
+            Param { name: "closed", required: true, summary: "Join the last vertex to the first", kind: ParamKind::Closed },
+        ],
+    },
+    Command {
+        id: DELETE_DRAWING,
+        title: "Delete Board Drawing",
+        summary: "Remove one addressed graphic, retaining its layer. One undo step.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "drawing", required: true, summary: "Drawing UUID from inspection", kind: ParamKind::DrawingId },
+        ],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -1119,6 +1170,9 @@ impl Session {
             | PLACE_ASSIGNED_FOOTPRINT
             | SET_FOOTPRINT_TRANSFORM
             | SET_SILKSCREEN
+            | ADD_DRAWING
+            | SET_DRAWING
+            | DELETE_DRAWING
             | DRAW_WIRE
             | DELETE_WIRE
             | SLICE_WIRE
@@ -1156,16 +1210,17 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json"})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json", "layers":board.layers(), "drawings":board.drawings()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
-            if !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || !p.board.footprints().is_empty() {
+            if !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || p.board.drawings.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"id":p.board_target().board, "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
                 inspected["board"]["assignments"] = json!(p.footprint_assignments());
                 inspected["board"]["silkscreen"] = json!(p.board.silkscreen.unwrap_or_default());
+                inspected["board"]["outline"] = json!(p.board.outline);
                 if !p.board.definitions.is_empty() {
                     inspected["board"]["definitions"] = json!(p.board.definitions.values().map(Arc::as_ref).collect::<Vec<_>>());
                 }
@@ -1225,6 +1280,9 @@ impl Session {
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
                 | SET_SILKSCREEN
+                | ADD_DRAWING
+                | SET_DRAWING
+                | DELETE_DRAWING
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
@@ -1351,6 +1409,7 @@ impl Session {
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
+            ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),

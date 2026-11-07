@@ -9,7 +9,9 @@ use std::{
 
 pub mod assignment;
 pub mod definition;
+pub mod drawing;
 pub mod materials;
+pub mod outline;
 pub mod setup;
 pub mod silkscreen;
 mod transform;
@@ -164,8 +166,12 @@ impl Footprint {
             "pins":project.board.pad_numbers(self).into_iter().filter_map(|pad| {
                 let point=self.pad_position(pad,&project.board)?;
                 let (_,pin)=self.component_pin(pad)?;
-                Some(json!({"pad":Pad{board:Some(project.board_target().board),footprint:self.id,number:pad}.inspect(),
-                    "terminal":project.component_terminal(self.component,pin).map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm}))
+                let mut record=json!({"pad":Pad{board:Some(project.board_target().board),footprint:self.id,number:pad}.inspect(),
+                    "terminal":project.component_terminal(self.component,pin).map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
+                if let Some(definition)=project.board.definition_for(self).and_then(|definition|definition.pads.iter().find(|item|item.number==pad.to_string())) {
+                    record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),definition.copper));
+                }
+                Some(record)
             }).collect::<Vec<_>>()});
         if let Some(library) = &self.library {
             value["library"] = json!(library);
@@ -188,6 +194,8 @@ pub(crate) fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Board {
     pub(crate) assignments: BTreeMap<u64, assignment::Assignment>,
+    pub(crate) outline: Option<outline::Outline>,
+    pub(crate) drawings: Option<drawing::Drawings>,
     pub(crate) setup: Option<setup::BoardSetup>,
     pub(crate) silkscreen: Option<silkscreen::Settings>,
     pub(crate) definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,

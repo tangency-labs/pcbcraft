@@ -37,6 +37,38 @@ pub struct BoardView<'a> {
     pub target: BoardTarget,
 }
 
+/// Physical copper membership resolved by the engine. Unconfigured boards retain their
+/// explicit compatibility binding instead of inventing a stackup or layer identities.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum CopperLayers {
+    Unconfigured { binding: super::definition::CopperBinding },
+    Resolved { binding: super::definition::CopperBinding, layers: Vec<Uuid> },
+}
+
+impl CopperLayers {
+    /// Resolve library copper binding in physical stack order. Component-side lands currently
+    /// use the documented front-side placement compatibility rule; all-copper lands span the stack.
+    pub(crate) fn resolve(setup: Option<&super::setup::BoardSetup>, binding: super::definition::CopperBinding) -> Self {
+        use super::{
+            definition::CopperBinding,
+            setup::{Side, Stratum},
+        };
+        let Some(setup) = setup else { return Self::Unconfigured { binding } };
+        let layers = setup
+            .stackup()
+            .strata
+            .iter()
+            .filter_map(|stratum| {
+                let Stratum::Copper { layer, .. } = stratum else { return None };
+                (binding == CopperBinding::AllCopper || setup.layers().iter().any(|record| record.id == *layer && record.side == Some(Side::Front)))
+                    .then_some(*layer)
+            })
+            .collect();
+        Self::Resolved { binding, layers }
+    }
+}
+
 /// A resolved pad in board nanometers. Physical lands carry rotated bounds and contours; legacy markers
 /// explicitly retain no shape and cannot be treated as manufactured pad geometry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +77,8 @@ pub struct PadView {
     pub center: Point,
     /// Land bounding corners in board coordinates; None denotes a legacy center-only marker.
     pub copper: Option<[Point; 4]>,
+    /// None denotes a marker with no physical copper. Configured memberships contain layer UUIDs.
+    pub copper_layers: Option<CopperLayers>,
     pub shape: super::definition::PadShape,
     pub corner_radius_nm: i64,
     pub drill_nm: Option<i64>,
@@ -109,6 +143,10 @@ impl Project {
 }
 
 impl<'a> BoardView<'a> {
+    /// Access the resolved owner for board-local projections within the engine.
+    pub(crate) fn project(self) -> &'a Project {
+        self.project
+    }
     /// Display name of the legacy board; identity never depends on this label.
     pub fn name(self) -> &'a str {
         "Board"
@@ -117,6 +155,11 @@ impl<'a> BoardView<'a> {
     /// The addressed physical board's setup, including local layers and material definitions.
     pub fn setup(self) -> Option<&'a super::setup::BoardSetup> {
         self.project.board.setup.as_ref()
+    }
+
+    /// The addressed board's authored physical boundary; absent boards have no inferred edge.
+    pub fn outline(self) -> Option<super::outline::Outline> {
+        self.project.board.outline
     }
 
     /// Effective physical silkscreen dimensions; an untouched legacy board uses explicit defaults.
@@ -153,6 +196,7 @@ impl<'a> BoardView<'a> {
                             number: pad.to_string(),
                             center,
                             copper,
+                            copper_layers: definition.map(|pad| CopperLayers::resolve(self.setup(), pad.copper)),
                             shape: definition.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
                             corner_radius_nm: definition.map_or(0, |p| p.corner_radius_nm),
                             drill_nm: definition.and_then(|p| p.drill_nm),
@@ -329,5 +373,76 @@ mod tests {
         assert!(other.board_view(target).is_none());
         assert!(other.terminal_for_pad(pad).is_none());
         assert!(other.pad_position(pad).is_none());
+    }
+    /// Copper UUID membership comes from the stackup, survives catalog rename/reorder, and never
+    /// upgrades a legacy marker or invents setup while projecting unconfigured physical pads.
+    #[test]
+    fn physical_pad_layers_resolve_in_the_core_without_changing_storage() {
+        use super::super::{
+            definition::CopperBinding,
+            setup::{LayerPurpose, Side, Stratum},
+        };
+        use crate::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP};
+        for configured in [false, true] {
+            let mut session = Session::default();
+            session.apply("project.new", &json!({})).unwrap();
+            if configured {
+                session.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":session.revision()})).unwrap();
+            }
+            for (index, definition) in ["resistor-0402", "header-1x02-254"].into_iter().enumerate() {
+                session
+                    .apply(
+                        PLACE_SYMBOL,
+                        &json!({"definition":"resistor","x_nm":index as i64*20000000,"y_nm":0,"expected_revision":session.revision()}),
+                    )
+                    .unwrap();
+                let symbol = session.project().unwrap().symbols().last().unwrap().id();
+                session.apply(PLACE_FOOTPRINT,&json!({"symbol":symbol,"definition":definition,"mapping":{"1":"1","2":"2"},"x_nm":index as i64*20000000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+            }
+            let before = encode_documents(session.snapshot().unwrap()).unwrap();
+            let board = session.project().unwrap().boards().next().unwrap();
+            let all: Vec<_> = board
+                .setup()
+                .into_iter()
+                .flat_map(|setup| &setup.stackup().strata)
+                .filter_map(|stratum| if let Stratum::Copper { layer, .. } = stratum { Some(*layer) } else { None })
+                .collect();
+            let front = board
+                .setup()
+                .and_then(|setup| setup.layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(Side::Front)))
+                .map(|layer| layer.id);
+            for footprint in board.footprints() {
+                let binding = if footprint.definition == "resistor-0402" { CopperBinding::ComponentSide } else { CopperBinding::AllCopper };
+                for pad in footprint.pads {
+                    if configured {
+                        let expected = if binding == CopperBinding::AllCopper { all.clone() } else { vec![front.unwrap()] };
+                        assert_eq!(pad.copper_layers, Some(CopperLayers::Resolved { binding, layers: expected }));
+                    } else {
+                        assert_eq!(pad.copper_layers, Some(CopperLayers::Unconfigured { binding }));
+                    }
+                }
+            }
+            assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+            if configured {
+                let expected: Vec<_> = board.footprints().flat_map(|footprint| footprint.pads.into_iter().map(|pad| pad.copper_layers)).collect();
+                let mut setup = serde_json::to_value(board.setup().unwrap()).unwrap();
+                setup["layers"].as_array_mut().unwrap().reverse();
+                for layer in setup["layers"].as_array_mut().unwrap() {
+                    layer["name"] = json!(format!("Renamed {}", layer["name"].as_str().unwrap()));
+                }
+                session.apply(SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":session.revision()})).unwrap();
+                let actual: Vec<_> = session
+                    .project()
+                    .unwrap()
+                    .boards()
+                    .next()
+                    .unwrap()
+                    .footprints()
+                    .flat_map(|footprint| footprint.pads.into_iter().map(|pad| pad.copper_layers))
+                    .collect();
+                assert_eq!(actual, expected);
+                assert!(session.inspect()["project"]["board"]["footprints"][0]["pins"][0]["copper_layers"]["layers"].is_array());
+            }
+        }
     }
 }

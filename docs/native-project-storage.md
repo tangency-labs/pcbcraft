@@ -47,7 +47,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6` | Project UUID, name, ordered sheet list and shared components |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` or `/2` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols |
-| `board.json` | `pcbcraft-board/1` through `/7` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements |
+| `board.json` | `pcbcraft-board/1` through `/9` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -172,7 +172,25 @@ optional under version 7, with their existing validation. Older boards retain
 their prior encoding until a package assignment is authored. Legacy single-file
 export refuses independent assignments rather than losing them.
 
-An unconfigured board without newer footprint, assignment or silkscreen data
+Board format 9 stores `graphics` with `layers` and `items` arrays. Items have
+independent UUIDs, a layer UUID, integer-nanometer `points`, and a `closed` flag.
+Layers in this section are technical Board Edge additions for boards without a
+matching configured layer; configured boards reference their existing layer UUIDs.
+Creating graphics does not invent copper stackup or change footprint bindings.
+Each path has 2–256 vertices (at least three when closed), no adjacent duplicates,
+and no repeated closing vertex. The codec validates non-nil unique drawing IDs,
+layer references and bounded resources (512 drawings, 4096 total vertices and
+128 combined layers); records sort by UUID. Optional setup, silkscreen, assignments
+and placements retain their existing validation and identities. Empty technical
+metadata remains after deleting the last graphic, preserving layer addresses.
+
+The earlier local format 8 rectangle remains readable and byte-stable on no-op
+save. Its first actual geometry edit materializes a layer-addressed drawing in
+format 9. Versions 1–7 keep their encoding until new data is authored; they reject
+newer fields instead of silently discarding them. Legacy single-file export
+refuses edge graphics. This adds no persisted board list or multiboard migration.
+
+An unconfigured board without newer footprint, assignment, edge graphic, outline or silkscreen data
 retains version 1 and its existing encoding. Initializing setup uses version 2, whose required `setup` contains a `layers` catalog and a
 `stackup` profile. Layers have UUIDs, names, typed purposes and optional surface
 sides; the profile has a UUID and front-to-back `strata`. Copper strata reference

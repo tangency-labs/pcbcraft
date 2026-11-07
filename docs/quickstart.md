@@ -221,8 +221,24 @@ project. Click **Main** or **Board** to navigate within the focused pane, or unf
 either document's arrow to browse its objects without switching. Picking a symbol,
 net or footprint opens its document and selects and centers the object.
 In the board workspace, Properties
-shows its stored reference, value, definition and unit-aware coordinate readouts;
+shows its stored reference, value, definition and unit-aware coordinate readouts.
+
+The Layout ribbon's **Active layer** selector shows the drawing target, also named
+in the status bar. In Layers, click a full row to activate it; the arrow and
+highlight follow that choice. The eyes at the right toggle visibility
+independently, and
+a hidden active layer is labeled **(hidden)** in the selector and status bar.
+**Show all** reveals every layer; **Isolate active** reveals only the active layer.
 Layers groups copper in physical stack order and retains visibility by layer ID.
+Click a layer swatch to change its color; the form supports a picker, **#RRGGBB**,
+Apply, Cancel and Reset to default. The swatch and supported geometry use the
+same color, including pad metal, Board Edge and technical graphics.
+The selected ribbon layer and its menu rows show matching color patches.
+**+** / **−** cycle through picker order (including hidden/technical layers);
+**PgUp** / **PgDn** select front/back copper. These keys change the active layer
+without changing visibility. Plated lands take the active visible copper color, while front-only surface
+pads stay on front copper. Colors are shared local settings for this board,
+separate from its geometry, saved engineering files and document undo.
 **Layout → Fit** fits the placements, and **Layout → Reveal** brings the current
 counterpart highlight into view without changing zoom. Switching back restores
 the schematic camera. These actions do not modify project data or undo history.
@@ -252,7 +268,21 @@ assigning an unassigned component directly from PCB layout. Already placed
 packages remain read-only pending reviewed board updates. See the
 [footprint contract](footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
-Slots, outline editing, routing, individual pad selection, selection
+In **Layers → Board**, select **Board Edge**, then choose **Layout → Draw → Line**
+or **Rectangle**. Click successive vertices for a line path; click its first vertex
+to close it, or press **Enter** to finish an open path. Rectangle uses two opposite
+corner clicks. Points snap to the current grid and nearby existing edge vertices.
+**Esc** discards the unfinished path, then exits the tool on a second press.
+
+With the tool exited, click an edge to select it. Drag a vertex to reshape the
+path, drag a segment or press **M** to move the whole drawing, and use **Delete**
+to remove it. Each completed edit shares project Undo. Fit includes edge geometry
+even on an empty board; the layer's visibility eye only affects this view.
+Saving retains drawing and layer identities without moving footprints or creating
+a copper stackup. Open paths are editing geometry, and this slice does not check
+closure across drawings, edge clearance or manufacturing validity.
+
+Arcs, slots, routing, individual pad selection, selection
 filters and Flip view still need implementation. Removing the last schematic
 unit currently removes its footprint too; reviewed board updates are tracked
 separately in #55.

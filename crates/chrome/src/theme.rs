@@ -83,6 +83,8 @@ pub struct Tokens {
     pub board_back: Color32,
     pub board_through: Color32,
     pub board_inner: Color32,
+    /// Alternate internal copper key; individual layer overrides live in editor appearance settings.
+    pub board_inner_alt: Color32,
     /// Symbol ink on the Parts library's raised preview tiles.
     pub catalog_symbol: Color32,
     /// Home page: page fill, card surface and border, and secondary text. These and the rail and
@@ -212,6 +214,7 @@ impl Tokens {
             board_back: Color32::from_rgb(64, 96, 255),
             board_through: Color32::from_rgb(224, 188, 50),
             board_inner: Color32::from_rgb(178, 169, 207),
+            board_inner_alt: Color32::from_rgb(115, 190, 136),
             catalog_symbol: Color32::from_rgb(55, 95, 130),
             // Placeholders until `with_home` derives them from the colours above.
             file_background: Color32::PLACEHOLDER,

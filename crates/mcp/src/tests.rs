@@ -23,6 +23,39 @@ fn body(result: &Value) -> Value {
     serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// Headless clients discover Board Edge layers and create/update/delete their graphics through
+/// revision-checked transactions rather than editing a rectangle settings object.
+#[test]
+fn board_edge_tools_share_layer_geometry_and_undo() {
+    use pcbcraft_engine::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
+    let mut s = server();
+    let opened = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let layer = opened["project"]["boards"][0]["layers"][0]["id"].clone();
+    let schema = body(&call(&mut s, "describe_command", json!({"command":ADD_DRAWING})));
+    assert_eq!(schema["params"]["properties"]["layer"]["format"], "uuid");
+    let points = json!([{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0},{"x_nm":10_000_000,"y_nm":5_000_000}]);
+    let updated = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":ADD_DRAWING,"params":{"layer":layer,"points":points,"closed":false,"expected_revision":opened["revision"]}}),
+    ));
+    let drawing = updated["project"]["boards"][0]["drawings"][0]["id"].clone();
+    assert_eq!(updated["project"]["boards"][0]["drawings"][0]["layer"], layer);
+    let stale = call(&mut s, "execute", json!({"command":DELETE_DRAWING,"params":{"drawing":drawing,"expected_revision":opened["revision"]}}));
+    assert_eq!(stale["isError"], true);
+    let same = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":SET_DRAWING,"params":{"drawing":drawing,"points":points,"closed":false,"expected_revision":updated["revision"]}}),
+    ));
+    assert_eq!(same, updated);
+    let deleted =
+        body(&call(&mut s, "execute", json!({"command":DELETE_DRAWING,"params":{"drawing":drawing,"expected_revision":updated["revision"]}})));
+    assert_eq!(deleted["project"]["boards"][0]["drawings"], json!([]));
+    let undone = body(&call(&mut s, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"], updated["project"]);
+}
+
 #[test]
 fn initialize_offers_a_version_the_client_can_speak() {
     let mut s = server();
@@ -159,10 +192,16 @@ fn execute_gives_the_same_state_as_running_the_command_on_a_session() {
 
 /// Independent project.new commands generate different UUIDs. Check each sheet's path and
 /// retain its other metadata while comparing commands from these separate projects.
+/// Empty boards also expose a compatibility layer derived from their distinct board IDs.
 fn without_sheet_identity(mut state: Value) -> Value {
     for board in state["project"]["boards"].as_array_mut().unwrap() {
         assert_eq!(board["id"].as_str().unwrap().len(), 36);
         board["id"] = Value::Null;
+        assert!(board["drawings"].as_array().unwrap().is_empty());
+        for layer in board["layers"].as_array_mut().unwrap() {
+            assert_eq!(layer["id"].as_str().unwrap().len(), 36);
+            layer["id"] = Value::Null;
+        }
     }
     for sheet in state["project"]["sheets"].as_array_mut().unwrap() {
         let id = sheet["id"].as_str().unwrap();

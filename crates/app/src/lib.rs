@@ -9,7 +9,9 @@ use std::sync::Arc;
 mod arrangements;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
+mod board_appearance;
 mod board_canvas;
+mod board_drawing;
 mod board_panels;
 mod board_workspace;
 mod canvas_camera;
@@ -149,6 +151,7 @@ enum Dialog {
     Hierarchy(hierarchy::Edit),
     /// Chooses and pins a package independently of board placement.
     Footprint(footprint_assignment::Edit),
+    LayerColor(board_appearance::Edit),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(properties::Edit),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
@@ -187,6 +190,7 @@ pub struct PcbApp {
     files: project_files::ProjectFiles,
     file_notice: Option<String>,
     preferences: Preferences,
+    board_appearance: board_appearance::Appearance,
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
     browser: project_browser::ProjectBrowser,
@@ -272,6 +276,9 @@ impl PcbApp {
             properties_open: true,
             arrangements: arrangements::Arrangements::from_storage(cc.storage.and_then(|storage| storage.get_string(arrangements::STORAGE_KEY))),
             preferences,
+            board_appearance: board_appearance::Appearance::from_storage(
+                cc.storage.and_then(|storage| storage.get_string(board_appearance::STORAGE_KEY)),
+            ),
             views,
             #[cfg(not(target_arch = "wasm32"))]
             files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
@@ -1000,6 +1007,7 @@ impl PcbApp {
     /// Show the command error or placement hint alongside the project name, and at the right
     /// the focused view's grid spacing, which can be changed there. Home has no canvas, so it
     /// shows no grid. Density annotations follow the visible grid style, independently of snapping.
+    /// PCB views report their active tool/layer and explicitly label a hidden active layer.
     fn status(&mut self, ui: &mut Ui) {
         let name = self.session.project().map_or("No project open", |p| p.name.as_str()).to_owned();
         let message = self.message.clone();
@@ -1017,6 +1025,23 @@ impl PcbApp {
         let mut unit = self.preferences.units;
         let pointer = self.pointer.filter(|_| grid_view.is_some());
         let units_shortcut = ui.ctx().format_shortcut(&SWITCH_UNITS);
+        let board_status = self
+            .session
+            .project()
+            .and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target)))
+            .and_then(|board| {
+                board.layers().into_iter().find(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str()))
+            })
+            .map(|layer| {
+                let name = crate::board_panels::layer_name(&layer);
+                let hidden = self.views.active.board.hidden_layers.contains(&layer.id.to_string());
+                let tool = match self.views.active.board.drawing.tool {
+                    Some(board_drawing::Tool::Lines) => "Line · ",
+                    Some(board_drawing::Tool::Rectangle) => "Rectangle · ",
+                    None => "",
+                };
+                format!("{tool}{name}{}", if hidden { " (hidden)" } else { "" })
+            });
         shell::status_bar(
             ui,
             |ui| {
@@ -1024,7 +1049,7 @@ impl PcbApp {
                 if let Some(message) = message {
                     ui.label(shell::error(message));
                 } else if self.views.active.workspace == Workspace::Board {
-                    ui.label(dim("Board"));
+                    ui.label(dim(board_status.as_deref().unwrap_or("Board")));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {
@@ -1352,6 +1377,33 @@ impl PcbApp {
         {
             return;
         }
+        if !self.home
+            && self.views.active.workspace == Workspace::Board
+            && !assistant_keys
+            && matches!(self.dialog, Dialog::None)
+            && !egui::Popup::is_any_open(ctx)
+            && !ctx.text_edit_focused()
+        {
+            let layer_direction = ctx.input_mut(|input| {
+                if input.consume_key(Modifiers::NONE, Key::PageUp) {
+                    Some("front")
+                } else if input.consume_key(Modifiers::NONE, Key::PageDown) {
+                    Some("back")
+                } else if input.consume_key(Modifiers::NONE, Key::Plus)
+                    || input.consume_key(Modifiers::SHIFT, Key::Plus)
+                    || input.consume_key(Modifiers::SHIFT, Key::Equals)
+                {
+                    Some("next")
+                } else if input.consume_key(Modifiers::NONE, Key::Minus) {
+                    Some("previous")
+                } else {
+                    None
+                }
+            });
+            if let Some(direction) = layer_direction {
+                let _ = self.navigate_board_layer(view, direction);
+            }
+        }
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
             return;
         }
@@ -1361,8 +1413,18 @@ impl PcbApp {
                 self.home = false;
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.views.active.board.draft.take().is_none() {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+                && !self.views.active.board.drawing.escape()
+                && self.views.active.board.draft.take().is_none()
+            {
                 self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);
+            }
+            if self.views.active.board.drawing.selected.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
+                self.views.active.board.drawing.delete_requested = true;
+            }
+            if self.views.active.board.drawing.tool == Some(board_drawing::Tool::Lines) {
+                self.views.active.board.drawing.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                self.views.active.board.drawing.backspace_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace));
             }
             self.views.active.board.move_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M));
             self.views.active.board.rotate_requested = if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::R)) {
@@ -1529,6 +1591,7 @@ impl PcbApp {
             }
             Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, edit),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
+            Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
@@ -1873,6 +1936,10 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
+    list.push(("PCB layout", "Next layer", "+".to_owned()));
+    list.push(("PCB layout", "Previous layer", "−".to_owned()));
+    list.push(("PCB layout", "Front copper layer", "PgUp".to_owned()));
+    list.push(("PCB layout", "Back copper layer", "PgDn".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));
     list.push(("View", "Finer grid", key(&FINER_GRID)));
@@ -1893,7 +1960,7 @@ impl eframe::App for PcbApp {
             // Release the native surface after the frame; surviving host/window IDs stay put.
             frame.retire_root_window();
         }
-        let changed = self.preferences != before;
+        let changed = self.preferences != before || self.board_appearance.dirty;
         #[cfg(not(target_arch = "wasm32"))]
         let changed = self.assistant.take_settings_changed() || changed;
         #[cfg(not(target_arch = "wasm32"))]
@@ -1919,6 +1986,10 @@ impl eframe::App for PcbApp {
             storage.set_string(arrangements::STORAGE_KEY, text);
         }
         storage.set_string(PREFERENCES_KEY, self.preferences.to_text());
+        if let Some(text) = self.board_appearance.storage_text() {
+            storage.set_string(board_appearance::STORAGE_KEY, text);
+        }
+        self.board_appearance.dirty = false;
         #[cfg(not(target_arch = "wasm32"))]
         {
             storage.set_string(RECENT_PROJECTS_KEY, self.files.recent.to_text());

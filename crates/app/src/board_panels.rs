@@ -2,7 +2,7 @@
 use crate::{PcbApp, editor_view::BoardState};
 use egui::{Id, Rect, Ui};
 use pcbcraft_chrome::{board, units, workspace};
-use pcbcraft_engine::board::setup::{BoardSetup, Layer, LayerPurpose, Side, Stratum};
+use pcbcraft_engine::board::setup::{Layer, LayerPurpose, Stratum};
 
 impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
@@ -21,6 +21,7 @@ impl PcbApp {
         let mut browser_area = area;
         browser_area.max.y = board::browser_bottom(area);
         let mut silk_apply = None;
+        let mut color_pick = None;
         let mut pick = None;
         let (browser, collapse) = if self.browser.open {
             workspace::floating_card_with_id(ui, host.with("browser"), "Browser", browser_area, state.browser_collapsed, |ui| {
@@ -43,11 +44,7 @@ impl PcbApp {
             layers_area.min.y = browser.max.y;
         }
         let (layers, collapse) = workspace::floating_card_with_id(ui, host.with("layers"), "Layers", layers_area, state.layers_collapsed, |ui| {
-            if let Some(setup) = target.setup() {
-                layer_groups(ui, setup, state, Id::new((view_id, target.target)));
-            } else {
-                ui.label("Stackup unspecified");
-            }
+            layer_groups(ui, target, state, Id::new((view_id, target.target)), &self.board_appearance, &mut color_pick);
         });
         if collapse {
             state.layers_collapsed = !state.layers_collapsed;
@@ -100,6 +97,10 @@ impl PcbApp {
         if let Some(action) = pick {
             self.queue_view_action(ui.ctx(), view_id, crate::editor_windows::ViewAction::Browse(action));
         }
+        if let Some(layer) = color_pick {
+            self.begin_layer_color(view_id, layer);
+            self.repaint_editors(ui.ctx());
+        }
         [browser, layers, properties]
     }
 }
@@ -122,53 +123,124 @@ fn group(purpose: LayerPurpose) -> usize {
     }
 }
 
-/// Copper follows physical stack order; technical layers group by purpose and sort by display
-/// name. Renaming or regrouping does not change local visibility keyed by stable layer identity.
-fn layer_groups(ui: &mut Ui, setup: &BoardSetup, state: &mut BoardState, id: Id) {
-    let mut layers: Vec<_> = setup.layers().iter().collect();
+/// Keep copper in stack order and group technical layers consistently in the picker and card.
+pub(super) fn ordered_layers(board: pcbcraft_engine::board::view::BoardView<'_>) -> Vec<Layer> {
+    let mut layers = board.layers();
     layers.sort_by_cached_key(|layer| {
         (
-            setup.stackup().strata.iter().position(|stratum| matches!(stratum,Stratum::Copper{layer:id,..}if *id==layer.id)).unwrap_or(usize::MAX),
+            group(layer.purpose),
+            board
+                .setup()
+                .and_then(|setup| setup.stackup().strata.iter().position(|stratum| matches!(stratum,Stratum::Copper{layer:id,..}if *id==layer.id)))
+                .unwrap_or(usize::MAX),
             layer.name.to_lowercase(),
         )
     });
+    layers
+}
+
+/// Retain older saved layer names while displaying the product's Board Edge terminology.
+pub(super) fn layer_name(layer: &Layer) -> &str {
+    if layer.purpose == LayerPurpose::Outline && layer.name == "Board outline" { "Board Edge" } else { &layer.name }
+}
+
+/// Layer keys share the effective palette used by their supported canvas geometry.
+fn layer_color(layer: &Layer, board: pcbcraft_engine::board::view::BoardView<'_>, appearance: &crate::board_appearance::Appearance) -> egui::Color32 {
+    appearance.color(board, layer)
+}
+
+/// Copper follows physical stack order; technical layers group by purpose and sort by display
+/// name. Renaming or regrouping does not change local visibility keyed by stable layer identity.
+/// A new active choice or resized viewport reveals the active row once, without fighting later scrolling.
+fn layer_groups(
+    ui: &mut Ui,
+    board: pcbcraft_engine::board::view::BoardView<'_>,
+    state: &mut BoardState,
+    id: Id,
+    appearance: &crate::board_appearance::Appearance,
+    pick: &mut Option<String>,
+) {
+    ui.horizontal(|ui| {
+        if ui.small_button("Show all").clicked() {
+            state.set_layer_visibility(board.layers().iter().map(|layer| layer.id.to_string()), false);
+        }
+        if ui.add_enabled(state.active_layer.is_some(), egui::Button::new("Isolate active").small()).clicked() {
+            state.set_layer_visibility(board.layers().iter().map(|layer| layer.id.to_string()), true);
+        }
+    });
+    let current = (state.active_layer.clone(), ui.clip_rect().height().to_bits());
+    let reveal = ui.ctx().data_mut(|data| {
+        let key = id.with("last_active_layer");
+        let before = data.get_temp::<(Option<String>, u32)>(key);
+        let reveal = before.as_ref() != Some(&current);
+        data.insert_temp(key, current);
+        reveal
+    });
+    let layers = ordered_layers(board);
     for (index, title) in ["Copper", "Board", "Component details", "Manufacturing", "User"].into_iter().enumerate() {
         let items: Vec<_> = layers.iter().filter(|layer| group(layer.purpose) == index).collect();
         if items.is_empty() {
             continue;
         }
-        egui::CollapsingHeader::new(title).id_salt(id.with(index)).default_open(index == 0).show(ui, |ui| {
-            for layer in items {
-                layer_row(ui, layer, state);
-            }
-        });
+        let contains_active = items.iter().any(|layer| state.active_layer.as_deref() == Some(layer.id.to_string().as_str()));
+        egui::CollapsingHeader::new(title).id_salt(id.with(index)).default_open(index <= 1).open((reveal && contains_active).then_some(true)).show(
+            ui,
+            |ui| {
+                for layer in items {
+                    if layer_row(ui, layer, state, reveal, board, appearance) {
+                        *pick = Some(layer.id.to_string());
+                    }
+                }
+            },
+        );
     }
 }
 
-/// Visibility and active layer are independent. Technical controls retain state for future
-/// geometry; the current legacy through-hole inspection markers use visible copper only.
-fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState) {
+/// Visibility and activation have separate hit targets. Eye changes retain the active layer;
+/// both copper and technical visibility remain view-local and keyed by stable layer identity.
+fn layer_row(
+    ui: &mut Ui,
+    layer: &Layer,
+    state: &mut BoardState,
+    reveal: bool,
+    board: pcbcraft_engine::board::view::BoardView<'_>,
+    appearance: &crate::board_appearance::Appearance,
+) -> bool {
     let id = layer.id.to_string();
+    let label = layer_name(layer);
+    let mut color_clicked = false;
     ui.push_id(&id, |ui| {
         ui.horizontal(|ui| {
-            let mut visible = !state.hidden_layers.contains(&id);
-            let response = ui.checkbox(&mut visible, "");
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, visible, format!("Show layer {}", layer.name)));
-            if response.changed() {
-                if visible {
-                    state.hidden_layers.remove(&id);
-                } else {
-                    state.hidden_layers.insert(id.clone());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let visible = !state.hidden_layers.contains(&id);
+                if board::layer_visibility(ui, label, visible).clicked() {
+                    state.set_layer(&id, false, Some(!visible));
                 }
-            }
-            if layer.purpose == LayerPurpose::Copper {
-                board::layer_swatch(ui, board::copper_color(layer.side.map(|side| side == Side::Front)));
-            }
-            if ui.selectable_label(state.active_layer.as_ref() == Some(&id), &layer.name).clicked() {
-                state.active_layer = Some(id.clone());
-            }
+                let active = state.active_layer.as_ref() == Some(&id);
+                let row = workspace::tree_row(
+                    ui,
+                    ui.id().with("activate"),
+                    &workspace::TreeRow {
+                        depth: 0,
+                        fold: None,
+                        icon: Some(workspace::TreeIcon::Layer { color: layer_color(layer, board, appearance), active, editable: true }),
+                        label,
+                        accessibility_label: Some(&format!("Activate layer {label}")),
+                        tip: if active { "Active layer" } else { "Set active layer" },
+                        selected: active,
+                    },
+                );
+                if reveal && active {
+                    row.response.scroll_to_me(Some(egui::Align::Center));
+                }
+                color_clicked = row.icon_clicked;
+                if row.clicked {
+                    state.set_layer(&id, true, None);
+                }
+            });
         })
     });
+    color_clicked
 }
 
 /// One view's unapplied, unit-aware board settings. A captured revision prevents overwriting

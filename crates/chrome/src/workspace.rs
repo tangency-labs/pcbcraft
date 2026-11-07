@@ -63,6 +63,8 @@ pub enum ToolIcon {
     SplitView,
     EditorWindow,
     Settings,
+    Rectangle,
+    Line,
 }
 
 /// The glyph at the start of a Browser row: a container or one of the ribbon's own glyphs.
@@ -72,6 +74,12 @@ pub enum TreeIcon {
     Sheet,
     Board,
     Tool(ToolIcon),
+    /// A layer uses the same tree row surface, with an explicit active arrow and color key.
+    Layer {
+        color: Color32,
+        active: bool,
+        editable: bool,
+    },
 }
 
 /// One row of a Browser tree. The caller owns the tree and its fold state; the row only draws.
@@ -98,6 +106,8 @@ pub struct TreeResponse {
     /// The stable row response supports contextual actions owned by the navigator.
     pub response: Response,
     pub clicked: bool,
+    /// An editable layer swatch has a separate button; this never activates the row.
+    pub icon_clicked: bool,
     pub fold: bool,
 }
 
@@ -537,7 +547,15 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
     let left = rect.left() + row.depth as f32 * TREE_INDENT;
     let fold_rect = Rect::from_min_max(pos2(left, rect.top()), pos2(left + TREE_FOLD_WIDTH, rect.bottom()));
     let body = Rect::from_min_max(pos2(fold_rect.right(), rect.top()), rect.max);
-    let response = ui.interact(body, id, Sense::click());
+    let editable = matches!(row.icon, Some(TreeIcon::Layer { editable: true, .. }));
+    let icon_rect = Rect::from_min_max(body.min, pos2(body.left() + TREE_LABEL_LEFT, body.bottom()));
+    let activation = if editable { Rect::from_min_max(pos2(icon_rect.right(), body.top()), body.max) } else { body };
+    let response = ui.interact(activation, id, Sense::click());
+    let icon_response = editable.then(|| {
+        let response = ui.interact(icon_rect, id.with("layer_color"), Sense::click());
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), format!("Change color for layer {}", row.label)));
+        response
+    });
     response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, row.selected, row.accessibility_label.unwrap_or(row.label)));
     let fold = row.fold.map(|open| {
         let fold = ui.interact(fold_rect, id.with("fold"), Sense::click());
@@ -551,6 +569,9 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
             p.rect_filled(body, t.radius_sm, t.accent_soft);
         } else if response.hovered() || response.has_focus() {
             p.rect_filled(body, t.radius_sm, t.hover);
+        }
+        if icon_response.as_ref().is_some_and(|response| response.hovered() || response.has_focus()) {
+            p.rect_filled(icon_rect, t.radius_sm, t.hover);
         }
         let cy = rect.center().y;
         if let Some((open, fold)) = &fold {
@@ -576,7 +597,11 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
         fold.on_hover_text(if open { "Collapse branch" } else { "Expand branch" });
     }
     let response = if row.tip.is_empty() { response } else { response.on_hover_text(row.tip) };
-    TreeResponse { clicked: response.clicked() && !fold_clicked, fold: fold_clicked, response }
+    let icon_clicked = icon_response.as_ref().is_some_and(|response| response.clicked());
+    if let Some(icon) = icon_response {
+        icon.on_hover_text(format!("Change color for layer {}", row.label));
+    }
+    TreeResponse { clicked: response.clicked() && !fold_clicked && !icon_clicked, icon_clicked, fold: fold_clicked, response }
 }
 
 /// Lay out one line of text no wider than `width`, ending in an ellipsis when it is cut short.
@@ -588,9 +613,21 @@ fn elided(p: &egui::Painter, text: &str, font: FontId, color: Color32, width: f3
     p.layout_job(job)
 }
 
-/// Draw Browser glyphs using shared workspace icons and the existing qualified tree artwork.
+/// Draw tree glyphs using shared workspace icons, qualified artwork and original layer markers.
 fn paint_tree_icon(p: &egui::Painter, icon: TreeIcon, center: Pos2, size: f32, t: Tokens) {
     match icon {
+        TreeIcon::Layer { color, active, .. } => {
+            p.circle_filled(center, t.space_4, color);
+            p.circle_stroke(center, t.space_4, Stroke::new(1.0, t.border));
+            if active {
+                let c = center - vec2(TREE_LABEL_LEFT - t.space_3, 0.0);
+                p.add(Shape::convex_polygon(
+                    vec![c + vec2(-t.space_3, -t.space_4), c + vec2(t.space_3, 0.0), c + vec2(-t.space_3, t.space_4)],
+                    t.accent,
+                    Stroke::NONE,
+                ));
+            }
+        }
         TreeIcon::Board => paint_workspace_glyph(p, WorkspaceIcon::Layout, center, size, t, true),
         TreeIcon::Folder => paint_folder(p, center, size, t.icon_line),
         TreeIcon::Sheet => {
@@ -696,6 +733,68 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
         }
     });
     picked
+}
+
+/// Standard themed layer dropdown with a color patch in its closed field and every popup row.
+/// Labels and color targets stay independent; selecting a row changes only the supplied value.
+pub fn layer_choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T, options: &[(T, &str, Color32)]) -> bool {
+    let before = *value;
+    let selected = options.iter().find(|(option, _, _)| option == value);
+    let selected_name = selected.map_or("Layer", |(_, name, _)| *name);
+    let result =
+        egui::ComboBox::from_id_salt(label).selected_text(layer_choice_label(ui, selected_name)).width(ui.available_width()).show_ui(ui, |ui| {
+            for (option, name, color) in options {
+                let text = layer_choice_label(ui, name);
+                let response = ui.selectable_value(value, *option, text);
+                layer_choice_patch(ui, response.rect, *color);
+            }
+        });
+    if let Some((_, _, color)) = selected {
+        layer_choice_patch(ui, result.response.rect, *color);
+    }
+    result.response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, ui.is_enabled(), label));
+    before != *value
+}
+
+/// Reserve actual layout space for a swatch rather than padding the visible or accessible text.
+fn layer_choice_label(ui: &Ui, name: &str) -> egui::text::LayoutJob {
+    let t = Tokens::get();
+    let mut job = egui::text::LayoutJob::simple(name.to_owned(), egui::TextStyle::Button.resolve(ui.style()), t.text, f32::INFINITY);
+    if let Some(section) = job.sections.first_mut() {
+        section.leading_space = t.space_12 + t.space_8;
+    }
+    job
+}
+
+/// Use the same palette and quiet border as the layer rows, with a rectangular toolbar key.
+fn layer_choice_patch(ui: &Ui, rect: Rect, color: Color32) {
+    let t = Tokens::get();
+    let left = rect.left() + ui.spacing().button_padding.x;
+    let patch = Rect::from_center_size(pos2(left + t.space_6, rect.center().y), vec2(t.space_12, t.space_12));
+    ui.painter().rect_filled(patch, t.space_2 as u8, color);
+    ui.painter().rect_stroke(patch, t.space_2 as u8, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+}
+
+/// Place a standard themed field in the ribbon using the existing group height and caption.
+/// Its own control opens any menu; the caption adds no second popup or interaction target.
+pub fn ribbon_field<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get();
+    let width = t.control_height * 6.0;
+    let height = RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP + t.font_small + t.space_4;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let field = Rect::from_min_max(
+        rect.min + vec2(RIBBON_GROUP_PADDING, t.space_8),
+        pos2(rect.right() - RIBBON_GROUP_PADDING, rect.top() + RIBBON_TOOL_HEIGHT),
+    );
+    let result = ui.scope_builder(egui::UiBuilder::new().max_rect(field).layout(Layout::top_down(Align::Min)), add).inner;
+    ui.painter().text(
+        pos2(rect.center().x, rect.top() + RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP),
+        Align2::CENTER_TOP,
+        title,
+        FontId::proportional(t.font_small),
+        t.text_dim,
+    );
+    result
 }
 
 /// The quiet rule between two ribbon groups, in a slot as tall as the groups.
@@ -1009,6 +1108,17 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
     let stroke = |width: f32, color| Stroke::new(width * size / 64.0, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
+        ToolIcon::Line => {
+            line(&[(10., 50.), (54., 14.)], stroke(4., ink));
+            p.circle_filled(at(10., 50.), 4. * size / 64., accent);
+            p.circle_filled(at(54., 14.), 4. * size / 64., accent);
+        }
+        ToolIcon::Rectangle => {
+            line(&[(10.0, 16.0), (54.0, 16.0), (54.0, 48.0), (10.0, 48.0), (10.0, 16.0)], stroke(4.0, ink));
+            for (x, y) in [(10.0, 16.0), (54.0, 16.0), (54.0, 48.0), (10.0, 48.0)] {
+                p.rect_filled(Rect::from_center_size(at(x, y), vec2(7.0, 7.0) * (size / 64.0)), 0, accent);
+            }
+        }
         ToolIcon::Subsheet
         | ToolIcon::Power
         | ToolIcon::Text

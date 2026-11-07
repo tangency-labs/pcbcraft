@@ -26,8 +26,9 @@ existing `pcb.*` commands accept an optional `board` UUID, defaulting only under
 the current single-board compatibility model. Unknown IDs fail before mutation.
 New renderers consume the resolved board, not a global project placement list.
 
-This is an address bridge, not the full #122 storage migration. Formats 1–5 and
-`board.json` remain unchanged. Their board UUID is derived deterministically from
+This is an address bridge, not the full #122 storage migration. The board remains
+in `board.json`; layer-addressed Board Edge graphics use board document version 9 without adding
+a persisted board list. The board UUID is derived deterministically from
 SHA-256 of the UTF-8 bytes `pcbcraft:legacy-board:1` followed by a zero byte and
 the saved project UUID's 16 bytes. The first 16 digest bytes use UUID v8 version
 and standard variant bits. This keeps the address stable through rename, edits,
@@ -99,6 +100,18 @@ silkscreen, fabrication, courtyard, adhesive, outline and user documentation.
 Copper order comes from the physical stackup. Catalog serialization uses stable
 ID order, so renaming or inserting a layer does not renumber unrelated records.
 Display order can differ by view without changing physical order.
+
+The engine's immutable `CopperLayers` projection now resolves physical pad
+membership into these copper UUIDs. Component-side surface lands use the current
+front-side placement compatibility rule; plated lands resolve every copper stratum
+in stack order. Without setup, the projection retains an explicit `unconfigured`
+binding, and center-only legacy markers have no physical membership. GUI and MCP
+consume this contract; renderers no longer infer surface membership from the
+active layer. The personal palette is stored separately in local editor settings,
+keyed by board/layer UUID, shared across views, and used for both swatches and
+metal. Selecting a layer changes display priority for spanning pads without
+moving or rebinding any metal. This slice adds no native-format migration, board
+side flipping, tracks, vias or zones.
 
 Adding, removing or changing a layer is an atomic document edit. Before applying
 it, the command must account for all objects using that layer, including pads,

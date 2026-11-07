@@ -45,6 +45,37 @@ impl PcbApp {
         }
     }
 
+    /// Navigate the addressed board's layer picker without changing visibility or document history.
+    /// Next/previous wrap in the same catalog order as the picker, including technical and hidden
+    /// layers; front/back resolve explicit copper side metadata. Unknown views/directions fail atomically.
+    pub(super) fn navigate_board_layer(&mut self, id: crate::ViewId, direction: &str) -> Result<(), String> {
+        use pcbcraft_engine::board::setup::{LayerPurpose, Side};
+        let state = self.views.view(id).filter(|view| view.workspace == crate::Workspace::Board).ok_or("The addressed view must show a board")?;
+        let board = self
+            .session
+            .project()
+            .and_then(|project| state.board.target.and_then(|target| project.board_view(target)))
+            .ok_or("The view's board is unavailable")?;
+        let layers = crate::board_panels::ordered_layers(board);
+        if layers.is_empty() {
+            return Err("This board has no available layers".into());
+        }
+        let current = layers.iter().position(|layer| state.board.active_layer.as_deref() == Some(layer.id.to_string().as_str()));
+        let chosen = match direction {
+            "next" => layers.get(current.map_or(0, |i| (i + 1) % layers.len())),
+            "previous" => layers.get(current.map_or(layers.len() - 1, |i| (i + layers.len() - 1) % layers.len())),
+            "front" | "back" => layers.iter().find(|layer| {
+                layer.purpose == LayerPurpose::Copper && layer.side == Some(if direction == "front" { Side::Front } else { Side::Back })
+            }),
+            _ => return Err("Layer direction must be next, previous, front or back".into()),
+        }
+        .ok_or("This board has no copper layer on that side")?
+        .id
+        .to_string();
+        self.views.view_mut(id).ok_or("The addressed view closed")?.board.set_layer(&chosen, true, None);
+        Ok(())
+    }
+
     /// Fit the addressed view to the project on its next paint, clear of every visible card.
     /// Unknown views are ignored; the project and other views are unchanged.
     pub(super) fn fit_view(&mut self, id: crate::ViewId) {
@@ -86,6 +117,8 @@ mod live {
         /// An arrangement name: 1 to 80 characters on one line.
         Name,
         Bool,
+        /// Opaque sRGB #RRGGBB, or null to restore a physical-role default.
+        Color,
         Choice(&'static [&'static str]),
         Integer {
             min: i64,
@@ -98,8 +131,8 @@ mod live {
         Selection,
         /// A list of distinct footprint IDs.
         Footprints,
-        /// Persistent sheet UUID, validated against the current project before navigation.
-        Sheet,
+        /// Persistent document/object UUID, resolved against the addressed view before acting.
+        Object,
     }
 
     impl Kind {
@@ -109,9 +142,10 @@ mod live {
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
                 Self::View | Self::Window | Self::Arrangement => json!({"type": "integer", "minimum": 0}),
-                Self::Sheet => json!({"type":"string","format":"uuid"}),
+                Self::Object => json!({"type":"string","format":"uuid"}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
+                Self::Color => json!({"oneOf":[{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},{"type":"null"}]}),
                 Self::Choice(values) => json!({"type": "string", "enum": values}),
                 Self::Integer { min, max, step } => json!({"type": "integer", "minimum": min, "maximum": max, "multipleOf": step}),
                 Self::Point => {
@@ -130,10 +164,11 @@ mod live {
                 Self::View | Self::Window | Self::Arrangement => value.as_u64().is_some(),
                 Self::Name => value.as_str().is_some(),
                 Self::Bool => value.is_boolean(),
+                Self::Color => value.is_null() || value.as_str().is_some_and(|text| crate::board_appearance::parse_color(text).is_ok()),
                 Self::Choice(values) => value.as_str().is_some_and(|value| values.contains(&value)),
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
-                Self::Sheet => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
+                Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
                 Self::Selection => Selection::parse(value).is_some(),
                 Self::Footprints => footprints(value).is_some(),
             };
@@ -144,9 +179,10 @@ mod live {
                 Self::View => "must be a view ID from inspect_editor".to_owned(),
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
-                Self::Sheet => "must be a sheet UUID from project inspection".to_owned(),
+                Self::Object => "must be an object UUID from project inspection".to_owned(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
+                Self::Color => "must be #RRGGBB or null to restore the default".to_owned(),
                 Self::Choice(values) => format!("must be one of {}", values.join(", ")),
                 Self::Integer { min, max, step: 1 } => format!("must be a whole number from {min} to {max}"),
                 Self::Integer { min, max, step } => format!("must be a multiple of {step} from {min} to {max}"),
@@ -258,7 +294,7 @@ mod live {
             id: "view.open_sheet",
             title: "Open Sheet",
             summary: "Open an explicitly addressed sheet in this pane, as its Browser row does. Other panes retain their targets.",
-            params: &[VIEW, Param { name: "sheet", summary: "Sheet UUID from project inspection", required: true, kind: Kind::Sheet }],
+            params: &[VIEW, Param { name: "sheet", summary: "Sheet UUID from project inspection", required: true, kind: Kind::Object }],
         },
         WindowCommand {
             id: "view.focus",
@@ -329,6 +365,55 @@ mod live {
                     summary: "The spacing in nanometres (50 mil is 1270000)",
                     required: true,
                     kind: Kind::Integer { min: *grid::SPACING_RANGE_NM.start(), max: *grid::SPACING_RANGE_NM.end(), step: 1 },
+                },
+            ],
+        },
+        WindowCommand {
+            id: "view.navigate_layer",
+            title: "Navigate Layers",
+            summary: "Choose the next/previous layer in picker order, or front/back copper, as the PCB keyboard shortcuts do. Wraps across technical/hidden layers without changing visibility or document history.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "direction",
+                    summary: "next, previous, front or back",
+                    required: true,
+                    kind: Kind::Choice(&["next", "previous", "front", "back"]),
+                },
+            ],
+        },
+        WindowCommand {
+            id: "view.set_layer",
+            title: "Layer",
+            summary: "Activate or show/hide an addressed PCB layer through the Layers controls. Changes only the addressed view and cancels unfinished drawing when necessary.",
+            params: &[
+                VIEW,
+                Param { name: "layer", summary: "Layer UUID on this view's board", required: true, kind: Kind::Object },
+                Param { name: "active", summary: "Make this the active drawing layer", required: false, kind: Kind::Bool },
+                Param { name: "visible", summary: "Show or hide this layer", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "view.set_layer_color",
+            title: "Layer Color",
+            summary: "Set or reset a board's personal layer color, through the same handler as its swatch. Shared by every view of that board, saved locally and excluded from project files/undo.",
+            params: &[
+                VIEW,
+                Param { name: "layer", summary: "Layer UUID on the view's board", required: true, kind: Kind::Object },
+                Param { name: "color", summary: "Opaque #RRGGBB or null to reset", required: true, kind: Kind::Color },
+            ],
+        },
+        WindowCommand {
+            id: "view.set_layer_visibility",
+            title: "Layer Visibility",
+            summary: "Show all layers or isolate the active layer, as the Layers card does. Changes only the addressed board view and cancels unfinished drawing.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "mode",
+                    summary: "all shows every layer; active reveals only the active layer",
+                    required: true,
+                    kind: Kind::Choice(&["all", "active"]),
                 },
             ],
         },
@@ -603,6 +688,13 @@ mod live {
                         "selection": view.board.selection,
                         "hidden_layers": view.board.hidden_layers,
                         "active_layer": view.board.active_layer,
+                        "layer_colors": view.board.target.and_then(|target|app.session.project().and_then(|project|project.board_view(target)))
+                            .map(|board|board.layers().iter().map(|layer|json!({"layer":layer.id,"color":crate::board_appearance::hex(app.board_appearance.color(board,layer)),"overridden":app.board_appearance.overridden(board.target,&layer.id.to_string())})).collect::<Vec<_>>()),
+                        "copper_colors": view.board.target.and_then(|target|app.session.project().and_then(|project|project.board_view(target)))
+                            .map(|board|board.layers().iter().filter(|layer|layer.purpose==pcbcraft_engine::board::setup::LayerPurpose::Copper)
+                                .map(|layer|json!({"layer":layer.id,"color":crate::board_appearance::hex(app.board_appearance.color(board,layer)),"overridden":app.board_appearance.overridden(board.target,&layer.id.to_string())})).collect::<Vec<_>>()),
+                        "drawing_selection": view.board.drawing.selected,
+                        "drawing_tool": view.board.drawing.tool.map(|tool| match tool {crate::board_drawing::Tool::Lines=>"lines",crate::board_drawing::Tool::Rectangle=>"rectangle"}),
                     })),
                 }))
             })
@@ -744,6 +836,45 @@ mod live {
                     if let Some(view) = self.views.view_mut(view) {
                         view.camera.set_zoom(percent as f32 / 100.0);
                     }
+                }
+                ("view.navigate_layer", Some((view, _)), _) => self.navigate_board_layer(view, params["direction"].as_str().unwrap_or_default())?,
+                ("view.set_layer_color", Some((view, _)), _) => {
+                    let rgb = params["color"].as_str().map(crate::board_appearance::parse_color).transpose()?;
+                    self.set_layer_color(view, params["layer"].as_str().unwrap_or_default(), rgb)?;
+                }
+                ("view.set_layer_visibility", Some((view, _)), _) => {
+                    let state =
+                        self.views.view(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
+                    let target = state.board.target.ok_or("No board is bound to this view")?;
+                    let board = self.session.project().and_then(|project| project.board_view(target)).ok_or("The view's board is unavailable")?;
+                    let active_only = params["mode"].as_str() == Some("active");
+                    if active_only && !board.layers().iter().any(|layer| state.board.active_layer.as_deref() == Some(layer.id.to_string().as_str())) {
+                        return Err("Select an active layer first".into());
+                    }
+                    let layers = board.layers().iter().map(|layer| layer.id.to_string()).collect::<Vec<_>>();
+                    self.views.view_mut(view).ok_or("The addressed view closed")?.board.set_layer_visibility(layers, active_only);
+                }
+                ("view.set_layer", Some((view, _)), _) => {
+                    let target = self
+                        .views
+                        .view(view)
+                        .filter(|view| view.workspace == Workspace::Board)
+                        .and_then(|view| view.board.target)
+                        .ok_or("The addressed view must show a board")?;
+                    let layer = params["layer"].as_str().unwrap_or_default();
+                    if !self
+                        .session
+                        .project()
+                        .and_then(|project| project.board_view(target))
+                        .is_some_and(|board| board.layers().iter().any(|record| record.id.to_string() == layer))
+                    {
+                        return Err("Unknown layer on this view's board".into());
+                    }
+                    self.views.view_mut(view).ok_or("The addressed view closed")?.board.set_layer(
+                        layer,
+                        params["active"].as_bool() == Some(true),
+                        params["visible"].as_bool(),
+                    );
                 }
                 ("view.set_grid", Some((view, _)), _) => self.set_view_grid(view, params["spacing_nm"].as_i64().unwrap_or_default()),
                 ("view.select" | "view.select_footprints", Some((view, _)), _)

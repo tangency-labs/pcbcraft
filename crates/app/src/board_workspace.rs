@@ -56,6 +56,7 @@ impl PcbApp {
 
     /// Offer single-footprint transforms alongside navigation, keeping board tools separate from
     /// schematic tools. Completed placements use the same atomic engine command as MCP.
+    /// The active-layer field uses the Layers card's view-local handler, without editing the project.
     /// Components › Footprints opens the package chooser for the selected footprint's component,
     /// or leaves the component unselected when no footprint is selected.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
@@ -109,6 +110,61 @@ impl PcbApp {
                 .and_then(|p| p.board_view(p.board_target()))
                 .and_then(|board| board.footprints().find(|f| self.views.active.board.selection.contains(&f.id)).map(|f| f.component));
             self.begin_footprint_assignment(component);
+        }
+        workspace::ribbon_separator(ui);
+        if let Some(board) = self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))) {
+            let layers = crate::board_panels::ordered_layers(board);
+            let labels: Vec<_> = layers
+                .iter()
+                .map(|layer| {
+                    let label = crate::board_panels::layer_name(layer);
+                    if self.views.active.board.hidden_layers.contains(&layer.id.to_string()) { format!("{label} (hidden)") } else { label.to_owned() }
+                })
+                .collect();
+            let options: Vec<_> = labels
+                .iter()
+                .zip(&layers)
+                .enumerate()
+                .map(|(i, (label, layer))| (i, label.as_str(), self.board_appearance.color(board, layer)))
+                .collect();
+            let mut selected =
+                layers.iter().position(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str())).unwrap_or(0);
+            let changed = workspace::ribbon_field(ui, "Active layer", |ui| workspace::layer_choice(ui, "Active layer", &mut selected, &options));
+            if changed && let Some(layer) = layers.get(selected) {
+                self.views.active.board.set_layer(&layer.id.to_string(), true, None);
+            }
+            workspace::ribbon_separator(ui);
+        }
+        let can_draw =
+            self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))).is_some_and(
+                |board| {
+                    crate::board_drawing::can_draw(board, self.views.active.board.active_layer.as_deref(), &self.views.active.board.hidden_layers)
+                },
+            );
+        let drawing_tools = [
+            RibbonTool {
+                icon: ToolIcon::Line,
+                label: "Line",
+                description: "Draw lines on Board Edge",
+                shortcut: "",
+                enabled: enabled && can_draw && !editing,
+                active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Lines),
+                toggle: false,
+            },
+            RibbonTool {
+                icon: ToolIcon::Rectangle,
+                label: "Rectangle",
+                description: "Draw rectangle on Board Edge",
+                shortcut: "",
+                enabled: enabled && can_draw && !editing,
+                active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Rectangle),
+                toggle: false,
+            },
+        ];
+        if let Some(index) = workspace::ribbon_group(ui, "Draw", &drawing_tools) {
+            let tool = if index == 0 { crate::board_drawing::Tool::Lines } else { crate::board_drawing::Tool::Rectangle };
+            let layer = self.views.active.board.active_layer.clone();
+            self.views.active.board.drawing.start(tool, layer);
         }
         workspace::ribbon_separator(ui);
         let tools = [
@@ -166,6 +222,7 @@ impl PcbApp {
                         &mut view.board,
                         source,
                         &highlighted,
+                        &self.board_appearance,
                         enabled,
                         self.preferences.navigation,
                         self.preferences.grid_opacity_percent,
@@ -175,12 +232,19 @@ impl PcbApp {
                 })
             })
             .inner;
-        if (pick.selection.is_some() || pick.edit.is_some())
+        if (pick.selection.is_some() || pick.edit.is_some() || pick.drawing_edit.is_some())
             && enabled
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some(selection) = pick.selection {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(mut edit) = pick.drawing_edit
+                && self.views.active.accepts(edit.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                edit.params["board"] = serde_json::json!(target.board);
+                self.run(edit.id, &edit.params);
             }
             if let Some(draft) = pick.edit
                 && self.views.active.accepts(draft.source, &self.session)

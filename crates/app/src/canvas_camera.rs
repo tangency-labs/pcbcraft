@@ -264,7 +264,8 @@ impl Camera {
     }
 
     /// Navigate and fit resolved board copper/graphics, independently of schematic geometry.
-    /// Physical SMD packages may magnify up to the ordinary navigation limit.
+    /// Physical SMD packages may magnify up to the ordinary navigation limit. Fit includes the
+    /// authored board boundary even on an otherwise empty board, independently of layer visibility.
     pub(crate) fn navigate_board(
         &mut self,
         response: &Response,
@@ -275,9 +276,12 @@ impl Camera {
     ) {
         if std::mem::take(&mut self.fit_requested) {
             *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
-            let bounds = project.footprints().flat_map(board_extent).fold(Rect::NOTHING, |bounds, point| {
-                bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
-            });
+            let bounds = project.footprints().flat_map(board_extent).chain(project.drawings().into_iter().flat_map(|drawing| drawing.points)).fold(
+                Rect::NOTHING,
+                |bounds, point| {
+                    bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
+                },
+            );
             self.fit_bounds(bounds, rect, MAX_ZOOM);
         }
         self.interact(response, rect, enabled, navigation);

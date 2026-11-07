@@ -2,6 +2,62 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Board Edge drawings
+
+The layer-addressed drawing model, commands, native board version 9 codec, canvas
+tools and ribbon glyphs are original PCBcraft work under MIT OR Apache-2.0.
+The earlier local rectangle codec remains for read compatibility. Layer-based
+board-boundary terminology was checked against the published [KiCad 10 PCB Editor
+manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#board_outlines_edge_cuts),
+consulted November 7, 2026. No KiCad implementation, fixtures, icons or artwork
+were used.
+
+PCBcraft Next's original workspace documentation and the existing FigCraft exports
+`03-layout-top.png` and `pcb-workspace.png` were reviewed as visual references
+for grouped Layers and canvas drawing. No board geometry, project fixtures or
+implementation code was imported from those references. The hosted Next demo
+could not be opened in this environment; that review is limited to the local
+documentation and exported visuals. This slice implements straight paths and
+rectangles without closure, edge-clearance or manufacturing validation.
+
+## Copper layer membership and personal colors
+
+The engine's resolved pad-layer contract, local board/layer color settings and
+GUI/live-control integration are original PCBcraft work under MIT OR Apache-2.0.
+The form uses the existing Craft modal, typography, fields and action buttons,
+with egui 0.36.2's color picker through its public API. No new dependency or
+external artwork is imported. Front/back colors retain the shared board palette;
+the alternate internal-layer green is an original palette extension. Color
+choices are presentation settings and make no material/manufacturing claim.
+
+## Layer controls
+
+The active-layer selector, full-row activation, active arrow and independent
+visibility behavior were checked against the published [KiCad 10 PCB Editor
+manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#layer_controls) and
+[Altium Designer's layer-view documentation](https://www.altium.com/documentation/altium-designer/pcb/your-view-of-the-board),
+consulted November 7, 2026. These are behavioral references only; no implementation,
+icons or artwork were copied. The controls reuse PCBcraft's existing themed
+choice field, Browser tree rows, cards, typography and palette.
+
+The layer-key patch in the ribbon and its popup uses the existing themed combo
+control with reserved label space and shared palette keys. Technical-layer
+color overrides extend the same local board/layer settings as copper. The keyboard
+bindings were checked only against the published [KiCad 10 PCB Editor manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#actions_reference),
+consulted November 7, 2026: +/− for next/previous and PgUp/PgDn for front/back copper.
+Picker-order traversal and shared view dispatch are original PCBcraft work. An
+incidental excluded search result and the user's subsequent manual-only approval
+are recorded in [the source-boundary note](docs/source-boundaries/2026-11-07-layer-shortcut-search.md);
+that result was not used as an implementation reference.
+
+The per-layer eye at the right follows Travis Lowe's original FigCraft rendering
+in `designs/pcb-workspace.png` and the eye construction in
+`designs/grouped_pcb_layers.py` (SHA-256
+`d213a6c0eb8ef4995225715c5af3f458339f4696bd7e04a9498751c716e7bfe2`),
+reviewed November 7, 2026. The outline stays visible, a pupil indicates shown and
+a slash indicates hidden. Its original vector geometry is adapted to the app's
+existing theme roles and metrics; the design files remain unchanged.
+
 ## Adapted from SolidCraft
 
 [SolidCraft](https://github.com/tangency-labs/solidcraft), revision `a43cd99e554de879e2abd548f67ca963919823b0`. Copyright (c) 2026 SolidCraft contributors. MIT OR Apache-2.0, the same texts as [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).

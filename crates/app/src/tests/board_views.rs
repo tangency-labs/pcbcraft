@@ -761,11 +761,8 @@ fn physical_demo_labels_drills_and_detail_visibility() {
             })
             .collect()
     };
-    let mut lands = copper_bounds(&h, Tokens::get().board_front);
-    assert_eq!(lands.len(), 13);
-    let plated = copper_bounds(&h, Tokens::get().board_through);
-    assert_eq!(plated.len(), 2);
-    lands.extend(plated);
+    let lands = copper_bounds(&h, Tokens::get().board_front);
+    assert_eq!(lands.len(), 15, "surface and plated lands use their front copper layer color");
     let labels: Vec<_> = h
         .output()
         .shapes
@@ -810,10 +807,10 @@ fn physical_demo_labels_drills_and_detail_visibility() {
     h.state_mut().views.active.board.hidden_layers.insert(top.clone());
     h.run();
     assert!(copper_bounds(&h, Tokens::get().board_front).is_empty());
-    assert_eq!(copper_bounds(&h, Tokens::get().board_through).len(), 2);
+    assert_eq!(copper_bounds(&h, Tokens::get().board_back).len(), 2);
     h.state_mut().views.active.board.hidden_layers.insert(bottom);
     h.run();
-    assert!(copper_bounds(&h, Tokens::get().board_through).is_empty());
+    assert!(copper_bounds(&h, Tokens::get().board_back).is_empty());
     h.state_mut().views.active.board.hidden_layers.remove(&top);
     h.state_mut().views.active.board.hidden_layers.remove(&details[0]);
     h.run();

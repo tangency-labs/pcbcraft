@@ -325,7 +325,37 @@ and explicit terminal-to-pad mapping. Assigning pins the package without placing
 it. In PCB layout, **Place on board** places an assigned component at unit-aware
 X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
-registration, slots, board outlines and routing remain planned.
+registration, arcs, slots and routing remain planned.
+The Layout ribbon's **Active layer** selector and status bar identify the drawing
+layer. Click a row in Layers to activate it, with an arrow and color swatch
+beside its name. The eye at the right toggles visibility independently: a pupil
+means visible, a slash means hidden, and its outline is always shown. Hidden
+active layers carry a **(hidden)** suffix. **Show all**
+and **Isolate active** change only visibility in the focused view, leaving saved
+board data and document undo unchanged. Click a layer color swatch to open the
+themed color form. Choose a color or enter **#RRGGBB**,
+then **Apply color**; **Cancel** discards the draft, and **Reset to default** removes
+that layer's override. Colors are local settings shared by every view of this
+board, including copper, Board Edge, silkscreen, mask and other technical layers. They survive
+renames without changing layer ownership or entering project files and undo.
+The ribbon's selected layer and every dropdown row include the same effective
+color patch. **+** and **−** cycle through the picker order, wrapping through
+technical and hidden layers without changing visibility. **PgUp** selects front
+copper and **PgDn** selects back copper when that side exists. Text fields,
+menus and dialogs keep their normal keys; switching layers cancels an unfinished
+Board Edge gesture. The keys are also listed in Keyboard Shortcuts.
+
+For a board boundary, select **Board Edge** in the selector or Layers card and
+use **Layout → Draw → Line** or **Rectangle**. Line accepts successive clicked
+vertices, closes when you click the first vertex, and finishes an open path with
+Enter. Rectangle uses two opposite corners. Both snap to the grid and nearby edge
+vertices, and Esc cancels unfinished geometry before exiting the tool. After
+exiting, click an edge to select it, drag a vertex to reshape it, drag a segment
+or press M to move the drawing, and Delete to remove it. These edits share project
+Undo; Fit and layer visibility include the edge geometry. A Board Edge layer is
+available independently of copper setup, including on older populated boards.
+Open paths remain valid editing state; no closure, clearance or manufacturing
+validation is implemented yet.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

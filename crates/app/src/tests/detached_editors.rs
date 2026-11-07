@@ -1538,3 +1538,31 @@ fn closing_detached_editor_expires_footprint_assignment() {
     assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(h.state().session.inspect(), before);
 }
+
+/// Edge previews belong to the drawing view; focus loss or closing that host cannot author them.
+#[test]
+fn detached_board_edge_preview_cancels_on_focus_loss_and_close() {
+    use pcbcraft_engine::persistence::encode_documents;
+    let (mut h, peer) = multi_window();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB layout in new window");
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let layer = child_rect(&peer, "Activate layer Board Edge").center();
+    child_click_at(&mut h, &peer, layer);
+    let tool = child_rect(&peer, "Draw rectangle on Board Edge").center();
+    child_click_at(&mut h, &peer, tool);
+    let origin = child_rect(&peer, "PCB canvas").center();
+    child_click_at(&mut h, &peer, origin);
+    assert!(h.state().views.view(child).unwrap().board.drawing.source().is_some());
+    focus(&mut h, &peer, false);
+    assert!(h.state().views.view(child).unwrap().board.drawing.source().is_none());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    child_click_at(&mut h, &peer, tool);
+    child_click_at(&mut h, &peer, origin);
+    assert!(h.state().views.view(child).unwrap().board.drawing.source().is_some());
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(h.state().views.view(child).is_none());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}

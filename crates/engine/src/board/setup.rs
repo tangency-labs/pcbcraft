@@ -300,7 +300,7 @@ impl BoardSetup {
                 layers.push(Layer { id: fresh_id()?, name: format!("{prefix} {name}"), purpose, side: Some(side) });
             }
         }
-        layers.push(Layer { id: fresh_id()?, name: "Board outline".to_owned(), purpose: LayerPurpose::Outline, side: None });
+        layers.push(Layer { id: fresh_id()?, name: "Board Edge".to_owned(), purpose: LayerPurpose::Outline, side: None });
         Self::try_from(SetupRecords { materials: Vec::new(), layers, stackup: Stackup { id: fresh_id()?, strata } })
             .map_err(CommandError::InvalidParams)
     }
@@ -347,6 +347,7 @@ impl BoardSetup {
 impl Session {
     /// Create the initial topology once on an empty board. Existing legacy footprints require
     /// an explicit future layer-binding migration instead of an inferred reassignment.
+    /// Existing technical drawing layers are promoted with their original identities.
     pub(crate) fn initialize_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -358,9 +359,20 @@ impl Session {
                 "initial board setup requires an empty board; migrating existing footprint layer bindings is not supported yet".to_owned(),
             ));
         }
-        let setup = BoardSetup::preset(params["copper_layers"].as_u64().unwrap_or_default())?;
+        let mut setup = BoardSetup::preset(params["copper_layers"].as_u64().unwrap_or_default())?;
+        if let Some(data) = &project.board.drawings
+            && !data.layers.is_empty()
+        {
+            setup.layers.retain(|layer| layer.purpose != LayerPurpose::Outline);
+            setup.layers.extend(data.layers.iter().cloned());
+            setup = BoardSetup::try_from(SetupRecords { materials: setup.materials, layers: setup.layers, stackup: setup.stackup })
+                .map_err(CommandError::InvalidParams)?;
+        }
         let mut project = project.clone();
         std::sync::Arc::make_mut(&mut project.board).setup = Some(setup);
+        if let Some(data) = &mut std::sync::Arc::make_mut(&mut project.board).drawings {
+            data.layers.clear();
+        }
         self.change(project);
         Ok(())
     }
@@ -392,6 +404,9 @@ impl Session {
         if before != &setup {
             let mut project = project.clone();
             std::sync::Arc::make_mut(&mut project.board).setup = Some(setup);
+            if let Some(mut data) = project.board.drawings.clone() {
+                data.validate(&project).map_err(CommandError::InvalidParams)?;
+            }
             self.change(project);
         }
         Ok(())
