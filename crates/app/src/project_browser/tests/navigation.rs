@@ -82,6 +82,40 @@ fn browser_folding_and_visibility_are_consistent_on_the_board() {
     assert_eq!(h.state().session.inspect(), before);
 }
 
+/// The ribbon can restore a Browser hidden in the other workspace. Both directions share
+/// visibility without changing project bytes, revision or history, including compact windows.
+#[test]
+fn browser_ribbon_toggle_can_restore_visibility_from_either_workspace() {
+    for width in [1400.0, 700.0] {
+        let mut h = project_harness(width);
+        let before = h.state().session.inspect();
+        let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        click(&mut h, "View");
+        click(&mut h, "Toggle Browser");
+        assert!(!h.state().browser.open);
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout");
+        assert_eq!(h.state().views.active.workspace, Workspace::Board);
+        assert!(h.query_by_label("Main").is_none());
+        click(&mut h, "Toggle Browser");
+        assert!(h.state().browser.open);
+        h.get_by_label("Main");
+        h.get_by_label("Footprint R1  1k");
+        click(&mut h, "Toggle Browser");
+        assert!(!h.state().browser.open);
+        h.get_by_label("Collapse Layers");
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Schematic");
+        assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+        assert!(h.query_by_label("Main").is_none());
+        click(&mut h, "Toggle Browser");
+        assert!(h.state().browser.open);
+        h.get_by_label("Main");
+        assert_eq!(h.state().session.inspect(), before);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    }
+}
+
 /// Selecting an inactive board's object creates its view before its panel layout exists.
 /// Centering waits for that layout, so the placement stays clear of Browser and Properties.
 #[test]

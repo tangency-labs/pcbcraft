@@ -195,10 +195,11 @@ impl PcbApp {
         }
     }
 
-    /// Place, move or close one existing view: the handler behind the sheet-tab and ribbon
-    /// actions and their window commands. Call it only while the current main host is bound and
-    /// no project dialog or action is pending. Unknown views, a sole primary pane's Close, or
-    /// Dock of an already docked view leave every layout unchanged.
+    /// Apply Browser navigation/selection/centering, sheet-tab and ribbon actions, and their
+    /// window commands. Call only with the main host bound and no project dialog or action
+    /// pending. The deferred queue drops stale captured input before reaching this handler;
+    /// invalid Browser targets leave every view unchanged. Unknown views, a sole primary pane's
+    /// Close and Dock of an already docked view also leave layouts unchanged.
     pub(super) fn apply_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
         match action {
             ViewAction::Browse(action) => self.apply_browser_action(id, action),

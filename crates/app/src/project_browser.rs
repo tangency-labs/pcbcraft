@@ -105,7 +105,8 @@ struct BoardItems {
 impl Lists {
     /// List symbols by reference in natural order (R2 before R10), independent of the value
     /// displayed beside it. Nets use the Net Inspector's order and numbering; a net row selects
-    /// a wire attached to one of its pins.
+    /// a wire attached to one of its pins. Each board's footprints also use natural reference
+    /// order, and each footprint row targets its stable ID and board position.
     fn read(project: Arc<Project>) -> Self {
         let mut symbols: Vec<_> = project
             .symbols()

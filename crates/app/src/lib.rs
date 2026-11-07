@@ -743,7 +743,7 @@ impl PcbApp {
                 label: "Browser",
                 description: "Toggle Browser",
                 shortcut: "",
-                enabled: has_project && schematic,
+                enabled: has_project,
                 active: has_project && self.browser.open,
                 toggle: true,
             },
