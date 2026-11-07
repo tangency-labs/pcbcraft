@@ -363,6 +363,12 @@ impl Assistant {
 
     /// Look for installed agents in the background. Detection never signs in or starts a session.
     fn detect(&mut self, ctx: &Context) {
+        // Unit tests never probe the machine's installed agents: what they find, and when, would
+        // vary by machine and load. `craft_agents::discover` tests detection on fake folders.
+        if cfg!(test) {
+            self.detection = Some(Detection::default());
+            return;
+        }
         let (send, receive) = mpsc::sync_channel(1);
         let ctx = ctx.clone();
         let started = std::thread::Builder::new().name("pcbcraft-agent-detect".to_owned()).spawn(move || {
