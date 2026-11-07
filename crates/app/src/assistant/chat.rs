@@ -6,7 +6,6 @@
 
 use std::time::{Duration, Instant};
 
-use craft_agents::backend::Secrets as _;
 use craft_agents::{
     acp::{self, McpBridge, ModelInfo},
     agents::{Entry, Mode},
@@ -198,7 +197,7 @@ impl Chat {
     /// `pcbcraft-cli` beside the app; without it the agent can talk but not reach the project.
     pub(super) fn connect(&mut self, ctx: &egui::Context, entry: Entry) {
         self.disconnect();
-        let key = match (entry.kind.is_api() && entry.key).then(|| super::host::Keychain.get(&entry.id)) {
+        let key = match (entry.kind.is_api() && entry.key).then(|| super::host::endpoint_key(&entry.id, &entry.base_url)) {
             None => None,
             Some(Ok(Some(key))) => Some(key),
             Some(Ok(None)) => {
@@ -206,7 +205,7 @@ impl Chat {
                 return;
             }
             Some(Err(error)) => {
-                self.state = State::Failed(format!("Could not read the key from the keychain: {error}"));
+                self.state = State::Failed(error);
                 return;
             }
         };

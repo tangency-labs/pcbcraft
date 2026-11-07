@@ -457,12 +457,17 @@ impl Assistant {
         if form.editing.is_none() && self.settings.agents.agents.len() >= MAX_AGENTS {
             return Err("The agent list is full.".to_owned());
         }
+        // A stored key goes only where it was entered for: a new address needs the key again.
+        let moved = form.editing.as_ref().and_then(|id| self.settings.agents.agents.iter().find(|existing| existing.id == *id));
+        if agent.key && form.key.trim().is_empty() && moved.is_some_and(|existing| existing.key && existing.base_url != agent.base_url) {
+            return Err("The address changed: enter the key again for it, or remove the key.".to_owned());
+        }
         let prefix = if form.kind == Kind::Acp { "custom" } else { "api" };
         agent.id = form.editing.clone().unwrap_or_else(|| agents::new_id(&self.settings.agents, prefix));
         let key = std::mem::take(&mut form.key);
         let key = key.trim();
         if form.kind != Kind::Acp && !key.is_empty() {
-            super::host::Keychain.set(&agent.id, key).map_err(|error| format!("Could not store the key in the keychain: {error}"))?;
+            super::host::store_endpoint_key(&agent.id, &agent.base_url, key)?;
         } else if form.forget_key {
             super::host::Keychain.delete(&agent.id).map_err(|error| format!("Could not remove the key from the keychain: {error}"))?;
         }
@@ -561,6 +566,23 @@ mod tests {
         let mut missing =
             Form { kind: Kind::Anthropic, name: "No model".to_owned(), base_url: "https://api.anthropic.com/v1".to_owned(), ..Form::default() };
         assert!(assistant.save_agent(&mut missing).is_err());
+
+        // A keyed endpoint moved to another address must be given its key again (or lose it);
+        // the stored key is never carried to the new address. Refused before the keychain.
+        if let Some(saved) = assistant.settings.agents.agents.first_mut() {
+            saved.key = true;
+        }
+        let mut moved = Form {
+            editing: Some("api-1".to_owned()),
+            kind: Kind::Api,
+            name: "Local".to_owned(),
+            base_url: "https://other.example/v1".to_owned(),
+            model: "qwen3".to_owned(),
+            key_stored: true,
+            ..Form::default()
+        };
+        assert_eq!(assistant.save_agent(&mut moved), Err("The address changed: enter the key again for it, or remove the key.".to_owned()));
+        assert_eq!(assistant.settings.agents.agents[0].base_url, "http://localhost:11434/v1", "nothing was saved");
     }
 
     /// A chat backend that records what it is told, for settings that reach a connected agent.

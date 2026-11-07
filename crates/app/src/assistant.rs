@@ -858,8 +858,8 @@ impl Assistant {
 
 /// Ask an endpoint for its models and whether `entry`'s model answers, with its stored key.
 fn test_endpoint(entry: &Entry, protocol: craft_agents::agents::Protocol) -> Result<String, String> {
-    use craft_agents::{agents::Protocol, api_client, backend::Secrets};
-    let key = if entry.key { host::Keychain.get(&entry.id)? } else { None };
+    use craft_agents::{agents::Protocol, api_client};
+    let key = if entry.key { host::endpoint_key(&entry.id, &entry.base_url)? } else { None };
     if entry.key && key.is_none() {
         return Err("No key is stored for this endpoint. Edit it to add one.".to_owned());
     }

@@ -9,6 +9,35 @@ const SERVICE: &str = "PCBCraft Assistant";
 /// Most bytes read back from one response.
 const MAX_RESPONSE: u64 = 16 << 20;
 
+/// A key as the keychain holds it: with the endpoint address it was entered for. The settings
+/// that name the address are saved separately (and later), so a key is never trusted for another
+/// address, even after a crash between the two saves.
+fn bind_key(base_url: &str, key: &str) -> String {
+    serde_json::json!({"base_url": base_url, "key": key}).to_string()
+}
+
+/// The key in a stored secret when it was entered for `base_url`; otherwise why it isn't used.
+/// Never names the secret.
+fn key_for(secret: &str, base_url: &str) -> Result<String, String> {
+    let stored: serde_json::Value = serde_json::from_str(secret).unwrap_or_default();
+    match (stored["base_url"].as_str(), stored["key"].as_str()) {
+        (Some(url), Some(key)) if url == base_url && !key.is_empty() => Ok(key.to_owned()),
+        _ => Err("The stored key was entered for another address. Edit the endpoint in Preferences › AI to enter it again.".to_owned()),
+    }
+}
+
+/// The key stored for endpoint `id`, only when it was entered for `base_url`; `Ok(None)` when
+/// none is stored.
+pub(super) fn endpoint_key(id: &str, base_url: &str) -> Result<Option<String>, String> {
+    let secret = Keychain.get(id).map_err(|error| format!("Could not read the key from the keychain: {error}"))?;
+    secret.map(|secret| key_for(&secret, base_url)).transpose()
+}
+
+/// Store `key` for endpoint `id`, bound to `base_url`.
+pub(super) fn store_endpoint_key(id: &str, base_url: &str, key: &str) -> Result<(), String> {
+    Keychain.set(id, &bind_key(base_url, key)).map_err(|error| format!("Could not store the key in the keychain: {error}"))
+}
+
 /// HTTP for model endpoints: to the URL the person configured, which may be plain HTTP on this
 /// computer (Ollama, LM Studio). No redirects (a key must not follow one elsewhere), no cookies,
 /// a whole-request timeout and at most 16 MB back. Any HTTP status is returned as an answer.
@@ -76,6 +105,24 @@ impl Secrets for Keychain {
         match Self::entry(id)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A key is only used for the address it was entered for: after an edit to another endpoint
+    /// whose settings were never saved, the old address finds a key it refuses. A key stored
+    /// without its address, as before, is refused too; neither error shows the key.
+    #[test]
+    fn a_key_is_only_used_for_the_address_it_was_entered_for() {
+        let stored = bind_key("https://b.example/v1", "sk-b");
+        assert_eq!(key_for(&stored, "https://b.example/v1"), Ok("sk-b".to_owned()));
+        for (secret, url) in [(stored.as_str(), "https://a.example/v1"), ("sk-plain", "https://b.example/v1"), ("", "https://b.example/v1")] {
+            let error = key_for(secret, url).err().unwrap_or_default();
+            assert!(error.contains("another address") && !error.contains("sk-"), "{error}");
         }
     }
 }

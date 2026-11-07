@@ -318,7 +318,8 @@ Anthropic-compatible, with its base URL, model, optional key, request timeout an
 effort. For an endpoint PCBCraft runs the conversation itself and gives the model the same project
 tools through the same permission gate. Its key is kept in the system keychain (Keychain on macOS,
 Credential Manager on Windows, the Secret Service on Linux), never in PCBCraft's settings, and is
-only sent over HTTPS or to this computer. **Test** lists an endpoint's models and checks that its
+only sent over HTTPS or to this computer, and only to the address it was entered for: changing an
+endpoint's address asks for its key again. **Test** lists an endpoint's models and checks that its
 model answers.
 
 ## Live MCP in the desktop editor
