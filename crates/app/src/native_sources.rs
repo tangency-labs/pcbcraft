@@ -309,92 +309,88 @@ impl PcbApp {
         let mut upload = false;
         let loaded = self.session.libraries().inspect();
         let can_add = self.library_sources.can_add(&self.session);
+        let mut ids: std::collections::BTreeSet<String> =
+            loaded.as_array().into_iter().flatten().filter_map(|s| s["source"].as_str().map(str::to_owned)).collect();
+        ids.extend(self.library_sources.statuses.keys().cloned());
+        ids.extend(self.library_sources.registered.iter().map(|r| r.source.clone()));
         let closing = chrome::dialog(ctx, |ui| {
-            ui.horizontal(|ui| {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    add = ui.add_enabled(can_add, egui::Button::new("Add folder…")).clicked();
-                }
-                upload = ui.add_enabled(can_add, egui::Button::new("Upload bundle…")).clicked();
-            });
-            if self.library_sources.job.is_some() {
-                ui.label("Loading library…");
-            }
-            chrome::list(ui, "source_registrations", |ui| {
-                let mut ids: std::collections::BTreeSet<String> =
-                    loaded.as_array().into_iter().flatten().filter_map(|s| s["source"].as_str().map(str::to_owned)).collect();
-                ids.extend(self.library_sources.statuses.keys().cloned());
-                ids.extend(self.library_sources.registered.iter().map(|r| r.source.clone()));
-                for id in ids {
-                    let data = loaded.as_array().into_iter().flatten().find(|s| s["source"] == id);
-                    let title = data.and_then(|s| s["name"].as_str()).unwrap_or(&id);
-                    ui.group(|ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(title);
-                            if id != "builtin" {
-                                if chrome::action(ui, "Remove", title, true) {
-                                    remove = Some(id.clone());
-                                }
-                                #[cfg(not(target_arch = "wasm32"))]
-                                if let Some(registration) = self.library_sources.registered.iter().find(|r| r.source == id) {
-                                    if chrome::action(ui, "Refresh", title, self.library_sources.job.is_none()) {
-                                        refresh = Some(registration.clone());
-                                    }
-                                    if chrome::action(ui, "Relocate…", title, self.library_sources.job.is_none()) {
-                                        relocate = Some(id.clone());
-                                    }
-                                }
-                            }
-                        });
-                        if let Some(status) = self.library_sources.statuses.get(&id) {
-                            ui.label(status);
-                        }
-                        if let Some(registration) = self.library_sources.registered.iter().find(|r| r.source == id) {
-                            ui.label(&registration.path);
-                        }
-                        if let Some(data) = data {
-                            ui.label(format!("{} · {}", data["library"].as_str().unwrap_or_default(), data["license"].as_str().unwrap_or_default()));
-                            for problem in data["problems"].as_array().into_iter().flatten().filter_map(|p| p.as_str()) {
-                                ui.label(pcbcraft_chrome::shell::error(problem));
-                            }
-                        }
-                    });
-                }
-            });
-            ui.separator();
-            chrome::search(ui, &mut self.library_sources.query);
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("source_kind")
-                    .selected_text(match self.library_sources.kind {
-                        None => "All items",
-                        Some(Kind::Symbol) => "Symbols",
-                        Some(Kind::Footprint) => "Footprints",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.library_sources.kind, None, "All items");
-                        ui.selectable_value(&mut self.library_sources.kind, Some(Kind::Symbol), "Symbols");
-                        ui.selectable_value(&mut self.library_sources.kind, Some(Kind::Footprint), "Footprints");
-                    });
-            });
-            let mut params = json!({"query":self.library_sources.query});
-            if let Some(kind) = self.library_sources.kind {
-                params["kind"] = json!(kind);
-            }
-            if let Ok(items) = self.session.execute(sources::SEARCH, &params) {
-                chrome::list(ui, "source_results", |ui| {
-                    for item in items.as_array().into_iter().flatten() {
-                        let key = &item["key"];
-                        ui.label(format!(
-                            "{} · {} · {}/{} r{}",
-                            item["name"].as_str().unwrap_or_default(),
-                            key["kind"].as_str().unwrap_or_default(),
-                            key["library"].as_str().unwrap_or_default(),
-                            key["id"].as_str().unwrap_or_default(),
-                            key["revision"]
-                        ));
+            chrome::panes(ui, |ui, pane| {
+                if pane == 0 {
+                    chrome::heading(ui, "Sources", ids.len());
+                    let imports = chrome::imports(ui, can_add, cfg!(not(target_arch = "wasm32")));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        add = imports.0;
                     }
-                });
-            }
+                    upload = imports.1;
+                    chrome::list(ui, "source_registrations", |ui| {
+                        for id in &ids {
+                            let data = loaded.as_array().into_iter().flatten().find(|s| s["source"] == *id);
+                            let title = data.and_then(|s| s["name"].as_str()).unwrap_or(id);
+                            let registration = self.library_sources.registered.iter().find(|r| r.source == *id);
+                            let problems: Vec<&str> =
+                                data.into_iter().flat_map(|s| s["problems"].as_array()).flatten().filter_map(|p| p.as_str()).collect();
+                            let source = chrome::Source {
+                                name: title,
+                                library: data.and_then(|s| s["library"].as_str()).unwrap_or_default(),
+                                license: data.and_then(|s| s["license"].as_str()).unwrap_or_default(),
+                                location: registration.map(|r| r.path.as_str()),
+                                status: self.library_sources.statuses.get(id).map(String::as_str),
+                                problems: &problems,
+                                symbols: data.and_then(|s| s["symbols"].as_u64()).unwrap_or_default(),
+                                footprints: data.and_then(|s| s["footprints"].as_u64()).unwrap_or_default(),
+                                builtin: id == "builtin",
+                                available: data.is_some_and(|s| s["available"] != false),
+                                loading: self.library_sources.job.as_ref().is_some_and(|job| job.source == *id),
+                            };
+                            let action = ui.push_id(id, |ui| chrome::source(ui, source, self.library_sources.job.is_none())).inner;
+                            match action {
+                                chrome::SourceAction::Remove => remove = Some(id.clone()),
+                                #[cfg(not(target_arch = "wasm32"))]
+                                chrome::SourceAction::Refresh => refresh = registration.cloned(),
+                                #[cfg(not(target_arch = "wasm32"))]
+                                chrome::SourceAction::Relocate => relocate = Some(id.clone()),
+                                _ => {}
+                            }
+                        }
+                    });
+                } else {
+                    // Search/filter changes are view state and never transact project data.
+                    let mut kind = match self.library_sources.kind {
+                        None => chrome::Filter::All,
+                        Some(Kind::Symbol) => chrome::Filter::Symbols,
+                        Some(Kind::Footprint) => chrome::Filter::Footprints,
+                    };
+                    chrome::search(ui, &mut self.library_sources.query);
+                    chrome::filters(ui, &mut kind);
+                    self.library_sources.kind = match kind {
+                        chrome::Filter::All => None,
+                        chrome::Filter::Symbols => Some(Kind::Symbol),
+                        chrome::Filter::Footprints => Some(Kind::Footprint),
+                    };
+                    let mut params = json!({"query":self.library_sources.query});
+                    if let Some(kind) = self.library_sources.kind {
+                        params["kind"] = json!(kind);
+                    }
+                    if let Ok(items) = self.session.execute(sources::SEARCH, &params) {
+                        let items: Vec<chrome::Item<'_>> = items
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|item| chrome::Item {
+                                name: item["name"].as_str().unwrap_or_default(),
+                                library: item["key"]["library"].as_str().unwrap_or_default(),
+                                id: item["key"]["id"].as_str().unwrap_or_default(),
+                                revision: item["key"]["revision"].as_u64().unwrap_or_default(),
+                                footprint: item["key"]["kind"] == "footprint",
+                                license: item["license"].as_str().unwrap_or_default(),
+                            })
+                            .collect();
+                        chrome::heading(ui, "Catalog", items.len());
+                        chrome::results(ui, &items);
+                    }
+                }
+            });
         });
         if let Some(source) = remove {
             self.library_sources.remove(&source, &mut self.session);

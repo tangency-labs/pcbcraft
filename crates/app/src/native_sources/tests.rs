@@ -54,6 +54,7 @@ fn source_dialog_search_and_parts_placement_share_the_catalog() {
         click(&mut h, "Manage native library sources");
         h.step();
         h.run();
+        click(&mut h, "Actions for Workshop");
         click(&mut h, "Remove Workshop");
         click(&mut h, "Close");
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), pinned);
@@ -163,4 +164,39 @@ fn personal_folder_registration_restores_and_reports_missing_sources() {
     pump(&mut manager, &mut session);
     assert!(session.libraries().search("Workshop", None).is_empty());
     assert_ne!(manager.statuses["folder"], "Available");
+}
+
+/// Compact windows give source management and catalog search separate, usable viewports.
+/// Filtering and removing a source through its overflow menu preserve the authored document.
+#[test]
+fn compact_source_manager_tabs_keep_search_and_actions_reachable() {
+    let mut app = PcbApp::default();
+    app.run("project.new", &json!({}));
+    app.session.execute(sources::LOAD, &json!({"source":"workshop-source","documents":documents()})).unwrap();
+    let before = app.session.inspect();
+    app.dialog = Dialog::LibrarySources;
+    let mut h = Harness::builder().with_size(egui::vec2(420., 520.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    click(&mut h, "Catalog");
+    click(&mut h, "Search libraries");
+    h.get_by_label("Search libraries").type_text("Workshop");
+    h.run();
+    assert_eq!(h.state().library_sources.query, "Workshop");
+    h.get_by_label("Workshop resistor");
+    click(&mut h, "Show footprints");
+    h.get_by_label("No matching items");
+    click(&mut h, "Show symbols");
+    h.get_by_label("Workshop resistor");
+    assert_eq!(h.state().session.inspect(), before);
+    click(&mut h, "Sources");
+    h.get_by_label("Actions for Workshop").scroll_to_me();
+    h.run();
+    click(&mut h, "Actions for Workshop");
+    click(&mut h, "Remove Workshop");
+    assert!(h.state().session.libraries().search("Workshop", None).is_empty());
+    assert_eq!(h.state().session.inspect(), before);
+    let close = h.get_by_label("Close").rect();
+    assert!(close.top() > 400. && close.bottom() <= 520. && close.right() <= 420.);
+    click(&mut h, "Close");
+    assert!(matches!(h.state().dialog, Dialog::None));
 }

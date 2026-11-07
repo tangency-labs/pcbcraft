@@ -10,8 +10,9 @@ Open **Libraries → Sources**. On desktop, **Add folder…** selects a native
 library containing `library.json` and optional flat `symbols/` and `footprints/`
 directories. Registrations are saved in personal application settings, including
 their machine-specific folder paths. They are read in the background on startup.
-**Refresh** reloads a source; **Relocate…** points its registration at a moved
-folder. Library and item identities come from their documents, so moving a folder
+Each source card's **⋯** menu contains **Refresh**, **Relocate…** and **Remove**
+(uploaded sources offer only Remove). **Refresh** reloads a source; **Relocate…**
+points its registration at a moved folder. Library and item identities come from their documents, so moving a folder
 does not change them. A missing or unreadable source remains listed with its
 error and stops supplying items until a successful refresh.
 
@@ -33,8 +34,10 @@ symbols already placed in a saved project reopen from their pinned copies.
 After loading the example, press **A**, search for **Workshop**, choose
 **Workshop resistor**, and place it. Search results retain library/item IDs,
 revision and license in their tooltips. Library sources can search both symbols
-and footprints and filter by kind. A bad item reports its filename and validation
-error without hiding other valid items; an invalid manifest prevents the source
+and footprints and filter by kind. Sources and the catalog appear side by side
+on wide windows and as **Sources** / **Catalog** tabs on compact windows, with
+independent scrolling and a fixed Close action. A bad item reports its filename
+and validation error without hiding other valid items; an invalid manifest prevents the source
 from loading. The built-in `starter` library identity is reserved.
 
 The source loader accepts at most 16 external registrations, 256 files per
