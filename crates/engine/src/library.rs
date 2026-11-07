@@ -494,7 +494,7 @@ mod tests {
         assert_eq!(library.problems(), [] as [String; 0]);
         assert_eq!((library.id.as_str(), library.license.as_str()), ("starter", "MIT OR Apache-2.0"));
         let ids: Vec<_> = library.symbols().iter().map(|symbol| symbol.id.as_str()).collect();
-        assert_eq!(ids, ["capacitor", "connector", "header-4", "led", "resistor"]);
+        assert_eq!(ids, ["capacitor", "connector", "header-4", "led", "npn", "resistor"]);
         let led = library.symbol("led").unwrap();
         let names: Vec<_> = led.pins().iter().map(|pin| pin.name.as_deref()).collect();
         assert_eq!(names, [Some("Anode"), Some("Cathode")]);
@@ -504,7 +504,7 @@ mod tests {
     /// New placements use compact revision 2; older pinned revisions retain every original pin.
     #[test]
     fn compact_revisions_preserve_old_projects_and_choose_newest_in_any_order() {
-        for symbol in starter().symbols().iter().filter(|symbol| symbol.id != "header-4") {
+        for symbol in starter().symbols().iter().filter(|symbol| ["capacitor", "connector", "led", "resistor"].contains(&symbol.id.as_str())) {
             assert_eq!(symbol.revision(), 2);
             let old = starter().symbol_revision(&symbol.id, 1).unwrap();
             for (new, old) in symbol.pins().iter().zip(old.pins()) {

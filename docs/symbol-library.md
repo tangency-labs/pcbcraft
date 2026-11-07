@@ -22,6 +22,7 @@ libraries/starter/
     connector.json
     header-4.json
     led.json
+    npn.json
     resistor.json
     *-v1.json         preserved revision 1 definitions
 ```
@@ -102,8 +103,10 @@ the file and the reason; the rest of the library still loads.
 The format leaves room for more than the engine places today:
 
 - **Any number of terminals**, each placed by exactly one pin of the unit. The
-  starter two-pad footprint only maps symbols with exactly pins `"1"` and `"2"`;
-  other parts have no footprint until footprint libraries exist.
+  legacy two-pad footprint only maps symbols with exactly pins `"1"` and `"2"`.
+  [Physical footprints](footprint-library.md) validate an explicit bijection
+  between the symbol terminals and the definition's numeric pad identifiers;
+  the starter NPN uses three SOT-23 pads.
 - **One unit.** Multi-unit symbols, such as a dual op-amp, are planned (issue #28).
 - **Pins** on the 1.27 mm grid, at most 12.7 mm from the center on each axis,
   each at its own position. Symbol centers stay 12.7 mm inside the sheet edge so

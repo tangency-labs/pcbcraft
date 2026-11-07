@@ -1,0 +1,79 @@
+{
+  "format": "pcbcraft-footprint/1",
+  "library": "starter",
+  "id": "led-0402",
+  "revision": 4,
+  "name": "LED 0402 (1005 metric)",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "https://www.kingbrightusa.com/images/catalog/spec/apg1005cgc-t.pdf",
+    "locator": "DSAM9856 / 1203013781 V11B, 2025-03-12, p. 1; land 0.7 x 0.5 mm, gap 0.2 mm; pad 1 cathode; original rounded corners, radius 25% of shorter pad dimension; original silk centerlines and pcbcraft-technical-1 reference lettering"
+  },
+  "pads": [
+    {
+      "number": "1",
+      "center": {
+        "x_nm": -450000,
+        "y_nm": 0
+      },
+      "width_nm": 700000,
+      "height_nm": 500000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 125000
+    },
+    {
+      "number": "2",
+      "center": {
+        "x_nm": 450000,
+        "y_nm": 0
+      },
+      "width_nm": 700000,
+      "height_nm": 500000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 125000
+    }
+  ],
+  "graphics": [
+    {
+      "purpose": "fabrication",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 1000000,
+      "height_nm": 500000,
+      "rotation": 0
+    },
+    {
+      "purpose": "courtyard",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 2100000,
+      "height_nm": 1000000,
+      "rotation": 0
+    }
+  ],
+  "reference": "pcbcraft-technical-1",
+  "silkscreen": [
+    {
+      "points": [
+        {
+          "x_nm": -1200000,
+          "y_nm": -500000
+        },
+        {
+          "x_nm": -1200000,
+          "y_nm": 500000
+        }
+      ],
+      "closed": false
+    }
+  ]
+}

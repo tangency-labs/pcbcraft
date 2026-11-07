@@ -1,0 +1,92 @@
+{
+  "format": "pcbcraft-footprint/1",
+  "library": "starter",
+  "id": "resistor-0402",
+  "revision": 4,
+  "name": "Resistor 0402 (1005 metric)",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "https://www.vishay.com/docs/20035/dcrcwe3.pdf",
+    "locator": "20035, 14-Apr-2026, p. 11, reflow dimensions; original rounded corners, radius 25% of shorter pad dimension; original silk centerlines and pcbcraft-technical-1 reference lettering"
+  },
+  "pads": [
+    {
+      "number": "1",
+      "center": {
+        "x_nm": -525000,
+        "y_nm": 0
+      },
+      "width_nm": 600000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 150000
+    },
+    {
+      "number": "2",
+      "center": {
+        "x_nm": 525000,
+        "y_nm": 0
+      },
+      "width_nm": 600000,
+      "height_nm": 600000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 150000
+    }
+  ],
+  "graphics": [
+    {
+      "purpose": "fabrication",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 1000000,
+      "height_nm": 500000,
+      "rotation": 0
+    },
+    {
+      "purpose": "courtyard",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 2150000,
+      "height_nm": 1100000,
+      "rotation": 0
+    }
+  ],
+  "reference": "pcbcraft-technical-1",
+  "silkscreen": [
+    {
+      "points": [
+        {
+          "x_nm": -400000,
+          "y_nm": -650000
+        },
+        {
+          "x_nm": 400000,
+          "y_nm": -650000
+        }
+      ],
+      "closed": false
+    },
+    {
+      "points": [
+        {
+          "x_nm": -400000,
+          "y_nm": 650000
+        },
+        {
+          "x_nm": 400000,
+          "y_nm": 650000
+        }
+      ],
+      "closed": false
+    }
+  ]
+}

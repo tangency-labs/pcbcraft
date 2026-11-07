@@ -1,8 +1,8 @@
 {
-  "format": "pcbcraft-project/5",
-  "id": "c8746800-e4e3-4ecf-81f4-7fe3ee1ea87b",
+  "format": "pcbcraft-project/6",
+  "id": "ed5fcf30-6942-4ed9-af3d-f73b7ac73ab0",
   "name": "Dual LED · editing demo",
-  "sheets": [{"id":"58892b91-f098-48f9-b176-e5087ac1201e","name":"Schematic","file":"sheets/58892b91-f098-48f9-b176-e5087ac1201e.json"}],
+  "sheets": [{"id":"2e84006a-89e6-478f-a66b-df5c1d3907dc","name":"Main","file":"sheets/2e84006a-89e6-478f-a66b-df5c1d3907dc.json"}],
   "components": [
     {"id":2,"library":"starter","definition":"connector","definition_revision":2,"reference_number":1,"reference":"J1","value":"Input"}
 
@@ -20,5 +20,8 @@
 
     ,
     {"id":9,"library":"starter","definition":"capacitor","definition_revision":2,"reference_number":1,"reference":"C1","value":"100nF"}
+
+    ,
+    {"id":26,"library":"starter","definition":"npn","definition_revision":1,"reference_number":1,"reference":"Q1","value":"PMBT3904"}
   ]
 }

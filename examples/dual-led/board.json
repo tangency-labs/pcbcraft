@@ -1,21 +1,77 @@
 {
-  "format": "pcbcraft-board/1",
+  "format": "pcbcraft-board/5",
+  "setup": {
+    "layers": [
+    {"id":"4249f1a1-d6a4-4575-bad3-540507e99ab2","name":"Front paste","purpose":"paste","side":"front"}
+
+    ,
+    {"id":"53a87a2d-5942-4ba5-b4f7-48c63e650d3a","name":"Front mask","purpose":"mask","side":"front"}
+
+    ,
+    {"id":"67790322-eea9-41cc-b505-d8377479c1c6","name":"Board outline","purpose":"outline"}
+
+    ,
+    {"id":"78d02c4c-6865-4cba-a365-37a277c69c9b","name":"Back mask","purpose":"mask","side":"back"}
+
+    ,
+    {"id":"850854f4-fc03-4f3d-8332-ef3ff1ad03c3","name":"Top","purpose":"copper","side":"front"}
+
+    ,
+    {"id":"8dcedc26-9db5-4062-8319-33298a46fe5a","name":"Back silkscreen","purpose":"silkscreen","side":"back"}
+
+    ,
+    {"id":"92be055c-1e75-4dbe-9590-1e92a613fe70","name":"Back courtyard","purpose":"courtyard","side":"back"}
+
+    ,
+    {"id":"937c695e-4f6c-4853-a967-000b5eccfe31","name":"Back paste","purpose":"paste","side":"back"}
+
+    ,
+    {"id":"c2dc515e-564f-4f9e-a65d-41c69184b716","name":"Front fabrication","purpose":"fabrication","side":"front"}
+
+    ,
+    {"id":"d26b1cef-3469-49ce-bd2b-455683fdebdd","name":"Front silkscreen","purpose":"silkscreen","side":"front"}
+
+    ,
+    {"id":"da3feb07-0f86-4744-8d5b-259ddd62f3df","name":"Front courtyard","purpose":"courtyard","side":"front"}
+
+    ,
+    {"id":"e4a2874c-d079-4c7d-80b1-be0384b21697","name":"Back fabrication","purpose":"fabrication","side":"back"}
+
+    ,
+    {"id":"e8ef4467-79d5-4ec5-9cb6-d5db3aad943c","name":"Bottom","purpose":"copper","side":"back"}
+    ],
+    "stackup": {
+      "id": "7b2f8cdb-963e-4f4f-9bae-d5e1daf369bc",
+      "strata": [
+    {"kind":"copper","layer":"850854f4-fc03-4f3d-8332-ef3ff1ad03c3"}
+
+    ,
+    {"kind":"dielectric","id":"f00fd0d6-1da9-4e91-90d4-e6eea357f00d"}
+
+    ,
+    {"kind":"copper","layer":"e8ef4467-79d5-4ec5-9cb6-d5db3aad943c"}
+      ]
+    }
+  },
   "footprints": [
-    {"id":26,"component":2,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":0,"y_nm":-10160000}
+    {"id":29,"component":2,"definition":"header-1x02-254","definition_revision":3,"library":"starter","mapping":{"1":"1","2":"2"},"x_nm":0,"y_nm":-5080000}
 
     ,
-    {"id":27,"component":3,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":-7620000,"y_nm":-2540000}
+    {"id":30,"component":3,"definition":"resistor-0402","definition_revision":4,"library":"starter","mapping":{"1":"1","2":"2"},"x_nm":-2540000,"y_nm":-1270000}
 
     ,
-    {"id":28,"component":4,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":7620000,"y_nm":-2540000}
+    {"id":31,"component":4,"definition":"led-0402","definition_revision":4,"library":"starter","mapping":{"1":"2","2":"1"},"x_nm":2540000,"y_nm":-1270000}
 
     ,
-    {"id":29,"component":6,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":-7620000,"y_nm":5080000}
+    {"id":32,"component":6,"definition":"resistor-0603","definition_revision":4,"library":"starter","mapping":{"1":"1","2":"2"},"x_nm":-2540000,"y_nm":2540000}
 
     ,
-    {"id":30,"component":7,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":7620000,"y_nm":5080000}
+    {"id":33,"component":7,"definition":"led-0402","definition_revision":4,"library":"starter","mapping":{"1":"2","2":"1"},"x_nm":2540000,"y_nm":2540000}
 
     ,
-    {"id":31,"component":9,"definition":"generic-through-hole-2","definition_revision":1,"pin_1_pad":1,"x_nm":0,"y_nm":12700000}
+    {"id":34,"component":9,"definition":"capacitor-0603","definition_revision":4,"library":"starter","mapping":{"1":"1","2":"2"},"x_nm":-2540000,"y_nm":6350000}
+
+    ,
+    {"id":35,"component":26,"definition":"sot23","definition_revision":4,"library":"starter","mapping":{"1":"1","2":"2","3":"3"},"x_nm":2540000,"y_nm":6350000}
   ]
 }

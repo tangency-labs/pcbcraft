@@ -16,6 +16,9 @@ const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
+const ROTATED_BOARD_FORMAT: &str = "pcbcraft-board/4";
+const PHYSICAL_BOARD_FORMAT: &str = "pcbcraft-board/5";
+const SILKSCREEN_BOARD_FORMAT: &str = "pcbcraft-board/6";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -54,10 +57,12 @@ struct BoardDocument {
     format: String,
     #[serde(default, deserialize_with = "present")]
     setup: Option<Box<serde_json::value::RawValue>>,
+    #[serde(default, deserialize_with = "present")]
+    silkscreen: Option<crate::board::silkscreen::Settings>,
     footprints: Vec<Footprint>,
 }
 
-/// Accept only paths owned by this format. Symbol identities are checked against their files on decode.
+/// Accept only paths owned by this format. Pinned item identities must match their files on decode.
 pub fn is_document_path(path: &str) -> bool {
     if path == ENTRY_POINT || path == "board.json" {
         return true;
@@ -65,7 +70,7 @@ pub fn is_document_path(path: &str) -> bool {
     let pieces: Vec<_> = path.split('/').collect();
     match pieces.as_slice() {
         ["sheets", name] => name.strip_suffix(".json").and_then(|name| Uuid::parse_str(name).ok()).is_some(),
-        ["library", "symbols", library, name] => {
+        ["library", "symbols" | "footprints", library, name] => {
             let id = |text: &str| {
                 (1..=64).contains(&text.len())
                     && text.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
@@ -140,7 +145,26 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         combined.wires.extend(sheet.wires);
     }
     let board: BoardDocument = parse(documents, "board.json")?;
+    if board.format != ROTATED_BOARD_FORMAT
+        && board.format != PHYSICAL_BOARD_FORMAT
+        && board.format != SILKSCREEN_BOARD_FORMAT
+        && board.footprints.iter().any(|f| f.rotation != 0)
+    {
+        return Err("board.json: footprint rotation requires board format 4".to_owned());
+    }
+    if board.format != PHYSICAL_BOARD_FORMAT && board.format != SILKSCREEN_BOARD_FORMAT && board.footprints.iter().any(|f| f.library.is_some()) {
+        return Err("board.json: pinned physical footprints require board format 5".into());
+    }
+    if (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some() {
+        return Err("board.json: explicit silkscreen settings require board format 6".into());
+    }
     let setup = match (board.format.as_str(), board.setup) {
+        (SILKSCREEN_BOARD_FORMAT, None) => None,
+        (SILKSCREEN_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (PHYSICAL_BOARD_FORMAT, None) => None,
+        (PHYSICAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (ROTATED_BOARD_FORMAT, None) => None,
+        (ROTATED_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (BOARD_FORMAT, None) => None,
         (CONFIGURED_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, true)?),
         (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
@@ -164,6 +188,24 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             definitions.push(value);
         }
     }
+    let mut footprint_definitions = BTreeMap::new();
+    for footprint in &board.footprints {
+        if let Some(key) = footprint.key() {
+            let (library, id, revision) = &key;
+            let path = format!("library/footprints/{library}/{id}.r{revision}.json");
+            if !is_document_path(&path) {
+                return Err(format!("board.json: invalid footprint identity {id}"));
+            }
+            if used.insert(path.clone()) {
+                let bytes = documents.get(&path).ok_or_else(|| format!("{path}: missing pinned footprint"))?;
+                let definition = crate::board::definition::read_saved(bytes).map_err(|e| format!("{path}: {e}"))?;
+                if definition.key() != key {
+                    return Err(format!("{path}: footprint identity does not match its file name"));
+                }
+                footprint_definitions.insert(key, definition);
+            }
+        }
+    }
     if let Some(path) = documents.keys().find(|path| !used.contains(*path)) {
         return Err(format!("{path}: unexpected or unused project document"));
     }
@@ -177,7 +219,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         sheet: combined,
         board: Some(BoardRecords { footprints: board.footprints }),
     };
-    let mut project = validate_document(document, None).map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
+    let mut project =
+        validate_document(document, None, footprint_definitions).map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
     let project_data = Arc::make_mut(&mut project);
     let sheets = layouts
         .into_iter()
@@ -192,6 +235,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         .collect();
     project_data.sheets = Arc::new(sheets);
     Arc::make_mut(&mut project_data.board).setup = setup;
+    Arc::make_mut(&mut project_data.board).silkscreen = board.silkscreen;
     Ok(project)
 }
 
@@ -274,6 +318,7 @@ pub struct DocumentsEncoder {
     cursor: u64,
     first: bool,
     definitions: BTreeMap<(String, String, u32), Arc<crate::schematic::SymbolDefinition>>,
+    footprint_definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
 }
 
 impl DocumentsEncoder {
@@ -288,6 +333,7 @@ impl DocumentsEncoder {
             cursor: 0,
             first: true,
             definitions: BTreeMap::new(),
+            footprint_definitions: BTreeMap::new(),
         }
     }
 
@@ -405,12 +451,22 @@ impl DocumentsEncoder {
                             .map_err(|e| e.to_string())?;
                         } else {
                             self.next();
-                            board_header(&mut self.bytes, self.project.board.setup.as_ref())?;
+                            board_header(
+                                &mut self.bytes,
+                                self.project.board.setup.as_ref(),
+                                self.project.board.footprints().iter().any(|f| f.rotation != 0),
+                                !self.project.board.definitions.is_empty(),
+                                self.project.board.silkscreen.as_ref(),
+                            )?;
                         }
                     }
                 }
                 5 => {
                     if let Some(f) = self.project.board.footprints().get(self.cursor as usize) {
+                        if let Some(key) = f.key() {
+                            let definition = self.project.board.definitions.get(&key).ok_or("unresolved pinned footprint during save")?;
+                            self.footprint_definitions.insert(key, Arc::clone(definition));
+                        }
                         record(&mut self.bytes, &mut self.first, f)?;
                         self.cursor += 1;
                     } else {
@@ -423,6 +479,15 @@ impl DocumentsEncoder {
                         let mut bytes = Vec::new();
                         saved_document(&mut bytes, &definition)?;
                         self.documents.insert(format!("library/symbols/{library}/{id}.r{revision}.json"), bytes);
+                    } else {
+                        self.next();
+                    }
+                }
+                7 => {
+                    if let Some(((library, id, revision), definition)) = self.footprint_definitions.pop_first() {
+                        let mut bytes = serde_json::to_vec_pretty(definition.as_ref()).map_err(|e| e.to_string())?;
+                        bytes.push(b'\n');
+                        self.documents.insert(format!("library/footprints/{library}/{id}.r{revision}.json"), bytes);
                     } else {
                         check_documents(&self.documents)?;
                         self.next();
@@ -456,11 +521,27 @@ impl DocumentsEncoder {
     }
 }
 
-/// Retain version 1/2 encoding until material-aware fields need version 3. Each layer, gap and
-/// pinned material revision has a stable record line; configuration collections are bounded.
-fn board_header(bytes: &mut Vec<u8>, setup: Option<&crate::board::setup::BoardSetup>) -> Result<(), String> {
+/// Keep legacy bytes until material fields, rotation, physical definitions or authored silk
+/// require versions 3, 4, 5 or 6. Versions 4–6 permit absent or material-aware setup.
+fn board_header(
+    bytes: &mut Vec<u8>,
+    setup: Option<&crate::board::setup::BoardSetup>,
+    rotated: bool,
+    physical: bool,
+    silkscreen: Option<&crate::board::silkscreen::Settings>,
+) -> Result<(), String> {
     if let Some(setup) = setup {
-        let format = if setup.requires_material_format() { MATERIAL_BOARD_FORMAT } else { CONFIGURED_BOARD_FORMAT };
+        let format = if silkscreen.is_some() {
+            SILKSCREEN_BOARD_FORMAT
+        } else if physical {
+            PHYSICAL_BOARD_FORMAT
+        } else if rotated {
+            ROTATED_BOARD_FORMAT
+        } else if setup.requires_material_format() {
+            MATERIAL_BOARD_FORMAT
+        } else {
+            CONFIGURED_BOARD_FORMAT
+        };
         bytes.extend_from_slice(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes());
         if !setup.materials().is_empty() {
             bytes.extend_from_slice(b"    \"materials\": [\n");
@@ -480,10 +561,23 @@ fn board_header(bytes: &mut Vec<u8>, setup: Option<&crate::board::setup::BoardSe
         for stratum in &setup.stackup().strata {
             record(bytes, &mut first, stratum)?;
         }
-        bytes.extend_from_slice(b"      ]\n    }\n  },\n  \"footprints\": [\n");
+        bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        bytes.extend_from_slice(format!("{{\n  \"format\": \"{BOARD_FORMAT}\",\n  \"footprints\": [\n").as_bytes());
+        let format = if silkscreen.is_some() {
+            SILKSCREEN_BOARD_FORMAT
+        } else if physical {
+            PHYSICAL_BOARD_FORMAT
+        } else if rotated {
+            ROTATED_BOARD_FORMAT
+        } else {
+            BOARD_FORMAT
+        };
+        bytes.extend_from_slice(format!("{{\n  \"format\": \"{format}\",\n").as_bytes());
     }
+    if let Some(settings) = silkscreen {
+        writeln!(bytes, "  \"silkscreen\": {},", serde_json::to_string(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    bytes.extend_from_slice(b"  \"footprints\": [\n");
     Ok(())
 }
 

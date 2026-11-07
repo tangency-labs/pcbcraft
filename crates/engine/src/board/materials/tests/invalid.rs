@@ -163,7 +163,7 @@ fn unsupported_or_ambiguous_saved_materials_fail_before_open() {
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
     let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let board: Value = serde_json::from_slice(&docs["board.json"]).unwrap();
-    for format in ["pcbcraft-board/1", "pcbcraft-board/2", "pcbcraft-board/4"] {
+    for format in ["pcbcraft-board/1", "pcbcraft-board/2", "pcbcraft-board/7"] {
         let mut bad = docs.clone();
         let mut b = board.clone();
         b["format"] = json!(format);

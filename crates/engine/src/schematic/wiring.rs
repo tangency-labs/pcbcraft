@@ -174,6 +174,12 @@ pub struct Connectivity {
 }
 
 impl Connectivity {
+    /// Return this snapshot's Net Inspector row index. This is presentation ordering, not a
+    /// persistent electrical net identity, and can change after wiring edits.
+    pub fn net_index_for(&self, terminal: Terminal) -> Option<usize> {
+        self.by_terminal.get(&terminal).copied()
+    }
+
     /// Find the connected group for a terminal without walking the schematic.
     pub fn net_for(&self, terminal: Terminal) -> Option<&[Terminal]> {
         self.by_terminal.get(&terminal).map(|&index| self.nets[index].as_slice())
