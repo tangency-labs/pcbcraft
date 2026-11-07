@@ -93,6 +93,7 @@ pub fn is_document_path(path: &str) -> bool {
 }
 
 /// Bound and validate every part before constructing a project. No partial state is returned.
+/// Parse each sheet once, collecting interfaces before resolving wire endpoint ownership.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
@@ -112,16 +113,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut hierarchy_ids = BTreeSet::new();
     let mut anchors = BTreeSet::new();
     let mut hierarchy_sheets = Vec::new();
+    let mut parsed_sheets = Vec::with_capacity(project.sheets.len());
     // Read all interfaces before resolving parent-side endpoint ownership.
     for reference in &project.sheets {
-        let sheet: SheetDocument = parse(documents, &reference.file)?;
+        let mut sheet: SheetDocument = parse(documents, &reference.file)?;
         match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some()) {
             (SHEET_FORMAT, false, false) | (HIERARCHY_FORMAT, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
-        metadata.labels = Arc::new(sheet.labels.unwrap_or_default());
-        metadata.subsheets = Arc::new(sheet.subsheets.unwrap_or_default());
+        metadata.labels = Arc::new(sheet.labels.take().unwrap_or_default());
+        metadata.subsheets = Arc::new(sheet.subsheets.take().unwrap_or_default());
         for label in metadata.labels.iter() {
             validate_id(&mut hierarchy_ids, label.id)?;
             anchors.insert(WireEndpoint::Label(label.id));
@@ -130,6 +132,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             validate_id(&mut hierarchy_ids, block.id)?;
         }
         hierarchy_sheets.push(metadata);
+        parsed_sheets.push(sheet);
     }
     let metadata = Project {
         name: project.name.clone(),
@@ -147,7 +150,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         anchors.extend(projection.hierarchy_endpoints().map(|(end, _)| end));
     }
     let mut combined = Sheet { id: project.sheets[0].id, symbols: Vec::new(), junctions: Some(Vec::new()), wires: Vec::new() };
-    for reference in &project.sheets {
+    for (reference, sheet) in project.sheets.iter().zip(parsed_sheets) {
         let sheet_path = format!("sheets/{}.json", reference.id);
         if reference.id.is_nil()
             || !sheet_ids.insert(reference.id)
@@ -160,7 +163,6 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        let sheet: SheetDocument = parse(documents, &sheet_path)?;
         if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT) || sheet.id != reference.id {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
         }

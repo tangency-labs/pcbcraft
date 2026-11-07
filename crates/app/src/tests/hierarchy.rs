@@ -39,6 +39,42 @@ fn point_click(h: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
     }
 }
 
+/// Accepting the suggested name succeeds after deletion and skips consecutive names
+/// regardless of case; creating the child still occupies exactly one undo step.
+#[test]
+fn default_child_sheet_name_skips_existing_names() {
+    use pcbcraft_engine::sheets::{CREATE_SHEET, DELETE_SHEET};
+
+    for (names, delete, expected) in
+        [(vec!["Sheet 3", "Discard"], Some("Discard"), "Sheet 4"), (vec!["sHeEt 3"], None, "Sheet 4"), (vec!["Sheet 4", "SHEET 5"], None, "Sheet 6")]
+    {
+        let mut h = hierarchy_harness(1400.);
+        for name in names {
+            let revision = h.state().session.revision();
+            h.state_mut().run(CREATE_SHEET, &json!({"name":name,"expected_revision":revision}));
+        }
+        if let Some(name) = delete {
+            let sheet = h.state().session.project().unwrap().sheets().find(|sheet| sheet.name == name).unwrap().target;
+            let revision = h.state().session.revision();
+            h.state_mut().run(DELETE_SHEET, &json!({"sheet":sheet.id(),"expected_revision":revision}));
+        }
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        h.key_press(Key::S);
+        h.run();
+        click(&mut h, "Schematic canvas");
+        assert_eq!(h.get_by_label("Name").value().as_deref(), Some(expected));
+        click(&mut h, "OK");
+        assert!(matches!(h.state().dialog, Dialog::None), "{:?}", h.state().dialog);
+        let project = h.state().session.project().unwrap();
+        assert_eq!(project.sheets().len(), before.sheets().len() + 1);
+        let child = project.child_sheet(project.sheet_symbols()[0].id).unwrap();
+        assert_eq!(project.sheets().find(|sheet| sheet.target == child).unwrap().name, expected);
+        h.state_mut().run("edit.undo", &Value::Null);
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
 /// S placement, Browser navigation, label placement, double-click entry and Alt+Backspace
 /// use persistent document identities and survive save/reopen at both supported widths.
 #[test]

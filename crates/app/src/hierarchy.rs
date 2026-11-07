@@ -493,13 +493,25 @@ impl PcbApp {
     }
 
     /// Capture label properties or a new/existing child choice without mutating authored data.
+    /// New child names skip existing sheet names case-insensitively, including after deletion.
     fn begin_hierarchy_edit(&mut self, source: ViewInput, kind: Kind, id: Option<u64>, at: Point) {
         let Some(project) = self.views.active.snapshot(&self.session) else {
             return;
         };
         let label = id.and_then(|id| project.hierarchical_labels().iter().find(|l| l.id == id));
-        let name = label
-            .map_or_else(|| if kind == Kind::Sheet { format!("Sheet {}", project.sheets().len() + 1) } else { "SIGNAL".into() }, |l| l.name.clone());
+        let name = label.map_or_else(
+            || {
+                if kind != Kind::Sheet {
+                    return "SIGNAL".into();
+                }
+                let mut number = project.sheets().len() + 1;
+                while project.sheets().any(|sheet| sheet.name.eq_ignore_ascii_case(&format!("Sheet {number}"))) {
+                    number += 1;
+                }
+                format!("Sheet {number}")
+            },
+            |l| l.name.clone(),
+        );
         self.dialog = Dialog::Hierarchy(Edit {
             source,
             sheet: project.sheet_target(),

@@ -223,7 +223,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
         workspace::Workspace {
             title: "Schematic",
             description: "Capture circuits, place symbols and connect pins",
-            tabs: Some("Capture · View"),
+            tabs: Some("Capture · Analyze · Libraries · Manage · View"),
             icon: workspace::WorkspaceIcon::Schematic,
             current: true,
         },
