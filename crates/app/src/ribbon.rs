@@ -55,6 +55,8 @@ enum Action {
     Slice,
     Heal,
     AutoHeal,
+    SymbolEditor,
+    FootprintEditor,
     Sources,
     Updates,
     Variants,
@@ -129,8 +131,10 @@ const ANALYZE: &[Group] = &[
     Group { title: "Reports", tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", "")], extras: &[] },
 ];
 const LIBRARIES: &[Group] = &[Group {
-    title: "Library sources",
+    title: "Libraries",
     tools: &[
+        tool(Action::SymbolEditor, "Symbol Editor", Icon::Symbol, "Create a symbol definition", ""),
+        tool(Action::FootprintEditor, "Footprint Editor", Icon::Symbol, "Create a footprint definition", ""),
         tool(Action::Sources, "Sources", Icon::Browser, "Manage native library sources", ""),
         tool(Action::Updates, "Updates", Icon::Sync, "Library update review is not available yet.", ""),
     ],
@@ -156,6 +160,8 @@ impl Action {
             self,
             Self::Symbol
                 | Self::Sources
+                | Self::SymbolEditor
+                | Self::FootprintEditor
                 | Self::HierarchicalLabel
                 | Self::NewSheet
                 | Self::Subsheet
@@ -177,6 +183,7 @@ impl Action {
         let project = app.session.project().is_some();
         let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
         match self {
+            Self::SymbolEditor | Self::FootprintEditor => true,
             Self::NewSheet => app.session.available(pcbcraft_engine::sheets::CREATE_SHEET),
             Self::Move | Self::Rotate => {
                 schematic && app.views.active.schematic.tool.is_none() && app.views.active.schematic.selection.single_symbol().is_some()
@@ -250,6 +257,8 @@ impl PcbApp {
         match action {
             Action::Sources => self.dialog = Dialog::LibrarySources,
             Action::Symbol => self.parts.focus_search(),
+            Action::SymbolEditor => self.new_library_item(pcbcraft_engine::authoring::Kind::Symbol),
+            Action::FootprintEditor => self.new_library_item(pcbcraft_engine::authoring::Kind::Footprint),
             Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),
             Action::NewSheet => {

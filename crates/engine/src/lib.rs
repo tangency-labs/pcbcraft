@@ -5,6 +5,7 @@
 //! [`Session::execute`] also includes an inspection result for existing callers.
 //! The native codec snapshots authored data independently of editing history and transport.
 
+pub mod authoring;
 pub mod board;
 pub mod hierarchy;
 pub mod library;

@@ -22,6 +22,7 @@ mod editor_workspace;
 mod footprint_assignment;
 mod hierarchy;
 mod home;
+mod library_editors;
 mod library_preview;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
@@ -154,6 +155,9 @@ enum Dialog {
     LayerColor(board_appearance::Edit),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(properties::Edit),
+    /// Closing a definition or quitting protects authoring documents separately from the project.
+    LibraryClose(Option<u64>),
+    LibraryProperties(u64),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
     SaveChanges(unsaved::Then),
     OpenLocation,
@@ -173,7 +177,8 @@ enum Dialog {
     About,
 }
 
-/// The project host owns one session, file lifecycle and services. Its schematic view holds
+/// The host owns the project session and independent library authoring documents, each with
+/// its own file/history lifecycle. Its schematic view holds
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
@@ -185,6 +190,7 @@ pub struct PcbApp {
     #[cfg(not(target_arch = "wasm32"))]
     assistant: assistant::Assistant,
     session: Session,
+    library_editors: library_editors::Editors,
     #[cfg(not(target_arch = "wasm32"))]
     live_control: Option<live_control::LiveControl>,
     files: project_files::ProjectFiles,
@@ -420,6 +426,7 @@ impl PcbApp {
     /// Open and save actions are disabled while a file job is in flight. The browser offers
     /// Download, while desktop Save As opens the encoding chooser. Preferences and Keyboard
     /// Shortcuts sit above Quit, as in SolidCraft.
+    /// Library entries create independent documents or fork the actual focused selection.
     fn file_menu(&mut self, ui: &mut Ui) {
         let new_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_N) };
         if self.command_row(ui, "project.new", "", &new_shortcut, MenuIcon::New) {
@@ -451,6 +458,30 @@ impl PcbApp {
         menu::separator(ui);
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
+        }
+
+        menu::separator(ui);
+        for (label, kind) in
+            [("New Symbol", pcbcraft_engine::authoring::Kind::Symbol), ("New Footprint", pcbcraft_engine::authoring::Kind::Footprint)]
+        {
+            if MenuItem::new(label).show(ui) {
+                self.new_library_item(kind);
+            }
+        }
+        if MenuItem::new("Open Library Item…").enabled(!self.library_editors.busy()).show(ui) {
+            self.message = self.library_editors.open_picker(ui.ctx()).err();
+        }
+        if MenuItem::new("Library Workspaces").enabled(self.library_editors.has_documents()).show(ui) {
+            self.library_editors.resume();
+        }
+        menu::separator(ui);
+        for (label, kind) in [
+            ("Edit Selected Symbol Copy", pcbcraft_engine::authoring::Kind::Symbol),
+            ("Edit Selected Footprint Copy", pcbcraft_engine::authoring::Kind::Footprint),
+        ] {
+            if MenuItem::new(label).enabled(self.session.project().is_some()).show(ui) {
+                self.message = self.fork_library_selection(kind).err();
+            }
         }
 
         // SolidCraft ends File with Preferences and Keyboard Shortcuts, above Quit.
@@ -1590,6 +1621,8 @@ impl PcbApp {
                 }
             }
             Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, edit),
+            Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
+            Dialog::LibraryProperties(id) => self.library_properties_dialog(ctx, id),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
@@ -1764,7 +1797,7 @@ impl PcbApp {
         self.repaint_editors(ctx);
     }
 
-    /// Poll the shared project exactly once through the framework root, even after its native
+    /// Poll project and library file owners once through the framework root, even after its native
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
@@ -1773,6 +1806,10 @@ impl PcbApp {
         self.sync_style(&ctx);
         self.checkpoint_arrangements();
         self.handle_close_request(&ctx);
+        self.library_editors.poll();
+        if std::mem::take(&mut self.library_editors.focus_requested) && self.library_editors.active.is_some() {
+            ctx.send_viewport_cmd_to(editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+        }
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {
@@ -1814,13 +1851,18 @@ impl PcbApp {
 
     /// Draw the same editor in any visible window. Project dialogs, Home and the assistant
     /// belong to the current main host, whose native identity can survive the original window.
-    /// Arrangement forms stay in their initiating host and block edits in every window.
+    /// Definition workspaces replace the main host’s project panes while detached project hosts
+    /// continue independently. Arrangement forms stay in their initiating host and block edits in every window.
     /// Blocked project actions disable editor controls, while native window interactions remain
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
         self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
+        if main && self.library_editors.active.is_some() {
+            self.library_frame(ui, integrated_titlebar);
+            return;
+        }
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
         let had_dialog = !matches!(self.dialog, Dialog::None);
         let was_home = self.home;
@@ -1860,7 +1902,7 @@ impl PcbApp {
             #[cfg(not(target_arch = "wasm32"))]
             if main {
                 let can_edit = workspace.is_some() && matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
-                self.assistant.show(&ctx, workspace, &self.session, can_edit);
+                self.assistant.show(&ctx, workspace, &self.session, can_edit, self.session.project().is_some());
                 self.serve_chat(&ctx);
                 if let Some(request) = self.assistant.take_settings_request() {
                     self.dialog = match request {

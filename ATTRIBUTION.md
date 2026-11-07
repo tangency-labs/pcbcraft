@@ -591,3 +591,17 @@ The new package preview projects native definitions through existing chrome
 primitives. Published manual observations and deliberate differences are recorded
 in [the properties/editor notes](docs/properties-and-library-editors.md); no EDA
 implementation source, external drawings, icons or example assets were used.
+
+
+## Native library authoring workspaces
+
+`crates/engine/src/authoring.rs`, `crates/app/src/library_editors*` and
+`crates/chrome/src/authoring.rs` are original upstream code. Their workspace
+composition uses the already qualified Craft chrome and properties primitives
+above. The feature comparisons in `docs/properties-and-library-editors.md`
+reference only published KiCad/Altium manuals; no implementation code, artwork,
+external component definitions or examples were imported. Built-in definition
+fork tests use this repository's original starter library data. The native
+Close regression adds a direct development dependency on the already locked
+winit 0.30.13 crate (Apache-2.0), already used by the desktop lifecycle tests;
+no new dependency version or asset is introduced.

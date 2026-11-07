@@ -730,8 +730,17 @@ impl PcbApp {
 
     /// Route focus without moving cameras or editing the document. Release text search and
     /// browser drag ownership when a pane takes over; dialog input remains with its owner.
+    /// Main-host focus returns from authoring even if that project view was already focused.
     pub(super) fn activate_editor(&mut self, ctx: &egui::Context, id: ViewId) {
-        if !matches!(self.dialog, Dialog::None) || !self.views.activate(id) {
+        if !matches!(self.dialog, Dialog::None) {
+            return;
+        }
+        let changed = self.views.activate(id);
+        let authoring = self.views.owner(id) == Some(self.views.main) && self.library_editors.active.is_some();
+        if authoring {
+            self.library_editors.active = None;
+        }
+        if !changed && !authoring {
             return;
         }
         self.parts.release_focus(ctx);

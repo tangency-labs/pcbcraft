@@ -110,6 +110,7 @@ mod live {
     enum Kind {
         /// A view ID from inspection.
         View,
+        LibraryAction,
         /// A window ID from inspection.
         Window,
         /// An arrangement ID from inspection.
@@ -141,6 +142,9 @@ mod live {
             let coordinate = json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM});
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
+                Self::LibraryAction => {
+                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","delete","metadata","undo","redo"]}},"required":["operation"],"description":"A pcbcraft engine authoring Action: insert primitive; replace object and primitive; delete objects; metadata name/license/source/reference_prefix/default_value; undo or redo. Primitive coordinates use integer nanometres; inspect_editor includes native typed primitive records."})
+                }
                 Self::View | Self::Window | Self::Arrangement => json!({"type": "integer", "minimum": 0}),
                 Self::Object => json!({"type":"string","format":"uuid"}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
@@ -161,6 +165,10 @@ mod live {
         /// Check a raw value without coercion, giving the reason it doesn't fit.
         fn validate(self, value: &Value) -> Result<(), String> {
             let fits = match self {
+                Self::LibraryAction => {
+                    serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= pcbcraft_engine::authoring::MAX_BYTES)
+                        && serde_json::from_value::<pcbcraft_engine::authoring::Action>(value.clone()).is_ok()
+                }
                 Self::View | Self::Window | Self::Arrangement => value.as_u64().is_some(),
                 Self::Name => value.as_str().is_some(),
                 Self::Bool => value.is_boolean(),
@@ -176,6 +184,7 @@ mod live {
                 return Ok(());
             }
             Err(match self {
+                Self::LibraryAction => "must be a bounded native authoring Action".into(),
                 Self::View => "must be a view ID from inspect_editor".to_owned(),
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
@@ -290,6 +299,77 @@ mod live {
     }
 
     const CATALOG: &[WindowCommand] = &[
+        WindowCommand {
+            id: "app.library_new",
+            title: "New Library Item",
+            summary: "Create an independent symbol or footprint definition workspace without editing project instances.",
+            params: &[Param { name: "kind", summary: "Definition kind", required: true, kind: Kind::Choice(&["symbol", "footprint"]) }],
+        },
+        WindowCommand {
+            id: "app.library_fork_selected",
+            title: "Edit Definition Copy",
+            summary: "Fork the actual focused symbol or footprint selection under a new identity, leaving its source and project instances unchanged.",
+            params: &[VIEW, Param { name: "kind", summary: "Definition kind", required: true, kind: Kind::Choice(&["symbol", "footprint"]) }],
+        },
+        WindowCommand {
+            id: "app.library_edit",
+            title: "Edit Library Item",
+            summary: "Apply one revision-checked authoring transaction to a library document, using its separate undo history.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
+                Param { name: "expected_revision", summary: "Library document revision from inspection", required: true, kind: Kind::Window },
+                Param { name: "action", summary: "Typed authoring Action", required: true, kind: Kind::LibraryAction },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_focus",
+            title: "Focus Library Workspace",
+            summary: "Focus an open library document; omit document to return to the project with library edits retained.",
+            params: &[Param { name: "document", summary: "Runtime library document ID; omit for project", required: false, kind: Kind::Window }],
+        },
+        WindowCommand {
+            id: "app.library_view",
+            title: "Library View",
+            summary: "Select a library primitive or definition metadata and navigate its canvas without changing authored data or history.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
+                Param { name: "selected", summary: "Stable primitive ID from library inspection", required: false, kind: Kind::Window },
+                Param { name: "definition", summary: "Select definition metadata instead of a primitive", required: false, kind: Kind::Bool },
+                Param { name: "fit", summary: "Fit the definition", required: false, kind: Kind::Bool },
+                Param { name: "zoom_percent", summary: "Camera zoom percentage", required: false, kind: Kind::Integer { min: 1, max: 800, step: 1 } },
+                Param { name: "center", summary: "Center in definition nanometres", required: false, kind: Kind::Point },
+                Param {
+                    name: "grid_spacing_nm",
+                    summary: "Grid spacing offered by this editor, in nanometres",
+                    required: false,
+                    kind: Kind::Integer { min: 25_000, max: 1_270_000, step: 1 },
+                },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_close",
+            title: "Close Library Item",
+            summary: "Close an addressed library document. Unsaved fields or edits require an explicit discard; running file jobs prevent closing.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
+                Param { name: "discard", summary: "Explicitly discard unsaved library edits", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_open",
+            title: "Open Library Item",
+            summary: "Open the library item picker in the editor; bounded input opens a new document and never replaces unsaved work.",
+            params: &[],
+        },
+        WindowCommand {
+            id: "app.library_save",
+            title: "Save Library Copy",
+            summary: "Choose a new destination for the captured library document. Export writes its native definition; browser downloads do not confirm durable saving.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
+                Param { name: "export", summary: "Export native definition rather than editable item", required: false, kind: Kind::Bool },
+            ],
+        },
         WindowCommand {
             id: "view.open_sheet",
             title: "Open Sheet",
@@ -670,7 +750,7 @@ mod live {
                 Some(json!({
                     "id": id.0,
                     "window": window.0,
-                    "focused": focused,
+                    "focused": focused && !(window==app.views.main && app.library_editors.active.is_some()),
                     "primary": id == app.views.primary(),
                     "workspace": match view.workspace {
                         Workspace::Schematic => "schematic",
@@ -704,9 +784,10 @@ mod live {
             "unsaved": app.files.dirty(&app.session),
             "file_operation": app.files.busy(),
             "dialog_open": !matches!(app.dialog, Dialog::None),
-            "home": app.home,
+            "home": app.home && app.library_editors.active.is_none(),
             "message": app.message,
             "windows": windows,
+            "library_editors":app.library_editors.inspect(),
             "views": views,
             "arrangements": {
                 "active": app.arrangements.active(),
@@ -783,6 +864,9 @@ mod live {
         pub(crate) fn run_window_command(&mut self, ctx: &Context, id: &str, params: &Value) -> Result<(), String> {
             let command = CATALOG.iter().find(|command| command.id == id).ok_or_else(|| format!("unknown command `{id}`"))?;
             command.check(params)?;
+            if id.starts_with("app.library_") {
+                return self.library_command(ctx, id, params);
+            }
             if (id.starts_with("view.") || id.starts_with("arrangement.") || id == "window.set_panel") && self.session.project().is_none() {
                 return Err("No project is open. Open or create one first.".to_owned());
             }
@@ -973,6 +1057,7 @@ mod live {
                 }
                 ("app.set_preferences", _, _) => self.preferences = updated_preferences(self.preferences, params),
                 ("app.set_home", _, _) => {
+                    self.library_editors.active = None;
                     if params["shown"].as_bool() == Some(true) {
                         if !self.home {
                             self.show_home();

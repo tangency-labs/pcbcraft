@@ -68,6 +68,11 @@ impl PcbApp {
     /// Ask once before ending the project. Running file jobs retain their owner and captured
     /// decision; a repeated request cannot overwrite a pending Save or Don't Save answer.
     pub(super) fn begin_project_close(&mut self, ctx: &egui::Context) {
+        if self.library_editors.unsaved() || self.library_editors.busy() {
+            self.dialog = Dialog::LibraryClose(None);
+            ctx.send_viewport_cmd_to(crate::editor_windows::viewport(self.views.main), ViewportCommand::Focus);
+            return;
+        }
         self.views.cancel_gestures();
         if self.waiting.is_some() || matches!(self.dialog, Dialog::SaveChanges(Then::Close)) {
             return;
@@ -162,7 +167,7 @@ impl PcbApp {
     /// Downloads leave it on, because a download doesn't confirm the project was kept.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn warn_before_leaving(&mut self) {
-        let unsaved = self.files.dirty(&self.session);
+        let unsaved = self.files.dirty(&self.session) || self.library_editors.unsaved();
         if self.leave_warning != Some(unsaved) {
             self.leave_warning = Some(unsaved);
             super::project_files::warn_before_leaving(unsaved);

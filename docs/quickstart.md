@@ -381,3 +381,25 @@ If a step fails, report the checkout commit, platform, exact action and error
 through [GitHub issues](https://github.com/tangency-labs/pcbcraft/issues), with a
 small shareable project when relevant. The
 [contributor guide](../CONTRIBUTING.md) describes where to start investigating.
+
+## Try a symbol or footprint definition
+
+Choose **File → New Symbol** or **New Footprint**, or open either editor from
+**Libraries**. These are definition workspaces with their own history, while
+the project remains available through **Project workspace**. Select a primitive
+on the canvas or in Browser, edit its Properties and choose **Apply**.
+**More properties…** expands the same draft; lengths accept mm, mil or inches.
+For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
+To make a plated hole, set Layers to All copper and enter a positive drill smaller
+than the land. Corner radius is zero for rectangular/circular pads.
+
+On desktop, **Save Library Copy** chooses a new `.pcitem.json` filename; an
+existing file is never overwritten. Reopen that file with **Open Library Item…**.
+The browser downloads the same editable format and retains its leave warning.
+**File → Export Native Definition…** produces the existing standalone definition
+schema, while the editor file retains authoring IDs and provenance. To start from
+a placed item, return to the project, select one symbol or footprint and use
+**File → Edit Selected Symbol Copy / Edit Selected Footprint Copy**. Forking and
+authoring leave the source and placed copies unchanged. Applying the resulting
+definition to a project is follow-up work; see the
+[editor notes](properties-and-library-editors.md#initial-authoring-slice) for scope.
