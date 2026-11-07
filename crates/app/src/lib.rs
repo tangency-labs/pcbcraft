@@ -591,9 +591,10 @@ impl PcbApp {
         }
     }
 
-    /// Whether the current project can start a save or download.
+    /// Save/download availability belongs to the whole open project, even if the active view's
+    /// sheet was deleted. A pending file operation still prevents starting another save.
     fn can_save_project(&self) -> bool {
-        !self.files.busy() && self.views.active.snapshot(&self.session).is_some()
+        !self.files.busy() && self.session.project().is_some()
     }
 
     /// Save the current desktop file or choose the encoding for a browser download.

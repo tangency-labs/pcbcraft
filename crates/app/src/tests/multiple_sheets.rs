@@ -152,6 +152,50 @@ fn stale_sheet_forms_and_deleted_sheet_views_never_fall_back_to_editing_main() {
     assert_eq!(h.state().views.view(id).unwrap().camera.saved_state(), camera);
 }
 
+/// Deleting the active sheet externally cannot disable project-wide Save/Save As. A real
+/// folder save still preserves the unavailable view, and its pending job blocks a second save.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn unavailable_sheet_view_can_save_the_project_and_respects_pending_file_jobs() {
+    let mut h = sheet_harness(1400.0);
+    h.state_mut().files.use_stand_in();
+    let revision = h.state().session.revision();
+    h.state_mut().run(CREATE_SHEET, &json!({"name":"Power","expected_revision":revision}));
+    h.run();
+    let power = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+    click(&mut h, "Power");
+    let revision = h.state().session.revision();
+    h.state_mut().session.apply(DELETE_SHEET, &json!({"sheet":power.id(),"expected_revision":revision})).unwrap();
+    h.run();
+    assert!(h.state().views.active.unavailable());
+    assert!(h.state().views.active.snapshot(&h.state().session).is_none());
+    assert!(h.state().can_save_project());
+    assert!(!h.get_by_label("Save Project").accesskit_node().is_disabled());
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "File");
+    assert!(!h.get_by_label("Save").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Save As…").accesskit_node().is_disabled());
+    click(&mut h, "Save As…");
+    assert!(matches!(h.state().dialog, Dialog::SaveEncoding));
+    click(&mut h, "Cancel");
+    click(&mut h, "File");
+    h.get_by_label("Save").click();
+    // The stand-in holds the real file job open until the simulated destination is chosen.
+    h.run_steps(3);
+    assert!(h.state().files.stand_in_waiting());
+    assert!(!h.state().can_save_project());
+    assert!(h.get_by_label("Save Project").accesskit_node().is_disabled());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("saved-project");
+    h.state_mut().files.finish_stand_in(path.clone());
+    h.run();
+    assert!(h.state().can_save_project());
+    assert!(h.state().views.active.unavailable());
+    assert!(!h.state().files.dirty(&h.state().session));
+    assert_eq!(encode_documents(pcbcraft_storage::open(&path).unwrap()).unwrap(), before);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Live navigation validates the explicit sheet before selecting, independently of focused pane.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
