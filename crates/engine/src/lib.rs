@@ -72,12 +72,14 @@ enum ParamKind {
     CopperLayers,
     HierarchyId,
     Direction,
+    SheetExtent,
 }
 
 impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
             Self::BoardSetup => board::setup::BoardSetup::schema(),
@@ -149,6 +151,7 @@ impl ParamKind {
             {
                 Ok(())
             }
+            Self::SheetExtent if value.as_i64().is_some_and(|n| (1..=2 * MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
             Self::BoardId | Self::SheetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup | Self::SilkscreenSettings if value.is_object() => Ok(()),
@@ -187,6 +190,7 @@ impl ParamKind {
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::Selection => Err("must contain bounded unique symbol and wire ID lists"),
             Self::HierarchyId => Err("must identify a sheet symbol or hierarchical label"),
+            Self::SheetExtent => Err("must be a positive extent within schematic bounds"),
             Self::Direction => Err("must be input, output, bidirectional, tri_state or passive"),
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
@@ -353,6 +357,19 @@ const ANCHOR_X: Param = Param { required: true, name: "x_nm", summary: "Anchor X
 const ANCHOR_Y: Param = Param { required: true, name: "y_nm", summary: "Anchor Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 const DIRECTION: Param = Param { required: true, name: "direction", summary: "Hierarchical interface direction", kind: ParamKind::Direction };
 const CATALOG: &[Command] = &[
+    Command {
+        id: hierarchy::RESIZE_SHEET,
+        title: "Resize Sheet Symbol",
+        summary: "Resize a sheet rectangle and its fixed interface anchors in one undo step; refuse sizes that cut through pins.",
+        params: &[
+            HIERARCHY_OBJECT,
+            ANCHOR_X,
+            ANCHOR_Y,
+            Param { required: true, name: "width_nm", summary: "Sheet width in nanometers", kind: ParamKind::SheetExtent },
+            Param { required: true, name: "height_nm", summary: "Sheet height in nanometers", kind: ParamKind::SheetExtent },
+            EXPECTED_REVISION,
+        ],
+    },
     Command {
         id: hierarchy::CREATE_CHILD,
         title: "New Hierarchical Sheet",
@@ -997,6 +1014,7 @@ impl Session {
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
             hierarchy::CREATE_CHILD
             | hierarchy::PLACE_SHEET
+            | hierarchy::RESIZE_SHEET
             | hierarchy::MOVE_SHEET
             | hierarchy::REMOVE_SHEET
             | hierarchy::ADD_LABEL
@@ -1159,6 +1177,7 @@ impl Session {
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
             hierarchy::CREATE_CHILD
             | hierarchy::PLACE_SHEET
+            | hierarchy::RESIZE_SHEET
             | hierarchy::MOVE_SHEET
             | hierarchy::REMOVE_SHEET
             | hierarchy::ADD_LABEL

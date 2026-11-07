@@ -93,7 +93,15 @@ labels are allowed per sheet. Directions are `input`, `output`, `bidirectional`,
 appear on the left. Names and directions on the parent derive from child records,
 so synchronization never relies on matching independently editable strings.
 Slots preserve other pins' positions when a label is removed. Symbol geometry is
-16 schematic grid steps wide and grows vertically to contain its occupied slots.
+16 by 10 schematic grid steps by default and grows vertically to contain occupied
+pin slots. A sheet symbol can optionally store an authored `size` point, whose
+`x_nm` and `y_nm` are positive width and height. Missing size retains legacy
+defaults; explicit null is refused. Authored extents must be at least 8 by 6 grid
+steps and fit within schematic bounds. Adding child labels can grow the effective
+height; explicit resizing refuses a rectangle smaller than current pin clearance.
+`schematic.resize_sheet` accepts a complete origin/width/height rectangle and
+commits it atomically, preserving all endpoint identities. Right-side pins follow
+the authored width while vertical slots remain stable.
 
 A stored `{"label":<id>}` endpoint addresses a child label; `{"sheet_pin":<id>}`
 addresses its distinct parent-side pin. Both resolve only within their owning

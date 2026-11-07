@@ -116,6 +116,7 @@ impl Binding {
 #[derive(Debug, Default)]
 pub(super) struct SchematicState {
     pub(super) selection: Selection,
+    pub(super) selected_sheet_symbol: Option<u64>,
     pub(super) selected_leg: Option<LegTarget>,
     pub(super) whole_wire_drag: bool,
     pub(super) tool: Option<Tool>,
@@ -492,8 +493,11 @@ impl EditorView {
         if let Some(project) = session.project() {
             if let Some(sheet) = &self.sheet_snapshot {
                 self.schematic.selection.retain(sheet);
+                self.schematic.selected_sheet_symbol =
+                    self.schematic.selected_sheet_symbol.filter(|id| sheet.sheet_symbols().iter().any(|s| s.id == *id));
             } else {
                 self.schematic.selection = Selection::default();
+                self.schematic.selected_sheet_symbol = None;
             }
             let placed: std::collections::BTreeSet<_> = self
                 .board

@@ -30,6 +30,61 @@ pub(super) enum Action {
     Delete,
 }
 
+/// A corner keeps the opposite edges fixed during a sheet resize.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Corner {
+    left: bool,
+    top: bool,
+}
+
+/// One complete authored rectangle, submitted atomically after a valid gesture ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Geometry {
+    pub at: Point,
+    pub size: Point,
+}
+
+/// View-local pickup state retains the original grab point and immutable document geometry.
+#[derive(Clone, Debug)]
+pub(super) struct Drag {
+    pub block: engine::SheetSymbol,
+    start: Point,
+    size: Point,
+    pub corner: Option<Corner>,
+}
+
+impl Drag {
+    /// Snap pointer travel while retaining the initial offset. Resizing clamps at interface
+    /// clearance instead of flipping the rectangle through its opposite edges.
+    pub fn geometry(&self, project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Geometry {
+        let point = camera.snap(pointer, rect);
+        let Some(corner) = self.corner else {
+            return Geometry {
+                at: Point { x_nm: self.block.at.x_nm + point.x_nm - self.start.x_nm, y_nm: self.block.at.y_nm + point.y_nm - self.start.y_nm },
+                size: self.size,
+            };
+        };
+        let min = project.sheet_symbol_min_size(&self.block);
+        let right = self.block.at.x_nm + self.size.x_nm;
+        let bottom = self.block.at.y_nm + self.size.y_nm;
+        let x = if corner.left { point.x_nm.min(right - min.x_nm) } else { self.block.at.x_nm };
+        let y = if corner.top { point.y_nm.min(bottom - min.y_nm) } else { self.block.at.y_nm };
+        let right = if corner.left { right } else { point.x_nm.max(x + min.x_nm) };
+        let bottom = if corner.top { bottom } else { point.y_nm.max(y + min.y_nm) };
+        Geometry { at: Point { x_nm: x, y_nm: y }, size: Point { x_nm: right - x, y_nm: bottom - y } }
+    }
+
+    /// Use the engine's validated geometry for preview, retaining electrical endpoint identity.
+    pub fn preview(&self, project: &Project, geometry: Geometry) -> Option<Project> {
+        let address = format!("sheet-symbol-{}", self.block.id);
+        if self.corner.is_some() {
+            project.resized_sheet_symbol(&address, geometry.at, geometry.size).ok()
+        } else {
+            project.moved_hierarchy(&address, geometry.at).ok()
+        }
+    }
+}
+
 /// A modal interface edit retains its originating document/revision across native hosts.
 #[derive(Debug)]
 pub(super) struct Edit {
@@ -57,7 +112,15 @@ fn direction_name(direction: Direction) -> &'static str {
 }
 
 /// Paint native hierarchy geometry with shared chrome colors, metrics and typography.
-pub(super) fn paint(painter: &Painter, rect: Rect, camera: &Camera, project: &Project, tool: Option<&Tool>, pointer: Option<Pos2>) {
+pub(super) fn paint(
+    painter: &Painter,
+    rect: Rect,
+    camera: &Camera,
+    project: &Project,
+    tool: Option<&Tool>,
+    pointer: Option<Pos2>,
+    selected: Option<u64>,
+) {
     let tokens = Tokens::get();
     let moving = match tool {
         Some(Tool::Hierarchy { kind, id, offset, .. }) => Some((*kind, *id, pointer.map(|p| camera.snap(p + *offset, rect)))),
@@ -67,17 +130,17 @@ pub(super) fn paint(painter: &Painter, rect: Rect, camera: &Camera, project: &Pr
         let at = moving.filter(|(kind, id, _)| *kind == Kind::Sheet && *id == Some(block.id)).and_then(|(_, _, at)| at).unwrap_or(block.at);
         let size = project.sheet_symbol_size(block);
         let bounds = Rect::from_min_max(camera.screen(at, rect), camera.screen(Point { x_nm: at.x_nm + size.x_nm, y_nm: at.y_nm + size.y_nm }, rect));
-        let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.text);
+        let color = if selected == Some(block.id) { tokens.accent } else { tokens.text };
+        let stroke = Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color);
         painter.rect_stroke(bounds, 0, stroke, egui::StrokeKind::Middle);
         paint_bounded_text(
             painter,
-            bounds.left_top() + Vec2::splat(tokens.space_8),
+            bounds.left_top() - egui::vec2(0., tokens.space_4),
             project.child_name(block),
             FontId::proportional(tokens.font_button),
-            tokens.text,
-            (bounds.width() - tokens.space_16).max(0.),
-            false,
-            false,
+            color,
+            bounds.width(),
+            Align2::LEFT_BOTTOM,
         );
         for pin in project.sheet_pins(block) {
             let point = Point { x_nm: pin.at.x_nm + at.x_nm - block.at.x_nm, y_nm: pin.at.y_nm + at.y_nm - block.at.y_nm };
@@ -92,9 +155,21 @@ pub(super) fn paint(painter: &Painter, rect: Rect, camera: &Camera, project: &Pr
                 FontId::proportional(tokens.font_small),
                 tokens.text,
                 (bounds.width() / 2. - tokens.space_16).max(0.),
-                right,
-                true,
+                if right { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER },
             );
+        }
+        if (selected == Some(block.id) || pointer.is_some_and(|p| bounds.expand(theme::SCHEMATIC_HANDLE_HIT_RADIUS).contains(p)))
+            && matches!(tool, None | Some(Tool::SheetGesture { .. }))
+        {
+            for (pos, _) in corners(bounds) {
+                painter.rect(
+                    Rect::from_center_size(pos, Vec2::splat(2. * theme::SCHEMATIC_HANDLE_HALF_SIZE)),
+                    0,
+                    tokens.panel,
+                    Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent),
+                    egui::StrokeKind::Middle,
+                );
+            }
         }
     }
     for label in project.hierarchical_labels() {
@@ -119,13 +194,34 @@ pub(super) fn paint(painter: &Painter, rect: Rect, camera: &Camera, project: &Pr
 
 /// Keep pin names on their own half of the symbol, with ellipses at small zoom levels.
 #[allow(clippy::too_many_arguments)]
-fn paint_bounded_text(painter: &Painter, at: Pos2, text: &str, font: FontId, color: egui::Color32, width: f32, right: bool, center: bool) {
+fn paint_bounded_text(painter: &Painter, at: Pos2, text: &str, font: FontId, color: egui::Color32, width: f32, align: Align2) {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
     job.wrap.max_width = width;
     job.wrap.max_rows = 1;
     let galley = painter.layout_job(job);
-    let offset = egui::vec2(if right { galley.size().x } else { 0. }, if center { galley.size().y / 2. } else { 0. });
-    painter.galley(at - offset, galley, color);
+    painter.galley(align.anchor_size(at, galley.size()).min, galley, color);
+}
+
+/// Derive the same screen rectangle for outlines, selection, title hit tests and handles.
+fn block_rect(project: &Project, block: &engine::SheetSymbol, camera: &Camera, rect: Rect) -> Rect {
+    let size = project.sheet_symbol_size(block);
+    Rect::from_min_max(camera.screen(block.at, rect), camera.screen(Point { x_nm: block.at.x_nm + size.x_nm, y_nm: block.at.y_nm + size.y_nm }, rect))
+}
+
+/// Include the external sheet name in body selection and movement, without moving the outline.
+fn body_rect(bounds: Rect) -> Rect {
+    let t = Tokens::get();
+    Rect::from_min_max(bounds.min - egui::vec2(0., t.font_button + t.space_8), bounds.max)
+}
+
+/// All four corners use the same geometry for drawing and pointer hit testing.
+fn corners(rect: Rect) -> [(Pos2, Corner); 4] {
+    [
+        (rect.left_top(), Corner { left: true, top: true }),
+        (rect.right_top(), Corner { left: false, top: true }),
+        (rect.left_bottom(), Corner { left: true, top: false }),
+        (rect.right_bottom(), Corner { left: false, top: false }),
+    ]
 }
 
 /// The interface anchor is the pointed end; direction also appears in the properties dialog.
@@ -158,13 +254,7 @@ fn hit(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<
         }
     }
     for block in project.sheet_symbols().iter().rev() {
-        let size = project.sheet_symbol_size(block);
-        if Rect::from_min_max(
-            camera.screen(block.at, rect),
-            camera.screen(Point { x_nm: block.at.x_nm + size.x_nm, y_nm: block.at.y_nm + size.y_nm }, rect),
-        )
-        .contains(pointer)
-        {
+        if body_rect(block_rect(project, block, camera, rect)).contains(pointer) {
             return Some((Kind::Sheet, block.id, block.at));
         }
     }
@@ -177,8 +267,9 @@ pub(super) fn hovered(project: &Project, camera: &Camera, pointer: Pos2) -> bool
     camera.schematic_rect().is_some_and(|rect| rect.contains(pointer) && hit(project, camera, rect, pointer).is_some())
 }
 
-/// Consume hierarchy placement, shortcuts and context menus before generic component selection.
+/// Consume hierarchy placement, body/corner drags, shortcuts and menus before component selection.
 /// A nested result distinguishes an owned menu with no action from unrelated canvas input.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn input(
     ui: &mut Ui,
     response: &Response,
@@ -187,7 +278,23 @@ pub(super) fn input(
     rect: Rect,
     tool: Option<&Tool>,
     enabled: bool,
+    selected: Option<u64>,
 ) -> Option<Option<Click>> {
+    if let Some(Tool::SheetGesture { drag, .. }) = tool {
+        let lost = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
+        if lost || response.secondary_clicked() {
+            return Some(Some(Click::FinishSheetGesture(None)));
+        }
+        if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+            let geometry = ui
+                .input(|i| i.pointer.hover_pos())
+                .filter(|p| enabled && rect.contains(*p))
+                .map(|p| drag.geometry(project, camera, rect, p))
+                .filter(|g| drag.preview(project, *g).is_some());
+            return Some(Some(Click::FinishSheetGesture(geometry)));
+        }
+        return Some(None);
+    }
     if let Some(Tool::Hierarchy { offset, .. }) = tool {
         if !enabled {
             return Some(None);
@@ -206,6 +313,23 @@ pub(super) fn input(
     }
     if tool.is_some() {
         return None;
+    }
+    if enabled
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+    {
+        for block in project.sheet_symbols().iter().rev() {
+            let bounds = block_rect(project, block, camera, rect);
+            let corner = corners(bounds)
+                .into_iter()
+                .find(|(pos, _)| pos.distance_sq(origin) <= theme::SCHEMATIC_HANDLE_HIT_RADIUS.powi(2))
+                .map(|(_, corner)| corner);
+            let pin = project.sheet_pins(block).any(|pin| camera.screen(pin.at, rect).distance_sq(origin) <= theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2));
+            if corner.is_some() || (body_rect(bounds).contains(origin) && !pin) {
+                let drag = Drag { block: block.clone(), start: camera.snap(origin, rect), size: project.sheet_symbol_size(block), corner };
+                return Some(Some(Click::GrabSheetGesture(Box::new(drag))));
+            }
+        }
     }
     if enabled && let Some(pointer) = response.hover_pos() {
         for block in project.sheet_symbols() {
@@ -245,11 +369,24 @@ pub(super) fn input(
     {
         return Some(menu.inner);
     }
-    if !enabled || !response.hovered() || ui.ctx().egui_wants_keyboard_input() {
+    if !enabled || ui.ctx().egui_wants_keyboard_input() {
         return None;
     }
-    let (kind, id, _) = hit(project, camera, rect, response.hover_pos()?)?;
-    let action = if kind == Kind::Sheet && response.double_clicked() {
+    if let Some(pointer) = response.hover_pos() {
+        let corner = project
+            .sheet_symbols()
+            .iter()
+            .rev()
+            .flat_map(|block| corners(block_rect(project, block, camera, rect)))
+            .find(|(pos, _)| pos.distance_sq(pointer) <= theme::SCHEMATIC_HANDLE_HIT_RADIUS.powi(2));
+        if let Some((_, corner)) = corner {
+            ui.ctx().set_cursor_icon(if corner.left == corner.top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
+        }
+    }
+    let hovered = response.hover_pos().and_then(|p| hit(project, camera, rect, p));
+    let (kind, id, _) =
+        hovered.or_else(|| selected.and_then(|id| project.sheet_symbols().iter().find(|s| s.id == id).map(|s| (Kind::Sheet, id, s.at))))?;
+    let action = if hovered.is_some() && kind == Kind::Sheet && response.double_clicked() {
         Some(Action::Enter)
     } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::E)) {
         Some(Action::Edit)
@@ -260,7 +397,20 @@ pub(super) fn input(
     } else {
         None
     };
-    action.map(|action| Some(Click::HierarchyAction(kind, id, action)))
+    if let Some(action) = action {
+        return Some(Some(Click::HierarchyAction(kind, id, action)));
+    }
+    if hovered.is_some()
+        && kind == Kind::Sheet
+        && response.clicked()
+        && let Some(pointer) = response.hover_pos()
+        && project.sheet_symbols().iter().find(|b| b.id == id).is_some_and(|block| {
+            !project.sheet_pins(block).any(|pin| camera.screen(pin.at, rect).distance_sq(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2))
+        })
+    {
+        return Some(Some(Click::SelectSheetSymbol(id)));
+    }
+    None
 }
 
 impl PcbApp {

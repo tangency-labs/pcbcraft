@@ -11,6 +11,8 @@ pub const PLACE_SHEET: &str = "schematic.place_sheet";
 pub const CREATE_CHILD: &str = "schematic.create_sheet";
 /// Move a sheet symbol while retaining its interface identities and connections.
 pub const MOVE_SHEET: &str = "schematic.move_sheet";
+/// Resize a sheet symbol, optionally moving its origin, as one revision-checked edit.
+pub const RESIZE_SHEET: &str = "schematic.resize_sheet";
 /// Remove a sheet symbol and parent wires to its pins, retaining the child as a root sheet.
 pub const REMOVE_SHEET: &str = "schematic.remove_sheet";
 /// Add a named hierarchical label and automatically expose its pin on the parent symbol.
@@ -73,6 +75,14 @@ pub struct SheetSymbol {
     pub id: u64,
     pub child: Uuid,
     pub at: Point,
+    /// Authored extent. Older records retain their default size and automatic pin clearance.
+    #[serde(default, deserialize_with = "sheet_size", skip_serializing_if = "Option::is_none")]
+    pub size: Option<Point>,
+}
+
+/// Missing size preserves older records; explicit null is rejected instead of dropping data.
+fn sheet_size<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Option<Point>, D::Error> {
+    Point::deserialize(input).map(Some)
 }
 
 /// Geometry and display metadata of a pin derived from its child label.
@@ -82,6 +92,25 @@ pub struct SheetPin<'a> {
 }
 
 impl Project {
+    /// Preview a complete sheet rectangle without publishing state. Pins keep their IDs and
+    /// stable vertical slots; right-side pins follow the new width. Refuse extents smaller
+    /// than the interface clearance or outside schematic bounds.
+    pub fn resized_sheet_symbol(&self, object: &str, at: Point, size: Point) -> Result<Self, CommandError> {
+        let id = schematic::wiring::parse_id(object, "sheet-symbol-").ok_or_else(|| CommandError::InvalidParams("invalid sheet symbol ID".into()))?;
+        let index =
+            self.subsheets.iter().position(|s| s.id == id).ok_or_else(|| CommandError::InvalidParams("unknown sheet symbol on this sheet".into()))?;
+        let minimum = self.sheet_symbol_min_size(&self.subsheets[index]);
+        if size.x_nm < minimum.x_nm || size.y_nm < minimum.y_nm {
+            return Err(CommandError::InvalidParams("sheet size must leave room for its pins".into()));
+        }
+        let mut next = self.clone();
+        let block = &mut Arc::make_mut(&mut next.sheet_mut().subsheets)[index];
+        block.at = at;
+        block.size = Some(size);
+        next.validate_hierarchy().map_err(CommandError::InvalidParams)?;
+        Ok(next)
+    }
+
     /// Preview an addressed sheet symbol or label move without publishing history. Fixed
     /// endpoint identities remain intact, so attached paths use the destination geometry.
     /// Foreign IDs and any hierarchy geometry outside the document bounds are rejected.
@@ -140,10 +169,11 @@ impl Project {
 
     /// Pins derive names/directions from child records while stable slots preserve other pins.
     pub fn sheet_pins<'a>(&'a self, block: &'a SheetSymbol) -> impl Iterator<Item = SheetPin<'a>> + 'a {
+        let width = self.sheet_symbol_size(block).x_nm;
         self.sheets.iter().find(|s| s.sheet_id == block.child).into_iter().flat_map(move |s| {
             s.labels.iter().map(move |label| SheetPin {
                 at: Point {
-                    x_nm: block.at.x_nm.saturating_add(if label.direction.right() { 16 * schematic::GRID_NM } else { 0 }),
+                    x_nm: block.at.x_nm.saturating_add(if label.direction.right() { width } else { 0 }),
                     y_nm: block.at.y_nm.saturating_add((i64::from(label.slot) + 2) * 2 * schematic::GRID_NM),
                 },
                 label,
@@ -151,10 +181,25 @@ impl Project {
         })
     }
 
-    /// Sheet block size in model coordinates; pin slots grow the height without moving anchors.
+    /// Minimum editable extent with clearance below all occupied pin slots.
+    pub fn sheet_symbol_min_size(&self, block: &SheetSymbol) -> Point {
+        let slots = self
+            .sheets
+            .iter()
+            .find(|s| s.sheet_id == block.child)
+            .into_iter()
+            .flat_map(|s| s.labels.iter())
+            .map(|label| i64::from(label.slot) + 1)
+            .max()
+            .unwrap_or(0);
+        Point { x_nm: 8 * schematic::GRID_NM, y_nm: (slots * 2 + 4).max(6) * schematic::GRID_NM }
+    }
+
+    /// Authored size or legacy defaults, grown as needed when child pins are added.
     pub fn sheet_symbol_size(&self, block: &SheetSymbol) -> Point {
-        let slots = self.sheet_pins(block).map(|pin| i64::from(pin.label.slot) + 1).max().unwrap_or(0);
-        Point { x_nm: 16 * schematic::GRID_NM, y_nm: (slots * 2 + 4).max(10) * schematic::GRID_NM }
+        let minimum = self.sheet_symbol_min_size(block);
+        let authored = block.size.unwrap_or(Point { x_nm: 16 * schematic::GRID_NM, y_nm: 10 * schematic::GRID_NM });
+        Point { x_nm: authored.x_nm.max(minimum.x_nm), y_nm: authored.y_nm.max(minimum.y_nm) }
     }
 
     /// Fixed hierarchy anchors participate in wire picking/healing alongside component pins.
@@ -204,6 +249,14 @@ impl Project {
             }
             for block in sheet.subsheets.iter() {
                 persistence::validate_id(&mut ids, block.id)?;
+                if block.size.is_some_and(|size| {
+                    size.x_nm < 8 * schematic::GRID_NM
+                        || size.y_nm < 6 * schematic::GRID_NM
+                        || size.x_nm > 2 * MAX_CENTER_NM
+                        || size.y_nm > 2 * MAX_CENTER_NM
+                }) {
+                    return Err("invalid authored sheet dimensions".into());
+                }
                 if !self.sheets.iter().any(|s| s.sheet_id == block.child) || parents.insert(block.child, sheet.sheet_id).is_some() {
                     return Err("child sheet is missing or has more than one parent".into());
                 }
@@ -244,10 +297,9 @@ impl Session {
     pub(super) fn edit_hierarchy(&mut self, id: &str, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let mut project = self.open_project()?.clone();
-        let object = params
-            .get("id")
-            .and_then(Value::as_str)
-            .and_then(|s| schematic::wiring::parse_id(s, if matches!(id, MOVE_SHEET | REMOVE_SHEET) { "sheet-symbol-" } else { "label-" }));
+        let object = params.get("id").and_then(Value::as_str).and_then(|s| {
+            schematic::wiring::parse_id(s, if matches!(id, MOVE_SHEET | RESIZE_SHEET | REMOVE_SHEET) { "sheet-symbol-" } else { "label-" })
+        });
         let at = || -> Result<Point, CommandError> {
             Ok(Point {
                 x_nm: params["x_nm"].as_i64().ok_or_else(|| CommandError::InvalidParams("missing x_nm".into()))?,
@@ -278,8 +330,26 @@ impl Session {
                         .ok_or_else(|| CommandError::Unavailable("object IDs exhausted".into()))?,
                     child: child.sheet,
                     at: at()?,
+                    size: None,
                 };
                 Arc::make_mut(&mut project.sheet_mut().subsheets).push(block);
+            }
+            RESIZE_SHEET => {
+                let address = params["id"].as_str().unwrap_or_default();
+                let size = Point {
+                    x_nm: params["width_nm"].as_i64().ok_or_else(|| CommandError::InvalidParams("missing width_nm".into()))?,
+                    y_nm: params["height_nm"].as_i64().ok_or_else(|| CommandError::InvalidParams("missing height_nm".into()))?,
+                };
+                let point = at()?;
+                let block = project
+                    .subsheets
+                    .iter()
+                    .find(|b| Some(b.id) == object)
+                    .ok_or_else(|| CommandError::InvalidParams("unknown sheet symbol on this sheet".into()))?;
+                if block.at == point && project.sheet_symbol_size(block) == size {
+                    return Ok(());
+                }
+                project = project.resized_sheet_symbol(address, point, size)?;
             }
             MOVE_SHEET | REMOVE_SHEET => {
                 let index = project

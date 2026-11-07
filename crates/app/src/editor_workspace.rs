@@ -416,6 +416,7 @@ impl EditorViews {
         if self.active.workspace != Workspace::Schematic {
             return;
         }
+        self.active.schematic.selected_sheet_symbol = None;
         self.active.schematic.selection = selection;
         self.selection_changed(session, policy);
     }
@@ -875,6 +876,7 @@ impl PcbApp {
                                     &view.schematic.selection,
                                     view.schematic.selected_leg.as_ref(),
                                     view.schematic.whole_wire_drag,
+                                    view.schematic.selected_sheet_symbol,
                                     &highlight,
                                     false,
                                     self.preferences.navigation,

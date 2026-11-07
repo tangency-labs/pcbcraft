@@ -27,6 +27,10 @@ use pcbcraft_engine::{
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Debug)]
 pub(crate) enum Tool {
+    SheetGesture {
+        drag: Box<crate::hierarchy::Drag>,
+        revision: u64,
+    },
     Hierarchy {
         kind: crate::hierarchy::Kind,
         id: Option<u64>,
@@ -69,7 +73,8 @@ impl Tool {
     /// Return the revision used to reject stale canvas actions.
     pub(crate) fn revision(&self) -> u64 {
         match self {
-            Self::Hierarchy { revision, .. }
+            Self::SheetGesture { revision, .. }
+            | Self::Hierarchy { revision, .. }
             | Self::PlaceSymbol { revision, .. }
             | Self::Wire { revision, .. }
             | Self::Move { revision, .. }
@@ -82,6 +87,9 @@ impl Tool {
 
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
+    GrabSheetGesture(Box<crate::hierarchy::Drag>),
+    FinishSheetGesture(Option<crate::hierarchy::Geometry>),
+    SelectSheetSymbol(u64),
     HierarchyPlace(Point),
     HierarchyAction(crate::hierarchy::Kind, u64, crate::hierarchy::Action),
     Place(Point),
@@ -200,6 +208,7 @@ pub(crate) fn show(
     selected: &Selection,
     selected_leg: Option<&LegTarget>,
     whole_wire_drag: bool,
+    selected_sheet: Option<u64>,
     highlighted: &Selection,
     input_enabled: bool,
     navigation: Navigation,
@@ -212,7 +221,8 @@ pub(crate) fn show(
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
-    let moving = matches!(tool, Some(Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. } | Tool::Reshape { .. }));
+    let moving =
+        matches!(tool, Some(Tool::SheetGesture { .. } | Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. } | Tool::Reshape { .. }));
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
     let group_delta = match &tool {
@@ -266,7 +276,12 @@ pub(crate) fn show(
     } else {
         None
     };
-    let project = hierarchy_preview.as_ref().or(group_preview.as_ref()).unwrap_or(project);
+    let sheet_preview = if let Some(Tool::SheetGesture { drag, .. }) = &tool {
+        ui.input(|i| i.pointer.hover_pos()).and_then(|pointer| drag.preview(project, drag.geometry(project, camera, rect, pointer)))
+    } else {
+        None
+    };
+    let project = sheet_preview.as_ref().or(hierarchy_preview.as_ref()).or(group_preview.as_ref()).unwrap_or(project);
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();
     let screen = |point| camera.screen(point, rect);
@@ -311,7 +326,7 @@ pub(crate) fn show(
         }
     }
 
-    crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos());
+    crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos(), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
         && matches!(tool, None | Some(Tool::Reshape { .. }))
@@ -362,7 +377,7 @@ pub(crate) fn show(
         return (input_enabled && valid_position(point)).then(|| Click::Drop(PartDrag::clone(&drag), point));
     }
 
-    if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled) {
+    if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled, selected_sheet) {
         return click;
     }
     // Handle active rectangles before context menus: a secondary drag consumes its release.
@@ -557,7 +572,12 @@ pub(crate) fn show(
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
-        Tool::Hierarchy { .. } | Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } | Tool::Reshape { .. } => None,
+        Tool::SheetGesture { .. }
+        | Tool::Hierarchy { .. }
+        | Tool::Move { .. }
+        | Tool::BoxSelect { .. }
+        | Tool::MoveItems { .. }
+        | Tool::Reshape { .. } => None,
     }
 }
 

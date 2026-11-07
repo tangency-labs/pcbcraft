@@ -10,7 +10,7 @@ Double-click inside the sheet symbol to enter its child. **Alt+Backspace** retur
 to the parent in the same pane. Browser navigation works in both schematic and
 PCB workspaces, and other panes/windows keep their own document and camera.
 
-Inside the child, use **Shift+H** or **Place → Label**, click an anchor position
+Inside the child, use **H** or **Place → Label**, click an anchor position
 and enter a name and direction. The label exposes a matching pin on the parent's
 sheet symbol automatically. Draw a wire to the pointed label anchor or parent
 pin with **W**; an ordinary click also starts a wire at an unconnected anchor.
@@ -26,9 +26,16 @@ pins occupy the left edge; output and tri-state pins occupy the right. Direction
 does not yet enforce electrical rules. Up to 64 labels fit on a sheet, with stable
 slots so removing one does not move neighboring pins.
 
-Use **M** while hovering or **Move** in the context menu to pick up a label or
-sheet symbol, then click its new position; **Esc** cancels. Attached routes retain
-their endpoint identities. A sheet symbol's **Rename Sheet…** action renames the
+The sheet name sits above its outline. Drag either the body or name to move the
+sheet, preserving the initial grab offset. Click to select it, then drag any of
+its four corner handles to resize; the opposite corner stays fixed and the
+minimum size leaves room for its pins. Attached wires follow both movement and
+resizing. A gesture commits on release as one undo step; **Esc**, a secondary
+click, focus loss or dropping outside the canvas cancels it.
+
+**M** while hovering or **Move** in the context menu also picks up a label or
+sheet symbol; click its new position or press **Esc** to cancel. Attached routes
+retain their endpoint identities. A sheet symbol's **Rename Sheet…** action renames the
 child without changing paths or references.
 
 **Remove Sheet Symbol** detaches the child to the project root and removes parent

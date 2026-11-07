@@ -107,7 +107,7 @@ impl Thumbnail {
             let bounds = Rect::from_min_max(screen(bounds.min), screen(bounds.max));
             painter.rect_stroke(bounds, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text), egui::StrokeKind::Middle);
             if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
-                painter.text(bounds.left_top() + Vec2::splat(t.space_4), Align2::LEFT_TOP, name, FontId::proportional(t.font_small), t.text);
+                painter.text(bounds.left_top() - egui::vec2(0., t.space_4), Align2::LEFT_BOTTOM, name, FontId::proportional(t.font_small), t.text);
             }
         }
         if step >= theme::SCHEMATIC_MIN_GRID_SPACING {

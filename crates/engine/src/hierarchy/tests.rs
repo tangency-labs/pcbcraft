@@ -183,3 +183,64 @@ fn sibling_names_remain_separate_and_malformed_hierarchy_is_refused() {
     malformed.insert(parent_path, serde_json::to_vec(&document).unwrap());
     assert!(persistence::decode_documents(&malformed).is_err());
 }
+
+/// Authored geometry, right-side pin contacts and attached routes survive resizing, undo and
+/// persistence. Invalid or stale rectangles leave the exact snapshot untouched.
+#[test]
+fn resize_sheet_is_atomic_persistent_and_preserves_pin_identity() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    let parent = s.project().unwrap().sheet_target();
+    apply(&mut s, CREATE_CHILD, json!({"name":"Child","x_nm":0,"y_nm":0}));
+    let child = s.project().unwrap().sheets().nth(1).unwrap().target;
+    apply(&mut s, ADD_LABEL, json!({"sheet":child.id(),"name":"OUT","direction":"output","x_nm":0,"y_nm":0}));
+    let p = s.project().unwrap();
+    let id = p.sheet_symbols()[0].id;
+    let pin = p.sheet_pins(&p.sheet_symbols()[0]).next().unwrap();
+    let end = WireEndpoint::SheetPin(pin.label.id);
+    let at = pin.at;
+    apply(
+        &mut s,
+        DRAW_WIRE,
+        json!({"sheet":parent.id(),"from":end.inspect(),"to":{"x_nm":at.x_nm+10_000_000,"y_nm":at.y_nm},"bends":[],"auto_heal":false}),
+    );
+    let before = s.snapshot().unwrap();
+    let prior_docs = persistence::encode_documents(before.clone()).unwrap();
+    let object = format!("sheet-symbol-{id}");
+    let params = json!({"sheet":parent.id(),"id":object,"x_nm":-1_270_000,"y_nm":-2_540_000,"width_nm":30_480_000,"height_nm":20_320_000});
+    apply(&mut s, RESIZE_SHEET, params.clone());
+    let resized = s.snapshot().unwrap();
+    assert_eq!(resized.endpoint_position(end), Some(Point { x_nm: 29_210_000, y_nm: 2_540_000 }));
+    assert_eq!(resized.wires()[0].endpoints()[0], end);
+    assert_eq!(resized.wire_path(&resized.wires()[0])[0], resized.endpoint_position(end).unwrap());
+    assert_eq!(resized.connectivity().nets, before.connectivity().nets);
+    let docs = persistence::encode_documents(resized.clone()).unwrap();
+    assert_eq!(docs, persistence::encode_documents(persistence::decode_documents(&docs).unwrap()).unwrap());
+    let changed: Vec<_> = prior_docs.iter().filter(|(path, bytes)| docs.get(*path) != Some(*bytes)).map(|(path, _)| path.clone()).collect();
+    assert_eq!(changed, vec![format!("sheets/{}.json", parent.id())]);
+    let revision = s.revision();
+    apply(&mut s, RESIZE_SHEET, params.clone());
+    assert_eq!(revision, s.revision());
+    for (field, value) in [("width_nm", json!(1)), ("height_nm", json!(1)), ("width_nm", json!(i64::MAX)), ("x_nm", json!(MAX_CENTER_NM))] {
+        let mut bad = params.clone();
+        bad[field] = value;
+        bad["expected_revision"] = json!(s.revision());
+        assert!(s.apply(RESIZE_SHEET, &bad).is_err());
+        assert!(Arc::ptr_eq(&resized, &s.snapshot().unwrap()));
+    }
+    let mut stale = params.clone();
+    stale["expected_revision"] = json!(0);
+    assert!(s.apply(RESIZE_SHEET, &stale).is_err());
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    // Existing sheet/2 records omit size and retain their exact canonical bytes.
+    assert_eq!(prior_docs, persistence::encode_documents(persistence::decode_documents(&prior_docs).unwrap()).unwrap());
+    let path = format!("sheets/{}.json", parent.id());
+    for size in [Value::Null, json!({"x_nm":-1,"y_nm":1}), json!({"x_nm":i64::MAX,"y_nm":20_320_000})] {
+        let mut bad_docs = docs.clone();
+        let mut sheet: Value = serde_json::from_slice(&bad_docs[&path]).unwrap();
+        sheet["subsheets"][0]["size"] = size;
+        bad_docs.insert(path.clone(), serde_json::to_vec(&sheet).unwrap());
+        assert!(persistence::decode_documents(&bad_docs).is_err());
+    }
+}

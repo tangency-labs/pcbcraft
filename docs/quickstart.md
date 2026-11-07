@@ -153,7 +153,9 @@ unavailable until it is restored or another document is opened.
 To add a subsheet, press **S**, click its parent canvas and give the child a name,
 or choose an existing unparented sheet in **Child sheet**. Double-click inside
 the placed rectangle to enter it; **Alt+Backspace** returns to its parent.
-Place a hierarchical label with **Shift+H**, enter its name and direction, then
+The name appears above the outline. Drag the body/name to move the sheet, or
+select it and drag a corner handle to resize; **Esc** cancels an active gesture.
+Place a hierarchical label with **H**, enter its name and direction, then
 connect its pointed anchor with **W**. A matching sheet pin appears automatically
 on the parent symbol. Names and directions stay synchronized when you edit the
 label with **E** or its context menu. The Browser shows the same nesting in

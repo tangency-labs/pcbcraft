@@ -67,6 +67,15 @@ fn hierarchy_tools_share_engine_transactions_and_endpoint_schemas() {
     ));
     assert_eq!(state["project"]["sheets"][0]["schematic"]["sheet_symbols"][0]["pins"][0]["name"], "RENAMED");
     assert_eq!(state["project"]["sheets"][0]["schematic"]["sheet_symbols"][0]["pins"][0]["direction"], "output");
+    let parent = state["project"]["sheets"][0]["id"].clone();
+    let block = state["project"]["sheets"][0]["schematic"]["sheet_symbols"][0]["id"].clone();
+    let state = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":pcbcraft_engine::hierarchy::RESIZE_SHEET,"params":{"sheet":parent,"id":block,"x_nm":0,"y_nm":0,"width_nm":30_480_000,"height_nm":20_320_000,"expected_revision":state["revision"]}}),
+    ));
+    assert_eq!(state["project"]["sheets"][0]["schematic"]["sheet_symbols"][0]["size"], json!({"x_nm":30_480_000,"y_nm":20_320_000}));
+    assert_eq!(state["project"]["sheets"][0]["schematic"]["sheet_symbols"][0]["pins"][0]["at"]["x_nm"], 30_480_000);
     let stale = call(
         &mut s,
         "execute",

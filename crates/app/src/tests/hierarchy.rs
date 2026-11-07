@@ -57,7 +57,7 @@ fn hierarchical_sheet_and_label_workflow() {
         assert_eq!(h.state().views.active.target(), Some(DocumentTarget::Sheet(parent)));
         click(&mut h, "Power");
         assert_eq!(h.state().views.active.target(), Some(DocumentTarget::Sheet(child)));
-        h.key_press_modifiers(Modifiers::SHIFT, Key::H);
+        h.key_press(Key::H);
         h.run();
         click(&mut h, "Schematic canvas");
         name(&mut h, "ENABLE");
@@ -129,7 +129,7 @@ fn hierarchy_edits_stay_bound_to_their_split_pane() {
     click(&mut h, "Child");
     let second = h.state().views.active.id();
     assert_ne!(first, second);
-    h.key_press_modifiers(Modifiers::SHIFT, Key::H);
+    h.key_press(Key::H);
     h.run();
     click(&mut h, &format!("Schematic canvas {}", second.0 + 1));
     name(&mut h, "DATA");
@@ -166,4 +166,166 @@ fn hierarchy_shortcuts_do_not_edit_an_old_component_selection() {
     h.run();
     assert!(h.state().session.project().unwrap().hierarchical_labels().is_empty());
     assert_eq!(h.state().session.project().unwrap().symbols()[0].id(), symbol);
+}
+
+/// Build original geometry through commands and clear floating panels for coordinate gestures.
+fn movable_sheet(width: f32) -> Harness<'static, PcbApp> {
+    let mut h = hierarchy_harness(width);
+    let revision = h.state().session.revision();
+    h.state_mut().run(engine::CREATE_CHILD, &json!({"name":"Power","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    h.state_mut().browser.open = false;
+    h.run();
+    h
+}
+
+/// Project model points using this pane's current camera and actual canvas rectangle.
+fn screen(h: &Harness<'_, PcbApp>, point: Point) -> egui::Pos2 {
+    h.state().views.active.camera.screen(point, h.get_by_label("Schematic canvas").rect())
+}
+
+/// Direct mouse movement retains its grab offset. Corners resize from the opposite corner,
+/// and each complete gesture is one undoable edit, at normal and compact sizes.
+#[test]
+fn sheet_body_and_title_drag_and_four_corner_resize() {
+    let grid = pcbcraft_engine::schematic::GRID_NM;
+    for width in [1400., 700.] {
+        let mut h = movable_sheet(width);
+        let before = h.state().session.snapshot().unwrap();
+        let top = screen(&h, Point { x_nm: 0, y_nm: 0 }).y;
+        let title = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Power" => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert!(title.pos.y + title.galley.size().y < top, "sheet name must clear the outline");
+        let from = screen(&h, Point { x_nm: 4 * grid, y_nm: 3 * grid });
+        let to = from + egui::vec2(50., 30.);
+        h.drag_at(from);
+        h.run();
+        h.hover_at(to);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::SheetGesture { .. })));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        h.drop_at(to);
+        h.run();
+        let moved = h.state().session.snapshot().unwrap();
+        assert_eq!(moved.sheet_symbols()[0].at, Point { x_nm: 5 * grid, y_nm: 3 * grid });
+        h.state_mut().run("edit.undo", &Value::Null);
+        h.run();
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        // The name is outside the outline and remains a pickup target.
+        let title = screen(&h, Point { x_nm: 2 * grid, y_nm: 0 }) - egui::vec2(0., 10.);
+        h.drag_at(title);
+        h.run();
+        h.hover_at(title + egui::vec2(-20., 20.));
+        h.run();
+        h.drop_at(title + egui::vec2(-20., 20.));
+        h.run();
+        assert_eq!(h.state().session.project().unwrap().sheet_symbols()[0].at, Point { x_nm: -2 * grid, y_nm: 2 * grid });
+        h.state_mut().run("edit.undo", &Value::Null);
+        h.run();
+        for (x, y, dx, dy) in [(0, 0, -3, -2), (16, 0, 3, -2), (0, 10, -3, 2), (16, 10, 3, 2)] {
+            let corner = screen(&h, Point { x_nm: x * grid, y_nm: y * grid });
+            let target = corner + egui::vec2(dx as f32 * 10., dy as f32 * 10.);
+            h.drag_at(corner);
+            h.run();
+            h.hover_at(target);
+            h.run();
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            h.drop_at(target);
+            h.run();
+            let p = h.state().session.project().unwrap();
+            let block = &p.sheet_symbols()[0];
+            let size = p.sheet_symbol_size(block);
+            assert_eq!(size, Point { x_nm: 19 * grid, y_nm: 12 * grid });
+            assert_eq!(block.at, Point { x_nm: if x == 0 { -3 * grid } else { 0 }, y_nm: if y == 0 { -2 * grid } else { 0 } });
+            h.state_mut().run("edit.undo", &Value::Null);
+            h.run();
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}
+
+/// Cancellation, leaving the canvas and stale source revisions cannot publish a resize.
+#[test]
+fn cancelled_and_stale_sheet_gestures_leave_the_document_unchanged() {
+    let mut h = movable_sheet(1400.);
+    let before = h.state().session.snapshot().unwrap();
+    let corner = screen(&h, Point { x_nm: 16 * pcbcraft_engine::schematic::GRID_NM, y_nm: 10 * pcbcraft_engine::schematic::GRID_NM });
+    h.drag_at(corner);
+    h.run();
+    h.hover_at(corner + egui::vec2(30., 40.));
+    h.run();
+    h.key_press(Key::Escape);
+    h.run();
+    h.drop_at(corner + egui::vec2(30., 40.));
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.drag_at(corner);
+    h.run();
+    h.hover_at(egui::pos2(2., 2.));
+    h.run();
+    h.drop_at(egui::pos2(2., 2.));
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.drag_at(corner);
+    h.run();
+    h.hover_at(corner + egui::vec2(30., 40.));
+    h.run();
+    let revision = h.state().session.revision();
+    h.state_mut().run("project.rename", &json!({"name":"Changed"}));
+    h.run();
+    let changed = h.state().session.snapshot().unwrap();
+    assert_ne!(h.state().session.revision(), revision);
+    h.drop_at(corner + egui::vec2(30., 40.));
+    h.run();
+    assert!(Arc::ptr_eq(&changed, &h.state().session.snapshot().unwrap()));
+}
+
+/// Resizing shows the connected route at the new pin before commit, then retains its exact
+/// electrical identity and restores the original document with one Undo.
+#[test]
+fn resizing_sheet_previews_and_commits_attached_wire_geometry() {
+    let grid = pcbcraft_engine::schematic::GRID_NM;
+    let mut h = movable_sheet(1400.);
+    let child = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+    let revision = h.state().session.revision();
+    h.state_mut()
+        .run(engine::ADD_LABEL, &json!({"sheet":child.id(),"name":"OUT","direction":"output","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    let p = h.state().session.project().unwrap();
+    let pin = p.sheet_pins(&p.sheet_symbols()[0]).next().unwrap();
+    let end = pcbcraft_engine::schematic::WireEndpoint::SheetPin(pin.label.id);
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::DRAW_WIRE,
+        &json!({"from":end.inspect(),"to":{"x_nm":28*grid,"y_nm":4*grid},"bends":[],"auto_heal":false,"expected_revision":revision}),
+    );
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let from = screen(&h, Point { x_nm: 16 * grid, y_nm: 10 * grid });
+    let to = screen(&h, Point { x_nm: 20 * grid, y_nm: 12 * grid });
+    h.drag_at(from);
+    h.run();
+    h.hover_at(to);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    let preview_pin = screen(&h, Point { x_nm: 20 * grid, y_nm: 4 * grid });
+    assert!(
+        h.output()
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.points.len()==2 && path.points[0].distance(preview_pin)<0.1)),
+        "wire preview must follow the resized pin"
+    );
+    h.drop_at(to);
+    h.run();
+    assert_eq!(h.state().session.project().unwrap().endpoint_position(end), Some(Point { x_nm: 20 * grid, y_nm: 4 * grid }));
+    assert_eq!(h.state().session.project().unwrap().wires()[0].endpoints()[0], end);
+    h.state_mut().run("edit.undo", &Value::Null);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }

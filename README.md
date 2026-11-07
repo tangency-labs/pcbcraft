@@ -206,7 +206,9 @@ its sheet target, camera and selection independently.
 
 Use **S** or **Capture → Place → Sheet** to place a hierarchical sheet symbol,
 then choose a new child or an existing unparented sheet. Double-click inside the
-symbol to enter its child; **Alt+Backspace** returns to the parent. **Shift+H** or
+symbol to enter its child; **Alt+Backspace** returns to the parent. The sheet name
+sits above the outline; drag either to move it, or select it and drag a corner
+handle to resize. Attached wires follow, and each gesture is one undo step. **H** or
 **Place → Label** places a hierarchical label inside a child. Its matching pin
 appears on the parent symbol automatically, with the same name and direction;
 **W** connects wires to either end. The Browser nests child sheets beneath their

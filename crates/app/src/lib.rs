@@ -77,6 +77,8 @@ const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(
 const COMMAND_N: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const COMMAND_Q: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
+const ADD_SHEET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::S);
+const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::H);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
 /// KiCad's keys for the next and previous grid: N for finer, Shift+N for coarser.
@@ -884,8 +886,8 @@ impl PcbApp {
             RibbonTool {
                 icon: ToolIcon::HierarchicalLabel,
                 label: "Label",
-                description: "Place hierarchical label (Shift+H)",
-                shortcut: "Shift+H",
+                description: "Place hierarchical label (H)",
+                shortcut: "H",
                 enabled: has_project,
                 active: matches!(self.views.active.schematic.tool, Some(Tool::Hierarchy { kind: hierarchy::Kind::Label, .. })),
                 toggle: false,
@@ -1091,6 +1093,9 @@ impl PcbApp {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
+                        Tool::SheetGesture { drag, .. } => {
+                            dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
+                        }
                         Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
@@ -1203,6 +1208,7 @@ impl PcbApp {
                             &self.views.active.schematic.selection,
                             self.views.active.schematic.selected_leg.as_ref(),
                             self.views.active.schematic.whole_wire_drag,
+                            self.views.active.schematic.selected_sheet_symbol,
                             &highlight,
                             input_enabled,
                             self.preferences.navigation,
@@ -1243,6 +1249,29 @@ impl PcbApp {
             return;
         }
         match (self.views.active.schematic.tool.clone(), click) {
+            (None, Click::SelectSheetSymbol(id)) => {
+                self.select(Selection::default());
+                self.views.active.schematic.selected_sheet_symbol = Some(id);
+            }
+            (None, Click::GrabSheetGesture(drag)) => {
+                self.select(Selection::default());
+                self.views.active.schematic.selected_sheet_symbol = Some(drag.block.id);
+                self.views.active.schematic.tool = Some(Tool::SheetGesture { drag, revision: source.revision });
+            }
+            (Some(Tool::SheetGesture { drag, revision }), Click::FinishSheetGesture(geometry)) => {
+                self.views.active.schematic.tool = None;
+                if let Some(geometry) = geometry {
+                    let mut params = json!({"id":format!("sheet-symbol-{}",drag.block.id),"x_nm":geometry.at.x_nm,"y_nm":geometry.at.y_nm,"expected_revision":revision});
+                    if drag.corner.is_some() {
+                        params["width_nm"] = json!(geometry.size.x_nm);
+                        params["height_nm"] = json!(geometry.size.y_nm);
+                    }
+                    self.run(
+                        if drag.corner.is_some() { pcbcraft_engine::hierarchy::RESIZE_SHEET } else { pcbcraft_engine::hierarchy::MOVE_SHEET },
+                        &params,
+                    );
+                }
+            }
             (Some(Tool::Hierarchy { kind, id, .. }), Click::HierarchyPlace(at)) => self.hierarchy_place(source, kind, id, at),
             (None, Click::HierarchyAction(kind, id, action)) => self.hierarchy_action(source, kind, id, action),
             (Some(Tool::PlaceSymbol { definition, revision, turns }), Click::Place(point)) => {
@@ -1412,10 +1441,10 @@ impl PcbApp {
                 self.leave_sheet();
                 return;
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::H)) {
+            if pressed(&ADD_HIERARCHICAL_LABEL) {
                 self.begin_hierarchy(hierarchy::Kind::Label);
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::S)) {
+            if pressed(&ADD_SHEET) {
                 self.begin_hierarchy(hierarchy::Kind::Sheet);
             }
             let hierarchy_hovered = ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M].into_iter().any(|key| i.key_pressed(key)))
@@ -1926,6 +1955,8 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Edit", "Undo", key(&COMMAND_Z)));
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
+    list.push(("Schematic", "Place hierarchical sheet", key(&ADD_SHEET)));
+    list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
     list.push(("Schematic", "Drag wire segment", "G".to_owned()));
