@@ -9,11 +9,13 @@ the [capability table](docs/capabilities.md) for current limits, or
 **Status: just started.** Schematic editing works on desktop and in the browser.
 The app starts on **Home**, where you can create or open a project. On desktop,
 **Recent projects** lists the last 12 successfully opened or saved projects, newest
-first, with their names and paths. Click a row to reopen it; unsaved work gets the
-usual Save/Don’t Save/Cancel question. Remove a row with **×**, or choose
+first, as cards with a rendering of the saved schematic, its name and path. Click
+a card to reopen it; unsaved work gets the
+usual Save/Don’t Save/Cancel question. Remove a card with **×**, or choose
 **Clear recent projects**, without deleting any files. History is kept between
 launches in application settings. A missing or unreadable project reports an error
-and stays in the list until removed. Browser uploads have no reusable local path,
+and stays in the list until removed. Empty and unavailable previews have
+placeholders; previews load in the background without opening or changing a project. Browser uploads have no reusable local path,
 so recent projects are desktop-only. Home does not automatically reopen a project.
 
 The app bar shows the project name and an unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the

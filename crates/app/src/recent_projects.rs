@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use crate::schematic_canvas::Thumbnail;
+use pcbcraft_chrome::preview::PreviewCache;
 use serde::{Deserialize, Serialize};
 
 /// Match the family start page's bounded history, newest first.
@@ -20,10 +22,18 @@ pub(super) struct RecentProject {
 }
 
 /// Bounded application history, with a change flag for prompt persistence.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct RecentProjects {
     entries: Vec<RecentProject>,
     changed: bool,
+    previews: PreviewCache<PathBuf, Thumbnail>,
+}
+
+impl Default for RecentProjects {
+    /// History and preview storage share the same bound; preview work never owns the editor.
+    fn default() -> Self {
+        Self { entries: Vec::new(), changed: false, previews: PreviewCache::new(MAX_RECENT) }
+    }
 }
 
 impl RecentProjects {
@@ -73,13 +83,47 @@ impl RecentProjects {
     /// Forget a path without deleting or otherwise accessing its project on disk.
     pub(super) fn remove(&mut self, path: &std::path::Path) {
         self.entries.retain(|entry| entry.path != path);
+        self.retain_previews();
         self.changed = true;
     }
 
     /// Forget the entire history without deleting any projects.
     pub(super) fn clear(&mut self) {
         self.entries.clear();
+        self.retain_previews();
         self.changed = true;
+    }
+
+    /// Cache a freshly opened/saved snapshot instead of rereading its file. Geometry preparation
+    /// runs on the preview worker, and a pending older load cannot replace this saved version.
+    pub(super) fn remember_project(&mut self, project: std::sync::Arc<pcbcraft_engine::Project>, path: PathBuf) {
+        self.remember(&project.name, path.clone());
+        self.retain_previews();
+        self.previews.enqueue(path, move || Thumbnail::new(&project));
+    }
+
+    /// Read missing previews independently of Open/Save, without modifying the files or session.
+    /// A failed preview stays terminal until that project is opened or saved successfully again.
+    pub(super) fn prepare_previews(&mut self, ctx: &egui::Context) {
+        self.retain_previews();
+        for entry in &self.entries {
+            if !self.previews.contains(&entry.path) {
+                let path = entry.path.clone();
+                self.previews.enqueue(path.clone(), move || pcbcraft_storage::preview(&path).ok().and_then(|project| Thumbnail::new(&project)));
+            }
+        }
+        self.previews.poll(ctx);
+    }
+
+    /// Borrow a ready schematic, a terminal unavailable result, or a still-pending request.
+    pub(super) fn preview(&self, path: &std::path::Path) -> Option<Option<&Thumbnail>> {
+        self.previews.get(&path.to_owned())
+    }
+
+    /// Release queued work and cached geometry for forgotten paths, retaining running worker
+    /// slots until their results arrive so repeated clearing cannot spawn unbounded threads.
+    fn retain_previews(&mut self) {
+        self.previews.retain(|path| self.entries.iter().any(|entry| &entry.path == path));
     }
 
     /// Consume the flag used to flush successful file operations and removals promptly.

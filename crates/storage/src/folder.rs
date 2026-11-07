@@ -55,6 +55,38 @@ pub fn load(root: &Path) -> Result<Documents, String> {
     Ok(documents)
 }
 
+/// Read a disposable, validated preview without recovering data or holding a writer lock
+/// during I/O. Probe existing locks and journals before/after reading; concurrent changes may
+/// make the picture stale, but can never make it authoritative editor state or block a save.
+pub(super) fn preview(root: &Path) -> Result<Documents, String> {
+    regular_directory(root)?;
+    let path = lock_path(root)?;
+    let had_lock = probe_preview_lock(&path)?;
+    require_no_journal(root)?;
+    let documents = read_documents(root, false)?;
+    require_no_journal(root)?;
+    if probe_preview_lock(&path)? && !had_lock {
+        return Err("Project changed while reading its preview.".to_owned());
+    }
+    Ok(documents)
+}
+
+/// Check an existing lock nonblockingly and immediately release it, creating no file. Keeping
+/// a shared lock across a slow preview read would make an explicit Open/Save fail behind it.
+fn probe_preview_lock(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            let file = File::open(path).map_err(error)?;
+            file.try_lock_shared().map_err(|e| format!("Could not lock preview: {e}"))?;
+            file.unlock().map_err(error)?;
+            Ok(true)
+        }
+        Ok(_) => Err("Save lock is not a regular file.".to_owned()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(error(e)),
+    }
+}
+
 /// Stage and flush every changed payload and its backup before atomically publishing a
 /// recovery journal. Once published, recovery completes the transaction before any open.
 /// A checkpoint failure simulates interruption; committed journals remain available for recovery.
@@ -268,17 +300,22 @@ fn scan(root: &Path, directory: &Path, documents: &mut Documents, depth: usize, 
     Ok(())
 }
 
-/// Hold a nonblocking sibling lock across recovery, baseline checks and publication. Loading
-/// may use an existing read-only lock in shared mode, or read unlocked if it cannot be created.
-/// Either fallback requires a permission/read-only error and no journal; contention and unsafe
-/// lock paths remain fatal, and a shared lock never authorizes recovery.
-fn lock(root: &Path, allow_read_only: bool) -> Result<FolderLock, String> {
+/// The persistent sibling lock name, shared by ordinary file jobs and read-only previews.
+fn lock_path(root: &Path) -> Result<PathBuf, String> {
     let parent = root.parent().ok_or("Project folder has no parent")?;
     let name = root.file_name().ok_or("Project folder has no name")?;
     let mut lock_name = std::ffi::OsString::from(".");
     lock_name.push(name);
     lock_name.push(".pcbcraft-lock");
-    let path = parent.join(lock_name);
+    Ok(parent.join(lock_name))
+}
+
+/// Hold a nonblocking sibling lock across recovery, baseline checks and publication. Loading
+/// may use an existing read-only lock in shared mode, or read unlocked if it cannot be created.
+/// Either fallback requires a permission/read-only error and no journal; contention and unsafe
+/// lock paths remain fatal, and a shared lock never authorizes recovery.
+fn lock(root: &Path, allow_read_only: bool) -> Result<FolderLock, String> {
+    let path = lock_path(root)?;
     if let Ok(metadata) = fs::symlink_metadata(&path)
         && !metadata.is_file()
     {

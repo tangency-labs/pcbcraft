@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
 mod selection;
+#[cfg(not(target_arch = "wasm32"))]
+mod thumbnail;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use thumbnail::Thumbnail;
 mod wires;
 pub(crate) use selection::BoxDrag;
 

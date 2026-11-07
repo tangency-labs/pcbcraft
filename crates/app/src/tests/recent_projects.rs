@@ -20,6 +20,20 @@ fn finish_file(h: &mut Harness<'_, PcbApp>) {
     h.run();
 }
 
+/// Let bounded background previews finish without requiring every worker to fit in one idle run.
+fn finish_previews(h: &mut Harness<'_, PcbApp>) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        h.run_steps(1);
+        if h.state().files.recent.entries().iter().all(|entry| h.state().files.recent.preview(&entry.path).is_some()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "preview worker did not complete");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    h.run();
+}
+
 /// Click a path-qualified row through accessibility, then let the normal worker finish.
 fn open_recent(h: &mut Harness<'_, PcbApp>, name: &str, path: &Path) {
     h.get_by_label(&format!("Open {name} ({})", path.display())).click();
@@ -177,7 +191,7 @@ fn narrow_history_keeps_long_paths_reachable_and_duplicate_names_distinct() {
         h.state_mut().files.recent.remember(name, dir.path().join(format!("a-long-parent-directory/project-{index}.pc.zip")));
     }
     h.state_mut().show_home();
-    h.run();
+    finish_previews(&mut h);
     let path = dir.path().join("a-long-parent-directory/project-0.pc.zip");
     let label = format!("Remove {name} ({}) from recent projects", path.display());
     h.get_by_label(&label).scroll_to_me();
@@ -217,4 +231,33 @@ fn cancelled_and_failed_saves_do_not_open_the_recent_target() {
         assert!(!h.state().home);
         assert_eq!(h.state().session.project().unwrap().name, "Target");
     }
+}
+
+/// Restored history renders real saved geometry without opening the document or changing the
+/// current session, dirty state or file bytes. Empty and unavailable previews remain actionable.
+#[test]
+fn restored_home_cards_preview_saved_schematics_without_opening_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("two-resistors.pc.zip");
+    std::fs::copy("tests/fixtures/split/two-resistors.pc.zip", &path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let mut h = harness();
+    let empty = dir.path().join("empty");
+    saved_project(&mut h, &empty);
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    let missing = dir.path().join("missing.pc");
+    h.state_mut().files.recent.remember("Two resistors", path.clone());
+    h.state_mut().files.recent.remember("Missing", missing.clone());
+    open_home(&mut h);
+    finish_previews(&mut h);
+    h.get_by_label(&format!("Schematic preview: Two resistors ({})", path.display()));
+    assert!(!h.state().files.recent.preview(&path).unwrap().unwrap().is_empty());
+    assert!(h.state().files.recent.preview(&empty).unwrap().unwrap().is_empty());
+    assert!(matches!(h.state().files.recent.preview(&missing), Some(None)));
+    assert!(h.state().home);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(!h.state().files.dirty(&h.state().session));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
 }

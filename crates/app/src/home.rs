@@ -37,6 +37,8 @@ impl PcbApp {
 
     /// Draw the Home page in the space below the app bar and apply the chosen action.
     pub(super) fn home_page(&mut self, ui: &mut Ui) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.files.recent.prepare_previews(ui.ctx());
         let (mut navigation, mut start) = (None, None);
         home::page(ui, |ui| self.home_navigation(ui, &mut navigation), |ui| self.home_start(ui, &mut start));
         if let Some(action) = navigation.or(start) {
@@ -120,15 +122,26 @@ impl PcbApp {
                 home::empty_recents(ui);
                 return;
             }
-            home::recent_list(ui, |ui| {
-                for (index, entry) in entries.iter().enumerate() {
-                    let path = entry.path.to_string_lossy();
-                    let picked = home::recent_row(ui, &path, &entry.name, &path, index > 0, !self.files.busy());
-                    if picked.open {
-                        *action = Some(Action::OpenRecent(index));
-                    } else if picked.remove {
-                        *action = Some(Action::RemoveRecent(index));
+            home::grid(ui, "recent_projects", entries.len(), |ui, index, width| {
+                let Some(entry) = entries.get(index) else { return };
+                let path = entry.path.to_string_lossy();
+                let preview = self.files.recent.preview(&entry.path);
+                let state = match preview {
+                    Some(Some(preview)) if preview.is_empty() => home::PreviewState::Empty,
+                    Some(Some(_)) => home::PreviewState::Ready,
+                    Some(None) => home::PreviewState::Unavailable,
+                    None => home::PreviewState::Loading,
+                };
+                let card = home::RecentCard { title: &entry.name, path: &path, enabled: !self.files.busy(), preview: state };
+                let picked = home::recent_card(ui, &path, width, card, |painter, rect| {
+                    if let Some(Some(preview)) = preview {
+                        preview.paint(painter, rect);
                     }
+                });
+                if picked.open {
+                    *action = Some(Action::OpenRecent(index));
+                } else if picked.remove {
+                    *action = Some(Action::RemoveRecent(index));
                 }
             });
             if home::clear_recents(ui).clicked() {

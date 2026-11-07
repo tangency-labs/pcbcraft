@@ -29,8 +29,9 @@ Use **File → Save As… → Project folder…** to save your own copy in a new
 folder outside the checkout before making changes. This keeps the tracked test
 fixture intact. **View → Fit** brings the circuit into view. On desktop, use the
 house button to return to Home: **Recent projects** lists successful opens and
-saves, including this copy, and clicking a row reopens it. The list survives
-restarts; **×** removes a row and **Clear recent projects** clears the history
+saves as cards with saved schematic previews, including this copy. Clicking a
+card reopens it. The list survives
+restarts; **×** removes a card and **Clear recent projects** clears the history
 without deleting files. Missing files report an error while keeping the current
 project open.
 

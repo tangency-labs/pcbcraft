@@ -278,7 +278,7 @@ impl ProjectFiles {
             Ok(Outcome::Cancelled) => None,
             Ok(Outcome::Opened(saved)) if session.revision() == revision => {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.recent.remember(&saved.snapshot.name, saved.target.path().to_owned());
+                self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 session.open_snapshot(Arc::clone(&saved.snapshot));
                 self.saved = Some(saved);
                 Some(Update::Opened)
@@ -291,7 +291,7 @@ impl ProjectFiles {
                 if let Some(original) = renamed {
                     session.adopt_saved_name(&original, &saved.snapshot);
                 }
-                self.recent.remember(&saved.snapshot.name, saved.target.path().to_owned());
+                self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));
                 let added_manifest = saved.target.added_manifest();
                 self.saved = Some(saved);
