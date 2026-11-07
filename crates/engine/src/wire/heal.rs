@@ -12,6 +12,7 @@ use std::{
 };
 
 mod loops;
+mod tails;
 
 /// Normalize one orthogonal draft using the same retrace and self-loop cleanup as committed
 /// edits. Endpoints stay fixed; this never inspects other wires or creates electrical links.
@@ -36,6 +37,9 @@ pub(super) struct Edit {
     pub project: Project,
     next: u64,
     budget: usize,
+    /// Pins, original free ends and real branches survive cleanup. Degree-two transit
+    /// junctions may disappear when a retrace makes their old location redundant.
+    protected: BTreeSet<WireEndpoint>,
     pub touched: BTreeSet<u64>,
 }
 
@@ -214,6 +218,8 @@ impl Edit {
     }
 
     /// Start above all persistent and session IDs, including IDs removed by earlier undo.
+    /// Remember original endpoints and branches so overlap cleanup cannot mistake an
+    /// intentionally dangling wire for an obsolete degree-two transit corner.
     pub fn new(project: &Project, revision: u64) -> Self {
         let highest = project
             .wires
@@ -222,7 +228,13 @@ impl Edit {
             .max(project.junctions.last_key_value().map_or(0, |(&id, _)| id))
             .max(project.symbols.last().map_or(0, |s| s.ordinal))
             .max(revision);
-        Self { project: project.clone(), next: highest.saturating_add(1), budget: 200_000, touched: BTreeSet::new() }
+        let mut degree = BTreeMap::new();
+        for end in project.wires.iter().flat_map(|wire| wire.endpoints) {
+            *degree.entry(end).or_insert(0) += 1;
+        }
+        let protected =
+            degree.into_iter().filter_map(|(end, count)| (count != 2 || matches!(end, WireEndpoint::Terminal(_))).then_some(end)).collect();
+        Self { project: project.clone(), next: highest.saturating_add(1), budget: 200_000, protected, touched: BTreeSet::new() }
     }
 
     /// Bound pair scans independently of the number of successful splits and merges.
@@ -259,7 +271,11 @@ impl Edit {
             Anchor::Existing(end) => {
                 self.project.endpoint_position(end).map(|_| end).ok_or_else(|| CommandError::InvalidParams("wire endpoint does not exist".into()))
             }
-            Anchor::Free(point) => self.free(point),
+            Anchor::Free(point) => {
+                let end = self.free(point)?;
+                self.protected.insert(end);
+                Ok(end)
+            }
             Anchor::Split { wire, at } => self.split(wire, at),
         }
     }
@@ -341,6 +357,9 @@ impl Edit {
             (_, WireEndpoint::Terminal(_)) => (b, a),
             _ => (a.min(b), a.max(b)),
         };
+        if self.protected.remove(&remove) {
+            self.protected.insert(keep);
+        }
         for wire in Arc::make_mut(&mut self.project.wires) {
             if wire.endpoints.contains(&remove) {
                 for end in &mut wire.endpoints {
@@ -392,8 +411,9 @@ impl Edit {
         Ok(None)
     }
 
-    /// Remove identical runs, preserving the earlier ID. Other parallel edges cannot be
-    /// represented by the current file format and reject the candidate without dropping paths.
+    /// Remove identical runs, preserving the earlier ID. Other parallel edges reject the
+    /// candidate without dropping paths. Tail cleanup waits until all overlaps are resolved,
+    /// so another participating endpoint can still protect a merged transit identity.
     fn deduplicate(&mut self) -> Result<(), CommandError> {
         let mut seen = BTreeMap::new();
         let mut remove = BTreeSet::new();
@@ -597,6 +617,7 @@ impl Edit {
             }
             let Some((a, b, p, q)) = self.next_overlap()? else {
                 self.deduplicate()?;
+                self.trim_retrace_tails()?;
                 self.collapse()?;
                 if self.straighten_return()? {
                     continue;

@@ -329,6 +329,9 @@ Self-intersection erasure and removal of branch-free alternative routes in
 are original upstream implementations as well.
 The active drawing preview now shares the same self-route normalization, with
 reversible corner checkpoints; this is new upstream code over those helpers.
+Folded-transit tail cleanup in `crates/engine/src/wire/heal/tails.rs` is also new
+upstream logic. It distinguishes obsolete split points from original free ends,
+pins and branches, retaining that protection through endpoint merges.
 The Slice, Break, Heal and Delete glyphs in `crates/chrome/src/workspace.rs` are
 original drawings using the existing shared icon palette and ribbon metrics.
 The horizontal ribbon scrollbar uses Next's five-point `scroll_gutter` from

@@ -107,6 +107,47 @@ fn dragging_a_segment_aligns_adjacent_runs_without_moving_the_whole_wire() {
     }
 }
 
+/// Dragging the photographed split step consumes the folded old corner in preview and on
+/// release, in either pane/layout. Escape restores the original, and undo remains atomic.
+#[test]
+fn dragging_a_split_step_consumes_the_folded_corner() {
+    for narrow in [false, true] {
+        for id in [0, 1] {
+            let mut h = split_harness(narrow);
+            h.state_mut().run("edit.undo", &Value::Null);
+            let revision = h.state().session.revision();
+            h.state_mut().run(
+                DRAW_WIRE,
+                &json!({"from":grid(16,0),"to":grid(12,18),
+                "bends":[grid(16,6),grid(0,6),grid(0,10),grid(12,10)],"expected_revision":revision}),
+            );
+            let wire = h.state().session.project().unwrap().wires()[0].id();
+            let revision = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::SLICE_WIRE, &json!({"wire":wire,"at":grid(0,6),"expected_revision":revision}));
+            h.run();
+            select_segment(&mut h, id, grid(0, 8));
+            let before = h.state().session.snapshot().unwrap();
+            slide_preview(&mut h, id, grid(0, 8), grid(16, 8));
+            let expected = vec![grid(16, 0), grid(16, 10), grid(12, 10), grid(12, 18)];
+            assert_painted(&h, id, &expected, pcbcraft_chrome::Tokens::get().schematic_wire);
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            let end = slide_preview(&mut h, id, grid(0, 8), grid(16, 8));
+            h.drop_at(end);
+            h.run();
+            assert_eq!(h.state().message, None);
+            assert_eq!(routes(&h), vec![expected]);
+            let after = h.state().session.snapshot().unwrap();
+            click(&mut h, "Undo");
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            click(&mut h, "Redo");
+            assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}
+
 /// Selecting a whole wire explicitly retains the existing group move/Delete behavior. G over
 /// an individual leg starts a connection-preserving slide that commits on the next click.
 #[test]

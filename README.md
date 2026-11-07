@@ -117,6 +117,8 @@ The same wire/point target works with `schematic.draw_wire`.
 
 Completed draws and moves heal positive-length collinear overlaps, doubled-back legs,
 duplicate strokes and redundant straight-through junctions in the affected routes.
+When dragging folds a stepped route back over itself, obsolete split corners disappear
+instead of becoming dangling stubs; original free ends, pins and branches stay connected.
 When a route returns to an already connected straight wire through a U-shaped detour,
 healing slides the junction to the nearer intersection without passing another branch
 or moving a pin. Self-crossing returns and redundant loops also shorten; cleanup keeps
