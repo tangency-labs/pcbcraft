@@ -206,6 +206,7 @@ pub(super) fn parse_color(text: &str) -> Result<[u8; 3], String> {
     Ok(rgb)
 }
 
+/// Format the RGB channels as canonical #RRGGBB for the opaque layer-color controls.
 pub(super) fn hex(color: egui::Color32) -> String {
     let [r, g, b, _] = color.to_array();
     format!("#{r:02X}{g:02X}{b:02X}")
