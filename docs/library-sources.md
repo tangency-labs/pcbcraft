@@ -6,12 +6,6 @@ has been discussed; push back on any of it. It extends issue
 broader library requirements, the symbol format proposal and the community
 threads behind them.
 
-The bounded native-source slice is now implemented and documented in
-[Native library sources](native-library-sources.md): desktop folder registration,
-session bundle upload, symbol/footprint search, per-file diagnostics and external
-symbol placement with offline pinning. The broader part/provider model below
-remains a proposal.
-
 The Parts card is meant to become the interface to part resources: symbols,
 footprints and parts, from local and remote sources, including KiCad libraries
 and vendor downloads. This document proposes the model behind that interface,
@@ -28,11 +22,8 @@ so each later slice builds on the same terms.
 - **Pinned physical footprints.** `libraries/starter/footprints` supplies rounded
   0402/0603 resistor/capacitor, 0402 LED, SOT-23 and plated two-pin header definitions. The shared placement
   command pins definitions and validates explicit terminal mappings. The legacy
-  `generic-through-hole-2` remains a marker-only compatibility definition. Native
-  source registration and footprint search are available; external footprint
-  assignment remains separate work. A shared schematic/PCB chooser assigns exact
-  starter or pinned packages and explicit mappings without placing them, then
-  places those assignments separately.
+  `generic-through-hole-2` remains a marker-only compatibility definition; source
+  registration remains proposed. A shared schematic/PCB chooser now assigns exact starter or pinned packages and explicit mappings without placing them, then places those assignments separately.
 - **The Parts card** lists the built-in symbols with search and three tile sizes,
   at a fixed 260 × 490 points, floating or docked. Clicking or dragging places a
   symbol through `schematic.place_symbol`.
@@ -82,7 +73,7 @@ symbol-only and footprint-only libraries are both ordinary libraries.
 | Source | Reads | Status |
 | --- | --- | --- |
 | Built-in starter | Embedded native library | Exists (symbols and starter SMD footprints) |
-| Native folder | A folder with `library.json` | [Implemented source slice](native-library-sources.md), remaining acceptance in [#92](https://github.com/tangency-labs/pcbcraft/issues/92) |
+| Native folder | A folder with `library.json` | Proposed, [#92](https://github.com/tangency-labs/pcbcraft/issues/92) |
 | KiCad library | `.kicad_sym` files and `.pretty` footprint folders | Proposed below |
 | Vendor download | A zip of KiCad files from a part provider | Proposed below |
 | Git | A native library at a pinned commit | [#93](https://github.com/tangency-labs/pcbcraft/issues/93) |

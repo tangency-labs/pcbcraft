@@ -21,9 +21,9 @@ mod footprint_assignment;
 mod hierarchy;
 mod home;
 mod library_preview;
-mod library_sources;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
+mod native_sources;
 mod net_inspector;
 mod parts_browser;
 mod preferences;
@@ -174,7 +174,7 @@ enum Dialog {
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
-    library_sources: library_sources::Sources,
+    library_sources: native_sources::Sources,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,
@@ -267,7 +267,7 @@ impl PcbApp {
         let mut views = EditorViews::default();
         views.set_grid_everywhere(preferences.schematic_grid_nm);
         Self {
-            library_sources: library_sources::Sources::restore(cc.storage.and_then(|s| s.get_string(library_sources::STORAGE_KEY))),
+            library_sources: native_sources::Sources::restore(cc.storage.and_then(|s| s.get_string(native_sources::STORAGE_KEY))),
             home: true,
             properties_open: true,
             arrangements: arrangements::Arrangements::from_storage(cc.storage.and_then(|storage| storage.get_string(arrangements::STORAGE_KEY))),
@@ -1913,7 +1913,7 @@ impl eframe::App for PcbApp {
 
     /// Persist presentation state and desktop history; unsupported arrangement records stay intact.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string(library_sources::STORAGE_KEY, self.library_sources.storage_text());
+        storage.set_string(native_sources::STORAGE_KEY, self.library_sources.storage_text());
         self.checkpoint_arrangements();
         if let Some(text) = self.arrangements.storage_text() {
             storage.set_string(arrangements::STORAGE_KEY, text);
