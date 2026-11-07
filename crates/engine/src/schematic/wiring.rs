@@ -127,6 +127,11 @@ impl Wire {
         format!("wire-{}", self.ordinal)
     }
 
+    /// The stable numeric identity used by explicit wire-segment targets.
+    pub fn ordinal(&self) -> u64 {
+        self.ordinal
+    }
+
     /// The exact terminal or junction identities joined by this edge.
     pub fn endpoints(&self) -> [WireEndpoint; 2] {
         self.endpoints

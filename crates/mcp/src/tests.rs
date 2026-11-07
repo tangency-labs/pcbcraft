@@ -327,6 +327,66 @@ fn mcp_slides_wire_segments_and_rejects_stale_retries() {
     assert_eq!(undone["project"], drawn["project"]);
 }
 
+/// Headless MCP discovers the strict attachment schema and connects explicit endpoints through
+/// the shared command; stale retries fail without affecting the one-step undo history.
+#[test]
+fn mcp_attaches_junctions_and_rejects_stale_retries() {
+    let mut server = server();
+    let command = pcbcraft_engine::ATTACH_JUNCTION;
+    let description = body(&call(&mut server, "describe_command", json!({"command":command})));
+    assert_eq!(description["params"]["required"], json!(["junction", "to", "expected_revision"]));
+    assert_eq!(description["params"]["properties"]["to"]["oneOf"].as_array().unwrap().len(), 3);
+    let mut state = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Attach"}})));
+    let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
+    for y in [0, 6] {
+        state = body(&call(
+            &mut server,
+            "execute",
+            json!({"command":pcbcraft_engine::DRAW_WIRE,
+            "params":{"from":point(0,y),"to":point(8,y),"bends":[],"expected_revision":state["revision"]}}),
+        ));
+    }
+    let wires = &state["project"]["schematic"]["wires"];
+    let request =
+        json!({"command":command,"params":{"junction":wires[0]["to"]["junction"],"to":wires[1]["to"],"expected_revision":state["revision"]}});
+    let attached = body(&call(&mut server, "execute", request.clone()));
+    let schematic = &attached["project"]["schematic"];
+    assert_eq!(schematic["netlist"]["nets"].as_array().unwrap().len(), 1);
+    let after = schematic["wires"].as_array().unwrap();
+    assert!(after.iter().any(|wire| wire["from"] == wires[1]["to"] || wire["to"] == wires[1]["to"]));
+    assert!(after.iter().all(|wire| wire["from"] != wires[0]["to"] && wire["to"] != wires[0]["to"]));
+    assert_eq!(call(&mut server, "execute", request)["isError"], true);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), attached);
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"], state["project"]);
+}
+
+/// MCP discovers the default-on boolean, preserves a loop when it is explicitly false, and
+/// can later heal that selected route through the same revision-checked command as the GUI.
+#[test]
+fn mcp_can_disable_automatic_healing_and_heal_later() {
+    let mut server = server();
+    let description = body(&call(&mut server, "describe_command", json!({"command":pcbcraft_engine::DRAW_WIRE})));
+    assert_eq!(description["params"]["properties"]["auto_heal"]["type"], "boolean");
+    assert_eq!(description["params"]["properties"]["auto_heal"]["default"], true);
+    let start = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Loop"}})));
+    let p = |x: i64, y: i64| json!({"x_nm":x*1_270_000,"y_nm":y*1_270_000});
+    let mut params = json!({"from":p(-10,0),"to":p(20,12),"bends":[p(6,0),p(6,12),p(-4,12),p(-4,6),p(6,6),p(6,12)],"auto_heal":"false","expected_revision":start["revision"]});
+    assert_eq!(call(&mut server, "execute", json!({"command":pcbcraft_engine::DRAW_WIRE,"params":params}))["isError"], true);
+    params["auto_heal"] = json!(false);
+    let looped = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::DRAW_WIRE,"params":params})));
+    let wire = &looped["project"]["schematic"]["wires"][0];
+    assert_eq!(wire["bends"].as_array().unwrap().len(), 6);
+    let healed = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::HEAL_WIRES,"params":{"items":{"symbols":[],"wires":[wire["id"]]},"expected_revision":looped["revision"]}}),
+    ));
+    assert_eq!(healed["project"]["schematic"]["wires"][0]["bends"], json!([p(6, 0), p(6, 12)]));
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"], looped["project"]);
+}
+
 /// MCP discovers the wire slice, break and segment deletion through the shared catalog and runs
 /// them: a slice keeps the route connected through a new junction, and deleting a leg leaves
 /// free ends.
@@ -417,4 +477,37 @@ fn mcp_reshapes_wire_segments_corners_and_ends() {
         json!({"command":pcbcraft_engine::MOVE_WIRE_SEGMENT,"params":{"wire":wire["id"],"at":point(9, 3),"to":point(11, 4),"expected_revision":moved["revision"]}}),
     );
     assert_eq!(refused["isError"], true);
+}
+
+/// MCP publishes segment targets and explicit healing, using the same graph changes and
+/// undo history as the ribbon; a stale retry cannot reapply cleanup.
+#[test]
+fn mcp_branches_into_wire_segments_and_heals_selection() {
+    let mut server = server();
+    let command = pcbcraft_engine::HEAL_WIRES;
+    let description = body(&call(&mut server, "describe_command", json!({"command":command})));
+    assert_eq!(description["params"]["required"], json!(["items", "expected_revision"]));
+    let mut state = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Branch"}})));
+    let point = |x: i64, y: i64| json!({"x_nm":x*1_270_000,"y_nm":y*1_270_000});
+    state = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DRAW_WIRE,
+        "params":{"from":point(0,0),"to":point(20,0),"bends":[],"expected_revision":state["revision"]}}),
+    ));
+    let wire = state["project"]["schematic"]["wires"][0]["id"].clone();
+    let before = state["project"].clone();
+    state = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::DRAW_WIRE,
+        "params":{"from":point(10,10),"to":{"wire":wire,"at":point(10,0)},"bends":[],"expected_revision":state["revision"]}}),
+    ));
+    assert_eq!(state["project"]["schematic"]["wires"].as_array().unwrap().len(), 3);
+    let request = json!({"command":command,"params":{"items":{"symbols":[],"wires":[wire]},"expected_revision":state["revision"]}});
+    let healed = body(&call(&mut server, "execute", request.clone()));
+    assert_eq!(healed, state, "this branch is already normalized");
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"], before);
+    assert_eq!(call(&mut server, "execute", request)["isError"], true);
 }

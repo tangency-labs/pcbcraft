@@ -56,17 +56,26 @@ first **Save** asks for a project folder, and the project takes that folder's na
 
 1. Drag a resistor on the canvas; its wire endpoint follows. Use **Undo**, then
    **Redo**, to check that the move is one edit. Select a resistor and press
-   **E** to change its reference or value, or **R** to rotate it.
+   **E** to change its reference or value, or **R** to rotate it. Right-click →
+   **Disconnect and Move** leaves its old wiring in place; click to place the symbol
+   elsewhere, or **Esc** to cancel. A replacement placed at the old pins reconnects
+   to the preserved wire ends.
 2. Press **A** to open Parts and focus search. Search for a capacitor, click the
    result and click the canvas to place it. **R** rotates a placement preview;
    **Esc** cancels it. Parts stays open until you close or hide it. Dragging a
    result directly onto the canvas also places it.
-3. Press **W**, click a pin, then click corners and a destination pin. **Space**
+3. Click an unconnected pin or free wire end to start directly, or hover a pin,
+   wire or grid point and press **W** to start there immediately. Connected nodes
+   use W or **Capture → Wire**, which waits for a first click. The green wire cursor
+   rings an existing connection target. Hold **Ctrl** to draw off-grid; releasing it
+   restores snapping, while pins and wires remain connection targets. Click corners
+   and a destination pin. **Space**
    flips the current elbow and **Backspace** removes the last corner. **Enter**
    or a double-click finishes a free end; **Esc** cancels the unfinished wire.
-   A crossing does not create a connection, and attaching to the middle of an
-   existing wire is not automatic yet. Right-click a wire and choose **Slice**
-   to create a connected endpoint there, then start another wire from it.
+   Finish on an existing wire segment to create a connected branch. Dragging a
+   free-end handle onto a pin or segment also connects it; simply crossing a
+   wire still leaves the routes separate. Redrawing onto the same net keeps your new
+   path when the old alternative has no intermediate pin or branch.
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right
    selects fully enclosed bodies/routes; right-to-left selects touched ones.
    **Shift** adds and **Ctrl** toggles hits. Drag a selected member to move the
@@ -76,8 +85,18 @@ first **Save** asks for a project folder, and the project takes that folder's na
    adjust alignment, or hover it and press **G**, then click to finish. Corner
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
    **Esc** cancels a preview. Right-click → **Select Wire** selects the complete
-   route for whole-wire movement or deletion. **Slice**, **Break**,
-   **Delete Segment** and **Delete Wire** remain available in that menu.
+   route for whole-wire movement or deletion. Capture → **Wire edits** offers
+   **Slice**, **Heal** and **Delete** for the selection. The context menu also offers
+   **Break** to release the selected leg's attachments, including pins and shared junctions,
+   whether one or both ends are connected. An already-free end stays free. The detached
+   straight piece moves freely in both directions; its original contacts remain disconnected
+   until pulled clear, after which dropping back onto them reconnects normally. Moves and draws clean up overlapping
+   runs, and **Heal** applies that cleanup to existing selected wires. Dropping
+   a part with a pin exactly on a wire connects it; a two-pin part placed across
+   a straight run replaces the wire between its pins. **Auto-heal wires** in the
+   Wire edits menu defaults on. Retracing a draft shortens the preview as you draw;
+   Backspace restores the preceding clicked corner. Switch automatic healing off to keep detours and loops while
+   drawing, then select a wire and use **Heal** for cleanup when desired.
 6. Save your desktop copy, reopen its `project.pc`, and check the edit. In the
    browser, choose **Download**, keep the resulting `.pc.zip`, then reopen that
    download to check it. A download request does not prove the file was saved,

@@ -29,8 +29,18 @@ pub const SCHEMATIC_PREVIEW_MAX_STEP: f32 = 1.4 * SCHEMATIC_GRID_SPACING;
 pub const SCHEMATIC_PREVIEW_STROKE: f32 = 1.1;
 /// Radius of a terminal marker while the Wire tool is active.
 pub const SCHEMATIC_PIN_RADIUS: f32 = 3.0;
-/// Distance at which the Wire tool snaps to a terminal.
-pub const SCHEMATIC_PIN_HIT_RADIUS: f32 = 8.0;
+/// Terminal/node target radius in logical points, independent of canvas zoom.
+pub const SCHEMATIC_PIN_HIT_RADIUS: f32 = 14.0;
+/// Wire stroke target radius for selection and connection, independent of canvas zoom.
+pub const SCHEMATIC_WIRE_HIT_RADIUS: f32 = 10.0;
+/// Keep reshape handles precise even though electrical connection targets are larger.
+pub const SCHEMATIC_HANDLE_HIT_RADIUS: f32 = 8.0;
+/// Wiring crosshair half-extent in logical points.
+pub const WIRE_CURSOR_ARM: f32 = 12.0;
+/// Empty center of each wiring crosshair arm, in logical points.
+pub const WIRE_CURSOR_GAP: f32 = 3.0;
+/// Radius of the ring around a snapped connection target, in logical points.
+pub const WIRE_CURSOR_TARGET_RADIUS: f32 = 7.0;
 /// Radius of the filled dot where three or more wires meet at a free point.
 pub const SCHEMATIC_JUNCTION_RADIUS: f32 = 2.5;
 /// Half the side of the open square on an unconnected wire end.

@@ -12,8 +12,16 @@ use crate::{
     },
 };
 
+mod heal;
+pub use heal::normalized_path;
 mod reshape;
 pub use reshape::Reshape;
+
+/// Automatic normalization defaults on for existing command clients. An explicit false
+/// preserves authored routes while still resolving deliberate connection targets.
+pub(crate) fn auto_heal(params: &Value) -> bool {
+    params["auto_heal"].as_bool().unwrap_or(true)
+}
 
 /// Maximum intermediate points accepted in a single authored wire.
 pub const MAX_BENDS: usize = 64;
@@ -23,13 +31,27 @@ pub const MAX_BENDS: usize = 64;
 pub enum Anchor {
     Existing(WireEndpoint),
     Free(Point),
+    /// Explicitly branch into this wire at an unambiguous point on its current route.
+    Split {
+        wire: u64,
+        at: Point,
+    },
 }
 
 impl Anchor {
-    /// Parse a strict terminal/junction reference or a bounded free point.
+    /// Parse a strict terminal/junction reference, explicit wire/at target or bounded free point.
     pub fn parse(value: &Value) -> Option<Self> {
         if let Some(endpoint) = WireEndpoint::parse(value) {
             return Some(Self::Existing(endpoint));
+        }
+        if let Some(object) = value.as_object()
+            && object.len() == 2
+            && object.contains_key("wire")
+            && object.contains_key("at")
+        {
+            let wire = object["wire"].as_str().and_then(|id| parse_id(id, "wire-"))?;
+            let at = serde_json::from_value::<Point>(object["at"].clone()).ok().filter(valid_point)?;
+            return Some(Self::Split { wire, at });
         }
         serde_json::from_value::<Point>(value.clone()).ok().filter(valid_point).map(Self::Free)
     }
@@ -39,6 +61,7 @@ impl Anchor {
         match self {
             Self::Existing(endpoint) => endpoint.inspect(),
             Self::Free(point) => json!(point),
+            Self::Split { wire, at } => json!({"wire":format!("wire-{wire}"),"at":at}),
         }
     }
 
@@ -47,6 +70,9 @@ impl Anchor {
         match self {
             Self::Existing(endpoint) => project.endpoint_position(endpoint),
             Self::Free(point) => Some(point),
+            Self::Split { wire, at } => {
+                project.wires.iter().find(|w| w.ordinal == wire).filter(|w| locate(&project.wire_path(w), at).is_ok()).map(|_| at)
+            }
         }
     }
 }
@@ -66,6 +92,26 @@ pub(crate) fn parse_bends(value: &Value) -> Option<Vec<Point>> {
 }
 
 impl Project {
+    /// Whether a selected straight leg has any attachment for Break to release. An internal
+    /// corner, terminal or shared junction counts; already detached straight wires do not.
+    /// Missing wires and ambiguous points return false without changing the project.
+    pub fn wire_segment_can_break(&self, wire: &str, at: Point) -> bool {
+        let Some(wire) = self.wires.iter().find(|candidate| candidate.id() == wire) else {
+            return false;
+        };
+        let path = self.wire_path(wire);
+        let Ok(leg) = leg_at(&path, at) else {
+            return false;
+        };
+        leg > 0 || leg + 2 < path.len() || wire.endpoints.iter().any(|&end| self.wire_end_has_attachment(end))
+    }
+
+    /// Terminals and junctions shared with another wire anchor a route end; degree-one
+    /// junctions are already free and keep their identity when a neighboring leg is broken.
+    fn wire_end_has_attachment(&self, end: WireEndpoint) -> bool {
+        matches!(end, WireEndpoint::Terminal(_)) || self.wires.iter().filter(|wire| wire.endpoints.contains(&end)).count() > 1
+    }
+
     /// Resolve either kind of explicit electrical endpoint in this snapshot.
     pub fn endpoint_position(&self, endpoint: WireEndpoint) -> Option<Point> {
         match endpoint {
@@ -176,6 +222,7 @@ pub fn wire_path(wire: &Wire, from: Point, to: Point) -> Vec<Point> {
 
 impl Session {
     /// Commit one complete route, including its free points, as one revision and undo step.
+    /// Interior wire targets split only on commit; overlaps heal in the same candidate.
     /// All geometry and endpoint checks precede adoption, so a rejected draft changes nothing.
     pub(crate) fn draw_wire(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -197,25 +244,16 @@ impl Session {
         if path.windows(2).any(|pair| pair[0] == pair[1] || (pair[0].x_nm != pair[1].x_nm && pair[0].y_nm != pair[1].y_nm)) {
             return Err(CommandError::InvalidParams("wire legs must be nonzero and horizontal or vertical".to_owned()));
         }
-        let mut next = self.next_object_id()?;
-        if next > MAX_OBJECT_ID - 3 {
-            return Err(CommandError::Unavailable("project has exhausted its object IDs".to_owned()));
-        }
-        let mut candidate = project.clone();
-        let endpoints = anchors.map(|anchor| match anchor {
-            Anchor::Existing(endpoint) => endpoint,
-            Anchor::Free(point) => {
-                let id = next;
-                next += 1;
-                Arc::make_mut(&mut candidate.junctions).insert(id, point);
-                WireEndpoint::Junction(id)
+        let mut edit = heal::Edit::new(project, self.revision());
+        let endpoints = match anchors {
+            [Anchor::Split { wire: a, at: p }, Anchor::Split { wire: b, at: q }] if a == b => {
+                let (from, to) = edit.cut_pair(a, p, q)?;
+                [from, to]
             }
-        });
-        if candidate.wires.iter().any(|wire| wire.endpoints == endpoints || wire.endpoints == [endpoints[1], endpoints[0]]) {
-            return Err(CommandError::InvalidParams("these endpoints are already joined by a wire".to_owned()));
-        }
-        Arc::make_mut(&mut candidate.wires).push(Wire { ordinal: next, endpoints, bends: Some(bends) });
-        candidate.connectivity = Arc::default();
+            _ => [edit.resolve(anchors[0])?, edit.resolve(anchors[1])?],
+        };
+        edit.draw(endpoints, &path)?;
+        let candidate = edit.finish(auto_heal(params))?;
         self.change(candidate);
         Ok(())
     }
@@ -240,23 +278,26 @@ impl Session {
         )
     }
 
-    /// Break the straight leg of a wire that contains `at` away from the legs beside it. The leg
-    /// stays where it was as its own wire; every place it met a neighbouring leg becomes two free
-    /// endpoints, one on each side, so the break is electrical while the drawing is unchanged.
-    /// The wire's original endpoints stay attached. A one-leg wire has nothing to break from.
+    /// Detach the selected straight leg from every neighboring leg, pin and shared junction.
+    /// Its geometry stays put; already-free outer ends keep their identity. Other wires retain
+    /// their existing pin/junction attachments. Refuse an already detached straight wire.
     pub(crate) fn break_wire(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let (index, path, at) = self.wire_target(params)?;
         let leg = leg_at(&path, at)?;
         let (before, after) = (leg > 0, leg + 2 < path.len());
-        if !before && !after {
-            return Err(CommandError::InvalidParams("a one-leg wire has no neighbouring leg to break from".to_owned()));
+        let project = self.open_project()?;
+        let wire = &project.wires[index];
+        let sever_start = before || project.wire_end_has_attachment(wire.endpoints[0]);
+        let sever_end = after || project.wire_end_has_attachment(wire.endpoints[1]);
+        if !sever_start && !sever_end {
+            return Err(CommandError::InvalidParams("this wire segment is already detached".to_owned()));
         }
         let mut pieces = Vec::new();
         if before {
             pieces.push(Piece { start: End::Keep, route: path[..=leg].to_vec(), end: End::Fresh });
         }
-        let ends = (if before { End::Fresh } else { End::Keep }, if after { End::Fresh } else { End::Keep });
+        let ends = (if sever_start { End::Fresh } else { End::Keep }, if sever_end { End::Fresh } else { End::Keep });
         pieces.push(Piece { start: ends.0, route: path[leg..=leg + 1].to_vec(), end: ends.1 });
         if after {
             pieces.push(Piece { start: End::Fresh, route: path[leg + 1..].to_vec(), end: End::Keep });
@@ -604,8 +645,8 @@ mod tests {
     }
 
     /// Breaking a middle leg keeps all three pieces where they were but disconnects them: each
-    /// gap has a free endpoint on either side. An end leg keeps the wire's original endpoint, and
-    /// a one-leg wire or a corner is refused.
+    /// gap has a free endpoint on either side. End legs also detach their pin/shared-junction
+    /// attachment; already-free straight wires and ambiguous corners are refused.
     #[test]
     fn breaking_a_leg_separates_it_from_its_neighbours() {
         let mut session = empty();
@@ -639,10 +680,10 @@ mod tests {
         session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(session.inspect()["project"], before["project"]);
 
-        // The first leg keeps the pin and gets a free end only where it met the next leg.
+        // The first leg detaches from both the pin and its neighboring leg.
         edit(&mut session, BREAK_WIRE, &id, p(2, 0)).unwrap();
         assert_eq!(routes(&session), vec![route[..=1].to_vec(), route[1..].to_vec()]);
-        assert_eq!(session.project().unwrap().wires()[0].endpoints()[0], WireEndpoint::Terminal(terminal));
+        assert_ne!(session.project().unwrap().wires()[0].endpoints()[0], WireEndpoint::Terminal(terminal));
 
         let mut single = empty();
         draw(&mut single, point(0, 0), point(8, 0), json!([]));

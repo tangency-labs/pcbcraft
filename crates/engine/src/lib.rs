@@ -37,6 +37,9 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    AutoHeal,
+    Disconnect,
+    Junctions,
     Name,
     /// Free text for a symbol's reference or value. Its length and characters are checked by the command.
     Text,
@@ -50,6 +53,7 @@ enum ParamKind {
     Terminal,
     Rotation,
     WireAnchor,
+    WireEndpoint,
     WireBends,
     WireId,
     JunctionId,
@@ -68,6 +72,9 @@ impl ParamKind {
             Self::BoardSetup => board::setup::BoardSetup::schema(),
             Self::BoardId => json!({"type":"string", "format":"uuid"}),
             Self::CopperLayers => json!({"type":"integer", "enum":[2,4]}),
+            Self::AutoHeal => json!({"type":"boolean","default":true}),
+            Self::Disconnect => json!({"type":"boolean","default":false}),
+            Self::Junctions => json!({"type":"array","maxItems":2,"uniqueItems":true,"items":Self::JunctionId.schema()}),
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()}
@@ -85,7 +92,10 @@ impl ParamKind {
             Self::JunctionId => json!({"type": "string", "pattern": "^junction-[1-9][0-9]*$"}),
             Self::WireAnchor => json!({"oneOf": [ParamKind::Terminal.schema(), {
                 "type": "object", "properties": {"junction": {"type": "string", "pattern": "^junction-[1-9][0-9]*$"}}, "required": ["junction"], "additionalProperties": false
-            }, point_schema()]}),
+            }, point_schema(), {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}]}),
+            Self::WireEndpoint => json!({"oneOf": [ParamKind::Terminal.schema(), {
+                "type": "object", "properties": {"junction": ParamKind::JunctionId.schema()}, "required": ["junction"], "additionalProperties": false
+            }, {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}]}),
             Self::WireBends => json!({"type": "array", "maxItems": wire::MAX_BENDS, "items": point_schema()}),
             Self::Point => point_schema(),
             Self::Rotation => json!({"type": "integer", "enum": [0, 90, 180, 270]}),
@@ -108,6 +118,14 @@ impl ParamKind {
             Self::BoardId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup if value.is_object() => Ok(()),
             Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
+            Self::AutoHeal | Self::Disconnect if value.is_boolean() => Ok(()),
+            Self::Junctions
+                if value.as_array().is_some_and(|ends| {
+                    ends.len() <= 2 && ends.iter().all(|end| Self::JunctionId.validate(end).is_ok()) && (ends.len() < 2 || ends[0] != ends[1])
+                }) =>
+            {
+                Ok(())
+            }
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition if value.as_str() == Some(FOOTPRINT_DEFINITION) => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
@@ -120,6 +138,7 @@ impl ParamKind {
             Self::WireId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "wire-")).is_some() => Ok(()),
             Self::JunctionId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "junction-")).is_some() => Ok(()),
             Self::WireAnchor if wire::Anchor::parse(value).is_some() => Ok(()),
+            Self::WireEndpoint if matches!(wire::Anchor::parse(value), Some(wire::Anchor::Existing(_) | wire::Anchor::Split { .. })) => Ok(()),
             Self::WireBends if wire::parse_bends(value).is_some() => Ok(()),
             Self::Point if serde_json::from_value::<schematic::Point>(value.clone()).ok().is_some_and(|point| wire::valid_point(&point)) => Ok(()),
             Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
@@ -128,6 +147,8 @@ impl ParamKind {
             Self::BoardId => Err("must identify a board by UUID"),
             Self::BoardSetup => Err("must contain a board setup object"),
             Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
+            Self::AutoHeal | Self::Disconnect => Err("must be a boolean"),
+            Self::Junctions => Err("must contain at most two distinct junction IDs"),
             Self::FootprintDefinition => Err("must identify the built-in footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name | Self::Text => Err("must be a string"),
@@ -139,6 +160,7 @@ impl ParamKind {
             Self::WireId => Err("must identify a wire"),
             Self::JunctionId => Err("must identify a junction or free endpoint"),
             Self::WireAnchor => Err("must identify a terminal, junction or bounded free point"),
+            Self::WireEndpoint => Err("must identify an existing terminal, junction or point on a wire"),
             Self::WireBends => Err("must contain at most 64 bounded points"),
             Self::Point => Err("must be a point with whole-nanometer x_nm and y_nm within the schematic bounds"),
             Self::Rotation => Err("must be 0, 90, 180 or 270 degrees"),
@@ -212,11 +234,15 @@ pub const SLICE_WIRE: &str = "schematic.slice_wire";
 pub const MOVE_WIRE_SEGMENT: &str = "schematic.move_wire_segment";
 pub const MOVE_WIRE_CORNER: &str = "schematic.move_wire_corner";
 pub const MOVE_JUNCTION: &str = "schematic.move_junction";
-/// Separate one straight leg of a wire from the legs beside it, leaving free ends at the gaps.
+/// Attach a free endpoint or junction and all its routes to an existing terminal or junction.
+pub const ATTACH_JUNCTION: &str = "schematic.attach_junction";
+/// Normalize selected wires and connect exact pin contacts as one undoable edit.
+pub const HEAL_WIRES: &str = "schematic.heal_wires";
+/// Detach one straight leg from its neighboring legs, pins and shared junctions.
 pub const BREAK_WIRE: &str = "schematic.break_wire";
 /// Remove one straight leg of a wire, leaving the rest of its route with free ends.
 pub const DELETE_WIRE_SEGMENT: &str = "schematic.delete_wire_segment";
-/// Move an existing symbol without changing its terminals or wiring.
+/// Move a symbol, optionally disconnecting it while preserving its old wire paths.
 pub const MOVE_SYMBOL: &str = "schematic.move_symbol";
 /// Turn a symbol a quarter turn counterclockwise.
 pub const ROTATE_SYMBOL: &str = "schematic.rotate_symbol";
@@ -238,6 +264,12 @@ const BOARD: Param = Param {
 };
 const EXPECTED_REVISION: Param =
     Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
+const AUTO_HEAL: Param = Param {
+    required: false,
+    name: "auto_heal",
+    summary: "Clean up touched wire overlaps, returns and redundant loops; defaults to true. False preserves authored routes; explicit attachments still connect.",
+    kind: ParamKind::AutoHeal,
+};
 
 /// Move a group of symbols and wire routes as one revision and undo step.
 pub const MOVE_ITEMS: &str = "schematic.move_items";
@@ -264,7 +296,7 @@ const CATALOG: &[Command] = &[
         id: PLACE_RESISTOR,
         title: "Place Resistor",
         summary: "Compatibility command for the starter library's 1k resistor. Use schematic.place_symbol for new calls. Undoable.",
-        params: &[SYMBOL_X, SYMBOL_Y, EXPECTED_REVISION],
+        params: &[SYMBOL_X, SYMBOL_Y, EXPECTED_REVISION, AUTO_HEAL],
     },
     Command {
         id: PLACE_SYMBOL,
@@ -276,6 +308,7 @@ const CATALOG: &[Command] = &[
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -283,10 +316,21 @@ const CATALOG: &[Command] = &[
         title: "Draw Wire",
         summary: "Draw an orthogonal wire with explicit endpoint identities and bends. One undoable edit.",
         params: &[
-            Param { required: true, name: "from", summary: "Existing endpoint or new free point", kind: ParamKind::WireAnchor },
-            Param { required: true, name: "to", summary: "Existing endpoint or new free point", kind: ParamKind::WireAnchor },
+            Param {
+                required: true,
+                name: "from",
+                summary: "Existing endpoint, explicit wire/at target, or new free point",
+                kind: ParamKind::WireAnchor,
+            },
+            Param {
+                required: true,
+                name: "to",
+                summary: "Existing endpoint, explicit wire/at target, or new free point",
+                kind: ParamKind::WireAnchor,
+            },
             Param { required: true, name: "bends", summary: "Intermediate orthogonal route points, excluding endpoints", kind: ParamKind::WireBends },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -308,7 +352,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: BREAK_WIRE,
         title: "Break Wire",
-        summary: "Separate the straight leg of a wire that contains a point from the legs beside it. The drawing stays; each gap gets free endpoints on both sides, disconnecting them. Undoable.",
+        summary: "Detach the selected straight leg from neighboring legs, pins and shared junctions at either end. Already-free ends stay free and all geometry stays put. Undoable.",
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
@@ -328,33 +372,69 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_WIRE_SEGMENT,
         title: "Move Wire Segment",
-        summary: "Slide the straight leg of a wire that contains a point across its direction. The wire's endpoints stay put, gaining orthogonal legs as needed; connections are unchanged. Undoable.",
+        summary: "Move a detached straight wire in both axes, or slide a connected leg across its direction. Pins and shared junctions stay anchored. Positive overlaps heal; crossings stay separate. Undoable.",
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
-            Param { required: true, name: "to", summary: "Where that point goes; it may differ from at only across the leg", kind: ParamKind::Point },
+            Param {
+                required: true,
+                name: "to",
+                summary: "Where that point goes; connected legs move only across the leg, detached straight wires move in both axes",
+                kind: ParamKind::Point,
+            },
             EXPECTED_REVISION,
+            AUTO_HEAL,
+            Param {
+                required: false,
+                name: "connect_ends",
+                summary: "Free ends of this wire to join to exact stationary pin or wire contacts on drop",
+                kind: ParamKind::Junctions,
+            },
         ],
     },
     Command {
         id: MOVE_WIRE_CORNER,
         title: "Move Wire Corner",
-        summary: "Move an interior corner of a wire; the two legs meeting there slide with it and the wire's endpoints stay put. Connections are unchanged. Undoable.",
+        summary: "Move an interior corner of a wire; the two legs meeting there slide with it and the wire's endpoints stay put. Positive overlaps heal; crossings stay separate. Undoable.",
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "An interior corner of the wire's drawn route", kind: ParamKind::Point },
             Param { required: true, name: "to", summary: "The corner's new position", kind: ParamKind::Point },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
         id: MOVE_JUNCTION,
         title: "Move Junction",
-        summary: "Move a free endpoint or junction; the end leg of each attached wire slides to keep its direction. Connections are unchanged. Undoable.",
+        summary: "Move a free endpoint or junction; the end leg of each attached wire slides to keep its direction. Exact pin contacts connect and positive overlaps heal. Undoable.",
         params: &[
             Param { required: true, name: "junction", summary: "Junction or free endpoint ID from inspection", kind: ParamKind::JunctionId },
             Param { required: true, name: "to", summary: "The new position", kind: ParamKind::Point },
             EXPECTED_REVISION,
+            AUTO_HEAL,
+        ],
+    },
+    Command {
+        id: HEAL_WIRES,
+        title: "Heal Wires",
+        summary: "Heal selected wire routes, compatible overlaps and redundant junctions; connect exact pin contacts. Crossings stay separate. Undoable.",
+        params: &[ITEMS, EXPECTED_REVISION],
+    },
+    Command {
+        id: ATTACH_JUNCTION,
+        title: "Attach Junction",
+        summary: "Move a free endpoint or junction onto a pin, junction or explicit wire/at target, connecting every attached route and healing overlaps. Undoable.",
+        params: &[
+            Param { required: true, name: "junction", summary: "Junction or free endpoint ID from inspection", kind: ParamKind::JunctionId },
+            Param {
+                required: true,
+                name: "to",
+                summary: "Existing terminal, junction or wire/at point to connect to",
+                kind: ParamKind::WireEndpoint,
+            },
+            EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -370,12 +450,19 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_SYMBOL,
         title: "Move Symbol",
-        summary: "Move an existing symbol and preserve its connections. Undoable.",
+        summary: "Move a symbol, retaining attached wires by default. With disconnect, leave its wiring in place. Exact destination contacts still connect. Undoable.",
         params: &[
             Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
+            AUTO_HEAL,
+            Param {
+                required: false,
+                name: "disconnect",
+                summary: "Leave the old wires in place with free ends before moving the symbol",
+                kind: ParamKind::Disconnect,
+            },
         ],
     },
     Command {
@@ -418,12 +505,13 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_ITEMS,
         title: "Move Selected Items",
-        summary: "Move symbols and wire routes together; preserve connections. One undoable edit.",
+        summary: "Move symbols and wire routes together; retain attached pins, connect exact pin contacts and heal touched routes. One undoable edit.",
         params: &[
             ITEMS,
             Param { required: true, name: "dx_nm", summary: "Horizontal displacement in nanometers", kind: ParamKind::Displacement },
             Param { required: true, name: "dy_nm", summary: "Vertical displacement in nanometers", kind: ParamKind::Displacement },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -735,7 +823,7 @@ impl Session {
             "project.new" => true,
             "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
             | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT | MOVE_WIRE_CORNER
-            | MOVE_JUNCTION | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
+            | MOVE_JUNCTION | ATTACH_JUNCTION | HEAL_WIRES | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none() && p.board.footprints().is_empty()),
             SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
             "edit.undo" => !self.undo.is_empty(),
@@ -813,6 +901,8 @@ impl Session {
                 | MOVE_WIRE_SEGMENT
                 | MOVE_WIRE_CORNER
                 | MOVE_JUNCTION
+                | ATTACH_JUNCTION
+                | HEAL_WIRES
                 | MOVE_ITEMS
                 | DELETE_ITEMS
                 | INITIALIZE_BOARD_SETUP
@@ -864,6 +954,8 @@ impl Session {
             MOVE_WIRE_SEGMENT => self.move_wire_segment(params)?,
             MOVE_WIRE_CORNER => self.move_wire_corner(params)?,
             MOVE_JUNCTION => self.move_junction(params)?,
+            ATTACH_JUNCTION => self.attach_junction(params)?,
+            HEAL_WIRES => self.heal_wires(params)?,
             BREAK_WIRE => self.break_wire(params)?,
             DELETE_WIRE_SEGMENT => self.delete_wire_segment(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
@@ -889,6 +981,7 @@ impl Session {
 
     /// Add a symbol from validated parameters if the caller's revision is still current.
     /// Use the resulting revision as the identity so undo and a new placement cannot reuse it.
+    /// Exact wire contacts connect; a two-pin placement on a straight run inserts the part.
     fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -936,11 +1029,13 @@ impl Session {
             rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
         });
         project.connectivity = Arc::default();
+        let project = project.healed(self.open_project()?, self.revision(), wire::auto_heal(params))?;
         self.change(project);
         Ok(())
     }
 
-    /// Move one existing placement at the expected revision, retaining its topology and history.
+    /// Move a placement as one undo step, retaining connections by default. With `disconnect`,
+    /// leave old routes at their original coordinates; destination contacts still connect.
     fn move_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -951,9 +1046,12 @@ impl Session {
             .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         if project.symbols[index].position != position {
-            let mut project = project.clone();
-            Arc::make_mut(&mut project.symbols)[index].position = position;
-            self.change(project);
+            let next = if params["disconnect"].as_bool().unwrap_or(false) {
+                project.moved_symbol_disconnected(&project.symbols[index].id(), position, self.revision(), wire::auto_heal(params))?
+            } else {
+                project.moved_symbol(&project.symbols[index].id(), position, self.revision(), wire::auto_heal(params))?
+            };
+            self.change(next);
         }
         Ok(())
     }

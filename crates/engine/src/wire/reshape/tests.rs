@@ -1,5 +1,7 @@
 use serde_json::json;
 
+mod attachment;
+
 use super::*;
 use crate::{
     CONNECT_PINS, DRAW_WIRE, MOVE_SYMBOL, PLACE_SYMBOL,

@@ -7,6 +7,10 @@ use pcbcraft_engine::{
 };
 
 use super::Camera;
+use std::cell::RefCell;
+
+mod departure;
+mod targets;
 
 #[cfg(test)]
 mod tests;
@@ -15,27 +19,32 @@ mod tests;
 #[derive(Debug)]
 pub(crate) struct Draft {
     corners: Vec<Vec<Point>>,
+    target_cache: RefCell<targets::Cache>,
     pub(crate) horizontal_first: bool,
     pub(crate) finish_requested: bool,
+    /// W begins at the pointer this frame; toolbar activation still waits for a click.
+    pub(crate) start_requested: bool,
 }
 
 impl Default for Draft {
     fn default() -> Self {
-        Self { corners: Vec::new(), horizontal_first: true, finish_requested: false }
+        Self { target_cache: RefCell::default(), corners: Vec::new(), horizontal_first: true, finish_requested: false, start_requested: false }
     }
 }
 
 impl Draft {
-    /// Resolve the frozen corners and current orthogonal preview leg.
-    pub(crate) fn path(&self, from: Point, to: Point) -> Vec<Point> {
+    /// Resolve the frozen corners and current leg, retracting self-overlap with the same
+    /// normalization as commit when enabled. Invalid or overly complex previews are refused.
+    pub(crate) fn path(&self, from: Point, to: Point, auto_heal: bool) -> Option<Vec<Point>> {
         let previous = self.corners.last().cloned().unwrap_or_else(|| vec![from]);
-        orthogonal_path(previous.into_iter().chain(std::iter::once(to)), self.horizontal_first)
+        let path = orthogonal_path(previous.into_iter().chain(std::iter::once(to)), self.horizontal_first);
+        if auto_heal { pcbcraft_engine::wire::normalized_path(&path).ok() } else { Some(path) }
     }
 
     /// Freeze a clicked corner if the resulting route fits the shared command's bound.
-    pub(crate) fn corner(&mut self, from: Point, to: Point) -> bool {
-        let path = self.path(from, to);
-        if path.len() < 2 || path.len() > pcbcraft_engine::wire::MAX_BENDS {
+    pub(crate) fn corner(&mut self, from: Point, to: Point, auto_heal: bool) -> bool {
+        let Some(path) = self.path(from, to, auto_heal) else { return false };
+        if path.len() < 2 || path.len() > pcbcraft_engine::wire::MAX_BENDS + 2 {
             return false;
         }
         if self.corners.last() != Some(&path) {
@@ -59,14 +68,69 @@ pub(crate) struct ReshapeDrag {
     pub(crate) wire: String,
     pub(crate) edit: Reshape,
     pub(crate) grabbed: Point,
-    /// For a segment, whether its leg runs horizontally, so it moves only vertically.
+    /// A connected segment's orientation constrains its travel. Detached straight pieces
+    /// have no axis constraint, like corners and free-end handles.
     horizontal: Option<bool>,
     origin: Point,
+    /// Transient suppression of contacts occupied when a detached straight piece is grabbed.
+    departure: std::rc::Rc<RefCell<departure::Departure>>,
 }
 
 impl ReshapeDrag {
+    /// Resolve a drag destination using drawing's unambiguous pin/junction hit test for a
+    /// movable endpoint. Other handles and empty space keep their snapped pointer travel.
+    /// The source itself is never an attachment target; coincident candidates cancel the drop.
+    /// Straight free pieces release their original-contact guard only after leaving its hit region.
+    pub(crate) fn destination(&self, project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Anchor> {
+        if !rect.contains(pointer) {
+            return None;
+        }
+        let point = self.target(camera.snap(pointer, rect));
+        if !super::valid_position(point) {
+            return None;
+        }
+        self.departure.borrow_mut().update(camera, rect, self.grabbed, point);
+        if let Reshape::Junction(id) = self.edit {
+            let suppressed = self.departure.borrow().suppressed_wires();
+            let suppressed_pins = self.departure.borrow().suppressed_nodes();
+            let anchor = targets::Targets::new(project, camera, rect).anchor_excluding(
+                camera,
+                rect,
+                pointer,
+                Some(WireEndpoint::Junction(id)),
+                true,
+                &suppressed,
+                &suppressed_pins,
+            )?;
+            if !matches!(anchor, Anchor::Free(_)) {
+                return Some(anchor);
+            }
+        }
+        Some(Anchor::Free(point))
+    }
+
+    /// Validate a disposable preview with the same engine operation used on release.
+    /// Junction handles use explicit targets; straight pieces can join exact end contacts after
+    /// departure. Invalid geometry or ambiguous topology yields no preview.
+    pub(crate) fn preview(&self, project: &Project, to: Anchor, revision: u64, auto_heal: bool) -> Option<Project> {
+        match (&self.edit, to) {
+            (Reshape::Junction(id), Anchor::Existing(_) | Anchor::Split { .. }) => project.attached(*id, to, revision, auto_heal).ok(),
+            (_, Anchor::Free(point)) => project
+                .reshaped(&self.edit, point)
+                .and_then(|next| next.healed_with_connections(project, revision, auto_heal, &self.connection_ends()))
+                .ok(),
+            _ => None,
+        }
+    }
+
+    /// Free ends eligible for exact wire contact on this drop. Original contacts are withheld
+    /// until that end has left their hit region; returning later can deliberately reconnect.
+    pub(crate) fn connection_ends(&self) -> Vec<u64> {
+        if matches!(self.edit, Reshape::Segment { .. }) { self.departure.borrow().connection_ends() } else { Vec::new() }
+    }
+
     /// Where the grabbed point goes with the pointer snapped at `pointer`: moved by the snapped
-    /// travel, and only across a segment's direction.
+    /// travel. Connected segments move across their direction; detached pieces move in both axes.
     pub(crate) fn target(&self, pointer: Point) -> Point {
         let shift = |grabbed: i64, now: i64, then: i64| grabbed.saturating_add(now.saturating_sub(then));
         let mut to =
@@ -87,8 +151,11 @@ impl ReshapeDrag {
 pub(super) fn reshape_at(project: &Project, camera: &Camera, rect: Rect, wire: &str, pointer: Pos2, origin: Point) -> Option<ReshapeDrag> {
     let found = project.wires().iter().find(|candidate| candidate.id() == wire)?;
     let route = project.wire_path(found);
-    let near = |point: Point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS;
-    let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| ReshapeDrag { wire: wire.to_owned(), edit, grabbed, horizontal, origin };
+    let near = |point: Point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_HANDLE_HIT_RADIUS;
+    let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| {
+        let departure = std::rc::Rc::new(RefCell::new(departure::Departure::new(project, wire, &edit)));
+        ReshapeDrag { wire: wire.to_owned(), edit, grabbed, horizontal, origin, departure }
+    };
     for end in found.endpoints() {
         if let WireEndpoint::Junction(id) = end
             && let Some(point) = project.endpoint_position(end)
@@ -103,7 +170,8 @@ pub(super) fn reshape_at(project: &Project, camera: &Camera, rect: Rect, wire: &
     let leg = leg_at(project, camera, rect, pointer, 0).filter(|leg| leg.wire == wire)?;
     let (a, b) = (leg.route[leg.leg], leg.route[leg.leg + 1]);
     let at = leg.inside();
-    Some(drag(Reshape::Segment { wire: wire.to_owned(), at }, at, Some(a.y_nm == b.y_nm)))
+    let constraint = (!project.wire_moves_freely(wire)).then_some(a.y_nm == b.y_nm);
+    Some(drag(Reshape::Segment { wire: wire.to_owned(), at }, at, constraint))
 }
 
 /// Draw the handles of the selected wire: a square on each interior corner, and an outlined
@@ -198,6 +266,8 @@ pub(crate) struct LegTarget {
     pub(crate) leg: usize,
     /// The grid point where Slice splits the wire, if the leg has one away from both ends.
     pub(crate) split: Option<Point>,
+    /// Whether the captured leg has a corner, pin or shared junction that Break can release.
+    pub(crate) breakable: bool,
     /// The revision the menu was opened at; an edit after another change is refused.
     pub(crate) revision: u64,
 }
@@ -218,13 +288,9 @@ impl LegTarget {
         if hits.next().is_some() || route.contains(&at) {
             return None;
         }
-        Some(Self { wire: wire.to_owned(), route, leg, split: Some(at), revision })
+        Some(Self { wire: wire.to_owned(), route, leg, split: Some(at), breakable: project.wire_segment_can_break(wire, at), revision })
     }
 
-    /// Whether this captured leg slides vertically rather than horizontally.
-    pub(crate) fn horizontal(&self) -> bool {
-        self.route[self.leg].y_nm == self.route[self.leg + 1].y_nm
-    }
     /// A point strictly inside the leg, naming it for Break and Delete Segment. Legs join grid points, so
     /// their midpoint is a whole number of nanometers.
     pub(crate) fn inside(&self) -> Point {
@@ -233,17 +299,11 @@ impl LegTarget {
     }
 }
 
-/// Paint only the selected leg, optionally displaced by a validated slide preview. The rest
-/// of the route keeps its ordinary ink so Delete's scope is visible before it is pressed.
-pub(super) fn paint_selected_leg(painter: &Painter, rect: Rect, camera: &Camera, leg: &LegTarget, offset_nm: i64) {
-    let points = leg.route[leg.leg..=leg.leg + 1]
-        .iter()
-        .map(
-            |point| {
-                if leg.horizontal() { Point { y_nm: point.y_nm + offset_nm, ..*point } } else { Point { x_nm: point.x_nm + offset_nm, ..*point } }
-            },
-        )
-        .collect();
+/// Paint only the selected leg at its validated movement offset, including both axes for
+/// a detached piece. The rest keeps ordinary ink so Delete's scope is visible before use.
+pub(super) fn paint_selected_leg(painter: &Painter, rect: Rect, camera: &Camera, leg: &LegTarget, offset: Point) {
+    let points =
+        leg.route[leg.leg..=leg.leg + 1].iter().map(|point| Point { x_nm: point.x_nm + offset.x_nm, y_nm: point.y_nm + offset.y_nm }).collect();
     paint_stroke(painter, rect, camera, points, Stroke::new(2.0 * theme::SCHEMATIC_SYMBOL_STROKE, Tokens::get().accent));
 }
 
@@ -270,7 +330,9 @@ pub(super) fn leg_at(project: &Project, camera: &Camera, rect: Rect, pointer: Po
     };
     let ends = [route.first().copied(), route.last().copied()];
     let split = (!ends.contains(&Some(on_leg))).then_some(on_leg);
-    Some(LegTarget { wire: id, route, leg, split, revision })
+    let midpoint = Point { x_nm: a.x_nm + (b.x_nm - a.x_nm) / 2, y_nm: a.y_nm + (b.y_nm - a.y_nm) / 2 };
+    let breakable = project.wire_segment_can_break(&id, midpoint);
+    Some(LegTarget { wire: id, route, leg, split, breakable, revision })
 }
 
 /// Squared screen distance from `pointer` to the segment `a`–`b`.
@@ -294,6 +356,7 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
     match hovered {
         Some(super::WireAction::Delete) => paint_route(painter, rect, camera, target.route.clone(), tokens.error),
         Some(super::WireAction::SelectWire) => paint_route(painter, rect, camera, target.route.clone(), tokens.accent),
+        Some(super::WireAction::Heal) => paint_route(painter, rect, camera, target.route.clone(), tokens.accent),
         Some(super::WireAction::DeleteSegment) => paint_route(painter, rect, camera, leg, tokens.error),
         Some(super::WireAction::Slice) => {
             if let Some(point) = target.split {
@@ -303,18 +366,15 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
         }
         Some(super::WireAction::Break) => {
             paint_route(painter, rect, camera, leg.clone(), tokens.accent);
-            let last = target.route.len() - 1;
-            for (index, point) in [(target.leg, leg[0]), (target.leg + 1, leg[1])] {
-                if index != 0 && index != last {
-                    paint_dangling(painter, camera.screen(point, rect), tokens.accent);
-                }
+            for point in leg {
+                paint_dangling(painter, camera.screen(point, rect), tokens.accent);
             }
         }
         None => paint_route(painter, rect, camera, leg, tokens.accent),
     }
 }
 
-/// Pick a pin, an explicit free endpoint, or a snapped empty point. Enter/double-click finishes.
+/// Pick a connection or free point; Ctrl bypasses the placement grid. Enter/double-click finishes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pick(
     painter: &Painter,
@@ -324,16 +384,27 @@ pub(super) fn pick(
     camera: &Camera,
     start: Option<Anchor>,
     draft: &Draft,
+    auto_heal: bool,
+    revision: u64,
 ) -> Option<(Anchor, bool)> {
     let clicked = response.clicked_by(PointerButton::Primary);
     let pointer = if clicked { response.interact_pointer_pos() } else { response.hover_pos() };
-    let target = preview(painter, rect, project, camera, start, draft, pointer);
-    response.clone().on_hover_cursor(egui::CursorIcon::Crosshair);
+    let target = preview(painter, rect, project, camera, start, draft, pointer, auto_heal, revision);
+    if response.hovered()
+        && let Some(pointer) = pointer
+    {
+        let point = target.and_then(|anchor| anchor.position(project)).unwrap_or_else(|| {
+            if painter.ctx().input(|input| input.modifiers.ctrl) { camera.unsnapped(pointer, rect) } else { camera.snap(pointer, rect) }
+        });
+        painter.ctx().set_cursor_icon(egui::CursorIcon::None);
+        pcbcraft_chrome::cursor::wire(painter, camera.screen(point, rect), target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_))));
+    }
     let finish = draft.finish_requested || response.double_clicked_by(PointerButton::Primary);
-    target.filter(|_| clicked || finish).map(|target| (target, finish))
+    target.filter(|_| clicked || finish || (start.is_none() && draft.start_requested)).map(|target| (target, finish))
 }
 
-/// Highlight unambiguous existing endpoints and preview the full route to the current target.
+/// Highlight unambiguous endpoints and preview the full route. Read Ctrl each frame so
+/// pressing or releasing the grid override updates the target without a pointer move.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preview(
     painter: &Painter,
@@ -343,50 +414,74 @@ pub(super) fn preview(
     start: Option<Anchor>,
     draft: &Draft,
     pointer: Option<Pos2>,
+    auto_heal: bool,
+    revision: u64,
 ) -> Option<Anchor> {
     let tokens = Tokens::get();
-    let endpoints: Vec<_> = project
+    let mut cache = draft.target_cache.borrow_mut();
+    let targets = cache.get(project, revision, camera, rect);
+    let snap_to_grid = !painter.ctx().input(|input| input.modifiers.ctrl);
+    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| targets.anchor(camera, rect, at, None, snap_to_grid));
+    if let Some(from) = start.and_then(|anchor| anchor.position(project))
+        && let Some(to) = target.and_then(|anchor| anchor.position(project))
+        && let Some(path) = draft.path(from, to, auto_heal)
+    {
+        paint_route(painter, rect, camera, path, tokens.accent);
+    }
+    for &(endpoint, pos) in &targets.endpoints {
+        let anchor = Anchor::Existing(endpoint);
+        let active = start == Some(anchor) || target == Some(anchor);
+        paint_pin(painter, pos, if active { tokens.schematic_wire } else { tokens.canvas_ink });
+    }
+    target
+}
+
+/// Project visible, explicitly connectable identities to screen space for drawing and dragging.
+fn endpoints(project: &Project, camera: &Camera, rect: Rect) -> Vec<(WireEndpoint, Pos2)> {
+    project
         .symbols()
         .iter()
         .flat_map(|symbol| symbol.terminals().into_iter().map(WireEndpoint::Terminal).zip(symbol.pins()))
         .chain(project.junctions().map(|(id, point)| (WireEndpoint::Junction(id), point)))
         .map(|(endpoint, point)| (endpoint, camera.screen(point, rect)))
         .filter(|(_, pos)| rect.contains(*pos))
-        .collect();
-    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| {
-        let mut nearest = None;
-        let mut distance = theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
-        let mut ambiguous = false;
-        for &(endpoint, pos) in &endpoints {
-            let candidate = at.distance_sq(pos);
-            if candidate < distance {
-                nearest = Some(endpoint);
-                distance = candidate;
-                ambiguous = false;
-            } else if candidate == distance && nearest.is_some() {
-                ambiguous = true;
-            }
+        .collect()
+}
+
+/// Find the nearest endpoint inside the magnetic radius. Equal-distance identities return
+/// an error; an empty hit returns `Ok(None)` so wiring may try a stroke or grid point.
+fn nearest_node(endpoints: &[(WireEndpoint, Pos2)], at: Pos2) -> Result<Option<WireEndpoint>, ()> {
+    let mut nearest = None;
+    let mut distance = theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
+    let mut ambiguous = false;
+    for &(endpoint, pos) in endpoints {
+        let candidate = at.distance_sq(pos);
+        if candidate < distance {
+            nearest = Some(endpoint);
+            distance = candidate;
+            ambiguous = false;
+        } else if candidate == distance && nearest.is_some() {
+            ambiguous = true;
         }
-        if ambiguous {
-            None
-        } else if let Some(endpoint) = nearest {
-            Some(Anchor::Existing(endpoint))
-        } else {
-            let point = camera.snap(at, rect);
-            super::valid_position(point).then_some(Anchor::Free(point))
-        }
-    });
-    if let Some(from) = start.and_then(|anchor| anchor.position(project))
-        && let Some(to) = target.and_then(|anchor| anchor.position(project))
-    {
-        paint_route(painter, rect, camera, draft.path(from, to), tokens.accent);
     }
-    for (endpoint, pos) in endpoints {
-        let anchor = Anchor::Existing(endpoint);
-        let active = start == Some(anchor) || target == Some(anchor);
-        paint_pin(painter, pos, if active { tokens.accent } else { tokens.canvas_ink });
+    if ambiguous { Err(()) } else { Ok(nearest) }
+}
+
+/// Resolve an unconnected pin or free wire end for automatic starts. Occupied pins and
+/// junctions keep normal selection behavior; W may still explicitly start at those targets.
+/// Equal-distance nodes are ambiguous and cannot start a connection.
+pub(super) fn node_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, draft: &Draft, revision: u64) -> Option<Anchor> {
+    if !rect.contains(pointer) {
+        return None;
     }
-    target
+    draft.target_cache.borrow_mut().get(project, revision, camera, rect).automatic_node(pointer)
+}
+
+/// Mark a validated attachment destination using the same pin ring as the wire drawing tool.
+pub(super) fn paint_attachment(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, target: Anchor) {
+    if let Some(point) = target.position(project) {
+        paint_pin(painter, camera.screen(point, rect), Tokens::get().accent);
+    }
 }
 
 /// Return the closest wire stroke under the pointer, leaving symbol picking to the caller.
@@ -397,7 +492,7 @@ pub(super) fn at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) 
         .filter_map(|wire| {
             let points: Vec<_> = project.wire_path(wire).into_iter().map(|point| camera.screen(point, rect)).collect();
             let distance = points.windows(2).map(|pair| distance_sq(pointer, pair[0], pair[1])).min_by(f32::total_cmp)?;
-            (distance < theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2)).then(|| (distance, wire.id()))
+            (distance < theme::SCHEMATIC_WIRE_HIT_RADIUS.powi(2)).then(|| (distance, wire.id()))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, id)| id)

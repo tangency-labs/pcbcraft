@@ -300,3 +300,48 @@ an opt-in WGPU root-window retirement request so a surviving editor keeps its
 native window when the original closes. The patch boundary and upgrade procedure
 are recorded in [vendor/eframe/PATCH.md](vendor/eframe/PATCH.md). Document/session
 ownership and the close/save policy remain in PCBcraft.
+
+## Wire endpoint attachment
+
+Endpoint drops in `crates/app/src/schematic_canvas/wires.rs` and
+`crates/app/src/schematic_canvas.rs` follow the interaction described in PCBcraft
+Next's `docs/wire-editing.md` and implemented by the junction-drop path and
+`attachment_target` in `src/desktop/canvas.rs` at
+`568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0). The new upstream
+implementation reuses its drawing tool's pin/junction hit test, rejects ambiguous
+targets and previews the connection before release. `crates/engine/src/wire/heal.rs`
+and `wire.rs` adapt the bounded split/merge, positive-overlap detection, path
+simplification and degree-two collapse workflow from Next's `src/wiring.rs`
+(`resolve`, `heal_overlaps`, `cut_pair`, `merge_endpoints`, `deduplicate_paths`,
+`collapse_runs`) at the same revision. Upstream retains its own snapshots, command
+catalog, numeric identity allocation, format limits and revision checks; straight
+junction collapse preserves intentional corners, and automatic routes are only
+materialized when normalization changes them. Next's document/session model and
+net-name machinery are not imported.
+
+Pin contact on part/group moves, two-pin insertion into straight wires, the explicit
+Heal command and the Capture → Wire edits group are new upstream implementations.
+Shortening U-shaped returns by sliding a shared junction along its existing straight
+run in `crates/engine/src/wire/heal.rs` is also original upstream logic; it preserves
+endpoint identities and does not connect unrelated crossings.
+Self-intersection erasure and removal of branch-free alternative routes in
+`crates/engine/src/wire/heal/loops.rs`, plus the remembered Auto-heal preference,
+are original upstream implementations as well.
+The active drawing preview now shares the same self-route normalization, with
+reversible corner checkpoints; this is new upstream code over those helpers.
+Folded-transit tail cleanup in `crates/engine/src/wire/heal/tails.rs` is also new
+upstream logic. It distinguishes obsolete split points from original free ends,
+pins and branches, retaining that protection through endpoint merges.
+Active-route preference during loop cleanup, direct node starts and the larger
+magnetic hit targets are new upstream behavior. The plain crosshair and target ring
+in `crates/chrome/src/cursor.rs` are original vector drawings using the shared
+theme; no KiCad cursor artwork or implementation was used.
+The per-view connection-target cache and edited-wire overlap scan are new upstream
+optimizations. Target identities remain revision-bound, projected geometry is rebuilt
+after navigation or viewport changes, and automatic starts exclude occupied nodes;
+W explicitly begins at the pointer without changing the model until completion.
+The Slice, Break, Heal and Delete glyphs in `crates/chrome/src/workspace.rs` are
+original drawings using the existing shared icon palette and ribbon metrics.
+The horizontal ribbon scrollbar uses Next's five-point `scroll_gutter` from
+`src/desktop/theme.rs` at the same revision; upstream places it below the captions
+so the additional wire actions remain usable at compact window widths.

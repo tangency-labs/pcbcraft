@@ -288,9 +288,17 @@ impl PcbApp {
 
     /// Run a command through the shared session, then discard view state invalidated by it.
     /// A failure shows in the status bar and leaves the document and surviving view state intact.
+    /// Commands that support automatic wire cleanup default to the person's current preference;
+    /// the explicit Heal command always cleans up, without changing that preference.
     fn run(&mut self, id: &str, params: &Value) {
         self.file_notice = None;
-        self.message = self.session.apply(id, params).err().map(|e| e.to_string());
+        let mut params = params.clone();
+        if pcbcraft_engine::command(id).is_some_and(|c| c.params.iter().any(|p| p.name == "auto_heal"))
+            && let Some(params) = params.as_object_mut()
+        {
+            params.entry("auto_heal").or_insert(json!(self.preferences.auto_heal_wires));
+        }
+        self.message = self.session.apply(id, &params).err().map(|e| e.to_string());
         self.views.sync(&self.session);
     }
 
@@ -430,8 +438,8 @@ impl PcbApp {
         project.symbols().iter().find(|symbol| symbol.id() == id).map(|symbol| project.reference(symbol))
     }
 
-    /// Rotate, delete or open Edit Fields for the selected symbol through the shared commands.
-    /// Deleting clears the selection; a failed command shows in the status bar.
+    /// Rotate, delete, edit fields or pick up a symbol for disconnected movement.
+    /// Pickup is view-only until placement; deleting clears selection and failures show in status.
     fn edit_selected(&mut self, action: SymbolAction) {
         if self.views.active.workspace != Workspace::Schematic {
             return;
@@ -440,6 +448,12 @@ impl PcbApp {
         let Some(id) = self.views.active.schematic.selection.single_symbol().map(str::to_owned) else { return };
         let revision = self.session.revision();
         match action {
+            SymbolAction::DisconnectMove => {
+                if let Some(symbol) = self.session.project().and_then(|project| project.symbols().iter().find(|symbol| symbol.id() == id)) {
+                    self.views.active.schematic.tool =
+                        Some(Tool::Move { symbol: symbol.clone(), offset: egui::Vec2::ZERO, revision, disconnect: true });
+                }
+            }
             SymbolAction::Rotate => self.run(ROTATE_SYMBOL, &json!({"symbol": id, "expected_revision": revision})),
             SymbolAction::Delete => {
                 self.run(DELETE_SYMBOL, &json!({"symbol": id, "expected_revision": revision}));
@@ -464,6 +478,13 @@ impl PcbApp {
     fn edit_wire(&mut self, action: schematic_canvas::WireAction, leg: &schematic_canvas::LegTarget) {
         use schematic_canvas::WireAction;
         let (command, at) = match action {
+            WireAction::Heal => {
+                self.run(pcbcraft_engine::HEAL_WIRES, &json!({"items":Selection::one_wire(leg.wire.clone()),"expected_revision":leg.revision}));
+                if self.message.is_none() {
+                    self.select(Selection::default());
+                }
+                return;
+            }
             WireAction::SelectWire => {
                 if leg.revision == self.session.revision() {
                     self.select(Selection::one_wire(leg.wire.clone()));
@@ -492,19 +513,28 @@ impl PcbApp {
     /// Commit a finished reshape drag through the matching shared command at the revision the
     /// drag began on, so an edit made meanwhile makes it fail visibly. Segments rebind to the
     /// new geometry when unambiguous, otherwise clear; corner/junction edits keep the wire selected.
-    fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::schematic::Point, revision: u64) {
-        use pcbcraft_engine::wire::Reshape;
-        let (command, params) = match &drag.edit {
-            Reshape::Segment { wire, at } => (pcbcraft_engine::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": at, "to": to})),
-            Reshape::Corner { wire, at } => (pcbcraft_engine::MOVE_WIRE_CORNER, json!({"wire": wire, "at": at, "to": to})),
-            Reshape::Junction(id) => (pcbcraft_engine::MOVE_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to})),
+    /// Dropping a junction on an explicit endpoint attaches it; free positions only reshape it.
+    fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::wire::Anchor, revision: u64) {
+        use pcbcraft_engine::wire::{Anchor, Reshape};
+        let (command, params) = match (&drag.edit, to) {
+            (Reshape::Segment { wire, at }, Anchor::Free(to)) => (
+                pcbcraft_engine::MOVE_WIRE_SEGMENT,
+                json!({"wire": wire, "at": at, "to": to,
+                "connect_ends":drag.connection_ends().iter().map(|id|format!("junction-{id}")).collect::<Vec<_>>()}),
+            ),
+            (Reshape::Corner { wire, at }, Anchor::Free(to)) => (pcbcraft_engine::MOVE_WIRE_CORNER, json!({"wire": wire, "at": at, "to": to})),
+            (Reshape::Junction(id), Anchor::Free(to)) => (pcbcraft_engine::MOVE_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to})),
+            (Reshape::Junction(id), Anchor::Existing(_) | Anchor::Split { .. }) => {
+                (pcbcraft_engine::ATTACH_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to.inspect()}))
+            }
+            _ => return,
         };
         let mut params = params;
         params["expected_revision"] = json!(revision);
         let selected_segment = self.views.active.schematic.selected_leg.is_some();
         self.run(command, &params);
         if self.message.is_none() && selected_segment {
-            if let pcbcraft_engine::wire::Reshape::Segment { wire, .. } = &drag.edit
+            if let (Reshape::Segment { wire, .. }, Anchor::Free(to)) = (&drag.edit, to)
                 && let Some(leg) =
                     self.session.project().and_then(|project| schematic_canvas::LegTarget::at_model(project, wire, to, self.session.revision()))
             {
@@ -869,6 +899,61 @@ impl PcbApp {
             Some(1) => self.views.active.camera.request_fit(),
             _ => {}
         }
+        workspace::ribbon_separator(ui);
+        self.wire_edit_ribbon(ui);
+    }
+
+    /// Expose implemented wire edits through both ribbon buttons and their caption menu.
+    /// Slice uses the selected leg's captured point and revision; Heal and Delete act on
+    /// the selected wires, with Delete retaining the narrower segment-selection semantics.
+    /// The menu-only Auto-heal toggle changes the saved preference for future edits, not history.
+    fn wire_edit_ribbon(&mut self, ui: &mut egui::Ui) {
+        use workspace::{RibbonTool, ToolIcon};
+        let leg = self.views.active.schematic.selected_leg.clone();
+        let selection = &self.views.active.schematic.selection;
+        let wires = !selection.wires.is_empty() && selection.symbols.is_empty();
+        let tools = [
+            (ToolIcon::Slice, "Slice", "Slice selected wire", "", leg.as_ref().is_some_and(|l| l.split.is_some())),
+            (ToolIcon::Heal, "Heal", "Heal selected wires", "", wires),
+            (ToolIcon::Delete, "Delete", "Delete selected wire or segment", "Del", wires),
+        ]
+        .map(|(icon, label, description, shortcut, enabled)| RibbonTool {
+            icon,
+            label,
+            description,
+            shortcut,
+            enabled,
+            active: false,
+            toggle: false,
+        });
+        let options = [RibbonTool {
+            icon: ToolIcon::Heal,
+            label: "Auto-heal wires",
+            description: "Auto-heal wires",
+            shortcut: "",
+            enabled: true,
+            active: self.preferences.auto_heal_wires,
+            toggle: true,
+        }];
+        match workspace::ribbon_group_with_menu(ui, "Wire edits", &tools, &options) {
+            Some(0) => {
+                if let Some(leg) = leg {
+                    self.edit_wire(schematic_canvas::WireAction::Slice, &leg);
+                }
+            }
+            Some(1) => {
+                self.run(
+                    pcbcraft_engine::HEAL_WIRES,
+                    &json!({"items":self.views.active.schematic.selection,"expected_revision":self.session.revision()}),
+                );
+                if self.message.is_none() {
+                    self.select(Selection::default());
+                }
+            }
+            Some(2) => self.delete_selection(),
+            Some(3) => self.preferences.auto_heal_wires = !self.preferences.auto_heal_wires,
+            _ => {}
+        }
     }
 
     /// Select and center a Browser pick only in its originating view and revision. Selection is
@@ -920,6 +1005,7 @@ impl PcbApp {
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
+                        Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
                         Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
                         Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
@@ -1025,6 +1111,7 @@ impl PcbApp {
                             input_enabled,
                             self.preferences.navigation,
                             self.preferences.grid_opacity_percent,
+                            self.preferences.auto_heal_wires,
                             &self.views.active.schematic.wire_draft,
                             &label,
                         );
@@ -1038,6 +1125,7 @@ impl PcbApp {
             })
             .inner;
         self.views.active.schematic.wire_draft.finish_requested = false;
+        self.views.active.schematic.wire_draft.start_requested = false;
         if let (Some(source), Some(click)) = (source, click) {
             self.view_click(source, click);
             // Selection can change after the other pane was painted, without a document edit.
@@ -1063,13 +1151,20 @@ impl PcbApp {
             (Some(Tool::Wire { revision, start: None }), Click::WirePoint(anchor, _)) => {
                 self.views.active.schematic.tool = Some(Tool::Wire { revision, start: Some(anchor) });
             }
+            (None, Click::StartWire(anchor)) => {
+                self.begin_wire();
+                self.views.active.schematic.tool = Some(Tool::Wire { revision: self.session.revision(), start: Some(anchor) });
+            }
             (Some(Tool::Wire { revision, start: Some(from) }), Click::WirePoint(to, finish)) => {
                 if let Some(project) = self.session.project()
                     && let (Some(a), Some(b)) = (from.position(project), to.position(project))
                     && a != b
                 {
-                    if finish || matches!(to, pcbcraft_engine::wire::Anchor::Existing(_)) {
-                        let path = self.views.active.schematic.wire_draft.path(a, b);
+                    if finish || !matches!(to, pcbcraft_engine::wire::Anchor::Free(_)) {
+                        let Some(path) = self.views.active.schematic.wire_draft.path(a, b, self.preferences.auto_heal_wires) else {
+                            self.message = Some("Wire preview exceeds the supported geometry limits.".to_owned());
+                            return;
+                        };
                         self.run(
                             pcbcraft_engine::DRAW_WIRE,
                             &json!({"from": from.inspect(), "to": to.inspect(), "bends": &path[1..path.len()-1], "expected_revision": revision}),
@@ -1077,14 +1172,14 @@ impl PcbApp {
                         if self.message.is_none() {
                             self.views.active.schematic.tool = None;
                         }
-                    } else if !self.views.active.schematic.wire_draft.corner(a, b) {
+                    } else if !self.views.active.schematic.wire_draft.corner(a, b, self.preferences.auto_heal_wires) {
                         self.message = Some("Wire has too many corners; finish it before continuing.".to_owned());
                     }
                 }
             }
             (None, Click::Grab(symbol, offset)) => {
                 self.select(Selection::one_symbol(symbol.id()));
-                self.views.active.schematic.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
+                self.views.active.schematic.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision(), disconnect: false });
             }
             (None, Click::StartBox(drag)) => {
                 self.views.active.schematic.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
@@ -1143,13 +1238,13 @@ impl PcbApp {
                 self.select(Selection::one_symbol(symbol));
                 self.edit_selected(action);
             }
-            (Some(Tool::Move { symbol, revision, .. }), Click::FinishMove(position)) => {
+            (Some(Tool::Move { symbol, revision, disconnect, .. }), Click::FinishMove(position)) => {
                 self.views.active.schematic.tool = None;
                 if let Some(point) = position {
                     self.run(
                         MOVE_SYMBOL,
                         &json!({
-                            "symbol": symbol.id(), "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision,
+                            "symbol": symbol.id(), "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "disconnect":disconnect,
                         }),
                     );
                 }
@@ -1198,7 +1293,12 @@ impl PcbApp {
                 self.cycle_grid(true);
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            // Ctrl temporarily bypasses the wire grid without disabling tool controls.
+            let wire_keys = Modifiers {
+                ctrl: matches!(self.views.active.schematic.tool, Some(Tool::Wire { .. })) && ctx.input(|i| i.modifiers.ctrl),
+                ..Modifiers::NONE
+            };
+            if ctx.input_mut(|i| i.consume_key(wire_keys, Key::Escape)) {
                 // Escape cancels the tool first, then clears the selection.
                 if self.views.active.schematic.tool.take().is_some() {
                     self.message = None;
@@ -1207,13 +1307,13 @@ impl PcbApp {
                 }
             }
             if let Some(Tool::Wire { start, .. }) = &mut self.views.active.schematic.tool {
-                if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
+                if ctx.input_mut(|i| i.consume_key(wire_keys, Key::Space)) {
                     self.views.active.schematic.wire_draft.horizontal_first = !self.views.active.schematic.wire_draft.horizontal_first;
                 }
-                if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace)) && !self.views.active.schematic.wire_draft.back() {
+                if ctx.input_mut(|i| i.consume_key(wire_keys, Key::Backspace)) && !self.views.active.schematic.wire_draft.back() {
                     *start = None;
                 }
-                self.views.active.schematic.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                self.views.active.schematic.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(wire_keys, Key::Enter));
             }
             if self.views.active.schematic.tool.is_none()
                 && !self.views.active.schematic.selection.is_empty()
@@ -1243,6 +1343,7 @@ impl PcbApp {
             }
             if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
                 self.begin_wire();
+                self.views.active.schematic.wire_draft.start_requested = true;
             }
         }
         if pressed(&COMMAND_Z) && self.session.available("edit.undo") {

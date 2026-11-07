@@ -178,9 +178,19 @@ impl Camera {
     /// even when the displayed grid is coarser. The division is in `f64`, so points far from
     /// the origin still land exactly on the grid.
     pub(crate) fn snap(&self, pointer: Pos2, rect: Rect) -> Point {
+        self.point_at_spacing(pointer, rect, self.snap_nm.max(1))
+    }
+
+    /// Convert a pointer to integer nanometres without applying the view's placement grid.
+    /// Callers still validate model bounds and resolve explicit connection targets.
+    pub(crate) fn unsnapped(&self, pointer: Pos2, rect: Rect) -> Point {
+        self.point_at_spacing(pointer, rect, 1)
+    }
+
+    /// Convert screen coordinates at a positive spacing, using f64 before rounding.
+    fn point_at_spacing(&self, pointer: Pos2, rect: Rect, spacing: i64) -> Point {
         let relative = pointer - rect.center() - self.offset;
         let nm_per_point = GRID_NM as f64 / f64::from(self.unit_step());
-        let spacing = self.snap_nm.max(1);
         let snap = |points: f32| (f64::from(points) * nm_per_point / spacing as f64).round() as i64 * spacing;
         Point { x_nm: snap(relative.x), y_nm: snap(relative.y) }
     }

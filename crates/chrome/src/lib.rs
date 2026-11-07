@@ -10,6 +10,7 @@
 pub mod arrangements;
 pub mod assistant;
 pub mod board;
+pub mod cursor;
 pub mod editor;
 pub mod fonts;
 pub mod grid;
