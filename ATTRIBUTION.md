@@ -20,6 +20,16 @@ could not be opened in this environment; that review is limited to the local
 documentation and exported visuals. This slice implements straight paths and
 rectangles without closure, edge-clearance or manufacturing validation.
 
+## Copper layer membership and personal colors
+
+The engine's resolved pad-layer contract, local board/layer color settings and
+GUI/live-control integration are original PCBcraft work under MIT OR Apache-2.0.
+The form uses the existing Craft modal, typography, fields and action buttons,
+with egui 0.36.2's color picker through its public API. No new dependency or
+external artwork is imported. Front/back colors retain the shared board palette;
+the alternate internal-layer green is an original palette extension. Color
+choices are presentation settings and make no material/manufacturing claim.
+
 ## Layer controls
 
 The active-layer selector, full-row activation, active arrow and independent

@@ -38,7 +38,8 @@ pub(super) struct Interaction {
 /// Select or preview one footprint at a time. Drags retain their grab offset; M moves the origin
 /// to the pointer. R rotates counterclockwise, including during a move. Only completion on the
 /// canvas emits an edit; secondary click, disabled input or stale authority discards the draft.
-/// Boundary visibility follows semantic outline layers; without such layers the boundary remains visible.
+/// Physical pad color/visibility follow engine-resolved copper membership; the active copper
+/// layer changes display priority for spanning lands without rebinding any geometry.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -47,6 +48,7 @@ pub(super) fn show(
     state: &mut BoardState,
     source: Option<ViewInput>,
     highlighted: &BTreeSet<String>,
+    appearance: &crate::board_appearance::Appearance,
     enabled: bool,
     navigation: Navigation,
     opacity: u8,
@@ -83,7 +85,7 @@ pub(super) fn show(
     let hit_bounds: Vec<_> = footprints
         .iter()
         .map(|footprint| {
-            let (pads, graphics) = drawing(footprint, camera, rect, project, state, visible);
+            let (pads, graphics) = drawing(footprint, camera, rect, project, state, visible, appearance);
             if pads.is_empty() && graphics.is_empty() {
                 egui::Rect::NOTHING
             } else {
@@ -187,18 +189,17 @@ pub(super) fn show(
             preview(&mut footprint, draft);
         }
         let center = camera.screen(footprint.position, rect);
-        let (pads, graphics) = drawing(&footprint, camera, rect, project, state, visible);
+        let (pads, graphics) = drawing(&footprint, camera, rect, project, state, visible, appearance);
         if (pads.is_empty() && graphics.is_empty()) || !rect.intersects(board::footprint_bounds(&pads, &graphics, center)) {
             continue;
         }
-        let physical = footprint.pads.iter().any(|p| p.copper.is_some());
         board::footprint(
             &p,
             &pads,
             &graphics,
             if footprint.physical_reference { "" } else { footprint.reference },
             center,
-            if physical { board::copper_color(Some(true)) } else { color },
+            color,
             state.selection.contains(&footprint.id) || state.draft.as_ref().is_some_and(|d| d.footprint == footprint.id),
             highlighted.contains(&footprint.id),
         );
@@ -230,8 +231,8 @@ fn preview(footprint: &mut FootprintView<'_>, draft: &Draft) {
     footprint.rotation = draft.rotation;
 }
 
-/// Project physical geometry without deriving dimensions from symbol names. SMD pads bind only
-/// to component-side copper; technical graphics follow their own layer visibility independently.
+/// Project physical geometry without deriving dimensions or copper membership from UI state.
+/// Engine memberships drive pad color/visibility; technical graphics retain their layer-role visibility.
 fn drawing(
     footprint: &FootprintView<'_>,
     camera: &Camera,
@@ -239,6 +240,7 @@ fn drawing(
     project: BoardView<'_>,
     state: &BoardState,
     legacy_visible: bool,
+    appearance: &crate::board_appearance::Appearance,
 ) -> (Vec<board::PadDrawing>, Vec<board::GraphicDrawing>) {
     let shown = |purpose| {
         project.setup().map_or(!matches!(purpose, LayerPurpose::Fabrication | LayerPurpose::Courtyard), |setup| {
@@ -252,34 +254,36 @@ fn drawing(
     let pads = footprint
         .pads
         .iter()
-        .filter(|pad| {
-            if pad.through_hole {
-                legacy_visible
-            } else if pad.copper.is_some() {
-                shown(LayerPurpose::Copper)
-            } else {
-                legacy_visible
+        .filter_map(|pad| {
+            let color = pad
+                .copper_layers
+                .as_ref()
+                .and_then(|membership| appearance.copper(project, membership, state.active_layer.as_deref(), &state.hidden_layers));
+            if (pad.copper.is_some() && color.is_none()) || (pad.copper.is_none() && !legacy_visible) {
+                return None;
             }
-        })
-        .map(|pad| board::PadDrawing {
-            number: pad.number.clone(),
-            center: camera.screen(pad.center, rect),
-            copper: pad.copper.map(|points| points.map(|p| camera.screen(p, rect))),
-            contour: match pad.shape {
-                pcbcraft_engine::board::definition::PadShape::Rectangle => board::PadContour::Rectangle,
-                pcbcraft_engine::board::definition::PadShape::RoundedRectangle => board::PadContour::RoundedRectangle {
-                    radius: (camera.screen(Point { x_nm: pad.center.x_nm + pad.corner_radius_nm, y_nm: pad.center.y_nm }, rect)
-                        - camera.screen(pad.center, rect))
-                    .length(),
+            Some(board::PadDrawing {
+                number: pad.number.clone(),
+                center: camera.screen(pad.center, rect),
+                copper: pad.copper.map(|points| points.map(|p| camera.screen(p, rect))),
+                color,
+                contour: match pad.shape {
+                    pcbcraft_engine::board::definition::PadShape::Rectangle => board::PadContour::Rectangle,
+                    pcbcraft_engine::board::definition::PadShape::RoundedRectangle => board::PadContour::RoundedRectangle {
+                        radius: (camera.screen(Point { x_nm: pad.center.x_nm + pad.corner_radius_nm, y_nm: pad.center.y_nm }, rect)
+                            - camera.screen(pad.center, rect))
+                        .length(),
+                    },
+                    pcbcraft_engine::board::definition::PadShape::Circle => board::PadContour::Circle,
                 },
-                pcbcraft_engine::board::definition::PadShape::Circle => board::PadContour::Circle,
-            },
-            drill_radius: pad.drill_nm.map(|diameter| {
-                (camera.screen(Point { x_nm: pad.center.x_nm + diameter, y_nm: pad.center.y_nm }, rect) - camera.screen(pad.center, rect)).length()
-                    / 2.
-            }),
-            through_hole: pad.through_hole,
-            net: pad.net.clone(),
+                drill_radius: pad.drill_nm.map(|diameter| {
+                    (camera.screen(Point { x_nm: pad.center.x_nm + diameter, y_nm: pad.center.y_nm }, rect) - camera.screen(pad.center, rect))
+                        .length()
+                        / 2.
+                }),
+                through_hole: pad.through_hole,
+                net: pad.net.clone(),
+            })
         })
         .collect();
     let graphics = footprint

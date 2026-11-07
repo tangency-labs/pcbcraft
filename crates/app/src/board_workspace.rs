@@ -218,6 +218,7 @@ impl PcbApp {
                         &mut view.board,
                         source,
                         &highlighted,
+                        &self.board_appearance,
                         enabled,
                         self.preferences.navigation,
                         self.preferences.grid_opacity_percent,

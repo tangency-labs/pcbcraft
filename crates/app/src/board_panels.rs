@@ -2,7 +2,7 @@
 use crate::{PcbApp, editor_view::BoardState};
 use egui::{Id, Rect, Ui};
 use pcbcraft_chrome::{board, units, workspace};
-use pcbcraft_engine::board::setup::{Layer, LayerPurpose, Side, Stratum};
+use pcbcraft_engine::board::setup::{Layer, LayerPurpose, Stratum};
 
 impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
@@ -21,6 +21,7 @@ impl PcbApp {
         let mut browser_area = area;
         browser_area.max.y = board::browser_bottom(area);
         let mut silk_apply = None;
+        let mut color_pick = None;
         let mut pick = None;
         let (browser, collapse) = if self.browser.open {
             workspace::floating_card_with_id(ui, host.with("browser"), "Browser", browser_area, state.browser_collapsed, |ui| {
@@ -43,7 +44,7 @@ impl PcbApp {
             layers_area.min.y = browser.max.y;
         }
         let (layers, collapse) = workspace::floating_card_with_id(ui, host.with("layers"), "Layers", layers_area, state.layers_collapsed, |ui| {
-            layer_groups(ui, target, state, Id::new((view_id, target.target)));
+            layer_groups(ui, target, state, Id::new((view_id, target.target)), &self.board_appearance, &mut color_pick);
         });
         if collapse {
             state.layers_collapsed = !state.layers_collapsed;
@@ -96,6 +97,10 @@ impl PcbApp {
         if let Some(action) = pick {
             self.queue_view_action(ui.ctx(), view_id, crate::editor_windows::ViewAction::Browse(action));
         }
+        if let Some(layer) = color_pick {
+            self.begin_layer_color(view_id, layer);
+            self.repaint_editors(ui.ctx());
+        }
         [browser, layers, properties]
     }
 }
@@ -139,10 +144,10 @@ pub(super) fn layer_name(layer: &Layer) -> &str {
     if layer.purpose == LayerPurpose::Outline && layer.name == "Board outline" { "Board Edge" } else { &layer.name }
 }
 
-/// Copper keys reuse the board palette; technical keys use existing chrome ink roles.
-fn layer_color(layer: &Layer) -> egui::Color32 {
+/// Copper keys share the exact palette used for metal; technical keys use existing chrome ink roles.
+fn layer_color(layer: &Layer, board: pcbcraft_engine::board::view::BoardView<'_>, appearance: &crate::board_appearance::Appearance) -> egui::Color32 {
     if layer.purpose == LayerPurpose::Copper {
-        board::copper_color(layer.side.map(|side| side == Side::Front))
+        appearance.color(board, layer)
     } else {
         board::technical_layer_color(layer.purpose == LayerPurpose::Outline)
     }
@@ -151,7 +156,14 @@ fn layer_color(layer: &Layer) -> egui::Color32 {
 /// Copper follows physical stack order; technical layers group by purpose and sort by display
 /// name. Renaming or regrouping does not change local visibility keyed by stable layer identity.
 /// A new active choice or resized viewport reveals the active row once, without fighting later scrolling.
-fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>, state: &mut BoardState, id: Id) {
+fn layer_groups(
+    ui: &mut Ui,
+    board: pcbcraft_engine::board::view::BoardView<'_>,
+    state: &mut BoardState,
+    id: Id,
+    appearance: &crate::board_appearance::Appearance,
+    pick: &mut Option<String>,
+) {
     ui.horizontal(|ui| {
         if ui.small_button("Show all").clicked() {
             state.set_layer_visibility(board.layers().iter().map(|layer| layer.id.to_string()), false);
@@ -179,7 +191,9 @@ fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>,
             ui,
             |ui| {
                 for layer in items {
-                    layer_row(ui, layer, state, reveal);
+                    if layer_row(ui, layer, state, reveal, board, appearance) {
+                        *pick = Some(layer.id.to_string());
+                    }
                 }
             },
         );
@@ -188,9 +202,17 @@ fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>,
 
 /// Visibility and activation have separate hit targets. Eye changes retain the active layer;
 /// both copper and technical visibility remain view-local and keyed by stable layer identity.
-fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState, reveal: bool) {
+fn layer_row(
+    ui: &mut Ui,
+    layer: &Layer,
+    state: &mut BoardState,
+    reveal: bool,
+    board: pcbcraft_engine::board::view::BoardView<'_>,
+    appearance: &crate::board_appearance::Appearance,
+) -> bool {
     let id = layer.id.to_string();
     let label = layer_name(layer);
+    let mut color_clicked = false;
     ui.push_id(&id, |ui| {
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -205,7 +227,11 @@ fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState, reveal: bool) {
                     &workspace::TreeRow {
                         depth: 0,
                         fold: None,
-                        icon: Some(workspace::TreeIcon::Layer { color: layer_color(layer), active }),
+                        icon: Some(workspace::TreeIcon::Layer {
+                            color: layer_color(layer, board, appearance),
+                            active,
+                            editable: layer.purpose == LayerPurpose::Copper,
+                        }),
                         label,
                         accessibility_label: Some(&format!("Activate layer {label}")),
                         tip: if active { "Active layer" } else { "Set active layer" },
@@ -215,12 +241,14 @@ fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState, reveal: bool) {
                 if reveal && active {
                     row.response.scroll_to_me(Some(egui::Align::Center));
                 }
+                color_clicked = row.icon_clicked;
                 if row.clicked {
                     state.set_layer(&id, true, None);
                 }
             });
         })
     });
+    color_clicked
 }
 
 /// One view's unapplied, unit-aware board settings. A captured revision prevents overwriting

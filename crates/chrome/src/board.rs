@@ -47,6 +47,8 @@ pub struct PadDrawing {
     pub number: String,
     pub center: Pos2,
     pub copper: Option<[Pos2; 4]>,
+    /// Resolved display color for this pad's actual visible copper layer; None for legacy markers.
+    pub color: Option<Color32>,
     pub contour: PadContour,
     pub drill_radius: Option<f32>,
     pub through_hole: bool,
@@ -98,7 +100,8 @@ pub fn pad_contour(pad: &PadDrawing) -> Vec<Pos2> {
 
 /// Size and orient pad labels within the land. Snapshot-local net labels appear only when both
 /// lines fit; zooming out removes text before it obscures copper or protrudes into a gap.
-fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4]) {
+/// Bright copper uses dark labels so personal color choices do not erase pad annotations.
+fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4], copper: Color32) {
     let mut axis = corners[1] - corners[0];
     let mut width = axis.length();
     let mut height = (corners[3] - corners[0]).length();
@@ -130,11 +133,13 @@ fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4]) {
     if angle < -std::f32::consts::FRAC_PI_2 {
         angle += std::f32::consts::PI;
     }
-    let mut job = egui::text::LayoutJob::simple(text, FontId::monospace(size), Color32::WHITE, f32::INFINITY);
+    let [r, g, b, _] = copper.to_normalized_gamma_f32();
+    let label_ink = if 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.65 { Tokens::get().board_canvas } else { Color32::WHITE };
+    let mut job = egui::text::LayoutJob::simple(text, FontId::monospace(size), label_ink, f32::INFINITY);
     job.halign = egui::Align::Center;
     let galley = p.layout_job(job);
     let pos = pad.center - galley.rect.center().to_vec2();
-    p.add(egui::epaint::TextShape::new(pos, galley, Color32::WHITE).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
+    p.add(egui::epaint::TextShape::new(pos, galley, label_ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
 }
 
 /// The physical purpose of a projected technical rectangle, independent of copper color.
@@ -224,13 +229,13 @@ pub fn footprint(
     let (offset, align) = if extent.height() > extent.width() { (vec2(9., 0.), Align2::LEFT_CENTER) } else { (vec2(0., 9.), Align2::CENTER_TOP) };
     for pad in pads {
         if let Some(points) = pad.copper {
-            let color = if pad.through_hole && !selected && !highlighted { t.board_through } else { ink };
+            let color = if selected || highlighted { ink } else { pad.color.unwrap_or(copper) };
             p.add(egui::Shape::convex_polygon(pad_contour(pad), color, Stroke::NONE));
             if let Some(radius) = pad.drill_radius {
                 p.circle_filled(pad.center, radius, t.board_canvas);
                 p.circle_stroke(pad.center, radius, Stroke::new(0.7, t.board_ink.gamma_multiply(0.5)));
             }
-            pad_label(p, pad, points);
+            pad_label(p, pad, points, color);
         } else {
             p.circle_stroke(pad.center, 5., Stroke::new(1.5, ink));
             p.line_segment([pad.center - vec2(2., 0.), pad.center + vec2(2., 0.)], Stroke::new(1., ink));
@@ -251,6 +256,58 @@ pub fn footprint(
 pub fn empty(p: &Painter, rect: Rect) {
     let t = Tokens::get();
     p.text(rect.center(), Align2::CENTER_CENTER, "No footprints placed", FontId::proportional(t.font_body), t.board_ink);
+}
+
+/// Intent from the shared layer-color form; the host validates and persists appearance separately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerColorAction {
+    None,
+    /// Let the host validate the typed hex and synchronize only the disposable preview.
+    HexChanged,
+    Apply,
+    Reset,
+    Cancel,
+}
+
+/// Use the existing modal surface and egui color picker for an opaque copper color draft.
+/// Hex edits stay pending until Apply; Cancel never changes any layer appearance.
+pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], hex: &mut String, error: Option<&str>) -> LayerColorAction {
+    let mut action = LayerColorAction::None;
+    let closing = crate::shell::scrolling_dialog(ctx, "layer_color", "Copper Layer Color", |ui| {
+        ui.label(name);
+        let mut color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+        let changed = ui
+            .scope(|ui| {
+                let t = Tokens::get();
+                ui.spacing_mut().slider_width =
+                    ui.available_width().min((ctx.content_rect().height() - t.control_height * 10.0 - t.space_8).max(t.control_height * 4.0));
+                egui::color_picker::color_picker_color32(ui, &mut color, egui::color_picker::Alpha::Opaque)
+            })
+            .inner;
+        if changed {
+            let [r, g, b, _] = color.to_array();
+            *rgb = [r, g, b];
+            *hex = format!("#{r:02X}{g:02X}{b:02X}");
+        }
+        if crate::properties::text(ui, "Hex", hex).changed() {
+            action = LayerColorAction::HexChanged;
+        }
+        if let Some(error) = error {
+            ui.label(crate::shell::error(error));
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Apply color").clicked() {
+                action = LayerColorAction::Apply;
+            }
+            if ui.button("Reset to default").clicked() {
+                action = LayerColorAction::Reset;
+            }
+            if ui.button("Cancel").clicked() {
+                action = LayerColorAction::Cancel;
+            }
+        });
+    });
+    if closing { LayerColorAction::Cancel } else { action }
 }
 
 /// FigCraft's layer visibility control: an always-visible eye outline, with a pupil when

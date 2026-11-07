@@ -332,7 +332,12 @@ beside its name. The eye at the right toggles visibility independently: a pupil
 means visible, a slash means hidden, and its outline is always shown. Hidden
 active layers carry a **(hidden)** suffix. **Show all**
 and **Isolate active** change only visibility in the focused view, leaving saved
-board data and document undo unchanged.
+board data and document undo unchanged. Click a copper color swatch to open the
+themed color form. Choose a color or enter **#RRGGBB**,
+then **Apply color**; **Cancel** discards the draft, and **Reset to default** removes
+that layer's override. Colors are local settings shared by every view of this
+board, with separate identities for every internal copper layer. They survive
+renames without changing copper ownership or entering project files and undo.
 
 For a board boundary, select **Board Edge** in the selector or Layers card and
 use **Layout → Draw → Line** or **Rectangle**. Line accepts successive clicked

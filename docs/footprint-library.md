@@ -104,13 +104,24 @@ rectangle corner together. Quarter turns retain exact integer coordinates;
 other whole-degree angles round to the nearest nanometer. Fit and hit bounds
 include the physical graphics. Surface copper renders on the front/component
 side, independently of the active layer; hiding front copper hides these SMD
-pads. Plated lands remain visible while any copper layer is visible, with their
-drills cut out of the land. Front copper is red, back copper blue, and plated
-through-hole copper gold. Technical graphics follow their corresponding visible
+pads. The engine projects each physical pad's copper membership as explicit layer
+UUIDs in physical stack order. Plated lands span all copper layers, remain visible
+while any occupied layer is visible, and retain their cut-out drills. They use the
+active copper layer's color when it is visible, otherwise the first visible layer
+in physical stack order. This does not move a surface pad onto another layer.
+Front copper defaults to red and back to blue; internal layers alternate purple
+and green defaults. Each copper swatch opens a shared color form with Apply,
+Cancel and Reset to default. Overrides follow board/layer UUIDs through renaming,
+are shared by views of the same board, and persist in local editor settings.
+Engineering files, package definitions and document undo never contain those colors.
+Unconfigured physical pads retain explicit component-side/all-copper compatibility
+bindings, using front red/plated gold until a real stackup is authored; projection
+never invents copper identities. Marker-only legacy pads still have no metal.
+Technical graphics follow their corresponding visible
 layers; new views hide fabrication and courtyard graphics by default. Existing
 view arrangements preserve their saved visibility choices, and Layers can show
-the detail graphics. Pad numbers use white text sized and oriented to fit the
-land. Connected pads also show snapshot-local Net Inspector labels when both
+the detail graphics. Pad numbers use light or dark ink according to copper brightness,
+sized and oriented to fit the land. Connected pads also show snapshot-local Net Inspector labels when both
 lines fit; these labels are derived presentation and never persist net identity. With multiple
 sheets, the annotation includes its owning sheet name and is independent of the
 active schematic view.

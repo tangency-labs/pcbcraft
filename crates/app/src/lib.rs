@@ -9,6 +9,7 @@ use std::sync::Arc;
 mod arrangements;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
+mod board_appearance;
 mod board_canvas;
 mod board_drawing;
 mod board_panels;
@@ -150,6 +151,7 @@ enum Dialog {
     Hierarchy(hierarchy::Edit),
     /// Chooses and pins a package independently of board placement.
     Footprint(footprint_assignment::Edit),
+    LayerColor(board_appearance::Edit),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(properties::Edit),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
@@ -188,6 +190,7 @@ pub struct PcbApp {
     files: project_files::ProjectFiles,
     file_notice: Option<String>,
     preferences: Preferences,
+    board_appearance: board_appearance::Appearance,
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
     browser: project_browser::ProjectBrowser,
@@ -273,6 +276,9 @@ impl PcbApp {
             properties_open: true,
             arrangements: arrangements::Arrangements::from_storage(cc.storage.and_then(|storage| storage.get_string(arrangements::STORAGE_KEY))),
             preferences,
+            board_appearance: board_appearance::Appearance::from_storage(
+                cc.storage.and_then(|storage| storage.get_string(board_appearance::STORAGE_KEY)),
+            ),
             views,
             #[cfg(not(target_arch = "wasm32"))]
             files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
@@ -1558,6 +1564,7 @@ impl PcbApp {
             }
             Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, edit),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
+            Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
@@ -1922,7 +1929,7 @@ impl eframe::App for PcbApp {
             // Release the native surface after the frame; surviving host/window IDs stay put.
             frame.retire_root_window();
         }
-        let changed = self.preferences != before;
+        let changed = self.preferences != before || self.board_appearance.dirty;
         #[cfg(not(target_arch = "wasm32"))]
         let changed = self.assistant.take_settings_changed() || changed;
         #[cfg(not(target_arch = "wasm32"))]
@@ -1948,6 +1955,10 @@ impl eframe::App for PcbApp {
             storage.set_string(arrangements::STORAGE_KEY, text);
         }
         storage.set_string(PREFERENCES_KEY, self.preferences.to_text());
+        if let Some(text) = self.board_appearance.storage_text() {
+            storage.set_string(board_appearance::STORAGE_KEY, text);
+        }
+        self.board_appearance.dirty = false;
         #[cfg(not(target_arch = "wasm32"))]
         {
             storage.set_string(RECENT_PROJECTS_KEY, self.files.recent.to_text());

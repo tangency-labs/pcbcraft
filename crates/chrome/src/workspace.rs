@@ -78,6 +78,7 @@ pub enum TreeIcon {
     Layer {
         color: Color32,
         active: bool,
+        editable: bool,
     },
 }
 
@@ -105,6 +106,8 @@ pub struct TreeResponse {
     /// The stable row response supports contextual actions owned by the navigator.
     pub response: Response,
     pub clicked: bool,
+    /// An editable layer swatch has a separate button; this never activates the row.
+    pub icon_clicked: bool,
     pub fold: bool,
 }
 
@@ -544,7 +547,15 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
     let left = rect.left() + row.depth as f32 * TREE_INDENT;
     let fold_rect = Rect::from_min_max(pos2(left, rect.top()), pos2(left + TREE_FOLD_WIDTH, rect.bottom()));
     let body = Rect::from_min_max(pos2(fold_rect.right(), rect.top()), rect.max);
-    let response = ui.interact(body, id, Sense::click());
+    let editable = matches!(row.icon, Some(TreeIcon::Layer { editable: true, .. }));
+    let icon_rect = Rect::from_min_max(body.min, pos2(body.left() + TREE_LABEL_LEFT, body.bottom()));
+    let activation = if editable { Rect::from_min_max(pos2(icon_rect.right(), body.top()), body.max) } else { body };
+    let response = ui.interact(activation, id, Sense::click());
+    let icon_response = editable.then(|| {
+        let response = ui.interact(icon_rect, id.with("layer_color"), Sense::click());
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), format!("Change color for layer {}", row.label)));
+        response
+    });
     response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, row.selected, row.accessibility_label.unwrap_or(row.label)));
     let fold = row.fold.map(|open| {
         let fold = ui.interact(fold_rect, id.with("fold"), Sense::click());
@@ -558,6 +569,9 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
             p.rect_filled(body, t.radius_sm, t.accent_soft);
         } else if response.hovered() || response.has_focus() {
             p.rect_filled(body, t.radius_sm, t.hover);
+        }
+        if icon_response.as_ref().is_some_and(|response| response.hovered() || response.has_focus()) {
+            p.rect_filled(icon_rect, t.radius_sm, t.hover);
         }
         let cy = rect.center().y;
         if let Some((open, fold)) = &fold {
@@ -583,7 +597,11 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
         fold.on_hover_text(if open { "Collapse branch" } else { "Expand branch" });
     }
     let response = if row.tip.is_empty() { response } else { response.on_hover_text(row.tip) };
-    TreeResponse { clicked: response.clicked() && !fold_clicked, fold: fold_clicked, response }
+    let icon_clicked = icon_response.as_ref().is_some_and(|response| response.clicked());
+    if let Some(icon) = icon_response {
+        icon.on_hover_text(format!("Change color for layer {}", row.label));
+    }
+    TreeResponse { clicked: response.clicked() && !fold_clicked && !icon_clicked, icon_clicked, fold: fold_clicked, response }
 }
 
 /// Lay out one line of text no wider than `width`, ending in an ellipsis when it is cut short.
@@ -598,7 +616,7 @@ fn elided(p: &egui::Painter, text: &str, font: FontId, color: Color32, width: f3
 /// Draw tree glyphs using shared workspace icons, qualified artwork and original layer markers.
 fn paint_tree_icon(p: &egui::Painter, icon: TreeIcon, center: Pos2, size: f32, t: Tokens) {
     match icon {
-        TreeIcon::Layer { color, active } => {
+        TreeIcon::Layer { color, active, .. } => {
             p.circle_filled(center, t.space_4, color);
             p.circle_stroke(center, t.space_4, Stroke::new(1.0, t.border));
             if active {

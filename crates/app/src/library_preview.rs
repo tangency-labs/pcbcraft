@@ -28,6 +28,11 @@ pub(super) fn footprint(ui: &mut egui::Ui, definition: &FootprintDefinition) {
                 number: pad.number.clone(),
                 center: at(pad.center),
                 copper: Some(corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation)),
+                color: Some(if pad.copper == CopperBinding::AllCopper {
+                    pcbcraft_chrome::Tokens::get().board_through
+                } else {
+                    board::copper_color(Some(true))
+                }),
                 contour: match pad.shape {
                     PadShape::Rectangle => board::PadContour::Rectangle,
                     PadShape::Circle => board::PadContour::Circle,

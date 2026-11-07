@@ -86,6 +86,8 @@ mod live {
         /// An arrangement name: 1 to 80 characters on one line.
         Name,
         Bool,
+        /// Opaque sRGB #RRGGBB, or null to restore a physical-role default.
+        Color,
         Choice(&'static [&'static str]),
         Integer {
             min: i64,
@@ -112,6 +114,7 @@ mod live {
                 Self::Object => json!({"type":"string","format":"uuid"}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
+                Self::Color => json!({"oneOf":[{"type":"string","pattern":"^#[0-9A-Fa-f]{6}$"},{"type":"null"}]}),
                 Self::Choice(values) => json!({"type": "string", "enum": values}),
                 Self::Integer { min, max, step } => json!({"type": "integer", "minimum": min, "maximum": max, "multipleOf": step}),
                 Self::Point => {
@@ -130,6 +133,7 @@ mod live {
                 Self::View | Self::Window | Self::Arrangement => value.as_u64().is_some(),
                 Self::Name => value.as_str().is_some(),
                 Self::Bool => value.is_boolean(),
+                Self::Color => value.is_null() || value.as_str().is_some_and(|text| crate::board_appearance::parse_color(text).is_ok()),
                 Self::Choice(values) => value.as_str().is_some_and(|value| values.contains(&value)),
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
@@ -147,6 +151,7 @@ mod live {
                 Self::Object => "must be an object UUID from project inspection".to_owned(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
+                Self::Color => "must be #RRGGBB or null to restore the default".to_owned(),
                 Self::Choice(values) => format!("must be one of {}", values.join(", ")),
                 Self::Integer { min, max, step: 1 } => format!("must be a whole number from {min} to {max}"),
                 Self::Integer { min, max, step } => format!("must be a multiple of {step} from {min} to {max}"),
@@ -341,6 +346,16 @@ mod live {
                 Param { name: "layer", summary: "Layer UUID on this view's board", required: true, kind: Kind::Object },
                 Param { name: "active", summary: "Make this the active drawing layer", required: false, kind: Kind::Bool },
                 Param { name: "visible", summary: "Show or hide this layer", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "view.set_layer_color",
+            title: "Copper Layer Color",
+            summary: "Set or reset a board's personal copper-layer color, through the same handler as its swatch. Shared by every view of that board, saved locally and excluded from project files/undo.",
+            params: &[
+                VIEW,
+                Param { name: "layer", summary: "Copper layer UUID on the view's board", required: true, kind: Kind::Object },
+                Param { name: "color", summary: "Opaque #RRGGBB or null to reset", required: true, kind: Kind::Color },
             ],
         },
         WindowCommand {
@@ -628,6 +643,9 @@ mod live {
                         "selection": view.board.selection,
                         "hidden_layers": view.board.hidden_layers,
                         "active_layer": view.board.active_layer,
+                        "copper_colors": view.board.target.and_then(|target|app.session.project().and_then(|project|project.board_view(target)))
+                            .map(|board|board.layers().iter().filter(|layer|layer.purpose==pcbcraft_engine::board::setup::LayerPurpose::Copper)
+                                .map(|layer|json!({"layer":layer.id,"color":crate::board_appearance::hex(app.board_appearance.color(board,layer)),"overridden":app.board_appearance.overridden(board.target,&layer.id.to_string())})).collect::<Vec<_>>()),
                         "drawing_selection": view.board.drawing.selected,
                         "drawing_tool": view.board.drawing.tool.map(|tool| match tool {crate::board_drawing::Tool::Lines=>"lines",crate::board_drawing::Tool::Rectangle=>"rectangle"}),
                     })),
@@ -771,6 +789,10 @@ mod live {
                     if let Some(view) = self.views.view_mut(view) {
                         view.camera.set_zoom(percent as f32 / 100.0);
                     }
+                }
+                ("view.set_layer_color", Some((view, _)), _) => {
+                    let rgb = params["color"].as_str().map(crate::board_appearance::parse_color).transpose()?;
+                    self.set_layer_color(view, params["layer"].as_str().unwrap_or_default(), rgb)?;
                 }
                 ("view.set_layer_visibility", Some((view, _)), _) => {
                     let state =
