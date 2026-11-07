@@ -253,6 +253,32 @@ pub fn empty(p: &Painter, rect: Rect) {
     p.text(rect.center(), Align2::CENTER_CENTER, "No footprints placed", FontId::proportional(t.font_body), t.board_ink);
 }
 
+/// FigCraft's layer visibility control: an always-visible eye outline, with a pupil when
+/// shown or a slash when hidden. The quiet button shares the app's palette and focus styling.
+/// Its toggle semantics remain available to keyboard and assistive-technology users.
+/// Returns a click intent; the caller changes visibility through its shared state handler.
+pub fn layer_visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::Response {
+    let t = Tokens::get();
+    let (rect, response) = ui.allocate_exact_size(vec2(t.space_24, t.space_24), egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, format!("Show layer {name}")));
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        if response.hovered() || response.has_focus() {
+            p.rect_filled(rect, t.radius_sm, t.hover);
+        }
+        let ink = if visible { t.icon_line } else { t.text_dim };
+        let at = |x: f32, y: f32| rect.center() + vec2(x - 11.0, y - 11.0) * (t.space_16 / 14.0);
+        let outline = [(4., 11.), (8., 7.), (14., 7.), (18., 11.), (14., 15.), (8., 15.), (4., 11.)];
+        p.add(egui::Shape::line(outline.into_iter().map(|(x, y)| at(x, y)).collect(), Stroke::new(1.0, ink)));
+        if visible {
+            p.circle_filled(at(11., 11.), t.space_2, ink);
+        } else {
+            p.line_segment([at(4., 17.), at(18., 5.)], Stroke::new(1.0, ink));
+        }
+    }
+    response.on_hover_text(format!("{} layer {name}", if visible { "Hide" } else { "Show" }))
+}
+
 /// Technical layer keys use existing theme roles, with board-edge ink distinct from details.
 pub fn technical_layer_color(edge: bool) -> Color32 {
     if edge { Tokens::get().text } else { Tokens::get().text_dim }

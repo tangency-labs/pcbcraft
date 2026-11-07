@@ -328,8 +328,9 @@ Changing an already placed package awaits reviewed board updates. Native-folder
 registration, arcs, slots and routing remain planned.
 The Layout ribbon's **Active layer** selector and status bar identify the drawing
 layer. Click a row in Layers to activate it, with an arrow and color swatch
-beside its name; the Visible checkboxes
-remain independent. Hidden active layers carry a **(hidden)** suffix. **Show all**
+beside its name. The eye at the right toggles visibility independently: a pupil
+means visible, a slash means hidden, and its outline is always shown. Hidden
+active layers carry a **(hidden)** suffix. **Show all**
 and **Isolate active** change only visibility in the focused view, leaving saved
 board data and document undo unchanged.
 

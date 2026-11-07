@@ -28,7 +28,15 @@ manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#layer_controls) and
 [Altium Designer's layer-view documentation](https://www.altium.com/documentation/altium-designer/pcb/your-view-of-the-board),
 consulted November 7, 2026. These are behavioral references only; no implementation,
 icons or artwork were copied. The controls reuse PCBcraft's existing themed
-choice field, Browser tree rows, checkboxes, cards, typography and palette.
+choice field, Browser tree rows, cards, typography and palette.
+
+The per-layer eye at the right follows Travis Lowe's original FigCraft rendering
+in `designs/pcb-workspace.png` and the eye construction in
+`designs/grouped_pcb_layers.py` (SHA-256
+`d213a6c0eb8ef4995225715c5af3f458339f4696bd7e04a9498751c716e7bfe2`),
+reviewed November 7, 2026. The outline stays visible, a pupil indicates shown and
+a slash indicates hidden. Its original vector geometry is adapted to the app's
+existing theme roles and metrics; the design files remain unchanged.
 
 ## Adapted from SolidCraft
 

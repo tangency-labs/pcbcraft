@@ -225,7 +225,8 @@ shows its stored reference, value, definition and unit-aware coordinate readouts
 
 The Layout ribbon's **Active layer** selector shows the drawing target, also named
 in the status bar. In Layers, click a full row to activate it; the arrow and
-highlight follow that choice. The **Visible** checkboxes are independent, and
+highlight follow that choice. The eyes at the right toggle visibility
+independently, and
 a hidden active layer is labeled **(hidden)** in the selector and status bar.
 **Show all** reveals every layer; **Isolate active** reveals only the active layer.
 Layers groups copper in physical stack order and retains visibility by layer ID.
@@ -267,7 +268,7 @@ corner clicks. Points snap to the current grid and nearby existing edge vertices
 With the tool exited, click an edge to select it. Drag a vertex to reshape the
 path, drag a segment or press **M** to move the whole drawing, and use **Delete**
 to remove it. Each completed edit shares project Undo. Fit includes edge geometry
-even on an empty board; the layer's visibility checkbox only affects this view.
+even on an empty board; the layer's visibility eye only affects this view.
 Saving retains drawing and layer identities without moving footprints or creating
 a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.

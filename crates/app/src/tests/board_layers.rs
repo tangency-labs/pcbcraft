@@ -19,7 +19,7 @@ fn layer(h: &Harness<'_, PcbApp>, name: &str) -> String {
     h.state().session.project().unwrap().boards().next().unwrap().layers().into_iter().find(|layer| layer.name == name).unwrap().id.to_string()
 }
 
-/// Picker, full rows and status agree; the visibility checkbox never activates a different layer.
+/// Picker, full rows and status agree; the visibility eye never activates a different layer.
 #[test]
 fn active_layer_picker_and_rows_share_state_without_document_edits() {
     let mut h = board();
@@ -87,4 +87,30 @@ fn compact_layers_reveal_the_active_row_after_resize() {
     assert!(row.bottom() < 528., "active row is outside the compact card: {row:?}");
     let selector = h.get_by_label("Active layer").rect();
     assert!(egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(760., 175.)).contains_rect(selector));
+}
+
+/// Eyes have separate hit targets and toggle semantics; keyboard visibility changes never activate a row.
+#[test]
+fn visibility_eye_is_separate_from_layer_activation_and_keyboard_operable() {
+    let mut h = board();
+    click(&mut h, "Activate layer Board Edge");
+    let active = h.state().views.active.board.active_layer.clone();
+    let top = layer(&h, "Top");
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let row = h.get_by_label("Activate layer Top").rect();
+    let eye = h.get_by_label("Show layer Top").rect();
+    assert!(eye.left() >= row.right(), "eye overlaps the activation target");
+    h.get_by_label("Show layer Top").focus();
+    h.run();
+    h.key_press(Key::Space);
+    h.run();
+    assert!(h.state().views.active.board.hidden_layers.contains(&top));
+    assert_eq!(h.state().views.active.board.active_layer, active);
+    assert_eq!(h.get_by_label("Show layer Top").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    click(&mut h, "Activate layer Top");
+    assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
+    assert!(h.state().views.active.board.hidden_layers.contains(&top));
+    click(&mut h, "Show layer Top");
+    assert!(!h.state().views.active.board.hidden_layers.contains(&top));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }

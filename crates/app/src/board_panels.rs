@@ -160,11 +160,6 @@ fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>,
             state.set_layer_visibility(board.layers().iter().map(|layer| layer.id.to_string()), true);
         }
     });
-    ui.horizontal(|ui| {
-        ui.label("Visible");
-        ui.add_space(pcbcraft_chrome::Tokens::get().space_24 + pcbcraft_chrome::Tokens::get().space_16);
-        ui.label("Layer");
-    });
     let current = (state.active_layer.clone(), ui.clip_rect().height().to_bits());
     let reveal = ui.ctx().data_mut(|data| {
         let key = id.with("last_active_layer");
@@ -191,39 +186,39 @@ fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>,
     }
 }
 
-/// Visibility and active layer are independent. Technical controls retain state for future
-/// geometry; the current legacy through-hole inspection markers use visible copper only.
+/// Visibility and activation have separate hit targets. Eye changes retain the active layer;
+/// both copper and technical visibility remain view-local and keyed by stable layer identity.
 fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState, reveal: bool) {
     let id = layer.id.to_string();
     let label = layer_name(layer);
     ui.push_id(&id, |ui| {
         ui.horizontal(|ui| {
-            let mut visible = !state.hidden_layers.contains(&id);
-            let response = ui.checkbox(&mut visible, "");
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, visible, format!("Show layer {}", label)));
-            if response.changed() {
-                state.set_layer(&id, false, Some(visible));
-            }
-            let active = state.active_layer.as_ref() == Some(&id);
-            let row = workspace::tree_row(
-                ui,
-                ui.id().with("activate"),
-                &workspace::TreeRow {
-                    depth: 0,
-                    fold: None,
-                    icon: Some(workspace::TreeIcon::Layer { color: layer_color(layer), active }),
-                    label,
-                    accessibility_label: Some(&format!("Activate layer {label}")),
-                    tip: if active { "Active layer" } else { "Set active layer" },
-                    selected: active,
-                },
-            );
-            if reveal && active {
-                row.response.scroll_to_me(Some(egui::Align::Center));
-            }
-            if row.clicked {
-                state.set_layer(&id, true, None);
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let visible = !state.hidden_layers.contains(&id);
+                if board::layer_visibility(ui, label, visible).clicked() {
+                    state.set_layer(&id, false, Some(!visible));
+                }
+                let active = state.active_layer.as_ref() == Some(&id);
+                let row = workspace::tree_row(
+                    ui,
+                    ui.id().with("activate"),
+                    &workspace::TreeRow {
+                        depth: 0,
+                        fold: None,
+                        icon: Some(workspace::TreeIcon::Layer { color: layer_color(layer), active }),
+                        label,
+                        accessibility_label: Some(&format!("Activate layer {label}")),
+                        tip: if active { "Active layer" } else { "Set active layer" },
+                        selected: active,
+                    },
+                );
+                if reveal && active {
+                    row.response.scroll_to_me(Some(egui::Align::Center));
+                }
+                if row.clicked {
+                    state.set_layer(&id, true, None);
+                }
+            });
         })
     });
 }
