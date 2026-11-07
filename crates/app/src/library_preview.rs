@@ -53,6 +53,7 @@ pub(super) fn footprint(ui: &mut egui::Ui, definition: &FootprintDefinition) {
                     GraphicPurpose::Silkscreen => board::GraphicStyle::Silkscreen,
                     GraphicPurpose::Courtyard => board::GraphicStyle::Courtyard,
                 },
+                color: None,
                 closed: true,
                 stroke_width: None,
             })

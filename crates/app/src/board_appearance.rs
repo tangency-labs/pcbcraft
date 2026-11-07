@@ -1,4 +1,4 @@
-//! Personal copper colors are shared across views by board/layer identity, outside engineering files.
+//! Personal layer colors are shared across views by board/layer identity, outside engineering files.
 use crate::{PcbApp, ViewId, Workspace, editor_view::ViewInput};
 use pcbcraft_chrome::board;
 use pcbcraft_engine::board::{
@@ -8,6 +8,7 @@ use pcbcraft_engine::board::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+// Preserve the first palette's local-storage key so existing copper overrides survive.
 pub(super) const STORAGE_KEY: &str = "pcbcraft.copper-colors.v1";
 const MAX_COLORS: usize = 4096;
 
@@ -94,6 +95,33 @@ impl Appearance {
         self.dirty = true;
         Ok(())
     }
+    /// Technical footprint graphics follow their current component-side purpose binding. The
+    /// active matching visible layer wins; unconfigured boards retain existing preview defaults.
+    pub(super) fn technical(
+        &self,
+        view: BoardView<'_>,
+        purpose: LayerPurpose,
+        active: Option<&str>,
+        hidden: &BTreeSet<String>,
+    ) -> Option<egui::Color32> {
+        if view.setup().is_none() {
+            return match purpose {
+                LayerPurpose::Silkscreen => Some(board::graphic_color(board::GraphicStyle::Silkscreen)),
+                LayerPurpose::Fabrication | LayerPurpose::Courtyard => None,
+                _ => None,
+            };
+        }
+        let layers: Vec<_> = view
+            .layers()
+            .into_iter()
+            .filter(|layer| {
+                layer.purpose == purpose && (layer.side == Some(Side::Front) || layer.side.is_none()) && !hidden.contains(&layer.id.to_string())
+            })
+            .collect();
+        let chosen = layers.iter().find(|layer| active == Some(layer.id.to_string().as_str())).or_else(|| layers.first())?;
+        Some(self.color(view, chosen))
+    }
+
     /// Choose only visible copper that this pad actually occupies. Active copper is drawn on top;
     /// otherwise physical stack order wins. Unconfigured compatibility bindings stay explicit.
     pub(super) fn copper(
@@ -131,8 +159,17 @@ fn valid_id(id: &str) -> bool {
         )
 }
 
-/// Shared copper defaults follow physical roles; alternate internal layers have distinct keys.
+/// Defaults follow layer purpose and side; alternating internal copper keys remain distinct.
 pub(super) fn default_color(view: BoardView<'_>, layer: &Layer) -> egui::Color32 {
+    if layer.purpose != LayerPurpose::Copper {
+        return match layer.purpose {
+            LayerPurpose::Silkscreen => board::graphic_color(board::GraphicStyle::Silkscreen),
+            LayerPurpose::Fabrication => board::graphic_color(board::GraphicStyle::Fabrication),
+            LayerPurpose::Courtyard => board::graphic_color(board::GraphicStyle::Courtyard),
+            LayerPurpose::Outline | LayerPurpose::Mechanical | LayerPurpose::User => pcbcraft_chrome::Tokens::get().board_ink,
+            _ => pcbcraft_chrome::Tokens::get().text_dim,
+        };
+    }
     match layer.side {
         Some(Side::Front) => board::copper_color(Some(true)),
         Some(Side::Back) => board::copper_color(Some(false)),
@@ -185,8 +222,8 @@ pub(super) struct Edit {
 }
 
 impl PcbApp {
-    /// Validate the addressed copper layer before changing any local settings. All editor views
-    /// share this board/layer palette; unknown, foreign and technical layers are refused atomically.
+    /// Validate the addressed layer before changing any local settings. All editor views
+    /// share this board/layer palette; unknown and foreign layers are refused atomically.
     pub(super) fn set_layer_color(&mut self, view: ViewId, layer: &str, rgb: Option<[u8; 3]>) -> Result<(), String> {
         let target = self
             .views
@@ -195,8 +232,8 @@ impl PcbApp {
             .and_then(|view| view.board.target)
             .ok_or("The addressed view must show a board")?;
         let board = self.session.project().and_then(|project| project.board_view(target)).ok_or("The view's board is unavailable")?;
-        if !board.layers().iter().any(|item| item.id.to_string() == layer && item.purpose == LayerPurpose::Copper) {
-            return Err("Unknown copper layer on this view's board".into());
+        if !board.layers().iter().any(|item| item.id.to_string() == layer) {
+            return Err("Unknown layer on this view's board".into());
         }
         self.board_appearance.set(target, layer, rgb)
     }
@@ -207,7 +244,7 @@ impl PcbApp {
         let Some(board) = self.session.project().and_then(|project| editor.board.target.and_then(|target| project.board_view(target))) else {
             return;
         };
-        let Some(record) = board.layers().into_iter().find(|item| item.id.to_string() == layer && item.purpose == LayerPurpose::Copper) else {
+        let Some(record) = board.layers().into_iter().find(|item| item.id.to_string() == layer) else {
             return;
         };
         let color = self.board_appearance.color(board, &record);

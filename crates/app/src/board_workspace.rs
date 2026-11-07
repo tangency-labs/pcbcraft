@@ -121,11 +121,15 @@ impl PcbApp {
                     if self.views.active.board.hidden_layers.contains(&layer.id.to_string()) { format!("{label} (hidden)") } else { label.to_owned() }
                 })
                 .collect();
-            let options: Vec<_> = labels.iter().enumerate().map(|(i, label)| (i, label.as_str())).collect();
+            let options: Vec<_> = labels
+                .iter()
+                .zip(&layers)
+                .enumerate()
+                .map(|(i, (label, layer))| (i, label.as_str(), self.board_appearance.color(board, layer)))
+                .collect();
             let mut selected =
                 layers.iter().position(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str())).unwrap_or(0);
-            let changed =
-                workspace::ribbon_field(ui, "Active layer", |ui| pcbcraft_chrome::settings::choice(ui, "Active layer", &mut selected, &options));
+            let changed = workspace::ribbon_field(ui, "Active layer", |ui| workspace::layer_choice(ui, "Active layer", &mut selected, &options));
             if changed && let Some(layer) = layers.get(selected) {
                 self.views.active.board.set_layer(&layer.id.to_string(), true, None);
             }

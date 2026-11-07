@@ -183,7 +183,7 @@ pub(super) fn show(
     }
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
-    crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers);
+    crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
     for mut footprint in footprints {
         if let Some(draft) = state.draft.as_ref().filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -242,15 +242,6 @@ fn drawing(
     legacy_visible: bool,
     appearance: &crate::board_appearance::Appearance,
 ) -> (Vec<board::PadDrawing>, Vec<board::GraphicDrawing>) {
-    let shown = |purpose| {
-        project.setup().map_or(!matches!(purpose, LayerPurpose::Fabrication | LayerPurpose::Courtyard), |setup| {
-            setup.layers().iter().any(|layer| {
-                layer.purpose == purpose
-                    && (layer.side == Some(Side::Front) || (purpose != LayerPurpose::Copper && layer.side.is_none()))
-                    && !state.hidden_layers.contains(&layer.id.to_string())
-            })
-        })
-    };
     let pads = footprint
         .pads
         .iter()
@@ -296,9 +287,10 @@ fn drawing(
                 GraphicPurpose::Silkscreen => (LayerPurpose::Silkscreen, board::GraphicStyle::Silkscreen),
                 GraphicPurpose::Courtyard => (LayerPurpose::Courtyard, board::GraphicStyle::Courtyard),
             };
-            shown(purpose).then(|| board::GraphicDrawing {
+            appearance.technical(project, purpose, state.active_layer.as_deref(), &state.hidden_layers).map(|color| board::GraphicDrawing {
                 points: graphic.points.iter().map(|p| camera.screen(*p, rect)).collect(),
                 style,
+                color: Some(color),
                 closed: graphic.closed,
                 stroke_width: graphic
                     .stroke_nm

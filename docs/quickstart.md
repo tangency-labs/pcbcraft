@@ -230,9 +230,13 @@ independently, and
 a hidden active layer is labeled **(hidden)** in the selector and status bar.
 **Show all** reveals every layer; **Isolate active** reveals only the active layer.
 Layers groups copper in physical stack order and retains visibility by layer ID.
-Click a copper swatch to change its color; the form supports a picker, **#RRGGBB**,
-Apply, Cancel and Reset to default. The swatch and the pad metal use the same
-color. Plated lands take the active visible copper color, while front-only surface
+Click a layer swatch to change its color; the form supports a picker, **#RRGGBB**,
+Apply, Cancel and Reset to default. The swatch and supported geometry use the
+same color, including pad metal, Board Edge and technical graphics.
+The selected ribbon layer and its menu rows show matching color patches.
+**+** / **−** cycle through picker order (including hidden/technical layers);
+**PgUp** / **PgDn** select front/back copper. These keys change the active layer
+without changing visibility. Plated lands take the active visible copper color, while front-only surface
 pads stay on front copper. Colors are shared local settings for this board,
 separate from its geometry, saved engineering files and document undo.
 **Layout → Fit** fits the placements, and **Layout → Reveal** brings the current

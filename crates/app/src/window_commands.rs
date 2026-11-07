@@ -45,6 +45,37 @@ impl PcbApp {
         }
     }
 
+    /// Navigate the addressed board's layer picker without changing visibility or document history.
+    /// Next/previous wrap in the same catalog order as the picker, including technical and hidden
+    /// layers; front/back resolve explicit copper side metadata. Unknown views/directions fail atomically.
+    pub(super) fn navigate_board_layer(&mut self, id: crate::ViewId, direction: &str) -> Result<(), String> {
+        use pcbcraft_engine::board::setup::{LayerPurpose, Side};
+        let state = self.views.view(id).filter(|view| view.workspace == crate::Workspace::Board).ok_or("The addressed view must show a board")?;
+        let board = self
+            .session
+            .project()
+            .and_then(|project| state.board.target.and_then(|target| project.board_view(target)))
+            .ok_or("The view's board is unavailable")?;
+        let layers = crate::board_panels::ordered_layers(board);
+        if layers.is_empty() {
+            return Err("This board has no available layers".into());
+        }
+        let current = layers.iter().position(|layer| state.board.active_layer.as_deref() == Some(layer.id.to_string().as_str()));
+        let chosen = match direction {
+            "next" => layers.get(current.map_or(0, |i| (i + 1) % layers.len())),
+            "previous" => layers.get(current.map_or(layers.len() - 1, |i| (i + layers.len() - 1) % layers.len())),
+            "front" | "back" => layers.iter().find(|layer| {
+                layer.purpose == LayerPurpose::Copper && layer.side == Some(if direction == "front" { Side::Front } else { Side::Back })
+            }),
+            _ => return Err("Layer direction must be next, previous, front or back".into()),
+        }
+        .ok_or("This board has no copper layer on that side")?
+        .id
+        .to_string();
+        self.views.view_mut(id).ok_or("The addressed view closed")?.board.set_layer(&chosen, true, None);
+        Ok(())
+    }
+
     /// Fit the addressed view to the project on its next paint, clear of every visible card.
     /// Unknown views are ignored; the project and other views are unchanged.
     pub(super) fn fit_view(&mut self, id: crate::ViewId) {
@@ -338,6 +369,20 @@ mod live {
             ],
         },
         WindowCommand {
+            id: "view.navigate_layer",
+            title: "Navigate Layers",
+            summary: "Choose the next/previous layer in picker order, or front/back copper, as the PCB keyboard shortcuts do. Wraps across technical/hidden layers without changing visibility or document history.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "direction",
+                    summary: "next, previous, front or back",
+                    required: true,
+                    kind: Kind::Choice(&["next", "previous", "front", "back"]),
+                },
+            ],
+        },
+        WindowCommand {
             id: "view.set_layer",
             title: "Layer",
             summary: "Activate or show/hide an addressed PCB layer through the Layers controls. Changes only the addressed view and cancels unfinished drawing when necessary.",
@@ -350,11 +395,11 @@ mod live {
         },
         WindowCommand {
             id: "view.set_layer_color",
-            title: "Copper Layer Color",
-            summary: "Set or reset a board's personal copper-layer color, through the same handler as its swatch. Shared by every view of that board, saved locally and excluded from project files/undo.",
+            title: "Layer Color",
+            summary: "Set or reset a board's personal layer color, through the same handler as its swatch. Shared by every view of that board, saved locally and excluded from project files/undo.",
             params: &[
                 VIEW,
-                Param { name: "layer", summary: "Copper layer UUID on the view's board", required: true, kind: Kind::Object },
+                Param { name: "layer", summary: "Layer UUID on the view's board", required: true, kind: Kind::Object },
                 Param { name: "color", summary: "Opaque #RRGGBB or null to reset", required: true, kind: Kind::Color },
             ],
         },
@@ -643,6 +688,8 @@ mod live {
                         "selection": view.board.selection,
                         "hidden_layers": view.board.hidden_layers,
                         "active_layer": view.board.active_layer,
+                        "layer_colors": view.board.target.and_then(|target|app.session.project().and_then(|project|project.board_view(target)))
+                            .map(|board|board.layers().iter().map(|layer|json!({"layer":layer.id,"color":crate::board_appearance::hex(app.board_appearance.color(board,layer)),"overridden":app.board_appearance.overridden(board.target,&layer.id.to_string())})).collect::<Vec<_>>()),
                         "copper_colors": view.board.target.and_then(|target|app.session.project().and_then(|project|project.board_view(target)))
                             .map(|board|board.layers().iter().filter(|layer|layer.purpose==pcbcraft_engine::board::setup::LayerPurpose::Copper)
                                 .map(|layer|json!({"layer":layer.id,"color":crate::board_appearance::hex(app.board_appearance.color(board,layer)),"overridden":app.board_appearance.overridden(board.target,&layer.id.to_string())})).collect::<Vec<_>>()),
@@ -790,6 +837,7 @@ mod live {
                         view.camera.set_zoom(percent as f32 / 100.0);
                     }
                 }
+                ("view.navigate_layer", Some((view, _)), _) => self.navigate_board_layer(view, params["direction"].as_str().unwrap_or_default())?,
                 ("view.set_layer_color", Some((view, _)), _) => {
                     let rgb = params["color"].as_str().map(crate::board_appearance::parse_color).transpose()?;
                     self.set_layer_color(view, params["layer"].as_str().unwrap_or_default(), rgb)?;

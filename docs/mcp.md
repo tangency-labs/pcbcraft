@@ -128,14 +128,20 @@ presentation changes do not alter project revision or undo.
 `view.set_layer_visibility` takes `view` and `mode` (`all` or `active`) through the
 same handler as Show all / Isolate active. Isolation reveals the active layer,
 hides the others and cancels unfinished drawing in that view.
-`view.set_layer_color` takes `view`, `layer` (a copper UUID) and `color`
+`view.set_layer_color` takes `view`, `layer` (a layer UUID) and `color`
 (`#RRGGBB`, or null to reset). It uses the swatch form's handler and shares the
 personal board/layer palette across all views. `inspect_editor` reports effective
-`board.copper_colors` per view, including whether each value is overridden.
+`board.layer_colors` per view, including whether each value is overridden.
+The earlier `board.copper_colors` subset remains for compatibility.
 These values persist locally without changing project revision or undo. Physical
 pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
 binding and stack-ordered layer UUIDs; `unconfigured` retains the explicit library
 binding without invented layers. Marker-only pins omit physical membership.
+`view.navigate_layer` takes `view` and `direction` (`next`, `previous`, `front`,
+`back`) through the keyboard's handler. Next/previous wrap in picker order across
+technical and hidden layers; front/back resolve physical copper side metadata.
+It preserves visibility, project revision and undo, and rejects unknown views or
+unavailable copper sides before changing anything.
 
 To start the MCP server from the repository root, run
 `cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it

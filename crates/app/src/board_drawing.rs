@@ -294,7 +294,15 @@ pub(super) fn interact(
 
 /// Paint only visible layer graphics and disposable previews; selected vertices are handles,
 /// not copper pads or electrical edit selections. No physical stroke width is implied.
-pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, view: BoardView<'_>, state: &State, hidden: &BTreeSet<String>) {
+pub(super) fn paint(
+    ui: &Ui,
+    rect: Rect,
+    camera: &Camera,
+    view: BoardView<'_>,
+    state: &State,
+    hidden: &BTreeSet<String>,
+    appearance: &crate::board_appearance::Appearance,
+) {
     let painter = ui.painter().with_clip_rect(rect);
     for mut drawing in view.drawings().into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())) {
         if let Some(edit) = state.edit.as_ref().filter(|edit| edit.drawing.id == drawing.id) {
@@ -307,6 +315,10 @@ pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, view: BoardView<'_>, s
             drawing.closed,
             selected,
             false,
+            view.layers()
+                .iter()
+                .find(|layer| layer.id == drawing.layer)
+                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer)),
         );
     }
     if let Some(draft) = &state.draft
@@ -327,6 +339,10 @@ pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, view: BoardView<'_>, s
             state.tool == Some(Tool::Rectangle),
             false,
             true,
+            view.layers()
+                .iter()
+                .find(|layer| layer.id.to_string() == draft.layer)
+                .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer)),
         );
         pcbcraft_chrome::board::drawing_target(&painter, camera.screen(at, rect));
     }

@@ -110,7 +110,7 @@ while any occupied layer is visible, and retain their cut-out drills. They use t
 active copper layer's color when it is visible, otherwise the first visible layer
 in physical stack order. This does not move a surface pad onto another layer.
 Front copper defaults to red and back to blue; internal layers alternate purple
-and green defaults. Each copper swatch opens a shared color form with Apply,
+and green defaults. Every layer swatch opens a shared color form with Apply,
 Cancel and Reset to default. Overrides follow board/layer UUIDs through renaming,
 are shared by views of the same board, and persist in local editor settings.
 Engineering files, package definitions and document undo never contain those colors.

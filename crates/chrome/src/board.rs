@@ -2,10 +2,10 @@
 use crate::Tokens;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, vec2};
 
-/// Paint a layer graphic and its selected vertex handles using the shared board palette.
-pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, selected: bool, preview: bool) {
+/// Paint a layer graphic in its effective color; selection, previews and handles use the shared accent.
+pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, selected: bool, preview: bool, color: Color32) {
     let t = Tokens::get();
-    let color = if selected || preview { t.accent } else { t.board_ink };
+    let color = if selected || preview { t.accent } else { color };
     p.add(egui::Shape::Path(egui::epaint::PathShape {
         points: points.clone(),
         closed,
@@ -150,11 +150,24 @@ pub enum GraphicStyle {
     Courtyard,
 }
 
+/// Shared technical-layer defaults used by both the layer legend and the physical painter.
+pub fn graphic_color(style: GraphicStyle) -> Color32 {
+    let t = Tokens::get();
+    let color = match style {
+        GraphicStyle::Fabrication => t.board_ink.gamma_multiply(0.55),
+        GraphicStyle::Silkscreen => t.board_silkscreen,
+        GraphicStyle::Courtyard => t.board_ink.gamma_multiply(0.3),
+    };
+    Color32::from_rgb(color.r(), color.g(), color.b())
+}
+
 /// A projected, unfilled rectangle with a physical layer role.
 #[derive(Clone, Debug)]
 pub struct GraphicDrawing {
     pub points: Vec<Pos2>,
     pub style: GraphicStyle,
+    /// Effective visible technical-layer color; None keeps the shared library-preview default.
+    pub color: Option<Color32>,
     pub closed: bool,
     pub stroke_width: Option<f32>,
 }
@@ -205,11 +218,12 @@ pub fn footprint(
     };
     let bounds = footprint_bounds(pads, graphics, center);
     for graphic in graphics {
-        let (color, width) = match graphic.style {
-            GraphicStyle::Fabrication => (t.board_ink.gamma_multiply(0.55), 0.8),
-            GraphicStyle::Silkscreen => (t.board_silkscreen, 1.2),
-            GraphicStyle::Courtyard => (t.board_ink.gamma_multiply(0.3), 0.7),
+        let width = match graphic.style {
+            GraphicStyle::Fabrication => 0.8,
+            GraphicStyle::Silkscreen => 1.2,
+            GraphicStyle::Courtyard => 0.7,
         };
+        let color = graphic.color.unwrap_or_else(|| graphic_color(graphic.style));
         let stroke = Stroke::new(graphic.stroke_width.unwrap_or(width), color);
         p.add(if graphic.closed {
             egui::Shape::closed_line(graphic.points.clone(), stroke)
@@ -273,7 +287,7 @@ pub enum LayerColorAction {
 /// Hex edits stay pending until Apply; Cancel never changes any layer appearance.
 pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], hex: &mut String, error: Option<&str>) -> LayerColorAction {
     let mut action = LayerColorAction::None;
-    let closing = crate::shell::scrolling_dialog(ctx, "layer_color", "Copper Layer Color", |ui| {
+    let closing = crate::shell::scrolling_dialog(ctx, "layer_color", "Layer Color", |ui| {
         ui.label(name);
         let mut color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
         let changed = ui

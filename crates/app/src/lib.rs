@@ -1377,6 +1377,33 @@ impl PcbApp {
         {
             return;
         }
+        if !self.home
+            && self.views.active.workspace == Workspace::Board
+            && !assistant_keys
+            && matches!(self.dialog, Dialog::None)
+            && !egui::Popup::is_any_open(ctx)
+            && !ctx.text_edit_focused()
+        {
+            let layer_direction = ctx.input_mut(|input| {
+                if input.consume_key(Modifiers::NONE, Key::PageUp) {
+                    Some("front")
+                } else if input.consume_key(Modifiers::NONE, Key::PageDown) {
+                    Some("back")
+                } else if input.consume_key(Modifiers::NONE, Key::Plus)
+                    || input.consume_key(Modifiers::SHIFT, Key::Plus)
+                    || input.consume_key(Modifiers::SHIFT, Key::Equals)
+                {
+                    Some("next")
+                } else if input.consume_key(Modifiers::NONE, Key::Minus) {
+                    Some("previous")
+                } else {
+                    None
+                }
+            });
+            if let Some(direction) = layer_direction {
+                let _ = self.navigate_board_layer(view, direction);
+            }
+        }
         if ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
             return;
         }
@@ -1909,6 +1936,10 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
+    list.push(("PCB layout", "Next layer", "+".to_owned()));
+    list.push(("PCB layout", "Previous layer", "−".to_owned()));
+    list.push(("PCB layout", "Front copper layer", "PgUp".to_owned()));
+    list.push(("PCB layout", "Back copper layer", "PgDn".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));
     list.push(("View", "Finer grid", key(&FINER_GRID)));

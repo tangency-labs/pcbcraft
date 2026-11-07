@@ -144,13 +144,9 @@ pub(super) fn layer_name(layer: &Layer) -> &str {
     if layer.purpose == LayerPurpose::Outline && layer.name == "Board outline" { "Board Edge" } else { &layer.name }
 }
 
-/// Copper keys share the exact palette used for metal; technical keys use existing chrome ink roles.
+/// Layer keys share the effective palette used by their supported canvas geometry.
 fn layer_color(layer: &Layer, board: pcbcraft_engine::board::view::BoardView<'_>, appearance: &crate::board_appearance::Appearance) -> egui::Color32 {
-    if layer.purpose == LayerPurpose::Copper {
-        appearance.color(board, layer)
-    } else {
-        board::technical_layer_color(layer.purpose == LayerPurpose::Outline)
-    }
+    appearance.color(board, layer)
 }
 
 /// Copper follows physical stack order; technical layers group by purpose and sort by display
@@ -227,11 +223,7 @@ fn layer_row(
                     &workspace::TreeRow {
                         depth: 0,
                         fold: None,
-                        icon: Some(workspace::TreeIcon::Layer {
-                            color: layer_color(layer, board, appearance),
-                            active,
-                            editable: layer.purpose == LayerPurpose::Copper,
-                        }),
+                        icon: Some(workspace::TreeIcon::Layer { color: layer_color(layer, board, appearance), active, editable: true }),
                         label,
                         accessibility_label: Some(&format!("Activate layer {label}")),
                         tip: if active { "Active layer" } else { "Set active layer" },

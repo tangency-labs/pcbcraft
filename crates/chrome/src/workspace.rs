@@ -735,6 +735,46 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
     picked
 }
 
+/// Standard themed layer dropdown with a color patch in its closed field and every popup row.
+/// Labels and color targets stay independent; selecting a row changes only the supplied value.
+pub fn layer_choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T, options: &[(T, &str, Color32)]) -> bool {
+    let before = *value;
+    let selected = options.iter().find(|(option, _, _)| option == value);
+    let selected_name = selected.map_or("Layer", |(_, name, _)| *name);
+    let result =
+        egui::ComboBox::from_id_salt(label).selected_text(layer_choice_label(ui, selected_name)).width(ui.available_width()).show_ui(ui, |ui| {
+            for (option, name, color) in options {
+                let text = layer_choice_label(ui, name);
+                let response = ui.selectable_value(value, *option, text);
+                layer_choice_patch(ui, response.rect, *color);
+            }
+        });
+    if let Some((_, _, color)) = selected {
+        layer_choice_patch(ui, result.response.rect, *color);
+    }
+    result.response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, ui.is_enabled(), label));
+    before != *value
+}
+
+/// Reserve actual layout space for a swatch rather than padding the visible or accessible text.
+fn layer_choice_label(ui: &Ui, name: &str) -> egui::text::LayoutJob {
+    let t = Tokens::get();
+    let mut job = egui::text::LayoutJob::simple(name.to_owned(), egui::TextStyle::Button.resolve(ui.style()), t.text, f32::INFINITY);
+    if let Some(section) = job.sections.first_mut() {
+        section.leading_space = t.space_12 + t.space_8;
+    }
+    job
+}
+
+/// Use the same palette and quiet border as the layer rows, with a rectangular toolbar key.
+fn layer_choice_patch(ui: &Ui, rect: Rect, color: Color32) {
+    let t = Tokens::get();
+    let left = rect.left() + ui.spacing().button_padding.x;
+    let patch = Rect::from_center_size(pos2(left + t.space_6, rect.center().y), vec2(t.space_12, t.space_12));
+    ui.painter().rect_filled(patch, t.space_2 as u8, color);
+    ui.painter().rect_stroke(patch, t.space_2 as u8, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+}
+
 /// Place a standard themed field in the ribbon using the existing group height and caption.
 /// Its own control opens any menu; the caption adds no second popup or interaction target.
 pub fn ribbon_field<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {

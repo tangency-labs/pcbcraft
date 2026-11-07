@@ -151,7 +151,6 @@ fn live_color_changes_share_palette_and_refuse_bad_addresses() {
     let saved = h.state().board_appearance.storage_text();
     for params in [
         json!({"view":999,"layer":top,"color":"#FFFFFF"}),
-        json!({"view":view,"layer":layer(&h,"Board Edge"),"color":"#FFFFFF"}),
         json!({"view":view,"layer":"00000000-0000-0000-0000-000000000001","color":"#FFFFFF"}),
         json!({"view":view,"layer":top,"color":"#éxxxx"}),
     ] {
@@ -264,4 +263,56 @@ fn app_settings_save_retains_palette_without_writing_engineering_data() {
     h.run();
     assert_eq!(lands(&h, egui::Color32::from_rgb(12, 34, 56)), 4);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// Every registered layer has an editable palette entry; supported technical graphics use it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn technical_layer_colors_reach_edges_silkscreen_and_ribbon_patches() {
+    let mut h = board();
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    let edge = layer(&h, "Board Edge");
+    let silk = layer(&h, "Front silkscreen");
+    let mask = layer(&h, "Front mask");
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_DRAWING,&json!({"layer":edge,"points":[{"x_nm":-3000000,"y_nm":-3000000},{"x_nm":13000000,"y_nm":-3000000},{"x_nm":13000000,"y_nm":3000000},{"x_nm":-3000000,"y_nm":3000000}],"closed":true,"expected_revision":revision}));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    for (id, color) in [(&edge, "#AE63D1"), (&silk, "#40C8D0"), (&mask, "#904030")] {
+        h.state_mut().run_window_command(&ctx, "view.set_layer_color", &json!({"view":view,"layer":id,"color":color})).unwrap();
+    }
+    h.run();
+    let path_color = |h: &Harness<'_, PcbApp>, color: egui::Color32| {
+        h.output()
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape,egui::Shape::Path(path) if path.stroke.color==egui::epaint::ColorMode::Solid(color)))
+    };
+    assert!(path_color(&h, egui::Color32::from_rgb(0xAE, 0x63, 0xD1)));
+    assert!(path_color(&h, egui::Color32::from_rgb(0x40, 0xC8, 0xD0)));
+    click(&mut h, "Active layer");
+    click(&mut h, "Board Edge");
+    let field = h.get_by_label("Active layer").rect();
+    let color = egui::Color32::from_rgb(0xAE, 0x63, 0xD1);
+    assert!(
+        h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Rect(rect) if rect.fill==color && field.contains_rect(rect.rect)))
+    );
+    click(&mut h, "Active layer");
+    assert!(
+        h.output().shapes.iter().filter(|shape| matches!(&shape.shape,egui::Shape::Rect(rect) if rect.fill==color)).count() >= 2,
+        "open picker and selected field both need a color patch"
+    );
+    h.key_press(Key::Escape);
+    h.run();
+    swatch(&mut h, "Board Edge");
+    hex_field(&mut h, "#DD8822");
+    click(&mut h, "Apply color");
+    assert_eq!(h.state().views.active.board.active_layer, Some(edge));
+    assert!(path_color(&h, egui::Color32::from_rgb(0xDD, 0x88, 0x22)));
+    let inspected = crate::window_commands::inspect_editor(h.state());
+    assert!(inspected["views"].as_array().unwrap().iter().any(|view| {
+        view["board"]["layer_colors"].as_array().is_some_and(|colors| colors.iter().any(|item| item["layer"] == mask && item["color"] == "#904030"))
+    }));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }

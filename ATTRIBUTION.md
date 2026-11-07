@@ -40,6 +40,16 @@ consulted November 7, 2026. These are behavioral references only; no implementat
 icons or artwork were copied. The controls reuse PCBcraft's existing themed
 choice field, Browser tree rows, cards, typography and palette.
 
+The layer-key patch in the ribbon and its popup uses the existing themed combo
+control with reserved label space and shared palette keys. Technical-layer
+color overrides extend the same local board/layer settings as copper. The keyboard
+bindings were checked only against the published [KiCad 10 PCB Editor manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#actions_reference),
+consulted November 7, 2026: +/− for next/previous and PgUp/PgDn for front/back copper.
+Picker-order traversal and shared view dispatch are original PCBcraft work. An
+incidental excluded search result and the user's subsequent manual-only approval
+are recorded in [the source-boundary note](docs/source-boundaries/2026-11-07-layer-shortcut-search.md);
+that result was not used as an implementation reference.
+
 The per-layer eye at the right follows Travis Lowe's original FigCraft rendering
 in `designs/pcb-workspace.png` and the eye construction in
 `designs/grouped_pcb_layers.py` (SHA-256
