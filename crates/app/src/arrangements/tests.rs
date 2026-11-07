@@ -5,6 +5,29 @@ use egui_kittest::{Harness, kittest::Queryable};
 use pcbcraft_engine::{persistence::encode_documents, schematic::Point};
 use serde_json::json;
 
+/// Missing visibility in old records adopts the new default; an explicit choice survives
+/// decoding and restoration into the live host's controls.
+#[test]
+fn properties_visibility_defaults_and_saved_choices_restore_consistently() {
+    assert!(PanelState::default().properties);
+    let mut legacy = serde_json::to_value(PanelState::default()).unwrap();
+    legacy.as_object_mut().unwrap().remove("properties");
+    let mut panels: PanelState = serde_json::from_value(legacy).unwrap();
+    assert!(panels.properties);
+    let mut h = harness();
+    let mut snapshot = h.state().arrangement_snapshot().unwrap();
+    snapshot.hosts[0].panels = panels.clone();
+    h.state_mut().restore_editor_panels(&snapshot);
+    assert!(h.state().properties_open);
+
+    panels.properties = false;
+    let saved = serde_json::to_value(panels).unwrap();
+    snapshot.hosts[0].panels = serde_json::from_value(saved).unwrap();
+    h.state_mut().restore_editor_panels(&snapshot);
+    assert!(!h.state().properties_open);
+    assert!(!h.state().saved_editor_panels(h.state().views.host).properties);
+}
+
 /// Open an original project with one editable symbol through the shared commands.
 fn harness() -> Harness<'static, PcbApp> {
     let mut app = PcbApp::default();

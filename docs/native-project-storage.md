@@ -131,7 +131,7 @@ Quarter turns resolve exactly; other angles round pad offsets to the nearest
 nanometer. The GUI steps by 90°, while the shared command accepts any supported
 whole-degree orientation.
 Omitted rotation means zero, and canonical records omit zero to preserve legacy
-bytes. A nonzero orientation requires `pcbcraft-board/4`, `/5` or `/6`; earlier board versions
+bytes. A nonzero orientation requires `pcbcraft-board/4` through `/7`; earlier board versions
 and legacy single-file encodings refuse it rather than lose orientation. Version
 4 permits an absent setup or the version-3 setup vocabulary, preserving layer,
 material and mapping identities. Encoding uses versions 1–3 when no footprint is

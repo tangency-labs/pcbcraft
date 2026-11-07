@@ -33,7 +33,7 @@ pub(super) enum ViewAction {
 
 /// Stationary contextual controls belong to one host even as its focused pane changes.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Panels {
     browser: crate::project_browser::ProjectBrowser,
     parts: crate::parts_browser::PartsBrowser,
@@ -43,6 +43,23 @@ struct Panels {
     pointer_next: Option<pcbcraft_engine::schematic::Point>,
     placed: bool,
     properties: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for Panels {
+    /// New native hosts use the same Properties visibility as a fresh arrangement.
+    fn default() -> Self {
+        Self {
+            browser: Default::default(),
+            parts: Default::default(),
+            nets: Default::default(),
+            ribbon: 0,
+            pointer: None,
+            pointer_next: None,
+            placed: false,
+            properties: crate::arrangements::PanelState::default().properties,
+        }
+    }
 }
 
 /// A host's panel visibility and ribbon tab, as window inspection reports them.

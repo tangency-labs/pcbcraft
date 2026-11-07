@@ -365,7 +365,7 @@ mod live {
         WindowCommand {
             id: "window.set_panel",
             title: "Show Panel",
-            summary: "Show or hide one of the window's panels: the Browser, the Parts library or the Net Inspector.",
+            summary: "Show or hide one of the window's panels: the Browser, the Parts library, the Net Inspector or the selection Properties inspector.",
             params: &[
                 WINDOW,
                 Param { name: "panel", summary: "Which panel", required: true, kind: Kind::Choice(PANELS) },

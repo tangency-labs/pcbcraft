@@ -466,7 +466,8 @@ impl PcbApp {
         project.symbols().iter().find(|symbol| symbol.id() == id).map(|symbol| project.reference(symbol))
     }
 
-    /// Rotate, delete, edit fields or pick up a symbol for disconnected movement.
+    /// Rotate, delete, edit fields, open the symbol component's footprint chooser, or pick up a
+    /// symbol for disconnected movement.
     /// Pickup is view-only until placement; deleting clears selection and failures show in status.
     fn edit_selected(&mut self, action: SymbolAction) {
         if self.views.active.workspace != Workspace::Schematic {

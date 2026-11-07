@@ -56,6 +56,8 @@ impl PcbApp {
 
     /// Offer single-footprint transforms alongside navigation, keeping board tools separate from
     /// schematic tools. Completed placements use the same atomic engine command as MCP.
+    /// Components › Footprints opens the package chooser for the selected footprint's component,
+    /// or leaves the component unselected when no footprint is selected.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().is_some();
         let selected = enabled && self.views.active.board.selection.len() == 1;

@@ -1240,9 +1240,18 @@ fn window_commands_reach_views_and_panels_in_every_window() {
         result
     };
     let root_view = h.state().views.hosts[&HostId::ROOT].focused;
-    run(&mut h, "view.open_window", json!({"view": root_view.0})).unwrap();
+    h.state_mut().run_window_command(&ctx, "view.open_window", &json!({"view": root_view.0})).unwrap();
     assert_eq!(h.state().views.detached_hosts(), vec![HostId(1)]);
     assert_eq!(h.state().views.hosts[&HostId::ROOT].focused, root_view);
+
+    // Inspect the fresh host before it has been drawn, then after creating its panel state.
+    assert!(h.state().host_panels(HostId(1)).properties);
+    assert!(h.state().saved_editor_panels(HostId(1)).properties);
+    h.run();
+    assert!(h.state().host_panels(HostId(1)).properties);
+    run(&mut h, "window.set_panel", json!({"window": 1, "panel": "properties", "open": false})).unwrap();
+    assert!(!h.state().host_panels(HostId(1)).properties);
+    assert!(!h.state().saved_editor_panels(HostId(1)).properties);
 
     run(&mut h, "window.set_panel", json!({"window": 1, "panel": "nets", "open": true})).unwrap();
     run(&mut h, "window.set_ribbon_tab", json!({"window": 1, "tab": "view"})).unwrap();
