@@ -73,8 +73,10 @@ for repeated placement. **Fit** and Browser selections keep their targets clear 
 The header chevron collapses Parts to its title bar and expands it again, keeping
 the search, preview size and position. **A** also expands it and focuses search.
 
-Right-click a symbol and choose **Disconnect and Move** to leave its wiring in place,
-then click to place the symbol elsewhere. **Esc** or a right-click cancels the preview.
+Press **M** with a symbol selected, or hover a symbol with no selection, to pick
+it up while leaving its wiring in place. Click to place it elsewhere, or press
+**Esc** or right-click to cancel the preview. **Disconnect and Move** in the
+symbol's context menu performs the same action.
 The move and disconnection share one undo step; placing a replacement at the vacated
 pins connects it to the preserved wire ends. Ordinary symbol dragging keeps wires attached.
 

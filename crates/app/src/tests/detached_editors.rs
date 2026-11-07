@@ -1445,3 +1445,27 @@ fn project_open_rebinds_detached_pcb_and_main_schematic() {
     assert!(h.state().arrangement_snapshot().unwrap().valid());
     assert!(!h.state().files.dirty(&h.state().session));
 }
+
+/// M in a detached schematic starts only that view's pickup and shares one completed edit
+/// with the main window's history. Closing a host or changing focus still expires its input.
+#[test]
+fn schematic_move_hotkey_in_detached_window_uses_its_own_view() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let main = h.state().views.hosts[&HostId::ROOT].focused;
+    let canvas = child_rect(&peer, "Schematic canvas");
+    let origin = h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+    let before = h.state().session.snapshot().unwrap();
+    child_click_at(&mut h, &peer, origin);
+    child_key(&mut h, &peer, Key::M, Modifiers::NONE);
+    assert!(matches!(h.state().views.view(child).unwrap().schematic.tool, Some(Tool::Move { disconnect: true, .. })));
+    assert!(h.state().views.view(main).unwrap().schematic.tool.is_none());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    child_click_at(&mut h, &peer, origin + vec2(60., 60.));
+    assert_ne!(h.state().session.project().unwrap().symbols()[0].position, Point { x_nm: 0, y_nm: 0 });
+    focus(&mut h, &peer, false);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}

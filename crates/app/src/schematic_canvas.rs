@@ -452,7 +452,7 @@ pub(crate) fn show(
                 return None;
             };
             let rows = [
-                ("Disconnect and Move", "", SymbolAction::DisconnectMove),
+                ("Disconnect and Move", "M", SymbolAction::DisconnectMove),
                 ("Rotate", "R", SymbolAction::Rotate),
                 ("Edit Fields…", "E", SymbolAction::EditFields),
                 ("Delete", "Del", SymbolAction::Delete),

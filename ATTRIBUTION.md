@@ -372,3 +372,9 @@ original drawings using the existing shared icon palette and ribbon metrics.
 The horizontal ribbon scrollbar uses Next's five-point `scroll_gutter` from
 `src/desktop/theme.rs` at the same revision; upstream places it below the captions
 so the additional wire actions remain usable at compact window widths.
+
+The schematic **M** shortcut in `crates/app/src/lib.rs` dispatches the existing
+Disconnect and Move preview and engine command. Its selected-symbol priority and
+leave-wiring-in-place behavior follow the published [KiCad 9 Schematic Editor manual](https://docs.kicad.org/9.0/en/eeschema/eeschema.html#moving-symbols).
+The shortcut routing and tests are original upstream code; no KiCad
+implementation source or artwork was used.
