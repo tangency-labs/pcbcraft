@@ -76,8 +76,9 @@ the search, preview size and position. **A** also expands it and focuses search.
 Click an unconnected symbol pin or free wire end to start directly. Press **W** to
 start immediately at the pointer, including on a connected pin, junction, wire segment
 or empty grid point. **Capture → Wire** instead waits for the first canvas click.
-The green snapped crosshair marks the drawing point; a ring marks an existing
-connection target. Ordinary clicks on connected nodes retain selection behavior.
+The green crosshair marks the drawing point; a ring marks an existing connection
+target. Hold **Ctrl** to bypass the placement grid while drawing; releasing it restores
+snapping. Pins and wire connections still use their exact positions. Ordinary clicks on connected nodes retain selection behavior.
 Click to add corners, **Space** to flip the current
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
 to finish, or press **Enter** or double-click to finish on empty space. **Esc** or

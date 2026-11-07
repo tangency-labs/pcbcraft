@@ -1288,7 +1288,12 @@ impl PcbApp {
                 self.cycle_grid(true);
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            // Ctrl temporarily bypasses the wire grid without disabling tool controls.
+            let wire_keys = Modifiers {
+                ctrl: matches!(self.views.active.schematic.tool, Some(Tool::Wire { .. })) && ctx.input(|i| i.modifiers.ctrl),
+                ..Modifiers::NONE
+            };
+            if ctx.input_mut(|i| i.consume_key(wire_keys, Key::Escape)) {
                 // Escape cancels the tool first, then clears the selection.
                 if self.views.active.schematic.tool.take().is_some() {
                     self.message = None;
@@ -1297,13 +1302,13 @@ impl PcbApp {
                 }
             }
             if let Some(Tool::Wire { start, .. }) = &mut self.views.active.schematic.tool {
-                if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
+                if ctx.input_mut(|i| i.consume_key(wire_keys, Key::Space)) {
                     self.views.active.schematic.wire_draft.horizontal_first = !self.views.active.schematic.wire_draft.horizontal_first;
                 }
-                if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace)) && !self.views.active.schematic.wire_draft.back() {
+                if ctx.input_mut(|i| i.consume_key(wire_keys, Key::Backspace)) && !self.views.active.schematic.wire_draft.back() {
                     *start = None;
                 }
-                self.views.active.schematic.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                self.views.active.schematic.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(wire_keys, Key::Enter));
             }
             if self.views.active.schematic.tool.is_none()
                 && !self.views.active.schematic.selection.is_empty()

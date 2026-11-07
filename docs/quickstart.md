@@ -64,7 +64,9 @@ first **Save** asks for a project folder, and the project takes that folder's na
 3. Click an unconnected pin or free wire end to start directly, or hover a pin,
    wire or grid point and press **W** to start there immediately. Connected nodes
    use W or **Capture → Wire**, which waits for a first click. The green wire cursor
-   rings an existing connection target. Click corners and a destination pin. **Space**
+   rings an existing connection target. Hold **Ctrl** to draw off-grid; releasing it
+   restores snapping, while pins and wires remain connection targets. Click corners
+   and a destination pin. **Space**
    flips the current elbow and **Backspace** removes the last corner. **Enter**
    or a double-click finishes a free end; **Esc** cancels the unfinished wire.
    Finish on an existing wire segment to create a connected branch. Dragging a

@@ -81,7 +81,7 @@ impl ReshapeDrag {
             return None;
         }
         if let Reshape::Junction(id) = self.edit {
-            let anchor = targets::Targets::new(project, camera, rect).anchor(camera, rect, pointer, Some(WireEndpoint::Junction(id)))?;
+            let anchor = targets::Targets::new(project, camera, rect).anchor(camera, rect, pointer, Some(WireEndpoint::Junction(id)), true)?;
             if !matches!(anchor, Anchor::Free(_)) && anchor != Anchor::Existing(WireEndpoint::Junction(id)) {
                 return Some(anchor);
             }
@@ -350,7 +350,7 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
     }
 }
 
-/// Pick a pin, an explicit free endpoint, or a snapped empty point. Enter/double-click finishes.
+/// Pick a connection or free point; Ctrl bypasses the placement grid. Enter/double-click finishes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pick(
     painter: &Painter,
@@ -369,7 +369,9 @@ pub(super) fn pick(
     if response.hovered()
         && let Some(pointer) = pointer
     {
-        let point = target.and_then(|anchor| anchor.position(project)).unwrap_or_else(|| camera.snap(pointer, rect));
+        let point = target.and_then(|anchor| anchor.position(project)).unwrap_or_else(|| {
+            if painter.ctx().input(|input| input.modifiers.ctrl) { camera.unsnapped(pointer, rect) } else { camera.snap(pointer, rect) }
+        });
         painter.ctx().set_cursor_icon(egui::CursorIcon::None);
         pcbcraft_chrome::cursor::wire(painter, camera.screen(point, rect), target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_))));
     }
@@ -377,7 +379,8 @@ pub(super) fn pick(
     target.filter(|_| clicked || finish || (start.is_none() && draft.start_requested)).map(|target| (target, finish))
 }
 
-/// Highlight unambiguous existing endpoints and preview the full route to the current target.
+/// Highlight unambiguous endpoints and preview the full route. Read Ctrl each frame so
+/// pressing or releasing the grid override updates the target without a pointer move.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preview(
     painter: &Painter,
@@ -393,7 +396,8 @@ pub(super) fn preview(
     let tokens = Tokens::get();
     let mut cache = draft.target_cache.borrow_mut();
     let targets = cache.get(project, revision, camera, rect);
-    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| targets.anchor(camera, rect, at, None));
+    let snap_to_grid = !painter.ctx().input(|input| input.modifiers.ctrl);
+    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| targets.anchor(camera, rect, at, None, snap_to_grid));
     if let Some(from) = start.and_then(|anchor| anchor.position(project))
         && let Some(to) = target.and_then(|anchor| anchor.position(project))
         && let Some(path) = draft.path(from, to, auto_heal)

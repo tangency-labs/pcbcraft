@@ -293,7 +293,8 @@ pub(crate) fn show(
         && (input_enabled || response.context_menu_opened())
         && let Some(popup) = menu::context(&response, |ui| {
             let cancel = MenuItem::new("Cancel").shortcut("Esc").show(ui);
-            let escape = ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
+            let wire_keys = Modifiers { ctrl: ui.input(|input| input.modifiers.ctrl), ..Modifiers::NONE };
+            let escape = ui.input_mut(|input| input.consume_key(wire_keys, Key::Escape));
             if escape {
                 ui.close();
             }

@@ -87,13 +87,14 @@ impl Targets {
         allowed.then_some(Anchor::Existing(end))
     }
 
-    /// W and the Wire tool can use any unambiguous node or stroke. Query the current grid
-    /// once, then project it onto nearby orthogonal segments without rebuilding project routes.
-    pub(super) fn anchor(&self, camera: &Camera, rect: Rect, at: Pos2, ignore: Option<WireEndpoint>) -> Option<Anchor> {
+    /// Resolve an unambiguous node, stroke or free point. Explicit connections retain their
+    /// exact positions when grid snapping is bypassed; stroke splits project the current
+    /// pointer coordinate onto the segment. Neither policy rebuilds the cached geometry.
+    pub(super) fn anchor(&self, camera: &Camera, rect: Rect, at: Pos2, ignore: Option<WireEndpoint>, snap_to_grid: bool) -> Option<Anchor> {
         if let Some(end) = nearest_node(&self.endpoints, at).ok()? {
             return Some(Anchor::Existing(end));
         }
-        let snapped = camera.snap(at, rect);
+        let snapped = if snap_to_grid { camera.snap(at, rect) } else { camera.unsnapped(at, rect) };
         let mut nearest = theme::SCHEMATIC_WIRE_HIT_RADIUS.powi(2);
         let (mut hit, mut ambiguous) = (None, false);
         for segment in &self.segments {

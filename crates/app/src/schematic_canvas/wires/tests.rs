@@ -2,6 +2,7 @@ mod attachment;
 mod healing;
 mod redraws;
 mod segments;
+mod snapping;
 mod targets;
 
 use crate::{PcbApp, tests::click};

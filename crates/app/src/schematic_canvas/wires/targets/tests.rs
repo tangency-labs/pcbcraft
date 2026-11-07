@@ -26,7 +26,7 @@ fn cached_targets_follow_history_reopening_navigation_and_grid_changes() {
     run(&mut s, DRAW_WIRE, json!({"from":pin.inspect(),"to":{"x_nm":25400000,"y_nm":12700000},"bends":[{"x_nm":25400000,"y_nm":0}]}));
     let targets = cache.get(s.project().unwrap(), s.revision(), &camera, rect);
     assert_eq!(targets.automatic_node(pos), None);
-    assert_eq!(targets.anchor(&camera, rect, pos, None), Some(Anchor::Existing(pin)));
+    assert_eq!(targets.anchor(&camera, rect, pos, None, true), Some(Anchor::Existing(pin)));
     s.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(cache.get(s.project().unwrap(), s.revision(), &camera, rect).automatic_node(pos), Some(Anchor::Existing(pin)));
     s.apply("edit.redo", &Value::Null).unwrap();
@@ -50,7 +50,7 @@ fn cached_targets_follow_history_reopening_navigation_and_grid_changes() {
     assert!(camera.set_snap_nm(500_000));
     let pointer = Pos2::new(900.0, 620.0);
     assert_eq!(
-        cache.get(s.project().unwrap(), s.revision(), &camera, resized).anchor(&camera, resized, pointer, None),
+        cache.get(s.project().unwrap(), s.revision(), &camera, resized).anchor(&camera, resized, pointer, None, true),
         Some(Anchor::Free(camera.snap(pointer, resized)))
     );
 }
