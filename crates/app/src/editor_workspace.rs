@@ -7,8 +7,9 @@ use pcbcraft_chrome::{editor, grid, shell, workspace};
 use pcbcraft_engine::{Session, selection::Selection};
 
 use crate::{
-    Dialog, PcbApp, SchematicView, Tool, ViewId, ViewInput,
+    Dialog, EditorView, PcbApp, Tool, ViewId, ViewInput,
     editor_layout::{HostId, Layout, ViewHost},
+    editor_view::{DocumentTarget, Workspace},
     preferences::SelectionFollow,
     schematic_canvas,
 };
@@ -17,15 +18,15 @@ use crate::{
 /// Binding exchanges a registry entry with that slot; each host retains its own focus/layout.
 #[derive(Debug)]
 pub(super) struct EditorViews {
-    pub(super) active: SchematicView,
-    rest: BTreeMap<ViewId, SchematicView>,
+    pub(super) active: EditorView,
+    rest: BTreeMap<ViewId, EditorView>,
     pub(super) hosts: BTreeMap<HostId, ViewHost>,
     pub(super) host: HostId,
     pub(super) main: HostId,
     next_view: u64,
     next_host: u64,
     primary: ViewId,
-    selection_source: Option<ViewId>,
+    selection_source: Option<(ViewId, Workspace)>,
     pending_reveal: BTreeMap<ViewId, PendingReveal>,
 }
 
@@ -42,8 +43,8 @@ impl Default for EditorViews {
         let mut root = ViewHost::new(ViewId(0));
         root.parked.push(ViewId(1));
         Self {
-            active: SchematicView::new(ViewId(0)),
-            rest: BTreeMap::from([(ViewId(1), SchematicView::new(ViewId(1)))]),
+            active: EditorView::new(ViewId(0)),
+            rest: BTreeMap::from([(ViewId(1), EditorView::new(ViewId(1)))]),
             hosts: BTreeMap::from([(HostId::ROOT, root)]),
             host: HostId::ROOT,
             main: HostId::ROOT,
@@ -57,24 +58,104 @@ impl Default for EditorViews {
 }
 
 impl EditorViews {
+    /// Snapshot ordering always puts the host owning project controls first.
+    pub(super) fn host_order(&self) -> Vec<HostId> {
+        std::iter::once(self.main).chain(self.hosts.keys().copied().filter(|id| *id != self.main)).collect()
+    }
+
+    /// Capture visible and parked views without selection, input tokens or electrical data.
+    pub(super) fn saved_state(&self, session: &Session) -> Option<crate::arrangements::Snapshot> {
+        use crate::arrangements::{SavedHost, Snapshot};
+        let mut ids = Vec::new();
+        for host in self.host_order() {
+            let host = self.hosts.get(&host)?;
+            ids.extend(host.layout.views());
+            ids.extend(&host.parked);
+        }
+        let indices: BTreeMap<_, _> = ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
+        let views = ids.iter().map(|id| self.view(*id)?.saved_state(session)).collect::<Option<Vec<_>>>()?;
+        let hosts = self
+            .host_order()
+            .into_iter()
+            .map(|id| {
+                let host = self.hosts.get(&id)?;
+                Some(SavedHost {
+                    layout: host.layout.saved_state(&indices)?,
+                    focused: *indices.get(&host.focused)?,
+                    parked: host.parked.iter().map(|id| indices.get(id).copied()).collect::<Option<Vec<_>>>()?,
+                    collapsed: match &host.collapsed {
+                        Some(layout) => Some(layout.saved_state(&indices)?),
+                        None => None,
+                    },
+                    panels: Default::default(),
+                    bounds: None,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Snapshot { views, hosts, primary: indices.get(&self.primary).copied().unwrap_or(0) })
+    }
+
+    /// Atomically replace presentation after validating the entire snapshot. IDs are never reused,
+    /// so delayed input cannot acquire authority when an arrangement is revisited.
+    pub(super) fn restore_state(&mut self, state: &crate::arrangements::Snapshot, session: &Session) -> Option<()> {
+        if !state.valid() {
+            return None;
+        }
+        let next_view = self.next_view.checked_add(state.views.len() as u64)?;
+        let next_host = self.next_host.checked_add(state.hosts.len().saturating_sub(1) as u64)?;
+        let ids: Vec<_> = (self.next_view..next_view).map(ViewId).collect();
+        let mut views: BTreeMap<_, _> =
+            ids.iter().copied().zip(&state.views).map(|(id, state)| (id, EditorView::from_state(id, state, session))).collect();
+        let host_ids: Vec<_> = std::iter::once(HostId::ROOT).chain((self.next_host..next_host).map(HostId)).collect();
+        let mut hosts = BTreeMap::new();
+        for (id, saved) in host_ids.into_iter().zip(&state.hosts) {
+            hosts.insert(
+                id,
+                ViewHost {
+                    layout: Layout::from_state(&saved.layout, &ids)?,
+                    focused: *ids.get(saved.focused)?,
+                    parked: saved.parked.iter().map(|index| ids.get(*index).copied()).collect::<Option<Vec<_>>>()?,
+                    collapsed: match &saved.collapsed {
+                        Some(layout) => Some(Layout::from_state(layout, &ids)?),
+                        None => None,
+                    },
+                    rects: Vec::new(),
+                },
+            );
+        }
+        let focused = hosts.get(&HostId::ROOT)?.focused;
+        let active = views.remove(&focused)?;
+        self.active = active;
+        self.rest = views;
+        self.hosts = hosts;
+        self.host = HostId::ROOT;
+        self.main = HostId::ROOT;
+        self.primary = *ids.get(state.primary)?;
+        self.next_view = next_view;
+        self.next_host = next_host;
+        self.selection_source = None;
+        self.pending_reveal.clear();
+        Some(())
+    }
+
     /// The non-active view in the existing two-view test fixtures.
     #[cfg(test)]
-    pub(super) fn other_mut(&mut self) -> &mut SchematicView {
+    pub(super) fn other_mut(&mut self) -> &mut EditorView {
         self.rest.values_mut().next().unwrap()
     }
 
     /// Borrow a live or parked view without changing its host or focus.
-    pub(super) fn view(&self, id: ViewId) -> Option<&SchematicView> {
+    pub(super) fn view(&self, id: ViewId) -> Option<&EditorView> {
         if self.active.id() == id { Some(&self.active) } else { self.rest.get(&id) }
     }
 
     /// Mutably address a view; closed or unknown IDs cannot fall back to another view.
-    pub(super) fn view_mut(&mut self, id: ViewId) -> Option<&mut SchematicView> {
+    pub(super) fn view_mut(&mut self, id: ViewId) -> Option<&mut EditorView> {
         if self.active.id() == id { Some(&mut self.active) } else { self.rest.get_mut(&id) }
     }
 
     /// Visit every view, including hidden panes, for shared-project invalidation and preferences.
-    pub(super) fn all_mut(&mut self) -> impl Iterator<Item = &mut SchematicView> {
+    pub(super) fn all_mut(&mut self) -> impl Iterator<Item = &mut EditorView> {
         std::iter::once(&mut self.active).chain(self.rest.values_mut())
     }
 
@@ -146,7 +227,7 @@ impl EditorViews {
             if let Some(remaining) = layout.layout.remove(id) {
                 layout.layout = remaining;
                 if layout.focused == id
-                    && let Some(first) = layout.layout.views().first()
+                    && let Some(first) = layout.layout.visible_views().first()
                 {
                     layout.focused = *first;
                 }
@@ -161,21 +242,26 @@ impl EditorViews {
         }
     }
 
-    /// Move a view to a new native host. A sole primary view leaves a new view of its document
-    /// behind, while a sole native view already has the requested placement and stays put.
+    /// Move a pane and its cached documents to a new native host. A sole primary pane leaves
+    /// a replacement behind; a sole detached pane already has the requested placement.
     pub(super) fn detach_view(&mut self, id: ViewId) -> Option<HostId> {
         let source = self.owner(id)?;
-        if source != self.main && !self.hosts.get(&source)?.split() {
+        let group = self.hosts.get(&source)?.layout.group(id)?.clone();
+        let members = group.views();
+        let sole = self.hosts.get(&source)?.layout.visible_views().len() == 1;
+        if source != self.main && sole {
             return Some(source);
         }
         let host = HostId(self.next_host);
         let next = self.next_host.checked_add(1)?;
-        if source == self.main && !self.hosts.get(&source)?.split() {
+        if source == self.main && sole {
             // Leave one view behind without reopening the host's previously collapsed layout.
             let parked = self.hosts.get_mut(&source)?.parked.pop();
             let replacement = if let Some(parked) = parked {
                 let camera = self.view_mut(id)?.camera.fork_navigation();
-                self.view_mut(parked)?.camera = camera;
+                if self.view(parked)?.workspace == self.view(id)?.workspace {
+                    self.view_mut(parked)?.camera = camera;
+                }
                 parked
             } else {
                 self.duplicate(id)?
@@ -184,29 +270,38 @@ impl EditorViews {
                 root.layout = Layout::View(replacement);
                 root.focused = replacement;
                 root.rects.clear();
-                root.collapsed = root.collapsed.take().and_then(|layout| layout.remove(id));
+                for member in &members {
+                    root.collapsed = root.collapsed.take().and_then(|layout| layout.remove(*member));
+                }
             }
         } else {
-            self.unplace(source, id);
+            for member in members {
+                self.unplace(source, member);
+            }
         }
         self.next_host = next;
-        self.hosts.insert(host, ViewHost::new(id));
+        self.hosts.insert(host, ViewHost { layout: group, ..ViewHost::new(id) });
         self.suspend();
         self.bind_main();
         Some(host)
     }
 
-    /// Explicitly dock one native view beside the primary host's focused pane. Existing panes
-    /// and other windows stay in place; an emptied source host and its parked views are pruned.
+    /// Dock a whole native pane, retaining its cached document navigation. Other panes and
+    /// windows stay in place; an emptied source host and its parked views are pruned.
     pub(super) fn dock_view(&mut self, id: ViewId) {
         let Some(source) = self.owner(id).filter(|host| *host != self.main) else {
             return;
         };
-        self.unplace(source, id);
+        let Some(group) = self.hosts.get(&source).and_then(|host| host.layout.group(id)).cloned() else {
+            return;
+        };
+        for member in group.views() {
+            self.unplace(source, member);
+        }
         if let Some(root) = self.hosts.get_mut(&self.main) {
-            root.layout.insert(root.focused, id);
+            root.layout.insert_group(root.focused, &group);
             if let Some(collapsed) = &mut root.collapsed {
-                collapsed.insert(root.focused, id);
+                collapsed.insert_group(root.focused, &group);
             }
             root.focused = id;
             root.rects.clear();
@@ -245,17 +340,25 @@ impl EditorViews {
         }
     }
 
-    /// Close one pane, except the last primary pane. Other placements and navigation survive.
+    /// Close a whole pane, including its cached documents, except the last primary pane.
+    /// Other placements and navigation survive; closing never reveals an older document.
     pub(super) fn close_view(&mut self, id: ViewId) {
         let Some(host) = self.owner(id) else {
             return;
         };
-        if host == self.main && !self.hosts.get(&host).is_some_and(ViewHost::split) {
+        if host == self.main && self.hosts.get(&host).is_some_and(|host| host.layout.visible_views().len() == 1) {
             return;
         }
-        self.unplace(host, id);
+        let Some(members) = self.hosts.get(&host).and_then(|host| host.layout.group(id)).map(Layout::views) else {
+            return;
+        };
+        for member in &members {
+            self.unplace(host, *member);
+        }
         self.bind_main();
-        self.rest.remove(&id);
+        for member in members {
+            self.rest.remove(&member);
+        }
         self.prune_closed();
     }
 
@@ -264,7 +367,7 @@ impl EditorViews {
     fn prune_closed(&mut self) {
         let live: std::collections::BTreeSet<_> = std::iter::once(self.active.id()).chain(self.rest.keys().copied()).collect();
         self.pending_reveal.retain(|_, pending| live.contains(&pending.source.view()) && live.contains(&pending.target.view()));
-        if self.selection_source.is_some_and(|id| self.view(id).is_none()) {
+        if self.selection_source.is_some_and(|(id, _)| self.view(id).is_none()) {
             self.selection_source = None;
         }
         if self.view(self.primary).is_none() {
@@ -291,15 +394,29 @@ impl EditorViews {
         }
     }
 
-    /// Record one selection intent and queue an independent reveal for each compatible target.
-    /// Highlights never replace another view's edit selection or emit a second intent.
+    /// Set a schematic selection, then broadcast correspondence without editing recipients.
     fn select(&mut self, selection: Selection, session: &Session, policy: SelectionFollow) {
-        self.active.selection = selection;
-        self.selection_source = Some(self.active.id());
-        self.pending_reveal.clear();
-        if self.active.selection.is_empty() {
+        if self.active.workspace != Workspace::Schematic {
             return;
         }
+        self.active.schematic.selection = selection;
+        self.selection_changed(session, policy);
+    }
+
+    /// Select board placements explicitly; a highlight never calls this handler.
+    pub(super) fn select_board(&mut self, selection: std::collections::BTreeSet<String>, session: &Session, policy: SelectionFollow) {
+        if self.active.workspace != Workspace::Board {
+            return;
+        }
+        self.active.board.selection = selection;
+        self.selection_changed(session, policy);
+    }
+
+    /// Remember the source workspace as well as view, so switching one view can reveal its
+    /// counterpart without turning the old selection into edit authority in the new workspace.
+    fn selection_changed(&mut self, session: &Session, policy: SelectionFollow) {
+        self.selection_source = Some((self.active.id(), self.active.workspace));
+        self.pending_reveal.clear();
         let Some(source) = self.active.input(session) else {
             return;
         };
@@ -312,7 +429,7 @@ impl EditorViews {
             };
             if id != source.view()
                 && allowed
-                && let Some(view) = self.view(id).filter(|view| self.active.shares_sheet(view, session))
+                && let Some(view) = self.view(id).filter(|view| self.active.shares_project(view, session))
                 && let Some(target) = view.input(session)
             {
                 self.pending_reveal.insert(id, PendingReveal { source, target, policy });
@@ -320,42 +437,138 @@ impl EditorViews {
         }
     }
 
-    /// Consume this target's reveal once, after its host supplies canvas geometry. Closed,
-    /// rebound or revision-stale addresses and changed policies discard the pending request.
+    /// Resolve a live source and destination in this opening. A source workspace may be parked
+    /// within its view after switching, but closed views or replaced projects cannot contribute.
+    fn probe_source(&self, id: ViewId, session: &Session) -> Option<(&EditorView, Workspace)> {
+        let (source_id, workspace) = self.selection_source?;
+        let source = self.view(source_id)?;
+        let target = self.view(id)?;
+        if (source_id == id && target.workspace == workspace)
+            || self.owner(source_id).is_none()
+            || self.owner(id).is_none()
+            || !source.shares_project(target, session)
+        {
+            return None;
+        }
+        Some((source, workspace))
+    }
+
+    /// Project through component identity when crossing workspaces; literal wire selections
+    /// remain local to schematic views. The result never changes edit selection or focus.
+    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
+        let Some((source, workspace)) = self.probe_source(id, session) else {
+            return Selection::default();
+        };
+        match workspace {
+            Workspace::Schematic => {
+                if source.workspace == Workspace::Schematic && !self.view(id).is_some_and(|target| source.shares_sheet(target, session)) {
+                    Selection::default()
+                } else {
+                    source.schematic.selection.clone()
+                }
+            }
+            Workspace::Board => session
+                .project()
+                .and_then(|p| p.board_view(source.board.target?))
+                .map_or_else(Selection::default, |board| board.selection_for_footprints(&source.board.selection)),
+        }
+    }
+
+    /// Resolve board counterparts using the shared engine adapter, preserving stable placement IDs.
+    pub(super) fn board_highlight_for(&self, id: ViewId, session: &Session) -> std::collections::BTreeSet<String> {
+        let Some((source, workspace)) = self.probe_source(id, session) else {
+            return Default::default();
+        };
+        match workspace {
+            Workspace::Schematic => session
+                .project()
+                .and_then(|p| p.board_view(self.view(id)?.board.target?))
+                .map_or_else(Default::default, |board| board.footprints_for_selection(&source.schematic.selection)),
+            Workspace::Board if self.view(id).is_some_and(|target| target.board.target == source.board.target) => source.board.selection.clone(),
+            Workspace::Board => Default::default(),
+        }
+    }
+
+    /// Consume a reveal once, after the target host supplies geometry. Stale inputs, changed
+    /// policies and closed hosts discard it, and each target uses its own coordinate system.
     fn reveal_for(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) {
         let Some(pending) = self.pending_reveal.remove(&id) else {
             return;
         };
-        if pending.policy != policy || self.owner(id).is_none() || self.owner(pending.source.view()).is_none() {
+        if pending.policy != policy
+            || self.owner(id).is_none()
+            || self.owner(pending.source.view()).is_none()
+            || !self.view(pending.source.view()).is_some_and(|view| view.accepts(pending.source, session))
+            || !self.view(id).is_some_and(|view| view.accepts(pending.target, session))
+        {
             return;
         }
-        let Some(source) = self.view(pending.source.view()).filter(|view| view.accepts(pending.source, session)) else {
-            return;
-        };
-        let Some(target) = self.view(id).filter(|view| view.accepts(pending.target, session) && view.shares_sheet(source, session)) else {
-            return;
-        };
-        let selection = source.selection.clone();
-        let target = target.id();
+        self.reveal_highlight(id, session);
+    }
+
+    /// Explicit Reveal and optional following use the same correspondence, without selection.
+    pub(super) fn reveal_highlight(&mut self, id: ViewId, session: &Session) {
+        let schematic = self.highlight_for(id, session);
+        let board = self.board_highlight_for(id, session);
         if let Some(project) = session.project()
-            && let Some(view) = self.view_mut(target)
+            && let Some(view) = self.view_mut(id)
         {
-            view.camera.reveal_selection(project, &selection);
+            match view.workspace {
+                Workspace::Schematic => view.camera.reveal_selection(project, &schematic),
+                Workspace::Board => {
+                    if let Some(target) = view.board.target.and_then(|target| project.board_view(target)) {
+                        view.camera.reveal_board(target, &board);
+                    }
+                }
+            }
         }
     }
 
-    /// Project a live source selection into any compatible visible target without edit authority.
-    pub(super) fn highlight_for(&self, id: ViewId, session: &Session) -> Selection {
-        let Some(source_id) = self.selection_source.filter(|source| *source != id) else {
-            return Selection::default();
+    /// Change one target without moving its host or rewriting another view's camera.
+    pub(super) fn switch_workspace(&mut self, id: ViewId, workspace: Workspace, session: &Session) {
+        self.pending_reveal.clear();
+        if let Some(view) = self.view_mut(id) {
+            view.switch(workspace, session);
+        }
+    }
+
+    /// Switch the originating pane's document, retaining prior navigation privately. Views in
+    /// other panes stay independent; switching adds no tab strip or named arrangement.
+    pub(super) fn open_document(&mut self, source: ViewId, target: DocumentTarget, session: &Session) -> Option<ViewId> {
+        if !target.available(session) {
+            return None;
+        }
+        let owner = self.owner(source)?;
+        let tabs = self.hosts.get(&owner)?.layout.group(source)?.views();
+        let existing = tabs.into_iter().find(|id| self.view(*id).is_some_and(|view| view.target() == Some(target)));
+        let id = if let Some(id) = existing {
+            id
+        } else if self.view(source)?.unavailable() {
+            self.view_mut(source)?.open_document(target, session);
+            source
+        } else {
+            let id = self.duplicate(source)?;
+            self.view_mut(id)?.open_document(target, session);
+            let host = self.hosts.get_mut(&owner)?;
+            host.layout.insert_tab(source, id);
+            if let Some(collapsed) = &mut host.collapsed {
+                collapsed.insert_tab(source, id);
+            }
+            id
         };
-        if self.owner(id).is_none() || self.owner(source_id).is_none() {
-            return Selection::default();
+        if let Some(host) = self.hosts.get_mut(&owner) {
+            host.layout.activate(id);
+            if let Some(collapsed) = &mut host.collapsed {
+                collapsed.activate(id);
+            }
+            host.focused = id;
+            host.rects.clear();
         }
-        match (self.view(source_id), self.view(id)) {
-            (Some(source), Some(target)) if source.shares_sheet(target, session) => source.selection.clone(),
-            _ => Selection::default(),
+        if id != source {
+            self.suspend();
         }
+        self.bind_main();
+        Some(id)
     }
 
     /// Cancel every local preview when a modal or Home takes input ownership.
@@ -382,6 +595,10 @@ impl EditorViews {
         self.suspend();
         if let Some(host) = self.hosts.get_mut(&self.host) {
             host.focused = id;
+            host.layout.activate(id);
+            if let Some(collapsed) = &mut host.collapsed {
+                collapsed.activate(id);
+            }
         }
         self.bind(id);
         true
@@ -396,10 +613,11 @@ impl EditorViews {
         let source = self.active.id();
         if split {
             let collapsed = self.hosts.get_mut(&self.host).and_then(|host| host.collapsed.take());
-            if let Some(layout) = collapsed.filter(|layout| layout.views().len() > 1) {
+            if let Some(layout) = collapsed.filter(|layout| matches!(layout, Layout::Split { .. })) {
                 for id in layout.views().into_iter().filter(|id| *id != source) {
                     let camera = self.active.camera.fork_navigation();
-                    if let Some(view) = self.view_mut(id) {
+                    let workspace = self.active.workspace;
+                    if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
                         view.camera = camera;
                     }
                 }
@@ -411,21 +629,23 @@ impl EditorViews {
                 let parked = self.hosts.get_mut(&self.host).and_then(|host| host.parked.pop());
                 if let Some(id) = parked {
                     let camera = self.active.camera.fork_navigation();
-                    if let Some(view) = self.view_mut(id) {
+                    let workspace = self.active.workspace;
+                    if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
                         view.camera = camera;
                     }
                     if let Some(host) = self.hosts.get_mut(&self.host) {
-                        host.layout = Layout::View(id.min(source));
-                        host.layout.insert(id.min(source), id.max(source));
+                        host.layout.insert(source, id);
                     }
                 } else {
                     self.open_beside(source);
                 }
             }
         } else if let Some(host) = self.hosts.get_mut(&self.host) {
-            let layout = std::mem::replace(&mut host.layout, Layout::View(source));
+            let group = host.layout.group(source).cloned().unwrap_or(Layout::View(source));
+            let retained = group.views();
+            let layout = std::mem::replace(&mut host.layout, group);
             let remembered = host.collapsed.take().unwrap_or(layout);
-            host.parked = remembered.views().into_iter().filter(|id| *id != source).collect();
+            host.parked = remembered.views().into_iter().filter(|id| !retained.contains(id)).collect();
             host.collapsed = Some(remembered);
         }
         if let Some(host) = self.hosts.get_mut(&self.host) {
@@ -439,15 +659,15 @@ impl EditorViews {
 impl PcbApp {
     /// Route explicit selection through the coordinator with the current follow policy.
     pub(super) fn select(&mut self, selection: Selection) {
-        self.views.active.selected_leg = None;
-        self.views.active.whole_wire_drag = false;
+        self.views.active.schematic.selected_leg = None;
+        self.views.active.schematic.whole_wire_drag = false;
         self.views.select(selection, &self.session, self.preferences.selection_follow);
     }
 
     /// Select one revision-bound segment while projecting its wire identity to other views.
     pub(super) fn select_leg(&mut self, leg: schematic_canvas::LegTarget) {
         self.select(Selection::one_wire(leg.wire.clone()));
-        self.views.active.selected_leg = Some(leg);
+        self.views.active.schematic.selected_leg = Some(leg);
     }
 
     /// Change one view's snap spacing and remember it for the next start. This is presentation
@@ -506,7 +726,7 @@ impl PcbApp {
         }
     }
 
-    /// Render split panes with sheet tabs in stable view order, or a single canvas with an
+    /// Render split panes with one document header each, or a single canvas with an
     /// overlaid breadcrumb and no tab clearance. Workspace panels address the focused view;
     /// their geometry changes with the layout, never with focus alone.
     pub(super) fn editor_workspace(&mut self, ui: &mut Ui, workspace: Rect) {
@@ -514,7 +734,15 @@ impl PcbApp {
             self.canvas(ui);
             return;
         }
-        let mut pick = self.editor_panels(ui);
+        let board = self.views.active.workspace == Workspace::Board;
+        if !board {
+            #[cfg(not(target_arch = "wasm32"))]
+            let clearance = if self.views.host != self.views.main { 0.0 } else { self.assistant.rail_clearance() };
+            #[cfg(target_arch = "wasm32")]
+            let clearance = 0.0;
+            self.net_inspector.show(ui, &self.session, clearance);
+        }
+        let area = ui.available_rect_before_wrap();
         let panes = if let Some(host) = self.views.hosts.get_mut(&self.views.host) {
             let panes = host.layout.panes(ui);
             host.rects = panes.clone();
@@ -522,6 +750,10 @@ impl PcbApp {
         } else {
             Vec::new()
         };
+        let headers = panes.len() > 1;
+        let area = editor::panel_area(area, &panes.iter().map(|(_, rect)| *rect).collect::<Vec<_>>(), headers, ui.spacing().item_spacing.y);
+        let board_panel = board.then(|| self.board_panels(ui, area));
+        let mut pick = if board { None } else { self.editor_panels(ui, area) };
         #[cfg(not(target_arch = "wasm32"))]
         let assistant = if self.views.host != self.views.main { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
         #[cfg(target_arch = "wasm32")]
@@ -529,18 +761,17 @@ impl PcbApp {
             let _ = workspace;
             Rect::NOTHING
         };
-        let covered = [self.browser.rect(), self.parts.rect(), assistant];
+        let mut covered = board_panel.map_or_else(|| vec![self.browser.rect(), self.parts.rect()], |panels| panels.to_vec());
+        covered.push(assistant);
         for (id, rect) in panes {
-            ui.scope_builder(egui::UiBuilder::new().id_salt(("editor_pane", id)).max_rect(rect), |ui| {
+            let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();
+            let pane_id = tab_ids.first().copied().unwrap_or(id);
+            let path = self.views.view(id).and_then(|view| view.sheet_path(&self.session)).unwrap_or_default();
+            ui.scope_builder(egui::UiBuilder::new().id_salt(("editor_pane", pane_id)).max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
-                let Some(view) = self.views.view(id) else {
-                    return;
-                };
-                if self.views.is_split()
-                    && let Some(path) = view.sheet_path(&self.session)
-                {
-                    let (clicked, action) = editor::sheet_tab(ui, &path, active, !crate::IN_BROWSER, self.views.host != self.views.main);
+                if headers {
+                    let (clicked, action) = editor::pane_header(ui, &path, active, !crate::IN_BROWSER, self.views.host != self.views.main);
                     if clicked {
                         self.activate_editor(ui.ctx(), id);
                     }
@@ -557,9 +788,25 @@ impl PcbApp {
                         self.queue_view_action(ui.ctx(), id, action);
                     }
                 }
+                if self.views.view(id).is_some_and(EditorView::unavailable) {
+                    shell::canvas(ui, |ui| {
+                        ui.centered_and_justified(|ui| {
+                            ui.label("This document is unavailable. Choose a workspace to replace this view.");
+                        });
+                    });
+                    return;
+                }
                 let canvas = ui.available_rect_before_wrap();
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);
-                if self.views.active.id() == id {
+                if self.views.view(id).is_some_and(|view| view.workspace == Workspace::Board) {
+                    if let Some(view) = self.views.view_mut(id) {
+                        view.camera.set_uncovered(canvas, uncovered);
+                    }
+                    if matches!(self.dialog, Dialog::None) {
+                        self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
+                    }
+                    self.board_pane(ui, id);
+                } else if self.views.active.id() == id {
                     self.views.active.camera.set_uncovered(canvas, uncovered);
                     if matches!(self.dialog, Dialog::None) {
                         self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
@@ -594,24 +841,45 @@ impl PcbApp {
                                     self.session.revision(),
                                     &mut view.camera,
                                     None,
-                                    &view.selection,
-                                    view.selected_leg.as_ref(),
-                                    view.whole_wire_drag,
+                                    &view.schematic.selection,
+                                    view.schematic.selected_leg.as_ref(),
+                                    view.schematic.whole_wire_drag,
                                     &highlight,
                                     false,
                                     self.preferences.navigation,
                                     self.preferences.grid_opacity_percent,
-                                    &view.wire_draft,
+                                    &view.schematic.wire_draft,
                                     &label,
                                 );
                             }
                         });
                     });
                 }
-                if !self.views.is_split()
-                    && let Some(path) = self.views.active.sheet_path(&self.session)
-                {
-                    workspace::sheet_heading(ui.painter(), canvas, self.browser.rect(), &path, "1 / 1");
+                if !headers && let Some(path) = self.views.active.sheet_path(&self.session) {
+                    let count = if self.views.active.workspace == Workspace::Board {
+                        format!(
+                            "{} footprints",
+                            self.session
+                                .project()
+                                .and_then(|project| project.board_view(self.views.active.board.target?))
+                                .map_or(0, |board| board.footprints().count())
+                        )
+                    } else {
+                        "1 / 1".to_owned()
+                    };
+                    if self.views.active.workspace == Workspace::Board {
+                        workspace::canvas_heading(
+                            ui.painter(),
+                            canvas,
+                            covered[0],
+                            covered[2],
+                            &path,
+                            &count,
+                            [pcbcraft_chrome::Tokens::get().board_ink; 2],
+                        );
+                    } else {
+                        workspace::sheet_heading(ui.painter(), canvas, covered[0], &path, &count);
+                    }
                 }
             });
         }
@@ -621,22 +889,15 @@ impl PcbApp {
         }
     }
 
-    /// Draw shared panels once against the workspace bounds, reserving tab clearance only
-    /// while split. Return a Browser pick with its originating view address so centering
-    /// can use that pane's actual uncovered canvas.
-    fn editor_panels(&mut self, ui: &mut Ui) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
+    /// Draw shared floating panels inside the host's header-free area. Return a Browser pick
+    /// with its originating view address so centering can use that pane's actual uncovered canvas.
+    fn editor_panels(&mut self, ui: &mut Ui, area: Rect) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
         let source = self.views.active.input(&self.session)?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let clearance = if self.views.host != self.views.main { 0.0 } else { self.assistant.rail_clearance() };
-        #[cfg(target_arch = "wasm32")]
-        let clearance = 0.0;
-        self.net_inspector.show(ui, &self.session, clearance);
-        let mut area = ui.available_rect_before_wrap();
-        if self.views.is_split() {
-            area.min.y = (area.min.y + editor::tab_height() + ui.spacing().item_spacing.y).min(area.max.y);
+        let pick = self.browser.show(ui, self.parts.browser_area(area).intersect(area), &self.session, &self.views.active.schematic.selection);
+        if let Some(target) = self.browser.take_sheet_request() {
+            self.queue_view_action(ui.ctx(), source.view(), crate::editor_windows::ViewAction::OpenDocument(DocumentTarget::Sheet(target)));
         }
-        let pick = self.browser.show(ui, self.parts.browser_area(area), &self.session, &self.views.active.selection);
-        let placing = match &self.views.active.tool {
+        let placing = match &self.views.active.schematic.tool {
             Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
             _ => None,
         };

@@ -29,6 +29,11 @@ pub(super) struct Target {
 }
 
 impl Target {
+    /// Distinguish local copies without deriving project or document identity from the path.
+    pub(super) fn arrangement_location(&self) -> String {
+        self.path.as_os_str().as_encoded_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
     /// Explain the next save when the open form needs migration or manifest generation.
     pub(super) fn open_notice(&self) -> String {
         if self.legacy {
@@ -62,7 +67,7 @@ pub(super) fn open(pick_folder: bool) -> Result<Outcome, String> {
 }
 
 /// Load a project from a chosen path without changing the active editor.
-fn load(path: &Path) -> Result<Saved, String> {
+pub(super) fn load(path: &Path) -> Result<Saved, String> {
     let path = normalize(path)?;
     if path.file_name().is_some_and(|name| name == ENTRY_POINT)
         && let Some(root) = path.parent()

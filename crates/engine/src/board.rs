@@ -9,6 +9,7 @@ use crate::schematic::{MAX_CENTER_NM, Point, Terminal};
 
 pub mod materials;
 pub mod setup;
+pub mod view;
 
 pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
 pub(crate) const FOOTPRINT_REVISION: u32 = 1;
@@ -17,6 +18,7 @@ const HALF_PAD_PITCH_NM: i64 = 1_270_000;
 /// A stable pad within a placed footprint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pad {
+    pub(crate) board: Option<uuid::Uuid>,
     footprint: u64,
     number: u8,
 }
@@ -31,12 +33,22 @@ impl Pad {
             "2" => 2,
             _ => return None,
         };
-        (id != 0 && digits == id.to_string()).then_some(Self { footprint: id, number })
+        (id != 0 && digits == id.to_string()).then_some(Self { board: None, footprint: id, number })
     }
 
-    /// Report the address clients can pass back to cross-probing.
+    /// Qualify a legacy pad address with the board it belongs to. Resolution validates ownership.
+    pub fn on_board(self, board: uuid::Uuid) -> Self {
+        Self { board: Some(board), ..self }
+    }
+
+    /// Report the address clients can pass back to cross-probing. Resolved pads always include a board;
+    /// legacy parsed inputs may omit it until resolved by the project.
     pub fn inspect(self) -> Value {
-        json!({"footprint": format!("footprint-{}", self.footprint), "pad": self.number.to_string()})
+        let mut address = json!({"footprint": format!("footprint-{}", self.footprint), "pad": self.number.to_string()});
+        if let Some(board) = self.board {
+            address["board"] = json!(board);
+        }
+        address
     }
 }
 
@@ -91,13 +103,14 @@ impl Footprint {
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         json!({
             "id": format!("footprint-{}", self.id),
+            "board": project.board_target().board,
             "component": format!("component-{}", self.component),
             "definition": self.definition,
             "definition_revision": self.definition_revision,
             "x_nm": self.x_nm,
             "y_nm": self.y_nm,
             "pins": ([1, 2]).map(|pad| json!({
-                "pad": Pad { footprint: self.id, number: pad }.inspect(),
+                "pad": Pad { board: Some(project.board_target().board), footprint: self.id, number: pad }.inspect(),
                 "terminal": project.component_terminal(self.component, self.component_pin(pad).1).map(Terminal::inspect),
                 "x_nm": self.pad_position(pad).x_nm,
                 "y_nm": self.pad_position(pad).y_nm,
@@ -145,7 +158,7 @@ impl Board {
     pub(crate) fn pad_for(&self, component: u64, pin: &str) -> Option<Pad> {
         let footprint = self.footprints.get(*self.by_component.get(&component)?)?;
         let number = if pin == "1" { footprint.pin_1_pad } else { 3 - footprint.pin_1_pad };
-        Some(Pad { footprint: footprint.id, number })
+        Some(Pad { board: None, footprint: footprint.id, number })
     }
 
     /// Find a pad's location by footprint ID, in board nanometers.

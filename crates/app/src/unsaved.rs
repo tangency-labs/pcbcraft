@@ -44,7 +44,7 @@ impl PcbApp {
     }
 
     /// Distinguish a native window dismissal from explicit Quit. Closing the original window
-    /// hides its framework shell when editors survive; only the final window or Quit ends the app.
+    /// releases its native surface when editors survive; only the final window or Quit ends the app.
     pub(crate) fn handle_close_request(&mut self, ctx: &egui::Context) {
         if IN_BROWSER || self.close_allowed || !ctx.input(|input| input.viewport().close_requested()) {
             return;

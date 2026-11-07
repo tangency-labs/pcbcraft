@@ -14,12 +14,28 @@ const MIN_DOCK_HEIGHT: f32 = 240.0;
 const SNAP_DISTANCE: f32 = 44.0;
 
 /// Anchoring a card to an edge still overlays the canvas; it never reserves a side panel.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Position {
     #[default]
     Floating,
     Left,
     Right,
+}
+
+/// Saved placement excludes a live drag and uses logical coordinates within the host.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PanelState {
+    position: Position,
+    at: Option<[f32; 2]>,
+    collapsed: bool,
+}
+
+impl PanelState {
+    /// Bound saved coordinates before restoring; normal panel layout clamps them to the host.
+    pub fn valid(&self) -> bool {
+        self.at.is_none_or(|at| at.iter().all(|n| n.is_finite() && n.abs() <= 100_000.0))
+    }
 }
 
 /// Disposable placement state for one floating card. It is never saved in project files.
@@ -32,6 +48,16 @@ pub struct Panel {
 }
 
 impl Panel {
+    /// Capture presentation without preserving an in-progress drag.
+    pub fn saved_state(&self) -> PanelState {
+        PanelState { position: self.position, at: self.at.map(|at| [at.x, at.y]), collapsed: self.collapsed }
+    }
+
+    /// Restore validated placement; rendering will constrain it to the current window.
+    pub fn from_state(state: &PanelState) -> Self {
+        Self { position: state.position, at: state.at.map(|[x, y]| pos2(x, y)), collapsed: state.collapsed, dragging: None }
+    }
+
     /// Reveal the catalog without changing its position or the caller's search/view state.
     pub fn expand(&mut self) {
         self.collapsed = false;
@@ -276,7 +302,7 @@ fn icon_button(ui: &mut Ui, label: &str, icon: HeaderIcon) -> Response {
 }
 
 /// Catalog preview density. A short dock uses List without replacing the person's preference.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum View {
     Small,
     #[default]

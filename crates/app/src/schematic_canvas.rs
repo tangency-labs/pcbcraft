@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-mod camera;
 mod selection;
 mod wires;
 pub(crate) use selection::BoxDrag;
@@ -8,7 +7,7 @@ pub(crate) use selection::BoxDrag;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use camera::Camera;
+pub(crate) use crate::canvas_camera::Camera;
 pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
 
 use crate::preferences::Navigation;

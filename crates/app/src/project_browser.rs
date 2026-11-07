@@ -144,16 +144,32 @@ pub(crate) struct ProjectBrowser {
     /// Whether the card is folded to its header.
     collapsed: bool,
     rect: Rect,
+    requested_sheet: Option<pcbcraft_engine::SheetTarget>,
 }
 
 impl Default for ProjectBrowser {
     /// The Browser starts open, as KiCad's hierarchy navigator and PCBcraft Next's Browser do.
     fn default() -> Self {
-        Self { open: true, toggled: BTreeSet::new(), lists: None, collapsed: false, rect: Rect::NOTHING }
+        Self { open: true, toggled: BTreeSet::new(), lists: None, collapsed: false, rect: Rect::NOTHING, requested_sheet: None }
     }
 }
 
 impl ProjectBrowser {
+    /// Consume sheet-navigation intent; the host validates and applies it to the focused pane.
+    pub(super) fn take_sheet_request(&mut self) -> Option<pcbcraft_engine::SheetTarget> {
+        self.requested_sheet.take()
+    }
+
+    /// Remember visibility and header collapse without cached project objects or selection.
+    pub(super) fn saved_state(&self) -> [bool; 2] {
+        [self.open, self.collapsed]
+    }
+
+    /// Restore layout with a fresh document cache.
+    pub(super) fn from_state([open, collapsed]: [bool; 2]) -> Self {
+        Self { open, collapsed, ..Self::default() }
+    }
+
     /// Whether a folding row is open now.
     fn is_open(&self, node: Node) -> bool {
         node.open_by_default() != self.toggled.contains(&node)
@@ -176,6 +192,7 @@ impl ProjectBrowser {
     /// header folds the card to itself; View › Browser hides it.
     pub(crate) fn show(&mut self, ui: &Ui, canvas: Rect, session: &Session, selected: &pcbcraft_engine::selection::Selection) -> Option<Pick> {
         self.rect = Rect::NOTHING;
+        self.requested_sheet = None;
         if !self.open {
             return None;
         }
@@ -185,6 +202,7 @@ impl ProjectBrowser {
         }
         let mut pick = None;
         let mut fold = None;
+        let mut sheet = None;
         let (card, toggle) = workspace::floating_card(ui, "project_browser", "Browser", canvas, self.collapsed, |ui| {
             let Some(lists) = &self.lists else { return };
             let mut folding = |ui: &mut Ui, node: Node, depth, icon, label: &str, selected| {
@@ -192,6 +210,9 @@ impl ProjectBrowser {
                 let response = workspace::tree_row(ui, Id::new(("project_browser", node)), &row);
                 if response.fold || (response.clicked && !matches!(node, Node::Sheet)) {
                     fold = Some(node);
+                }
+                if response.clicked && matches!(node, Node::Sheet) {
+                    sheet = Some(lists.project.sheet_target());
                 }
             };
             folding(ui, Node::Project, 0, TreeIcon::Folder, &lists.project.name, false);
@@ -246,6 +267,7 @@ impl ProjectBrowser {
             self.collapsed = !self.collapsed;
         }
         self.rect = card;
+        self.requested_sheet = sheet;
         pick
     }
 }
@@ -321,13 +343,13 @@ mod tests {
 
         click(&mut harness, "Expand Symbols");
         click(&mut harness, "R2  1k");
-        assert_eq!(harness.state().views.active.selection.single_symbol(), Some("symbol-3"));
-        assert_eq!(harness.state().views.active.selection.single_wire(), None);
+        assert_eq!(harness.state().views.active.schematic.selection.single_symbol(), Some("symbol-3"));
+        assert_eq!(harness.state().views.active.schematic.selection.single_wire(), None);
 
         click(&mut harness, "Expand Nets");
         click(&mut harness, "Net 1");
-        assert_eq!(harness.state().views.active.selection.single_symbol(), None);
-        assert_eq!(harness.state().views.active.selection.single_wire(), Some("wire-4"));
+        assert_eq!(harness.state().views.active.schematic.selection.single_symbol(), None);
+        assert_eq!(harness.state().views.active.schematic.selection.single_wire(), Some("wire-4"));
         assert_eq!(harness.state().session.revision(), 4);
 
         click(&mut harness, "Collapse Symbols");

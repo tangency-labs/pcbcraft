@@ -11,12 +11,14 @@ The app starts on **Home**, where you can create or open a project. It does not
 yet reopen the last project automatically. The app bar shows the project name and an
 unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
-pages for Appearance (theme, interface scale, grid opacity, units), Navigation (whether the wheel
+pages for Appearance (theme, interface scale, PCB grid, grid opacity, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant.
-**Grid opacity** fades the canvas grid
+The PCB canvas starts with its grid hidden; **Appearance → PCB grid** chooses
+**Off**, **Dots** or **Lines** for all PCB views and windows. This choice is remembered
+between sessions and leaves snapping unchanged. **Grid opacity** fades visible grids
 from 100% down to hidden at 0%, with **Reset** to go back; parts still snap to the
-same points. The opacity applies to both split panes and is kept with your
+same points. The opacity applies across views and windows and is kept with your
 preferences, not in the project.
 The right end of the bottom status bar shows the grid point under the pointer (**X**, **Y**,
 with Y increasing down), the **Grid** button and the display unit. Click the unit, or press
@@ -118,7 +120,7 @@ the circuit into view and **Nets** to open the Net Inspector.
 The **Browser** floats over the left of the canvas and shows the project as
 **Project → Sheets → Main → Symbols / Nets**. With one view open, the sheet path
 and count sit directly on the canvas beside the Browser, without a tab strip.
-Split views have a tab above each canvas showing its sheet path, such as
+Split views have one closable header above each canvas showing its document path, such as
 **Power controller › Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
 items, and click one to select it and center the view on it. A net row selects
 one of its wires. Click the Browser's title to fold it. Browsing never changes the
@@ -129,10 +131,10 @@ Inspector panels, and fits the view. Each ribbon group's caption, such as
 
 **View → Split** opens another view of the current schematic in that window.
 Each pane keeps its camera, grid and edit selection while sharing the project's
-commands, undo history and saving. Click a pane or its sheet tab to activate it;
-the tab underline marks that window's focused view. Browser, Parts and Net
-Inspector stay in place and target that view. Tabs show the sheet path rather
-than a runtime view number.
+commands, undo history and saving. Click a pane or its header to activate it;
+the header underline marks that window's focused view. Browser, Parts and Net
+Inspector stay in place and target that view. Selecting a sheet in Browser or
+switching workspace changes that pane without adding document tabs.
 
 On the desktop, **View → New window** opens another view without moving an
 existing one. Multiple native windows and splits can coexist, and each detached
@@ -140,12 +142,14 @@ window can have its own split. **Detach** moves the active pane to a new window;
 when moving the only primary pane, another view remains at the same zoom and
 position. **Dock** in a detached window moves its focused pane beside the main
 window's focused pane, preserving the other panes and windows. Closing a native
-window dismisses only its views, without a save prompt or an implicit split
-elsewhere. Each window uses the same title-bar style and has its own panels.
+window while another remains dismisses only its views, without a save prompt or
+an implicit split elsewhere. Each window uses the same title-bar style and has
+its own panels.
 
-Right-click a sheet tab for **Open beside**, **Open in new window**, **Detach
+Right-click a split pane's header for **Open beside**, **Open in new window**, **Detach
 view**, **Dock in main window** or **Close view**, as applicable. These actions
-target that tab. Dividers resize panes, with narrow areas stacking vertically.
+target that pane, including its remembered document navigation. Dividers resize
+panes, with narrow areas stacking vertically.
 Opening another view copies the source camera and grid without copying its edit
 selection. Turning Split off keeps the focused pane; turning it back on restores
 the window's remembered split arrangement, seeding restored cameras from the
@@ -165,11 +169,22 @@ Closing any editor window leaves the others open. If the original window closes,
 a surviving window takes over project dialogs and the Assistant without moving
 its panes or resetting its camera. Closing the last editor window, or choosing
 **File → Quit** from any window, uses one **Save / Don’t Save / Cancel** decision
-for the project. Canceling or failing a save leaves the project open. View arrangements last for the app session and do not change
-project files. Browser builds support panes within one tab; native window actions
-are desktop only. The editor still supports one schematic sheet. Mixed-workspace
-splits, schematic-to-board cross-probing and live-MCP view/window controls remain
-planned in #64, #65 and #61.
+for the project. Canceling or failing a save leaves the project open.
+
+The top **Views** tab represents a named arrangement of the project's panes and
+windows. Use **+** to add one, or right-click a tab to rename, duplicate or delete
+it. Arrangements restore when a saved project is reopened on the same computer;
+they live in user-local app settings and do not change or travel with project
+files. Unsaved projects keep arrangements only for the session until their first
+successful save. See the [arrangement persistence details](docs/board-workspace-plan.md#named-arrangements-and-reopening-a-project).
+
+Browser builds support panes within one tab; native window actions are desktop
+only. The workspace tile can switch to PCB layout, open it beside
+the schematic or create a board window directly. Existing placements render as
+pad-center markers with component counterpart highlights, grouped Layers and
+read-only Properties. The editor still supports one schematic sheet and one
+board; board editing and live-MCP view/window controls remain planned. See the
+[board inspection walkthrough](docs/quickstart.md#inspect-a-board-beside-its-schematic).
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
 Desktop projects default to a folder containing separate project, schematic,
@@ -301,7 +316,7 @@ ownership, #75's unit contract and the proposed shared net/rule model. Its first
 engine supports validated setup commands, custom materials, sourced Tg/Dk/Df
 reports, core/prepreg plies, undo and native persistence. The
 [material contract](docs/board-materials.md) documents these fields; the stackup
-UI, impedance estimator, board canvas and rule resolver remain follow-up work.
+UI, impedance estimator, editable board canvas and rule resolver remain follow-up work.
 
 ## Checks
 

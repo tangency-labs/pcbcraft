@@ -1,13 +1,12 @@
-//! The canvas grid: its spacing, its dots, how they thin out when zoomed out, and how strongly
-//! they show.
+//! The canvas grid: its spacing, dot or line display, zoom thinning and opacity.
 //!
-//! Opacity is purely a matter of drawing. It never changes the grid's spacing or what the pointer
+//! Style and opacity only affect drawing. They never change the grid's spacing or what the pointer
 //! snaps to, so a hidden grid still places parts on the same points. Spacing changes where new
 //! points snap; it never rescales the drawing or moves anything already placed.
 
 use std::{fmt, ops::RangeInclusive};
 
-use egui::{Color32, Painter, Pos2, Rect, RichText, Ui, pos2};
+use egui::{Color32, Painter, Pos2, Rect, RichText, Stroke, Ui, pos2};
 
 use crate::{
     MenuItem, Tokens, menu, theme,
@@ -23,6 +22,17 @@ pub const SCHEMATIC_SPACING_PRESETS_NM: [i64; 5] = [100 * NM_PER_MIL, 50 * NM_PE
 pub const SPACING_RANGE_NM: RangeInclusive<i64> = 10_000..=1000 * NM_PER_MIL;
 /// Drawn grid points are at least this many times their spacing apart after thinning out.
 const THIN_FACTOR: f32 = 5.0;
+
+/// Grid drawing is independent of snapping. Unknown saved styles fall back to Off without
+/// discarding unrelated preferences; callers choose a workspace's default explicitly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Style {
+    Dots,
+    Lines,
+    #[default]
+    #[serde(other)]
+    Off,
+}
 
 /// Why typed grid spacing was not accepted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,7 +86,7 @@ pub fn spacing_label(nm: i64, unit: Unit) -> String {
     units::label(nm, unit)
 }
 
-/// How many grid points apart the drawn dots are when `step` points separate grid points: 1
+/// How many snap intervals apart the drawn dots or lines are when `step` points separate grid points: 1
 /// normally, then 5, 25, … once zooming out would crowd them closer than
 /// [`theme::SCHEMATIC_MIN_GRID_SPACING`]. `None` for a step that isn't a positive finite number.
 pub fn shown_every(step: f32) -> Option<u32> {
@@ -103,7 +113,7 @@ pub const OPACITY_RANGE: RangeInclusive<u8> = 0..=100;
 /// The slider moves in steps of this many percent.
 pub const OPACITY_STEP: u8 = 5;
 
-/// The colour to paint grid dots at `opacity_percent` of `base`, or `None` when the grid is
+/// The colour to paint the grid at `opacity_percent` of `base`, or `None` when the grid is
 /// hidden. Values above 100% paint at full strength.
 pub fn color(base: Color32, opacity_percent: u8) -> Option<Color32> {
     match opacity_percent.min(*OPACITY_RANGE.end()) {
@@ -120,6 +130,15 @@ pub fn paint(painter: &Painter, rect: Rect, origin: Pos2, step: f32, opacity_per
     let Some(color) = color(Tokens::get().canvas_grid, opacity_percent) else {
         return;
     };
+    paint_style(painter, rect, origin, step, color, Style::Dots);
+}
+
+/// Draw dots or lines using the supplied workspace color. Off paints nothing, and both
+/// visible styles use the same origin and zoom thinning without changing the snap interval.
+pub fn paint_style(painter: &Painter, rect: Rect, origin: Pos2, step: f32, color: Color32, style: Style) {
+    if style == Style::Off {
+        return;
+    }
     let Some(every) = shown_every(step) else {
         return;
     };
@@ -128,6 +147,15 @@ pub fn paint(painter: &Painter, rect: Rect, origin: Pos2, step: f32, opacity_per
     let last_x = ((rect.right() - origin.x) / step).floor() as i32;
     let first_y = ((rect.top() - origin.y) / step).ceil() as i32;
     let last_y = ((rect.bottom() - origin.y) / step).floor() as i32;
+    if style == Style::Lines {
+        for x in first_x..=last_x {
+            painter.vline(origin.x + x as f32 * step, rect.y_range(), Stroke::new(1.0, color));
+        }
+        for y in first_y..=last_y {
+            painter.hline(rect.x_range(), origin.y + y as f32 * step, Stroke::new(1.0, color));
+        }
+        return;
+    }
     for x in first_x..=last_x {
         for y in first_y..=last_y {
             let center = pos2(origin.x + x as f32 * step, origin.y + y as f32 * step);
@@ -154,15 +182,17 @@ pub fn opacity_control(ui: &mut Ui, opacity_percent: &mut u8) -> bool {
 /// The grid button for the status bar and its menu, which opens upward: the presets, a field for any other
 /// spacing, and the default. `spacing_nm` changes only when a row is picked or valid text is
 /// applied; invalid text shows why under the field and keeps the current spacing. `every` is
-/// [`shown_every`] for the view, so the label says when the dots are sparser than the snap points.
+/// [`shown_every`] for the view; `style` labels sparser visible dots/lines and suppresses that
+/// annotation for a hidden grid. Style is read-only here and configured through Preferences.
 /// The field's text is kept in egui's temporary memory under the button. Every spacing is shown in
 /// `unit`, and a number typed without a unit is read in it. Returns true when the spacing changed.
-pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_nm: i64, every: u32, unit: Unit) -> bool {
+pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_nm: i64, every: u32, unit: Unit, style: Style) -> bool {
     let t = Tokens::get();
     let before = *spacing_nm;
     let current = spacing_label(*spacing_nm, unit);
-    let text = if every > 1 {
-        format!("Grid {current} · dots {}", spacing_label(spacing_nm.saturating_mul(i64::from(every)), unit))
+    let text = if every > 1 && style != Style::Off {
+        let marks = if style == Style::Lines { "lines" } else { "dots" };
+        format!("Grid {current} · {marks} {}", spacing_label(spacing_nm.saturating_mul(i64::from(every)), unit))
     } else {
         format!("Grid {current}")
     };

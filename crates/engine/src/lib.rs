@@ -57,6 +57,7 @@ enum ParamKind {
     Point,
     Selection,
     BoardSetup,
+    BoardId,
     CopperLayers,
 }
 
@@ -65,6 +66,7 @@ impl ParamKind {
     fn schema(self) -> Value {
         match self {
             Self::BoardSetup => board::setup::BoardSetup::schema(),
+            Self::BoardId => json!({"type":"string", "format":"uuid"}),
             Self::CopperLayers => json!({"type":"integer", "enum":[2,4]}),
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
@@ -103,6 +105,7 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::BoardId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup if value.is_object() => Ok(()),
             Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
@@ -122,6 +125,7 @@ impl ParamKind {
             Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::Selection => Err("must contain bounded unique symbol and wire ID lists"),
+            Self::BoardId => Err("must identify a board by UUID"),
             Self::BoardSetup => Err("must contain a board setup object"),
             Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
             Self::FootprintDefinition => Err("must identify the built-in footprint"),
@@ -226,6 +230,12 @@ pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
 /// Atomically replace a validated board setup while retaining its profile identity.
 pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
+const BOARD: Param = Param {
+    required: false,
+    name: "board",
+    summary: "Board UUID from inspection; omission uses the single-board compatibility default",
+    kind: ParamKind::BoardId,
+};
 const EXPECTED_REVISION: Param =
     Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
 
@@ -396,6 +406,7 @@ const CATALOG: &[Command] = &[
         title: "Place Footprint",
         summary: "Place the supported two-pad footprint for a schematic component and map its pins. Undoable.",
         params: &[
+            BOARD,
             Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
             Param { required: true, name: "definition", summary: "Pinned built-in footprint definition", kind: ParamKind::FootprintDefinition },
             Param { required: true, name: "pin_1_pad", summary: "Physical pad for schematic pin 1", kind: ParamKind::PadNumber },
@@ -426,6 +437,7 @@ const CATALOG: &[Command] = &[
         title: "Initialize Board Setup",
         summary: "Create stable layers and a rigid stackup on an empty board. Thickness and materials remain unspecified. Undoable.",
         params: &[
+            BOARD,
             Param { required: true, name: "copper_layers", summary: "Initial two- or four-layer topology", kind: ParamKind::CopperLayers },
             EXPECTED_REVISION,
         ],
@@ -435,6 +447,7 @@ const CATALOG: &[Command] = &[
         title: "Set Board Setup",
         summary: "Validate and replace layer names and physical stackup in one undo step. Populated boards reject topology changes.",
         params: &[
+            BOARD,
             Param {
                 required: true,
                 name: "setup",
@@ -480,7 +493,8 @@ impl std::error::Error for CommandError {}
 
 /// The persistent address of a schematic sheet within a project. Names and file paths are not
 /// identities; this address survives edits and saves, but does not identify a runtime opening.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SheetTarget {
     project: uuid::Uuid,
     sheet: uuid::Uuid,
@@ -608,16 +622,22 @@ impl Project {
 
     /// Find the placed board pad for a schematic terminal, if a footprint is assigned.
     pub fn pad_for_terminal(&self, terminal: Terminal) -> Option<Pad> {
-        self.board.pad_for(self.terminal_symbol(terminal)?.component, terminal.number())
+        self.board.pad_for(self.terminal_symbol(terminal)?.component, terminal.number()).map(|pad| pad.on_board(self.board_target().board))
     }
 
     /// Locate a mapped physical pad in board coordinates.
     pub fn pad_position(&self, pad: Pad) -> Option<Point> {
+        if pad.board.is_some_and(|id| id != self.board_target().board) {
+            return None;
+        }
         self.board.pad_position(pad)
     }
 
     /// Find the schematic terminal corresponding to a placed board pad.
     pub fn terminal_for_pad(&self, pad: Pad) -> Option<Terminal> {
+        if pad.board.is_some_and(|id| id != self.board_target().board) {
+            return None;
+        }
         let (component, pin) = self.board.component_pin_for(pad)?;
         self.component_terminal(component, pin)
     }
@@ -735,12 +755,13 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json"})).collect::<Vec<_>>(),
                 "sheets": [{"id":p.sheet_id, "name":p.sheet_name, "file":format!("sheets/{}.json", p.sheet_id)}],
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": p.inspect_schematic(),
             });
             if p.board.setup.is_some() || !p.board.footprints().is_empty() {
-                inspected["board"] = json!({"footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
+                inspected["board"] = json!({"id":p.board_target().board, "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
                 if let Some(setup) = &p.board.setup {
                     inspected["board"]["setup"] = json!(setup);
                     inspected["board"]["laminate_thickness_nm"] = json!(setup.laminate_thickness_nm());
@@ -769,6 +790,9 @@ impl Session {
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
+        if matches!(id, PLACE_FOOTPRINT | INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP) {
+            self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
+        }
         let setup_handler_checks_state = self.project.is_some() && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP);
         if !setup_handler_checks_state && !self.available(id) {
             return Err(CommandError::Unavailable(match id {

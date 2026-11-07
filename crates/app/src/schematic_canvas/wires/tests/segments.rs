@@ -22,7 +22,7 @@ fn slide_preview(h: &mut Harness<'_, PcbApp>, id: u64, from: Point, to: Point) -
     h.run();
     h.hover_at(end);
     h.run();
-    assert!(matches!(view(h, id).tool, Some(Tool::Reshape { .. })));
+    assert!(matches!(view(h, id).schematic.tool, Some(Tool::Reshape { .. })));
     end
 }
 
@@ -35,8 +35,8 @@ fn click_and_delete_target_only_the_indicated_segment() {
             let mut h = split_harness(narrow);
             let before = h.state().session.snapshot().unwrap();
             select_segment(&mut h, id, grid(8, 3));
-            assert_eq!(view(&h, id).selected_leg.as_ref().unwrap().leg, 1);
-            assert!(view(&h, 1 - id).selection.is_empty());
+            assert_eq!(view(&h, id).schematic.selected_leg.as_ref().unwrap().leg, 1);
+            assert!(view(&h, 1 - id).schematic.selection.is_empty());
             let ink = pcbcraft_chrome::Tokens::get();
             assert_painted(&h, id, &routes(&h)[0], ink.schematic_wire);
             assert_painted(&h, id, &[grid(8, 0), grid(8, 6)], ink.accent);
@@ -92,7 +92,7 @@ fn dragging_a_segment_aligns_adjacent_runs_without_moving_the_whole_wire() {
                 let ink = pcbcraft_chrome::Tokens::get();
                 assert_painted(&h, pane, &routes(&h)[0], if pane == id { ink.schematic_wire } else { ink.schematic_highlight });
             }
-            assert!(view(&h, id).selected_leg.is_some(), "The reshaped segment stays selected");
+            assert!(view(&h, id).schematic.selected_leg.is_some(), "The reshaped segment stays selected");
             h.key_press(Key::Delete);
             h.run();
             assert_eq!(routes(&h).len(), 2, "The retained selection deletes only the newly aligned segment");
@@ -114,7 +114,7 @@ fn whole_wire_actions_and_keyboard_segment_drag_remain_distinct() {
     let mut h = split_harness(false);
     right_click_in(&mut h, 1, grid(8, 3));
     click(&mut h, "Select Wire");
-    assert!(view(&h, 1).selected_leg.is_none());
+    assert!(view(&h, 1).schematic.selected_leg.is_none());
     let before = h.state().session.snapshot().unwrap();
     let from = view(&h, 1).camera.screen(grid(8, 3), canvas(&h, 1));
     let to = from + vec2(20.0, 30.0);
@@ -122,7 +122,7 @@ fn whole_wire_actions_and_keyboard_segment_drag_remain_distinct() {
     h.run();
     h.hover_at(to);
     h.run();
-    assert!(matches!(view(&h, 1).tool, Some(Tool::MoveItems { .. })));
+    assert!(matches!(view(&h, 1).schematic.tool, Some(Tool::MoveItems { .. })));
     h.drop_at(to);
     h.run();
     assert_eq!(routes(&h), vec![vec![grid(-6, 3), grid(10, 3), grid(10, 9)]]);
@@ -139,13 +139,13 @@ fn whole_wire_actions_and_keyboard_segment_drag_remain_distinct() {
     h.run();
     h.key_press(Key::G);
     h.run();
-    assert!(view(&h, 1).tool.is_none(), "Typing in Parts must not start a segment drag");
+    assert!(view(&h, 1).schematic.tool.is_none(), "Typing in Parts must not start a segment drag");
     click(&mut h, "Close Parts library");
     h.hover_at(from);
     h.run();
     h.key_press(Key::G);
     h.run();
-    assert!(matches!(view(&h, 1).tool, Some(Tool::Reshape { .. })));
+    assert!(matches!(view(&h, 1).schematic.tool, Some(Tool::Reshape { .. })));
     select_segment(&mut h, 1, grid(10, 3));
     assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(10, 0), grid(10, 6), grid(8, 6)]]);
 }
@@ -190,9 +190,9 @@ fn interrupted_segment_drags_and_stale_selections_cannot_commit_or_widen() {
         h.drop_at(end);
         h.run();
         assert_eq!(h.state().session.inspect(), before, "{interruption}");
-        assert!(h.state().views.active.tool.is_none(), "{interruption}");
+        assert!(h.state().views.active.schematic.tool.is_none(), "{interruption}");
         if matches!(interruption, "edit" | "reopen") {
-            assert!(h.state().views.active.selection.is_empty());
+            assert!(h.state().views.active.schematic.selection.is_empty());
             h.key_press(Key::Delete);
             h.run();
             assert_eq!(h.state().session.inspect(), before);
@@ -212,7 +212,7 @@ fn selected_segments_expire_on_shared_edits_without_whole_wire_fallback() {
     h.key_press(Key::Delete);
     h.run();
     assert_eq!(h.state().session.inspect(), before);
-    assert!(view(&h, 1).selected_leg.is_none());
+    assert!(view(&h, 1).schematic.selected_leg.is_none());
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
 }
 
@@ -239,7 +239,7 @@ fn segment_reshape_uses_its_own_panes_custom_grid() {
                 select_segment(&mut h, id, from);
                 h.key_press(Key::G);
                 h.run();
-                assert!(matches!(view(&h, id).tool, Some(Tool::Reshape { .. })));
+                assert!(matches!(view(&h, id).schematic.tool, Some(Tool::Reshape { .. })));
                 select_segment(&mut h, id, to);
             }
             assert_eq!(h.state().message, None);
@@ -275,7 +275,7 @@ fn corner_and_branched_endpoint_handles_survive_segment_selection_in_both_panes(
             ] {
                 select_segment(&mut h, id, grid(8, 3));
                 let end = slide_preview(&mut h, id, from, to);
-                let Some(Tool::Reshape { drag, .. }) = &view(&h, id).tool else { panic!("handle did not start a reshape") };
+                let Some(Tool::Reshape { drag, .. }) = &view(&h, id).schematic.tool else { panic!("handle did not start a reshape") };
                 assert!(!matches!(drag.edit, pcbcraft_engine::wire::Reshape::Segment { .. }));
                 assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
                 h.drop_at(end);
@@ -283,7 +283,7 @@ fn corner_and_branched_endpoint_handles_survive_segment_selection_in_both_panes(
                 assert_eq!(h.state().message, None);
                 assert_eq!(routes(&h), expected);
                 assert_eq!(h.state().session.project().unwrap().wires().iter().map(|wire| wire.endpoints()).collect::<Vec<_>>(), endpoints);
-                assert_eq!(view(&h, id).selection.single_wire(), Some("wire-4"));
+                assert_eq!(view(&h, id).schematic.selection.single_wire(), Some("wire-4"));
                 let after = h.state().session.snapshot().unwrap();
                 for pane in [0, 1] {
                     assert_painted(&h, pane, &expected[1], pcbcraft_chrome::Tokens::get().schematic_wire);

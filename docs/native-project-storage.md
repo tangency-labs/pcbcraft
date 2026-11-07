@@ -112,6 +112,13 @@ A component without a placed unit is still refused.
 
 ## Git behavior
 
+[Named arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
+are kept in versioned user-local application storage. Camera, pane, tab and window
+changes do not rewrite electrical project files or create undo entries. Successful
+Save As copies the local arrangement record to the destination association;
+failed or cancelled saves retain the original. Portable arrangement export remains
+a separate future format and feature.
+
 Commit the working folder. Each editable record has a stable ordering and its
 own line; separator commas occupy separate lines so appending a record does not
 rewrite the preceding record. Saved symbol files have one line per terminal,

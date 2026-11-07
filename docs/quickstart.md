@@ -2,8 +2,8 @@
 
 This guide exercises the schematic editor available today. The
 [capability table](capabilities.md) distinguishes working features from the
-[MVP plan](https://github.com/tangency-labs/pcbcraft/milestone/1); PCB layout and
-visual schematic/board cross-probing are still being built. The two-resistor
+[MVP plan](https://github.com/tangency-labs/pcbcraft/milestone/1); PCB inspection and
+component cross-highlighting are available, while board editing is still being built. The two-resistor
 example below is an original development fixture, not the polished MVP demo or
 a validated circuit design.
 
@@ -88,6 +88,11 @@ float or collapse; **View** restores a hidden panel. **Help → Keyboard Shortcu
 shows the current bindings. Keyboard editing shortcuts apply to the canvas when
 a text field or dialog is not using the keys.
 
+The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
+**Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
+views and windows. Grid opacity affects visible grids in both workspaces; display
+changes leave snapping and each view's spacing unchanged.
+
 To compare views, choose **View → Split**, pan one pane, and select a symbol:
 the other pane highlights it while keeping its own selection. **View → Settings**
 can also pan other views to reveal a selection. On desktop, **View → New window**
@@ -98,12 +103,69 @@ Right-click a sheet tab to open beside it or close that pane. Closing a detached
 window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
+The project name stays separate from the top **Views** arrangement tab. Its tooltip
+explains the arrangement and its right-click actions. Use the
+**+** beside it to name a setup, starting with the current views and windows or a
+single view. Right-click any arrangement tab for **Rename…**, **Duplicate…** or
+**Delete…**. Renaming or deleting an inactive tab leaves the current setup in
+place. Naming opens a dialog in the window you are using;
+**Cancel** or **Esc** discards the draft. Each arrangement remembers
+its panes, document navigation, cameras, panels and desktop windows locally; reopening
+the saved project restores the last active arrangement. Selecting a sheet in
+Browser or a workspace changes what the focused pane shows, without adding tabs,
+switching arrangements or moving views elsewhere. A single view has no lower tab
+strip; split panes each show one document header whose **×** closes the pane.
+The engine currently exposes one editable sheet and one legacy board.
+See [arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
+for storage and monitor-restoration limits.
+
 Close the original window while another editor remains: the surviving window
 keeps its views and takes over project dialogs. Closing the last editor window
 prompts for unsaved changes; **Cancel** keeps that window open. **File → Quit**
-from any editor asks once before closing the whole project. Browser builds keep panes inside one tab. Schematic is currently
-the only editable workspace, so these actions show additional views of its one
-sheet; schematic/PCB workspace choices come with the board editor.
+from any editor asks once before closing the whole project. Browser builds keep
+panes inside one tab. Schematic is currently the editable workspace; PCB layout
+inspects existing placements and highlights their schematic counterparts.
+
+Desktop Close releases the addressed native window, including the original
+window. A surviving editor keeps its native identity and position even when both
+windows show the same document. There is no hidden original editor or automatic
+switch away from Wayland. Native close/reopen verification currently covers Linux
+Wayland and X11; Windows and macOS still need platform qualification.
+
+## Inspect a board beside its schematic
+
+Generate an original example into a directory that does not already exist:
+
+```sh
+cargo run --locked -p pcbcraft-engine --example board_workspace -- /tmp/pcbcraft-board-example
+```
+
+Open `/tmp/pcbcraft-board-example/board-inspection/project.pc` on desktop, or
+upload the generated `board-inspection.pc.zip` in the browser. The example has a
+resistor, a two-pin connector, two connections and two generic footprint
+placements. It is an inspection fixture, not a fabrication-ready board.
+
+Click the workspace tile and choose **PCB layout** to switch the focused pane.
+To keep the schematic visible, click the split icon inside the PCB layout card
+(tooltip: **Open PCB layout beside current view**). On desktop, the adjacent
+window icon opens the board directly in another native window; repeat it to open
+another. Each split pane has an **×** beside its document title that closes only
+that view and leaves the other views in place. Select a symbol or a footprint marker and
+check the counterpart's amber highlight. Each view keeps its own edit selection,
+zoom and position, with optional panning under **View → Settings**.
+
+In the board workspace, Browser picks select and center a footprint. Properties
+shows its stored reference, value, definition and unit-aware coordinate readouts;
+Layers groups copper in physical stack order and retains visibility by layer ID.
+**Layout → Fit** fits the placements, and **Layout → Reveal** brings the current
+counterpart highlight into view without changing zoom. Switching back restores
+the schematic camera. These actions do not modify project data or undo history.
+
+Only pad centers are represented by the current generic footprint model. Pad
+shapes/drills, outline editing, routing, individual pad selection, selection
+filters and Flip view still need implementation. Removing the last schematic
+unit currently removes its footprint too; reviewed board updates are tracked
+separately in #55.
 
 Share the entire project folder or its `.pc.zip` archive, rather than the entry
 point alone. Used symbol definitions are pinned so the recipient does not need

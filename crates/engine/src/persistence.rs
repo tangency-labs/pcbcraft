@@ -1153,7 +1153,7 @@ mod tests {
         let decoded = decode(&bytes).unwrap();
         let pin = decoded.symbols()[1].terminals()[0];
         let pad = decoded.pad_for_terminal(pin).unwrap();
-        assert_eq!(pad.inspect(), json!({"footprint":"footprint-5", "pad":"2"}));
+        assert_eq!(pad.inspect(), json!({"board":decoded.board_target().board,"footprint":"footprint-5", "pad":"2"}));
         assert_eq!(decoded.terminal_for_pad(pad), Some(pin));
         assert_eq!(decoded.pad_position(pad), Some(Point { x_nm: 13_970_000, y_nm: 0 }));
         assert_eq!(encode(decoded.clone()).unwrap(), bytes);
@@ -1252,7 +1252,7 @@ mod tests {
         let migrated = decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         let terminal = migrated.symbols()[0].terminals()[0];
         let pad = migrated.pad_for_terminal(terminal).unwrap();
-        assert_eq!(pad.inspect(), json!({"footprint": "footprint-5", "pad": "2"}));
+        assert_eq!(pad.inspect(), json!({"board":migrated.board_target().board,"footprint": "footprint-5", "pad": "2"}));
         for encoding in [Encoding::Json, Encoding::Zip] {
             let bytes = encode_file(migrated.clone(), encoding).unwrap();
             let (project, detected) = decode_file(&bytes).unwrap();
