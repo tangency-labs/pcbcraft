@@ -73,8 +73,10 @@ for repeated placement. **Fit** and Browser selections keep their targets clear 
 The header chevron collapses Parts to its title bar and expands it again, keeping
 the search, preview size and position. **A** also expands it and focuses search.
 
-Choose **Capture → Wire** or press **W**, then click a pin, an existing wire endpoint
-or empty grid space to start. Click to add corners, **Space** to flip the current
+Click a symbol pin, wire endpoint or junction to start a wire directly, or choose
+**Capture → Wire** / **W** to start on a wire segment or empty grid space. The snapped
+crosshair carries a small wire glyph; a ring marks an existing connection target.
+Click to add corners, **Space** to flip the current
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
 to finish, or press **Enter** or double-click to finish on empty space. **Esc** or
 right-click → **Cancel** discards the draft. Click a completed wire segment to select it;
@@ -121,8 +123,10 @@ When dragging folds a stepped route back over itself, obsolete split corners dis
 instead of becoming dangling stubs; original free ends, pins and branches stay connected.
 When a route returns to an already connected straight wire through a U-shaped detour,
 healing slides the junction to the nearer intersection without passing another branch
-or moving a pin. Self-crossing returns and redundant loops also shorten; cleanup keeps
-the shorter alternative only when the removed path has no intermediate pin or branch.
+or moving a pin. Self-crossing returns also shorten. When a new route reconnects to
+its existing net, cleanup keeps the new drawing gesture and removes the older
+alternative only when it has no intermediate pin or branch. Manual cleanup and
+geometry-only moves retain the shorter-route policy.
 While drawing, retracing the draft shortens its preview immediately, including a
 reversal that runs past an earlier corner. Backspace restores the previous clicked
 corner, and finishing keeps the shortened route in one undo step.

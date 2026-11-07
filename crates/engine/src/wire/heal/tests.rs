@@ -2,6 +2,7 @@ use super::*;
 use crate::{ATTACH_JUNCTION, DRAW_WIRE, HEAL_WIRES, MOVE_ITEMS, MOVE_SYMBOL, PLACE_SYMBOL, Session, persistence};
 use serde_json::{Value, json};
 
+mod redraws;
 mod segment_slides;
 
 /// Build a model point in the fixture's schematic grid units.

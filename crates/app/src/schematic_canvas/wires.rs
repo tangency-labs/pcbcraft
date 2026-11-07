@@ -116,7 +116,7 @@ impl ReshapeDrag {
 pub(super) fn reshape_at(project: &Project, camera: &Camera, rect: Rect, wire: &str, pointer: Pos2, origin: Point) -> Option<ReshapeDrag> {
     let found = project.wires().iter().find(|candidate| candidate.id() == wire)?;
     let route = project.wire_path(found);
-    let near = |point: Point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_PIN_HIT_RADIUS;
+    let near = |point: Point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_HANDLE_HIT_RADIUS;
     let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| ReshapeDrag { wire: wire.to_owned(), edit, grabbed, horizontal, origin };
     for end in found.endpoints() {
         if let WireEndpoint::Junction(id) = end
@@ -359,7 +359,13 @@ pub(super) fn pick(
     let clicked = response.clicked_by(PointerButton::Primary);
     let pointer = if clicked { response.interact_pointer_pos() } else { response.hover_pos() };
     let target = preview(painter, rect, project, camera, start, draft, pointer, auto_heal);
-    response.clone().on_hover_cursor(egui::CursorIcon::Crosshair);
+    if response.hovered()
+        && let Some(pointer) = pointer
+    {
+        let point = target.and_then(|anchor| anchor.position(project)).unwrap_or_else(|| camera.snap(pointer, rect));
+        painter.ctx().set_cursor_icon(egui::CursorIcon::None);
+        pcbcraft_chrome::cursor::wire(painter, camera.screen(point, rect), target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_))));
+    }
     let finish = draft.finish_requested || response.double_clicked_by(PointerButton::Primary);
     target.filter(|_| clicked || finish).map(|target| (target, finish))
 }
@@ -405,16 +411,9 @@ fn endpoints(project: &Project, camera: &Camera, rect: Rect) -> Vec<(WireEndpoin
         .collect()
 }
 
-/// Pick the nearest explicit endpoint within the shared hit radius, refusing equal-distance
-/// targets. Empty space resolves to a bounded grid point; overlapping geometry never joins.
-fn anchor_at(
-    endpoints: &[(WireEndpoint, Pos2)],
-    project: &Project,
-    camera: &Camera,
-    rect: Rect,
-    at: Pos2,
-    ignore: Option<WireEndpoint>,
-) -> Option<Anchor> {
+/// Find the nearest endpoint inside the magnetic radius. Equal-distance identities return
+/// an error; an empty hit returns `Ok(None)` so wiring may try a stroke or grid point.
+fn nearest_node(endpoints: &[(WireEndpoint, Pos2)], at: Pos2) -> Result<Option<WireEndpoint>, ()> {
     let mut nearest = None;
     let mut distance = theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
     let mut ambiguous = false;
@@ -428,13 +427,24 @@ fn anchor_at(
             ambiguous = true;
         }
     }
-    if ambiguous {
-        None
-    } else if let Some(endpoint) = nearest {
+    if ambiguous { Err(()) } else { Ok(nearest) }
+}
+
+/// Resolve the nearest node, wire stroke or free grid point without resolving ties
+/// arbitrarily. Interior wire targets use their projected model coordinate.
+fn anchor_at(
+    endpoints: &[(WireEndpoint, Pos2)],
+    project: &Project,
+    camera: &Camera,
+    rect: Rect,
+    at: Pos2,
+    ignore: Option<WireEndpoint>,
+) -> Option<Anchor> {
+    if let Some(endpoint) = nearest_node(endpoints, at).ok()? {
         Some(Anchor::Existing(endpoint))
     } else {
         let mut hit = None;
-        let mut nearest = theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2);
+        let mut nearest = theme::SCHEMATIC_WIRE_HIT_RADIUS.powi(2);
         let mut ambiguous = false;
         for wire in project.wires().iter().filter(|w| ignore.is_none_or(|end| !w.endpoints().contains(&end))) {
             for pair in project.wire_path(wire).windows(2) {
@@ -466,6 +476,16 @@ fn anchor_at(
     }
 }
 
+/// Resolve a directly clickable terminal or explicit wire node using drawing's magnetic
+/// target rules. Interior wire strokes remain available for segment selection and dragging.
+/// Equal-distance nodes are ambiguous and cannot start a connection.
+pub(super) fn node_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Anchor> {
+    if !rect.contains(pointer) {
+        return None;
+    }
+    nearest_node(&endpoints(project, camera, rect), pointer).ok()?.map(Anchor::Existing)
+}
+
 /// Mark a validated attachment destination using the same pin ring as the wire drawing tool.
 pub(super) fn paint_attachment(painter: &Painter, rect: Rect, project: &Project, camera: &Camera, target: Anchor) {
     if let Some(point) = target.position(project) {
@@ -481,7 +501,7 @@ pub(super) fn at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) 
         .filter_map(|wire| {
             let points: Vec<_> = project.wire_path(wire).into_iter().map(|point| camera.screen(point, rect)).collect();
             let distance = points.windows(2).map(|pair| distance_sq(pointer, pair[0], pair[1])).min_by(f32::total_cmp)?;
-            (distance < theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2)).then(|| (distance, wire.id()))
+            (distance < theme::SCHEMATIC_WIRE_HIT_RADIUS.powi(2)).then(|| (distance, wire.id()))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, id)| id)

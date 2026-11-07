@@ -1145,6 +1145,10 @@ impl PcbApp {
             (Some(Tool::Wire { revision, start: None }), Click::WirePoint(anchor, _)) => {
                 self.views.active.schematic.tool = Some(Tool::Wire { revision, start: Some(anchor) });
             }
+            (None, Click::StartWire(anchor)) => {
+                self.begin_wire();
+                self.views.active.schematic.tool = Some(Tool::Wire { revision: self.session.revision(), start: Some(anchor) });
+            }
             (Some(Tool::Wire { revision, start: Some(from) }), Click::WirePoint(to, finish)) => {
                 if let Some(project) = self.session.project()
                     && let (Some(a), Some(b)) = (from.position(project), to.position(project))

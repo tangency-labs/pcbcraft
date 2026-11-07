@@ -40,6 +40,9 @@ pub(super) struct Edit {
     /// Pins, original free ends and real branches survive cleanup. Degree-two transit
     /// junctions may disappear when a retrace makes their old location redundant.
     protected: BTreeSet<WireEndpoint>,
+    /// The active drawing gesture wins over a redundant older route. Manual cleanup and
+    /// geometry-only moves have no preferred path and retain their length-based policy.
+    preferred: BTreeSet<u64>,
     pub touched: BTreeSet<u64>,
 }
 
@@ -234,7 +237,14 @@ impl Edit {
         }
         let protected =
             degree.into_iter().filter_map(|(end, count)| (count != 2 || matches!(end, WireEndpoint::Terminal(_))).then_some(end)).collect();
-        Self { project: project.clone(), next: highest.saturating_add(1), budget: 200_000, protected, touched: BTreeSet::new() }
+        Self {
+            project: project.clone(),
+            next: highest.saturating_add(1),
+            budget: 200_000,
+            protected,
+            preferred: BTreeSet::new(),
+            touched: BTreeSet::new(),
+        }
     }
 
     /// Bound pair scans independently of the number of successful splits and merges.
@@ -289,6 +299,7 @@ impl Edit {
             if old == path || old.iter().rev().eq(path.iter()) {
                 return Err(CommandError::InvalidParams("these endpoints are already joined by this route".into()));
             }
+            self.touched.insert(existing.ordinal);
             if old.len() > 2 {
                 self.split(existing.ordinal, old[1])?;
             } else if path.len() > 2 {
@@ -302,7 +313,8 @@ impl Edit {
         self.push_wire(endpoints, path)
     }
 
-    /// Allocate one authored route within the wire limit and track it for local normalization.
+    /// Allocate one authored drawing route within the wire limit and prefer that gesture
+    /// over older branch-free alternatives during local normalization.
     fn push_wire(&mut self, endpoints: [WireEndpoint; 2], path: &[Point]) -> Result<(), CommandError> {
         if self.project.wires.len() >= MAX_WIRES {
             return Err(CommandError::Unavailable("the schematic wire limit has been reached".into()));
@@ -311,11 +323,13 @@ impl Edit {
         let bends = super::interior(path)?;
         Arc::make_mut(&mut self.project.wires).push(Wire { ordinal, endpoints, bends: Some(bends) });
         self.touched.insert(ordinal);
+        self.preferred.insert(ordinal);
         Ok(())
     }
 
-    /// Split at an unambiguous route point, preserving the first piece's ID. Endpoints reuse
-    /// their identities; a new interior junction and second wire are allocated atomically.
+    /// Split at an unambiguous route point, preserving the first piece's ID and active-draw
+    /// preference on both pieces. Endpoints reuse their identities; a new interior junction
+    /// and second wire are allocated atomically.
     pub fn split(&mut self, id: u64, at: Point) -> Result<WireEndpoint, CommandError> {
         let index =
             self.project.wires.iter().position(|w| w.ordinal == id).ok_or_else(|| CommandError::InvalidParams("wire does not exist".into()))?;
@@ -337,6 +351,9 @@ impl Edit {
         wires[index].bends = Some(super::interior(&left)?);
         wires.push(Wire { ordinal, endpoints: [node, wire.endpoints[1]], bends: Some(super::interior(&right)?) });
         self.touched.extend([id, ordinal]);
+        if self.preferred.contains(&id) {
+            self.preferred.insert(ordinal);
+        }
         Ok(node)
     }
 
@@ -431,19 +448,26 @@ impl Edit {
             if a > b {
                 path.reverse();
             }
-            if let Some(old) = seen.insert((a.min(b), a.max(b)), path.clone()) {
-                if old != path {
+            let key = (a.min(b), a.max(b));
+            if let Some((old, kept)) = seen.get(&key) {
+                if old != &path {
                     return Err(CommandError::InvalidParams("healing would create different parallel routes between the same endpoints".into()));
                 }
+                if self.preferred.contains(&wire.ordinal) {
+                    self.preferred.insert(*kept);
+                }
                 remove.insert(wire.ordinal);
+            } else {
+                seen.insert(key, (path, wire.ordinal));
             }
         }
         Arc::make_mut(&mut self.project.wires).retain(|w| !remove.contains(&w.ordinal));
         Ok(())
     }
 
-    /// Remove redundant straight-through degree-two junctions touched by the edit. Intentional
-    /// corners and branch points remain; untouched routes and their authored/automatic state stay.
+    /// Remove redundant straight-through degree-two junctions touched by the edit, retaining
+    /// active-draw preference on the joined wire. Intentional corners and branch points
+    /// remain; untouched routes and their authored/automatic state stay.
     fn collapse(&mut self) -> Result<(), CommandError> {
         for _ in 0..128 {
             let mut joined = None;
@@ -496,6 +520,9 @@ impl Edit {
             let Some((a, b, ends, path)) = joined else {
                 return Ok(());
             };
+            if self.preferred.contains(&a) || self.preferred.contains(&b) {
+                self.preferred.insert(a);
+            }
             for wire in Arc::make_mut(&mut self.project.wires) {
                 if wire.ordinal == a {
                     wire.endpoints = ends;

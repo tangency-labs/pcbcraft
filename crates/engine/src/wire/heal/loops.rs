@@ -49,8 +49,10 @@ pub(super) fn erase_path_loops(path: &mut Vec<Point>, budget: &mut usize) -> Res
 
 impl Edit {
     /// Remove one redundant alternative route to a touched edge. Only degree-two junctions
-    /// may lie inside the alternative; pins and other branches stop the walk. Keep the shorter
-    /// path, breaking equal-length ties by the older wire ID. Geometry alone never joins nets.
+    /// may lie inside the alternative; pins, authored endpoints and branches stop the walk.
+    /// Keep the active drawing gesture when only one route contains it; without a preferred
+    /// gesture, keep the shorter path and break length ties by older wire ID.
+    /// Geometry alone never joins nets.
     pub(super) fn remove_redundant_loop(&mut self) -> Result<bool, CommandError> {
         let wires = self.project.wires.clone();
         let mut adjacent = BTreeMap::<WireEndpoint, Vec<usize>>::new();
@@ -81,17 +83,21 @@ impl Edit {
                     if at == to {
                         let distance: u128 = alternative.iter().map(|&i| length(&self.project, &wires[i])).sum();
                         let oldest = alternative.iter().map(|&i| wires[i].ordinal).min().unwrap_or(wire.ordinal);
-                        let remove: BTreeSet<_> = if (length(&self.project, wire), wire.ordinal) > (distance, oldest) {
-                            BTreeSet::from([wire.ordinal])
+                        let current_preferred = self.preferred.contains(&wire.ordinal);
+                        let alternative_preferred = alternative.iter().any(|&i| self.preferred.contains(&wires[i].ordinal));
+                        let remove_current = if current_preferred != alternative_preferred {
+                            alternative_preferred
                         } else {
-                            alternative.iter().map(|&i| wires[i].ordinal).collect()
+                            (length(&self.project, wire), wire.ordinal) > (distance, oldest)
                         };
+                        let remove: BTreeSet<_> =
+                            if remove_current { BTreeSet::from([wire.ordinal]) } else { alternative.iter().map(|&i| wires[i].ordinal).collect() };
                         self.touched.extend(alternative.iter().map(|&i| wires[i].ordinal));
                         Arc::make_mut(&mut self.project.wires).retain(|w| !remove.contains(&w.ordinal));
                         self.project.prune_junctions();
                         return Ok(true);
                     }
-                    if !matches!(at, WireEndpoint::Junction(_)) || !visited.insert(at) {
+                    if !matches!(at, WireEndpoint::Junction(_)) || self.protected.contains(&at) || !visited.insert(at) {
                         break;
                     }
                     let Some(edges) = adjacent.get(&at).filter(|edges| edges.len() == 2) else { break };

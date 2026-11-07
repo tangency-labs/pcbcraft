@@ -1,6 +1,8 @@
 mod attachment;
 mod healing;
+mod redraws;
 mod segments;
+mod targets;
 
 use crate::{PcbApp, tests::click};
 use egui::{Modifiers, PointerButton, Pos2, vec2};

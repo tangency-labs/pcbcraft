@@ -86,6 +86,8 @@ pub(crate) enum Click {
     FinishReshape(Option<Anchor>),
     DeleteItems,
     WirePoint(Anchor, bool),
+    /// A plain terminal/node click begins a fresh wire draft without a tool shortcut.
+    StartWire(Anchor),
     CancelWire,
     Grab(SymbolPlacement, Vec2),
     FinishMove(Option<Point>),
@@ -464,6 +466,17 @@ pub(crate) fn show(
         return None;
     }
     if tool.is_none()
+        && response.hovered()
+        && !ui.ctx().egui_wants_keyboard_input()
+        && !ui.input(|input| input.modifiers.shift || input.modifiers.ctrl || input.modifiers.command)
+        && let Some(pointer) = response.hover_pos()
+        && let Some(anchor) = wires::node_at(project, camera, rect, pointer)
+        && let Some(point) = anchor.position(project)
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        pcbcraft_chrome::cursor::wire(&painter, screen(point), true);
+    }
+    if tool.is_none()
         && response.contains_pointer()
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::G))
@@ -477,6 +490,13 @@ pub(crate) fn show(
         let pointer = response.interact_pointer_pos()?;
         let hit = selection::at(project, camera, rect, pointer);
         let modifiers = ui.input(|i| i.modifiers);
+        if !modifiers.shift
+            && !modifiers.ctrl
+            && !modifiers.command
+            && let Some(anchor) = wires::node_at(project, camera, rect, pointer)
+        {
+            return Some(Click::StartWire(anchor));
+        }
         if !modifiers.shift
             && !modifiers.ctrl
             && hit.single_wire().is_some()
