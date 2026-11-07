@@ -10,15 +10,18 @@ use egui::{ViewportCommand, ViewportId};
 use super::{Dialog, IN_BROWSER, PcbApp, shell};
 
 /// What the person was doing when the open project's unsaved changes had to be answered for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Then {
     Close,
     New,
     Open,
+    /// Capture the chosen path so a save can reorder history without changing the destination.
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenRecent(std::path::PathBuf),
 }
 
 /// An action held back until the running file operation finishes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Waiting {
     /// Closing was requested while a file operation ran: decide once it ends, asking if anything
     /// is still unsaved.
@@ -83,11 +86,10 @@ impl PcbApp {
     /// unsaved work left behind (a cancelled or failed save, or edits made while it ran) keeps the
     /// project open; the save's own status explains why. After Don't Save, carry on regardless.
     pub(crate) fn finish_waiting(&mut self, ctx: &egui::Context) {
-        let Some(waiting) = self.waiting else { return };
         if self.files.busy() {
             return;
         }
-        self.waiting = None;
+        let Some(waiting) = self.waiting.take() else { return };
         let (then, ask) = match waiting {
             Waiting::ToDecide(then) => (then, true),
             Waiting::ForSave(then) => (then, false),
@@ -112,6 +114,11 @@ impl PcbApp {
             }
             Then::New => self.start_new_project(),
             Then::Open => self.choose_open_location(ctx),
+            #[cfg(not(target_arch = "wasm32"))]
+            Then::OpenRecent(path) => {
+                self.file_notice = None;
+                self.message = self.files.open_path(path, self.session.revision(), ctx).err();
+            }
         }
     }
 

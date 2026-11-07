@@ -677,3 +677,37 @@ fn first_save_suggests_the_project_name() {
     assert_eq!(file_name_for("Power: 5V/3V3"), "Power- 5V-3V3");
     assert_eq!(file_name_for(" .. "), "project");
 }
+
+/// History follows accepted results, never cancelled, failed, disconnected or stale opens.
+/// A second recent open cannot replace an active receiver and silently drop its file result.
+#[test]
+fn recent_history_records_only_successful_file_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("project.pc.zip");
+    let mut session = session();
+    fs::write(&path, encode_packed(session.snapshot().unwrap()).unwrap()).unwrap();
+    let mut files = ProjectFiles::default();
+    assert!(matches!(complete(&mut files, &mut session, load(&path).map(Outcome::Opened)), Some(Update::Opened)));
+    let before = files.recent.to_text();
+    assert_eq!(files.recent.entries()[0].path, path);
+    for outcome in [Ok(Outcome::Cancelled), Err("Failed to open".to_owned())] {
+        complete(&mut files, &mut session, outcome);
+        assert_eq!(files.recent.to_text(), before);
+    }
+    let (send, receiver) = mpsc::channel();
+    let ctx = egui::Context::default();
+    files.job = Some(Job { receiver, revision: session.revision() });
+    assert!(files.open_path(path.clone(), session.revision(), &ctx).is_err());
+    assert!(files.busy());
+    send.send(load(&path).map(Outcome::Opened)).unwrap();
+    session.apply("project.rename", &json!({"name":"Keep edits"})).unwrap();
+    assert!(matches!(files.poll(&mut session, &ctx), Some(Update::Error(_))));
+    assert_eq!(session.project().unwrap().name, "Keep edits");
+    assert_eq!(files.recent.to_text(), before);
+    let (send, receiver) = mpsc::channel();
+    files.job = Some(Job { receiver, revision: session.revision() });
+    drop(send);
+    assert!(matches!(files.poll(&mut session, &ctx), Some(Update::Error(_))));
+    assert!(!files.busy());
+    assert_eq!(files.recent.to_text(), before);
+}

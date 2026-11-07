@@ -33,6 +33,8 @@ pub(super) fn warn_before_leaving(unsaved: bool) {
 
 #[derive(Debug, Default)]
 pub(super) struct ProjectFiles {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) recent: crate::recent_projects::RecentProjects,
     saved: Option<Saved>,
     job: Option<Job>,
     /// In tests, saves wait here for the test to finish them instead of opening a native picker.
@@ -112,6 +114,33 @@ impl ProjectFiles {
             let _ = saved;
             Some("browser".into())
         }
+    }
+
+    /// Restore desktop history from app storage without reading any project files at startup.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn with_recent(text: Option<&str>) -> Self {
+        Self { recent: text.map(crate::recent_projects::RecentProjects::parse).unwrap_or_default(), ..Self::default() }
+    }
+
+    /// Reopen a recent path through the ordinary native worker and revision check. No picker
+    /// or disk access runs on the editor thread; an existing job retains its receiver.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn open_path(&mut self, path: std::path::PathBuf, revision: u64, ctx: &egui::Context) -> Result<(), String> {
+        if self.busy() {
+            return Err("A project file operation is already running".to_owned());
+        }
+        let (send, receiver) = mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::Builder::new()
+            .name("pcbcraft-open-recent".to_owned())
+            .spawn(move || {
+                let result = native::load(&path).map(Outcome::Opened).map_err(|error| format!("Could not open {}: {error}", path.display()));
+                let _ = send.send(result);
+                ctx.request_repaint();
+            })
+            .map_err(|error| format!("Could not start opening the project: {error}"))?;
+        self.job = Some(Job { receiver, revision });
+        Ok(())
     }
 
     /// Whether a file operation is outstanding. Edits may continue during a save.
@@ -226,6 +255,7 @@ impl ProjectFiles {
     }
 
     /// Accept completed jobs on the editor thread. Keep edits made after the saved revision.
+    /// Record desktop history only for accepted opens and successful saves.
     /// A save that named an Untitled project renames it in the session too, history included,
     /// without changing the revision; cancelled and failed saves leave the session as it was.
     pub(super) fn poll(&mut self, session: &mut Session, ctx: &egui::Context) -> Option<Update> {
@@ -247,6 +277,8 @@ impl ProjectFiles {
         match result {
             Ok(Outcome::Cancelled) => None,
             Ok(Outcome::Opened(saved)) if session.revision() == revision => {
+                #[cfg(not(target_arch = "wasm32"))]
+                self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 session.open_snapshot(Arc::clone(&saved.snapshot));
                 self.saved = Some(saved);
                 Some(Update::Opened)
@@ -259,6 +291,7 @@ impl ProjectFiles {
                 if let Some(original) = renamed {
                     session.adopt_saved_name(&original, &saved.snapshot);
                 }
+                self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));
                 let added_manifest = saved.target.added_manifest();
                 self.saved = Some(saved);

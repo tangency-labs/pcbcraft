@@ -114,8 +114,8 @@ navigation rail, back row, navigation rows, separators, tile grid and action
 tile layout, and the `file_*` sizes come from `assets/styles/ui/palettes.rs`
 at that revision. The `file_*` colours are derived from PCBCraft's palette the
 way SolidCraft's `crates/ui-egui/src/theme_files.rs` fills them in for theme
-files that leave them out, with a deeper hover on the light rail. PCBCraft dropped recent
-designs, samples, recovery, export and thumbnails, stacks the rail above the
+files that leave them out, with a deeper hover on the light rail. PCBCraft omits
+samples, recovery and export, stacks the rail above the
 content at narrow widths, and wires the rows to its own project dialogs and
 commands. The house glyph in `crates/chrome/src/menu/icons.rs` is a simplified,
 theme-colored drawing of `assets/icons/ui/design/svg/flat/home.svg` at the same
@@ -155,6 +155,31 @@ The single-view layout in `crates/app/src/editor_workspace.rs` restores the exis
 `src/desktop/canvas.rs` and `src/desktop/panels.rs` at the same revision. Its path
 and count share the canvas with the floating Browser; tab strips and their panel
 clearance are reserved for split views. Heading insets remain in chrome.
+
+The recent-project cards in `crates/chrome/src/home.rs` and their preview-height
+and inset tokens in `crates/chrome/src/theme.rs` adapt SolidCraft's
+`crates/ui-egui/src/ui_kit/file_view.rs::{sample_grid, sample_card_with_height, thumbnail}`
+at revision `c553365a2197a689e749389a6fbf707a38df9b61` (MIT OR Apache-2.0,
+copyright (c) 2026 SolidCraft contributors): a responsive card grid, 84-point image
+region, inset, title/description placement and hover/focus treatment. PCBCraft adds
+a separate remove control, path-qualified accessibility labels and a clipped
+app-supplied drawing callback. Middle elision of long paths adapts
+`crates/ui-egui/src/ui_kit/text.rs::ellipsize_middle` at that revision.
+The 12-entry bound and promote/forget behavior follow `home.rs::HomeState`.
+`crates/chrome/src/preview.rs` adapts the bounded scheduling, retained worker slots
+and stale-result rejection pattern in `crates/ui-egui/src/render_workspace_thumbnails.rs::Cache`:
+it accepts generic keys and callbacks, permits two workers, and retains no
+SolidCraft document, scene, cancellation or renderer types. The cache and card
+interfaces have no PCBcraft engine dependency and can move to shared Craft UI.
+
+`crates/app/src/recent_projects.rs`, `home.rs` and `project_files.rs` implement
+application-storage history and reopen through upstream's file worker and
+unsaved-changes controller. `schematic_canvas/thumbnail.rs` prepares saved geometry
+and reuses upstream's symbol painter and engine wire paths, rendered by egui;
+no new rasterizer, SolidCraft mechanical session or project model is included.
+`crates/storage` adds bounded, read-only preview reads that neither recover
+interrupted saves nor create locks or write project files. Preview pictures and
+cache state remain outside native project documents.
 
 ## Bundled fonts
 

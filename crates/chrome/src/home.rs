@@ -233,6 +233,134 @@ pub fn action_tile(ui: &mut Ui, id: &str, width: f32, tile: Tile<'_>) -> Respons
     response.on_hover_text(format!("{label}\n{caption}"))
 }
 
+/// Preserve both ends of a path inside a card, including Unicode filenames. Adapted from
+/// SolidCraft's `ui_kit/text.rs::ellipsize_middle`; invalid widths yield an empty label.
+fn elide_path(ui: &Ui, path: &str, font: FontId, width: f32) -> String {
+    if !width.is_finite() || width <= 0.0 {
+        return String::new();
+    }
+    let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), Tokens::get().file_dim).size().x;
+    if measure(path) <= width {
+        return path.to_owned();
+    }
+    let chars: Vec<_> = path.chars().collect();
+    let mut best = "…".to_owned();
+    let (mut low, mut high) = (1, chars.len() / 2);
+    while low <= high {
+        let keep = (low + high) / 2;
+        let candidate = format!("{}…{}", chars.iter().take(keep).collect::<String>(), chars.iter().skip(chars.len() - keep).collect::<String>());
+        if measure(&candidate) <= width {
+            best = candidate;
+            low = keep + 1;
+        } else {
+            high = keep - 1;
+        }
+    }
+    best
+}
+
+/// Preview availability is presentation state, independent of any application's document model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreviewState {
+    Ready,
+    Loading,
+    Empty,
+    Unavailable,
+}
+
+/// The separate actions in a recent project card; removing never activates opening.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RecentAction {
+    pub open: bool,
+    pub remove: bool,
+}
+
+/// Application-owned labels and availability for a family-style rendered project card.
+pub struct RecentCard<'a> {
+    pub title: &'a str,
+    pub path: &'a str,
+    pub enabled: bool,
+    pub preview: PreviewState,
+}
+
+/// A bounded card with an app-rendered picture above its title/path and a separate removal
+/// button. The full path stays in accessible labels and hover text, including at compact widths.
+/// `paint` runs only for visible images, with a clipped painter and fixed image rectangle.
+pub fn recent_card(ui: &mut Ui, id: &str, width: f32, card: RecentCard<'_>, paint: impl FnOnce(&egui::Painter, Rect)) -> RecentAction {
+    let t = Tokens::get();
+    let height = t.file_preview_height + t.file_card_inset * 2.0 + t.space_8 * 2.0 + t.font_button + t.font_small;
+    let label = format!("Open {} ({})", card.title, card.path);
+    let (rect, response) = allocate(ui, id, width, height, &label, card.enabled, None);
+    let hot = card.enabled && (response.hovered() || response.has_focus());
+    ui.painter().rect(
+        rect,
+        t.radius_lg,
+        if hot { t.hover } else { t.file_surface },
+        Stroke::new(1.0, if response.has_focus() { t.accent } else { t.file_border }),
+        StrokeKind::Inside,
+    );
+    let inner = rect.shrink(t.file_card_inset);
+    let image = Rect::from_min_size(inner.min, vec2(inner.width(), t.file_preview_height));
+    ui.painter().rect(image, t.radius_md, t.canvas, Stroke::new(1.0, t.file_border), StrokeKind::Inside);
+    let image_label = format!("Schematic preview: {} ({})", card.title, card.path);
+    let image_response = ui.interact(image, ui.make_persistent_id(("recent:preview", id)), Sense::hover());
+    image_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &image_label));
+    if card.preview == PreviewState::Ready && ui.clip_rect().intersects(image) {
+        paint(&ui.painter().with_clip_rect(ui.clip_rect().intersect(image.shrink(t.space_2))), image);
+    } else if card.preview != PreviewState::Ready {
+        let label = match card.preview {
+            PreviewState::Loading => "Loading preview…",
+            PreviewState::Empty => "Empty schematic",
+            PreviewState::Unavailable => "Preview unavailable",
+            PreviewState::Ready => "",
+        };
+        MenuIcon::Open.paint_sized(ui.painter(), image.center() - vec2(0.0, t.space_8), t.space_24, t, false);
+        ui.painter().text(image.center() + vec2(0.0, t.space_16), egui::Align2::CENTER_CENTER, label, FontId::proportional(t.font_small), t.file_dim);
+    }
+    let top = image.bottom() + t.space_8;
+    let remove_size = t.space_24 + t.space_4;
+    let remove_rect = Rect::from_center_size(pos2(inner.right() - remove_size / 2.0, (top + inner.bottom()) / 2.0), vec2(remove_size, remove_size));
+    let right = (remove_rect.left() - t.space_4).max(inner.left());
+    text(
+        ui,
+        Rect::from_min_max(pos2(inner.left(), top), pos2(right, top + t.font_button + t.space_2)),
+        card.title,
+        fonts::semibold(t.font_button),
+        t.text,
+    );
+    let path_rect = Rect::from_min_max(pos2(inner.left(), top + t.font_button + t.space_4), pos2(right, inner.bottom()));
+    let path_font = FontId::monospace(t.font_small);
+    let path = elide_path(ui, card.path, path_font.clone(), path_rect.width());
+    text(ui, path_rect, &path, path_font, t.file_dim);
+    let remove = ui.interact(remove_rect, ui.make_persistent_id(("recent:remove", id)), Sense::click());
+    remove.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), format!("Remove {} ({}) from recent projects", card.title, card.path))
+    });
+    if remove.hovered() || remove.has_focus() {
+        ui.painter().rect_filled(remove_rect, t.radius_md, t.hover);
+    }
+    MenuIcon::Close.paint_sized(ui.painter(), remove_rect.center(), t.space_12, t, true);
+    if remove.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let picked = RecentAction { open: response.clicked() && !remove.clicked(), remove: remove.clicked() };
+    response.on_hover_text(card.path);
+    remove.on_hover_text("Remove from recent projects");
+    picked
+}
+
+/// Show the empty history without adding an inactive project row.
+pub fn empty_recents(ui: &mut Ui) {
+    let t = Tokens::get();
+    ui.label(egui::RichText::new("No recent projects yet").size(t.font_heading).color(t.file_dim));
+}
+
+/// Forget all history, without deleting project files.
+pub fn clear_recents(ui: &mut Ui) -> Response {
+    ui.add_space(Tokens::get().space_8);
+    ui.button("Clear recent projects")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

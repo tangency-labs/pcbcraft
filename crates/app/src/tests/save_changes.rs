@@ -219,7 +219,7 @@ fn dont_save_waits_for_a_running_save() {
         h.key_press_modifiers(Modifiers::COMMAND, Key::S);
         settle(&mut h);
         assert!(h.state().files.busy());
-        h.state_mut().dialog = Dialog::SaveChanges(then);
+        h.state_mut().dialog = Dialog::SaveChanges(then.clone());
         settle(&mut h);
         press(&mut h, "Don't Save");
         assert!(matches!(h.state().dialog, Dialog::None));
