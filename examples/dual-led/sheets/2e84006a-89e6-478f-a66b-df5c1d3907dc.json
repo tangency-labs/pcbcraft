@@ -1,6 +1,6 @@
 {
   "format": "pcbcraft-sheet/1",
-  "id": "58892b91-f098-48f9-b176-e5087ac1201e",
+  "id": "2e84006a-89e6-478f-a66b-df5c1d3907dc",
   "symbols": [
     {"id":2,"component":2,"unit":"main","x_nm":0,"y_nm":-22860000,"rotation":0}
 
@@ -18,6 +18,9 @@
 
     ,
     {"id":9,"component":9,"unit":"main","x_nm":0,"y_nm":22860000,"rotation":0}
+
+    ,
+    {"id":26,"component":26,"unit":"main","x_nm":40640000,"y_nm":0,"rotation":0}
   ],
   "junctions": [
     {"id":10,"x_nm":-22860000,"y_nm":-7620000}

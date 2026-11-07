@@ -53,7 +53,7 @@ project's direction.
 Choose **Capture → Symbol** or press **A** to open the **Parts** browser and focus
 its search. It lists schematic symbols from
 [`libraries/starter`](libraries/starter): a resistor, LED, capacitor, two-pin
-connector and 4-pin header. See [docs/symbol-library.md](docs/symbol-library.md) for the file
+connector, 4-pin header and NPN transistor. See [docs/symbol-library.md](docs/symbol-library.md) for the file
 format. Type to search, choose Small, Medium, Large or List, and click a part (or
 press **Enter** for the first match) to place it on the grid, or drag parts
 straight onto the sheet. Press **R** to rotate a click-to-place preview before placing it,
@@ -256,11 +256,26 @@ successful save. See the [arrangement persistence details](docs/board-workspace-
 
 Browser builds support panes within one tab; native window actions are desktop
 only. The workspace tile can switch to PCB layout, open it beside
-the schematic or create a board window directly. Existing placements render as
-pad-center markers with component counterpart highlights, grouped Layers and
-read-only Properties. The editor still supports one schematic sheet and one
-board; board editing remains planned. Live MCP reaches these view, workspace and
-window controls too (see below). See the
+the schematic or create a board window directly. Physical SMD placements render rounded rectangular copper pads, body outlines,
+courtyards and silkscreen, with component counterpart highlights, grouped Layers
+and read-only Properties. Legacy placements retain pad-center markers. The editor
+supports up to 64 flat schematic sheets sharing one board. Existing footprints can be moved by left-dragging or by
+hovering/selecting one and pressing **M**, then clicking to place it. **R** rotates
+90° counterclockwise and **Shift+R** clockwise, including during a move. **Esc**
+or a right-click cancels a move; releasing a drag over a panel also cancels it.
+The Layout ribbon offers **Move** and **Rotate** for a single selection, and
+Properties reports the saved orientation. Moves snap the footprint origin to the
+view's grid, independently of grid visibility; each completed move and its
+preview rotations form one undo step. A conflicting edit, focus/workspace change
+or project reopen cancels the draft. The [starter footprints](docs/footprint-library.md) include 0402/0603
+resistors and capacitors, 0402 LEDs, SOT-23 and a two-pin plated header, pinned
+into projects with explicit terminal mappings. New views hide fabrication and
+courtyard graphics by default; Layers can show them. **Properties → Silkscreen**
+edits physical text height, stroke width and pad clearance in one undoable board
+change. Defaults are 1 mm, 0.15 mm and 0.25 mm respectively; lengths accept mil/mm
+input and save with the project. Slots, board outlines, general assignment UI and routing remain planned.
+Live MCP reaches the transform command and these view, workspace and window
+controls too (see below). See the
 [board inspection walkthrough](docs/quickstart.md#inspect-a-board-beside-its-schematic).
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**. Opening from PCB layout binds the incoming project's board before restoring
@@ -392,6 +407,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
 | `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
 | `view.set_workspace` | The workspace picker: schematic or PCB layout, here, beside or in a new window |
+| `pcb.set_footprint_transform` | Set a footprint center and whole-degree orientation through the same atomic command used by the PCB canvas |
 | `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing; click and box selection in a schematic; footprint and Browser selection in a PCB view |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | The named arrangement tabs: click, **+** and **Duplicate…**, **Rename…**, **Delete** |
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture or Layout, and View), closing a non-last window |

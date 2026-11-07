@@ -767,3 +767,36 @@ fn recent_history_records_only_successful_file_jobs() {
     assert!(!files.busy());
     assert_eq!(files.recent.to_text(), before);
 }
+
+/// Rotated placements survive the production folder/archive save paths, and an unchanged Save
+/// retains the exact bytes. An interrupted subsequent save leaves the previously saved placement.
+#[test]
+fn footprint_transform_saves_offline_in_folders_and_archives() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = session();
+    replacement(&mut s);
+    let footprint = s.inspect()["project"]["board"]["footprints"][0]["id"].clone();
+    apply(&mut s, pcbcraft_engine::SET_FOOTPRINT_TRANSFORM, json!({"footprint":footprint,"x_nm":2_540_000,"y_nm":-1_270_000,"rotation":270}));
+    let snapshot = s.snapshot().unwrap();
+    let documents = encode_documents(snapshot.clone()).unwrap();
+    let root = dir.path().join("rotated-board");
+    let archive = dir.path().join("rotated-board.pc.zip");
+    folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+    fs::write(&archive, encode_packed(snapshot.clone()).unwrap()).unwrap();
+    for path in [&root, &archive] {
+        let loaded = load(path).unwrap();
+        let saved_bytes = if path == &archive { Some(fs::read(path).unwrap()) } else { None };
+        assert_eq!(encode_documents(loaded.snapshot.clone()).unwrap(), documents);
+        save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target.clone(), &mut |_| Ok(())).unwrap();
+        if let Some(saved_bytes) = saved_bytes {
+            assert_eq!(fs::read(path).unwrap(), saved_bytes);
+        }
+        assert_eq!(encode_documents(load(path).unwrap().snapshot).unwrap(), documents);
+        s.open_snapshot(loaded.snapshot.clone());
+        apply(&mut s, pcbcraft_engine::SET_FOOTPRINT_TRANSFORM, json!({"footprint":footprint,"x_nm":0,"y_nm":0,"rotation":90}));
+        assert!(
+            save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Err("Interrupted before publish".into())).is_err()
+        );
+        assert_eq!(encode_documents(load(path).unwrap().snapshot).unwrap(), documents);
+    }
+}

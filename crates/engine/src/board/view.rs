@@ -37,12 +37,29 @@ pub struct BoardView<'a> {
     pub target: BoardTarget,
 }
 
-/// A physical pad center within the containing board and footprint. Shape and drill are absent
-/// from the legacy placement model; viewers must not treat markers as fabrication geometry.
+/// A resolved pad in board nanometers. Physical lands carry rotated bounds and contours; legacy markers
+/// explicitly retain no shape and cannot be treated as manufactured pad geometry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PadView {
     pub number: String,
     pub center: Point,
+    /// Land bounding corners in board coordinates; None denotes a legacy center-only marker.
+    pub copper: Option<[Point; 4]>,
+    pub shape: super::definition::PadShape,
+    pub corner_radius_nm: i64,
+    pub drill_nm: Option<i64>,
+    pub through_hole: bool,
+    /// Snapshot-local connectivity label, matching Net Inspector; not a persisted net identity.
+    pub net: Option<String>,
+}
+
+/// A technical footprint rectangle resolved independently of copper visibility and layer ownership.
+#[derive(Clone, Debug)]
+pub struct GraphicView {
+    pub purpose: super::definition::GraphicPurpose,
+    pub points: Vec<Point>,
+    pub stroke_nm: Option<i64>,
+    pub closed: bool,
 }
 
 /// A placement resolved in one addressed board, including its logical component association.
@@ -55,7 +72,11 @@ pub struct FootprintView<'a> {
     pub value: &'a str,
     pub definition: &'a str,
     pub position: Point,
+    /// Counterclockwise whole degrees around the footprint origin, from 0 through 359.
+    pub rotation: u16,
     pub pads: Vec<PadView>,
+    pub graphics: Vec<GraphicView>,
+    pub physical_reference: bool,
 }
 
 impl Project {
@@ -98,6 +119,11 @@ impl<'a> BoardView<'a> {
         self.project.board.setup.as_ref()
     }
 
+    /// Effective physical silkscreen dimensions; an untouched legacy board uses explicit defaults.
+    pub fn silkscreen(self) -> super::silkscreen::Settings {
+        self.project.board.silkscreen.unwrap_or_default()
+    }
+
     /// Resolve placements without assuming starter-definition geometry in a renderer.
     pub fn footprints(self) -> impl Iterator<Item = FootprintView<'a>> {
         self.project.board.footprints().iter().filter_map(move |footprint| {
@@ -110,7 +136,33 @@ impl<'a> BoardView<'a> {
                 value: component.value(),
                 definition: &footprint.definition,
                 position: Point { x_nm: footprint.x_nm, y_nm: footprint.y_nm },
-                pads: (1..=2).map(|pad| PadView { number: pad.to_string(), center: footprint.pad_position(pad) }).collect(),
+                rotation: footprint.rotation,
+                pads: self
+                    .project
+                    .board
+                    .pad_numbers(footprint)
+                    .into_iter()
+                    .filter_map(|pad| {
+                        let center = footprint.pad_position(pad, &self.project.board)?;
+                        let definition =
+                            self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.to_string()));
+                        let copper = definition.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
+                        let terminal = footprint.component_pin(pad).and_then(|(component, pin)| self.project.component_terminal(component, pin));
+                        let net = terminal.and_then(|terminal| net_label(self.project, terminal));
+                        Some(PadView {
+                            number: pad.to_string(),
+                            center,
+                            copper,
+                            shape: definition.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
+                            corner_radius_nm: definition.map_or(0, |p| p.corner_radius_nm),
+                            drill_nm: definition.and_then(|p| p.drill_nm),
+                            through_hole: definition.is_some_and(|p| p.copper == super::definition::CopperBinding::AllCopper),
+                            net,
+                        })
+                    })
+                    .collect(),
+                graphics: graphics(self.project, footprint, component.reference()),
+                physical_reference: self.project.board.definition_for(footprint).is_some_and(|d| d.reference.is_some()),
             })
         })
     }
@@ -145,6 +197,77 @@ impl<'a> BoardView<'a> {
             ..Selection::default()
         }
     }
+}
+
+/// Derive a sheet-qualified annotation from the terminal's owning sheet. Project-wide board
+/// views must not inherit whichever schematic projection happened to request them.
+fn net_label(project: &Project, terminal: crate::schematic::Terminal) -> Option<String> {
+    let sheet = project.sheets.iter().find(|sheet| sheet.symbols.binary_search_by_key(&terminal.symbol, |symbol| symbol.ordinal).is_ok())?;
+    let connectivity = sheet.connectivity.get_or_init(|| crate::schematic::Connectivity::build(&sheet.symbols, &sheet.wires));
+    let index = connectivity.net_index_for(terminal)?;
+    Some(if project.sheets.len() > 1 { format!("{}: Net {}", sheet.sheet_name, index + 1) } else { format!("Net {}", index + 1) })
+}
+
+/// Resolve saved technical rectangles and physical silk/reference paths without changing the
+/// pinned definition. Board settings control actual ink dimensions before viewport projection.
+fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) -> Vec<GraphicView> {
+    let Some(definition) = project.board.definition_for(footprint) else { return Vec::new() };
+    let style = project.board.silkscreen.unwrap_or_default();
+    let mut result: Vec<_> = definition
+        .graphics
+        .iter()
+        .map(|g| GraphicView {
+            purpose: g.purpose,
+            points: rectangle_points(footprint, g.center, g.width_nm, g.height_nm, g.rotation).to_vec(),
+            stroke_nm: None,
+            closed: true,
+        })
+        .collect();
+    let mut paths: Vec<_> = definition
+        .silkscreen
+        .iter()
+        .map(|path| {
+            let mut points = path.points.clone();
+            if path.closed {
+                points.push(points[0]);
+            }
+            points
+        })
+        .collect();
+    if definition.reference.is_some() {
+        let top_pad = definition.pads.iter().map(|p| p.center.y_nm - p.width_nm.max(p.height_nm) / 2).min().unwrap_or(0);
+        let top_line = paths.iter().flatten().map(|p| p.y_nm - style.stroke_width_nm / 2).min().unwrap_or(top_pad);
+        let lettering = if definition.reference.as_deref() == Some("pcbcraft-technical-1") {
+            super::silkscreen::lettering
+        } else {
+            super::silkscreen::legacy_lettering
+        };
+        let mut text = lettering(reference, 0, style);
+        let bottom = text.iter().flatten().map(|p| p.y_nm).max().unwrap_or(0) + (style.stroke_width_nm + 1) / 2;
+        let offset = top_pad.min(top_line) - style.pad_clearance_nm - bottom;
+        for point in text.iter_mut().flatten() {
+            point.y_nm += offset;
+        }
+        paths.extend(text);
+    }
+    result.extend(super::silkscreen::clipped(paths, &definition.pads, style).into_iter().map(|path| GraphicView {
+        purpose: super::definition::GraphicPurpose::Silkscreen,
+        points: path.into_iter().map(|point| footprint.point(point)).collect(),
+        stroke_nm: Some(style.stroke_width_nm),
+        closed: false,
+    }));
+    result
+}
+
+/// Resolve rectangle corners from immutable local geometry, preserving exact odd dimensions
+/// before rotation. Pad and graphic orientation share the placement's transform.
+fn rectangle_points(footprint: &super::Footprint, center: Point, width: i64, height: i64, rotation: u16) -> [Point; 4] {
+    let left = -width / 2;
+    let top = -height / 2;
+    [(left, top), (left + width, top), (left + width, top + height), (left, top + height)].map(|(x, y)| {
+        let (x, y) = super::rotate(x, y, rotation);
+        footprint.point(Point { x_nm: center.x_nm + x, y_nm: center.y_nm + y })
+    })
 }
 
 #[cfg(test)]

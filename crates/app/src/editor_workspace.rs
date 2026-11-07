@@ -822,15 +822,19 @@ impl PcbApp {
                 let canvas = ui.available_rect_before_wrap();
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);
                 if self.views.view(id).is_some_and(|view| view.workspace == Workspace::Board) {
-                    if let Some(view) = self.views.view_mut(id) {
-                        view.camera.set_uncovered(canvas, uncovered);
+                    if let Some(view) = self.views.view_mut(id)
+                        && view.camera.set_uncovered(canvas, uncovered)
+                    {
+                        ui.ctx().request_repaint();
                     }
                     if matches!(self.dialog, Dialog::None) {
                         self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
                     }
                     self.board_pane(ui, id);
                 } else if self.views.active.id() == id {
-                    self.views.active.camera.set_uncovered(canvas, uncovered);
+                    if self.views.active.camera.set_uncovered(canvas, uncovered) {
+                        ui.ctx().request_repaint();
+                    }
                     if matches!(self.dialog, Dialog::None) {
                         self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
                     }
@@ -841,8 +845,10 @@ impl PcbApp {
                     }
                     self.canvas(ui);
                 } else {
-                    if let Some(view) = self.views.view_mut(id) {
-                        view.camera.set_uncovered(canvas, uncovered);
+                    if let Some(view) = self.views.view_mut(id)
+                        && view.camera.set_uncovered(canvas, uncovered)
+                    {
+                        ui.ctx().request_repaint();
                     }
                     // A context-menu action in the earlier pane can open a modal this frame.
                     if matches!(self.dialog, Dialog::None) {

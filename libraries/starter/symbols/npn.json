@@ -1,0 +1,143 @@
+{
+  "format": "pcbcraft-symbol/1",
+  "id": "npn",
+  "revision": 1,
+  "name": "NPN transistor",
+  "reference_prefix": "Q",
+  "default_value": "NPN",
+  "terminals": [
+    {
+      "id": "1",
+      "name": "Base",
+      "electrical_type": "passive"
+    },
+    {
+      "id": "2",
+      "name": "Emitter",
+      "electrical_type": "passive"
+    },
+    {
+      "id": "3",
+      "name": "Collector",
+      "electrical_type": "passive"
+    }
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {
+          "type": "line",
+          "from_nm": [
+            -5080000,
+            0
+          ],
+          "to_nm": [
+            -1270000,
+            0
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            -1270000,
+            -2540000
+          ],
+          "to_nm": [
+            -1270000,
+            2540000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            -1270000,
+            -1270000
+          ],
+          "to_nm": [
+            2540000,
+            -3810000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            2540000,
+            -3810000
+          ],
+          "to_nm": [
+            5080000,
+            -3810000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            -1270000,
+            1270000
+          ],
+          "to_nm": [
+            2540000,
+            3810000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            2540000,
+            3810000
+          ],
+          "to_nm": [
+            5080000,
+            3810000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            2540000,
+            3810000
+          ],
+          "to_nm": [
+            1270000,
+            1905000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            2540000,
+            3810000
+          ],
+          "to_nm": [
+            635000,
+            3429000
+          ]
+        }
+      ],
+      "pins": [
+        {
+          "terminal": "1",
+          "at_nm": [
+            -5080000,
+            0
+          ]
+        },
+        {
+          "terminal": "2",
+          "at_nm": [
+            5080000,
+            3810000
+          ]
+        },
+        {
+          "terminal": "3",
+          "at_nm": [
+            5080000,
+            -3810000
+          ]
+        }
+      ]
+    }
+  ]
+}

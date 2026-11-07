@@ -142,7 +142,7 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
                 schema["properties"]["definition"],
                 json!({
                     "type": "string",
-                    "enum": ["capacitor", "connector", "header-4", "led", "resistor"],
+                    "enum": ["capacitor", "connector", "header-4", "led", "npn", "resistor"],
                     "description": "ID of a symbol in the starter library",
                 })
             );

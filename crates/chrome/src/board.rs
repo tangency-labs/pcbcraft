@@ -15,12 +15,159 @@ pub fn copper_color(front: Option<bool>) -> Color32 {
 /// Screen-space hit area for a placement's pad-center markers, with screen-space padding for reliable pointer selection.
 /// These sizes are UI affordances, not pad dimensions or a manufactured footprint outline.
 pub fn marker_bounds(pads: &[Pos2], center: Pos2) -> Rect {
-    pads.iter().fold(Rect::from_pos(center), |bounds, point| bounds.union(Rect::from_pos(*point))).expand2(vec2(12.0, 18.0))
+    let bounds = pads.iter().fold(Rect::from_pos(center), |bounds, point| bounds.union(Rect::from_pos(*point)));
+    bounds.expand2(if bounds.height() > bounds.width() { vec2(18.0, 12.0) } else { vec2(12.0, 18.0) })
 }
 
-/// Paint pad centers and reference as an inspection proxy, with distinct local and linked
-/// highlights. No pad diameter, hole, courtyard or fabrication geometry is inferred.
-pub fn footprint(p: &Painter, pads: &[(String, Pos2)], reference: &str, center: Pos2, copper: Color32, selected: bool, highlighted: bool) {
+/// A projected copper pad or an explicitly shape-less legacy marker.
+#[derive(Clone, Debug)]
+pub struct PadDrawing {
+    pub number: String,
+    pub center: Pos2,
+    pub copper: Option<[Pos2; 4]>,
+    pub contour: PadContour,
+    pub drill_radius: Option<f32>,
+    pub through_hole: bool,
+    pub net: Option<String>,
+}
+
+/// Physical land contour, with screen-projected radius independent of UI corner tokens.
+#[derive(Clone, Copy, Debug)]
+pub enum PadContour {
+    Rectangle,
+    RoundedRectangle { radius: f32 },
+    Circle,
+}
+
+/// Tessellate a physical contour in its own rotated axes without inflating its copper bounds.
+pub fn pad_contour(pad: &PadDrawing) -> Vec<Pos2> {
+    let Some(corners) = pad.copper else { return Vec::new() };
+    let u = corners[1] - corners[0];
+    let v = corners[3] - corners[0];
+    let width = u.length();
+    let height = v.length();
+    if width <= f32::EPSILON || height <= f32::EPSILON {
+        return corners.to_vec();
+    }
+    let at = |x: f32, y: f32| corners[0] + u * (x / width) + v * (y / height);
+    match pad.contour {
+        PadContour::Rectangle => corners.to_vec(),
+        PadContour::Circle => (0..64)
+            .map(|i| {
+                let angle = i as f32 * std::f32::consts::TAU / 64.;
+                at(width * (1. + angle.cos()) / 2., height * (1. + angle.sin()) / 2.)
+            })
+            .collect(),
+        PadContour::RoundedRectangle { radius } => {
+            let radius = radius.min(width.min(height) / 2.);
+            [(width - radius, radius), (width - radius, height - radius), (radius, height - radius), (radius, radius)]
+                .into_iter()
+                .enumerate()
+                .flat_map(|(corner, (x, y))| {
+                    (0..=8).map(move |step| {
+                        let angle = (corner as f32 - 1. + step as f32 / 8.) * std::f32::consts::FRAC_PI_2;
+                        at(x + radius * angle.cos(), y + radius * angle.sin())
+                    })
+                })
+                .collect()
+        }
+    }
+}
+
+/// Size and orient pad labels within the land. Snapshot-local net labels appear only when both
+/// lines fit; zooming out removes text before it obscures copper or protrudes into a gap.
+fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4]) {
+    let mut axis = corners[1] - corners[0];
+    let mut width = axis.length();
+    let mut height = (corners[3] - corners[0]).length();
+    if height > width * 1.3 {
+        std::mem::swap(&mut width, &mut height);
+        axis = corners[3] - corners[0];
+    }
+    if width < 12. || height < 12. {
+        return;
+    }
+    let size_for = |text: &str, lines: f32| {
+        ((width - 5.) / (text.lines().map(str::len).max().unwrap_or(1) as f32 * 0.65)).min((height - 3.) / (1.2 * lines)).min(28.)
+    };
+    let both = pad.net.as_ref().map(|net| format!("{}\n{net}", pad.number));
+    let (text, size) = match both {
+        Some(text) if size_for(&text, 2.) >= 7. => {
+            let size = size_for(&text, 2.);
+            (text, size)
+        }
+        _ => (pad.number.clone(), size_for(&pad.number, 1.)),
+    };
+    if size < 7. {
+        return;
+    }
+    let mut angle = axis.y.atan2(axis.x);
+    if angle > std::f32::consts::FRAC_PI_2 {
+        angle -= std::f32::consts::PI;
+    }
+    if angle < -std::f32::consts::FRAC_PI_2 {
+        angle += std::f32::consts::PI;
+    }
+    let mut job = egui::text::LayoutJob::simple(text, FontId::monospace(size), Color32::WHITE, f32::INFINITY);
+    job.halign = egui::Align::Center;
+    let galley = p.layout_job(job);
+    let pos = pad.center - galley.rect.center().to_vec2();
+    p.add(egui::epaint::TextShape::new(pos, galley, Color32::WHITE).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
+}
+
+/// The physical purpose of a projected technical rectangle, independent of copper color.
+#[derive(Clone, Copy, Debug)]
+pub enum GraphicStyle {
+    Fabrication,
+    Silkscreen,
+    Courtyard,
+}
+
+/// A projected, unfilled rectangle with a physical layer role.
+#[derive(Clone, Debug)]
+pub struct GraphicDrawing {
+    pub points: Vec<Pos2>,
+    pub style: GraphicStyle,
+    pub closed: bool,
+    pub stroke_width: Option<f32>,
+}
+
+/// Bounds include real pad extents and visible technical graphics. Legacy markers retain their
+/// generous selection affordance; physical dimensions are never inflated to match that affordance.
+pub fn footprint_bounds(pads: &[PadDrawing], graphics: &[GraphicDrawing], center: Pos2) -> Rect {
+    if pads.iter().all(|p| p.copper.is_none()) && graphics.is_empty() {
+        return marker_bounds(&pads.iter().map(|p| p.center).collect::<Vec<_>>(), center);
+    }
+    let mut bounds = Rect::from_pos(center);
+    for pad in pads {
+        bounds = bounds.union(Rect::from_pos(pad.center));
+        if let Some(points) = pad.copper {
+            for point in points {
+                bounds = bounds.union(Rect::from_pos(point));
+            }
+        }
+    }
+    for graphic in graphics {
+        let extent = graphic.points.iter().fold(Rect::NOTHING, |rect, point| rect.union(Rect::from_pos(*point)));
+        bounds = bounds.union(extent.expand(graphic.stroke_width.unwrap_or(0.) / 2.));
+    }
+    bounds.expand(4.0)
+}
+
+/// Paint physical land contours and plated drills at their projected dimensions, with separate
+/// technical graphics and selection ink. Only legacy definitions use center markers. Small
+/// lands omit labels before they become illegible; physical dimensions never depend on zoom.
+#[allow(clippy::too_many_arguments)]
+pub fn footprint(
+    p: &Painter,
+    pads: &[PadDrawing],
+    graphics: &[GraphicDrawing],
+    reference: &str,
+    center: Pos2,
+    copper: Color32,
+    selected: bool,
+    highlighted: bool,
+) {
     let t = Tokens::get();
     let ink = if selected {
         t.accent
@@ -29,19 +176,48 @@ pub fn footprint(p: &Painter, pads: &[(String, Pos2)], reference: &str, center: 
     } else {
         copper
     };
-    let points: Vec<_> = pads.iter().map(|(_, point)| *point).collect();
-    let bounds = marker_bounds(&points, center);
+    let bounds = footprint_bounds(pads, graphics, center);
+    for graphic in graphics {
+        let (color, width) = match graphic.style {
+            GraphicStyle::Fabrication => (t.board_ink.gamma_multiply(0.55), 0.8),
+            GraphicStyle::Silkscreen => (t.board_silkscreen, 1.2),
+            GraphicStyle::Courtyard => (t.board_ink.gamma_multiply(0.3), 0.7),
+        };
+        let stroke = Stroke::new(graphic.stroke_width.unwrap_or(width), color);
+        p.add(if graphic.closed {
+            egui::Shape::closed_line(graphic.points.clone(), stroke)
+        } else {
+            egui::Shape::line(graphic.points.clone(), stroke)
+        });
+        if let Some(width) = graphic.stroke_width {
+            for point in &graphic.points {
+                p.circle_filled(*point, width / 2., color);
+            }
+        }
+    }
     if selected || highlighted {
         p.rect_stroke(bounds, t.radius_sm, Stroke::new(1.5, ink), egui::StrokeKind::Inside);
     }
-    for (number, point) in pads {
-        p.circle_stroke(*point, 5.0, Stroke::new(1.5, ink));
-        p.line_segment([*point - vec2(2.0, 0.0), *point + vec2(2.0, 0.0)], Stroke::new(1.0, ink));
-        p.line_segment([*point - vec2(0.0, 2.0), *point + vec2(0.0, 2.0)], Stroke::new(1.0, ink));
-        p.text(*point + vec2(0.0, 9.0), Align2::CENTER_TOP, number, FontId::proportional(t.font_small), t.board_ink);
+    let extent = pads.iter().fold(Rect::from_pos(center), |r, p| r.union(Rect::from_pos(p.center)));
+    let (offset, align) = if extent.height() > extent.width() { (vec2(9., 0.), Align2::LEFT_CENTER) } else { (vec2(0., 9.), Align2::CENTER_TOP) };
+    for pad in pads {
+        if let Some(points) = pad.copper {
+            let color = if pad.through_hole && !selected && !highlighted { t.board_through } else { ink };
+            p.add(egui::Shape::convex_polygon(pad_contour(pad), color, Stroke::NONE));
+            if let Some(radius) = pad.drill_radius {
+                p.circle_filled(pad.center, radius, t.board_canvas);
+                p.circle_stroke(pad.center, radius, Stroke::new(0.7, t.board_ink.gamma_multiply(0.5)));
+            }
+            pad_label(p, pad, points);
+        } else {
+            p.circle_stroke(pad.center, 5., Stroke::new(1.5, ink));
+            p.line_segment([pad.center - vec2(2., 0.), pad.center + vec2(2., 0.)], Stroke::new(1., ink));
+            p.line_segment([pad.center - vec2(0., 2.), pad.center + vec2(0., 2.)], Stroke::new(1., ink));
+            p.text(pad.center + offset, align, &pad.number, FontId::proportional(t.font_small), t.board_ink);
+        }
     }
     p.text(
-        bounds.center_top() - vec2(0.0, t.space_2),
+        bounds.center_top() - vec2(0., t.space_2),
         Align2::CENTER_BOTTOM,
         reference,
         FontId::proportional(t.font_body),

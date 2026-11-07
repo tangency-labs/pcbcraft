@@ -28,10 +28,12 @@ fn demo_folder_and_archive_migrate_to_the_same_documents() {
 #[test]
 fn demo_connectivity_and_mappings_survive_an_undoable_edit() {
     let project = decode_packed(ARCHIVE).unwrap().project;
-    assert_eq!(project.symbols().len(), 6);
+    assert_eq!(project.symbols().len(), 7);
     assert_eq!(project.wires().len(), 12);
     assert_eq!(project.junctions().count(), 4);
-    assert!(project.connectivity().unconnected.is_empty());
+    assert_eq!(project.connectivity().unconnected.len(), 3);
+    let q = project.symbols().iter().find(|symbol| project.reference(symbol) == "Q1").unwrap();
+    assert!(q.terminals().iter().all(|pin| project.connectivity().unconnected.contains(pin)));
     let expected: BTreeSet<Vec<String>> =
         [vec!["C1.1", "J1.1", "R1.1", "R2.1"], vec!["C1.2", "D1.2", "D2.2", "J1.2"], vec!["D1.1", "R1.2"], vec!["D2.1", "R2.2"]]
             .into_iter()
@@ -46,7 +48,7 @@ fn demo_connectivity_and_mappings_survive_an_undoable_edit() {
             assert!(pads.insert(pad.inspect().to_string()));
         }
     }
-    assert_eq!(pads.len(), 12);
+    assert_eq!(pads.len(), 15);
 
     let r1 = project.symbols().iter().find(|symbol| project.reference(symbol) == "R1").unwrap();
     let mut session = Session::default();
@@ -82,4 +84,36 @@ fn named_nets(project: &Project) -> Option<BTreeSet<Vec<String>>> {
             Some(pins)
         })
         .collect()
+}
+
+/// The distributed demo carries actual passive/LED copper rectangles and a three-pad SOT23;
+/// LED cathodes map to the marked physical pad, independently of symbol numbering.
+#[test]
+fn demo_packages_have_pinned_geometry_and_correct_polarity_mapping() {
+    let project = decode_packed(ARCHIVE).unwrap().project;
+    let board = project.board_view(project.board_target()).unwrap();
+    let expected = [
+        ("J1", "header-1x02-254", 2),
+        ("R1", "resistor-0402", 2),
+        ("R2", "resistor-0603", 2),
+        ("C1", "capacitor-0603", 2),
+        ("D1", "led-0402", 2),
+        ("D2", "led-0402", 2),
+        ("Q1", "sot23", 3),
+    ];
+    for (reference, definition, count) in expected {
+        let footprint = board.footprints().find(|f| f.reference == reference).unwrap();
+        assert_eq!(footprint.definition, definition);
+        assert_eq!(footprint.pads.len(), count);
+        assert!(footprint.pads.iter().all(|pad| pad.copper.is_some()));
+        assert!(!footprint.graphics.is_empty());
+    }
+    for symbol in project.symbols().iter().filter(|s| project.reference(s).starts_with('D')) {
+        let terminal = symbol.terminals()[1];
+        assert_eq!(terminal.number(), "2");
+        assert_eq!(project.pad_for_terminal(terminal).unwrap().inspect()["pad"], "1");
+    }
+    let pads = board.footprints().find(|f| f.reference == "Q1").unwrap().pads;
+    assert_eq!(pads[0].center.y_nm, pads[1].center.y_nm);
+    assert!(pads[2].center.y_nm < pads[0].center.y_nm);
 }

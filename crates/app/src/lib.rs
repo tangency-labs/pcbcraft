@@ -1059,7 +1059,7 @@ impl PcbApp {
                 if let Some(message) = message {
                     ui.label(shell::error(message));
                 } else if self.views.active.workspace == Workspace::Board {
-                    ui.label(dim("Board inspection · Pad centers"));
+                    ui.label(dim("Board"));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {
@@ -1340,6 +1340,8 @@ impl PcbApp {
         }
         self.views.active.schematic.rotate_requested = false;
         self.views.active.schematic.move_requested = false;
+        self.views.active.board.move_requested = false;
+        self.views.active.board.rotate_requested = 0;
         if !self.home
             && self.views.active.workspace == Workspace::Schematic
             && !assistant_keys
@@ -1358,9 +1360,17 @@ impl PcbApp {
                 self.home = false;
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.views.active.board.draft.take().is_none() {
                 self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);
             }
+            self.views.active.board.move_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M));
+            self.views.active.board.rotate_requested = if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::R)) {
+                270
+            } else if pressed(&ROTATE) {
+                90
+            } else {
+                0
+            };
             if pressed(&COARSER_GRID) {
                 self.cycle_grid(false);
             } else if pressed(&FINER_GRID) {
@@ -1873,6 +1883,10 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
+    list.push(("PCB layout", "Move footprint", "M or left drag".to_owned()));
+    list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
+    list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
+    list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("View", "Zoom", "Mouse wheel".to_owned()));
     list.push(("View", "Pan", "Middle-button drag".to_owned()));
     list.push(("View", "Finer grid", key(&FINER_GRID)));

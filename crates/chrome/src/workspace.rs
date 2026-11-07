@@ -30,6 +30,8 @@ const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 /// The glyphs used by the schematic ribbon actions and Browser rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
+    Move,
+    Rotate,
     Symbol,
     Wire,
     Slice,
@@ -946,6 +948,22 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
             for points in [[(26.0, 22.0), (34.0, 22.0)], [(30.0, 18.0), (30.0, 26.0)], [(26.0, 42.0), (34.0, 42.0)]] {
                 line(&points, s);
             }
+        }
+        ToolIcon::Move => {
+            for points in [
+                &[(8.0, 32.0), (56.0, 32.0)][..],
+                &[(32.0, 8.0), (32.0, 56.0)][..],
+                &[(18.0, 22.0), (8.0, 32.0), (18.0, 42.0)][..],
+                &[(46.0, 22.0), (56.0, 32.0), (46.0, 42.0)][..],
+                &[(22.0, 18.0), (32.0, 8.0), (42.0, 18.0)][..],
+                &[(22.0, 46.0), (32.0, 56.0), (42.0, 46.0)][..],
+            ] {
+                line(points, stroke(3.0, accent));
+            }
+        }
+        ToolIcon::Rotate => {
+            line(&[(15.0, 20.0), (30.0, 10.0), (48.0, 18.0), (54.0, 36.0), (42.0, 52.0), (23.0, 52.0), (12.0, 40.0)], stroke(3.5, ink));
+            line(&[(15.0, 7.0), (15.0, 20.0), (29.0, 20.0)], stroke(4.0, accent));
         }
         ToolIcon::Wire => {
             line(&[(10.0, 49.0), (28.0, 49.0), (28.0, 15.0), (54.0, 15.0)], stroke(4.25, accent));

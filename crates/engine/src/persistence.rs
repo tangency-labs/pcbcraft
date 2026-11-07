@@ -273,6 +273,9 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
                 pin_1_pad: record.pin_1_pad,
                 x_nm: record.x_nm,
                 y_nm: record.y_nm,
+                rotation: 0,
+                library: None,
+                mapping: None,
             })
             .collect(),
     });
@@ -410,14 +413,20 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    /// Start a legacy single document without walking the schematic. Configured boards need
-    /// split documents or a packed archive; refusing them here prevents lossy legacy export.
+    /// Start a legacy single document without walking the schematic. Setup, physical definitions,
+    /// silkscreen settings and rotation require split documents or an archive; refuse lossy export.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if project.sheets.len() != 1 || project.sheet_name() != "Main" {
             return Err("legacy single-file encoding cannot represent multiple or renamed sheets; use split documents or a packed archive".to_owned());
         }
-        if project.board.setup.is_some() {
-            return Err("legacy single-file encoding cannot represent board setup; use split documents or a packed archive".to_owned());
+        if project.board.silkscreen.is_some()
+            || project.board.setup.is_some()
+            || !project.board.definitions.is_empty()
+            || project.board.footprints().iter().any(|f| f.rotation != 0)
+        {
+            return Err(
+                "legacy single-file encoding cannot represent board setup, physical footprints, silkscreen settings or footprint rotation; use split documents or a packed archive".to_owned()
+            );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
         let mut bytes = Vec::new();
@@ -593,11 +602,18 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         }
         format => return Err(format!("unsupported project format {format}")),
     };
-    validate_document(document, upgraded_from)
+    if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.rotation != 0 || f.library.is_some())) {
+        return Err("physical footprints and rotation require split board format 5 or 4 respectively".to_owned());
+    }
+    validate_document(document, upgraded_from, BTreeMap::new())
 }
 
 /// Validate the combined legacy or split records without imposing a single-file size limit.
-fn validate_document(document: Document, upgraded_from: Option<u32>) -> Result<Arc<Project>, String> {
+fn validate_document(
+    document: Document,
+    upgraded_from: Option<u32>,
+    definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
+) -> Result<Arc<Project>, String> {
     let Document { format, id, name, symbol_definitions, components: records, sheet, board } = document;
     if format != FORMAT {
         return Err(format!("unsupported project format {format}"));
@@ -754,6 +770,7 @@ fn validate_document(document: Document, upgraded_from: Option<u32>) -> Result<A
     }
     wires.sort_unstable_by_key(|wire| wire.ordinal);
     let mut layout = Board::default();
+    layout.definitions = definitions;
     if let Some(mut board) = board {
         if board.footprints.len() > components.len() {
             return Err("board has more footprints than schematic components".to_owned());
@@ -763,8 +780,11 @@ fn validate_document(document: Document, upgraded_from: Option<u32>) -> Result<A
             validate_id(&mut ids, footprint.id)?;
             match components.get(&footprint.component) {
                 None => return Err("footprint points to a missing component".to_owned()),
-                Some(component) if !component.definition.fits_two_pad_footprint() => {
-                    return Err("the two-pad footprint only fits symbols with exactly pins 1 and 2".to_owned());
+                Some(component) if !layout.mapping_valid(&footprint, &component.definition) => {
+                    return Err(
+                        "the two-pad footprint only fits symbols with exactly pins 1 and 2; physical footprint mappings must cover every terminal"
+                            .to_owned(),
+                    );
                 }
                 Some(_) => {}
             }
@@ -854,6 +874,7 @@ mod tests {
                 ("connector", "J1", "Input"),
                 ("header-4", "J2", "Header"),
                 ("led", "D1", "LED"),
+                ("npn", "Q1", "NPN"),
                 ("resistor", "R1", "1k"),
             ]
             .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))

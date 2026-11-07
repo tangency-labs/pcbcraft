@@ -1,16 +1,28 @@
 # Dual LED editing demo
 
-This original example gives the current schematic editor a small, wired project
-to explore. It has an input connector, two resistor/LED branches and a capacitor,
-with enough space to select and move each branch. Its symbol definitions travel
-with the project, so opening it needs no external library service. The example
-and generator use the repository's MIT OR Apache-2.0 license; the four symbols
-come from the existing original [starter library](../libraries/starter).
+This original example contains the wired input connector, two resistor/LED
+branches and a capacitor, plus an unconnected NPN transistor for trying a
+three-pad package. Symbol and footprint definitions travel with the project,
+so it opens without a library service. The example, generator and original
+starter definitions use the repository's MIT OR Apache-2.0 license.
 
-The six generic two-pad footprints exercise component identity and MCP
-cross-probing. They are placeholders, not selected physical packages. This is
-an editing demonstration, not an electrically or fabrication-validated design;
-there is no board outline, routing or graphical PCB editor in this version.
+| Reference | Footprint |
+|---|---|
+| R1 | 0402 resistor |
+| R2 | 0603 resistor |
+| C1 | 0603 capacitor |
+| D1, D2 | 0402 LED, with a cathode mark |
+| Q1 | SOT-23 NPN, pins 1 Base / 2 Emitter / 3 Collector |
+| J1 | 2.54 mm two-pin header with plated drills |
+
+The PCB view draws physical rounded rectangular copper pads, body outlines, courtyards
+and silkscreen for the SMD packages. Front copper is red and J1 has gold
+plated-hole lands with square pad 1. Fabrication and courtyard graphics start
+hidden in new views and can be shown in Layers. Reference labels and silk lines
+use physical dimensions. **Properties → Silkscreen** edits their text height,
+stroke width and pad clearance; Q1 uses an external triangular pad-1 mark. See [footprint sources and dimensions](../docs/footprint-library.md).
+Q1's three terminals are deliberately unwired; the original four connected groups
+remain below. This editing example has no board outline or routing.
 The full schematic/board walkthrough and preview release remain part of
 [#91](https://github.com/tangency-labs/pcbcraft/issues/91).
 
@@ -45,7 +57,7 @@ because it cannot confirm that you kept the file.
    Press **Esc** when finished. Existing shared rail junctions are explicit
    connections; crossing a wire elsewhere does not join it.
 4. Choose **Capture → Nets**. The unchanged example has four connected groups
-   and no unconnected pins, as listed below. Save your copy and reopen it to
+   and Q1's three unconnected pins, as listed below. Save your copy and reopen it to
    verify the result. Share the complete folder or archive, not `project.pc`
    alone.
 
@@ -60,6 +72,21 @@ The connector's left pin is the input rail and its right pin the return rail.
 The rail names in this table describe the circuit; they are not net labels in
 the saved project. LED values distinguish the two branches without changing
 their generic symbol drawing.
+
+## Try PCB transforms
+
+Choose **PCB layout** in the workspace picker, or its split icon to keep the
+schematic visible. Select a footprint in Browser and use **Fit** if needed.
+Drag a footprint, or press **M** and click its new position. **R**
+rotates 90° counterclockwise and **Shift+R** clockwise, including while moving;
+**Esc** or a right-click cancels an unfinished move. The origin snaps to the
+view's grid even when the grid is hidden. A completed move and its preview
+rotations share one undo step, available from either editor.
+
+Save your copy and reopen it to check the stored position and orientation.
+Footprint identities and pin mappings stay unchanged. Slots, board outlines, routing and general footprint assignment UI remain
+separate work. Existing saved copies keep their original definitions; reopen the
+updated distributed folder or archive to try these packages.
 
 ## Inspect the mappings through MCP
 
@@ -78,8 +105,9 @@ R1's inspected ID:
 ```
 
 Pass the returned `pad` object back as `{"pad": ...}` to find the same terminal.
-Both pins of every component have a mapping. This checks correspondence in the
-engine; graphical selection between schematic and board is still upcoming.
+Every terminal of every component has a mapping, including all three on Q1. This checks correspondence in the
+engine; selecting a symbol or footprint in the GUI also highlights its
+counterpart in the other workspace.
 
 For a live edit in the desktop window, follow the
 [live MCP setup](../README.md#live-mcp-in-the-desktop-editor) with your demo copy
@@ -87,7 +115,9 @@ open. Inspect R1 and the current revision, then execute
 `schematic.move_symbol` with its ID, its current `x_nm`, `y_nm` reduced by
 `2540000`, and the inspected numeric `expected_revision`. The wire follows in
 the editor. GUI Undo and Redo share that history; inspect again after each step.
-The live adapter currently exposes only symbol movement as an edit.
+The same live connection can move and rotate footprints through
+`pcb.set_footprint_transform`, using the inspected footprint and board IDs,
+`x_nm`, `y_nm`, whole-degree `rotation` and `expected_revision`.
 
 ## Generate another copy
 
