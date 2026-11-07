@@ -13,6 +13,24 @@ use std::{
 
 mod loops;
 
+/// Normalize one orthogonal draft using the same retrace and self-loop cleanup as committed
+/// edits. Endpoints stay fixed; this never inspects other wires or creates electrical links.
+/// Accept at most twice the authored route bound to allow a temporary elbow at each anchor.
+/// Invalid coordinates, diagonal legs and excessive comparison work fail without mutation.
+pub fn normalized_path(path: &[Point]) -> Result<Vec<Point>, CommandError> {
+    if path.is_empty()
+        || path.len() > 2 * (MAX_BENDS + 2)
+        || !path.iter().all(valid_point)
+        || path.windows(2).any(|p| p[0].x_nm != p[1].x_nm && p[0].y_nm != p[1].y_nm)
+    {
+        return Err(CommandError::InvalidParams("invalid orthogonal wire preview".into()));
+    }
+    let mut path = path.to_vec();
+    simplify(&mut path);
+    loops::erase_path_loops(&mut path, &mut 200_000)?;
+    Ok(path)
+}
+
 /// One disposable edit owns allocation and comparison budgets; nothing reaches history on error.
 pub(super) struct Edit {
     pub project: Project,
@@ -561,7 +579,7 @@ impl Edit {
             let original = self.project.wire_path(&self.project.wires[index]);
             let mut path = original.clone();
             simplify(&mut path);
-            self.erase_path_loops(&mut path)?;
+            loops::erase_path_loops(&mut path, &mut self.budget)?;
             if path.len() < 2 {
                 let [a, b] = self.project.wires[index].endpoints;
                 self.merge(a, b)?;

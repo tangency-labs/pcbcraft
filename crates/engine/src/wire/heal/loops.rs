@@ -25,28 +25,29 @@ fn length(project: &Project, wire: &Wire) -> u128 {
     project.wire_path(wire).windows(2).map(|p| u128::from(p[0].x_nm.abs_diff(p[1].x_nm)) + u128::from(p[0].y_nm.abs_diff(p[1].y_nm))).sum()
 }
 
-impl Edit {
-    /// Erase returns to an earlier point on this same wire. A wire has no internal electrical
-    /// anchors, so its endpoints remain fixed and no attached branch or pin can be skipped.
-    /// Each splice removes points; the shared comparison budget bounds dense self-intersections.
-    pub(super) fn erase_path_loops(&mut self, path: &mut Vec<Point>) -> Result<(), CommandError> {
-        loop {
-            let mut found = None;
-            'scan: for later in 2..path.len().saturating_sub(1) {
-                for earlier in 0..later - 1 {
-                    self.compare()?;
-                    if let Some(at) = intersection(path[earlier], path[earlier + 1], path[later], path[later + 1]) {
-                        found = Some((earlier, later, at));
-                        break 'scan;
-                    }
+/// Erase returns to an earlier point on this same wire. A wire has no internal electrical
+/// anchors, so its endpoints remain fixed and no attached branch or pin can be skipped.
+/// Each splice removes points; the shared comparison budget bounds dense self-intersections.
+pub(super) fn erase_path_loops(path: &mut Vec<Point>, budget: &mut usize) -> Result<(), CommandError> {
+    loop {
+        let mut found = None;
+        'scan: for later in 2..path.len().saturating_sub(1) {
+            for earlier in 0..later - 1 {
+                *budget =
+                    budget.checked_sub(1).ok_or_else(|| CommandError::Unavailable("wire healing exceeds this edit's comparison budget".into()))?;
+                if let Some(at) = intersection(path[earlier], path[earlier + 1], path[later], path[later + 1]) {
+                    found = Some((earlier, later, at));
+                    break 'scan;
                 }
             }
-            let Some((earlier, later, at)) = found else { return Ok(()) };
-            path.splice(earlier + 1..later + 1, [at]);
-            simplify(path);
         }
+        let Some((earlier, later, at)) = found else { return Ok(()) };
+        path.splice(earlier + 1..later + 1, [at]);
+        simplify(path);
     }
+}
 
+impl Edit {
     /// Remove one redundant alternative route to a touched edge. Only degree-two junctions
     /// may lie inside the alternative; pins and other branches stop the walk. Keep the shorter
     /// path, breaking equal-length ties by the older wire ID. Geometry alone never joins nets.

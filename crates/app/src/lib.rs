@@ -899,8 +899,8 @@ impl PcbApp {
     /// The menu-only Auto-heal toggle changes the saved preference for future edits, not history.
     fn wire_edit_ribbon(&mut self, ui: &mut egui::Ui) {
         use workspace::{RibbonTool, ToolIcon};
-        let leg = self.views.active.selected_leg.clone();
-        let selection = &self.views.active.selection;
+        let leg = self.views.active.schematic.selected_leg.clone();
+        let selection = &self.views.active.schematic.selection;
         let wires = !selection.wires.is_empty() && selection.symbols.is_empty();
         let tools = [
             (ToolIcon::Slice, "Slice", "Slice selected wire", "", leg.as_ref().is_some_and(|l| l.split.is_some())),
@@ -938,7 +938,10 @@ impl PcbApp {
                 }
             }
             Some(2) => {
-                self.run(pcbcraft_engine::HEAL_WIRES, &json!({"items":self.views.active.selection,"expected_revision":self.session.revision()}));
+                self.run(
+                    pcbcraft_engine::HEAL_WIRES,
+                    &json!({"items":self.views.active.schematic.selection,"expected_revision":self.session.revision()}),
+                );
                 if self.message.is_none() {
                     self.select(Selection::default());
                 }
@@ -1148,7 +1151,10 @@ impl PcbApp {
                     && a != b
                 {
                     if finish || !matches!(to, pcbcraft_engine::wire::Anchor::Free(_)) {
-                        let path = self.views.active.schematic.wire_draft.path(a, b);
+                        let Some(path) = self.views.active.schematic.wire_draft.path(a, b, self.preferences.auto_heal_wires) else {
+                            self.message = Some("Wire preview exceeds the supported geometry limits.".to_owned());
+                            return;
+                        };
                         self.run(
                             pcbcraft_engine::DRAW_WIRE,
                             &json!({"from": from.inspect(), "to": to.inspect(), "bends": &path[1..path.len()-1], "expected_revision": revision}),
@@ -1156,7 +1162,7 @@ impl PcbApp {
                         if self.message.is_none() {
                             self.views.active.schematic.tool = None;
                         }
-                    } else if !self.views.active.schematic.wire_draft.corner(a, b) {
+                    } else if !self.views.active.schematic.wire_draft.corner(a, b, self.preferences.auto_heal_wires) {
                         self.message = Some("Wire has too many corners; finish it before continuing.".to_owned());
                     }
                 }

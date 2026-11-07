@@ -302,7 +302,7 @@ pub(crate) fn show(
             return Some(Click::CancelWire);
         }
         let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
-        wires::preview(&painter, rect, project, camera, Some(start), draft, anchor);
+        wires::preview(&painter, rect, project, camera, Some(start), draft, anchor, auto_heal);
         return None;
     }
 
@@ -491,7 +491,7 @@ pub(crate) fn show(
             placement_preview(&painter, rect, response, camera, tokens, &definition, turns).map(Click::Place)
         }
         Tool::Wire { start, .. } => {
-            wires::pick(&painter, rect, &response, project, camera, start, draft).map(|(anchor, finish)| Click::WirePoint(anchor, finish))
+            wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal).map(|(anchor, finish)| Click::WirePoint(anchor, finish))
         }
         Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } | Tool::Reshape { .. } => None,
     }

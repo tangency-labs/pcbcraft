@@ -82,7 +82,8 @@ first **Save** asks for a project folder, and the project takes that folder's na
    runs, and **Heal** applies that cleanup to existing selected wires. Dropping
    a part with a pin exactly on a wire connects it; a two-pin part placed across
    a straight run replaces the wire between its pins. **Auto-heal wires** in the
-   Wire edits menu defaults on; switch it off to keep detours and loops while
+   Wire edits menu defaults on. Retracing a draft shortens the preview as you draw;
+   Backspace restores the preceding clicked corner. Switch automatic healing off to keep detours and loops while
    drawing, then select a wire and use **Heal** for cleanup when desired.
 6. Save your desktop copy, reopen its `project.pc`, and check the edit. In the
    browser, choose **Download**, keep the resulting `.pc.zip`, then reopen that

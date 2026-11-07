@@ -2,18 +2,22 @@ use super::*;
 use crate::{ATTACH_JUNCTION, DRAW_WIRE, HEAL_WIRES, MOVE_ITEMS, MOVE_SYMBOL, PLACE_SYMBOL, Session, persistence};
 use serde_json::{Value, json};
 
+/// Build a model point in the fixture's schematic grid units.
 fn p(x: i64, y: i64) -> Point {
     Point { x_nm: x * 1_270_000, y_nm: y * 1_270_000 }
 }
+/// Execute a fixture edit against the session's current revision.
 fn run(s: &mut Session, command: &str, mut params: Value) {
     params["expected_revision"] = json!(s.revision());
     s.apply(command, &params).unwrap();
 }
+/// Open an empty project for command-driven healing fixtures.
 fn session() -> Session {
     let mut s = Session::default();
     s.apply("project.new", &json!({"name":"Healing"})).unwrap();
     s
 }
+/// Draw a straight free-ended fixture wire through the production command.
 fn draw(s: &mut Session, from: Point, to: Point) {
     run(s, DRAW_WIRE, json!({"from":from,"to":to,"bends":[]}));
 }
@@ -338,4 +342,37 @@ fn healing_rejects_stale_or_ambiguous_requests_without_changes() {
     edit.touched.insert(before.wires[0].ordinal);
     assert!(edit.heal().is_err());
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+}
+/// Preview and committed-route normalization shorten partial and complete retraces in either
+/// axis and direction, without drifting endpoints. Normalizing twice yields the same route.
+#[test]
+fn draft_retraces_normalize_in_every_orientation() {
+    for swap in [false, true] {
+        for sign in [-1, 1] {
+            let transform = |(x, y): (i64, i64)| if swap { p(sign * y, x) } else { p(x, sign * y) };
+            for (input, output) in [
+                (vec![(0, 0), (0, 10), (0, 3), (6, 3)], vec![(0, 0), (0, 3), (6, 3)]),
+                (vec![(0, 0), (0, 10), (0, -5), (6, -5)], vec![(0, 0), (0, -5), (6, -5)]),
+                (vec![(0, 0), (0, 10), (0, 0), (6, 0)], vec![(0, 0), (6, 0)]),
+                (vec![(0, 0), (0, 10), (0, 3), (0, 8), (0, 2), (6, 2)], vec![(0, 0), (0, 2), (6, 2)]),
+            ] {
+                let path: Vec<_> = input.into_iter().map(transform).collect();
+                let expected: Vec<_> = output.into_iter().map(transform).collect();
+                let normalized = normalized_path(&path).unwrap();
+                assert_eq!(normalized, expected);
+                assert_eq!(normalized.first(), path.first());
+                assert_eq!(normalized.last(), path.last());
+                assert_eq!(normalized_path(&normalized).unwrap(), normalized);
+            }
+        }
+    }
+}
+
+/// Invalid preview geometry is rejected before cleanup; a bounded draft cannot silently
+/// turn diagonal or out-of-range input into a different route.
+#[test]
+fn invalid_draft_geometry_is_refused() {
+    for path in [Vec::new(), vec![p(0, 0), p(1, 1)], vec![p(0, 0), Point { x_nm: i64::MAX, y_nm: 0 }], vec![p(0, 0); 2 * (MAX_BENDS + 2) + 1]] {
+        assert!(normalized_path(&path).is_err());
+    }
 }

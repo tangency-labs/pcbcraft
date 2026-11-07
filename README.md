@@ -121,6 +121,9 @@ When a route returns to an already connected straight wire through a U-shaped de
 healing slides the junction to the nearer intersection without passing another branch
 or moving a pin. Self-crossing returns and redundant loops also shorten; cleanup keeps
 the shorter alternative only when the removed path has no intermediate pin or branch.
+While drawing, retracing the draft shortens its preview immediately, including a
+reversal that runs past an earlier corner. Backspace restores the previous clicked
+corner, and finishing keeps the shortened route in one undo step.
 The Wire edits menu's **Auto-heal wires** toggle defaults on and is remembered as a
 user preference. Turn it off to keep detours and loops during editing, then use **Heal**
 on selected wires when you want cleanup. Commands that draw, place, move or attach

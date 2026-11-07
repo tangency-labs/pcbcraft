@@ -2,6 +2,63 @@ use super::*;
 use pcbcraft_engine::{PLACE_SYMBOL, schematic::WireEndpoint};
 use std::sync::Arc;
 
+/// Retracing the active W draft must shorten its painted route before commit, including
+/// the vertical reversal in the reported two-resistor example. The preview is disposable.
+#[test]
+fn new_wire_preview_retracts_self_overlap_before_commit() {
+    let mut h = harness();
+    h.state_mut().session.apply("project.new", &json!({"name":"Retrace"})).unwrap();
+    h.state_mut().browser.open = false;
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    h.key_press(egui::Key::W);
+    h.run();
+    for point in [grid(-8, 0), grid(-6, 0), grid(-6, 5), grid(-2, 5), grid(-2, 0)] {
+        let pos = screen(&h, point);
+        h.hover_at(pos);
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run();
+        }
+    }
+    h.hover_at(screen(&h, grid(-2, 9)));
+    h.run();
+    let expected = vec![grid(-8, 0), grid(-6, 0), grid(-6, 5), grid(-2, 5), grid(-2, 9)];
+    let points: Vec<_> = expected.iter().map(|&point| screen(&h, point)).collect();
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(pcbcraft_chrome::Tokens::get().accent) && path.points == points)),
+        "the active preview should remove the doubled-back vertical spur");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(routes(&h), vec![expected]);
+    let after = h.state().session.snapshot().unwrap();
+    click(&mut h, "Undo");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    click(&mut h, "Redo");
+    assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+}
+
+/// Each click retains its own reversible draft checkpoint even when retracing removes a
+/// corner. Disabling automatic healing keeps the explicit detour in both preview and commit.
+#[test]
+fn retraced_draft_corners_keep_backspace_and_cleanup_off_behavior() {
+    let from = grid(0, 0);
+    for automatic in [false, true] {
+        let mut draft = super::super::Draft::default();
+        assert!(draft.corner(from, grid(0, 10), automatic));
+        assert!(draft.corner(from, grid(0, 3), automatic));
+        let expected = if automatic { vec![from, grid(0, 3), grid(6, 3)] } else { vec![from, grid(0, 10), grid(0, 3), grid(6, 3)] };
+        assert_eq!(draft.path(from, grid(6, 3), automatic), Some(expected));
+        assert!(draft.back());
+        assert_eq!(draft.path(from, grid(6, 10), automatic), Some(vec![from, grid(0, 10), grid(6, 10)]));
+        assert!(draft.back());
+        assert!(!draft.back());
+    }
+}
+
 /// A part and a whole-wire drop both connect the coincident pin through shared commands;
 /// previews never change the live snapshot and undo restores the disconnected state.
 #[test]
@@ -50,7 +107,7 @@ fn wire_tool_finishes_on_a_segment() {
         }
     }
     assert_eq!(h.state().message, None);
-    assert!(h.state().views.active.tool.is_none());
+    assert!(h.state().views.active.schematic.tool.is_none());
     let project = h.state().session.project().unwrap();
     assert_eq!(project.wires().len(), 3);
     assert_eq!(project.connectivity().nets.len(), 1);
@@ -84,7 +141,7 @@ fn wire_tool_heals_a_return_to_the_connected_trunk() {
         }
     }
     assert_eq!(h.state().message, None);
-    assert!(h.state().views.active.tool.is_none());
+    assert!(h.state().views.active.schematic.tool.is_none());
     assert_eq!(routes(&h), vec![vec![grid(2, 12), grid(6, 12)], vec![grid(6, 12), grid(14, 12)], vec![grid(-10, 0), grid(6, 0), grid(6, 12)]]);
     click(&mut h, "Undo");
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
@@ -129,7 +186,7 @@ fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
             }
         }
         assert_eq!(h.state().message, None);
-        assert!(h.state().views.active.tool.is_none());
+        assert!(h.state().views.active.schematic.tool.is_none());
         assert_eq!(h.state().session.project().unwrap().wires().len(), if automatic { 2 } else { 5 });
         if !automatic {
             let looped = h.state().session.snapshot().unwrap();

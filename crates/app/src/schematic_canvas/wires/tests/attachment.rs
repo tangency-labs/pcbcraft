@@ -74,7 +74,7 @@ fn attachments_work_in_either_split_pane() {
             drop(&mut h, end);
             assert_eq!(h.state().message, None);
             assert_eq!(h.state().session.project().unwrap().wires()[0].endpoints()[1], target);
-            assert!(view(&h, 1 - id).selection.is_empty());
+            assert!(view(&h, 1 - id).schematic.selection.is_empty());
             assert_eq!(view(&h, 1 - id).camera.screen(grid(0, 0), canvas(&h, 1 - id)), other_center);
             focus_tab(&mut h, 1 - id);
             click(&mut h, "Undo");

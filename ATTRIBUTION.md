@@ -327,6 +327,8 @@ endpoint identities and does not connect unrelated crossings.
 Self-intersection erasure and removal of branch-free alternative routes in
 `crates/engine/src/wire/heal/loops.rs`, plus the remembered Auto-heal preference,
 are original upstream implementations as well.
+The active drawing preview now shares the same self-route normalization, with
+reversible corner checkpoints; this is new upstream code over those helpers.
 The Slice, Break, Heal and Delete glyphs in `crates/chrome/src/workspace.rs` are
 original drawings using the existing shared icon palette and ribbon metrics.
 The horizontal ribbon scrollbar uses Next's five-point `scroll_gutter` from

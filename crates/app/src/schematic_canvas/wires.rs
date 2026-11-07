@@ -26,16 +26,18 @@ impl Default for Draft {
 }
 
 impl Draft {
-    /// Resolve the frozen corners and current orthogonal preview leg.
-    pub(crate) fn path(&self, from: Point, to: Point) -> Vec<Point> {
+    /// Resolve the frozen corners and current leg, retracting self-overlap with the same
+    /// normalization as commit when enabled. Invalid or overly complex previews are refused.
+    pub(crate) fn path(&self, from: Point, to: Point, auto_heal: bool) -> Option<Vec<Point>> {
         let previous = self.corners.last().cloned().unwrap_or_else(|| vec![from]);
-        orthogonal_path(previous.into_iter().chain(std::iter::once(to)), self.horizontal_first)
+        let path = orthogonal_path(previous.into_iter().chain(std::iter::once(to)), self.horizontal_first);
+        if auto_heal { pcbcraft_engine::wire::normalized_path(&path).ok() } else { Some(path) }
     }
 
     /// Freeze a clicked corner if the resulting route fits the shared command's bound.
-    pub(crate) fn corner(&mut self, from: Point, to: Point) -> bool {
-        let path = self.path(from, to);
-        if path.len() < 2 || path.len() > pcbcraft_engine::wire::MAX_BENDS {
+    pub(crate) fn corner(&mut self, from: Point, to: Point, auto_heal: bool) -> bool {
+        let Some(path) = self.path(from, to, auto_heal) else { return false };
+        if path.len() < 2 || path.len() > pcbcraft_engine::wire::MAX_BENDS + 2 {
             return false;
         }
         if self.corners.last() != Some(&path) {
@@ -352,10 +354,11 @@ pub(super) fn pick(
     camera: &Camera,
     start: Option<Anchor>,
     draft: &Draft,
+    auto_heal: bool,
 ) -> Option<(Anchor, bool)> {
     let clicked = response.clicked_by(PointerButton::Primary);
     let pointer = if clicked { response.interact_pointer_pos() } else { response.hover_pos() };
-    let target = preview(painter, rect, project, camera, start, draft, pointer);
+    let target = preview(painter, rect, project, camera, start, draft, pointer, auto_heal);
     response.clone().on_hover_cursor(egui::CursorIcon::Crosshair);
     let finish = draft.finish_requested || response.double_clicked_by(PointerButton::Primary);
     target.filter(|_| clicked || finish).map(|target| (target, finish))
@@ -371,14 +374,16 @@ pub(super) fn preview(
     start: Option<Anchor>,
     draft: &Draft,
     pointer: Option<Pos2>,
+    auto_heal: bool,
 ) -> Option<Anchor> {
     let tokens = Tokens::get();
     let endpoints = endpoints(project, camera, rect);
     let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| anchor_at(&endpoints, project, camera, rect, at, None));
     if let Some(from) = start.and_then(|anchor| anchor.position(project))
         && let Some(to) = target.and_then(|anchor| anchor.position(project))
+        && let Some(path) = draft.path(from, to, auto_heal)
     {
-        paint_route(painter, rect, camera, draft.path(from, to), tokens.accent);
+        paint_route(painter, rect, camera, path, tokens.accent);
     }
     for (endpoint, pos) in endpoints {
         let anchor = Anchor::Existing(endpoint);
