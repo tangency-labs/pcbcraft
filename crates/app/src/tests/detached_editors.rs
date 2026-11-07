@@ -1138,6 +1138,102 @@ fn a_pending_save_survives_original_window_close_and_cancel_from_the_last_window
     assert!(matches!(h.state().dialog, Dialog::None));
 }
 
+/// Window commands address views and windows by ID in every native host, through the same
+/// handlers as the ribbon and sheet tabs: panels stay per window, splits and docking move only
+/// the addressed view, and the project snapshot never changes.
+#[test]
+fn window_commands_reach_views_and_panels_in_every_window() {
+    let (mut h, _peers) = many_windows();
+    let ctx = h.ctx.clone();
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    let run = |h: &mut Harness<'_, PcbApp>, id: &str, params: Value| {
+        let result = h.state_mut().run_window_command(&ctx, id, &params);
+        h.run();
+        result
+    };
+    let root_view = h.state().views.hosts[&HostId::ROOT].focused;
+    run(&mut h, "view.open_window", json!({"view": root_view.0})).unwrap();
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(1)]);
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].focused, root_view);
+
+    run(&mut h, "window.set_panel", json!({"window": 1, "panel": "nets", "open": true})).unwrap();
+    run(&mut h, "window.set_ribbon_tab", json!({"window": 1, "tab": "view"})).unwrap();
+    let inspected = window_commands::inspect_editor(h.state());
+    assert_eq!(inspected["windows"][1]["panels"]["nets"], true);
+    assert_eq!(inspected["windows"][1]["ribbon_tab"], "view");
+    assert_eq!(inspected["windows"][0]["panels"]["nets"], false);
+    assert_eq!(inspected["windows"][0]["ribbon_tab"], "capture");
+
+    let child_view = h.state().views.hosts[&HostId(1)].focused;
+    run(&mut h, "view.split", json!({"view": child_view.0, "split": true})).unwrap();
+    assert!(h.state().views.hosts[&HostId(1)].split());
+    assert!(!h.state().views.hosts[&HostId::ROOT].split());
+    let moved = h.state().views.hosts[&HostId(1)].layout.views()[1];
+    run(&mut h, "view.dock", json!({"view": moved.0})).unwrap();
+    assert_eq!(h.state().views.owner(moved), Some(HostId::ROOT));
+    assert_eq!(h.state().views.hosts[&HostId(1)].layout.views(), vec![child_view]);
+    assert!(run(&mut h, "view.dock", json!({"view": moved.0})).unwrap_err().contains("already in the main window"));
+
+    run(&mut h, "view.detach", json!({"view": moved.0})).unwrap();
+    let host = h.state().views.owner(moved).unwrap();
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(1), host]);
+    run(&mut h, "window.close", json!({"window": host.0})).unwrap();
+    assert!(h.state().views.view(moved).is_none());
+    assert!(run(&mut h, "view.fit", json!({"view": moved.0})).unwrap_err().contains(&format!("no open view {}", moved.0)));
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(1)]);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
+}
+
+/// Window commands reach PCB views as the workspace picker and board selection do: switching a
+/// view, opening the board in a new window, selecting footprints and the Layout ribbon tab, all
+/// without changing the project. Each view's selection command matches what it shows.
+#[test]
+fn window_commands_switch_workspaces_and_select_footprints() {
+    let (mut h, _peers) = many_windows();
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.run(pcbcraft_engine::PLACE_FOOTPRINT,&json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}));
+    h.run();
+    let before = h.state().session.inspect();
+    let run = |h: &mut Harness<'_, PcbApp>, id: &str, params: Value| {
+        let result = h.state_mut().run_window_command(&ctx, id, &params);
+        h.run();
+        result
+    };
+    let root = h.state().views.hosts[&HostId::ROOT].focused;
+    let pick = json!({"view": root.0, "footprints": ["footprint-3"]});
+    assert!(run(&mut h, "view.select_footprints", pick).unwrap_err().contains("shows the schematic"));
+
+    run(&mut h, "view.set_workspace", json!({"view": root.0, "workspace": "board"})).unwrap();
+    let board = h.state().views.hosts[&HostId::ROOT].focused;
+    assert_ne!(board, root, "the board opens as a tab in the same pane, as the picker does");
+    assert_eq!(h.state().views.view(board).map(|view| view.workspace), Some(Workspace::Board));
+    let shown = |h: &Harness<'_, PcbApp>, id: ViewId| {
+        let inspected = window_commands::inspect_editor(h.state());
+        inspected["views"].as_array().into_iter().flatten().find(|view| view["id"] == id.0).cloned().unwrap_or_default()
+    };
+    assert_eq!(shown(&h, board)["workspace"], "board");
+    assert_eq!(window_commands::inspect_editor(h.state())["windows"][0]["ribbon_tab"], "layout");
+    run(&mut h, "view.select_footprints", json!({"view": board.0, "footprints": ["footprint-3"]})).unwrap();
+    assert_eq!(shown(&h, board)["board"]["selection"], json!(["footprint-3"]));
+    let missing = json!({"view": board.0, "footprints": ["footprint-99"]});
+    assert!(run(&mut h, "view.select_footprints", missing).unwrap_err().contains("aren't on this view's board"));
+    let symbols = json!({"view": board.0, "items": {"symbols": ["symbol-2"], "wires": []}});
+    assert!(run(&mut h, "view.select", symbols).unwrap_err().contains("shows the PCB layout"));
+    run(&mut h, "window.set_ribbon_tab", json!({"window": 0, "tab": "view"})).unwrap();
+    assert_eq!(window_commands::inspect_editor(h.state())["windows"][0]["ribbon_tab"], "view");
+
+    run(&mut h, "view.set_workspace", json!({"view": board.0, "workspace": "schematic", "placement": "window"})).unwrap();
+    let hosts = h.state().views.detached_hosts();
+    assert_eq!(hosts.len(), 1);
+    let child = h.state().views.hosts[&hosts[0]].focused;
+    assert_eq!(h.state().views.view(child).map(|view| view.workspace), Some(Workspace::Schematic));
+    assert_eq!(h.state().views.view(board).map(|view| view.workspace), Some(Workspace::Board));
+    assert_eq!(h.state().session.inspect(), before);
+}
+
 /// New-window workspace choices use the existing viewport lifecycle without an intermediate
 /// split. Board selection highlights the schematic and closing one child leaves its peers intact.
 #[test]

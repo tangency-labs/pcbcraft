@@ -153,6 +153,16 @@ impl ProjectFiles {
         session.snapshot().is_some_and(|project| !self.saved.as_ref().is_some_and(|saved| Arc::ptr_eq(&saved.snapshot, &project)))
     }
 
+    /// Whether a plain Save of the open project would write in place, without asking where: the
+    /// project was opened from or saved to a current-format location. Untitled and legacy
+    /// single-file projects need the person to choose one.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn has_location(&self, session: &Session) -> bool {
+        session
+            .snapshot()
+            .is_some_and(|project| self.saved.as_ref().is_some_and(|saved| saved.snapshot.same_document(&project) && !saved.target.legacy()))
+    }
+
     /// Start opening a file. The completed result is ignored if the editor changes in the meantime.
     pub(super) fn open(&mut self, revision: u64, ctx: &egui::Context, folder: bool) -> Result<(), String> {
         let (send, receive) = mpsc::channel();

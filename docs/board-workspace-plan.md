@@ -31,8 +31,9 @@ Highlighting and optional selection following reach compatible views across all
 hosts while preserving edit selection, zoom and focus. The first PCB inspection
 view now renders existing footprint pad centers, with schematic/board workspace
 choices and component counterpart highlights. It shares the same single-sheet,
-single-board session; board editing, individual pad/pin selection and live-MCP
-presentation actions remain incomplete.
+single-board session; board editing and individual pad/pin selection remain
+incomplete. Live MCP runs the presentation actions below by view and window ID,
+including workspace choices and footprint selection.
 
 ## Existing foundation
 
@@ -300,8 +301,9 @@ Selection filters, Flip view and the broader layout ribbon remain future work.
 The next authored-layout step is #92's pinned footprint definitions and mapping,
 then outline and placement tools using shared commands. Before adding a normal
 schematic-to-board editing workflow, #55 must replace immediate footprint removal
-with reviewed updates. Live-MCP presentation discovery and dispatch remain #61;
-this slice does not complete #54, #64 or #65.
+with reviewed updates. Live-MCP presentation discovery and dispatch cover
+schematic and PCB views under #61; board edits join them with the board canvas.
+This slice does not complete #54, #64 or #65.
 
 The focused view determines where editing shortcuts and contextual controls act.
 Text fields and dialogs retain keyboard ownership. A tool gesture captures its
@@ -310,7 +312,8 @@ conflicting edit must never commit it into another target. Document edits are
 serialized through the existing session, and all affected views repaint.
 
 Following [#61](https://github.com/tangency-labs/pcbcraft/issues/61), presentation
-actions use the same GUI and live-MCP handlers. Inspecting, selecting, fitting,
+actions use the same GUI and live-MCP handlers (the app's `view.`, `window.`,
+`arrangement.`, `app.` and `file.` commands). Inspecting, selecting, fitting,
 splitting or moving a view must not dirty the electrical document, change saved
 bytes, advance its revision or add a document undo step. Live requests identify
 their target view explicitly. Headless sessions report that window actions need

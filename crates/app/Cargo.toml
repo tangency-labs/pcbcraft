@@ -19,6 +19,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-agents = { path = "../craft-agents" }
+# Model endpoints in the Assistant, as SolidCraft's agent chat does: HTTPS with rustls and the
+# operating system's certificates, and API keys in the system keychain (Keychain on macOS,
+# Credential Manager on Windows, the Secret Service over pure-Rust D-Bus elsewhere).
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
 craft-control = { path = "../craft-control" }
 pcbcraft-mcp = { workspace = true }
 eframe = { workspace = true, features = ["wayland", "x11"] }

@@ -1,0 +1,581 @@
+//! The agents the chat can use: the installed ones it finds by itself (Claude Code, Codex,
+//! Antigravity, OpenCode, …) and the ones the user adds (another ACP command, or an
+//! OpenAI-compatible endpoint such as Ollama, LM Studio or OpenAI, or an Anthropic-compatible
+//! one). Also the permission modes. Preferences only: no project data, no keys (those are in the
+//! system keychain).
+//!
+//! Adapted from PCBCraft's `crates/ui-egui/src/agent_chat/agents.rs` (see `ATTRIBUTION.md`):
+//! the app and preference lookups take [`AgentPrefs`] and the discovery results instead of
+//! PCBCraft's window state.
+
+use serde::{Deserialize, Serialize};
+
+/// How much the agent may do without asking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    /// Every change to the project, file and destructive action asks first.
+    Ask,
+    /// Editing commands run; files and destructive actions still ask (the default).
+    #[default]
+    Edits,
+    /// Nothing asks (crash reports and the folder limits still hold).
+    All,
+}
+
+impl Mode {
+    /// Every mode, in the order the settings list them.
+    pub const ALL: [Mode; 3] = [Mode::Ask, Mode::Edits, Mode::All];
+    /// The mode's name in saved preferences.
+    pub fn id(self) -> &'static str {
+        match self {
+            Mode::Ask => "ask",
+            Mode::Edits => "edits",
+            Mode::All => "all",
+        }
+    }
+    /// The mode a saved name means; `None` for an unknown one.
+    pub fn parse(s: &str) -> Option<Mode> {
+        Mode::ALL.into_iter().find(|m| m.id() == s)
+    }
+    /// The mode's label in the settings.
+    pub fn label(self) -> &'static str {
+        crate::i18n::tr(match self {
+            Mode::Ask => "ui.ai_mode_ask",
+            Mode::Edits => "ui.ai_mode_edits",
+            Mode::All => "ui.ai_mode_all",
+        })
+    }
+}
+
+/// What kind of agent an entry is: an installed ACP program or a model endpoint.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    /// A program that speaks the Agent Client Protocol.
+    #[default]
+    Acp,
+    /// An OpenAI-compatible chat completions endpoint.
+    Api,
+    /// An Anthropic-compatible Messages endpoint.
+    Anthropic,
+}
+
+impl Kind {
+    /// The id written in preferences and on the control channel.
+    pub fn id(self) -> &'static str {
+        match self {
+            Kind::Acp => "acp",
+            Kind::Api => "api",
+            Kind::Anthropic => "anthropic",
+        }
+    }
+    /// Whether the agent is an endpoint the app talks to itself (either protocol).
+    pub fn is_api(self) -> bool {
+        matches!(self, Kind::Api | Kind::Anthropic)
+    }
+    /// The wire protocol of an added endpoint; `None` for an ACP agent.
+    pub fn protocol(self) -> Option<Protocol> {
+        match self {
+            Kind::Acp => None,
+            Kind::Api => Some(Protocol::OpenAi),
+            Kind::Anthropic => Some(Protocol::Anthropic),
+        }
+    }
+}
+
+/// The wire protocol of an endpoint the user added.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    /// `{base}/chat/completions`, as Ollama, LM Studio, OpenAI and their kin speak.
+    #[default]
+    OpenAi,
+    /// `{base}/v1/messages`, as the Anthropic Messages API and compatible endpoints speak.
+    Anthropic,
+}
+
+impl Protocol {
+    /// The kind of agent an endpoint with this protocol is.
+    pub fn kind(self) -> Kind {
+        match self {
+            Protocol::OpenAi => Kind::Api,
+            Protocol::Anthropic => Kind::Anthropic,
+        }
+    }
+}
+
+/// An agent the user added.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    pub id: String,
+    pub name: String,
+    pub kind: Kind,
+    /// ACP: the command line.
+    pub command: String,
+    /// API: the endpoint (`…/v1`) and model.
+    pub base_url: String,
+    pub model: String,
+    /// Added with the Ollama preset (even if its display name changes).
+    pub ollama: bool,
+    /// API: a key is stored for it in the system keychain.
+    pub key: bool,
+    /// API: how long one model request may take, in seconds (clamped to
+    /// [`MIN_REQUEST_TIMEOUT_S`]..=[`MAX_REQUEST_TIMEOUT_S`] where it is used).
+    pub request_timeout_s: u64,
+    /// API: the reasoning effort to send as `reasoning_effort`; empty sends nothing and the
+    /// provider's own default applies (trimmed and length-capped by [`reasoning_effort`]).
+    pub reasoning_effort: String,
+}
+
+impl Default for AgentConfig {
+    fn default() -> AgentConfig {
+        AgentConfig {
+            id: String::new(),
+            name: String::new(),
+            kind: Kind::default(),
+            command: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+            ollama: false,
+            key: false,
+            request_timeout_s: DEFAULT_REQUEST_TIMEOUT_S,
+            reasoning_effort: String::new(),
+        }
+    }
+}
+
+/// How long one model request to an endpoint may take by default, in seconds.
+pub const DEFAULT_REQUEST_TIMEOUT_S: u64 = 300;
+/// The shortest request timeout an endpoint can have.
+pub const MIN_REQUEST_TIMEOUT_S: u64 = 30;
+/// The longest request timeout an endpoint can have (an hour).
+pub const MAX_REQUEST_TIMEOUT_S: u64 = 3600;
+
+/// A request timeout in range: seconds from a preferences file, the dialog or the control
+/// channel, rounded and clamped; anything not a finite number is the default.
+pub fn request_timeout_s(secs: f64) -> u64 {
+    if !secs.is_finite() {
+        return DEFAULT_REQUEST_TIMEOUT_S;
+    }
+    // Clamped first, so the cast is exact.
+    secs.round().clamp(MIN_REQUEST_TIMEOUT_S as f64, MAX_REQUEST_TIMEOUT_S as f64) as u64
+}
+
+/// The longest reasoning effort an endpoint can be given (no provider names one near this).
+pub const MAX_REASONING_EFFORT_LEN: usize = 64;
+
+/// A reasoning effort as stored: trimmed, and capped so a hand-edited preferences file or the
+/// control channel cannot carry an absurd value into every request. Empty means "send nothing".
+pub fn reasoning_effort(raw: &str) -> String {
+    raw.trim().chars().take(MAX_REASONING_EFFORT_LEN).collect()
+}
+
+/// An agent as the picker and the switcher show it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry {
+    pub id: String,
+    pub name: String,
+    pub kind: Kind,
+    /// ACP: what to start.
+    pub argv: Vec<String>,
+    pub version: Option<String>,
+    /// `login_found`, `key`, `signed_out`, `unknown` from discovery, `signed_in` after a
+    /// successful connection, or empty for an untested custom agent.
+    pub login: &'static str,
+    /// Found installed (not added by the user).
+    pub found: bool,
+    pub base_url: String,
+    pub model: String,
+    pub key: bool,
+    /// API: seconds one model request may take (in range).
+    pub request_timeout_s: u64,
+    /// API: the reasoning effort to send, empty for none (trimmed, in length).
+    pub reasoning_effort: String,
+    /// Found installed, but its program didn't start when asked its version: why (#9034).
+    pub problem: Option<String>,
+    /// Found installed: the command that installs it again.
+    pub install: &'static str,
+}
+
+impl Entry {
+    /// An agent from its saved configuration, named by its ID when the name is blank.
+    fn from_config(c: &AgentConfig) -> Entry {
+        Entry {
+            id: c.id.clone(),
+            name: if c.name.trim().is_empty() { c.id.clone() } else { c.name.clone() },
+            kind: c.kind,
+            argv: super::acp::split_command(&c.command),
+            version: None,
+            login: "",
+            found: false,
+            base_url: c.base_url.clone(),
+            model: c.model.clone(),
+            key: c.key,
+            request_timeout_s: c.request_timeout_s.clamp(MIN_REQUEST_TIMEOUT_S, MAX_REQUEST_TIMEOUT_S),
+            reasoning_effort: reasoning_effort(&c.reasoning_effort),
+            problem: None,
+            install: "",
+        }
+    }
+    /// A short line under the name: the version, the model, the command, or why it can't start.
+    pub fn detail(&self) -> String {
+        match self.kind {
+            Kind::Api | Kind::Anthropic => format!("{} · {}", self.model, self.base_url),
+            Kind::Acp => match (&self.problem, &self.version) {
+                (Some(p), _) => crate::i18n::format("ui.agent_chat_cannot_start", &[("error", p)]),
+                (None, Some(v)) => v.clone(),
+                (None, None) => short_command(&self.argv.join(" ")),
+            },
+        }
+    }
+    /// What to tell someone starting an agent that was found but didn't start (#9034): the reason,
+    /// and how to install it again. `None` when nothing was seen wrong.
+    pub fn problem_hint(&self) -> Option<String> {
+        let problem = self.problem.as_deref()?;
+        let program = self.argv.first().map(String::as_str).unwrap_or_default();
+        Some(crate::i18n::format(
+            "ui.agent_chat_reinstall",
+            &[("agent", &self.name), ("program", program), ("error", problem), ("install", self.install)],
+        ))
+    }
+}
+
+/// The person's agent settings, as PCBCraft keeps them among its preferences: the agents they
+/// added, the default, the permission modes, the chosen models and the "always allow" answers.
+/// No keys: those are in the system keychain.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentPrefs {
+    pub agents: Vec<AgentConfig>,
+    /// The agent a new conversation uses, by id; empty for the first one.
+    pub agent_default: String,
+    /// The permission mode for agents without their own.
+    pub ai_permissions: Mode,
+    /// Answer an agent's own permission questions about the chat's MCP tools for the person, so
+    /// each call is confirmed once, by the gate that checks the command itself. Off: they are
+    /// asked like any other tool's. The question only names a tool the agent says it is calling,
+    /// so turning this off also confirms that the call comes from the agent's request.
+    pub auto_approve_bridge: bool,
+    pub agent_permissions: std::collections::BTreeMap<String, Mode>,
+    /// The model chosen for each agent, by agent id.
+    pub agent_models: std::collections::BTreeMap<String, String>,
+    pub agent_always_allow: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+impl Default for AgentPrefs {
+    fn default() -> Self {
+        Self {
+            agents: Vec::new(),
+            agent_default: String::new(),
+            ai_permissions: Mode::Edits,
+            auto_approve_bridge: true,
+            agent_permissions: Default::default(),
+            agent_models: Default::default(),
+            agent_always_allow: Default::default(),
+        }
+    }
+}
+
+/// Every agent the chat can use: the installed ones `found`, then the ones the user added.
+/// `login_results` overrides an ACP agent's sign-in state after a connection tried it.
+pub fn entries(prefs: &AgentPrefs, found: &[crate::discover::Found], login_results: &std::collections::HashMap<String, bool>) -> Vec<Entry> {
+    let mut out: Vec<Entry> = found
+        .iter()
+        .map(|f| Entry {
+            id: f.id.to_string(),
+            name: f.name.to_string(),
+            kind: Kind::Acp,
+            argv: f.argv.clone(),
+            version: f.version.clone(),
+            login: f.login.id(),
+            found: true,
+            base_url: String::new(),
+            model: String::new(),
+            key: false,
+            request_timeout_s: DEFAULT_REQUEST_TIMEOUT_S,
+            reasoning_effort: String::new(),
+            problem: f.problem.clone(),
+            install: f.install,
+        })
+        .collect();
+    out.extend(prefs.agents.iter().map(Entry::from_config));
+    for entry in &mut out {
+        if entry.kind == Kind::Acp
+            && let Some(signed_in) = login_results.get(&entry.id)
+        {
+            entry.login = if *signed_in { "signed_in" } else { "signed_out" };
+        }
+    }
+    out
+}
+
+/// The agent a conversation uses: the one `picked` in the panel, else the default, else the first.
+pub fn current(prefs: &AgentPrefs, all: &[Entry], picked: Option<&str>) -> Option<Entry> {
+    let pick = |id: &str| all.iter().find(|e| e.id == id).cloned();
+    picked.and_then(pick).or_else(|| pick(&prefs.agent_default)).or_else(|| all.first().cloned())
+}
+
+/// The permission mode for an agent: its own, else the global one.
+pub fn mode_for(p: &AgentPrefs, id: &str) -> Mode {
+    p.agent_permissions.get(id).copied().unwrap_or(p.ai_permissions)
+}
+
+/// Whether `tool` is always allowed for `agent`.
+pub fn always_allowed(p: &AgentPrefs, agent: &str, tool: &str) -> bool {
+    p.agent_always_allow.get(agent).is_some_and(|t| t.iter().any(|x| x == tool))
+}
+
+/// Remember an "always allow" answer, keeping at most 500 per agent.
+pub fn remember(p: &mut AgentPrefs, agent: &str, tool: &str) {
+    let list = p.agent_always_allow.entry(agent.to_string()).or_default();
+    if !list.iter().any(|x| x == tool) && list.len() < 500 {
+        list.push(tool.chars().take(200).collect());
+    }
+}
+
+/// A free id for a new agent: `prefix-1`, `prefix-2`, …
+pub fn new_id(p: &AgentPrefs, prefix: &str) -> String {
+    (1..).map(|n| format!("{prefix}-{n}")).find(|id| !p.agents.iter().any(|a| &a.id == id)).unwrap_or_else(|| prefix.to_string())
+}
+
+/// A command line shortened for a list: program names without their folders, at most 40 characters.
+pub fn short_command(line: &str) -> String {
+    let argv = crate::acp::split_command(line);
+    let mut parts: Vec<String> = argv.iter().map(|a| a.rsplit(['/', '\\']).next().unwrap_or(a).to_string()).collect();
+    if parts.is_empty() {
+        parts.push(line.to_string());
+    }
+    let s = parts.join(" ");
+    if s.chars().count() > 40 { format!("{}…", s.chars().take(40).collect::<String>()) } else { s }
+}
+
+/// An endpoint people commonly add, with the base URL to start from.
+pub struct ApiPreset {
+    pub name: &'static str,
+    pub base_url: &'static str,
+}
+
+/// OpenAI-compatible endpoints people use.
+pub const OPENAI_PRESETS: &[ApiPreset] = &[
+    ApiPreset { name: "Ollama", base_url: "http://localhost:11434/v1" },
+    ApiPreset { name: "LM Studio", base_url: "http://localhost:1234/v1" },
+    ApiPreset { name: "OpenClaw", base_url: "http://localhost:18789/v1" },
+    ApiPreset { name: "OpenAI", base_url: "https://api.openai.com/v1" },
+    ApiPreset { name: "Mammouth AI", base_url: "https://api.mammouth.ai/v1" },
+    ApiPreset { name: "OpenCode Go", base_url: "https://opencode.ai/zen/go/v1" },
+    ApiPreset { name: "OpenRouter", base_url: "https://openrouter.ai/api/v1" },
+];
+
+/// Anthropic-compatible endpoints people use. The base URL is the one their documentation calls
+/// `ANTHROPIC_BASE_URL`: the `/v1` is added where needed.
+pub const ANTHROPIC_PRESETS: &[ApiPreset] = &[ApiPreset { name: "Anthropic", base_url: "https://api.anthropic.com/v1" }];
+
+/// The presets offered for an endpoint protocol.
+pub fn presets(protocol: Protocol) -> &'static [ApiPreset] {
+    match protocol {
+        Protocol::OpenAi => OPENAI_PRESETS,
+        Protocol::Anthropic => ANTHROPIC_PRESETS,
+    }
+}
+
+/// Whether a key may be sent to `url`: only over HTTPS, or to this computer.
+pub fn key_safe_for(url: &str) -> bool {
+    let u = url.trim().to_ascii_lowercase();
+    if u.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = u.strip_prefix("http://") else { return false };
+    // The host part ends where the HTTP client ends it, at the first `/`, `?` or `#`.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    local_authority(authority)
+}
+
+/// `authority` is exactly this computer's name with at most a port. No user name goes before it
+/// and no stray character after it, as URL parsers don't all read those the same way.
+fn local_authority(authority: &str) -> bool {
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(inner) => {
+            let Some((ip, after)) = inner.split_once(']') else { return false };
+            if ip != "::1" {
+                return false;
+            }
+            ("[::1]", after)
+        }
+        None => {
+            let end = authority.find(':').unwrap_or(authority.len());
+            authority.split_at(end)
+        }
+    };
+    let port_ok = match port.strip_prefix(':') {
+        Some(digits) => digits.bytes().all(|b| b.is_ascii_digit()) && digits.parse::<u16>().is_ok(),
+        None => port.is_empty(),
+    };
+    port_ok && matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+}
+
+/// A base URL the API backend accepts: `http(s)://host…`, without a trailing slash.
+pub fn normalize_url(url: &str) -> Result<String, String> {
+    let u = url.trim().trim_end_matches('/').to_string();
+    let lower = u.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) || u.len() < 10 || u.contains(char::is_whitespace) {
+        return Err(crate::i18n::tr("ui.ai_bad_url").to_string());
+    }
+    Ok(u)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_go_only_over_https_or_to_this_computer() {
+        assert!(key_safe_for("https://api.openai.com/v1"));
+        assert!(key_safe_for("https://api.mammouth.ai/v1"));
+        assert!(key_safe_for("http://localhost:11434/v1"));
+        assert!(key_safe_for("http://127.0.0.1:1234/v1"));
+        assert!(key_safe_for("http://[::1]:8080/v1"));
+        assert!(!key_safe_for("http://192.168.1.20:11434/v1"));
+        assert!(!key_safe_for("http://localhost.evil.example/v1"));
+        assert!(!key_safe_for("http://user@evil.example/v1"));
+        assert!(!key_safe_for("ftp://x"));
+    }
+
+    /// Plain HTTP only reaches this computer: the check reads the host where the HTTP client does,
+    /// and takes nothing around the name that URL parsers could read differently.
+    #[test]
+    fn a_key_over_http_needs_a_url_that_can_only_mean_this_computer() {
+        for url in [
+            "http://localhost",
+            "HTTP://LOCALHOST:11434/v1",
+            " http://localhost:11434/v1/ ",
+            "http://127.0.0.1:1234/v1?x=1",
+            "http://[::1]/v1",
+            "http://[::1]:8080/v1",
+            "http://localhost:65535/@models",
+        ] {
+            assert!(key_safe_for(url), "{url}");
+        }
+        for url in [
+            "http://evil.example#@localhost/v1",
+            "http://evil.example?@localhost/v1",
+            "http://evil.example/@localhost/v1",
+            "http://evil.example\\@localhost/v1",
+            "http://localhost\\@evil.example/v1",
+            "http://localhost\\.evil.example/v1",
+            "http://localhost@evil.example/v1",
+            "http://localhost:1234@evil.example/v1",
+            "http://user@localhost/v1",
+            "http://user:secret@localhost:1234/v1",
+            "http://[::1]@evil.example/v1",
+            "http://[::1].evil.example/v1",
+            "http://[::1]evil.example/v1",
+            "http://[::2]/v1",
+            "http://[::1/v1",
+            "http://127.0.0.1.evil.example/v1",
+            "http://localhost.evil.example:1234/v1",
+            "http://localhost:80.evil.example/v1",
+            "http://localhost:abc/v1",
+            "http://localhost:/v1",
+            "http://localhost:65536/v1",
+            "http://local\thost.evil.example/v1",
+            "http://localhost evil.example/v1",
+            "http://localhost%2eevil.example/v1",
+            "http://",
+            "http:///localhost/v1",
+            "http:/localhost/v1",
+            "//localhost/v1",
+            "localhost:1234/v1",
+        ] {
+            assert!(!key_safe_for(url), "{url}");
+        }
+    }
+
+    /// Modes and ids round trip.
+    #[test]
+    fn modes_and_ids_round_trip() {
+        for m in Mode::ALL {
+            assert_eq!(Mode::parse(m.id()), Some(m));
+        }
+        let mut p = AgentPrefs::default();
+        assert_eq!(p.ai_permissions, Mode::Edits, "model edits run, files ask: the default");
+        p.agent_permissions.insert("codex".into(), Mode::Ask);
+        assert_eq!(mode_for(&p, "codex"), Mode::Ask);
+        assert_eq!(mode_for(&p, "claude"), Mode::Edits);
+        remember(&mut p, "claude", "mcp__pcbcraft__save");
+        remember(&mut p, "claude", "mcp__pcbcraft__save");
+        assert!(always_allowed(&p, "claude", "mcp__pcbcraft__save") && !always_allowed(&p, "codex", "mcp__pcbcraft__save"));
+        assert_eq!(p.agent_always_allow["claude"].len(), 1);
+        p.agents.push(AgentConfig { id: "api-1".into(), ..Default::default() });
+        assert_eq!(new_id(&p, "api"), "api-2");
+        assert_eq!(normalize_url(" http://localhost:11434/v1/ ").as_deref(), Ok("http://localhost:11434/v1"));
+        assert!(normalize_url("localhost:11434").is_err());
+    }
+
+    /// Endpoint kinds keep their protocol and presets.
+    #[test]
+    fn endpoint_kinds_keep_their_protocol_and_presets() {
+        assert_eq!(serde_json::to_string(&Kind::Api).unwrap(), "\"api\"");
+        assert_eq!(serde_json::to_string(&Kind::Anthropic).unwrap(), "\"anthropic\"");
+        assert_eq!(serde_json::from_str::<Kind>("\"anthropic\"").unwrap(), Kind::Anthropic);
+        assert!(Kind::Anthropic.is_api() && !Kind::Acp.is_api());
+        assert!(Kind::Acp.protocol().is_none());
+        assert_eq!(Kind::Anthropic.protocol(), Some(Protocol::Anthropic));
+        assert_eq!(Protocol::Anthropic.kind(), Kind::Anthropic);
+        assert_eq!(Kind::Api.id(), "api");
+        assert_eq!(Kind::Anthropic.id(), "anthropic");
+        assert!(presets(Protocol::OpenAi).iter().all(|p| !p.name.is_empty() && p.base_url.starts_with("http")));
+        assert!(presets(Protocol::OpenAi).iter().any(|p| p.name == "Mammouth AI" && key_safe_for(p.base_url)));
+        assert!(presets(Protocol::Anthropic).iter().any(|p| p.base_url == "https://api.anthropic.com/v1"));
+    }
+
+    /// The first preset is the one an Add dialog opens with, and the one taken for Ollama.
+    #[test]
+    fn ollama_stays_the_first_preset_and_every_preset_can_take_a_key() {
+        assert_eq!(OPENAI_PRESETS.first().map(|p| p.name), Some("Ollama"));
+        assert_eq!(OPENAI_PRESETS.last().map(|p| p.name), Some("OpenRouter"));
+        assert!(OPENAI_PRESETS.iter().any(|p| p.name == "OpenClaw"));
+        for preset in OPENAI_PRESETS.iter().chain(ANTHROPIC_PRESETS) {
+            assert_eq!(normalize_url(preset.base_url).as_deref(), Ok(preset.base_url), "{}", preset.name);
+            assert!(key_safe_for(preset.base_url), "{}", preset.name);
+        }
+    }
+
+    #[test]
+    fn request_timeouts_default_to_300_s_and_stay_between_30_s_and_an_hour() {
+        assert_eq!(AgentConfig::default().request_timeout_s, 300);
+        assert_eq!(request_timeout_s(600.4), 600);
+        assert_eq!(request_timeout_s(1.0), 30);
+        assert_eq!(request_timeout_s(-5.0), 30);
+        assert_eq!(request_timeout_s(1e300), 3600);
+        assert_eq!(request_timeout_s(f64::NAN), 300);
+        assert_eq!(request_timeout_s(f64::INFINITY), 300);
+        // An older preferences file has no timeout: the default; a hand-edited one is clamped where used.
+        let old: AgentConfig = serde_json::from_str(r#"{"id":"api-1","kind":"api","base_url":"http://localhost:11434/v1","model":"m"}"#).unwrap();
+        assert_eq!(old.request_timeout_s, 300);
+        let wild: AgentConfig = serde_json::from_str(r#"{"id":"api-2","kind":"api","request_timeout_s":99999}"#).unwrap();
+        assert_eq!(Entry::from_config(&wild).request_timeout_s, 3600);
+        let saved = AgentConfig { id: "api-3".into(), kind: Kind::Api, request_timeout_s: 1200, ..Default::default() };
+        let back: AgentConfig = serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert_eq!(back, saved);
+    }
+
+    #[test]
+    fn reasoning_effort_defaults_to_empty_and_is_trimmed_and_capped() {
+        assert!(AgentConfig::default().reasoning_effort.is_empty());
+        // An older preferences file has no effort: empty, so nothing is sent.
+        let old: AgentConfig = serde_json::from_str(r#"{"id":"api-1","kind":"api","base_url":"http://localhost:11434/v1","model":"m"}"#).unwrap();
+        assert!(old.reasoning_effort.is_empty());
+        assert_eq!(reasoning_effort("  high "), "high");
+        assert!(reasoning_effort("   ").is_empty());
+        let long = reasoning_effort(&"x".repeat(500));
+        assert_eq!(long.chars().count(), MAX_REASONING_EFFORT_LEN);
+        let saved = AgentConfig { id: "api-2".into(), kind: Kind::Api, reasoning_effort: "max".into(), ..Default::default() };
+        let back: AgentConfig = serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert_eq!(back, saved);
+        // The entry carries it trimmed; a hand-edited over-long one is capped where used.
+        assert_eq!(Entry::from_config(&saved).reasoning_effort, "max");
+        let wild: AgentConfig = serde_json::from_str(&format!(r#"{{"id":"api-3","kind":"api","reasoning_effort":"{}"}}"#, "y".repeat(500))).unwrap();
+        assert_eq!(Entry::from_config(&wild).reasoning_effort.chars().count(), MAX_REASONING_EFFORT_LEN);
+    }
+}

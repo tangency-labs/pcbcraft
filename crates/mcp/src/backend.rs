@@ -3,14 +3,30 @@
 use pcbcraft_engine::{Project, Session, board::Pad, catalog, schematic::Terminal};
 use serde_json::{Value, json};
 
-/// Something that answers `engine.commands`, `engine.execute` and `project.inspect`.
+/// Command namespaces that act on an open editor window instead of the project document.
+/// Only a live editor can run them, and they never change the project, its revision or its undo
+/// history; only `file.save` changes the unsaved state, by saving. The editor publishes their
+/// catalog during live discovery.
+pub const WINDOW_NAMESPACES: &[&str] = &["view.", "window.", "arrangement.", "app.", "file."];
+
+/// Whether `id` names a window command, which only an open editor can run.
+pub fn is_window_command(id: &str) -> bool {
+    WINDOW_NAMESPACES.iter().any(|namespace| id.starts_with(namespace))
+}
+
+/// The refusal a session without a window gives for a window command or editor inspection.
+pub(crate) fn needs_live_editor(what: &str) -> String {
+    format!(
+        "{what} acts on an open PCBCraft editor window, and this MCP session has none. \
+In the desktop app choose Help → Connect AI assistants…, then connect with `pcbcraft-cli mcp --connect PORT`."
+    )
+}
+
+/// Something that answers `engine.commands`, `engine.execute`, `project.inspect`,
+/// `project.cross_probe` and `editor.inspect`.
 pub trait Backend {
     /// Run an engine or project operation and return its result or a tool error.
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String>;
-    /// Whether this backend exposes the given command in discovery.
-    fn permits_command(&self, _id: &str) -> bool {
-        true
-    }
     /// Where the commands run, for the client's information.
     fn describe(&self) -> String;
 }
@@ -37,16 +53,22 @@ impl Backend for Headless {
     }
 
     fn describe(&self) -> String {
-        "a headless session in this process, not an open window".to_owned()
+        "a headless session in this process, not an open window. Window commands (view., window., arrangement., app. and file.) need a live editor"
+            .to_owned()
     }
 }
 
 /// Run an operation against the supplied session. Its owner controls execution policy.
+/// Window commands and editor inspection fail with a reason instead of silently succeeding,
+/// because a bare session has no window to act on.
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, String> {
     match method {
         "engine.commands" => Ok(json!(catalog().iter().map(|c| c.to_json()).collect::<Vec<_>>())),
         "engine.execute" => {
             let id = params["command"].as_str().ok_or("missing `command`")?;
+            if is_window_command(id) {
+                return Err(needs_live_editor(&format!("`{id}`")));
+            }
             if params["inspect"].as_bool() == Some(false) {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())
             } else {
@@ -55,6 +77,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
         }
         "project.inspect" => Ok(session.inspect()),
         "project.cross_probe" => cross_probe(session, params),
+        "editor.inspect" => Err(needs_live_editor("Editor inspection")),
         _ => Err(format!("unknown method `{method}`")),
     }
 }

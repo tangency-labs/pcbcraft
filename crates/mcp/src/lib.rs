@@ -2,7 +2,8 @@
 //!
 //! JSON-RPC 2.0 over stdio (newline-delimited), implementing the MCP lifecycle, tools and resources.
 //! Tools are thin wrappers over engine commands, so an agent does what the app's menus do, through
-//! the same code. Agents never touch project files.
+//! the same code. A live editor adds window commands, run by the window's own handlers. Agents
+//! never touch project files.
 //!
 //! Adapted from SolidCraft's `crates/mcp` (see `ATTRIBUTION.md`).
 
@@ -12,7 +13,7 @@ pub mod live;
 mod server;
 mod tools;
 
-pub use backend::{Backend, Headless};
+pub use backend::{Backend, Headless, WINDOW_NAMESPACES, is_window_command};
 pub use server::{PROTOCOL_VERSION, SUPPORTED_VERSIONS, Server};
 pub use tools::{call_tool, tool_definitions};
 

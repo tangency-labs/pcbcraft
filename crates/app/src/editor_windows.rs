@@ -44,6 +44,16 @@ struct Panels {
     placed: bool,
 }
 
+/// A host's panel visibility and ribbon tab, as window inspection reports them.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct HostPanels {
+    pub(super) browser: bool,
+    pub(super) parts: bool,
+    pub(super) nets: bool,
+    pub(super) ribbon: usize,
+}
+
 /// A viewport's identity belongs to its host, independently of the views displayed inside it.
 pub(super) fn viewport(host: HostId) -> ViewportId {
     if host == HostId::ROOT { ViewportId::ROOT } else { ViewportId::from_hash_of(("pcbcraft_editor", host)) }
@@ -181,30 +191,50 @@ impl PcbApp {
             {
                 continue;
             }
-            match action {
-                ViewAction::OpenDocument(target) => {
-                    self.views.open_document(source.view(), target, &self.session);
-                }
-                ViewAction::Workspace { workspace, placement } => self.apply_workspace(source.view(), workspace, placement),
-                ViewAction::OpenWindow => {
-                    self.views.open_window(source.view());
-                }
-                ViewAction::Detach => {
-                    self.views.detach_view(source.view());
-                }
-                ViewAction::Dock => {
-                    self.views.dock_view(source.view());
-                    ctx.send_viewport_cmd_to(viewport(self.views.main), ViewportCommand::Focus);
-                }
-                ViewAction::OpenBeside => {
-                    self.views.open_beside(source.view());
-                }
-                ViewAction::Close => self.views.close_view(source.view()),
-            }
-            self.parts.release_focus(ctx);
-            egui::DragAndDrop::clear_payload(ctx);
-            self.repaint_editors(ctx);
+            self.apply_view_action(ctx, source.view(), action);
         }
+    }
+
+    /// Place, move or close one existing view: the handler behind the sheet-tab and ribbon
+    /// actions and their window commands. Call it only while the current main host is bound and
+    /// no project dialog or action is pending. Unknown views, a sole primary pane's Close, or
+    /// Dock of an already docked view leave every layout unchanged.
+    pub(super) fn apply_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
+        match action {
+            ViewAction::OpenDocument(target) => {
+                self.views.open_document(id, target, &self.session);
+            }
+            ViewAction::Workspace { workspace, placement } => self.apply_workspace(id, workspace, placement),
+            ViewAction::OpenWindow => {
+                self.views.open_window(id);
+            }
+            ViewAction::Detach => {
+                self.views.detach_view(id);
+            }
+            ViewAction::Dock => {
+                self.views.dock_view(id);
+                ctx.send_viewport_cmd_to(viewport(self.views.main), ViewportCommand::Focus);
+            }
+            ViewAction::OpenBeside => {
+                self.views.open_beside(id);
+            }
+            ViewAction::Close => self.views.close_view(id),
+        }
+        self.parts.release_focus(ctx);
+        egui::DragAndDrop::clear_payload(ctx);
+        self.repaint_editors(ctx);
+    }
+
+    /// Which contextual panels `host` shows and its ribbon tab, whether or not it is bound.
+    /// A host that has not been drawn yet reports the panels it will start with.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn host_panels(&self, host: HostId) -> HostPanels {
+        if host == self.views.host {
+            return HostPanels { browser: self.browser.open, parts: self.parts.open, nets: self.net_inspector.open, ribbon: self.ribbon_tab };
+        }
+        let fresh = Panels::default();
+        let panels = self.windows.panels.get(&host).unwrap_or(&fresh);
+        HostPanels { browser: panels.browser.open, parts: panels.parts.open, nets: panels.nets.open, ribbon: panels.ribbon }
     }
 
     /// Cancel old host input on actual native focus changes, never on repaint. A modal retains

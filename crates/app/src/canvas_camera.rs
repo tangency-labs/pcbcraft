@@ -156,10 +156,28 @@ impl Camera {
         self.fit_requested = false;
     }
 
-    /// The current zoom factor, for tests that check navigation.
-    #[cfg(test)]
+    /// The current zoom factor, where 1 shows one 50 mil drawing unit at its default size.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn zoom(&self) -> f32 {
         self.zoom
+    }
+
+    /// The model point at the center of the uncovered canvas, to the nearest nanometre. Before
+    /// the view has been painted this is relative to the whole canvas.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn center(&self) -> Point {
+        let scale = self.unit_step() / GRID_NM as f32;
+        let center = (self.uncovered_center() - self.offset) / scale;
+        Point { x_nm: center.x.round() as i64, y_nm: center.y.round() as i64 }
+    }
+
+    /// Zoom to `zoom` (clamped to the wheel's limits) about the uncovered canvas center, as a
+    /// wheel zoom with Zoom around center does. Cancels a pending fit, like any navigation.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_zoom(&mut self, zoom: f32) {
+        let center = self.center();
+        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        self.center_on(center);
     }
 
     /// The on-screen size of one [`GRID_NM`] drawing unit (50 mil), which symbol geometry is

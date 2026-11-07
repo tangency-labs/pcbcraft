@@ -685,7 +685,11 @@ impl Project {
     pub fn inspect_schematic(&self) -> Value {
         json!({
             "symbols": self.symbols.iter().map(|symbol| symbol.inspect(&self.reference(symbol), self.value(symbol))).collect::<Vec<_>>(),
-            "wires": self.wires.iter().map(Wire::inspect).collect::<Vec<_>>(),
+            "wires": self.wires.iter().map(|wire| {
+                let mut inspected = wire.inspect();
+                inspected["path"] = json!(self.wire_path(wire));
+                inspected
+            }).collect::<Vec<_>>(),
             "junctions": self.junctions().map(|(id, point)| json!({"id": format!("junction-{id}"), "x_nm": point.x_nm, "y_nm": point.y_nm})).collect::<Vec<_>>(),
             "netlist": self.connectivity().inspect(),
         })
@@ -833,7 +837,9 @@ impl Session {
     }
 
     /// Return the current project, revision, and undo and redo availability as JSON.
-    /// Each schematic wire reports terminal or junction endpoints and optional authored `bends`.
+    /// Each schematic wire reports terminal or junction endpoints, optional authored `bends`, and
+    /// its drawn `path`: every corner from end to end in nanometres, so a point on any leg can be
+    /// chosen for the commands that take one.
     /// The schematic's `junctions` list provides endpoint IDs and positions; its `netlist`
     /// groups connected terminals and junctions, including junction-only nets, and lists
     /// terminals without a wire as `unconnected`. `sheets` reports ordered sheet identities,
@@ -1575,7 +1581,8 @@ mod wiring_tests {
         let first = session.execute(CONNECT_PINS, &json!({"from": b, "to": a, "expected_revision": 4})).unwrap();
         let second = session.execute(CONNECT_PINS, &json!({"from": c, "to": b, "expected_revision": 5})).unwrap();
         let schematic = &second["project"]["schematic"];
-        assert_eq!(schematic["wires"][0], json!({"id": "wire-5", "from": a, "to": b}));
+        let path = json!([{"x_nm": -5_080_000, "y_nm": 0}, {"x_nm": 5_080_000, "y_nm": 0}]);
+        assert_eq!(schematic["wires"][0], json!({"id": "wire-5", "from": a, "to": b, "path": path}), "inspection reports the drawn route");
         assert_eq!(schematic["netlist"]["nets"], json!([{"terminals": [a, b, c]}]));
         assert_eq!(schematic["netlist"]["unconnected"].as_array().unwrap().len(), 3);
 

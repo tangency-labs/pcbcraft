@@ -511,3 +511,48 @@ fn mcp_branches_into_wire_segments_and_heals_selection() {
     assert_eq!(undone["project"], before);
     assert_eq!(call(&mut server, "execute", request)["isError"], true);
 }
+
+/// A session without a window refuses window commands and editor inspection with a reason,
+/// instead of silently succeeding, and leaves the project untouched.
+#[test]
+fn headless_sessions_say_window_commands_need_a_live_editor() {
+    let mut server = server();
+    body(&call(&mut server, "execute", json!({"command": "project.new"})));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    for (tool, arguments) in [
+        ("execute", json!({"command": "view.split", "params": {"view": 0, "split": true}})),
+        ("execute", json!({"command": "app.set_preferences", "params": {"theme": "light"}})),
+        ("describe_command", json!({"command": "window.set_panel"})),
+        ("inspect_editor", json!({})),
+    ] {
+        let refused = call(&mut server, tool, arguments);
+        assert_eq!(refused["isError"], true, "{tool}");
+        assert!(refused["content"][0]["text"].as_str().unwrap().contains("Connect AI assistants"), "{refused}");
+    }
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    let unknown = call(&mut server, "describe_command", json!({"command": "schematic.nothing"}));
+    assert_eq!(unknown["content"][0]["text"], "unknown command `schematic.nothing`");
+    let listed = body(&call(&mut server, "list_commands", json!({})));
+    assert!(listed.as_array().unwrap().iter().all(|command| !crate::is_window_command(command["id"].as_str().unwrap())));
+}
+
+/// A token file is read trimmed and bounded.
+#[test]
+fn a_token_file_is_read_trimmed_and_bounded() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = std::env::temp_dir().join(format!("pcbcraft-mcp-token-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let good = dir.join("good.token");
+    std::fs::write(&good, "0123456789abcdef0123456789abcdef\n")?;
+    assert!(crate::live::Remote::from_token_file(41234, &good).is_ok());
+    let huge = dir.join("huge.token");
+    std::fs::write(&huge, "a".repeat(5000))?;
+    let error = crate::live::Remote::from_token_file(41234, &huge).err().ok_or("an oversized file was accepted")?;
+    assert!(error.contains("too large") && !error.contains("aaaa"), "{error}");
+    let junk = dir.join("junk.token");
+    std::fs::write(&junk, "not a token")?;
+    let error = crate::live::Remote::from_token_file(41234, &junk).err().ok_or("junk was accepted")?;
+    assert!(!error.contains("not a token"), "the file's text stays out of errors: {error}");
+    assert!(crate::live::Remote::from_token_file(41234, &dir.join("missing.token")).is_err());
+    std::fs::remove_dir_all(&dir)?;
+    Ok(())
+}

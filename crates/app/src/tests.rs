@@ -988,6 +988,7 @@ fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
             "from": {"symbol": "symbol-2", "terminal": "2"},
             "to": {"symbol": "symbol-3", "terminal": "1"},
             "bends": [{"x_nm": 21_590_000, "y_nm": 0}],
+            "path": [{"x_nm": 5_080_000, "y_nm": 0}, {"x_nm": 21_590_000, "y_nm": 0}, {"x_nm": 21_590_000, "y_nm": 7_620_000}],
         }])
     );
     assert_eq!(schematic["netlist"]["nets"].as_array().unwrap().len(), 1);
@@ -1493,8 +1494,11 @@ mod live_mcp {
 
         let connection = (port, token);
         let commands = payload(tool(&mut harness, connection, "list_commands", json!({})));
-        assert_eq!(commands.as_array().unwrap().len(), 1);
-        assert_eq!(commands[0]["id"], MOVE_SYMBOL);
+        let ids: Vec<&str> = commands.as_array().unwrap().iter().filter_map(|command| command["id"].as_str()).collect();
+        assert_eq!(ids.len(), pcbcraft_engine::catalog().len() + window_commands::window_catalog().len());
+        for id in [MOVE_SYMBOL, pcbcraft_engine::DELETE_WIRE, "edit.undo", "view.split", "window.set_panel", "app.set_preferences"] {
+            assert!(ids.contains(&id), "{id}");
+        }
         let before = payload(tool(&mut harness, connection, "inspect_project", json!({})));
         let from = &before["project"]["schematic"];
         let request = json!({"command": MOVE_SYMBOL, "params": {
@@ -1507,6 +1511,7 @@ mod live_mcp {
             assert_eq!(to["wires"][0][key], from["wires"][0][key]);
         }
         assert_eq!(to["netlist"], from["netlist"]);
+        assert_eq!(to["wires"][0]["path"][0], json!({"x_nm": 5_080_000, "y_nm": 5_080_000}), "its drawn route follows the pin");
         let after_wire = painted_wire(&harness);
         assert_ne!(after_wire, before_wire);
         assert_eq!(after_wire.last(), before_wire.last());
@@ -1517,6 +1522,7 @@ mod live_mcp {
         assert!(stale["content"][0]["text"].as_str().unwrap().contains("project changed"));
         let denied = tool(&mut harness, connection, "execute", json!({"command": "project.new", "params": {"name": "other"}}));
         assert_eq!(denied["isError"], true);
+        assert!(denied["content"][0]["text"].as_str().unwrap().contains("unsaved changes"), "{denied}");
         assert_eq!(harness.state().session().inspect(), moved);
 
         click(&mut harness, "Undo");
@@ -1533,6 +1539,174 @@ mod live_mcp {
         assert!(harness.state().live_control.is_none());
         let disconnected = tool(&mut harness, connection, "inspect_project", json!({}));
         assert_eq!(disconnected["isError"], true);
+    }
+
+    /// Enable the window's connection through Help and return its port and credential.
+    fn connect(harness: &mut Harness<'_, PcbApp>) -> (u16, String) {
+        choose(harness, "Help", "Connect AI assistants…");
+        click(harness, "Enable local connection");
+        let config: Value = serde_json::from_str(&harness.state().live_control.as_ref().unwrap().client_configuration()).unwrap();
+        click(harness, "Close");
+        let settings = &config["mcpServers"]["pcbcraft-live"];
+        (settings["args"][2].as_str().unwrap().parse().unwrap(), settings["env"][TOKEN_ENV].as_str().unwrap().to_owned())
+    }
+
+    /// Run a window command over the live connection and return the editor inspection it answers.
+    fn window(harness: &mut Harness<'_, PcbApp>, connection: (u16, &str), command: &str, params: Value) -> Value {
+        payload(tool(harness, connection, "execute", json!({"command": command, "params": params})))
+    }
+
+    /// The document state a window command must leave alone: project, revision, unsaved state
+    /// and undo/redo availability.
+    fn document(harness: &Harness<'_, PcbApp>) -> (Value, bool) {
+        (harness.state().session().inspect(), harness.state().files.dirty(&harness.state().session))
+    }
+
+    /// Deleting a wire through MCP removes it from the open canvas, names the edit in the
+    /// status bar, and shares one history with the GUI and with MCP's own undo.
+    #[test]
+    fn local_mcp_deletes_wires_and_shares_undo() {
+        let mut harness = harness();
+        wiring_project(&mut harness);
+        click(&mut harness, "Draw wire (W)");
+        click_pin(&mut harness, 0, 1);
+        click_pin(&mut harness, 1, 0);
+        let wired = painted_wire(&harness);
+        let (port, token) = connect(&mut harness);
+        let connection = (port, token.as_str());
+
+        let before = payload(tool(&mut harness, connection, "inspect_project", json!({})));
+        let wire = before["project"]["schematic"]["wires"][0]["id"].clone();
+        let request = json!({"command": pcbcraft_engine::DELETE_WIRE, "params": {"wire": wire, "expected_revision": before["revision"]}});
+        let deleted = payload(tool(&mut harness, connection, "execute", request));
+        assert_eq!(deleted["project"]["schematic"]["wires"], json!([]));
+        harness.run();
+        assert!(harness.state().session().project().unwrap().wires().is_empty());
+        harness.get_by_label("Delete Wire through MCP");
+
+        click(&mut harness, "Undo");
+        assert_eq!(payload(tool(&mut harness, connection, "inspect_project", json!({})))["project"], before["project"]);
+        assert_eq!(painted_wire(&harness), wired);
+        let redone = payload(tool(&mut harness, connection, "execute", json!({"command": "edit.redo"})));
+        assert_eq!(redone["project"], deleted["project"]);
+        let undone = payload(tool(&mut harness, connection, "execute", json!({"command": "edit.undo"})));
+        assert_eq!(undone["project"], before["project"]);
+        assert_eq!(painted_wire(&harness), wired);
+    }
+
+    /// Splitting, panels, Fit, selection, grid and settings run through the same handlers from
+    /// the ribbon and from MCP, and none of them touches the project, its revision, unsaved
+    /// state or history.
+    #[test]
+    fn window_commands_match_the_gui_and_leave_the_project_alone() {
+        let mut harness = harness();
+        wiring_project(&mut harness);
+        let (port, token) = connect(&mut harness);
+        let connection = (port, token.as_str());
+        let untouched = document(&harness);
+
+        // The ribbon's Split and MCP's view.split reach the same layout.
+        click(&mut harness, "View");
+        click(&mut harness, "Split editor views");
+        let by_gui = payload(tool(&mut harness, connection, "inspect_editor", json!({})));
+        click(&mut harness, "Split editor views");
+        let single = payload(tool(&mut harness, connection, "inspect_editor", json!({})));
+        assert_eq!(single["windows"][0]["split"], false);
+        let focused = single["windows"][0]["focused_view"].clone();
+        let by_mcp = window(&mut harness, connection, "view.split", json!({"view": focused, "split": true}));
+        harness.run();
+        assert_eq!(by_mcp["windows"], by_gui["windows"]);
+        assert_eq!(by_mcp["views"].as_array().unwrap().len(), 2);
+        harness.get_by_label("Schematic canvas 2");
+
+        // Fit accounts for the visible cards the same way from either entry point.
+        let second = by_mcp["windows"][0]["views"][1].clone();
+        window(&mut harness, connection, "view.focus", json!({"view": second}));
+        harness.run();
+        assert_eq!(harness.state().views.active.id().0, second.as_u64().unwrap());
+        window(&mut harness, connection, "view.zoom", json!({"view": second, "zoom_percent": 300}));
+        click(&mut harness, "Fit schematic");
+        let fit_by_gui = payload(tool(&mut harness, connection, "inspect_editor", json!({})))["views"][1].clone();
+        window(&mut harness, connection, "view.zoom", json!({"view": second, "zoom_percent": 300}));
+        window(&mut harness, connection, "view.fit", json!({"view": second}));
+        harness.run();
+        let fit_by_mcp = payload(tool(&mut harness, connection, "inspect_editor", json!({})))["views"][1].clone();
+        assert_eq!((&fit_by_mcp["zoom_percent"], &fit_by_mcp["center"]), (&fit_by_gui["zoom_percent"], &fit_by_gui["center"]));
+        assert_ne!(fit_by_mcp["zoom_percent"], 300.0);
+
+        // Panels: the ribbon toggle and window.set_panel agree.
+        click(&mut harness, "Toggle Browser");
+        assert!(harness.query_by_label("Collapse Browser").is_none());
+        let hidden = payload(tool(&mut harness, connection, "inspect_editor", json!({})));
+        assert_eq!(hidden["windows"][0]["panels"]["browser"], false);
+        let shown = window(&mut harness, connection, "window.set_panel", json!({"window": 0, "panel": "browser", "open": true}));
+        harness.run();
+        assert_eq!(shown["windows"][0]["panels"]["browser"], true);
+        harness.get_by_label("Collapse Browser");
+
+        // Selection, centering and grid are view state.
+        let symbol = untouched.0["project"]["schematic"]["symbols"][0]["id"].clone();
+        let selected = window(&mut harness, connection, "view.select", json!({"view": second, "items": {"symbols": [symbol], "wires": []}}));
+        assert_eq!(selected["views"][1]["selection"]["symbols"], json!([symbol]));
+        assert_eq!(harness.state().views.active.schematic.selection.single_symbol(), symbol.as_str());
+        let centered = window(&mut harness, connection, "view.center", json!({"view": second, "at": {"x_nm": 2_540_000, "y_nm": -1_270_000}}));
+        assert_eq!(centered["views"][1]["center"], json!({"x_nm": 2_540_000, "y_nm": -1_270_000}));
+        let gridded = window(&mut harness, connection, "view.set_grid", json!({"view": second, "spacing_nm": 254_000}));
+        assert_eq!(gridded["views"][1]["grid_spacing_nm"], 254_000);
+        assert_eq!(gridded["views"][0]["grid_spacing_nm"], grid::SCHEMATIC_SPACING_DEFAULT_NM);
+
+        // Settings change the palette and persist like Preferences.
+        assert_eq!(harness.ctx.global_style().visuals.panel_fill, Tokens::dark().panel);
+        let themed = window(&mut harness, connection, "app.set_preferences", json!({"theme": "light", "units": "mm"}));
+        assert_eq!(themed["preferences"]["theme"], "light");
+        harness.run();
+        assert_eq!(harness.ctx.global_style().visuals.panel_fill, Tokens::light().panel);
+        assert_eq!(harness.state().preferences().units, pcbcraft_chrome::units::Unit::Mm);
+
+        // Closing the extra pane leaves the sole main view, which can't close.
+        let closed = window(&mut harness, connection, "view.close", json!({"view": second}));
+        assert_eq!(closed["windows"][0]["split"], false);
+        let last = closed["windows"][0]["views"][0].clone();
+        let refused = tool(&mut harness, connection, "execute", json!({"command": "view.close", "params": {"view": last}}));
+        assert_eq!(refused["isError"], true);
+
+        assert_eq!(document(&harness), untouched);
+    }
+
+    /// Stale IDs, bad parameters and an open dialog fail visibly and change nothing.
+    #[test]
+    fn refused_window_commands_change_nothing() {
+        let mut harness = harness();
+        wiring_project(&mut harness);
+        let (port, token) = connect(&mut harness);
+        let connection = (port, token.as_str());
+        let before = payload(tool(&mut harness, connection, "inspect_editor", json!({})));
+        let untouched = document(&harness);
+        for (command, params, reason) in [
+            ("view.fit", json!({"view": 99}), "no open view 99"),
+            ("window.set_panel", json!({"window": 7, "panel": "nets", "open": true}), "no open window 7"),
+            ("window.close", json!({"window": 0}), "last editor window"),
+            ("view.select", json!({"view": 0, "items": {"symbols": ["symbol-99"], "wires": []}}), "aren't in the project"),
+            ("app.set_preferences", json!({"scale_percent": 101}), "multiple of 5"),
+            ("view.teleport", json!({}), "unknown command"),
+            ("file.save", json!({}), "hasn't been saved"),
+        ] {
+            let refused = tool(&mut harness, connection, "execute", json!({"command": command, "params": params}));
+            assert_eq!(refused["isError"], true, "{command}");
+            assert!(refused["content"][0]["text"].as_str().unwrap().contains(reason), "{command}: {refused}");
+        }
+        harness.state_mut().open_preferences();
+        harness.run();
+        let blocked = tool(&mut harness, connection, "execute", json!({"command": "view.fit", "params": {"view": 0}}));
+        assert!(blocked["content"][0]["text"].as_str().unwrap().contains("Finish the current dialog"), "{blocked}");
+        let blocked = tool(&mut harness, connection, "execute", json!({"command": pcbcraft_engine::DELETE_ITEMS, "params": {}}));
+        assert!(blocked["content"][0]["text"].as_str().unwrap().contains("Finish the current dialog"), "{blocked}");
+        harness.state_mut().dialog = Dialog::None;
+        harness.run();
+        let mut after = payload(tool(&mut harness, connection, "inspect_editor", json!({})));
+        after["dialog_open"] = before["dialog_open"].clone();
+        assert_eq!(after, before);
+        assert_eq!(document(&harness), untouched);
     }
 }
 

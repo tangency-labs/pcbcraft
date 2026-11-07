@@ -16,6 +16,32 @@ PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhe
 | `apps/pcbcraft-web/` | `apps/solidcraft-web/` | Kept the Trunk setup, page layout and web runner start. Dropped offline use, installing, files and URL launch options. |
 | `.github/workflows/`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | same paths | Cut down to what PCBCraft needs. `deny.toml` adds the license allow list. |
 
+`crates/craft-agents/` recreates SolidCraft's agent chat core from
+`crates/ui-egui/src/agent_chat/` at `c553365a2197a689e749389a6fbf707a38df9b61`
+(MIT OR Apache-2.0, copyright (c) 2026 SolidCraft contributors) until SolidCraft
+extracts it as a shared library:
+
+| PCBCraft file | SolidCraft source | What changed |
+|---|---|---|
+| `acp.rs`, `acp_client.rs`, `api_client.rs`, `backend.rs`, `discover.rs`, `markdown.rs`, `process.rs` | same names in `agent_chat/` | Client, bridge and tool names, token variable and system note are PCBCraft's. The MCP bridge runs `pcbcraft-cli mcp --connect PORT --token-file FILE --wait SECONDS`, with the live endpoint's credential in a private file as SolidCraft's token file keeps it, not in its environment. |
+| `agents.rs` | `agent_chat/agents.rs` | Agent settings are an `AgentPrefs` value instead of SolidCraft's window state and preferences; `short_command` moved here from `panel.rs`. |
+| `i18n.rs`, `lib.rs` | `i18n.rs`; `agent_chat/mod.rs` | English messages for the keys these modules use; the model id limits and a small `ControlRequest`. |
+
+The Assistant in `crates/app/src/assistant.rs` and `assistant/` is a lighter rewrite of
+SolidCraft's chat panel, state and gate at the same revision: `chat.rs` follows
+`agent_chat/mod.rs` and `gate.rs` (conversation items, permission questions and holding tool calls
+for Allow, Always allow or Deny under the Ask, Edits and All modes), and `settings.rs` follows
+`agent_chat/settings.rs` (agents found, added and not installed, Test, default and per-agent
+modes). The gate's rules are PCBCraft's own command namespaces, and the UI uses PCBCraft's chrome.
+`assistant/host.rs` adapts SolidCraft's `agent_http` and `Keychain` from `apps/solidcraft/src/main.rs`
+at the same revision: HTTPS through `ureq` and `rustls` with the platform's certificates, no
+redirects, a bounded response, and keys in the system keychain through `keyring`.
+The chat's token file (`write_token_file` and `restrict_to_user` in `assistant/chat.rs`) adapts
+`write_token_file_with` and `restrict_to_user` from SolidCraft's `crates/engine/src/control_auth.rs`
+at the same revision: an owner-only file on Unix, and on Windows `icacls` replacing the empty file's
+inherited permissions before the secret goes in. PCBCraft calls `icacls` by its full path, keeps the
+file in its own temporary folder, and writes no token when `icacls` fails or times out.
+
 The local transport in `crates/craft-control/` follows the first-request token
 and loopback design in SolidCraft's
 [`control_server.rs`](https://github.com/tangency-labs/solidcraft/blob/ffc84dbe2e35af7d2eae302d42953271ef7a72b7/apps/solidcraft/src/control_server.rs)
@@ -27,7 +53,8 @@ and leaves token distribution, discovery, and command dispatch to its callers.
 The desktop live MCP setup follows the explicit per-window connection and
 copyable configuration in PCBcraft Next's `docs/mcp.md` at the revision below.
 PCBCraft's adapter dispatches directly through the shared editor session and
-limits live edits to moving a symbol.
+the window's own view and window handlers.
+
 
 The integrated Linux title bar and ribbon dimensions follow SolidCraft's
 `crates/ui-egui/src/titlebar.rs` and `crates/ui-egui/src/toolbar.rs` at
@@ -192,7 +219,7 @@ cache state remain outside native project documents.
 
 ## Dependencies
 
-`Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. A notices file for release binaries is still to do, and is needed before the first release.
+`Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. A notices file for release binaries is still to do, and is needed before the first release. `webpki-root-certs`, the Mozilla root-certificate list that the desktop Assistant's HTTPS uses, is CDLA-Permissive-2.0 data. It allows use, changes and redistribution, places no conditions on PCBCraft's own code, and asks only that its license text ship with the data, so that notices file must include it.
 
 The workspace picker on the ribbon's workspace tile (`crates/chrome/src/workspace.rs`,
 `picker` and `workspace_row`) follows SolidCraft's `workspace_menu` in

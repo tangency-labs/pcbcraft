@@ -51,7 +51,6 @@ impl Target {
     }
 
     /// Whether saving needs a new destination because the project was opened from an older format.
-    #[cfg(test)]
     pub(super) fn legacy(&self) -> bool {
         self.legacy
     }

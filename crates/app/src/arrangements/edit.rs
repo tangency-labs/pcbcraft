@@ -15,7 +15,7 @@ pub(crate) struct Edit {
 
 impl Arrangements {
     /// Reject ambiguous labels and invalid text without using a label as identity.
-    pub(super) fn name_error(&self, name: &str, except: Option<u64>) -> Option<&'static str> {
+    pub(crate) fn name_error(&self, name: &str, except: Option<u64>) -> Option<&'static str> {
         let name = name.trim();
         if !valid_name(name) {
             return Some("Use a name of 1–80 characters on one line.");

@@ -178,7 +178,7 @@ pub(crate) enum Outcome {
     Closed,
     /// The AI page asked to add an agent. The window waits while that dialog is open.
     #[cfg(not(target_arch = "wasm32"))]
-    AddAgent(crate::assistant::AgentForm),
+    AddAgent(Box<crate::assistant::AgentForm>),
 }
 
 const APPEARANCE: usize = 0;

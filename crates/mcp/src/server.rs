@@ -27,7 +27,9 @@ const MAX_LINE: usize = 16 << 20;
 /// What every MCP client is told at `initialize`.
 const INSTRUCTIONS: &str = "PCBCraft is an electronics design app, and these tools drive it through the same commands its menus run. \
 `list_commands` shows what exists, `execute` runs one, `inspect_project` shows the result. Changes are undoable with `edit.undo`. \
-Project files are never edited directly. Inspect the project to read its current revision before making an edit.";
+Project files are never edited directly. Inspect the project to read its current revision before making an edit. \
+With a live editor, view., window., arrangement., app. and file. commands change its views, windows, arrangements and settings without editing the project; \
+`inspect_editor` gives the view and window IDs they take.";
 
 pub struct Server {
     backend: Box<dyn Backend>,
