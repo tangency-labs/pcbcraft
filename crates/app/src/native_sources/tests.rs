@@ -76,7 +76,7 @@ fn removed_and_disconnected_loads_cannot_restore_stale_catalog_entries() {
     let mut manager = Sources::default();
     let (send, receive) = mpsc::channel();
     manager.statuses.insert("loading".into(), "Loading…".into());
-    manager.job = Some(Job { source: "loading".into(), receive, generation: session.libraries().generation() });
+    manager.job = Some(Job { source: "loading".into(), previous_status: None, receive, generation: session.libraries().generation() });
     manager.remove("loading", &mut session);
     assert!(manager.job.is_some());
     send.send(Ok(Some((source.clone(), None)))).unwrap();
@@ -87,7 +87,7 @@ fn removed_and_disconnected_loads_cannot_restore_stale_catalog_entries() {
     let (send, receive) = mpsc::channel();
     drop(send);
     manager.statuses.insert("loading".into(), "Loading…".into());
-    manager.job = Some(Job { source: "loading".into(), receive, generation: session.libraries().generation() });
+    manager.job = Some(Job { source: "loading".into(), previous_status: None, receive, generation: session.libraries().generation() });
     manager.poll(&mut session, &egui::Context::default());
     assert!(session.libraries().search("Workshop", None).is_empty());
     assert!(manager.statuses["loading"].contains("disconnected"));
@@ -101,13 +101,49 @@ fn newer_source_command_invalidates_an_inflight_folder_result() {
     let mut manager = Sources::default();
     let (send, receive) = mpsc::channel();
     manager.statuses.insert("loading".into(), "Loading…".into());
-    manager.job = Some(Job { source: "loading".into(), generation: session.libraries().generation(), receive });
+    manager.job = Some(Job { source: "loading".into(), previous_status: None, generation: session.libraries().generation(), receive });
     session.execute(sources::LOAD, &json!({"source":"mcp","documents":documents()})).unwrap();
     send.send(Ok(Some((Arc::new(NativeSource::load(&documents()).unwrap()), None)))).unwrap();
     manager.poll(&mut session, &egui::Context::default());
     assert!(manager.statuses["loading"].contains("changed during loading"));
     assert_eq!(session.libraries().inspect().as_array().unwrap().len(), 2);
     assert_eq!(session.libraries().search("Workshop", None)[0].0, "mcp");
+}
+
+/// Cancelling Add/Relocate restores the prior diagnostic without changing availability,
+/// personal locators, project snapshots or history, including after a failed refresh.
+#[test]
+fn cancelled_picker_restores_the_previous_source_status() {
+    for previous in [None, Some("Available"), Some("Library folder is missing")] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({})).unwrap();
+        let mut manager = Sources::default();
+        if let Some(status) = previous {
+            session.install_library_source("folder", Arc::new(NativeSource::load(&documents()).unwrap())).unwrap();
+            manager.registered.push(Registration { source: "folder".into(), path: "/missing/workshop".into() });
+            manager.statuses.insert("folder".into(), status.into());
+            if status != "Available" {
+                session.mark_library_unavailable("folder");
+            }
+        }
+        let before = session.snapshot().unwrap();
+        let revision = session.revision();
+        let catalog = session.libraries().inspect();
+        let generation = session.libraries().generation();
+        let registrations = manager.storage_text();
+        let (send, receive) = mpsc::channel();
+        let previous_status = manager.statuses.insert("folder".into(), "Loading…".into());
+        manager.job = Some(Job { source: "folder".into(), previous_status, receive, generation });
+        send.send(Ok(None)).unwrap();
+        manager.poll(&mut session, &egui::Context::default());
+        assert!(manager.job.is_none());
+        assert_eq!(manager.statuses.get("folder").map(String::as_str), previous);
+        assert_eq!(manager.storage_text(), registrations);
+        assert_eq!(session.libraries().inspect(), catalog);
+        assert_eq!(session.libraries().generation(), generation);
+        assert_eq!(session.revision(), revision);
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    }
 }
 
 /// The live editor adapter loads/searches the same catalog that Parts reads, without changing

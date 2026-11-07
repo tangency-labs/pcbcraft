@@ -1212,6 +1212,7 @@ impl Session {
     }
 
     /// Dispatch validated commands inside one atomic sheet transaction or the project session.
+    /// External symbol placement names missing revision/digest guards before catalog resolution.
     fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
@@ -1309,6 +1310,12 @@ impl Session {
                         None => library_symbol(id),
                     }
                 } else {
+                    if params.get("definition_revision").is_none() {
+                        return Err(CommandError::InvalidParams("`definition_revision` is required for external libraries".into()));
+                    }
+                    if params.get("definition_digest").is_none() {
+                        return Err(CommandError::InvalidParams("`definition_digest` is required for external libraries".into()));
+                    }
                     revision.and_then(|revision| self.libraries.symbol(library, id, revision))
                 }
                 .ok_or_else(|| CommandError::InvalidParams("unknown symbol definition".to_owned()))?;

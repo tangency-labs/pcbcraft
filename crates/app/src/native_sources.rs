@@ -23,6 +23,8 @@ struct Registration {
 struct Job {
     generation: u64,
     source: String,
+    /// Restore this diagnostic if the picker is cancelled while this request is still current.
+    previous_status: Option<String>,
     receive: Receiver<LoadResult>,
 }
 
@@ -118,12 +120,12 @@ impl Sources {
                 ctx.request_repaint();
             })
             .map_err(|e| e.to_string())?;
-        self.statuses.insert(source.clone(), "Loading…".into());
-        self.job = Some(Job { source, receive, generation });
+        let previous_status = self.statuses.insert(source.clone(), "Loading…".into());
+        self.job = Some(Job { source, previous_status, receive, generation });
         Ok(())
     }
 
-    /// Open a desktop picker inside the worker. Cancel returns no registration or catalog change.
+    /// Open a desktop picker inside the worker. Cancel preserves registration, catalog and prior status.
     #[cfg(not(target_arch = "wasm32"))]
     fn pick_folder(&mut self, source: String, ctx: &egui::Context, generation: u64) -> Result<(), String> {
         if self.job.is_some() {
@@ -146,13 +148,14 @@ impl Sources {
                 ctx.request_repaint();
             })
             .map_err(|e| e.to_string())?;
-        self.statuses.insert(source.clone(), "Loading…".into());
-        self.job = Some(Job { source, receive, generation });
+        let previous_status = self.statuses.insert(source.clone(), "Loading…".into());
+        self.job = Some(Job { source, previous_status, receive, generation });
         Ok(())
     }
 
     /// Upload uses the same bundle decoder on desktop and browser; browser selection is initiated
-    /// synchronously during the click to retain its user-activation permission.
+    /// synchronously during the click to retain its user-activation permission. Cancellation
+    /// restores the source's previous status without changing its catalog or registration.
     fn upload(&mut self, source: String, ctx: &egui::Context, generation: u64) -> Result<(), String> {
         if self.job.is_some() {
             return Err("A library read is already running".into());
@@ -187,8 +190,8 @@ impl Sources {
                 ctx.request_repaint();
             });
         }
-        self.statuses.insert(source.clone(), "Loading…".into());
-        self.job = Some(Job { source, receive, generation });
+        let previous_status = self.statuses.insert(source.clone(), "Loading…".into());
+        self.job = Some(Job { source, previous_status, receive, generation });
         Ok(())
     }
 
@@ -202,6 +205,7 @@ impl Sources {
 
     /// Consume a worker result only while its registration request is still current. Failed
     /// refreshes remove stale catalog content without touching pinned project copies or history.
+    /// Cancelled pickers restore their prior status only while the source request remains current.
     fn poll(&mut self, session: &mut pcbcraft_engine::Session, ctx: &egui::Context) {
         let result = self.job.as_ref().map(|job| job.receive.try_recv());
         if let Some(result) = result {
@@ -230,7 +234,11 @@ impl Sources {
                                 }
                             },
                             Ok(None) => {
-                                self.statuses.remove(&job.source);
+                                if let Some(previous) = job.previous_status {
+                                    self.statuses.insert(job.source, previous);
+                                } else {
+                                    self.statuses.remove(&job.source);
+                                }
                             }
                             Err(error) => {
                                 session.mark_library_unavailable(&job.source);

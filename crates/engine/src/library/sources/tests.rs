@@ -128,3 +128,32 @@ fn source_refresh_cannot_replace_pinned_geometry_or_bypass_revision_checks() {
     assert!(session.apply(crate::PLACE_SYMBOL, &params).unwrap_err().to_string().contains("pinned project copy"));
     assert!(Arc::ptr_eq(&pinned, &session.snapshot().unwrap()));
 }
+
+/// Omitted external identity guards report the missing parameter before lookup or digest checks;
+/// rejected calls preserve the exact document, revision and undo history.
+#[test]
+fn external_symbol_placement_names_missing_revision_and_digest_parameters() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.execute(LOAD, &json!({"source":"personal","documents":documents()})).unwrap();
+    let before = session.snapshot().unwrap();
+    let state = session.inspect();
+    let params = json!({
+        "library":"local-demo", "definition":"resistor", "definition_revision":2,
+        "definition_digest":session.libraries().search("",Some(Kind::Symbol))[0].1.inspect()["digest"],
+        "x_nm":0, "y_nm":0, "expected_revision":session.revision()
+    });
+    for name in ["definition_revision", "definition_digest"] {
+        let mut missing = params.clone();
+        missing.as_object_mut().unwrap().remove(name);
+        let error = session.apply(crate::PLACE_SYMBOL, &missing).unwrap_err();
+        assert!(
+            matches!(&error, crate::CommandError::InvalidParams(message) if message == &format!("`{name}` is required for external libraries")),
+            "{error}"
+        );
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(session.inspect(), state);
+    }
+    session.apply(crate::PLACE_SYMBOL, &params).unwrap();
+    assert_eq!(session.project().unwrap().symbols().len(), 1);
+}
