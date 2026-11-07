@@ -86,6 +86,29 @@ impl PcbApp {
             _ => {}
         }
         workspace::ribbon_separator(ui);
+        if workspace::ribbon_group(
+            ui,
+            "Components",
+            &[RibbonTool {
+                icon: ToolIcon::Symbol,
+                label: "Footprints",
+                description: "Assign and place component footprints",
+                shortcut: "",
+                enabled: enabled && self.session.project().is_some_and(|p| p.components().next().is_some()),
+                active: false,
+                toggle: false,
+            }],
+        )
+        .is_some()
+        {
+            let component = self
+                .session
+                .project()
+                .and_then(|p| p.board_view(p.board_target()))
+                .and_then(|board| board.footprints().find(|f| self.views.active.board.selection.contains(&f.id)).map(|f| f.component));
+            self.begin_footprint_assignment(component);
+        }
+        workspace::ribbon_separator(ui);
         let tools = [
             RibbonTool { icon: ToolIcon::Fit, label: "Fit", description: "Fit board", shortcut: "", enabled, active: false, toggle: false },
             RibbonTool {

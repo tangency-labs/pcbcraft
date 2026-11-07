@@ -310,7 +310,13 @@ into projects with explicit terminal mappings. New views hide fabrication and
 courtyard graphics by default; Layers can show them. **Properties → Silkscreen**
 edits physical text height, stroke width and pad clearance in one undoable board
 change. Defaults are 1 mm, 0.15 mm and 0.25 mm respectively; lengths accept mil/mm
-input and save with the project. Slots, board outlines, general assignment UI and routing remain planned.
+input and save with the project. **Assign Footprint…** in a schematic symbol's
+context menu, or **Footprints** in the PCB Layout ribbon, opens package selection
+and explicit terminal-to-pad mapping. Assigning pins the package without placing
+it. In PCB layout, **Place on board** places an assigned component at unit-aware
+X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
+Changing an already placed package awaits reviewed board updates. Native-folder
+registration, slots, board outlines and routing remain planned.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

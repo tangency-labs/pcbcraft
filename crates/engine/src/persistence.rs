@@ -426,7 +426,8 @@ impl Encoder {
         if !project.labels.is_empty() || !project.subsheets.is_empty() {
             return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
         }
-        if project.board.silkscreen.is_some()
+        if !project.board.assignments.is_empty()
+            || project.board.silkscreen.is_some()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
             || project.board.footprints().iter().any(|f| f.rotation != 0)

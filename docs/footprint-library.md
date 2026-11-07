@@ -2,10 +2,44 @@
 
 `libraries/starter/footprints` contains six original SMD definitions and a plated header under
 MIT OR Apache-2.0. The engine embeds these definitions for shared command use;
-the Parts card currently browses symbols only. `pcb.place_footprint` pins the
+the Parts card browses symbols while the package chooser offers footprints in both editors. `pcb.place_footprint` pins the
 selected definition into the project and validates its terminal-to-pad mapping.
 A saved project opens from that pinned copy without consulting the built-in
 catalog or fetching its source URL.
+
+## Assigning and placing a package
+
+From a schematic symbol's context menu, choose **Assign Footprint…**. In PCB
+layout, **Layout → Components → Footprints** opens the same chooser for the
+project's components, including components not yet placed on the board. Search
+and choose a package, then explicitly choose a pad for each logical terminal.
+The chooser shows the library, item, revision, license and dimensional source.
+**Assign** validates a complete bijection and pins the exact definition and map;
+it creates no copper, placement ID or board coordinates. The schematic wiring
+and reference stay unchanged.
+
+Assignments survive folder/archive save and offline reopen. In the PCB chooser,
+an assigned, unplaced component offers unit-aware X/Y fields and **Place on
+board**. Placement uses the pinned package, selects it and centers the PCB view.
+The canvas's M/drag and R controls then move and rotate it normally. Choosing a
+package and placing it are separate undo steps. A modified chooser must apply
+its assignment before it can place; a stale form closes without changing data.
+
+`pcb.assign_footprint` accepts an optional board UUID, a stable `component` ID,
+`library`, `definition`, `definition_revision`, explicit `mapping` and
+`expected_revision`. `pcb.place_assigned_footprint` takes the board/component,
+`x_nm`, `y_nm` and revision, resolving solely from the project. Both use the same
+engine command catalog in GUI, live and headless MCP. `inspect_project` reports
+physical assignments with `placed` status and a compact `footprint_catalog` of
+available built-in/project-pinned revisions. Legacy physical placements report
+their effective assignment without changing saved bytes; marker-only legacy
+placements remain explicit compatibility data.
+
+A placed package cannot be silently reassigned: its package and mapping stay
+read-only until reviewed board updates (#55) exist. The chooser does not register
+folders, import external footprints or create library parts. Those source and
+library workflows remain under #92/#28. This slice supports the original starter
+packages and physical definitions already pinned into an opened project.
 
 ## Packages and sources
 
@@ -81,13 +115,13 @@ lines fit; these labels are derived presentation and never persist net identity.
 sheets, the annotation includes its owning sheet name and is independent of the
 active schematic view.
 Side flipping, mask/paste apertures, arbitrary shapes, footprint authoring and general
-library registration/assignment UI remain future work.
+library source registration remain future work.
 
 The marker-only `generic-through-hole-2` compatibility definition is unchanged.
 It does not acquire physical copper or drill geometry from its name. Existing
 projects retain their original definitions and encoding until explicitly edited;
 the updated [Dual LED demo](../examples/README.md) is a new physical example.
-The [native storage guide](native-project-storage.md) specifies board version 5
+The [native storage guide](native-project-storage.md) specifies board versions 5–7
 and pinned footprint paths.
 
 ## Silkscreen settings

@@ -14,6 +14,7 @@ mod board_views;
 mod detached_editors;
 mod display_units;
 mod editor_views;
+mod footprint_assignment;
 mod grid_spacing;
 mod hierarchy;
 mod multiple_sheets;

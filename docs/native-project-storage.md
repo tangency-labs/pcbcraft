@@ -47,7 +47,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6` | Project UUID, name, ordered sheet list and shared components |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` or `/2` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols |
-| `board.json` | `pcbcraft-board/1` through `/6` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings |
+| `board.json` | `pcbcraft-board/1` through `/7` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -160,8 +160,20 @@ the stable default style for definitions that request physical silk. Editing the
 style changes only the board document. Legacy single-file export refuses these
 settings rather than discarding them.
 
-An unconfigured board retains version 1 and its existing encoding. Initializing
-setup uses version 2, whose required `setup` contains a `layers` catalog and a
+Board format 7 adds a nonempty `assignments` array before `footprints`. Each
+record carries the numeric component ID, library/item/revision and an explicit
+terminal-to-pad mapping, with no placement ID or coordinates. Every assignment
+must resolve a component and pinned physical definition; duplicate components,
+incomplete/nonbijective mappings and disagreements with an existing placement
+are refused. Unplaced assignments retain their pinned files even with an empty
+`footprints` array. The incremental encoder writes one assignment per record
+budget and emits shared definition copies once. Setup and silkscreen remain
+optional under version 7, with their existing validation. Older boards retain
+their prior encoding until a package assignment is authored. Legacy single-file
+export refuses independent assignments rather than losing them.
+
+An unconfigured board without newer footprint, assignment or silkscreen data
+retains version 1 and its existing encoding. Initializing setup uses version 2, whose required `setup` contains a `layers` catalog and a
 `stackup` profile. Layers have UUIDs, names, typed purposes and optional surface
 sides; the profile has a UUID and front-to-back `strata`. Copper strata reference
 catalog layer UUIDs, while dielectric strata own UUIDs and optional material

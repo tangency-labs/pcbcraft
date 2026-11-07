@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod assignment;
 pub mod definition;
 pub mod materials;
 pub mod setup;
@@ -186,6 +187,7 @@ pub(crate) fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
 /// Board-local placements and immutable definitions, indexed independently from view state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Board {
+    pub(crate) assignments: BTreeMap<u64, assignment::Assignment>,
     pub(crate) setup: Option<setup::BoardSetup>,
     pub(crate) silkscreen: Option<silkscreen::Settings>,
     pub(crate) definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,
@@ -239,13 +241,15 @@ impl Board {
         self.footprints.push(footprint);
         Ok(())
     }
-    /// Drop a deleted component's placement and unused pinned definitions while retaining all
+    /// Drop a deleted component's assignment, placement and unused definitions while retaining all
     /// other placements, IDs and library revisions. Undo restores the previous board snapshot.
     pub(crate) fn remove_component(&mut self, component: u64) {
-        if self.by_component.remove(&component).is_some() {
+        let assigned = self.assignments.remove(&component).is_some();
+        if self.by_component.remove(&component).is_some() || assigned {
             self.footprints.retain(|f| f.component != component);
             self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
-            let used: BTreeSet<_> = self.footprints.iter().filter_map(Footprint::key).collect();
+            let used: BTreeSet<_> =
+                self.footprints.iter().filter_map(Footprint::key).chain(self.assignments.values().map(assignment::Assignment::key)).collect();
             self.definitions.retain(|key, _| used.contains(key));
         }
     }

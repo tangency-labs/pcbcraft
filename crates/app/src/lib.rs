@@ -17,6 +17,7 @@ mod editor_layout;
 mod editor_view;
 mod editor_windows;
 mod editor_workspace;
+mod footprint_assignment;
 mod hierarchy;
 mod home;
 #[cfg(not(target_arch = "wasm32"))]
@@ -142,6 +143,8 @@ enum Dialog {
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
     Hierarchy(hierarchy::Edit),
+    /// Chooses and pins a package independently of board placement.
+    Footprint(footprint_assignment::Edit),
     /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
     EditFields {
         source: ViewInput,
@@ -489,6 +492,14 @@ impl PcbApp {
                 if self.message.is_none() {
                     self.select(Selection::default());
                 }
+            }
+            SymbolAction::AssignFootprint => {
+                let component = self
+                    .views
+                    .active
+                    .snapshot(&self.session)
+                    .and_then(|p| p.symbols().iter().find(|s| s.id() == id).and_then(|s| p.component(s)).map(|c| c.id()));
+                self.begin_footprint_assignment(component);
             }
             SymbolAction::EditFields => {
                 let Some(project) = self.views.active.snapshot(&self.session) else { return };
@@ -1542,6 +1553,7 @@ impl PcbApp {
                     self.dialog = Dialog::EditFields { source, symbol, reference, value, error, focused };
                 }
             }
+            Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),

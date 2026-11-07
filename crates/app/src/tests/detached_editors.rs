@@ -1509,3 +1509,23 @@ fn footprint_transforms_in_detached_windows_share_history_and_cancel_on_focus_lo
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
+
+/// A package chooser binds its originating detached editor; closing that view expires the form
+/// without creating an assignment or granting the remaining window edit authority.
+#[test]
+fn closing_detached_editor_expires_footprint_assignment() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let root = h.state().views.active.id();
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    h.state_mut().views.bind(child);
+    h.state_mut().begin_footprint_assignment(None);
+    h.state_mut().views.bind(root);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::Footprint(_)));
+    let before = h.state().session.inspect();
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.inspect(), before);
+}

@@ -183,6 +183,20 @@ pub fn dialog(ctx: &egui::Context, id: &str, title: &str, add: impl FnOnce(&mut 
     dialog_width(ctx, id, title, 340.0, add)
 }
 
+/// Keep a variable-length form within the viewport, with a fixed title and scrollable content.
+/// Escape and outside clicks retain the ordinary modal close behavior.
+pub fn scrolling_dialog(ctx: &egui::Context, id: &str, title: &str, add: impl FnOnce(&mut Ui)) -> bool {
+    let t = Tokens::get();
+    let height = (ctx.content_rect().height() - t.space_16 * 5.0 - t.control_height).max(0.0);
+    dialog(ctx, id, title, |ui| {
+        ui.scope(|ui| {
+            // Recompute the body's height when a package adds rows, without resetting the title's cursor.
+            ui.set_max_height(height);
+            egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).show(ui, add);
+        });
+    })
+}
+
 /// Draw a modal with a preferred content width bounded by the viewport.
 pub fn dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();

@@ -225,6 +225,18 @@ A concurrent edit or a change of focused view cancels unfinished input.
 The [Dual LED demo](../examples/README.md) contains physical SMD packages with
 rounded rectangular copper pads, body outlines, courtyards and silkscreen. Older generic
 placements retain pad-center markers; opening them does not assign a package.
+
+To choose a package for an unplaced component, right-click its schematic symbol
+and choose **Assign Footprint…**. For a starter resistor, choose **Resistor 0402**,
+map terminal 1 to pad 1 and terminal 2 to pad 2, then choose **Assign** and
+**Close**. This pins the package without creating a board placement. In PCB layout,
+open **Layout → Components → Footprints**, select the component, enter X/Y and
+choose **Place on board**. Assignment and placement are separate undo steps;
+save/reopen retains the package and mapping offline. The chooser also supports
+assigning an unassigned component directly from PCB layout. Already placed
+packages remain read-only pending reviewed board updates. See the
+[footprint contract](footprint-library.md#assigning-and-placing-a-package) for
+mapping constraints and source limits.
 Slots, outline editing, routing, individual pad selection, selection
 filters and Flip view still need implementation. Removing the last schematic
 unit currently removes its footprint too; reviewed board updates are tracked

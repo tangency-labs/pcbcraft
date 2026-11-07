@@ -650,3 +650,41 @@ fn a_token_file_is_read_trimmed_and_bounded() -> Result<(), Box<dyn std::error::
     std::fs::remove_dir_all(&dir)?;
     Ok(())
 }
+
+/// Headless clients discover exact package metadata, assign without copper and place later
+/// through the same revision-checked transactions, preserving explicit swapped mappings.
+#[test]
+fn footprint_assignment_is_discoverable_and_separate_from_placement() {
+    use pcbcraft_engine::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT};
+    let mut s = server();
+    call(&mut s, "execute", json!({"command":"project.new","params":{}}));
+    call(&mut s, "execute", json!({"command":PLACE_RESISTOR,"params":{"x_nm":0,"y_nm":0,"expected_revision":1}}));
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    let component = before["project"]["components"][0]["id"].clone();
+    let package = before["footprint_catalog"].as_array().unwrap().iter().find(|p| p["id"] == "resistor-0402").unwrap();
+    let assigned = call(
+        &mut s,
+        "execute",
+        json!({"command":ASSIGN_FOOTPRINT,"params":{
+        "component":component,"library":package["library"],"definition":package["id"],"definition_revision":package["revision"],
+        "mapping":{"1":"2","2":"1"},"expected_revision":2}}),
+    );
+    assert_ne!(assigned["isError"], true);
+    assert_eq!(body(&assigned)["project"]["board"]["footprints"], json!([]));
+    let placed = call(
+        &mut s,
+        "execute",
+        json!({"command":PLACE_ASSIGNED_FOOTPRINT,"params":{
+        "component":component,"x_nm":0,"y_nm":0,"expected_revision":3}}),
+    );
+    assert_ne!(placed["isError"], true);
+    assert_eq!(body(&placed)["project"]["board"]["footprints"][0]["mapping"], json!({"1":"2","2":"1"}));
+    let stale = call(
+        &mut s,
+        "execute",
+        json!({"command":PLACE_ASSIGNED_FOOTPRINT,"params":{
+        "component":component,"x_nm":1,"y_nm":0,"expected_revision":3}}),
+    );
+    assert_eq!(stale["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), body(&placed));
+}
