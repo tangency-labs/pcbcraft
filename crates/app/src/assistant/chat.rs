@@ -356,6 +356,21 @@ impl Chat {
         self.deny_all("Stopped.");
     }
 
+    /// Bring the connected agent up to its saved settings without a restart: its name, and an
+    /// endpoint's request timeout and reasoning effort, which it uses from its next request on.
+    pub(super) fn retune(&mut self, saved: &craft_agents::agents::AgentConfig) {
+        let (Some(entry), Some(backend)) = (self.agent.as_mut(), self.backend.as_mut()) else { return };
+        if entry.request_timeout_s != saved.request_timeout_s {
+            backend.set_request_timeout(saved.request_timeout_s);
+            entry.request_timeout_s = saved.request_timeout_s;
+        }
+        if entry.reasoning_effort != saved.reasoning_effort {
+            backend.set_reasoning_effort(&saved.reasoning_effort);
+            entry.reasoning_effort.clone_from(&saved.reasoning_effort);
+        }
+        entry.name.clone_from(&saved.name);
+    }
+
     /// Whether a message is being answered, so its tool calls may run.
     pub(super) fn turn_open(&self) -> bool {
         self.turn_open

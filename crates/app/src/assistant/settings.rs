@@ -283,10 +283,21 @@ impl Assistant {
 
     /// Forget an added agent, its stored key and everything remembered for it.
     fn remove_agent(&mut self, id: &str) {
+        self.remove_agent_with(id, |id| super::host::Keychain.delete(id));
+    }
+
+    /// [`Self::remove_agent`], with `delete_key` removing its key from the keychain. When the key
+    /// can't be removed, nothing else is: the agent's row stays and says why. A connected chat
+    /// with the agent ends first, so it doesn't run on, or keep a key, after the agent is gone.
+    fn remove_agent_with(&mut self, id: &str, delete_key: impl FnOnce(&str) -> Result<(), String>) {
         if self.settings.agents.agents.iter().any(|agent| agent.id == id && agent.key)
-            && let Err(error) = super::host::Keychain.delete(id)
+            && let Err(error) = delete_key(id)
         {
-            self.test_results.insert(id.to_owned(), Err(format!("The key stays in the keychain: {error}")));
+            self.test_results.insert(id.to_owned(), Err(format!("The key stays in the keychain, so the agent was kept: {error}")));
+            return;
+        }
+        if self.chat.agent.as_ref().is_some_and(|connected| connected.id == id) {
+            self.chat.disconnect();
         }
         let prefs = &mut self.settings.agents;
         prefs.agents.retain(|agent| agent.id != id);
@@ -411,7 +422,8 @@ impl Assistant {
     }
 
     /// Store the agent under a stable id, and an endpoint's new key in the keychain. Changing
-    /// what the connected agent starts or calls disconnects it. Nothing is saved on an error.
+    /// what the connected agent starts or calls disconnects it; its name, request timeout and
+    /// reasoning effort apply to it at once. Nothing is saved on an error.
     fn save_agent(&mut self, form: &mut Form) -> Result<(), String> {
         let name = form.name.trim().to_owned();
         if name.is_empty() {
@@ -460,9 +472,11 @@ impl Assistant {
                     || existing.model != agent.model
                     || existing.key != agent.key
                     || !key.is_empty();
-                *existing = agent;
+                *existing = agent.clone();
                 if restart && connected {
                     self.chat.disconnect();
+                } else if connected {
+                    self.chat.retune(&agent);
                 }
             }
             None => prefs.agents.push(agent),
@@ -540,6 +554,102 @@ mod tests {
         let mut missing =
             Form { kind: Kind::Anthropic, name: "No model".to_owned(), base_url: "https://api.anthropic.com/v1".to_owned(), ..Form::default() };
         assert!(assistant.save_agent(&mut missing).is_err());
+    }
+
+    /// A chat backend that records what it is told, for settings that reach a connected agent.
+    struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl craft_agents::backend::ChatBackend for Recorder {
+        /// Nothing arrives.
+        fn poll(&mut self) -> Vec<craft_agents::backend::Event> {
+            Vec::new()
+        }
+        fn prompt(&mut self, _parts: &[craft_agents::backend::PromptPart]) {}
+        fn cancel(&mut self) {}
+        fn new_session(&mut self) {}
+        fn answer_permission(&mut self, _key: u64, _option: Option<&str>) {}
+        fn authenticate(&mut self, _method: &str) {}
+        /// Record the new timeout.
+        fn set_request_timeout(&mut self, secs: u64) {
+            if let Ok(mut seen) = self.0.lock() {
+                seen.push(format!("timeout {secs}"));
+            }
+        }
+        /// Record the new effort.
+        fn set_reasoning_effort(&mut self, effort: &str) {
+            if let Ok(mut seen) = self.0.lock() {
+                seen.push(format!("effort {effort}"));
+            }
+        }
+        /// Record that it was ended.
+        fn shutdown(&mut self, _wait: bool) {
+            if let Ok(mut seen) = self.0.lock() {
+                seen.push("shutdown".to_owned());
+            }
+        }
+    }
+
+    /// An endpoint saved and connected to a recording backend: the assistant and what it records.
+    fn connected_endpoint() -> (Assistant, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let mut assistant = Assistant::default();
+        let mut form = Form {
+            kind: Kind::Api,
+            name: "Local".to_owned(),
+            base_url: "http://localhost:11434/v1".to_owned(),
+            model: "qwen3".to_owned(),
+            timeout_s: 120,
+            ..Form::default()
+        };
+        assert_eq!(assistant.save_agent(&mut form), Ok(()));
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let entry = assistant.entries().into_iter().find(|entry| entry.id == "api-1").unwrap_or_else(|| panic!("saved"));
+        assistant.chat.attach(Box::new(Recorder(seen.clone())), entry);
+        (assistant, seen)
+    }
+
+    /// The connected agent takes a new name, timeout and effort at once, without a restart;
+    /// a new model restarts it.
+    #[test]
+    fn saving_a_connected_endpoint_applies_or_restarts() {
+        let (mut assistant, seen) = connected_endpoint();
+        let mut form = Form {
+            editing: Some("api-1".to_owned()),
+            kind: Kind::Api,
+            name: "Local fast".to_owned(),
+            base_url: "http://localhost:11434/v1".to_owned(),
+            model: "qwen3".to_owned(),
+            timeout_s: 300,
+            effort: "high".to_owned(),
+            ..Form::default()
+        };
+        assert_eq!(assistant.save_agent(&mut form), Ok(()));
+        assert!(assistant.chat.connected());
+        assert_eq!(seen.lock().map(|seen| seen.clone()).unwrap_or_default(), ["timeout 300", "effort high"]);
+        let entry = assistant.chat.agent.as_ref().unwrap_or_else(|| panic!("connected"));
+        assert_eq!((entry.name.as_str(), entry.request_timeout_s, entry.reasoning_effort.as_str()), ("Local fast", 300, "high"));
+
+        let mut form = Form { model: "qwen3-large".to_owned(), ..form };
+        assert_eq!(assistant.save_agent(&mut form), Ok(()));
+        assert!(!assistant.chat.connected(), "a new model restarts the agent");
+    }
+
+    /// Removing the connected agent ends its chat. A key the keychain won't give up keeps the
+    /// agent, and its row says why.
+    #[test]
+    fn removing_an_agent_ends_its_chat_or_keeps_it_when_its_key_stays() {
+        let (mut assistant, seen) = connected_endpoint();
+        if let Some(agent) = assistant.settings.agents.agents.first_mut() {
+            agent.key = true;
+        }
+        assistant.remove_agent_with("api-1", |_| Err("locked".to_owned()));
+        assert_eq!(assistant.settings.agents.agents.len(), 1, "the agent stays");
+        assert!(assistant.chat.connected());
+        assert!(matches!(assistant.test_results.get("api-1"), Some(Err(error)) if error.contains("locked")));
+
+        assistant.remove_agent_with("api-1", |_| Ok(()));
+        assert!(assistant.settings.agents.agents.is_empty());
+        assert!(!assistant.chat.connected());
+        assert_eq!(seen.lock().map(|seen| seen.clone()).unwrap_or_default(), ["shutdown"]);
     }
 
     /// A typed key never shows in debug output.

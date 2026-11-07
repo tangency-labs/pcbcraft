@@ -532,8 +532,6 @@ impl Assistant {
         self.chat.take_request()
     }
 
-    /// Tool calls the person answered, once, for the editor to run or refuse. "Always allow" is
-    /// remembered here.
     /// Whether the chat is answering a message, so its tool calls may run.
     pub(crate) fn turn_open(&self) -> bool {
         self.chat.turn_open()
@@ -544,7 +542,8 @@ impl Assistant {
         self.chat.generation()
     }
 
-    /// The approvals the person answered since the last frame, for the editor to act on.
+    /// The approvals the person answered since the last frame, each once, for the editor to run
+    /// or refuse. "Always allow" is remembered when the person answers.
     pub(super) fn take_answers(&mut self) -> Vec<(Approval, Answer)> {
         std::mem::take(&mut self.answers)
     }
