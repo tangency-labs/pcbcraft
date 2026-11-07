@@ -63,7 +63,7 @@ mod live {
 
     use super::Panel;
     use crate::{
-        Dialog, PcbApp, RIBBON_TABS, ViewId, Workspace,
+        Dialog, PcbApp, ViewId, Workspace,
         arrangements::{Action, Start},
         editor_layout::HostId,
         editor_windows::ViewAction,
@@ -240,7 +240,7 @@ mod live {
     const SCROLL: &[&str] = &["zoom", "pan"];
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
     const PANELS: &[&str] = &["browser", "parts", "nets"];
-    const TABS: &[&str] = &["capture", "layout", "view"];
+    const TABS: &[&str] = &["capture", "layout", "analyze", "libraries", "manage", "view"];
     const WORKSPACES: &[&str] = &["schematic", "board"];
     const PLACEMENTS: &[&str] = &["here", "beside", "window"];
     const BOARD_GRIDS: &[&str] = &["off", "dots", "lines"];
@@ -372,7 +372,7 @@ mod live {
         WindowCommand {
             id: "window.set_ribbon_tab",
             title: "Ribbon Tab",
-            summary: "Show the window's first ribbon tab (Capture, or Layout when its focused view shows the PCB) or its View tab.",
+            summary: "Show a schematic ribbon tab (Capture, Analyze, Libraries, Manage, View) or a PCB ribbon tab (Layout, View).",
             params: &[WINDOW, Param { name: "tab", summary: "Which tab", required: true, kind: Kind::Choice(TABS) }],
         },
         WindowCommand {
@@ -537,6 +537,8 @@ mod live {
     /// Name the view's unfinished gesture, if any.
     fn tool_name(tool: &Tool) -> &'static str {
         match tool {
+            Tool::SheetGesture { .. } => "sheet_geometry",
+            Tool::Hierarchy { .. } => "hierarchy",
             Tool::PlaceSymbol { .. } => "place_symbol",
             Tool::Wire { .. } => "wire",
             Tool::BoxSelect { .. } => "box_select",
@@ -565,7 +567,7 @@ mod live {
                     "ribbon_tab": match panels.ribbon {
                         0 if app.views.view(host.focused).is_some_and(|view| view.workspace == Workspace::Board) => "layout",
                         0 => "capture",
-                        _ => "view",
+                        slot => crate::ribbon::tab_name(slot),
                     },
                 })
             })
@@ -815,7 +817,17 @@ mod live {
                     self.in_window(host, |app| app.set_panel(ctx, panel, open));
                 }
                 ("window.set_ribbon_tab", _, Some(host)) => {
-                    let tab = if params["tab"].as_str() == Some("view") { RIBBON_TABS.len() - 1 } else { 0 };
+                    let tab = crate::ribbon::tab_slot(params["tab"].as_str().unwrap_or_default());
+                    if tab > 1
+                        && self
+                            .views
+                            .hosts
+                            .get(&host)
+                            .and_then(|host| self.views.view(host.focused))
+                            .is_some_and(|view| view.workspace == Workspace::Board)
+                    {
+                        return Err("This ribbon tab is available in the schematic workspace.".into());
+                    }
                     self.in_window(host, |app| app.ribbon_tab = tab);
                 }
                 ("window.close", _, Some(host)) => {

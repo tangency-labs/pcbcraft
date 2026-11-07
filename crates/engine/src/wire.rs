@@ -39,7 +39,7 @@ pub enum Anchor {
 }
 
 impl Anchor {
-    /// Parse a strict terminal/junction reference, explicit wire/at target or bounded free point.
+    /// Parse a strict electrical endpoint, explicit wire/at target or bounded free point.
     pub fn parse(value: &Value) -> Option<Self> {
         if let Some(endpoint) = WireEndpoint::parse(value) {
             return Some(Self::Existing(endpoint));
@@ -106,17 +106,18 @@ impl Project {
         leg > 0 || leg + 2 < path.len() || wire.endpoints.iter().any(|&end| self.wire_end_has_attachment(end))
     }
 
-    /// Terminals and junctions shared with another wire anchor a route end; degree-one
+    /// Component/hierarchy pins and shared junctions anchor a route end; degree-one
     /// junctions are already free and keep their identity when a neighboring leg is broken.
     fn wire_end_has_attachment(&self, end: WireEndpoint) -> bool {
-        matches!(end, WireEndpoint::Terminal(_)) || self.wires.iter().filter(|wire| wire.endpoints.contains(&end)).count() > 1
+        !matches!(end, WireEndpoint::Junction(_)) || self.wires.iter().filter(|wire| wire.endpoints.contains(&end)).count() > 1
     }
 
-    /// Resolve either kind of explicit electrical endpoint in this snapshot.
+    /// Resolve an explicit electrical endpoint within this sheet projection.
     pub fn endpoint_position(&self, endpoint: WireEndpoint) -> Option<Point> {
         match endpoint {
             WireEndpoint::Terminal(pin) => self.terminal_position(pin),
             WireEndpoint::Junction(id) => self.junctions.get(&id).copied(),
+            _ => self.hierarchy_endpoints().find(|(end, _)| *end == endpoint).map(|(_, point)| point),
         }
     }
 
@@ -141,7 +142,7 @@ impl Project {
             .flat_map(|wire| wire.endpoints)
             .filter_map(|endpoint| match endpoint {
                 WireEndpoint::Junction(id) => Some(id),
-                WireEndpoint::Terminal(_) => None,
+                _ => None,
             })
             .collect();
         Arc::make_mut(&mut self.sheet_mut().junctions).retain(|id, _| used.contains(id));

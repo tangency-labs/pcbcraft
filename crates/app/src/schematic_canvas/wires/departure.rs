@@ -52,6 +52,7 @@ impl Departure {
                 .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins()))
                 .filter(|(_, point)| *point == origin)
                 .map(|(pin, _)| WireEndpoint::Terminal(pin))
+                .chain(project.hierarchy_endpoints().filter(|(_, point)| *point == origin).map(|(end, _)| end))
                 .collect::<Vec<_>>();
             ends.push(End { id, origin, cleared: contacts.is_empty() && pins.is_empty(), contacts, pins });
         }
@@ -87,5 +88,51 @@ impl Departure {
     /// Request contact only for ends that have cleared their initial detached neighbors.
     pub(super) fn connection_ends(&self) -> Vec<u64> {
         self.ends.iter().filter(|end| end.cleared).map(|end| end.id).collect()
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_tests {
+    use super::*;
+    use pcbcraft_engine::{Session, hierarchy, schematic::GRID_NM};
+    use serde_json::json;
+
+    /// Break at a sheet pin keeps its original contact masked until departure, then allows
+    /// the same gesture to return and deliberately reconnect through the normal target path.
+    #[test]
+    fn broken_sheet_pin_uses_the_same_departure_guard_as_component_pins() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({})).unwrap();
+        session.apply(hierarchy::CREATE_CHILD, &json!({"name":"Child","x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        let parent = session.project().unwrap().sheet_target();
+        let child = session.project().unwrap().sheets().nth(1).unwrap().target;
+        session
+            .apply(
+                hierarchy::ADD_LABEL,
+                &json!({"sheet":child.id(),"name":"DATA","direction":"input","x_nm":0,"y_nm":0,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+        let label = session.project().unwrap().for_sheet(child).unwrap().hierarchical_labels()[0].id;
+        let endpoint = WireEndpoint::SheetPin(label);
+        let origin = session.project().unwrap().endpoint_position(endpoint).unwrap();
+        session.apply(pcbcraft_engine::DRAW_WIRE,&json!({"sheet":parent.id(),"from":endpoint.inspect(),"to":{"x_nm":origin.x_nm-10*GRID_NM,"y_nm":origin.y_nm},"bends":[],"expected_revision":session.revision()})).unwrap();
+        let wire = session.project().unwrap().wires()[0].id();
+        session.apply(pcbcraft_engine::BREAK_WIRE,&json!({"sheet":parent.id(),"wire":wire,"at":{"x_nm":origin.x_nm-5*GRID_NM,"y_nm":origin.y_nm},"expected_revision":session.revision()})).unwrap();
+        let project = session.project().unwrap();
+        let wire = &project.wires()[0];
+        let source = wire.endpoints().into_iter().find(|end| project.endpoint_position(*end) == Some(origin)).unwrap();
+        let WireEndpoint::Junction(id) = source else {
+            panic!("Break must detach the fixed pin");
+        };
+        let mut departure = Departure::new(project, &wire.id(), &Reshape::Junction(id));
+        assert!(departure.suppressed_nodes().contains(&endpoint));
+        let camera = Camera::default();
+        let rect = Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1000., 800.));
+        departure.update(&camera, rect, origin, origin);
+        assert!(departure.connection_ends().is_empty());
+        departure.update(&camera, rect, origin, Point { x_nm: origin.x_nm, y_nm: origin.y_nm + 10 * GRID_NM });
+        departure.update(&camera, rect, origin, origin);
+        assert!(departure.suppressed_nodes().is_empty());
+        assert_eq!(departure.connection_ends(), vec![id]);
     }
 }

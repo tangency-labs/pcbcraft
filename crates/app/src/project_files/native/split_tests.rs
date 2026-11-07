@@ -641,8 +641,13 @@ fn recovery_allows_the_bounded_union_of_old_and_new_documents() {
     folder::save(&root, None, &before, &mut |_| Ok(())).unwrap();
     let new_library = after.keys().find(|path| path.starts_with("library/")).unwrap();
     let stop = format!("published:{new_library}");
-    assert!(folder::save(&root, Some(&before), &after, &mut |phase| if phase == stop { Err("crash".to_owned()) } else { Ok(()) }).is_err());
-    assert_eq!(folder::load(&root).unwrap(), after);
+    let interrupted = folder::save(&root, Some(&before), &after, &mut |phase| if phase == stop { Err("crash".to_owned()) } else { Ok(()) });
+    assert_eq!(interrupted.unwrap_err(), "crash", "must reach the intended interruption checkpoint");
+    let recovered = folder::load(&root).unwrap();
+    assert_eq!(recovered.keys().collect::<Vec<_>>(), after.keys().collect::<Vec<_>>());
+    for (path, bytes) in &after {
+        assert!(recovered[path] == *bytes, "document {path} differs after recovery");
+    }
 }
 
 /// Start an Untitled project with one placed part, as New Project does before any save.

@@ -210,6 +210,7 @@ impl Edit {
                 .flat_map(|s| s.terminals().into_iter().zip(s.pins()))
                 .filter(|(_, p)| *p == point)
                 .map(|(pin, _)| WireEndpoint::Terminal(pin))
+                .chain(self.project.hierarchy_endpoints().filter(|(_, p)| *p == point).map(|(end, _)| end))
                 .collect();
             if pins.len() > 1 {
                 return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
@@ -225,19 +226,13 @@ impl Edit {
     /// Remember original endpoints and branches so overlap cleanup cannot mistake an
     /// intentionally dangling wire for an obsolete degree-two transit corner.
     pub fn new(project: &Project, revision: u64) -> Self {
-        let highest = project
-            .wires
-            .last()
-            .map_or(0, |w| w.ordinal)
-            .max(project.junctions.last_key_value().map_or(0, |(&id, _)| id))
-            .max(project.symbols.last().map_or(0, |s| s.ordinal))
-            .max(revision);
+        let highest = project.highest_id().max(revision);
         let mut degree = BTreeMap::new();
         for end in project.wires.iter().flat_map(|wire| wire.endpoints) {
             *degree.entry(end).or_insert(0) += 1;
         }
         let protected =
-            degree.into_iter().filter_map(|(end, count)| (count != 2 || matches!(end, WireEndpoint::Terminal(_))).then_some(end)).collect();
+            degree.into_iter().filter_map(|(end, count)| (count != 2 || !matches!(end, WireEndpoint::Junction(_))).then_some(end)).collect();
         Self {
             project: project.clone(),
             next: highest.saturating_add(1),
@@ -359,7 +354,7 @@ impl Edit {
     }
 
     /// Merge coincident identities, retaining a pin over a junction and otherwise the older
-    /// junction. Distinct coincident component pins are refused rather than losing an identity.
+    /// junction. Distinct coincident fixed pins are refused rather than losing an identity.
     pub fn merge(&mut self, a: WireEndpoint, b: WireEndpoint) -> Result<WireEndpoint, CommandError> {
         if a == b {
             return Ok(a);
@@ -368,11 +363,11 @@ impl Edit {
             return Err(CommandError::InvalidParams("wire attachment positions disagree".into()));
         }
         let (keep, remove) = match (a, b) {
-            (WireEndpoint::Terminal(_), WireEndpoint::Terminal(_)) => {
-                return Err(CommandError::InvalidParams("separate coincident component pins before joining wires".into()));
+            (a, b) if !matches!(a, WireEndpoint::Junction(_)) && !matches!(b, WireEndpoint::Junction(_)) => {
+                return Err(CommandError::InvalidParams("separate coincident fixed pins before joining wires".into()));
             }
-            (WireEndpoint::Terminal(_), _) => (a, b),
-            (_, WireEndpoint::Terminal(_)) => (b, a),
+            (a, _) if !matches!(a, WireEndpoint::Junction(_)) => (a, b),
+            (_, b) if !matches!(b, WireEndpoint::Junction(_)) => (b, a),
             _ => (a.min(b), a.max(b)),
         };
         if self.protected.remove(&remove) {

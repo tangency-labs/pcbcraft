@@ -56,7 +56,7 @@ impl PcbApp {
         let closing = shell::dialog(ctx, "sheet_dialog", title, |ui| {
             if deletion {
                 ui.label(format!("Delete sheet “{}”?", edit.text));
-                ui.label("Its symbols, wires and associated board footprints will be removed. Undo restores them.");
+                ui.label("Its symbols, wires, associated board footprints and connections to parent pins will be removed. Child sheets become top-level sheets. Undo restores them.");
             } else {
                 let label = ui.label("Name");
                 let field = ui.add(egui::TextEdit::singleline(&mut edit.text).desired_width(f32::INFINITY)).labelled_by(label.id);

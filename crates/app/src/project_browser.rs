@@ -98,6 +98,7 @@ struct Lists {
 struct SheetItems {
     target: SheetTarget,
     name: String,
+    ancestors: Vec<SheetTarget>,
     symbols: Vec<Item>,
     nets: Vec<Item>,
 }
@@ -116,7 +117,10 @@ impl Lists {
     /// a wire attached to one of its pins. Each board's footprints also use natural reference
     /// order, and each footprint row targets its stable ID and board position.
     fn read(project: Arc<Project>) -> Self {
-        let sheets = project.sheets().filter_map(|sheet| project.for_sheet(sheet.target)).map(|sheet| SheetItems::read(&sheet)).collect();
+        let mut sheets = Vec::new();
+        for root in project.sheets().filter(|s| project.parent_sheet(s.target).is_none()) {
+            append_sheet_tree(&project, root.target, &[], &mut sheets);
+        }
         let boards = project
             .boards()
             .map(|board| {
@@ -183,7 +187,22 @@ impl SheetItems {
                 target,
             })
             .collect();
-        Self { target: project.sheet_target(), name: project.sheet_name().to_owned(), symbols, nets }
+        Self { target: project.sheet_target(), name: project.sheet_name().to_owned(), ancestors: Vec::new(), symbols, nets }
+    }
+}
+
+/// Cache a bounded pre-order traversal, so sibling order remains the project's authored order.
+fn append_sheet_tree(project: &Project, target: SheetTarget, ancestors: &[SheetTarget], out: &mut Vec<SheetItems>) {
+    let Some(projection) = project.for_sheet(target) else {
+        return;
+    };
+    let mut row = SheetItems::read(&projection);
+    row.ancestors = ancestors.to_vec();
+    out.push(row);
+    let mut path = ancestors.to_vec();
+    path.push(target);
+    for child in project.sheets().filter(|s| project.parent_sheet(s.target) == Some(target)) {
+        append_sheet_tree(project, child.target, &path, out);
     }
 }
 
@@ -289,15 +308,27 @@ impl ProjectBrowser {
             self.lists = Some(Lists::read(snapshot));
         }
         let lists = self.lists.as_ref()?;
-        let mut tree = Tree { toggled: &self.toggled, active, sheet_count: lists.sheets.len(), folded: None, reset: None, picked: None };
+        let mut tree = Tree {
+            ancestors: lists.sheets.iter().find(|s| active == DocumentTarget::Sheet(s.target)).map_or(&[][..], |s| s.ancestors.as_slice()),
+            toggled: &self.toggled,
+            active,
+            sheet_count: lists.sheets.len(),
+            folded: None,
+            reset: None,
+            picked: None,
+        };
         if tree.branch(ui, Node::Project, 0, TreeIcon::Folder, &lists.project.name, false, None) {
             if tree.branch(ui, Node::Sheets, 1, TreeIcon::Folder, "Sheets", false, None) {
                 for items in &lists.sheets {
+                    if items.ancestors.iter().any(|parent| !tree.open(Node::Sheet(*parent))) {
+                        continue;
+                    }
+                    let depth = items.ancestors.len();
                     let sheet = items.target;
                     if !tree.branch(
                         ui,
                         Node::Sheet(sheet),
-                        2,
+                        2 + depth,
                         TreeIcon::Sheet,
                         &items.name,
                         active == DocumentTarget::Sheet(sheet),
@@ -309,16 +340,16 @@ impl ProjectBrowser {
                         (Node::Symbols(sheet), ToolIcon::Symbol, "Symbols", &items.symbols, &selected.symbols),
                         (Node::Nets(sheet), ToolIcon::Wire, "Nets", &items.nets, &selected.wires),
                     ] {
-                        if !tree.branch(ui, node, 3, TreeIcon::Tool(icon), title, false, None) {
+                        if !tree.branch(ui, node, 3 + depth, TreeIcon::Tool(icon), title, false, None) {
                             continue;
                         }
                         if items.is_empty() {
-                            empty_row(ui, 4, if matches!(node, Node::Symbols(_)) { "No symbols placed" } else { "No connected nets" });
+                            empty_row(ui, 4 + depth, if matches!(node, Node::Symbols(_)) { "No symbols placed" } else { "No connected nets" });
                         }
                         for (index, item) in items.iter().enumerate() {
                             let id = item.target.as_ref().map(|(id, _)| id.as_str());
                             let row = TreeRow {
-                                depth: 4,
+                                depth: 4 + depth,
                                 fold: None,
                                 icon: Some(TreeIcon::Tool(icon)),
                                 label: &item.label,
@@ -392,6 +423,7 @@ impl ProjectBrowser {
 /// Only transient fold and click intents are collected while snapshot data is borrowed.
 struct Tree<'a> {
     toggled: &'a HashMap<Node, bool>,
+    ancestors: &'a [SheetTarget],
     active: DocumentTarget,
     sheet_count: usize,
     folded: Option<(Node, bool)>,
@@ -400,11 +432,19 @@ struct Tree<'a> {
 }
 
 impl Tree<'_> {
+    /// Explicit folds win; otherwise unfold the path to the active child document.
+    fn open(&self, node: Node) -> bool {
+        self.toggled
+            .get(&node)
+            .copied()
+            .unwrap_or_else(|| node.open_by_default(self.active) || matches!(node,Node::Sheet(sheet) if self.ancestors.contains(&sheet)))
+    }
+
     /// Body clicks navigate documents or fold containers; the arrow only folds. Sheet context
     /// menus return lifecycle intents, disabling creation/deletion at the project bounds.
     #[allow(clippy::too_many_arguments)]
     fn branch(&mut self, ui: &mut Ui, node: Node, depth: usize, icon: TreeIcon, label: &str, selected: bool, pick: Option<Action>) -> bool {
-        let open = self.toggled.get(&node).copied().unwrap_or_else(|| node.open_by_default(self.active));
+        let open = self.open(node);
         let access = matches!(node, Node::Board(_)).then(|| format!("Open board {label}"));
         let row = TreeRow { depth, fold: Some(open), icon: Some(icon), label, accessibility_label: access.as_deref(), tip: "", selected };
         let response = workspace::tree_row(ui, ui.make_persistent_id(("project_browser", node)), &row);

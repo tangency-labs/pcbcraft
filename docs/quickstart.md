@@ -86,7 +86,7 @@ first **Save** asks for a project folder, and the project takes that folder's na
    adjust alignment, or hover it and press **G**, then click to finish. Corner
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
    **Esc** cancels a preview. Right-click → **Select Wire** selects the complete
-   route for whole-wire movement or deletion. Capture → **Wire edits** offers
+   route for whole-wire movement or deletion. Capture → **Modify** menu offers
    **Slice**, **Heal** and **Delete** for the selection. The context menu also offers
    **Break** to release the selected leg's attachments, including pins and shared junctions,
    whether one or both ends are connected. An already-free end stays free. The detached
@@ -95,7 +95,7 @@ first **Save** asks for a project folder, and the project takes that folder's na
    runs, and **Heal** applies that cleanup to existing selected wires. Dropping
    a part with a pin exactly on a wire connects it; a two-pin part placed across
    a straight run replaces the wire between its pins. **Auto-heal wires** in the
-   Wire edits menu defaults on. Retracing a draft shortens the preview as you draw;
+   Modify menu defaults on. Retracing a draft shortens the preview as you draw;
    Backspace restores the preceding clicked corner. Switch automatic healing off to keep detours and loops while
    drawing, then select a wire and use **Heal** for cleanup when desired.
 6. Save your desktop copy, reopen its `project.pc`, and check the edit. In the
@@ -142,14 +142,25 @@ the saved project restores the last active arrangement. Selecting a sheet in
 Browser or a workspace changes what the focused pane shows, without adding tabs,
 switching arrangements or moving views elsewhere. A single view has no lower tab
 strip; split panes each show one document header whose **×** closes the pane.
-The engine supports up to 64 flat sheets and one legacy board. Right-click
-**Sheets** in the Browser and choose **New Sheet…**; sheet rows also offer
+The engine supports up to 64 sheets and one legacy board. Right-click
+**Sheets** in the Browser and choose **New Sheet…**, or use
+**Manage → Sheets → New sheet**; sheet rows also offer
 **Rename Sheet…** and **Delete Sheet…**. Creating a sheet opens it in that pane.
 The breadcrumb uses the actual sheet name and its position in the sheet count.
 Deletion asks for confirmation and removes its symbols, wires and associated
 footprints together; Undo restores them. Other views of a deleted sheet become
-unavailable until it is restored or another document is opened. Hierarchical
-sheet symbols, pins and labels remain tracked by #41.
+unavailable until it is restored or another document is opened.
+
+To add a subsheet, press **S** or choose **Capture → Sheets → Subsheet**, click its parent canvas and give the child a name,
+or choose an existing unparented sheet in **Child sheet**. Double-click inside
+the placed rectangle to enter it; **Alt+Backspace** returns to its parent.
+The name appears above the outline. Drag the body/name to move the sheet, or
+select it and drag a corner handle to resize; **Esc** cancels an active gesture.
+Place a hierarchical label with **H** or **Capture → Sheets → Hierarchical label**, enter its name and direction, then
+connect its pointed anchor with **W**. A matching sheet pin appears automatically
+on the parent symbol. Names and directions stay synchronized when you edit the
+label with **E** or its context menu. The Browser shows the same nesting in
+schematic and PCB workspaces. See [hierarchical sheets](hierarchical-sheets.md).
 See [arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
 for storage and monitor-restoration limits.
 

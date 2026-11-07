@@ -167,7 +167,7 @@ fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
         assert!(h.state().preferences.auto_heal_wires);
         let before = h.state().session.snapshot().unwrap();
         if !automatic {
-            click(&mut h, "Wire edits menu");
+            click(&mut h, "Modify menu");
             click(&mut h, "Auto-heal wires");
             assert!(!h.state().preferences.auto_heal_wires);
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
@@ -195,7 +195,8 @@ fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
             let wire = looped.wires().last().unwrap().id();
             h.state_mut().select(pcbcraft_engine::selection::Selection::one_wire(wire));
             h.run();
-            click(&mut h, "Heal selected wires");
+            click(&mut h, "Modify menu");
+            click(&mut h, "Heal");
             assert_eq!(h.state().session.project().unwrap().wires().len(), 2);
             assert!(!h.state().preferences.auto_heal_wires);
             click(&mut h, "Undo");
@@ -205,33 +206,30 @@ fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
     assert!(crate::preferences::Preferences::parse("{}").auto_heal_wires);
 }
 
-/// Ribbon buttons and caption-menu entries invoke the same selected-leg commands. Heal can
+/// The ported Modify menu invokes the same selected-leg commands. Heal can
 /// reconnect an old visually touching endpoint, and unavailable actions remain disabled.
 #[test]
-fn ribbon_wire_edits_work_from_buttons_and_caption_menu() {
-    for caption in [false, true] {
-        for (label, button, count) in [("Slice", "Slice selected wire", 2), ("Delete", "Delete selected wire or segment", 1)] {
-            let mut h = harness();
-            assert!(h.get_by_label(button).accesskit_node().is_disabled());
-            let pos = screen(&h, grid(8, 3));
-            h.hover_at(pos);
+fn modify_menu_wire_edits_preserve_selected_leg_commands() {
+    for (label, count) in [("Slice", 2), ("Delete", 1)] {
+        let mut h = harness();
+        click(&mut h, "Modify menu");
+        assert!(h.get_by_label(label).accesskit_node().is_disabled());
+        h.key_press(egui::Key::Escape);
+        h.run();
+        let pos = screen(&h, grid(8, 3));
+        h.hover_at(pos);
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
             h.run();
-            for pressed in [true, false] {
-                h.event(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
-                h.run();
-            }
-            let before = h.state().session.snapshot().unwrap();
-            if caption {
-                click(&mut h, "Wire edits menu");
-                click(&mut h, label);
-            } else {
-                click(&mut h, button);
-            }
-            assert_eq!(h.state().message, None);
-            assert_eq!(h.state().session.project().unwrap().wires().len(), count);
-            click(&mut h, "Undo");
-            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         }
+        let before = h.state().session.snapshot().unwrap();
+        click(&mut h, "Modify menu");
+        click(&mut h, label);
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().session.project().unwrap().wires().len(), count);
+        click(&mut h, "Undo");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     }
     // Draw a free endpoint at an already placed pin, explicitly as coordinates to reproduce
     // a pre-existing touching connection. Heal targets exactly the selected wire.
@@ -249,7 +247,8 @@ fn ribbon_wire_edits_work_from_buttons_and_caption_menu() {
     h.state_mut().select(pcbcraft_engine::selection::Selection::one_wire(wire.clone()));
     h.run();
     let before = h.state().session.snapshot().unwrap();
-    click(&mut h, "Heal selected wires");
+    click(&mut h, "Modify menu");
+    click(&mut h, "Heal");
     assert_eq!(h.state().message, None);
     let healed = h.state().session.project().unwrap().wires().iter().find(|w| w.id() == wire).unwrap();
     assert!(healed.endpoints().contains(&WireEndpoint::Terminal(pin)));

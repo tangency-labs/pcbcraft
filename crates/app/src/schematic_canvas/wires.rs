@@ -442,6 +442,7 @@ fn endpoints(project: &Project, camera: &Camera, rect: Rect) -> Vec<(WireEndpoin
         .symbols()
         .iter()
         .flat_map(|symbol| symbol.terminals().into_iter().map(WireEndpoint::Terminal).zip(symbol.pins()))
+        .chain(project.hierarchy_endpoints())
         .chain(project.junctions().map(|(id, point)| (WireEndpoint::Junction(id), point)))
         .map(|(endpoint, point)| (endpoint, camera.screen(point, rect)))
         .filter(|(_, pos)| rect.contains(*pos))

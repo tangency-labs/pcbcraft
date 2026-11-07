@@ -46,13 +46,13 @@ does not confirm a durable write and does not clear the editor's dirty state.
 | File | Format | Contents |
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6` | Project UUID, name, ordered sheet list and shared components |
-| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` | Sheet UUID, unit placements, junctions and wires |
+| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` or `/2` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols |
 | `board.json` | `pcbcraft-board/1` through `/6` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
-UUID must agree. Version 6 supports 1–64 ordered flat sheets with non-nil,
+UUID must agree. Version 6 supports 1–64 ordered sheets with non-nil,
 project-unique UUIDs and names unique without case. Names are trimmed, nonblank,
 control-free and at most 200 characters. Each sheet owns its symbols, junctions,
 wires and connectivity; wire endpoints cannot reference another sheet. Components,
@@ -69,11 +69,55 @@ sheet belongs to user-local presentation state and is never saved in `project.pc
 Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
 intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
-Current encoding writes version 6 while retaining sheet/1 and existing board
-encodings. An unchanged save preserves original version-5 document bytes, and
+Current encoding writes version 6, sheet/1 for ordinary sheets and sheet/2 for
+sheets with hierarchy records, retaining existing board encodings. An unchanged save preserves original version-5 document bytes, and
 editing another document preserves an unaffected entry point. Adding or renaming
 a sheet writes the version-6 entry point. Legacy single-file encoding refuses
-multiple or renamed sheets rather than discarding them.
+multiple or renamed sheets, hierarchical labels and child symbols rather than discarding them.
+
+### Hierarchical sheet records
+
+The project list remains flat and authoritative for document identities. Nesting
+belongs to `subsheets` records in the parent sheet/2 document, each containing a
+global object `id`, the `child` sheet UUID and its top-left `at` point. Each child
+has at most one parent, cycles are refused, and removing a parent symbol promotes
+the child to a root without deleting its document. Deleting a sheet removes its
+incoming symbol and wires attached to its parent pins, while promoting its own
+children to roots. These operations share the ordinary project undo transaction.
+
+Sheet/2 requires both `labels` and `subsheets` arrays. Each label stores its global
+object `id`, case-sensitive `name` (unique within that sheet, 1–200 characters),
+`direction`, child-side anchor `at` and stable side-local `slot` (0–63). At most 64
+labels are allowed per sheet. Directions are `input`, `output`, `bidirectional`,
+`tri_state` and `passive`. Output/tri-state pins appear on the right; other pins
+appear on the left. Names and directions on the parent derive from child records,
+so synchronization never relies on matching independently editable strings.
+Slots preserve other pins' positions when a label is removed. Symbol geometry is
+16 by 10 schematic grid steps by default and grows vertically to contain occupied
+pin slots. A sheet symbol can optionally store an authored `size` point, whose
+`x_nm` and `y_nm` are positive width and height. Missing size retains legacy
+defaults; explicit null is refused. Authored extents must be at least 8 by 6 grid
+steps and fit within schematic bounds. Adding child labels can grow the effective
+height; explicit resizing refuses a rectangle smaller than current pin clearance.
+`schematic.resize_sheet` accepts a complete origin/width/height rectangle and
+commits it atomically, preserving all endpoint identities. Right-side pins follow
+the authored width while vertical slots remain stable.
+
+A stored `{"label":<id>}` endpoint addresses a child label; `{"sheet_pin":<id>}`
+addresses its distinct parent-side pin. Both resolve only within their owning
+sheet. Ordinary terminal/junction ownership checks remain in force. The engine's
+project electrical graph adds an explicit link between each placed child's label
+and corresponding parent pin; coincident coordinates and repeated names on
+unrelated sheets never create cross-sheet links. Per-sheet net inspection remains
+local, while `inspect_project.project.netlist` reports the complete electrical
+graph, including interface identities. Direction is currently descriptive; ERC is
+separate work.
+
+Sheet/1 rejects hierarchy fields even when empty or null. Sheet/2 rejects missing
+or null arrays, invalid or duplicate object IDs/slots/names, unsupported directions,
+missing children, multiple parents, cycles, foreign endpoints and out-of-bounds
+geometry before project adoption. A no-change save retains the existing document
+bytes; each hierarchy record occupies its own line.
 
 Components own their stable ID, library/definition/revision, reference number,
 displayed reference and value. Unit placements own their ID, component link,

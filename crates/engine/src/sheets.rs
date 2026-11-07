@@ -1,4 +1,4 @@
-//! Flat-sheet ownership, immutable schematic projections and atomic sheet transactions.
+//! Sheet ownership, immutable schematic projections and atomic sheet transactions.
 
 use super::*;
 use std::ops::Deref;
@@ -22,7 +22,7 @@ impl SheetTarget {
     }
 }
 
-/// Authored geometry of one flat sheet. Logical components and board placements remain project-owned.
+/// Authored geometry and hierarchy interfaces of one schematic sheet. Logical components and board placements remain project-owned.
 #[derive(Clone, Debug)]
 pub struct SchematicSheet {
     pub(crate) sheet_id: uuid::Uuid,
@@ -30,13 +30,24 @@ pub struct SchematicSheet {
     pub(crate) symbols: Arc<Vec<SymbolPlacement>>,
     pub(crate) wires: Arc<Vec<Wire>>,
     pub(crate) junctions: Arc<BTreeMap<u64, Point>>,
+    pub(crate) labels: Arc<Vec<crate::hierarchy::Label>>,
+    pub(crate) subsheets: Arc<Vec<crate::hierarchy::SheetSymbol>>,
     pub(crate) connectivity: Arc<OnceLock<Connectivity>>,
 }
 
 impl SchematicSheet {
     /// Create an empty sheet after identity/name validation by the owning command or codec.
     pub(crate) fn empty(sheet_id: uuid::Uuid, sheet_name: String) -> Self {
-        Self { sheet_id, sheet_name, symbols: Arc::default(), wires: Arc::default(), junctions: Arc::default(), connectivity: Arc::default() }
+        Self {
+            sheet_id,
+            sheet_name,
+            labels: Arc::default(),
+            subsheets: Arc::default(),
+            symbols: Arc::default(),
+            wires: Arc::default(),
+            junctions: Arc::default(),
+            connectivity: Arc::default(),
+        }
     }
 }
 
@@ -101,12 +112,14 @@ impl Project {
         self.sheets
             .iter()
             .map(|sheet| {
-                sheet
-                    .symbols
-                    .last()
-                    .map_or(0, |s| s.ordinal)
-                    .max(sheet.wires.last().map_or(0, |w| w.ordinal))
-                    .max(sheet.junctions.last_key_value().map_or(0, |(&id, _)| id))
+                sheet.labels.iter().map(|l| l.id).chain(sheet.subsheets.iter().map(|s| s.id)).max().unwrap_or(0).max(
+                    sheet
+                        .symbols
+                        .last()
+                        .map_or(0, |s| s.ordinal)
+                        .max(sheet.wires.last().map_or(0, |w| w.ordinal))
+                        .max(sheet.junctions.last_key_value().map_or(0, |(&id, _)| id)),
+                )
             })
             .max()
             .unwrap_or_default()
@@ -182,6 +195,20 @@ impl Session {
             (DELETE_SHEET, Some(index)) => {
                 if project.sheets.len() == 1 {
                     return Err(CommandError::Unavailable("a project must retain at least one sheet".into()));
+                }
+                let deleting = project.sheets[index].sheet_id;
+                let pins: std::collections::BTreeSet<_> = project.sheets[index].labels.iter().map(|l| WireEndpoint::SheetPin(l.id)).collect();
+                for sheet in Arc::make_mut(&mut project.sheets) {
+                    Arc::make_mut(&mut sheet.subsheets).retain(|block| block.child != deleting);
+                    Arc::make_mut(&mut sheet.wires).retain(|wire| !wire.endpoints.iter().any(|end| pins.contains(end)));
+                    let used: std::collections::BTreeSet<_> = sheet
+                        .wires
+                        .iter()
+                        .flat_map(|w| w.endpoints)
+                        .filter_map(|end| if let WireEndpoint::Junction(id) = end { Some(id) } else { None })
+                        .collect();
+                    Arc::make_mut(&mut sheet.junctions).retain(|id, _| used.contains(id));
+                    sheet.connectivity = Arc::default();
                 }
                 let removed = Arc::make_mut(&mut project.sheets).remove(index);
                 for symbol in removed.symbols.iter() {

@@ -100,7 +100,7 @@ PCBcraft Next, revision `568cd495397a91563e563e7163efb226d84fa83a`, MIT OR Apach
 | `libraries/starter/symbols/led.json`, `crates/engine/src/schematic.rs` | `src/document.rs`, `src/definitions.rs`, `src/desktop/canvas.rs` | Adapted the original generic LED definition and drawing to the shared placement command. Preserved numbered terminals and identified their polarity in inspection. The drawing now lives in the starter library as nanometer strokes. |
 | `libraries/starter/symbols/capacitor.json`, `libraries/starter/symbols/connector.json` | `src/document.rs`, `src/desktop/canvas.rs` | Added the original generic capacitor and two-pin connector with their names, reference prefixes and default values. Converted their point drawings to nanometer strokes in the starter library. |
 | `crates/engine/src/lib.rs`, `crates/app/src/schematic_canvas.rs`, `crates/app/src/lib.rs` | `docs/implementation-status.md` (behavior only) | Followed the prototype's select, rotate, delete and reference/value editing behavior with new engine commands, a format 2 schema and canvas code. No prototype implementation was copied. |
-| `crates/app/src/project_browser.rs`, `crates/chrome/src/workspace.rs`, `crates/app/src/lib.rs` | `docs/sheet-workflows.md`, `docs/desktop-guide.md`, `docs/ui-audit.md` (behavior only) | Followed the prototype's Browser tree (Project › Sheets › sheet › Symbols / Nets), with fold arrows separate from row clicks, sheet-local item lists that select without opening a drawer, and Capture/View ribbon tabs where tab changes never edit the project. The tree, tab strip, row glyphs and pick-to-center are new code; no prototype implementation was copied. Sheet creation and hierarchy are not ported yet. |
+| `crates/app/src/project_browser.rs`, `crates/chrome/src/workspace.rs`, `crates/app/src/lib.rs` | `docs/sheet-workflows.md`, `docs/desktop-guide.md`, `docs/ui-audit.md` (behavior only) | Followed the prototype's Browser tree (Project › Sheets › sheet › Symbols / Nets), with fold arrows separate from row clicks, sheet-local item lists that select without opening a drawer, and Capture/View ribbon tabs where tab changes never edit the project. The tree, tab strip, row glyphs and pick-to-center are new code; no prototype implementation was copied. Sheet creation and hierarchy now have independent upstream implementations. |
 | `crates/app/src/parts_browser.rs`, `crates/chrome/src/workspace.rs` | `docs/implementation-status.md` (behavior only) | Followed the prototype's searchable parts browser with Small/Medium/Large/List views, click-to-place and drag-to-sheet placement. The card, thumbnails and drag handling are new code over the existing canvas painter; floating and snapping the panel are not ported. |
 | `crates/engine/src/schematic/wiring.rs`, `crates/engine/src/lib.rs` | `src/document.rs`, `src/netlist.rs` | Adapted explicit terminal references and net traversal to the existing command session. This slice supports direct pin links on one schematic. |
 | `crates/engine/src/schematic.rs`, `crates/engine/src/lib.rs`, `libraries/starter/symbols/resistor.json` | `src/document.rs`, `src/definitions.rs`, `src/session.rs` | Adapted nanometer coordinates, distinct component and symbol identities, and the procedural resistor definition to the existing session and command history. The resistor drawing now lives in the starter library. |
@@ -255,7 +255,7 @@ separator slot, and a caption with a caret 10 points under the buttons that open
 a menu of the group's actions, and the 5 point gutter under the groups. The
 menu's check marks for toggles
 (`crates/chrome/src/menu.rs`) follow Next's `src/desktop/controls.rs` `MenuItem`.
-The code is new; Next's planned, disabled tools are not shown.
+The original group renderer remains upstream code; the qualified toolbar port below now includes Next's planned tools as disabled controls.
 
 The floating Browser card, its collapsing header, the row metrics (26 point rows,
 16 point indent, 18 point arrow target, 15 point glyph, label 25 points in), the
@@ -448,3 +448,57 @@ The original converter flattens Bézier centerlines and preserves proportional
 advances; runtime spacing and reference placement are original upstream code.
 No external implementation, KiCad font data or artwork was incorporated. The
 prior original font remains a distinct compatibility identity.
+
+The hierarchical sheet model, commands, UI, native sheet/2 records and Sheet/Label
+ribbon glyphs are original PCBcraft work. Control names and connection scope were
+checked against the published [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
+without consulting implementation source or copying icons. PCBcraft synchronizes
+parent pins directly from child label identities; repeated sheet instances are
+not included in this feature.
+
+
+## PCBcraft Next toolbar port
+
+The Capture, Analyze, Libraries, Manage and View tab composition in
+`crates/app/src/ribbon.rs` adapts the UI tables and button/menu dispatch in
+PCBcraft Next's `src/desktop/ribbon.rs` at
+`568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0, copyright
+2026 Travis Lowe and contributors). This port retains the Place, Sheets, Connect,
+Modify, Inspect and Design groups, routes implemented actions through upstream's
+existing session/view handlers, and leaves unavailable tools disabled. Compact
+layouts retain those unavailable controls in caption menus. Upstream's existing
+Fit, Net Inspector, split/window controls and saved View-tab index are preserved.
+No prototype document/session backend, importer or dependency lockfile is ported.
+
+`crates/chrome/src/ribbon_icons.rs` adapts the embedded SVG consumer and two-stage
+palette substitution in Next's `src/desktop/icons.rs` at the same revision. It
+uses upstream chrome tokens and a palette-keyed egui image cache; only the SVG
+loader is enabled, with no file or HTTP loader. The original SVG masters are
+unchanged. `crates/chrome/assets/ribbon/provenance.json` records every source path,
+revision and SHA-256, including the separate SolidCraft provenance of the five
+family icons. Those family masters were carried in Next's `assets/family/icons/`
+from SolidCraft revisions `60488a0837affcee79832bdb7bf6e860e84b10f2` (`spin.svg`)
+and `c553365a2197a689e749389a6fbf707a38df9b61` (`move.svg`, `mirror.svg`,
+`list.svg`, `configuration_table.svg`), MIT OR Apache-2.0, copyright 2026 SolidCraft
+contributors. Both projects' license texts and SolidCraft's NOTICE are retained
+beside the assets, included in About's Toolbar licenses, and copied into the web
+build's `ribbon-notices/` directory. Save, Undo and Redo remain in upstream's app bar with their existing menu glyphs. This is a bounded UI/artwork adaptation; the chrome module remains
+replaceable by the shared Craft UI layer.
+
+SVG rendering adds `egui_extras` 0.36.2 with only its `svg` feature, using
+`resvg`/`usvg` 0.45.1 and `tiny-skia` 0.11.4. The exact dependency closure is pinned
+in `Cargo.lock` and checked by cargo-deny. These packages and their added
+transitive dependencies use MIT, Apache-2.0, BSD-2-Clause or BSD-3-Clause licenses;
+no GPL-family, file-fetching or HTTP dependency is introduced by this feature.
+
+
+The subsequent toolbar cleanup gives each schematic action one tab owner:
+Capture contains drawing/editing and hierarchical interfaces; Analyze contains
+checks/reports; Libraries contains source management; Manage contains independent
+sheet creation and project operations; View retains panels and layout. The
+hierarchical-label command is named **Hierarchical label**, replacing the
+prototype's broader **Port** label. The imported SVG master retains its original
+`port.svg` filename and recorded hash. Move now dispatches upstream's existing
+M/Disconnect and Move handler, and redundant Save/Undo/Redo ribbon actions were
+removed in favor of the existing app bar. These layout/label changes are
+original upstream adaptation code and do not import further prototype sources.

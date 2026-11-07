@@ -204,7 +204,7 @@ impl PcbApp {
         match action {
             ViewAction::Browse(action) => {
                 self.apply_browser_action(id, action);
-                if matches!(self.dialog, Dialog::Sheet(_)) {
+                if matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_)) {
                     ctx.send_viewport_cmd_to(viewport(self.views.main), ViewportCommand::Focus);
                 }
             }
@@ -277,7 +277,7 @@ impl PcbApp {
     /// the focused document, so they restore the host's resulting focus rather than its old slot.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
         let previous = self.views.active.id();
-        let sheet_form = matches!(self.dialog, Dialog::Sheet(_));
+        let sheet_form = matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_));
         if let Dialog::EditFields { source, .. } = &self.dialog {
             self.views.bind(source.view());
         }

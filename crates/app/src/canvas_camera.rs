@@ -35,6 +35,7 @@ impl CameraState {
 #[derive(Debug)]
 pub(crate) struct Camera {
     zoom: f32,
+    schematic_rect: Option<Rect>,
     offset: Vec2,
     fit_requested: bool,
     /// A Browser destination waits for its own panel geometry before centering.
@@ -50,6 +51,7 @@ impl Default for Camera {
     fn default() -> Self {
         Self {
             zoom: 1.0,
+            schematic_rect: None,
             offset: Vec2::ZERO,
             fit_requested: false,
             center_requested: None,
@@ -60,6 +62,12 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// Last painted schematic bounds, for prioritizing hovered-object shortcuts before layout.
+    /// This disposable rectangle never enters saved camera state or document identity.
+    pub(crate) fn schematic_rect(&self) -> Option<Rect> {
+        self.schematic_rect
+    }
+
     /// Capture world-space navigation independently of pane size and transient fit requests.
     pub(super) fn saved_state(&self) -> CameraState {
         let scale = f64::from(self.unit_step()) / GRID_NM as f64;
@@ -248,6 +256,7 @@ impl Camera {
     /// The zoom anchor (the pointer, or the view center) stays fixed while zooming. When
     /// scrolling pans, Ctrl or ⌘ with the wheel still zooms, and a pinch always zooms.
     pub(crate) fn navigate(&mut self, response: &Response, rect: Rect, project: &Project, enabled: bool, navigation: Navigation) {
+        self.schematic_rect = Some(rect);
         if std::mem::take(&mut self.fit_requested) {
             self.fit(project, rect);
         }
@@ -330,6 +339,12 @@ impl Camera {
             bounds = bounds.union(symbol_bounds);
         }
         for point in project.wires().iter().flat_map(|wire| project.wire_path(wire)) {
+            bounds = bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN));
+        }
+        for point in project.hierarchical_labels().iter().map(|l| l.at).chain(project.sheet_symbols().iter().flat_map(|block| {
+            let size = project.sheet_symbol_size(block);
+            [block.at, Point { x_nm: block.at.x_nm + size.x_nm, y_nm: block.at.y_nm + size.y_nm }]
+        })) {
             bounds = bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN));
         }
         self.fit_bounds(bounds, rect, 1.0);

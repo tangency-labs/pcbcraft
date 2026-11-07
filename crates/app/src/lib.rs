@@ -17,6 +17,7 @@ mod editor_layout;
 mod editor_view;
 mod editor_windows;
 mod editor_workspace;
+mod hierarchy;
 mod home;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
@@ -27,6 +28,7 @@ mod project_browser;
 mod project_files;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod ribbon;
 mod schematic_canvas;
 mod sheet_editing;
 mod unsaved;
@@ -76,6 +78,8 @@ const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(
 const COMMAND_N: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const COMMAND_Q: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
+const ADD_SHEET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::S);
+const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::H);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
 /// KiCad's keys for the next and previous grid: N for finer, Shift+N for coarser.
@@ -137,6 +141,7 @@ enum Dialog {
     Arrangement(arrangements::Edit),
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
+    Hierarchy(hierarchy::Edit),
     /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
     EditFields {
         source: ViewInput,
@@ -208,7 +213,7 @@ pub struct PcbApp {
 }
 
 /// The Schematic workspace's ribbon tabs, in order.
-const RIBBON_TABS: [&str; 2] = ["Capture", "View"];
+const RIBBON_TABS: [&str; 5] = ["Capture", "Analyze", "Libraries", "Manage", "View"];
 const VIEW_TAB: usize = 1;
 
 /// Built-in workspace contributions. The picker handles presentation only; each document
@@ -218,7 +223,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
         workspace::Workspace {
             title: "Schematic",
             description: "Capture circuits, place symbols and connect pins",
-            tabs: Some("Capture · View"),
+            tabs: Some("Capture · Analyze · Libraries · Manage · View"),
             icon: workspace::WorkspaceIcon::Schematic,
             current: true,
         },
@@ -713,26 +718,65 @@ impl PcbApp {
         !self.home && self.assistant.shortcuts(ctx)
     }
 
-    /// Show the ribbon tab picked: placement, wiring, inspection and fit actions on Capture, and
-    /// the panel toggles and fit on View. The workspace picker is on its tile.
+    /// Render the workspace toolbar using ported schematic groups and upstream PCB/View controls.
+    /// Saved tab slots stay stable while visual ordering follows Next; quick actions use the focused view.
     fn ribbon(&mut self, ui: &mut Ui) {
-        let mut tab = self.ribbon_tab;
+        use workspace::{RibbonTool, ToolIcon};
         let current = self.views.active.workspace;
+        let board = current == Workspace::Board;
+        let mut tab = if board {
+            usize::from(self.ribbon_tab == VIEW_TAB)
+        } else {
+            ribbon::TAB_ORDER.iter().position(|slot| *slot == self.ribbon_tab).unwrap_or(0)
+        };
         let mut entries = WORKSPACES.entries.to_vec();
         entries[0].current = current == Workspace::Schematic && !self.views.active.unavailable();
-        entries[1].current = current == Workspace::Board && !self.views.active.unavailable();
-        let tabs = if current == Workspace::Board { ["Layout", "View"] } else { RIBBON_TABS };
-        let picked =
-            workspace::ribbon(ui, current.title(), &tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, |ui, shown| {
-                if shown == VIEW_TAB {
+        entries[1].current = board && !self.views.active.unavailable();
+        let tabs: &[&str] = if board { &["Layout", "View"] } else { &RIBBON_TABS };
+        let has_project = self.session.project().is_some();
+        let mut quick = Vec::new();
+        if self.ribbon_tab != VIEW_TAB {
+            if !board {
+                quick.push(RibbonTool {
+                    icon: ToolIcon::Nets,
+                    label: "Nets",
+                    description: "Toggle Net Inspector",
+                    shortcut: "",
+                    enabled: has_project,
+                    active: has_project && self.net_inspector.open,
+                    toggle: true,
+                });
+            }
+            quick.push(RibbonTool {
+                icon: ToolIcon::Fit,
+                label: "Fit",
+                description: if board { "Fit board" } else { "Fit schematic" },
+                shortcut: "",
+                enabled: has_project,
+                active: false,
+                toggle: false,
+            });
+        }
+        let response =
+            workspace::ribbon(ui, current.title(), tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, &quick, |ui, shown| {
+                let slot = if board { shown } else { ribbon::TAB_ORDER[shown] };
+                if slot == VIEW_TAB {
                     self.view_tab(ui);
-                } else if current == Workspace::Board {
+                } else if board {
                     self.board_tab(ui);
                 } else {
-                    self.capture_tab(ui);
+                    self.ported_ribbon_tab(ui, slot);
                 }
             });
-        self.ribbon_tab = tab;
+        self.ribbon_tab = if board { tab } else { ribbon::TAB_ORDER[tab] };
+        if let Some(action) = response.quick {
+            if !board && action == 0 {
+                self.set_panel(ui.ctx(), Panel::Nets, !self.net_inspector.open);
+            } else {
+                self.fit_view(self.views.active.id());
+            }
+        }
+        let picked = response.workspace;
         if let Some(pick) = picked {
             let target = match pick.index {
                 0 => Some(Workspace::Schematic),
@@ -854,120 +898,6 @@ impl PcbApp {
         }
     }
 
-    /// The Capture tab: place symbols, draw wires, inspect nets and fit. Each group's caption
-    /// also lists its actions in a menu.
-    fn capture_tab(&mut self, ui: &mut Ui) {
-        use workspace::{RibbonTool, ToolIcon};
-
-        let has_project = self.session.project().is_some();
-        let place = [RibbonTool {
-            icon: ToolIcon::Symbol,
-            label: "Symbol",
-            description: "Add symbol (A)",
-            shortcut: "A",
-            enabled: self.session.available(PLACE_SYMBOL),
-            active: matches!(self.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
-            toggle: false,
-        }];
-        if workspace::ribbon_group(ui, "Place", &place).is_some() {
-            self.parts.focus_search();
-        }
-        workspace::ribbon_separator(ui);
-        let connect = [RibbonTool {
-            icon: ToolIcon::Wire,
-            label: "Wire",
-            description: "Draw wire (W)",
-            shortcut: "W",
-            enabled: self.session.available(CONNECT_PINS),
-            active: matches!(self.views.active.schematic.tool, Some(Tool::Wire { .. })),
-            toggle: false,
-        }];
-        if workspace::ribbon_group(ui, "Connect", &connect).is_some() {
-            self.begin_wire();
-        }
-        workspace::ribbon_separator(ui);
-        let inspect = [
-            RibbonTool {
-                icon: ToolIcon::Nets,
-                label: "Nets",
-                description: "Toggle Net Inspector",
-                shortcut: "",
-                enabled: has_project,
-                active: has_project && self.net_inspector.open,
-                toggle: true,
-            },
-            RibbonTool {
-                icon: ToolIcon::Fit,
-                label: "Fit",
-                description: "Fit schematic",
-                shortcut: "",
-                enabled: has_project,
-                active: false,
-                toggle: false,
-            },
-        ];
-        match workspace::ribbon_group(ui, "Inspect", &inspect) {
-            Some(0) => self.set_panel(ui.ctx(), Panel::Nets, !self.panel_open(Panel::Nets)),
-            Some(1) => self.fit_view(self.views.active.id()),
-            _ => {}
-        }
-        workspace::ribbon_separator(ui);
-        self.wire_edit_ribbon(ui);
-    }
-
-    /// Expose implemented wire edits through both ribbon buttons and their caption menu.
-    /// Slice uses the selected leg's captured point and revision; Heal and Delete act on
-    /// the selected wires, with Delete retaining the narrower segment-selection semantics.
-    /// The menu-only Auto-heal toggle changes the saved preference for future edits, not history.
-    fn wire_edit_ribbon(&mut self, ui: &mut egui::Ui) {
-        use workspace::{RibbonTool, ToolIcon};
-        let leg = self.views.active.schematic.selected_leg.clone();
-        let selection = &self.views.active.schematic.selection;
-        let wires = !selection.wires.is_empty() && selection.symbols.is_empty();
-        let tools = [
-            (ToolIcon::Slice, "Slice", "Slice selected wire", "", leg.as_ref().is_some_and(|l| l.split.is_some())),
-            (ToolIcon::Heal, "Heal", "Heal selected wires", "", wires),
-            (ToolIcon::Delete, "Delete", "Delete selected wire or segment", "Del", wires),
-        ]
-        .map(|(icon, label, description, shortcut, enabled)| RibbonTool {
-            icon,
-            label,
-            description,
-            shortcut,
-            enabled,
-            active: false,
-            toggle: false,
-        });
-        let options = [RibbonTool {
-            icon: ToolIcon::Heal,
-            label: "Auto-heal wires",
-            description: "Auto-heal wires",
-            shortcut: "",
-            enabled: true,
-            active: self.preferences.auto_heal_wires,
-            toggle: true,
-        }];
-        match workspace::ribbon_group_with_menu(ui, "Wire edits", &tools, &options) {
-            Some(0) => {
-                if let Some(leg) = leg {
-                    self.edit_wire(schematic_canvas::WireAction::Slice, &leg);
-                }
-            }
-            Some(1) => {
-                self.run(
-                    pcbcraft_engine::HEAL_WIRES,
-                    &json!({"items":self.views.active.schematic.selection,"expected_revision":self.session.revision()}),
-                );
-                if self.message.is_none() {
-                    self.select(Selection::default());
-                }
-            }
-            Some(2) => self.delete_selection(),
-            Some(3) => self.preferences.auto_heal_wires = !self.preferences.auto_heal_wires,
-            _ => {}
-        }
-    }
-
     /// Select and center a Browser pick only in its originating view and revision. Selection is
     /// view state, so the project and its revision are unchanged; stale picks do not move a camera.
     fn show_pick(&mut self, source: ViewInput, pick: project_browser::Pick) {
@@ -1066,6 +996,10 @@ impl PcbApp {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
+                        Tool::SheetGesture { drag, .. } => {
+                            dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
+                        }
+                        Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
@@ -1177,6 +1111,7 @@ impl PcbApp {
                             &self.views.active.schematic.selection,
                             self.views.active.schematic.selected_leg.as_ref(),
                             self.views.active.schematic.whole_wire_drag,
+                            self.views.active.schematic.selected_sheet_symbol,
                             &highlight,
                             input_enabled,
                             self.preferences.navigation,
@@ -1198,6 +1133,9 @@ impl PcbApp {
         self.views.active.schematic.wire_draft.start_requested = false;
         if let (Some(source), Some(click)) = (source, click) {
             self.view_click(source, click);
+            if matches!(self.dialog, Dialog::Hierarchy(_) | Dialog::Sheet(_)) {
+                ui.ctx().send_viewport_cmd_to(editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+            }
             // Selection can change after the other pane was painted, without a document edit.
             self.repaint_editors(ui.ctx());
         }
@@ -1214,6 +1152,31 @@ impl PcbApp {
             return;
         }
         match (self.views.active.schematic.tool.clone(), click) {
+            (None, Click::SelectSheetSymbol(id)) => {
+                self.select(Selection::default());
+                self.views.active.schematic.selected_sheet_symbol = Some(id);
+            }
+            (None, Click::GrabSheetGesture(drag)) => {
+                self.select(Selection::default());
+                self.views.active.schematic.selected_sheet_symbol = Some(drag.block.id);
+                self.views.active.schematic.tool = Some(Tool::SheetGesture { drag, revision: source.revision });
+            }
+            (Some(Tool::SheetGesture { drag, revision }), Click::FinishSheetGesture(geometry)) => {
+                self.views.active.schematic.tool = None;
+                if let Some(geometry) = geometry {
+                    let mut params = json!({"id":format!("sheet-symbol-{}",drag.block.id),"x_nm":geometry.at.x_nm,"y_nm":geometry.at.y_nm,"expected_revision":revision});
+                    if drag.corner.is_some() {
+                        params["width_nm"] = json!(geometry.size.x_nm);
+                        params["height_nm"] = json!(geometry.size.y_nm);
+                    }
+                    self.run(
+                        if drag.corner.is_some() { pcbcraft_engine::hierarchy::RESIZE_SHEET } else { pcbcraft_engine::hierarchy::MOVE_SHEET },
+                        &params,
+                    );
+                }
+            }
+            (Some(Tool::Hierarchy { kind, id, .. }), Click::HierarchyPlace(at)) => self.hierarchy_place(source, kind, id, at),
+            (None, Click::HierarchyAction(kind, id, action)) => self.hierarchy_action(source, kind, id, action),
             (Some(Tool::PlaceSymbol { definition, revision, turns }), Click::Place(point)) => {
                 self.views.active.schematic.tool = None;
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}));
@@ -1377,6 +1340,20 @@ impl PcbApp {
                 self.cycle_grid(true);
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::Backspace)) {
+                self.leave_sheet();
+                return;
+            }
+            if pressed(&ADD_HIERARCHICAL_LABEL) {
+                self.begin_hierarchy(hierarchy::Kind::Label);
+            }
+            if pressed(&ADD_SHEET) {
+                self.begin_hierarchy(hierarchy::Kind::Sheet);
+            }
+            let hierarchy_hovered = ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M].into_iter().any(|key| i.key_pressed(key)))
+                && self.views.active.snapshot(&self.session).is_some_and(|project| {
+                    ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| hierarchy::hovered(&project, &self.views.active.camera, pointer))
+                });
             // Ctrl temporarily bypasses the wire grid without disabling tool controls.
             let wire_keys = Modifiers {
                 ctrl: matches!(self.views.active.schematic.tool, Some(Tool::Wire { .. })) && ctx.input(|i| i.modifiers.ctrl),
@@ -1399,23 +1376,27 @@ impl PcbApp {
                 }
                 self.views.active.schematic.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(wire_keys, Key::Enter));
             }
-            if self.views.active.schematic.tool.is_none()
+            if !hierarchy_hovered
+                && self.views.active.schematic.tool.is_none()
                 && !self.views.active.schematic.selection.is_empty()
                 && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace))
             {
                 self.delete_selection();
             }
-            if self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M)) {
+            if !hierarchy_hovered && self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M)) {
                 self.views.active.schematic.move_requested = true;
             }
-            if pressed(&ROTATE) {
+            if !hierarchy_hovered && pressed(&ROTATE) {
                 if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.schematic.tool {
                     *turns = (*turns + 1) % 4;
                 } else if self.views.active.schematic.tool.is_none() {
                     self.views.active.schematic.rotate_requested = true;
                 }
             }
-            if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.single_symbol().is_some() && pressed(&EDIT_FIELDS)
+            if !hierarchy_hovered
+                && self.views.active.schematic.tool.is_none()
+                && self.views.active.schematic.selection.single_symbol().is_some()
+                && pressed(&EDIT_FIELDS)
             {
                 self.edit_selected(SymbolAction::EditFields);
             }
@@ -1549,6 +1530,7 @@ impl PcbApp {
                 }
             }
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
+            Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;
@@ -1626,6 +1608,7 @@ impl PcbApp {
                     ui.label(format!("PCBCraft {VERSION}"));
                     ui.label("Electronics design that feels like KiCad, built for people and agents to work on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
+                    workspace::ribbon_licenses(ui);
                     ui.hyperlink_to("Report a bug", BUG_REPORT_URL);
                     close = ui.button("Close").clicked();
                 });
@@ -1876,6 +1859,8 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Edit", "Undo", key(&COMMAND_Z)));
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
+    list.push(("Schematic", "Place hierarchical sheet", key(&ADD_SHEET)));
+    list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
     list.push(("Schematic", "Drag wire segment", "G".to_owned()));

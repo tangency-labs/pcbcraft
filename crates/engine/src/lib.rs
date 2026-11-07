@@ -6,6 +6,7 @@
 //! The native codec snapshots authored data independently of editing history and transport.
 
 pub mod board;
+pub mod hierarchy;
 pub mod library;
 pub mod persistence;
 pub mod schematic;
@@ -69,12 +70,18 @@ enum ParamKind {
     BoardId,
     SheetId,
     CopperLayers,
+    HierarchyId,
+    Direction,
+    SheetExtent,
 }
 
 impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
+            Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
+            Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
             Self::BoardSetup => board::setup::BoardSetup::schema(),
             Self::SilkscreenSettings => json!({"type":"object","properties": {
                 "text_height_nm":{"type":"integer","minimum":1,"maximum":10_000_000},
@@ -108,12 +115,16 @@ impl ParamKind {
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
             Self::WireId => json!({"type": "string", "pattern": "^wire-[1-9][0-9]*$"}),
             Self::JunctionId => json!({"type": "string", "pattern": "^junction-[1-9][0-9]*$"}),
-            Self::WireAnchor => json!({"oneOf": [ParamKind::Terminal.schema(), {
+            Self::WireAnchor => {
+                json!({"oneOf": [ParamKind::Terminal.schema(), {
                 "type": "object", "properties": {"junction": {"type": "string", "pattern": "^junction-[1-9][0-9]*$"}}, "required": ["junction"], "additionalProperties": false
-            }, point_schema(), {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}]}),
-            Self::WireEndpoint => json!({"oneOf": [ParamKind::Terminal.schema(), {
+            }, point_schema(), {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}, hierarchy_endpoint_schema("label"), hierarchy_endpoint_schema("sheet_pin")]})
+            }
+            Self::WireEndpoint => {
+                json!({"oneOf": [ParamKind::Terminal.schema(), {
                 "type": "object", "properties": {"junction": ParamKind::JunctionId.schema()}, "required": ["junction"], "additionalProperties": false
-            }, {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}]}),
+            }, {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}, hierarchy_endpoint_schema("label"), hierarchy_endpoint_schema("sheet_pin")]})
+            }
             Self::WireBends => json!({"type": "array", "maxItems": wire::MAX_BENDS, "items": point_schema()}),
             Self::Point => point_schema(),
             Self::Rotation => json!({"type": "integer", "enum": [0, 90, 180, 270]}),
@@ -133,6 +144,15 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::HierarchyId
+                if value.as_str().is_some_and(|s| {
+                    schematic::wiring::parse_id(s, "label-").is_some() || schematic::wiring::parse_id(s, "sheet-symbol-").is_some()
+                }) =>
+            {
+                Ok(())
+            }
+            Self::SheetExtent if value.as_i64().is_some_and(|n| (1..=2 * MAX_CENTER_NM).contains(&n)) => Ok(()),
+            Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
             Self::BoardId | Self::SheetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup | Self::SilkscreenSettings if value.is_object() => Ok(()),
             Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
@@ -169,6 +189,9 @@ impl ParamKind {
             Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::Selection => Err("must contain bounded unique symbol and wire ID lists"),
+            Self::HierarchyId => Err("must identify a sheet symbol or hierarchical label"),
+            Self::SheetExtent => Err("must be a positive extent within schematic bounds"),
+            Self::Direction => Err("must be input, output, bidirectional, tri_state or passive"),
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
             Self::BoardSetup | Self::SilkscreenSettings => Err("must contain a settings object"),
@@ -201,6 +224,13 @@ impl ParamKind {
 /// Publish the strict bounded point representation used by free wire endpoints and bends.
 fn point_schema() -> Value {
     json!({"type": "object", "properties": {"x_nm": ParamKind::Coordinate.schema(), "y_nm": ParamKind::Coordinate.schema()}, "required": ["x_nm", "y_nm"], "additionalProperties": false})
+}
+
+/// Publish a strict fixed interface endpoint alongside ordinary terminals and junctions.
+fn hierarchy_endpoint_schema(kind: &str) -> Value {
+    let mut properties = Map::new();
+    properties.insert(kind.into(), json!({"type":"string", "pattern":"^label-[1-9][0-9]*$"}));
+    json!({"type":"object", "properties":properties, "required":[kind], "additionalProperties":false})
 }
 
 /// A parameter of a command.
@@ -320,7 +350,73 @@ const SYMBOL_X: Param =
 const SYMBOL_Y: Param =
     Param { required: true, name: "y_nm", summary: "Symbol center Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 
+const HIERARCHY_OBJECT: Param =
+    Param { required: true, name: "id", summary: "Sheet-symbol or label ID from inspection", kind: ParamKind::HierarchyId };
+const INTERFACE_NAME: Param = Param { required: true, name: "name", summary: "Interface name, unique within the child sheet", kind: ParamKind::Name };
+const ANCHOR_X: Param = Param { required: true, name: "x_nm", summary: "Anchor X in nanometers, increasing right", kind: ParamKind::Coordinate };
+const ANCHOR_Y: Param = Param { required: true, name: "y_nm", summary: "Anchor Y in nanometers, increasing down", kind: ParamKind::Coordinate };
+const DIRECTION: Param = Param { required: true, name: "direction", summary: "Hierarchical interface direction", kind: ParamKind::Direction };
 const CATALOG: &[Command] = &[
+    Command {
+        id: hierarchy::RESIZE_SHEET,
+        title: "Resize Sheet Symbol",
+        summary: "Resize a sheet rectangle and its fixed interface anchors in one undo step; refuse sizes that cut through pins.",
+        params: &[
+            HIERARCHY_OBJECT,
+            ANCHOR_X,
+            ANCHOR_Y,
+            Param { required: true, name: "width_nm", summary: "Sheet width in nanometers", kind: ParamKind::SheetExtent },
+            Param { required: true, name: "height_nm", summary: "Sheet height in nanometers", kind: ParamKind::SheetExtent },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: hierarchy::CREATE_CHILD,
+        title: "New Hierarchical Sheet",
+        summary: "Create a child sheet and place its parent symbol as one undo step.",
+        params: &[sheets::SHEET_NAME, ANCHOR_X, ANCHOR_Y, EXPECTED_REVISION],
+    },
+    Command {
+        id: hierarchy::PLACE_SHEET,
+        title: "Place Hierarchical Sheet",
+        summary: "Place an existing unparented sheet as a child; cycles and reuse are rejected. Undoable.",
+        params: &[
+            Param { required: true, name: "child", summary: "Child sheet UUID", kind: ParamKind::SheetId },
+            ANCHOR_X,
+            ANCHOR_Y,
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: hierarchy::MOVE_SHEET,
+        title: "Move Sheet Symbol",
+        summary: "Move a sheet symbol and its connected pins. Undoable.",
+        params: &[HIERARCHY_OBJECT, ANCHOR_X, ANCHOR_Y, EXPECTED_REVISION],
+    },
+    Command {
+        id: hierarchy::REMOVE_SHEET,
+        title: "Remove Sheet Symbol",
+        summary: "Detach a child to the project root; remove parent wires attached to its pins. Child contents are retained. Undoable.",
+        params: &[HIERARCHY_OBJECT, EXPECTED_REVISION],
+    },
+    Command {
+        id: hierarchy::ADD_LABEL,
+        title: "Add Hierarchical Label",
+        summary: "Add a child interface label and synchronized parent pin. Undoable.",
+        params: &[INTERFACE_NAME, DIRECTION, ANCHOR_X, ANCHOR_Y, EXPECTED_REVISION],
+    },
+    Command {
+        id: hierarchy::EDIT_LABEL,
+        title: "Edit Hierarchical Label",
+        summary: "Rename, change direction or move a hierarchical label and its parent pin. Undoable.",
+        params: &[HIERARCHY_OBJECT, INTERFACE_NAME, DIRECTION, ANCHOR_X, ANCHOR_Y, EXPECTED_REVISION],
+    },
+    Command {
+        id: hierarchy::DELETE_LABEL,
+        title: "Delete Hierarchical Label",
+        summary: "Remove a label, parent pin and wires directly attached to either. Undoable.",
+        params: &[HIERARCHY_OBJECT, EXPECTED_REVISION],
+    },
     Command {
         id: "project.new",
         title: "New Project",
@@ -782,6 +878,8 @@ impl Project {
             }).collect::<Vec<_>>(),
             "junctions": self.junctions().map(|(id, point)| json!({"id": format!("junction-{id}"), "x_nm": point.x_nm, "y_nm": point.y_nm})).collect::<Vec<_>>(),
             "netlist": self.connectivity().inspect(),
+            "sheet_symbols": self.subsheets.iter().map(|block| json!({"id":format!("sheet-symbol-{}",block.id), "child":block.child,"name":self.child_name(block),"at":block.at,"size":self.sheet_symbol_size(block),"pins":self.sheet_pins(block).map(|pin| json!({"endpoint":WireEndpoint::SheetPin(pin.label.id).inspect(),"name":pin.label.name,"direction":pin.label.direction,"at":pin.at})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+            "hierarchical_labels":self.labels.iter().map(|label|json!({"id":format!("label-{}",label.id),"name":label.name,"direction":label.direction,"at":label.at,"endpoint":WireEndpoint::Label(label.id).inspect()})).collect::<Vec<_>>(),
         })
     }
 
@@ -914,7 +1012,15 @@ impl Session {
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
-            sheets::RENAME_SHEET
+            hierarchy::CREATE_CHILD
+            | hierarchy::PLACE_SHEET
+            | hierarchy::RESIZE_SHEET
+            | hierarchy::MOVE_SHEET
+            | hierarchy::REMOVE_SHEET
+            | hierarchy::ADD_LABEL
+            | hierarchy::EDIT_LABEL
+            | hierarchy::DELETE_LABEL
+            | sheets::RENAME_SHEET
             | "project.rename"
             | PLACE_RESISTOR
             | PLACE_SYMBOL
@@ -947,21 +1053,23 @@ impl Session {
     }
 
     /// Return the current project, revision, and undo and redo availability as JSON.
-    /// Each schematic wire reports terminal or junction endpoints, optional authored `bends`, and
+    /// Each schematic wire reports explicit component/junction/interface endpoints, authored `bends`, and
     /// its drawn `path`: every corner from end to end in nanometres, so a point on any leg can be
     /// chosen for the commands that take one.
     /// The schematic's `junctions` list provides endpoint IDs and positions; its `netlist`
     /// groups connected terminals and junctions, including junction-only nets, and lists
     /// terminals without a wire as `unconnected`. `sheets` reports ordered sheet identities,
     /// display names, relative document paths and per-sheet schematic inspection. The legacy
-    /// top-level schematic is populated only for a single-sheet project.
+    /// top-level schematic is populated only for a single-sheet project. Sheet entries include
+    /// their parent UUID; project `netlist` follows the complete parent/child electrical graph.
     /// A configured board also reports setup and laminate thickness (null when unspecified).
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
                 "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json"})).collect::<Vec<_>>(),
-                "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
+                "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
+                "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
@@ -1067,6 +1175,14 @@ impl Session {
                 }
             }
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
+            hierarchy::CREATE_CHILD
+            | hierarchy::PLACE_SHEET
+            | hierarchy::RESIZE_SHEET
+            | hierarchy::MOVE_SHEET
+            | hierarchy::REMOVE_SHEET
+            | hierarchy::ADD_LABEL
+            | hierarchy::EDIT_LABEL
+            | hierarchy::DELETE_LABEL => self.edit_hierarchy(id, params)?,
             PLACE_RESISTOR => {
                 let resistor =
                     library_symbol("resistor").ok_or_else(|| CommandError::Unavailable("the starter library has no resistor symbol".to_owned()))?;

@@ -18,6 +18,8 @@ struct Symbol {
 pub(crate) struct Thumbnail {
     symbols: Vec<Symbol>,
     wires: Vec<Vec<Pos2>>,
+    blocks: Vec<(Rect, String)>,
+    labels: Vec<(Pos2, String, pcbcraft_engine::hierarchy::Direction)>,
     bounds: Rect,
 }
 
@@ -57,12 +59,32 @@ impl Thumbnail {
             }
             wires.push(path);
         }
-        Some(Self { symbols, wires, bounds })
+        let blocks = project
+            .sheet_symbols()
+            .iter()
+            .map(|block| {
+                let size = project.sheet_symbol_size(block);
+                let rect =
+                    Rect::from_min_max(grid_pos(block.at), grid_pos(Point { x_nm: block.at.x_nm + size.x_nm, y_nm: block.at.y_nm + size.y_nm }));
+                bounds = bounds.union(rect);
+                (rect, project.child_name(block).to_owned())
+            })
+            .collect();
+        let labels = project
+            .hierarchical_labels()
+            .iter()
+            .map(|label| {
+                let at = grid_pos(label.at);
+                bounds = bounds.union(Rect::from_pos(at));
+                (at, label.name.clone(), label.direction)
+            })
+            .collect();
+        Some(Self { symbols, wires, blocks, labels, bounds })
     }
 
     /// An empty saved schematic has its own placeholder rather than pretending a load failed.
     pub(crate) fn is_empty(&self) -> bool {
-        self.symbols.is_empty() && self.wires.is_empty()
+        self.symbols.is_empty() && self.wires.is_empty() && self.blocks.is_empty() && self.labels.is_empty()
     }
 
     /// Fit the saved geometry in the card and paint with the active theme. Canvas labels follow
@@ -80,6 +102,18 @@ impl Thumbnail {
         for path in &self.wires {
             painter
                 .add(egui::Shape::line(path.iter().copied().map(screen).collect(), Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.schematic_wire)));
+        }
+        for (bounds, name) in &self.blocks {
+            let bounds = Rect::from_min_max(screen(bounds.min), screen(bounds.max));
+            painter.rect_stroke(bounds, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text), egui::StrokeKind::Middle);
+            if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
+                painter.text(bounds.left_top() - egui::vec2(0., t.space_4), Align2::LEFT_BOTTOM, name, FontId::proportional(t.font_small), t.text);
+            }
+        }
+        if step >= theme::SCHEMATIC_MIN_GRID_SPACING {
+            for (at, name, direction) in &self.labels {
+                crate::hierarchy::paint_label(&painter, screen(*at), name, *direction, t.schematic_wire);
+            }
         }
         for symbol in &self.symbols {
             let placement = &symbol.placement;
@@ -115,5 +149,12 @@ mod tests {
         let mut session = Session::default();
         session.apply("project.new", &json!({"name":"Empty"})).unwrap();
         assert!(Thumbnail::new(session.project().unwrap()).unwrap().is_empty());
+        session
+            .apply(pcbcraft_engine::hierarchy::CREATE_CHILD, &json!({"name":"Child","x_nm":0,"y_nm":0,"expected_revision":session.revision()}))
+            .unwrap();
+        let preview = Thumbnail::new(session.project().unwrap()).unwrap();
+        assert!(!preview.is_empty());
+        assert!(preview.bounds.is_finite());
+        assert_eq!(preview.blocks[0].1, "Child");
     }
 }

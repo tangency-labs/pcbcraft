@@ -12,6 +12,12 @@ pub mod catalog;
 /// The card is tall enough for the tabs, the groups and PCBcraft Next's 5 point gutter under them.
 const RIBBON_HEIGHT: f32 = 121.0;
 const WORKSPACE_WIDTH: f32 = 88.0;
+const RIBBON_COMPACT_WIDTH: f32 = 1000.0;
+
+/// Compact ribbons promote working tools while retaining planned controls in their group menus.
+pub fn ribbon_is_compact(ui: &Ui) -> bool {
+    ui.clip_rect().width() < RIBBON_COMPACT_WIDTH
+}
 /// PCBcraft Next's ribbon metrics (`src/desktop/theme.rs`, `RibbonMetrics`): 56 by 52 point
 /// buttons 2 points apart, a 24 point icon centered 17 points down and the label centered 10
 /// points above the bottom, 6 points of padding on each side of a group, a 12 point slot for the
@@ -30,8 +36,21 @@ const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 /// The glyphs used by the schematic ribbon actions and Browser rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
+    Subsheet,
+    Power,
+    Text,
+    Bus,
+    NetLabel,
     Move,
     Rotate,
+    Mirror,
+    Rules,
+    Erc,
+    Annotate,
+    Bom,
+    Sync,
+    Sheet,
+    HierarchicalLabel,
     Symbol,
     Wire,
     Slice,
@@ -147,10 +166,18 @@ pub struct WorkspacePick {
     pub placement: Placement,
 }
 
+/// Workspace navigation and compact header controls are separate caller-owned intents.
+#[derive(Default)]
+pub struct RibbonResponse {
+    pub workspace: Option<WorkspacePick>,
+    pub quick: Option<usize>,
+}
+
 /// Put a tabbed command strip above the viewport. `tabs` names the ribbon tabs and `tab` is the
 /// index of the one shown; clicking another tab selects it. `add` draws the actions of the tab
-/// shown, whose index it receives, including a tab clicked this frame. At compact widths the workspace title moves into the strip, and the actions can scroll
-/// horizontally when they exceed the available space, with the scrollbar below the captions.
+/// shown, whose index it receives, including a tab clicked this frame. The workspace tile yields
+/// space to longer tab lists at narrow widths; actions scroll with a gutter below the captions.
+/// Narrow headers use tighter tabs; quick controls yield when space runs out and on View, which holds their full controls.
 ///
 /// The workspace tile returns a workspace/placement request. Picking the current row closes
 /// the picker; the split and window icons within its card create another view.
@@ -160,8 +187,9 @@ pub fn ribbon(
     tabs: &[&str],
     tab: &mut usize,
     workspaces: Workspaces<'_>,
+    quick: &[RibbonTool<'_>],
     add: impl FnOnce(&mut Ui, usize),
-) -> Option<WorkspacePick> {
+) -> RibbonResponse {
     let t = Tokens::get();
     let height = RIBBON_HEIGHT;
     // Let the app bar color show behind the two rounded workspace corners.
@@ -178,8 +206,9 @@ pub fn ribbon(
                 .inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)),
         )
         .show(ui, |ui| {
-            let wide = ui.available_width() >= 480.0;
+            let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
             let mut picked = None;
+            let mut quick_pick = None;
             ui.horizontal_top(|ui| {
                 if wide {
                     // Read before the tile can toggle it, so the picker knows the frame it opens on.
@@ -203,15 +232,35 @@ pub fn ribbon(
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
                         ui.spacing_mut().item_spacing.y = 1.0;
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = t.space_6;
-                            if !wide {
-                                ui.label(RichText::new(format!("{workspace} /")).font(fonts::interface_heading(ui, t.font_button)).color(t.text_dim));
-                            }
+                            ui.spacing_mut().item_spacing.x = if wide { t.space_6 } else { t.space_2 };
                             for (index, title) in tabs.iter().enumerate() {
-                                if ribbon_tab(ui, title, index == *tab).clicked() {
+                                if ribbon_tab(ui, title, index == *tab, wide).clicked() {
                                     *tab = index;
                                 }
                             }
+                            if wide {
+                                ui.add_enabled(false, egui::Button::new("+")).on_disabled_hover_text("Ribbon customization is not available yet.");
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                let show_quick = tabs.get(*tab) != Some(&"View")
+                                    && ui.available_width() >= quick.len() as f32 * (t.space_24 + ui.spacing().item_spacing.x);
+                                for (index, tool) in quick.iter().enumerate().rev().filter(|_| show_quick) {
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        vec2(t.space_24, t.space_24),
+                                        if tool.enabled { Sense::click() } else { Sense::hover() },
+                                    );
+                                    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, tool.enabled, tool.active, tool.description));
+                                    if tool.active {
+                                        ui.painter().rect_filled(rect, t.control_radius, t.accent_soft);
+                                    } else if response.hovered() {
+                                        ui.painter().rect_filled(rect, t.control_radius, t.hover);
+                                    }
+                                    paint_icon(ui.painter(), tool.icon, rect.center(), t.space_16, t, tool.enabled);
+                                    if response.on_hover_text(tool.description).clicked() {
+                                        quick_pick = Some(index);
+                                    }
+                                }
+                            });
                         });
                         ui.separator();
                         ui.spacing_mut().scroll.floating = false;
@@ -224,7 +273,7 @@ pub fn ribbon(
                     });
                 });
             });
-            picked
+            RibbonResponse { workspace: picked, quick: quick_pick }
         })
         .inner
 }
@@ -458,10 +507,10 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -
 
 /// Draw one ribbon tab as PCBcraft Next does: a quiet 22 point button in regular text, with the
 /// selection fill on the tab shown.
-fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool) -> Response {
+fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool, wide: bool) -> Response {
     let t = Tokens::get();
     let galley = ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_body), t.text);
-    let size = vec2(galley.size().x + 2.0 * t.space_8, t.control_height - t.space_6);
+    let size = vec2(galley.size().x + 2.0 * if wide { t.space_8 } else { t.space_4 }, t.control_height - t.space_6);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, selected, title));
     if ui.is_rect_visible(rect) {
@@ -600,7 +649,8 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
         .iter()
         .map(|tool| (ui.painter().layout_no_wrap(tool.label.to_owned(), font.clone(), t.text).size().x + t.space_8).max(RIBBON_TOOL_WIDTH))
         .collect();
-    let width = widths.iter().sum::<f32>() + tools.len().saturating_sub(1) as f32 * RIBBON_TOOL_GAP + 2.0 * RIBBON_GROUP_PADDING;
+    let width = (widths.iter().sum::<f32>() + tools.len().saturating_sub(1) as f32 * RIBBON_TOOL_GAP + 2.0 * RIBBON_GROUP_PADDING)
+        .max(ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim).size().x + t.space_24);
     let caption_height = t.font_small + t.space_4;
     let (rect, _) = ui.allocate_exact_size(vec2(width, RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP + caption_height), Sense::hover());
     let mut picked = None;
@@ -633,7 +683,7 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
         ui.set_min_width(t.control_height * 7.0);
         ui.spacing_mut().item_spacing.y = 0.0;
         for (index, tool) in tools.iter().chain(menu_tools).enumerate() {
-            if index == tools.len() {
+            if index == tools.len() && index > 0 {
                 ui.separator();
             }
             let mut item = crate::MenuItem::new(tool.label).tool_icon(tool.icon).shortcut(tool.shortcut).enabled(tool.enabled);
@@ -930,46 +980,32 @@ fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, s
 }
 
 /// Draw a ribbon glyph in the theme's icon roles: line art in `icon_line` and accents in the
-/// strongest icon blue, both faded when the action is unavailable. Symbol, Wire, Fit and the
-/// Browser folder follow PCBcraft Next's icon art; Nets and SplitView are PCBCraft's own.
+/// strongest icon blue, both faded when the action is unavailable. Registered SVG masters use
+/// the embedded loader; other chrome glyphs retain their native painter and menu artwork.
 fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tokens, enabled: bool) {
+    if crate::ribbon_icons::paint(p, icon, center, size, t, enabled) {
+        return;
+    }
     let fade = |color: Color32| if enabled { color } else { color.gamma_multiply(0.33) };
     let (ink, accent) = (fade(t.icon_line), fade(t.icon_active_3));
     let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * (size / 64.0);
     let stroke = |width: f32, color| Stroke::new(width * size / 64.0, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
-        ToolIcon::Symbol => {
-            let s = stroke(3.0, ink);
-            line(&[(21.0, 8.0), (21.0, 56.0), (55.0, 32.0), (21.0, 8.0)], s);
-            for points in [[(7.0, 22.0), (21.0, 22.0)], [(7.0, 42.0), (21.0, 42.0)], [(55.0, 32.0), (62.0, 32.0)]] {
-                line(&points, s);
-            }
-            for points in [[(26.0, 22.0), (34.0, 22.0)], [(30.0, 18.0), (30.0, 26.0)], [(26.0, 42.0), (34.0, 42.0)]] {
-                line(&points, s);
-            }
-        }
-        ToolIcon::Move => {
-            for points in [
-                &[(8.0, 32.0), (56.0, 32.0)][..],
-                &[(32.0, 8.0), (32.0, 56.0)][..],
-                &[(18.0, 22.0), (8.0, 32.0), (18.0, 42.0)][..],
-                &[(46.0, 22.0), (56.0, 32.0), (46.0, 42.0)][..],
-                &[(22.0, 18.0), (32.0, 8.0), (42.0, 18.0)][..],
-                &[(22.0, 46.0), (32.0, 56.0), (42.0, 46.0)][..],
-            ] {
-                line(points, stroke(3.0, accent));
-            }
-        }
-        ToolIcon::Rotate => {
-            line(&[(15.0, 20.0), (30.0, 10.0), (48.0, 18.0), (54.0, 36.0), (42.0, 52.0), (23.0, 52.0), (12.0, 40.0)], stroke(3.5, ink));
-            line(&[(15.0, 7.0), (15.0, 20.0), (29.0, 20.0)], stroke(4.0, accent));
-        }
-        ToolIcon::Wire => {
-            line(&[(10.0, 49.0), (28.0, 49.0), (28.0, 15.0), (54.0, 15.0)], stroke(4.25, accent));
-            p.circle_filled(at(10.0, 49.0), 4.0 * size / 64.0, accent);
-            p.circle_filled(at(54.0, 15.0), 4.0 * size / 64.0, accent);
-        }
+        ToolIcon::Subsheet
+        | ToolIcon::Power
+        | ToolIcon::Text
+        | ToolIcon::Bus
+        | ToolIcon::NetLabel
+        | ToolIcon::Move
+        | ToolIcon::Rotate
+        | ToolIcon::Mirror
+        | ToolIcon::Rules
+        | ToolIcon::Erc
+        | ToolIcon::Annotate
+        | ToolIcon::Bom
+        | ToolIcon::Sync => {}
+        ToolIcon::Sheet | ToolIcon::HierarchicalLabel | ToolIcon::Symbol | ToolIcon::Wire => {}
         ToolIcon::Slice => {
             line(&[(8.0, 32.0), (56.0, 32.0)], stroke(4.0, ink));
             line(&[(32.0, 10.0), (32.0, 24.0)], stroke(4.0, accent));
@@ -1028,4 +1064,13 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
             line(&[(20.0, 10.0), (56.0, 10.0), (56.0, 44.0), (20.0, 44.0), (20.0, 10.0)], stroke(4.0, accent));
         }
     }
+}
+
+/// Show the retained license texts for the embedded toolbar artwork inside About.
+pub fn ribbon_licenses(ui: &mut Ui) {
+    ui.collapsing("Toolbar licenses", |ui| {
+        ScrollArea::vertical().id_salt("ribbon_licenses").max_height(Tokens::get().control_height * 8.0).show(ui, |ui| {
+            ui.label(crate::ribbon_icons::NOTICES);
+        });
+    });
 }

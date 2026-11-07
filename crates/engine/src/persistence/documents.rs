@@ -13,6 +13,7 @@ pub const MAX_DOCUMENTS: usize = 4096;
 const PROJECT_FORMAT: &str = "pcbcraft-project/6";
 const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
+const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -46,6 +47,10 @@ struct ProjectDocument {
 struct SheetDocument {
     format: String,
     id: Uuid,
+    #[serde(default, deserialize_with = "present")]
+    labels: Option<Vec<crate::hierarchy::Label>>,
+    #[serde(default, deserialize_with = "present")]
+    subsheets: Option<Vec<crate::hierarchy::SheetSymbol>>,
     symbols: Vec<Placement<'static>>,
     junctions: Vec<Junction>,
     wires: Vec<Connection<'static>>,
@@ -88,6 +93,7 @@ pub fn is_document_path(path: &str) -> bool {
 }
 
 /// Bound and validate every part before constructing a project. No partial state is returned.
+/// Parse each sheet once, collecting interfaces before resolving wire endpoint ownership.
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
@@ -104,8 +110,47 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut sheet_names = BTreeSet::new();
     let mut used = BTreeSet::from([ENTRY_POINT.to_owned(), "board.json".to_owned()]);
     let mut layouts = Vec::new();
-    let mut combined = Sheet { id: project.sheets[0].id, symbols: Vec::new(), junctions: Some(Vec::new()), wires: Vec::new() };
+    let mut hierarchy_ids = BTreeSet::new();
+    let mut anchors = BTreeSet::new();
+    let mut hierarchy_sheets = Vec::new();
+    let mut parsed_sheets = Vec::with_capacity(project.sheets.len());
+    // Read all interfaces before resolving parent-side endpoint ownership.
     for reference in &project.sheets {
+        let mut sheet: SheetDocument = parse(documents, &reference.file)?;
+        match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some()) {
+            (SHEET_FORMAT, false, false) | (HIERARCHY_FORMAT, true, true) => {}
+            _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
+        }
+        let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
+        metadata.labels = Arc::new(sheet.labels.take().unwrap_or_default());
+        metadata.subsheets = Arc::new(sheet.subsheets.take().unwrap_or_default());
+        for label in metadata.labels.iter() {
+            validate_id(&mut hierarchy_ids, label.id)?;
+            anchors.insert(WireEndpoint::Label(label.id));
+        }
+        for block in metadata.subsheets.iter() {
+            validate_id(&mut hierarchy_ids, block.id)?;
+        }
+        hierarchy_sheets.push(metadata);
+        parsed_sheets.push(sheet);
+    }
+    let metadata = Project {
+        name: project.name.clone(),
+        id: project.id,
+        sheets: Arc::new(hierarchy_sheets.clone()),
+        sheet_index: 0,
+        components: Arc::default(),
+        units: Arc::default(),
+        board: Arc::default(),
+        upgraded_from: None,
+    };
+    metadata.validate_hierarchy()?;
+    for sheet in metadata.sheets() {
+        let projection = metadata.for_sheet(sheet.target).ok_or("missing sheet")?;
+        anchors.extend(projection.hierarchy_endpoints().map(|(end, _)| end));
+    }
+    let mut combined = Sheet { id: project.sheets[0].id, symbols: Vec::new(), junctions: Some(Vec::new()), wires: Vec::new() };
+    for (reference, sheet) in project.sheets.iter().zip(parsed_sheets) {
         let sheet_path = format!("sheets/{}.json", reference.id);
         if reference.id.is_nil()
             || !sheet_ids.insert(reference.id)
@@ -118,20 +163,23 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        let sheet: SheetDocument = parse(documents, &sheet_path)?;
-        if sheet.format != SHEET_FORMAT || sheet.id != reference.id {
+        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT) || sheet.id != reference.id {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
         }
         let symbols: BTreeSet<_> = sheet.symbols.iter().map(|s| s.id).collect();
         let junctions: BTreeSet<_> = sheet.junctions.iter().map(|j| j.id).collect();
         let wires: BTreeSet<_> = sheet.wires.iter().map(|w| w.id).collect();
+        let own = metadata.for_sheet(crate::SheetTarget { project: project.id, sheet: reference.id }).ok_or("missing sheet")?;
+        let interface: BTreeSet<_> = own.hierarchy_endpoints().map(|(end, _)| end).collect();
         // Validate ownership before global identity/geometry validation. A wire must never
-        // resolve a terminal or junction belonging to another flat sheet.
+        // resolve a terminal or junction belonging to another sheet.
         for wire in &sheet.wires {
             for endpoint in [&wire.from, &wire.to] {
                 let local = match endpoint {
                     Endpoint::Pin { symbol, .. } => symbols.contains(symbol),
                     Endpoint::Junction { junction } => junctions.contains(junction),
+                    Endpoint::Label { label } => interface.contains(&WireEndpoint::Label(*label)),
+                    Endpoint::SheetPin { sheet_pin } => interface.contains(&WireEndpoint::SheetPin(*sheet_pin)),
                 };
                 if !local {
                     return Err(format!("{sheet_path}: wire endpoint belongs to a missing or different sheet"));
@@ -219,20 +267,24 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         sheet: combined,
         board: Some(BoardRecords { footprints: board.footprints }),
     };
-    let mut project =
-        validate_document(document, None, footprint_definitions).map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
+    let mut project = validate_with_hierarchy(document, None, footprint_definitions, &anchors, &hierarchy_ids)
+        .map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
     let project_data = Arc::make_mut(&mut project);
     let sheets = layouts
         .into_iter()
-        .map(|(reference, symbols, junctions, wires)| crate::sheets::SchematicSheet {
-            sheet_id: reference.id,
-            sheet_name: if previous_format && reference.name == "Schematic" { "Main".into() } else { reference.name.clone() },
-            symbols: Arc::new(project_data.symbols.iter().filter(|s| symbols.contains(&s.ordinal)).cloned().collect()),
-            wires: Arc::new(project_data.wires.iter().filter(|w| wires.contains(&w.ordinal)).cloned().collect()),
-            junctions: Arc::new(project_data.junctions.iter().filter(|(id, _)| junctions.contains(id)).map(|(&id, &at)| (id, at)).collect()),
-            connectivity: Arc::default(),
+        .map(|(reference, symbols, junctions, wires)| {
+            Ok(crate::sheets::SchematicSheet {
+                sheet_id: reference.id,
+                sheet_name: if previous_format && reference.name == "Schematic" { "Main".into() } else { reference.name.clone() },
+                symbols: Arc::new(project_data.symbols.iter().filter(|s| symbols.contains(&s.ordinal)).cloned().collect()),
+                wires: Arc::new(project_data.wires.iter().filter(|w| wires.contains(&w.ordinal)).cloned().collect()),
+                junctions: Arc::new(project_data.junctions.iter().filter(|(id, _)| junctions.contains(id)).map(|(&id, &at)| (id, at)).collect()),
+                labels: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.labels.clone(),
+                subsheets: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.subsheets.clone(),
+                connectivity: Arc::default(),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     project_data.sheets = Arc::new(sheets);
     Arc::make_mut(&mut project_data.board).setup = setup;
     Arc::make_mut(&mut project_data.board).silkscreen = board.silkscreen;
@@ -386,15 +438,28 @@ impl DocumentsEncoder {
                     } else {
                         self.finish_document(ENTRY_POINT.to_owned())?;
                         self.next();
-                        write!(
-                            self.bytes,
-                            "{{\n  \"format\": \"{SHEET_FORMAT}\",\n  \"id\": \"{}\",\n  \"symbols\": [\n",
-                            self.project.sheets[self.sheet_cursor].sheet_id
-                        )
-                        .map_err(|e| e.to_string())?;
+                        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
                     }
                 }
                 2 => {
+                    if let Some(label) = self.project.sheets[self.sheet_cursor].labels.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, label)?;
+                        self.cursor += 1;
+                    } else {
+                        self.bytes.extend_from_slice(b"  ],\n  \"subsheets\": [\n");
+                        self.next();
+                    }
+                }
+                3 => {
+                    if let Some(block) = self.project.sheets[self.sheet_cursor].subsheets.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, block)?;
+                        self.cursor += 1;
+                    } else {
+                        self.bytes.extend_from_slice(b"  ],\n  \"symbols\": [\n");
+                        self.next();
+                    }
+                }
+                4 => {
                     if let Some(s) = self.project.sheets[self.sheet_cursor].symbols.get(self.cursor as usize) {
                         record(
                             &mut self.bytes,
@@ -414,7 +479,7 @@ impl DocumentsEncoder {
                         self.next();
                     }
                 }
-                3 => {
+                5 => {
                     if let Some((&id, p)) = self.project.sheets[self.sheet_cursor]
                         .junctions
                         .range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded))
@@ -427,7 +492,7 @@ impl DocumentsEncoder {
                         self.next();
                     }
                 }
-                4 => {
+                6 => {
                     if let Some(w) = self.project.sheets[self.sheet_cursor].wires.get(self.cursor as usize) {
                         let [from, to] = w.endpoints();
                         record(
@@ -440,15 +505,9 @@ impl DocumentsEncoder {
                         self.finish_document(format!("sheets/{}.json", self.project.sheets[self.sheet_cursor].sheet_id))?;
                         self.sheet_cursor += 1;
                         if self.sheet_cursor < self.project.sheets.len() {
-                            self.phase = 2;
                             self.cursor = 0;
                             self.first = true;
-                            write!(
-                                self.bytes,
-                                "{{\n  \"format\": \"{SHEET_FORMAT}\",\n  \"id\": \"{}\",\n  \"symbols\": [\n",
-                                self.project.sheets[self.sheet_cursor].sheet_id
-                            )
-                            .map_err(|e| e.to_string())?;
+                            self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
                         } else {
                             self.next();
                             board_header(
@@ -461,7 +520,7 @@ impl DocumentsEncoder {
                         }
                     }
                 }
-                5 => {
+                7 => {
                     if let Some(f) = self.project.board.footprints().get(self.cursor as usize) {
                         if let Some(key) = f.key() {
                             let definition = self.project.board.definitions.get(&key).ok_or("unresolved pinned footprint during save")?;
@@ -474,7 +533,7 @@ impl DocumentsEncoder {
                         self.next();
                     }
                 }
-                6 => {
+                8 => {
                     if let Some(((library, id, revision), definition)) = self.definitions.pop_first() {
                         let mut bytes = Vec::new();
                         saved_document(&mut bytes, &definition)?;
@@ -483,7 +542,7 @@ impl DocumentsEncoder {
                         self.next();
                     }
                 }
-                7 => {
+                9 => {
                     if let Some(((library, id, revision), definition)) = self.footprint_definitions.pop_first() {
                         let mut bytes = serde_json::to_vec_pretty(definition.as_ref()).map_err(|e| e.to_string())?;
                         bytes.push(b'\n');
@@ -616,4 +675,19 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
         }
     }
     Ok(())
+}
+
+/// Write the bounded sheet header and return its first incremental record phase. Flat
+/// sheets retain version 1 and bypass the version-2 label and child-symbol lists.
+fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
+    let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
+    let format = if hierarchy { HIERARCHY_FORMAT } else { SHEET_FORMAT };
+    write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
+    if hierarchy {
+        bytes.extend_from_slice(b"  \"labels\": [\n");
+        Ok(2)
+    } else {
+        bytes.extend_from_slice(b"  \"symbols\": [\n");
+        Ok(4)
+    }
 }
