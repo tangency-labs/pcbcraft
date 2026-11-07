@@ -128,7 +128,7 @@ pub(crate) enum WireAction {
     Heal,
     /// Split the wire at the grid point under the click, keeping it connected (KiCad's Slice).
     Slice,
-    /// Separate the leg under the click from the legs beside it (KiCad's Break).
+    /// Detach the leg under the click from neighboring legs, pins and shared junctions.
     Break,
     /// Remove the leg under the click, leaving free ends.
     DeleteSegment,
@@ -266,13 +266,9 @@ pub(crate) fn show(
     if let Some(leg) = selected_leg {
         let offset = match (&tool, reshape_target) {
             (Some(Tool::Reshape { drag, .. }), Some(Anchor::Free(to))) if group_preview.is_some() => {
-                if leg.horizontal() {
-                    to.y_nm - drag.grabbed.y_nm
-                } else {
-                    to.x_nm - drag.grabbed.x_nm
-                }
+                Point { x_nm: to.x_nm - drag.grabbed.x_nm, y_nm: to.y_nm - drag.grabbed.y_nm }
             }
-            _ => 0,
+            _ => Point { x_nm: 0, y_nm: 0 },
         };
         wires::paint_selected_leg(&painter, rect, camera, leg, offset);
     }
@@ -540,14 +536,14 @@ pub(crate) fn show(
     }
 }
 
-/// The rows of a wire's context menu, named as in KiCad's schematic editor: Slice (when the leg
-/// has a grid point to split at), Break (when the wire has more than one leg), Delete Segment
+/// The wire context menu offers Slice (when the leg
+/// has a grid point to split at), Break (when the leg has any attachment), Delete Segment
 /// and Delete Wire, plus Select Wire for whole-route selection. The hovered row previews
 /// its effect on the canvas.
 fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: wires::LegTarget) -> Option<Click> {
     let rows = [
         (MenuItem::new("Slice").enabled(leg.split.is_some()), WireAction::Slice),
-        (MenuItem::new("Break").enabled(leg.route.len() > 2), WireAction::Break),
+        (MenuItem::new("Break").enabled(leg.breakable), WireAction::Break),
         (MenuItem::new("Heal Wire"), WireAction::Heal),
         (MenuItem::new("Delete Segment").shortcut("Del"), WireAction::DeleteSegment),
         (MenuItem::new("Delete Wire"), WireAction::Delete),

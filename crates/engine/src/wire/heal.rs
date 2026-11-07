@@ -715,7 +715,7 @@ impl Project {
     }
 
     /// Normalize changed routes and optionally join explicitly requested free ends to exact
-    /// stationary wire contacts. Ordinary geometry moves do not request these connections.
+    /// stationary pin or wire contacts. Ordinary geometry moves do not request these connections.
     /// Accept at most two distinct degree-one ends; ambiguous targets fail the entire candidate.
     pub fn healed_with_connections(&self, before: &Project, revision: u64, auto_heal: bool, connect_ends: &[u64]) -> Result<Project, CommandError> {
         if connect_ends.len() > 2 || (connect_ends.len() == 2 && connect_ends[0] == connect_ends[1]) {

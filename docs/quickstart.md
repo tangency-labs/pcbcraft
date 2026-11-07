@@ -87,9 +87,10 @@ first **Save** asks for a project folder, and the project takes that folder's na
    **Esc** cancels a preview. Right-click → **Select Wire** selects the complete
    route for whole-wire movement or deletion. Capture → **Wire edits** offers
    **Slice**, **Heal** and **Delete** for the selection. The context menu also offers
-   **Break** to detach a leg and whole-wire deletion. A detached straight piece carries
-   its free ends when dragged; its original contacts remain disconnected until pulled
-   clear, after which dropping back onto them reconnects normally. Moves and draws clean up overlapping
+   **Break** to release the selected leg's attachments, including pins and shared junctions,
+   whether one or both ends are connected. An already-free end stays free. The detached
+   straight piece moves freely in both directions; its original contacts remain disconnected
+   until pulled clear, after which dropping back onto them reconnects normally. Moves and draws clean up overlapping
    runs, and **Heal** applies that cleanup to existing selected wires. Dropping
    a part with a pin exactly on a wire connects it; a two-pin part placed across
    a straight run replaces the wire between its pins. **Auto-heal wires** in the

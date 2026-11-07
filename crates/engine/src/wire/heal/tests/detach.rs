@@ -16,20 +16,22 @@ fn broken_route() -> (Session, String) {
 #[test]
 fn broken_segment_moves_away_with_its_free_ends() {
     for auto_heal in [false, true] {
-        let (mut s, wire) = broken_route();
-        let before = s.snapshot().unwrap();
-        run(&mut s, MOVE_WIRE_SEGMENT, json!({"wire":wire,"at":p(8,3),"to":p(12,3),"auto_heal":auto_heal}));
-        let after = s.snapshot().unwrap();
-        let moved = after.wires.iter().find(|w| w.id() == wire).unwrap();
-        assert_eq!(after.wire_path(moved), vec![p(12, 0), p(12, 6)]);
-        assert_eq!(after.connectivity().nets.len(), 3);
-        for old in before.wires.iter().filter(|w| w.id() != wire) {
-            assert_eq!(after.wire_path(after.wires.iter().find(|w| w.id() == old.id()).unwrap()), before.wire_path(old));
+        for (dx, dy) in [(4, 0), (0, 4), (4, 4), (-4, -4)] {
+            let (mut s, wire) = broken_route();
+            let before = s.snapshot().unwrap();
+            run(&mut s, MOVE_WIRE_SEGMENT, json!({"wire":wire,"at":p(8,3),"to":p(8+dx,3+dy),"auto_heal":auto_heal}));
+            let after = s.snapshot().unwrap();
+            let moved = after.wires.iter().find(|w| w.id() == wire).unwrap();
+            assert_eq!(after.wire_path(moved), vec![p(8 + dx, dy), p(8 + dx, 6 + dy)]);
+            assert_eq!(after.connectivity().nets.len(), 3);
+            for old in before.wires.iter().filter(|w| w.id() != wire) {
+                assert_eq!(after.wire_path(after.wires.iter().find(|w| w.id() == old.id()).unwrap()), before.wire_path(old));
+            }
+            s.apply("edit.undo", &Value::Null).unwrap();
+            assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+            s.apply("edit.redo", &Value::Null).unwrap();
+            assert!(Arc::ptr_eq(&after, &s.snapshot().unwrap()));
         }
-        s.apply("edit.undo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
-        s.apply("edit.redo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&after, &s.snapshot().unwrap()));
     }
 }
 
@@ -96,6 +98,10 @@ fn straight_piece_drop_keeps_normal_joining_and_fixed_connections() {
     let pin = WireEndpoint::Terminal(s.project().unwrap().symbols[0].terminals()[1]);
     run(&mut s, DRAW_WIRE, json!({"from":pin.inspect(),"to":p(12,0),"bends":[]}));
     let wire = s.project().unwrap().wires[0].id();
+    let anchored = s.snapshot().unwrap();
+    assert!(!anchored.wire_moves_freely(&wire));
+    assert!(s.apply(MOVE_WIRE_SEGMENT, &json!({"wire":wire,"at":p(8,0),"to":p(10,2),"expected_revision":s.revision()})).is_err());
+    assert!(Arc::ptr_eq(&anchored, &s.snapshot().unwrap()));
     run(&mut s, MOVE_WIRE_SEGMENT, json!({"wire":wire,"at":p(8,0),"to":p(8,4)}));
     assert_eq!(s.project().unwrap().wire_path(&s.project().unwrap().wires[0]), vec![p(4, 0), p(4, 4), p(12, 4)]);
     assert_eq!(s.project().unwrap().wires[0].endpoints[0], pin);
@@ -154,4 +160,86 @@ fn wire_drop_rejects_coincident_pins_atomically() {
     let result = s.apply(MOVE_WIRE_SEGMENT, &json!({"wire":wire,"at":p(0,3),"to":p(10,3),"connect_ends":ends,"expected_revision":s.revision()}));
     assert!(result.unwrap_err().to_string().contains("coincident component pins"));
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+}
+
+/// Break detaches both ends of a straight pin-to-pin wire, preserving the symbols and
+/// geometry. A deliberate return can join both original pins without a stationary wire there.
+#[test]
+fn break_detaches_both_pin_ends_and_can_rejoin_them() {
+    let mut s = session();
+    for x in [0, 20] {
+        run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":p(x,0).x_nm,"y_nm":0}));
+    }
+    let pins = [
+        WireEndpoint::Terminal(s.project().unwrap().symbols[0].terminals()[1]),
+        WireEndpoint::Terminal(s.project().unwrap().symbols[1].terminals()[0]),
+    ];
+    run(&mut s, DRAW_WIRE, json!({"from":pins[0].inspect(),"to":pins[1].inspect(),"bends":[]}));
+    let original = s.snapshot().unwrap();
+    let wire = original.wires[0].id();
+    run(&mut s, BREAK_WIRE, json!({"wire":wire,"at":p(10,0)}));
+    let broken = s.snapshot().unwrap();
+    assert_eq!(broken.wire_path(&broken.wires[0]), original.wire_path(&original.wires[0]));
+    assert!(broken.wires[0].terminals().is_empty());
+    assert!(broken.wire_moves_freely(&wire));
+    let ends: Vec<_> = broken.wires[0].endpoints.iter().map(|end| end.inspect()["junction"].clone()).collect();
+    run(&mut s, MOVE_WIRE_SEGMENT, json!({"wire":wire,"at":p(10,0),"to":p(14,8),"connect_ends":ends}));
+    assert!(s.project().unwrap().wires[0].terminals().is_empty());
+    run(&mut s, MOVE_WIRE_SEGMENT, json!({"wire":wire,"at":p(14,8),"to":p(10,0),"connect_ends":ends}));
+    assert_eq!(s.project().unwrap().wires[0].endpoints, pins);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&broken, &s.snapshot().unwrap()));
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&original, &s.snapshot().unwrap()));
+}
+
+/// The selected straight wire separates from shared junctions at both ends without moving
+/// or disconnecting any neighboring wire from its own junction.
+#[test]
+fn break_detaches_both_shared_junction_ends() {
+    let mut s = session();
+    draw(&mut s, p(0, 0), p(10, 0));
+    let wire = s.project().unwrap().wires[0].id();
+    let ends = s.project().unwrap().wires[0].endpoints;
+    for (end, to) in [(ends[0], p(0, -6)), (ends[1], p(10, 6))] {
+        run(&mut s, DRAW_WIRE, json!({"from":end.inspect(),"to":to,"bends":[]}));
+    }
+    let before = s.snapshot().unwrap();
+    run(&mut s, BREAK_WIRE, json!({"wire":wire,"at":p(5,0)}));
+    let after = s.snapshot().unwrap();
+    assert!(after.wire_moves_freely(&wire));
+    assert_ne!(after.wires[0].endpoints[0], ends[0]);
+    assert_ne!(after.wires[0].endpoints[1], ends[1]);
+    assert_eq!(after.wires[1..], before.wires[1..]);
+    assert_eq!(after.connectivity().nets.len(), 3);
+}
+
+/// A single connected side is enough to offer Break. Its existing free end stays free and
+/// keeps its identity, while the attached pin is released without changing the route.
+#[test]
+fn break_releases_one_connected_end_and_preserves_the_free_end() {
+    for reverse in [false, true] {
+        let mut s = session();
+        run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
+        let pin = WireEndpoint::Terminal(s.project().unwrap().symbols[0].terminals()[1]);
+        let (from, to) = if reverse { (json!(p(12, 0)), pin.inspect()) } else { (pin.inspect(), json!(p(12, 0))) };
+        run(&mut s, DRAW_WIRE, json!({"from":from,"to":to,"bends":[]}));
+        let before = s.snapshot().unwrap();
+        let wire = before.wires[0].id();
+        let free_index = usize::from(!reverse);
+        let free = before.wires[0].endpoints[free_index];
+        assert!(before.wire_segment_can_break(&wire, p(8, 0)));
+        run(&mut s, BREAK_WIRE, json!({"wire":wire,"at":p(8,0)}));
+        let after = s.snapshot().unwrap();
+        assert!(after.wires[0].terminals().is_empty());
+        assert_eq!(after.wires[0].endpoints[free_index], free);
+        assert_eq!(after.wire_path(&after.wires[0]), before.wire_path(&before.wires[0]));
+        assert!(after.wire_moves_freely(&wire));
+        assert!(!after.wire_segment_can_break(&wire, p(8, 0)));
+        let saved = persistence::encode_documents(after.clone()).unwrap();
+        assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
 }

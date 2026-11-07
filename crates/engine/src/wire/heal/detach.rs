@@ -36,23 +36,24 @@ impl Edit {
                 }
                 found = Some(target);
             }
+            let pins: Vec<_> = self
+                .project
+                .symbols
+                .iter()
+                .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins()))
+                .filter(|(_, pin)| *pin == point)
+                .map(|(pin, _)| pin)
+                .collect();
+            if pins.len() > 1 {
+                return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
+            }
+            let mut joined = source;
             if let Some(target) = found {
-                let pins: Vec<_> = self
-                    .project
-                    .symbols
-                    .iter()
-                    .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins()))
-                    .filter(|(_, pin)| *pin == point)
-                    .map(|(pin, _)| pin)
-                    .collect();
-                if pins.len() > 1 {
-                    return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
-                }
                 let target = self.resolve(target)?;
-                let joined = self.merge(source, target)?;
-                if let Some(&pin) = pins.first() {
-                    self.merge(joined, WireEndpoint::Terminal(pin))?;
-                }
+                joined = self.merge(source, target)?;
+            }
+            if let Some(&pin) = pins.first() {
+                self.merge(joined, WireEndpoint::Terminal(pin))?;
             }
         }
         Ok(())

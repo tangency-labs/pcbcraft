@@ -98,18 +98,22 @@ or **Delete**. The group caption opens the same actions as a menu.
 Right-click a wire for these edits and whole-wire selection/deletion:
 **Slice** splits it at the grid point under the pointer and keeps it connected, so a new wire
 can start from the slice point. **Break**, available in this context menu, detaches the
-leg under the pointer from neighboring legs. Dragging a straight piece carries its free
-ends away; its old contacts stay disconnected during departure. Once pulled clear,
+leg under the pointer from neighboring legs, pins and shared junctions at either end.
+It works with one or both ends attached; an already-free end stays free. The detached
+straight piece moves in both directions when dragged, carrying its ends with it.
+Its old contacts stay disconnected during departure. Once pulled clear,
 dropping it back onto those contacts reconnects them, including within the same drag.
-Pins and shared branch junctions stay anchored. **Delete Segment** removes just that leg,
+Ordinary drags of connected segments still anchor pins and shared junctions.
+**Delete Segment** removes just that leg,
 and **Delete Wire** the whole route. Hovering a row previews what it changes. An unconnected wire end shows a small square, a
 point where three or more wires meet shows a dot, and two wires meeting end to end read as one
 line. Agents use `schematic.slice_wire`, `schematic.break_wire` and
 `schematic.delete_wire_segment` with a point on the wire.
 `schematic.move_wire_segment` takes `wire`, `at`, `to` and `expected_revision`;
-`to` moves the point at `at` perpendicular to the segment. It uses the same
+`to` moves the point at `at` in both axes for a detached straight wire, or perpendicular
+to the segment when its ends are anchored. It uses the same
 geometry as the canvas preview and commits one undo step. Optional `connect_ends` names
-up to two of that wire’s degree-one junction IDs to join to exact stationary wire contacts;
+up to two of that wire’s degree-one junction IDs to join to exact stationary pin or wire contacts;
 ordinary geometry-only commands omit it. These commands are available in
 headless MCP; the live desktop connection still exposes only symbol movement.
 

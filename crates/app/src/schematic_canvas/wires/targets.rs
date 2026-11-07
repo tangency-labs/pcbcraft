@@ -91,7 +91,7 @@ impl Targets {
     /// exact positions when grid snapping is bypassed; stroke splits project the current
     /// pointer coordinate onto the segment. Neither policy rebuilds the cached geometry.
     pub(super) fn anchor(&self, camera: &Camera, rect: Rect, at: Pos2, ignore: Option<WireEndpoint>, snap_to_grid: bool) -> Option<Anchor> {
-        self.anchor_excluding(camera, rect, at, ignore, snap_to_grid, &std::collections::BTreeSet::new())
+        self.anchor_excluding(camera, rect, at, ignore, snap_to_grid, &std::collections::BTreeSet::new(), &std::collections::BTreeSet::new())
     }
 
     /// Endpoint departures can hide their source identity and original neighboring routes
@@ -105,14 +105,20 @@ impl Targets {
         ignore: Option<WireEndpoint>,
         snap_to_grid: bool,
         suppressed: &std::collections::BTreeSet<u64>,
+        suppressed_pins: &std::collections::BTreeSet<WireEndpoint>,
     ) -> Option<Anchor> {
         let nodes;
-        let endpoints = if ignore.is_none() && suppressed.is_empty() {
+        let endpoints = if ignore.is_none() && suppressed.is_empty() && suppressed_pins.is_empty() {
             &self.endpoints
         } else {
             let suppressed_nodes: std::collections::BTreeSet<_> =
                 self.segments.iter().filter(|segment| suppressed.contains(&segment.wire)).flat_map(|segment| segment.ends).collect();
-            nodes = self.endpoints.iter().copied().filter(|(end, _)| Some(*end) != ignore && !suppressed_nodes.contains(end)).collect();
+            nodes = self
+                .endpoints
+                .iter()
+                .copied()
+                .filter(|(end, _)| Some(*end) != ignore && !suppressed_nodes.contains(end) && !suppressed_pins.contains(end))
+                .collect();
             &nodes
         };
         if let Some(end) = nearest_node(endpoints, at).ok()? {

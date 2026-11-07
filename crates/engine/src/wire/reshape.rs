@@ -24,8 +24,8 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reshape {
     /// The straight leg of wire `wire` strictly containing `at`, which slides across its
-    /// direction. Interior corners follow; pins and shared junctions stay anchored. A
-    /// straight one-leg wire carries its degree-one free ends with the slide.
+    /// direction unless both ends of its straight one-leg wire are free, which allows
+    /// translation in both axes. Interior corners follow; pins and shared junctions stay anchored.
     Segment { wire: String, at: Point },
     /// The interior corner of wire `wire` at `at`. The two legs meeting there slide with it.
     Corner { wire: String, at: Point },
@@ -89,11 +89,25 @@ fn follow(neighbour: Point, old: Point, to: Point) -> Point {
 }
 
 impl Project {
+    /// Whether a straight wire has two degree-one free ends and can translate in both axes.
+    /// Pins, shared junctions, bent routes and missing IDs retain constrained reshape behavior.
+    pub fn wire_moves_freely(&self, wire: &str) -> bool {
+        let Ok(index) = self.wire_index(wire) else {
+            return false;
+        };
+        let wire = &self.wires[index];
+        self.wire_path(wire).len() == 2
+            && wire
+                .endpoints
+                .iter()
+                .all(|end| matches!(end, WireEndpoint::Junction(_)) && self.wires.iter().filter(|wire| wire.endpoints.contains(end)).count() == 1)
+    }
+
     /// Build the result of moving the grabbed point of `edit` to `to`, for a drag preview or a
     /// command, without changing this snapshot. A straight one-leg piece carries degree-one
     /// free ends with it; pins, shared junctions and ends of longer routes remain anchored.
-    /// A segment moves only across its direction, so
-    /// `to` must keep `at`'s coordinate along the leg. A corner must be an interior corner, not
+    /// With two free ends the whole straight piece translates in both axes; other segments
+    /// move only across their direction, so `to` keeps `at`'s coordinate along the leg. A corner must be an interior corner, not
     /// a route end. Every endpoint keeps its identity, so connectivity is unchanged. Moving to
     /// the grabbed point is checked like any other move, then returns this project unchanged,
     /// even for an automatic route. Missing wires or junctions, points off
@@ -114,7 +128,7 @@ impl Project {
                     (Reshape::Segment { .. }, OnPath::Leg(leg)) => {
                         let (a, b) = (path[leg], path[leg + 1]);
                         let along = if horizontal(a, b) { to.x_nm != at.x_nm } else { to.y_nm != at.y_nm };
-                        if along {
+                        if along && !self.wire_moves_freely(wire) {
                             return Err(CommandError::InvalidParams("a segment slides only across its direction".to_owned()));
                         }
                         let shift = |p: Point| Point { x_nm: p.x_nm + to.x_nm - at.x_nm, y_nm: p.y_nm + to.y_nm - at.y_nm };

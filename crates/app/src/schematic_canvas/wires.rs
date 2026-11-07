@@ -68,7 +68,8 @@ pub(crate) struct ReshapeDrag {
     pub(crate) wire: String,
     pub(crate) edit: Reshape,
     pub(crate) grabbed: Point,
-    /// For a segment, whether its leg runs horizontally, so it moves only vertically.
+    /// A connected segment's orientation constrains its travel. Detached straight pieces
+    /// have no axis constraint, like corners and free-end handles.
     horizontal: Option<bool>,
     origin: Point,
     /// Transient suppression of contacts occupied when a detached straight piece is grabbed.
@@ -91,6 +92,7 @@ impl ReshapeDrag {
         self.departure.borrow_mut().update(camera, rect, self.grabbed, point);
         if let Reshape::Junction(id) = self.edit {
             let suppressed = self.departure.borrow().suppressed_wires();
+            let suppressed_pins = self.departure.borrow().suppressed_nodes();
             let anchor = targets::Targets::new(project, camera, rect).anchor_excluding(
                 camera,
                 rect,
@@ -98,6 +100,7 @@ impl ReshapeDrag {
                 Some(WireEndpoint::Junction(id)),
                 true,
                 &suppressed,
+                &suppressed_pins,
             )?;
             if !matches!(anchor, Anchor::Free(_)) {
                 return Some(anchor);
@@ -127,7 +130,7 @@ impl ReshapeDrag {
     }
 
     /// Where the grabbed point goes with the pointer snapped at `pointer`: moved by the snapped
-    /// travel, and only across a segment's direction.
+    /// travel. Connected segments move across their direction; detached pieces move in both axes.
     pub(crate) fn target(&self, pointer: Point) -> Point {
         let shift = |grabbed: i64, now: i64, then: i64| grabbed.saturating_add(now.saturating_sub(then));
         let mut to =
@@ -167,7 +170,8 @@ pub(super) fn reshape_at(project: &Project, camera: &Camera, rect: Rect, wire: &
     let leg = leg_at(project, camera, rect, pointer, 0).filter(|leg| leg.wire == wire)?;
     let (a, b) = (leg.route[leg.leg], leg.route[leg.leg + 1]);
     let at = leg.inside();
-    Some(drag(Reshape::Segment { wire: wire.to_owned(), at }, at, Some(a.y_nm == b.y_nm)))
+    let constraint = (!project.wire_moves_freely(wire)).then_some(a.y_nm == b.y_nm);
+    Some(drag(Reshape::Segment { wire: wire.to_owned(), at }, at, constraint))
 }
 
 /// Draw the handles of the selected wire: a square on each interior corner, and an outlined
@@ -262,6 +266,8 @@ pub(crate) struct LegTarget {
     pub(crate) leg: usize,
     /// The grid point where Slice splits the wire, if the leg has one away from both ends.
     pub(crate) split: Option<Point>,
+    /// Whether the captured leg has a corner, pin or shared junction that Break can release.
+    pub(crate) breakable: bool,
     /// The revision the menu was opened at; an edit after another change is refused.
     pub(crate) revision: u64,
 }
@@ -282,13 +288,9 @@ impl LegTarget {
         if hits.next().is_some() || route.contains(&at) {
             return None;
         }
-        Some(Self { wire: wire.to_owned(), route, leg, split: Some(at), revision })
+        Some(Self { wire: wire.to_owned(), route, leg, split: Some(at), breakable: project.wire_segment_can_break(wire, at), revision })
     }
 
-    /// Whether this captured leg slides vertically rather than horizontally.
-    pub(crate) fn horizontal(&self) -> bool {
-        self.route[self.leg].y_nm == self.route[self.leg + 1].y_nm
-    }
     /// A point strictly inside the leg, naming it for Break and Delete Segment. Legs join grid points, so
     /// their midpoint is a whole number of nanometers.
     pub(crate) fn inside(&self) -> Point {
@@ -297,17 +299,11 @@ impl LegTarget {
     }
 }
 
-/// Paint only the selected leg, optionally displaced by a validated slide preview. The rest
-/// of the route keeps its ordinary ink so Delete's scope is visible before it is pressed.
-pub(super) fn paint_selected_leg(painter: &Painter, rect: Rect, camera: &Camera, leg: &LegTarget, offset_nm: i64) {
-    let points = leg.route[leg.leg..=leg.leg + 1]
-        .iter()
-        .map(
-            |point| {
-                if leg.horizontal() { Point { y_nm: point.y_nm + offset_nm, ..*point } } else { Point { x_nm: point.x_nm + offset_nm, ..*point } }
-            },
-        )
-        .collect();
+/// Paint only the selected leg at its validated movement offset, including both axes for
+/// a detached piece. The rest keeps ordinary ink so Delete's scope is visible before use.
+pub(super) fn paint_selected_leg(painter: &Painter, rect: Rect, camera: &Camera, leg: &LegTarget, offset: Point) {
+    let points =
+        leg.route[leg.leg..=leg.leg + 1].iter().map(|point| Point { x_nm: point.x_nm + offset.x_nm, y_nm: point.y_nm + offset.y_nm }).collect();
     paint_stroke(painter, rect, camera, points, Stroke::new(2.0 * theme::SCHEMATIC_SYMBOL_STROKE, Tokens::get().accent));
 }
 
@@ -334,7 +330,9 @@ pub(super) fn leg_at(project: &Project, camera: &Camera, rect: Rect, pointer: Po
     };
     let ends = [route.first().copied(), route.last().copied()];
     let split = (!ends.contains(&Some(on_leg))).then_some(on_leg);
-    Some(LegTarget { wire: id, route, leg, split, revision })
+    let midpoint = Point { x_nm: a.x_nm + (b.x_nm - a.x_nm) / 2, y_nm: a.y_nm + (b.y_nm - a.y_nm) / 2 };
+    let breakable = project.wire_segment_can_break(&id, midpoint);
+    Some(LegTarget { wire: id, route, leg, split, breakable, revision })
 }
 
 /// Squared screen distance from `pointer` to the segment `a`–`b`.
@@ -368,11 +366,8 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
         }
         Some(super::WireAction::Break) => {
             paint_route(painter, rect, camera, leg.clone(), tokens.accent);
-            let last = target.route.len() - 1;
-            for (index, point) in [(target.leg, leg[0]), (target.leg + 1, leg[1])] {
-                if index != 0 && index != last {
-                    paint_dangling(painter, camera.screen(point, rect), tokens.accent);
-                }
+            for point in leg {
+                paint_dangling(painter, camera.screen(point, rect), tokens.accent);
             }
         }
         None => paint_route(painter, rect, camera, leg, tokens.accent),

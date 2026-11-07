@@ -238,7 +238,7 @@ pub const MOVE_JUNCTION: &str = "schematic.move_junction";
 pub const ATTACH_JUNCTION: &str = "schematic.attach_junction";
 /// Normalize selected wires and connect exact pin contacts as one undoable edit.
 pub const HEAL_WIRES: &str = "schematic.heal_wires";
-/// Separate one straight leg of a wire from the legs beside it, leaving free ends at the gaps.
+/// Detach one straight leg from its neighboring legs, pins and shared junctions.
 pub const BREAK_WIRE: &str = "schematic.break_wire";
 /// Remove one straight leg of a wire, leaving the rest of its route with free ends.
 pub const DELETE_WIRE_SEGMENT: &str = "schematic.delete_wire_segment";
@@ -352,7 +352,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: BREAK_WIRE,
         title: "Break Wire",
-        summary: "Separate the straight leg of a wire that contains a point from the legs beside it. The drawing stays; each gap gets free endpoints on both sides, disconnecting them. Undoable.",
+        summary: "Detach the selected straight leg from neighboring legs, pins and shared junctions at either end. Already-free ends stay free and all geometry stays put. Undoable.",
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
@@ -372,17 +372,22 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_WIRE_SEGMENT,
         title: "Move Wire Segment",
-        summary: "Slide the straight leg of a wire that contains a point across its direction. A straight piece carries its free ends; pins and shared junctions stay anchored. Positive overlaps heal; crossings stay separate. Undoable.",
+        summary: "Move a detached straight wire in both axes, or slide a connected leg across its direction. Pins and shared junctions stay anchored. Positive overlaps heal; crossings stay separate. Undoable.",
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
-            Param { required: true, name: "to", summary: "Where that point goes; it may differ from at only across the leg", kind: ParamKind::Point },
+            Param {
+                required: true,
+                name: "to",
+                summary: "Where that point goes; connected legs move only across the leg, detached straight wires move in both axes",
+                kind: ParamKind::Point,
+            },
             EXPECTED_REVISION,
             AUTO_HEAL,
             Param {
                 required: false,
                 name: "connect_ends",
-                summary: "Free ends of this wire to join to exact stationary wire contacts on drop",
+                summary: "Free ends of this wire to join to exact stationary pin or wire contacts on drop",
                 kind: ParamKind::Junctions,
             },
         ],

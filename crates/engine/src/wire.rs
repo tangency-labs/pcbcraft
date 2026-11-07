@@ -92,6 +92,26 @@ pub(crate) fn parse_bends(value: &Value) -> Option<Vec<Point>> {
 }
 
 impl Project {
+    /// Whether a selected straight leg has any attachment for Break to release. An internal
+    /// corner, terminal or shared junction counts; already detached straight wires do not.
+    /// Missing wires and ambiguous points return false without changing the project.
+    pub fn wire_segment_can_break(&self, wire: &str, at: Point) -> bool {
+        let Some(wire) = self.wires.iter().find(|candidate| candidate.id() == wire) else {
+            return false;
+        };
+        let path = self.wire_path(wire);
+        let Ok(leg) = leg_at(&path, at) else {
+            return false;
+        };
+        leg > 0 || leg + 2 < path.len() || wire.endpoints.iter().any(|&end| self.wire_end_has_attachment(end))
+    }
+
+    /// Terminals and junctions shared with another wire anchor a route end; degree-one
+    /// junctions are already free and keep their identity when a neighboring leg is broken.
+    fn wire_end_has_attachment(&self, end: WireEndpoint) -> bool {
+        matches!(end, WireEndpoint::Terminal(_)) || self.wires.iter().filter(|wire| wire.endpoints.contains(&end)).count() > 1
+    }
+
     /// Resolve either kind of explicit electrical endpoint in this snapshot.
     pub fn endpoint_position(&self, endpoint: WireEndpoint) -> Option<Point> {
         match endpoint {
@@ -258,23 +278,26 @@ impl Session {
         )
     }
 
-    /// Break the straight leg of a wire that contains `at` away from the legs beside it. The leg
-    /// stays where it was as its own wire; every place it met a neighbouring leg becomes two free
-    /// endpoints, one on each side, so the break is electrical while the drawing is unchanged.
-    /// The wire's original endpoints stay attached. A one-leg wire has nothing to break from.
+    /// Detach the selected straight leg from every neighboring leg, pin and shared junction.
+    /// Its geometry stays put; already-free outer ends keep their identity. Other wires retain
+    /// their existing pin/junction attachments. Refuse an already detached straight wire.
     pub(crate) fn break_wire(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let (index, path, at) = self.wire_target(params)?;
         let leg = leg_at(&path, at)?;
         let (before, after) = (leg > 0, leg + 2 < path.len());
-        if !before && !after {
-            return Err(CommandError::InvalidParams("a one-leg wire has no neighbouring leg to break from".to_owned()));
+        let project = self.open_project()?;
+        let wire = &project.wires[index];
+        let sever_start = before || project.wire_end_has_attachment(wire.endpoints[0]);
+        let sever_end = after || project.wire_end_has_attachment(wire.endpoints[1]);
+        if !sever_start && !sever_end {
+            return Err(CommandError::InvalidParams("this wire segment is already detached".to_owned()));
         }
         let mut pieces = Vec::new();
         if before {
             pieces.push(Piece { start: End::Keep, route: path[..=leg].to_vec(), end: End::Fresh });
         }
-        let ends = (if before { End::Fresh } else { End::Keep }, if after { End::Fresh } else { End::Keep });
+        let ends = (if sever_start { End::Fresh } else { End::Keep }, if sever_end { End::Fresh } else { End::Keep });
         pieces.push(Piece { start: ends.0, route: path[leg..=leg + 1].to_vec(), end: ends.1 });
         if after {
             pieces.push(Piece { start: End::Fresh, route: path[leg + 1..].to_vec(), end: End::Keep });
@@ -622,8 +645,8 @@ mod tests {
     }
 
     /// Breaking a middle leg keeps all three pieces where they were but disconnects them: each
-    /// gap has a free endpoint on either side. An end leg keeps the wire's original endpoint, and
-    /// a one-leg wire or a corner is refused.
+    /// gap has a free endpoint on either side. End legs also detach their pin/shared-junction
+    /// attachment; already-free straight wires and ambiguous corners are refused.
     #[test]
     fn breaking_a_leg_separates_it_from_its_neighbours() {
         let mut session = empty();
@@ -657,10 +680,10 @@ mod tests {
         session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(session.inspect()["project"], before["project"]);
 
-        // The first leg keeps the pin and gets a free end only where it met the next leg.
+        // The first leg detaches from both the pin and its neighboring leg.
         edit(&mut session, BREAK_WIRE, &id, p(2, 0)).unwrap();
         assert_eq!(routes(&session), vec![route[..=1].to_vec(), route[1..].to_vec()]);
-        assert_eq!(session.project().unwrap().wires()[0].endpoints()[0], WireEndpoint::Terminal(terminal));
+        assert_ne!(session.project().unwrap().wires()[0].endpoints()[0], WireEndpoint::Terminal(terminal));
 
         let mut single = empty();
         draw(&mut single, point(0, 0), point(8, 0), json!([]));

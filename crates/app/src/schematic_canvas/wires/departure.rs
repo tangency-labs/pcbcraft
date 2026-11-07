@@ -6,6 +6,7 @@ struct End {
     id: u64,
     origin: Point,
     contacts: Vec<(u64, Vec<Point>)>,
+    pins: Vec<WireEndpoint>,
     cleared: bool,
 }
 
@@ -45,7 +46,14 @@ impl Departure {
                 .map(|w| (w.ordinal(), project.wire_path(w)))
                 .filter(|(_, path)| path.first() == Some(&origin) || path.last() == Some(&origin))
                 .collect::<Vec<_>>();
-            ends.push(End { id, origin, cleared: contacts.is_empty(), contacts });
+            let pins = project
+                .symbols()
+                .iter()
+                .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins()))
+                .filter(|(_, point)| *point == origin)
+                .map(|(pin, _)| WireEndpoint::Terminal(pin))
+                .collect::<Vec<_>>();
+            ends.push(End { id, origin, cleared: contacts.is_empty() && pins.is_empty(), contacts, pins });
         }
         Self { ends }
     }
@@ -56,16 +64,24 @@ impl Departure {
         for end in self.ends.iter_mut().filter(|end| !end.cleared) {
             let moved = Point { x_nm: end.origin.x_nm + to.x_nm - grabbed.x_nm, y_nm: end.origin.y_nm + to.y_nm - grabbed.y_nm };
             let pos = camera.screen(moved, rect);
-            end.cleared = end.contacts.iter().flat_map(|(_, path)| path.windows(2)).all(|pair| {
-                distance_sq(pos, camera.screen(pair[0], rect), camera.screen(pair[1], rect))
-                    > theme::SCHEMATIC_WIRE_HIT_RADIUS.max(theme::SCHEMATIC_PIN_HIT_RADIUS).powi(2)
-            });
+            let radius = theme::SCHEMATIC_WIRE_HIT_RADIUS.max(theme::SCHEMATIC_PIN_HIT_RADIUS).powi(2);
+            end.cleared = (end.pins.is_empty() || pos.distance_sq(camera.screen(end.origin, rect)) > radius)
+                && end
+                    .contacts
+                    .iter()
+                    .flat_map(|(_, path)| path.windows(2))
+                    .all(|pair| distance_sq(pos, camera.screen(pair[0], rect), camera.screen(pair[1], rect)) > radius);
         }
     }
 
     /// Hide only original neighboring routes while their detached end is departing.
     pub(super) fn suppressed_wires(&self) -> std::collections::BTreeSet<u64> {
         self.ends.iter().filter(|end| !end.cleared).flat_map(|end| end.contacts.iter().map(|(id, _)| *id)).collect()
+    }
+
+    /// Mask vacated pin targets until the detached end has been pulled clear of them.
+    pub(super) fn suppressed_nodes(&self) -> std::collections::BTreeSet<WireEndpoint> {
+        self.ends.iter().filter(|end| !end.cleared).flat_map(|end| end.pins.iter().copied()).collect()
     }
 
     /// Request contact only for ends that have cleared their initial detached neighbors.
