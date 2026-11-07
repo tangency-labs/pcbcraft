@@ -156,12 +156,14 @@ The single-view layout in `crates/app/src/editor_workspace.rs` restores the exis
 and count share the canvas with the floating Browser; tab strips and their panel
 clearance are reserved for split views. Heading insets remain in chrome.
 
-The recent-project cards in `crates/chrome/src/home.rs` and their preview-height
+The recent-project cards in `crates/chrome/src/home.rs` and their preview
 and inset tokens in `crates/chrome/src/theme.rs` adapt SolidCraft's
 `crates/ui-egui/src/ui_kit/file_view.rs::{sample_grid, sample_card_with_height, thumbnail}`
 at revision `c553365a2197a689e749389a6fbf707a38df9b61` (MIT OR Apache-2.0,
-copyright (c) 2026 SolidCraft contributors): a responsive card grid, 84-point image
-region, inset, title/description placement and hover/focus treatment. PCBCraft adds
+copyright (c) 2026 SolidCraft contributors): a responsive card grid, image
+region, inset, title/description placement and hover/focus treatment. PCBCraft replaces
+the original 84-point preview height with a bounded aspect ratio based on the
+card's actual width, caps the card width, and adds
 a separate remove control, path-qualified accessibility labels and a clipped
 app-supplied drawing callback. Middle elision of long paths adapts
 `crates/ui-egui/src/ui_kit/text.rs::ellipsize_middle` at that revision.
