@@ -1,0 +1,213 @@
+//! Original native footprint definitions, pinned independently from symbol graphics and placements.
+use crate::schematic::Point;
+use serde::{Deserialize, Serialize};
+use std::{collections::BTreeSet, sync::Arc};
+
+/// Stable identity of an immutable library item revision; paths and labels are only locators.
+pub(crate) type Key = (String, String, u32);
+const MAX_OFFSET_NM: i64 = 100_000_000;
+pub(crate) const STARTER_IDS: [&str; 7] =
+    ["resistor-0402", "resistor-0603", "capacitor-0402", "capacitor-0603", "led-0402", "sot23", "header-1x02-254"];
+const STARTER: [&str; 7] = [
+    include_str!("../../../../libraries/starter/footprints/resistor-0402.json"),
+    include_str!("../../../../libraries/starter/footprints/resistor-0603.json"),
+    include_str!("../../../../libraries/starter/footprints/capacitor-0402.json"),
+    include_str!("../../../../libraries/starter/footprints/capacitor-0603.json"),
+    include_str!("../../../../libraries/starter/footprints/led-0402.json"),
+    include_str!("../../../../libraries/starter/footprints/sot23.json"),
+    include_str!("../../../../libraries/starter/footprints/header-1x02-254.json"),
+];
+
+/// A physical land relative to its footprint origin. Surface lands bind to the component
+/// side; plated through-hole lands explicitly bind to all copper and carry a circular drill.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RectPad {
+    pub number: String,
+    pub center: Point,
+    pub width_nm: i64,
+    pub height_nm: i64,
+    pub rotation: u16,
+    pub shape: PadShape,
+    pub copper: CopperBinding,
+    /// Physical corner radius; omitted/zero for rectangles and circular lands.
+    #[serde(default, skip_serializing_if = "zero")]
+    pub corner_radius_nm: i64,
+    /// Diameter of a circular plated drill; present only for all-copper through-hole lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drill_nm: Option<i64>,
+}
+
+/// Keep the original rectangle-only JSON encoding when no physical rounding is requested.
+fn zero(value: &i64) -> bool {
+    *value == 0
+}
+
+/// Shapes supported by this schema. Unsupported kinds fail instead of becoming marker geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PadShape {
+    Rectangle,
+    RoundedRectangle,
+    Circle,
+}
+
+/// Copper binding distinguishes a component-side surface land from a plated through-hole land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CopperBinding {
+    ComponentSide,
+    AllCopper,
+}
+
+/// Technical graphics are kept separate from copper and retain their physical layer purpose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphicPurpose {
+    Fabrication,
+    Silkscreen,
+    Courtyard,
+}
+
+/// One unfilled rectangle with physical dimensions and local orientation.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphicRect {
+    pub purpose: GraphicPurpose,
+    pub center: Point,
+    pub width_nm: i64,
+    pub height_nm: i64,
+    pub rotation: u16,
+}
+
+/// A physical silkscreen centerline. Ink width and pad clearance come from board settings.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SilkPath {
+    pub points: Vec<Point>,
+    pub closed: bool,
+}
+
+/// Original geometry records its numeric reference without importing vendor artwork or files.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    pub kind: String,
+    pub reference: String,
+    pub locator: String,
+}
+
+/// A bounded physical footprint definition independent of any schematic component.
+/// It is pinned in the project at an exact library/item/revision and opens offline.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintDefinition {
+    pub format: String,
+    pub library: String,
+    pub id: String,
+    pub revision: u32,
+    pub name: String,
+    pub license: String,
+    pub source: Source,
+    pub pads: Vec<RectPad>,
+    pub graphics: Vec<GraphicRect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub silkscreen: Vec<SilkPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+}
+
+/// Validate portable identity segments before using them in a native relative filename.
+pub(crate) fn valid_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        && !id.starts_with('-')
+        && !id.ends_with('-')
+}
+
+/// Bound a single-line metadata value, rejecting empty, padded or control-bearing fields.
+fn text(value: &str, max: usize) -> bool {
+    !value.is_empty() && value.len() <= max && value.trim() == value && !value.chars().any(char::is_control)
+}
+
+/// Bound local rectangle geometry so rotation and translation cannot overflow board coordinates.
+fn rectangle(center: Point, width: i64, height: i64, rotation: u16) -> bool {
+    (-MAX_OFFSET_NM..=MAX_OFFSET_NM).contains(&center.x_nm)
+        && (-MAX_OFFSET_NM..=MAX_OFFSET_NM).contains(&center.y_nm)
+        && (1..=MAX_OFFSET_NM).contains(&width)
+        && (1..=MAX_OFFSET_NM).contains(&height)
+        && rotation < 360
+}
+
+impl RectPad {
+    /// Require a supported land contour and a smaller, positive plated drill for all-copper lands.
+    fn valid(&self) -> bool {
+        rectangle(self.center, self.width_nm, self.height_nm, self.rotation)
+            && match self.shape {
+                PadShape::Rectangle => self.corner_radius_nm == 0,
+                PadShape::RoundedRectangle => (1..=self.width_nm.min(self.height_nm) / 2).contains(&self.corner_radius_nm),
+                PadShape::Circle => self.width_nm == self.height_nm && self.corner_radius_nm == 0,
+            }
+            && match (self.copper, self.drill_nm) {
+                (CopperBinding::ComponentSide, None) => true,
+                (CopperBinding::AllCopper, Some(diameter)) => diameter > 0 && diameter < self.width_nm.min(self.height_nm),
+                _ => false,
+            }
+    }
+}
+
+impl FootprintDefinition {
+    /// Return the exact identity used by placements and pinned project copies.
+    pub(crate) fn key(&self) -> Key {
+        (self.library.clone(), self.id.clone(), self.revision)
+    }
+
+    /// Validate the schema, provenance, bounded graphics and the explicit numeric pad identities.
+    /// Arbitrary pad stacks, slots and alphanumeric pad names remain unsupported.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
+        if self.format != "pcbcraft-footprint/1"
+            || !valid_id(&self.library)
+            || !valid_id(&self.id)
+            || self.revision == 0
+            || !text(&self.name, 200)
+            || !text(&self.license, 200)
+            || !text(&self.source.kind, 64)
+            || !text(&self.source.reference, 2048)
+            || !text(&self.source.locator, 1024)
+            || self.pads.is_empty()
+            || self.pads.len() > 64
+            || numbers.len() != self.pads.len()
+            || self.pads.iter().any(|p| p.number.parse::<u8>().ok().is_none_or(|n| n == 0 || n.to_string() != p.number))
+            || self.graphics.len() > 64
+            || self.silkscreen.len() > 64
+            || self.reference.as_deref().is_some_and(|font| !matches!(font, "pcbcraft-stroke-1" | "pcbcraft-technical-1"))
+            || self.silkscreen.iter().any(|path| {
+                !(2..=64).contains(&path.points.len())
+                    || (path.closed && path.points.len() < 3)
+                    || path.points.iter().any(|p| !rectangle(*p, 1, 1, 0))
+            })
+            || self.pads.iter().any(|p| !p.valid())
+            || self.graphics.iter().any(|g| !rectangle(g.center, g.width_nm, g.height_nm, g.rotation))
+        {
+            return Err("invalid footprint identity, metadata, pad identities or rectangle geometry".into());
+        }
+        Ok(())
+    }
+}
+
+/// Parse and validate a project copy without consulting built-in sources or upgrading its revision.
+pub(crate) fn read_saved(bytes: &[u8]) -> Result<Arc<FootprintDefinition>, String> {
+    let definition: FootprintDefinition = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    definition.validate()?;
+    Ok(Arc::new(definition))
+}
+
+/// Resolve an original built-in definition. A project pins this copy once, rather than resolving
+/// its placement geometry from the installed catalog on every load.
+pub(crate) fn starter(id: &str) -> Option<Arc<FootprintDefinition>> {
+    STARTER_IDS.iter().position(|name| *name == id).and_then(|index| read_saved(STARTER[index].as_bytes()).ok())
+}
+
+#[cfg(test)]
+mod tests;

@@ -54,10 +54,38 @@ impl PcbApp {
         }
     }
 
-    /// The first board ribbon exposes navigation and correspondence without advertising editing
-    /// commands whose footprint geometry and reviewed-update semantics are not implemented yet.
+    /// Offer single-footprint transforms alongside navigation, keeping board tools separate from
+    /// schematic tools. Completed placements use the same atomic engine command as MCP.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().is_some();
+        let selected = enabled && self.views.active.board.selection.len() == 1;
+        let editing = self.views.active.board.draft.is_some();
+        let edit_tools = [
+            RibbonTool {
+                icon: ToolIcon::Move,
+                label: "Move",
+                description: "Move footprint",
+                shortcut: "M",
+                enabled: selected && !editing,
+                active: editing,
+                toggle: false,
+            },
+            RibbonTool {
+                icon: ToolIcon::Rotate,
+                label: "Rotate",
+                description: "Rotate footprint counterclockwise",
+                shortcut: "R",
+                enabled: selected || editing,
+                active: false,
+                toggle: false,
+            },
+        ];
+        match workspace::ribbon_group(ui, "Placement", &edit_tools) {
+            Some(0) => self.views.active.board.move_requested = true,
+            Some(1) => self.views.active.board.rotate_requested = 90,
+            _ => {}
+        }
+        workspace::ribbon_separator(ui);
         let tools = [
             RibbonTool { icon: ToolIcon::Fit, label: "Fit", description: "Fit board", shortcut: "", enabled, active: false, toggle: false },
             RibbonTool {
@@ -78,7 +106,7 @@ impl PcbApp {
     }
 
     /// Paint any addressed board pane, with input granted only to its focused view. The renderer
-    /// returns selection intent; validation and broadcasting happen after its borrow ends.
+    /// returns selection and transform intent; validation and dispatch follow after its borrow ends.
     /// All board panes use the shared grid display preference without changing their cameras.
     pub(super) fn board_pane(&mut self, ui: &mut Ui, id: ViewId) {
         let enabled = ui.is_enabled()
@@ -110,7 +138,8 @@ impl PcbApp {
                         ui,
                         project,
                         &mut view.camera,
-                        &view.board,
+                        &mut view.board,
+                        source,
                         &highlighted,
                         enabled,
                         self.preferences.navigation,
@@ -121,11 +150,26 @@ impl PcbApp {
                 })
             })
             .inner;
-        if let Some(pick) = pick
-            && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
+        if (pick.selection.is_some() || pick.edit.is_some())
             && enabled
+            && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
-            self.views.select_board(pick, &self.session, self.preferences.selection_follow);
+            if let Some(selection) = pick.selection {
+                self.views.select_board(selection, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(draft) = pick.edit
+                && self.views.active.accepts(draft.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                self.run(
+                    pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+                    &serde_json::json!({
+                        "board": target.board, "footprint": draft.footprint,
+                        "x_nm": draft.position.x_nm, "y_nm": draft.position.y_nm,
+                        "rotation": draft.rotation, "expected_revision": draft.source.revision,
+                    }),
+                );
+            }
             self.repaint_editors(ui.ctx());
         }
     }

@@ -29,9 +29,10 @@ uses one project-level **Save / Don’t Save / Cancel** decision. Layout transit
 old input without editing the document, and closed view/host IDs are never reused.
 Highlighting and optional selection following reach compatible views across all
 hosts while preserving edit selection, zoom and focus. The first PCB inspection
-view now renders existing footprint pad centers, with schematic/board workspace
+view now renders physical SMD geometry and legacy footprint pad centers, with schematic/board workspace
 choices and component counterpart highlights. It shares the same multi-sheet,
-single-board session; board editing and individual pad/pin selection remain
+single-board session; single-footprint movement and quarter-turn rotation now work through shared
+commands, while general board editing and individual pad/pin selection remain
 incomplete. Live MCP runs the presentation actions below by view and window ID,
 including workspace choices and footprint selection.
 
@@ -41,8 +42,10 @@ At `b028afa555bba85e2ad479d83c268aaf6e2bce8b`, the engine separates components
 from schematic placements and supports a generic two-pad footprint with explicit
 pin-to-pad lookup. The [storage format](native-project-storage.md) separates
 `project.pc`, sheets, `board.json` and pinned symbol definitions while retaining
-one runtime project. General footprint definitions and an editable board canvas
-remain to be built; the inspection view does not infer pad shapes or drills.
+one runtime project. Later local slices add movement, rotation and original
+[pinned SMD definitions](footprint-library.md), without inferring physical geometry
+for legacy markers. General footprint authoring/assignment UI and routing remain
+to be built.
 
 The desktop Assistant already opens a secondary native viewport with access to
 the same session. Editor focus, canvas input, repainting and close behavior need
@@ -164,8 +167,11 @@ remain separate future features.
 Checkpoints capture the outgoing setup before project or arrangement transitions
 and after settled frame changes. Storage is flushed after pointer release or a
 one-second change interval, and through the normal application save hook.
-Restoration follows successful project load; failed Open leaves the existing
-arrangement active. Modal dialogs and pending file/project transitions block
+After successful project load, live and cached views first bind the incoming
+project's default schematic or board in their existing workspace, discarding
+outgoing document addresses and gestures. Saved arrangements then restore their
+explicit document targets; genuinely missing saved targets remain placeholders.
+Failed Open leaves the existing arrangement and document bindings active. Modal dialogs and pending file/project transitions block
 arrangement actions. Validation happens before replacing the live host graph,
 and stale requests are rejected by project-opening and view input identities.
 
@@ -294,12 +300,18 @@ and a Layout ribbon independent of schematic Capture. The PCB grid is hidden by
 default; Preferences → Appearance offers Off, Dots and Lines across all PCB views
 and windows, independently of snap spacing. Copper
 markers use visible layers; active layer, layer visibility and document ownership
-remain distinct. The current model has no pad shape, drill, outline or copper
-tracks, so the view shows pad-center markers rather than fabrication geometry.
+remain distinct. Pinned starter SMD definitions now provide rounded rectangular copper pads, body
+outlines, courtyards and silkscreen. Legacy placements retain their markers;
+slots, board outlines and tracks remain future work.
 Selection filters, Flip view and the broader layout ribbon remain future work.
 
-The next authored-layout step is #92's pinned footprint definitions and mapping,
-then outline and placement tools using shared commands. Before adding a normal
+A bounded transform slice now moves and rotates existing legacy and physical SMD
+placements through `pcb.set_footprint_transform`, with GUI drag/M/R/Shift+R,
+ribbon actions, local previews, revision checks, shared undo and persistence.
+Board format 4 stores orientation; unchanged legacy boards retain their encoding.
+A subsequent bounded slice adds [pinned physical definitions](footprint-library.md)
+and validated terminal mappings through the shared placement command. General
+footprint libraries/assignment UI under #92 and outline tools remain future work. Before adding a normal
 schematic-to-board editing workflow, #55 must replace immediate footprint removal
 with reviewed updates. Live-MCP presentation discovery and dispatch cover
 schematic and PCB views under #61; board edits join them with the board canvas.
@@ -348,9 +360,10 @@ the meaning of a component target.
 
 Footprint assignment and board placement are separate facts. Pin the selected
 definition, source revision and validated terminal-to-pad mapping so the project
-reopens offline. Start with an original two-pad definition, while representing
+reopens offline. The starter SMD slice now exercises this with two- and three-pad
+definitions and explicit mappings, while representing
 missing or unsupported mappings explicitly. General mappings cannot be inferred
-from the current hard-coded two-pad case or matching pin and pad numbers.
+from the legacy two-pad case or matching pin and pad numbers.
 
 A user selection projects highlights into counterpart views without changing
 their focus. By default cameras stay put; **View → Settings** allows all views

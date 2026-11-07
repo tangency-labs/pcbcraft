@@ -25,6 +25,7 @@ my-board/
   sheets/<sheet-uuid>.json
   board.json
   library/symbols/<library>/<symbol>.r<revision>.json
+  library/footprints/<library>/<footprint>.r<revision>.json
   assets/                       # reserved for future asset references
 ```
 
@@ -46,8 +47,9 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6` | Project UUID, name, ordered sheet list and shared components |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` | Sheet UUID, unit placements, junctions and wires |
-| `board.json` | `pcbcraft-board/1`, `/2` or `/3` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction |
+| `board.json` | `pcbcraft-board/1` through `/6` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
+| `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
 UUID must agree. Version 6 supports 1–64 ordered flat sheets with non-nil,
@@ -79,7 +81,40 @@ unit, position in integer nanometers and rotation in degrees (0, 90, 180, 270).
 Wires retain terminal or junction endpoints and optional authored bends; legacy
 auto-routed pin links may omit bends. The sheet always has a junction array.
 Footprints retain their component link, definition/revision, pin-to-pad mapping
-and position. Empty projects still have sheet and board documents.
+and position. Version 4 adds optional `rotation` in counterclockwise whole degrees
+from 0 through 359, around the footprint origin with board Y increasing downward.
+Quarter turns resolve exactly; other angles round pad offsets to the nearest
+nanometer. The GUI steps by 90°, while the shared command accepts any supported
+whole-degree orientation.
+Omitted rotation means zero, and canonical records omit zero to preserve legacy
+bytes. A nonzero orientation requires `pcbcraft-board/4`, `/5` or `/6`; earlier board versions
+and legacy single-file encodings refuse it rather than lose orientation. Version
+4 permits an absent setup or the version-3 setup vocabulary, preserving layer,
+material and mapping identities. Encoding uses versions 1–3 when no footprint is
+rotated, and legacy single-file export refuses rotated footprints. Moving changes
+only the affected footprint record; rotating can additionally change the board
+format header. Empty projects still have sheet and board documents.
+
+Physical footprint references require board version 5. Each instance carries
+`library`, `definition`, `revision` and an explicit `mapping` from terminal ID to
+numeric pad ID, together with its position and optional rotation. The complete
+[footprint definition](footprint-library.md) is saved separately and must match
+its path identity. Missing, conflicting or unused definitions are refused; loading
+never substitutes a built-in definition. Version 5 allows absent setup or the
+version-3 setup vocabulary. Legacy marker instances can coexist with physical
+placements, and legacy single-file export refuses physical definitions. Existing
+marker-only projects retain their bytes and are never upgraded to physical pads
+implicitly. Deleting the last placement using a physical definition removes its
+unused pinned copy on save.
+
+Board format 6 requires a `silkscreen` object with `text_height_nm`,
+`stroke_width_nm` and `pad_clearance_nm`, as defined in the
+[footprint contract](footprint-library.md#silkscreen-settings). It permits the
+same optional setup, placement orientation and pinned definitions as version 5.
+Versions 1–5 refuse this field; untouched older boards keep their bytes and use
+the stable default style for definitions that request physical silk. Editing the
+style changes only the board document. Legacy single-file export refuses these
+settings rather than discarding them.
 
 An unconfigured board retains version 1 and its existing encoding. Initializing
 setup uses version 2, whose required `setup` contains a `layers` catalog and a

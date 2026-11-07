@@ -47,6 +47,9 @@ enum ParamKind {
     SymbolDefinition,
     SymbolId,
     FootprintDefinition,
+    FootprintMapping,
+    FootprintId,
+    BoardRotation,
     PadNumber,
     Coordinate,
     Displacement,
@@ -62,6 +65,7 @@ enum ParamKind {
     Point,
     Selection,
     BoardSetup,
+    SilkscreenSettings,
     BoardId,
     SheetId,
     CopperLayers,
@@ -72,6 +76,11 @@ impl ParamKind {
     fn schema(self) -> Value {
         match self {
             Self::BoardSetup => board::setup::BoardSetup::schema(),
+            Self::SilkscreenSettings => json!({"type":"object","properties": {
+                "text_height_nm":{"type":"integer","minimum":1,"maximum":10_000_000},
+                "stroke_width_nm":{"type":"integer","minimum":1,"maximum":5_000_000},
+                "pad_clearance_nm":{"type":"integer","minimum":0,"maximum":10_000_000}
+            },"required":["text_height_nm","stroke_width_nm","pad_clearance_nm"],"additionalProperties":false}),
             Self::BoardId | Self::SheetId => json!({"type":"string", "format":"uuid"}),
             Self::CopperLayers => json!({"type":"integer", "enum":[2,4]}),
             Self::AutoHeal => json!({"type":"boolean","default":true}),
@@ -82,8 +91,15 @@ impl ParamKind {
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()}
             }, "required":["symbols","wires"], "additionalProperties":false}),
             Self::Name | Self::Text => json!({"type": "string"}),
+            Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
+            Self::FootprintId => json!({"type":"string", "pattern":"^footprint-[1-9][0-9]*$"}),
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
-            Self::FootprintDefinition => json!({"type":"string", "enum":[FOOTPRINT_DEFINITION]}),
+            Self::FootprintDefinition => {
+                json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::STARTER_IDS).collect::<Vec<_>>()})
+            }
+            Self::FootprintMapping => {
+                json!({"type":"object","minProperties":1,"maxProperties":64,"additionalProperties":{"type":"string","pattern":"^[1-9][0-9]{0,2}$"}})
+            }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
             Self::SymbolDefinition => {
                 json!({"type": "string", "enum": library::starter().symbols().iter().map(|definition| definition.id.as_str()).collect::<Vec<_>>()})
@@ -118,7 +134,7 @@ impl ParamKind {
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
             Self::BoardId | Self::SheetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
-            Self::BoardSetup if value.is_object() => Ok(()),
+            Self::BoardSetup | Self::SilkscreenSettings if value.is_object() => Ok(()),
             Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
             Self::AutoHeal | Self::Disconnect if value.is_boolean() => Ok(()),
             Self::Junctions
@@ -129,7 +145,14 @@ impl ParamKind {
                 Ok(())
             }
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
-            Self::FootprintDefinition if value.as_str() == Some(FOOTPRINT_DEFINITION) => Ok(()),
+            Self::FootprintDefinition
+                if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::STARTER_IDS.contains(&id)) =>
+            {
+                Ok(())
+            }
+            Self::FootprintMapping if board::parse_mapping(value).is_some() => Ok(()),
+            Self::BoardRotation if value.as_u64().is_some_and(|degrees| degrees < 360) => Ok(()),
+            Self::FootprintId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "footprint-")).is_some() => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::Name | Self::Text if value.is_string() => Ok(()),
             Self::SymbolId if value.as_str().and_then(schematic::parse_symbol_id).is_some() => Ok(()),
@@ -148,11 +171,14 @@ impl ParamKind {
             Self::Selection => Err("must contain bounded unique symbol and wire ID lists"),
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
-            Self::BoardSetup => Err("must contain a board setup object"),
+            Self::BoardSetup | Self::SilkscreenSettings => Err("must contain a settings object"),
             Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
             Self::AutoHeal | Self::Disconnect => Err("must be a boolean"),
             Self::Junctions => Err("must contain at most two distinct junction IDs"),
-            Self::FootprintDefinition => Err("must identify the built-in footprint"),
+            Self::FootprintDefinition => Err("must identify an available built-in footprint"),
+            Self::FootprintMapping => Err("must map terminal IDs to canonical numeric pad IDs"),
+            Self::BoardRotation => Err("must be a whole-degree orientation from 0 through 359"),
+            Self::FootprintId => Err("must identify a placed footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),
@@ -258,10 +284,14 @@ pub const DELETE_SYMBOL: &str = "schematic.delete_symbol";
 pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
+/// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
+pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
 /// Initialize an empty board's stable layers and rigid stackup without specifying materials.
 pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
 /// Atomically replace a validated board setup while retaining its profile identity.
 pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
+/// Set board-local physical silkscreen text height, stroke width and pad clearance.
+pub const SET_SILKSCREEN: &str = "pcb.set_silkscreen";
 const BOARD: Param = Param {
     required: false,
     name: "board",
@@ -515,14 +545,38 @@ const CATALOG: &[Command] = &[
     Command {
         id: PLACE_FOOTPRINT,
         title: "Place Footprint",
-        summary: "Place the supported two-pad footprint for a schematic component and map its pins. Undoable.",
+        summary: "Place a built-in footprint for a schematic component with validated terminal-to-pad mapping. Undoable.",
         params: &[
             BOARD,
             Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
             Param { required: true, name: "definition", summary: "Pinned built-in footprint definition", kind: ParamKind::FootprintDefinition },
-            Param { required: true, name: "pin_1_pad", summary: "Physical pad for schematic pin 1", kind: ParamKind::PadNumber },
+            Param { required: false, name: "pin_1_pad", summary: "Two-pin shorthand; mutually exclusive with mapping", kind: ParamKind::PadNumber },
+            Param {
+                required: false,
+                name: "mapping",
+                summary: "Explicit terminal-to-pad bijection; required for other terminal sets",
+                kind: ParamKind::FootprintMapping,
+            },
             Param { required: true, name: "x_nm", summary: "Footprint center X in nanometers", kind: ParamKind::Coordinate },
             Param { required: true, name: "y_nm", summary: "Footprint center Y in nanometers", kind: ParamKind::Coordinate },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: SET_FOOTPRINT_TRANSFORM,
+        title: "Move or Rotate Footprint",
+        summary: "Set one footprint's center and counterclockwise orientation without changing its pad mapping. One undoable edit; unchanged values are a no-op.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "footprint", summary: "Placed footprint ID from board inspection", kind: ParamKind::FootprintId },
+            Param { required: true, name: "x_nm", summary: "Footprint center X in nanometers", kind: ParamKind::Coordinate },
+            Param { required: true, name: "y_nm", summary: "Footprint center Y in nanometers", kind: ParamKind::Coordinate },
+            Param {
+                required: true,
+                name: "rotation",
+                summary: "Counterclockwise whole degrees from 0 through 359 around the footprint center",
+                kind: ParamKind::BoardRotation,
+            },
             EXPECTED_REVISION,
         ],
     },
@@ -565,6 +619,21 @@ const CATALOG: &[Command] = &[
                 name: "setup",
                 summary: "Complete setup from inspection; lengths are exact integer nanometers",
                 kind: ParamKind::BoardSetup,
+            },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: SET_SILKSCREEN,
+        title: "Set Silkscreen Settings",
+        summary: "Set physical text height, stroke width and copper-pad clearance for this board. Undoable.",
+        params: &[
+            BOARD,
+            Param {
+                required: true,
+                name: "settings",
+                summary: "Physical silkscreen settings in integer nanometers",
+                kind: ParamKind::SilkscreenSettings,
             },
             EXPECTED_REVISION,
         ],
@@ -855,6 +924,8 @@ impl Session {
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
             | PLACE_FOOTPRINT
+            | SET_FOOTPRINT_TRANSFORM
+            | SET_SILKSCREEN
             | DRAW_WIRE
             | DELETE_WIRE
             | SLICE_WIRE
@@ -894,8 +965,12 @@ impl Session {
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
-            if p.board.setup.is_some() || !p.board.footprints().is_empty() {
+            if p.board.setup.is_some() || p.board.silkscreen.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"id":p.board_target().board, "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
+                inspected["board"]["silkscreen"] = json!(p.board.silkscreen.unwrap_or_default());
+                if !p.board.definitions.is_empty() {
+                    inspected["board"]["definitions"] = json!(p.board.definitions.values().map(Arc::as_ref).collect::<Vec<_>>());
+                }
                 if let Some(setup) = &p.board.setup {
                     inspected["board"]["setup"] = json!(setup);
                     inspected["board"]["laminate_thickness_nm"] = json!(setup.laminate_thickness_nm());
@@ -932,11 +1007,11 @@ impl Session {
     fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        if matches!(id, PLACE_FOOTPRINT | INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP) {
+        if matches!(id, PLACE_FOOTPRINT | SET_FOOTPRINT_TRANSFORM | INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP | SET_SILKSCREEN) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
-        let handler_checks_state =
-            self.project.is_some() && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP | sheets::CREATE_SHEET | sheets::DELETE_SHEET);
+        let handler_checks_state = self.project.is_some()
+            && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP | SET_SILKSCREEN | sheets::CREATE_SHEET | sheets::DELETE_SHEET);
         if !handler_checks_state && !self.available(id) {
             return Err(CommandError::Unavailable(match id {
                 sheets::CREATE_SHEET
@@ -951,6 +1026,8 @@ impl Session {
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
                 | PLACE_FOOTPRINT
+                | SET_FOOTPRINT_TRANSFORM
+                | SET_SILKSCREEN
                 | DRAW_WIRE
                 | DELETE_WIRE
                 | SLICE_WIRE
@@ -1020,8 +1097,10 @@ impl Session {
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
             PLACE_FOOTPRINT => self.place_footprint(params)?,
+            SET_FOOTPRINT_TRANSFORM => self.set_footprint_transform(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
+            SET_SILKSCREEN => self.set_silkscreen(params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),
@@ -1181,21 +1260,53 @@ impl Session {
         Ok(())
     }
 
-    /// Place one footprint per component and retain the exact terminal-to-pad association.
+    /// Place one footprint per component, pinning its exact physical definition and validating
+    /// the terminal-to-pad bijection before changing state. Legacy two-pad callers retain their
+    /// original encoding. Supplying both mapping forms or an incomplete mapping is refused.
     fn place_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
         let component = project.symbols[index].component;
-        if !project.symbols[index].definition.fits_two_pad_footprint() {
-            return Err(CommandError::InvalidParams("the two-pad footprint only fits symbols with exactly pins 1 and 2".to_owned()));
-        }
+        let symbol = Arc::clone(&project.symbols[index].definition);
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
+        let id = params["definition"].as_str().unwrap_or_default();
+        if params.get("mapping").is_some() && params.get("pin_1_pad").is_some() {
+            return Err(CommandError::InvalidParams("supply mapping or pin_1_pad, not both".into()));
+        }
+        let mapping = if let Some(value) = params.get("mapping") {
+            board::parse_mapping(value).ok_or_else(|| CommandError::InvalidParams("invalid terminal-to-pad mapping".into()))?
+        } else {
+            let first = params["pin_1_pad"].as_u64().ok_or_else(|| CommandError::InvalidParams("supply mapping or pin_1_pad".into()))? as u8;
+            BTreeMap::from([("1".into(), first.to_string()), ("2".into(), (3 - first).to_string())])
+        };
         let mut project = project.clone();
-        let pin_1_pad = params["pin_1_pad"].as_u64().unwrap_or_default() as u8;
-        Arc::make_mut(&mut project.board)
-            .append(Footprint::new(self.next_object_id()?, component, pin_1_pad, position))
-            .map_err(|error| CommandError::InvalidParams(error.to_owned()))?;
+        let mut footprint = Footprint::new(self.next_object_id()?, component, 0, position);
+        if id == FOOTPRINT_DEFINITION {
+            if !symbol.fits_two_pad_footprint() {
+                return Err(CommandError::InvalidParams("the two-pad footprint only fits symbols with exactly pins 1 and 2".into()));
+            }
+            let first = mapping.get("1").and_then(|pad| pad.parse::<u8>().ok()).filter(|pad| (1..=2).contains(pad));
+            let Some(first) = first.filter(|pad| mapping.len() == 2 && mapping.get("2") == Some(&(3 - pad).to_string())) else {
+                return Err(CommandError::InvalidParams("legacy footprint requires an exact two-pad bijection".into()));
+            };
+            footprint.pin_1_pad = first;
+        } else {
+            let definition = board::definition::starter(id).ok_or_else(|| CommandError::InvalidParams("unavailable footprint definition".into()))?;
+            let key = definition.key();
+            if project.board.definitions.get(&key).is_some_and(|pinned| pinned.as_ref() != definition.as_ref()) {
+                return Err(CommandError::InvalidParams("footprint identity/revision conflicts with its pinned copy".into()));
+            }
+            footprint.library = Some(definition.library.clone());
+            footprint.definition.clone_from(&definition.id);
+            footprint.definition_revision = definition.revision;
+            footprint.mapping = Some(mapping);
+            Arc::make_mut(&mut project.board).definitions.insert(key, definition);
+        }
+        if !project.board.mapping_valid(&footprint, &symbol) {
+            return Err(CommandError::InvalidParams("footprint pads must map exactly once to every symbol terminal".into()));
+        }
+        Arc::make_mut(&mut project.board).append(footprint).map_err(|error| CommandError::InvalidParams(error.into()))?;
         self.change(project);
         Ok(())
     }

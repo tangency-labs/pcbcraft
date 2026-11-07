@@ -75,11 +75,13 @@ pub struct Tokens {
     /// PCB canvas stays near-black with either chrome theme, following the FigCraft layout.
     pub board_canvas: Color32,
     pub board_ink: Color32,
+    pub board_silkscreen: Color32,
     pub board_grid: Color32,
     pub board_highlight: Color32,
-    /// Copper inspection colors for front, back and internal board layers.
+    /// Copper colors for front, back, plated through-hole and internal board lands.
     pub board_front: Color32,
     pub board_back: Color32,
+    pub board_through: Color32,
     pub board_inner: Color32,
     /// Symbol ink on the Parts library's raised preview tiles.
     pub catalog_symbol: Color32,
@@ -199,12 +201,14 @@ impl Tokens {
             canvas_grid: Color32::from_rgb(194, 201, 211),
             schematic_wire: Color32::from_rgb(20, 112, 75),
             schematic_highlight: Color32::from_rgb(145, 88, 12),
-            board_canvas: Color32::from_rgb(18, 25, 29),
+            board_canvas: Color32::from_rgb(0, 16, 32),
             board_ink: Color32::from_rgb(213, 221, 221),
+            board_silkscreen: Color32::from_rgb(245, 235, 145),
             board_grid: Color32::from_rgb(29, 39, 43),
             board_highlight: Color32::from_rgb(245, 195, 91),
-            board_front: Color32::from_rgb(202, 143, 119),
-            board_back: Color32::from_rgb(113, 158, 185),
+            board_front: Color32::from_rgb(255, 48, 48),
+            board_back: Color32::from_rgb(64, 96, 255),
+            board_through: Color32::from_rgb(224, 188, 50),
             board_inner: Color32::from_rgb(178, 169, 207),
             catalog_symbol: Color32::from_rgb(55, 95, 130),
             // Placeholders until `with_home` derives them from the colours above.

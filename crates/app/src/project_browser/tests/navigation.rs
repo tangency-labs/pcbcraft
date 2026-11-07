@@ -127,7 +127,7 @@ fn first_footprint_pick_centers_in_the_destination_uncovered_canvas() {
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         let center = h.state().views.active.camera.center();
         assert!((center.x_nm - 127_000_000).abs() < 100);
-        assert!((center.y_nm - 25_400_000).abs() < 100);
+        assert!((center.y_nm - 25_400_000).abs() < 100, "width={width}, center={center:?}");
         // A consumed request must not undo a later manual camera move.
         let away = pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 };
         h.state_mut().views.active.camera.center_on(away);

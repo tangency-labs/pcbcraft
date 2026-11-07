@@ -56,9 +56,10 @@ first **Save** asks for a project folder, and the project takes that folder's na
 
 1. Drag a resistor on the canvas; its wire endpoint follows. Use **Undo**, then
    **Redo**, to check that the move is one edit. Select a resistor and press
-   **E** to change its reference or value, or **R** to rotate it. Right-click →
-   **Disconnect and Move** leaves its old wiring in place; click to place the symbol
-   elsewhere, or **Esc** to cancel. A replacement placed at the old pins reconnects
+   **E** to change its reference or value, or **R** to rotate it. **M** picks up
+   the selected symbol while leaving its wiring in place; with nothing selected,
+   it picks the symbol under the pointer. Click to place it elsewhere, or **Esc**
+   to cancel. Right-click → **Disconnect and Move** performs the same action. A replacement placed at the old pins reconnects
    to the preserved wire ends.
 2. Press **A** to open Parts and focus search. Search for a capacitor, click the
    result and click the canvas to place it. **R** rotates a placement preview;
@@ -198,8 +199,20 @@ Layers groups copper in physical stack order and retains visibility by layer ID.
 counterpart highlight into view without changing zoom. Switching back restores
 the schematic camera. These actions do not modify project data or undo history.
 
-Only pad centers are represented by the current generic footprint model. Pad
-shapes/drills, outline editing, routing, individual pad selection, selection
+To edit an existing footprint, hover it and press **M**, move the pointer, then
+click to place it, or drag the footprint with the left mouse button. **R** rotates
+90° counterclockwise and **Shift+R** clockwise, including during a move; **Esc**
+or a right-click cancels the preview. Move/Rotate are also in the Layout ribbon
+for a single selected footprint. The origin snaps to the view's grid even when
+that grid is hidden. Undo once to reverse a completed move and all rotations
+made during that move; both the schematic and PCB views share that history.
+Save and reopen the folder/archive to check the stored position and orientation.
+A concurrent edit or a change of focused view cancels unfinished input.
+
+The [Dual LED demo](../examples/README.md) contains physical SMD packages with
+rounded rectangular copper pads, body outlines, courtyards and silkscreen. Older generic
+placements retain pad-center markers; opening them does not assign a package.
+Slots, outline editing, routing, individual pad selection, selection
 filters and Flip view still need implementation. Removing the last schematic
 unit currently removes its footprint too; reviewed board updates are tracked
 separately in #55.

@@ -5,7 +5,8 @@ contracts that still need implementation. It extends the [board workspace
 plan](board-workspace-plan.md), [native storage contract](native-project-storage.md)
 and [library proposal](library-sources.md) merged in #118. The implementation
 status below distinguishes the layer/stackup and material slices from later work; this
-document does not claim an editable board canvas, router or design-rule checker.
+document distinguishes the current physical SMD/legacy marker canvas and single-footprint
+transforms from general footprint editing, routing and design-rule checking.
 
 The model should support a small board soon while allowing richer constructions
 without making names, array positions or today's UI controls into permanent
@@ -268,8 +269,11 @@ opposite-side mask, or a supported copper span. Placement resolves those purpose
 against the board and the footprint's side. A library footprint must not contain
 another project's layer IDs. Pad geometry, holes and later per-layer pad shapes
 belong to pad definitions; the board instance owns placement and orientation.
-Board geometry must leave room for arbitrary footprint angles rather than
-inheriting the schematic's quarter-turn-only command restriction.
+Board placement now stores counterclockwise whole degrees from 0 through 359,
+independently of the schematic's quarter-turn restriction. The shared transform
+command accepts those angles while GUI rotation steps by 90°. Quarter turns
+resolve exactly and other angles round pad offsets to the nearest nanometer;
+subdegree precision remains future work.
 
 Looking at the underside changes a view transform. Flipping a footprint changes
 the document and resolves its layer purposes again. Neither operation reverses
@@ -439,17 +443,21 @@ not implement #61. No network requests belong in these model operations.
 The first slice implements a validated layer catalog and one rigid stackup,
 initialization and replacement commands, project inspection, native persistence,
 undo/redo and headless MCP discovery. Presets provide topology without claiming
-material or thickness specifications. There is no setup dialog or board renderer
-yet. General footprint layer bindings are also absent; the first slice must
+material or thickness specifications. The board canvas now renders pinned
+rounded SMD geometry alongside legacy pad-center markers and supports
+single-footprint transforms; the setup dialog remains future work. General
+footprint layer bindings are also absent; setup commands
 conservatively reject topology changes on populated boards rather than infer a
-reassignment from the hard-coded two-pad footprint.
+reassignment from a footprint name.
 
 The structured material/core/prepreg model and sourced electrical reports are
 now implemented (#76). Follow with shared unit parsing and the stackup UI
 (#75/#76), project manufacturing settings and portable fabrication profiles,
 a bounded impedance estimator, and the net-identity/rule-resolution contract
-(#77 with #42) before applying estimates to routing rules. Then add pinned footprints/assignments (#92),
-then the board canvas and mixed workspace/cross-probing acceptance (#54/#64/#65).
+(#77 with #42) before applying estimates to routing rules. The bounded
+[pinned-footprint slice](footprint-library.md) now covers starter physical
+definitions and mappings; general assignment UI (#92) and the remaining board
+canvas/mixed-workspace acceptance (#54/#64/#65) are still open.
 Review the accepted-board baseline and pending removals under #55 before exposing
 schematic deletion in that board workflow. Live editor command parity remains
 #61. These are bounded slices; none closes the broader issue by itself.

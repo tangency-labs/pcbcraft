@@ -157,11 +157,20 @@ impl Camera {
 
     /// Set the rectangle available to Fit and centering, relative to the full canvas. Opening
     /// or moving a card changes this target without moving the camera unless centering is pending.
-    pub(crate) fn set_uncovered(&mut self, canvas: Rect, uncovered: Rect) {
-        self.uncovered = Some(uncovered.translate(-canvas.center().to_vec2()));
+    /// A Browser center request is consumed only after panel geometry settles; true requests
+    /// another frame. Explicit navigation cancels that pending authority.
+    pub(crate) fn set_uncovered(&mut self, canvas: Rect, uncovered: Rect) -> bool {
+        let next = Some(uncovered.translate(-canvas.center().to_vec2()));
+        let stable = self.uncovered == next;
+        self.uncovered = next;
         if let Some(point) = self.center_requested.take() {
             self.center_on(point);
+            if !stable {
+                self.center_requested = Some(point);
+                return true;
+            }
         }
+        false
     }
 
     /// The canvas offset that puts the drawing's origin at the middle of the uncovered part.
@@ -245,7 +254,8 @@ impl Camera {
         self.interact(response, rect, enabled, navigation);
     }
 
-    /// Navigate a board using its resolved pad centers, without fitting schematic geometry.
+    /// Navigate and fit resolved board copper/graphics, independently of schematic geometry.
+    /// Physical SMD packages may magnify up to the ordinary navigation limit.
     pub(crate) fn navigate_board(
         &mut self,
         response: &Response,
@@ -256,21 +266,20 @@ impl Camera {
     ) {
         if std::mem::take(&mut self.fit_requested) {
             *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
-            let bounds = project.footprints().flat_map(|footprint| footprint.pads).fold(Rect::NOTHING, |bounds, pad| {
-                bounds.union(Rect::from_pos((self.screen(pad.center, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
+            let bounds = project.footprints().flat_map(board_extent).fold(Rect::NOTHING, |bounds, point| {
+                bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
             });
-            self.fit_bounds(bounds, rect);
+            self.fit_bounds(bounds, rect, MAX_ZOOM);
         }
         self.interact(response, rect, enabled, navigation);
     }
 
     /// Reveal selected board placements in their own coordinate space without changing zoom.
     pub(crate) fn reveal_board(&mut self, project: pcbcraft_engine::board::view::BoardView<'_>, selected: &std::collections::BTreeSet<String>) {
-        let bounds = project
-            .footprints()
-            .filter(|footprint| selected.contains(&footprint.id))
-            .flat_map(|footprint| footprint.pads)
-            .fold(Rect::NOTHING, |bounds, pad| bounds.union(Rect::from_pos(self.screen(pad.center, Rect::ZERO)).expand(theme::SCHEMATIC_FIT_MARGIN)));
+        let bounds =
+            project.footprints().filter(|footprint| selected.contains(&footprint.id)).flat_map(board_extent).fold(Rect::NOTHING, |bounds, point| {
+                bounds.union(Rect::from_pos(self.screen(point, Rect::ZERO)).expand(theme::SCHEMATIC_FIT_MARGIN))
+            });
         self.reveal_bounds(bounds);
     }
 
@@ -280,12 +289,16 @@ impl Camera {
             return;
         }
         if response.dragged_by(PointerButton::Middle) {
+            self.center_requested = None;
             self.offset += response.drag_delta();
         }
         if response.contains_pointer()
             && let Some(pointer) = response.ctx.input(|i| i.pointer.hover_pos())
         {
             let Wheel { zoom, pan } = response.ctx.input(|input| wheel(&input.events, rect.height(), navigation));
+            if pan != Vec2::ZERO || zoom != 0.0 {
+                self.center_requested = None;
+            }
             self.offset += pan;
             if zoom != 0.0 {
                 let anchor = match navigation.zoom_around {
@@ -319,15 +332,15 @@ impl Camera {
         for point in project.wires().iter().flat_map(|wire| project.wire_path(wire)) {
             bounds = bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN));
         }
-        self.fit_bounds(bounds, rect);
+        self.fit_bounds(bounds, rect, 1.0);
     }
 
     /// Fit resolved document bounds in the unobscured viewport, retaining the grid spacing.
-    fn fit_bounds(&mut self, bounds: Rect, rect: Rect) {
+    fn fit_bounds(&mut self, bounds: Rect, rect: Rect, zoom_limit: f32) {
         if bounds.is_finite() {
             let size = self.uncovered.map_or(rect.size(), |clear| clear.size());
             let available = (size - Vec2::splat(2.0 * theme::SCHEMATIC_FIT_MARGIN)).max(Vec2::splat(1.0));
-            self.zoom = (available.x / bounds.width()).min(available.y / bounds.height()).clamp(MIN_ZOOM, 1.0);
+            self.zoom = (available.x / bounds.width()).min(available.y / bounds.height()).clamp(MIN_ZOOM, zoom_limit);
             self.offset = self.uncovered_center() - bounds.center().to_vec2() * self.zoom;
         }
     }
@@ -364,6 +377,18 @@ fn wheel(events: &[Event], viewport_height: f32, navigation: Navigation) -> Whee
         }
     }
     out
+}
+
+/// Fit/reveal includes real copper and technical extents; legacy footprints retain their centers.
+fn board_extent(footprint: pcbcraft_engine::board::view::FootprintView<'_>) -> impl Iterator<Item = Point> {
+    footprint.pads.into_iter().flat_map(|pad| std::iter::once(pad.center).chain(pad.copper.into_iter().flatten())).chain(
+        footprint.graphics.into_iter().flat_map(|g| {
+            let half = (g.stroke_nm.unwrap_or(0) + 1) / 2;
+            g.points
+                .into_iter()
+                .flat_map(move |p| [Point { x_nm: p.x_nm - half, y_nm: p.y_nm - half }, Point { x_nm: p.x_nm + half, y_nm: p.y_nm + half }])
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -460,5 +485,26 @@ mod tests {
         let moved = wheel(&[scroll(-30.0, false)], 500.0, pan);
         assert_eq!((moved.zoom, moved.pan), (0.0, vec2(0.0, -30.0)));
         assert!(wheel(&[scroll(30.0, true)], 500.0, pan).zoom > 0.0);
+    }
+    /// Newly displayed panels can settle over several passes. Center once against stable
+    /// geometry, while a subsequent explicit camera move cancels the deferred request.
+    #[test]
+    fn browser_center_waits_for_panel_geometry_and_expires_after_navigation() {
+        let mut camera = Camera::default();
+        let canvas = Rect::from_min_size(Pos2::ZERO, vec2(700., 800.));
+        let first = canvas.shrink2(vec2(220., 100.));
+        let settled = first.translate(vec2(0., -3.));
+        let target = Point { x_nm: 127_000_000, y_nm: 25_400_000 };
+        camera.request_center(target);
+        assert!(camera.set_uncovered(canvas, first));
+        assert!(camera.set_uncovered(canvas, settled));
+        assert!(!camera.set_uncovered(canvas, settled));
+        assert_eq!(camera.center(), target);
+        camera.request_center(target);
+        assert!(camera.set_uncovered(canvas, first));
+        camera.center_on(Point { x_nm: 0, y_nm: 0 });
+        let before = camera.screen(target, canvas);
+        assert!(!camera.set_uncovered(canvas, settled));
+        assert_eq!(camera.screen(target, canvas), before);
     }
 }

@@ -1,0 +1,117 @@
+{
+  "format": "pcbcraft-footprint/1",
+  "library": "starter",
+  "id": "sot23",
+  "revision": 4,
+  "name": "SOT-23 (TO-236AB)",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "https://assets.nexperia.com/documents/outline-drawing/SOT23.pdf",
+    "locator": "SOT23 package outline, 12 October 2022, p. 2; original demo lands 0.6 x 0.7 mm, row pitch 2.0 mm, same-side pitch 1.9 mm; original rounded corners, radius 25% of shorter pad dimension; original silk centerlines and pcbcraft-technical-1 reference lettering"
+  },
+  "pads": [
+    {
+      "number": "1",
+      "center": {
+        "x_nm": -950000,
+        "y_nm": 1000000
+      },
+      "width_nm": 600000,
+      "height_nm": 700000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 150000
+    },
+    {
+      "number": "2",
+      "center": {
+        "x_nm": 950000,
+        "y_nm": 1000000
+      },
+      "width_nm": 600000,
+      "height_nm": 700000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 150000
+    },
+    {
+      "number": "3",
+      "center": {
+        "x_nm": 0,
+        "y_nm": -1000000
+      },
+      "width_nm": 600000,
+      "height_nm": 700000,
+      "rotation": 0,
+      "shape": "rounded_rectangle",
+      "copper": "component_side",
+      "corner_radius_nm": 150000
+    }
+  ],
+  "graphics": [
+    {
+      "purpose": "fabrication",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 2900000,
+      "height_nm": 1300000,
+      "rotation": 0
+    },
+    {
+      "purpose": "courtyard",
+      "center": {
+        "x_nm": 0,
+        "y_nm": 0
+      },
+      "width_nm": 3400000,
+      "height_nm": 3300000,
+      "rotation": 0
+    }
+  ],
+  "silkscreen": [
+    {
+      "points": [
+        {
+          "x_nm": -1450000,
+          "y_nm": -650000
+        },
+        {
+          "x_nm": 1450000,
+          "y_nm": -650000
+        },
+        {
+          "x_nm": 1450000,
+          "y_nm": 650000
+        },
+        {
+          "x_nm": -1450000,
+          "y_nm": 650000
+        }
+      ],
+      "closed": true
+    },
+    {
+      "points": [
+        {
+          "x_nm": -2250000,
+          "y_nm": 600000
+        },
+        {
+          "x_nm": -1650000,
+          "y_nm": 1000000
+        },
+        {
+          "x_nm": -2250000,
+          "y_nm": 1400000
+        }
+      ],
+      "closed": true
+    }
+  ],
+  "reference": "pcbcraft-technical-1"
+}

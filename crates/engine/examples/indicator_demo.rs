@@ -62,12 +62,22 @@ fn build_demo() -> Result<Session, Box<dyn Error>> {
     wire(&mut session, left_bottom, pin(&capacitor, "1"), &[(-18, 18)])?;
     wire(&mut session, pin(&capacitor, "2"), right_bottom, &[(18, 18)])?;
 
-    // These generic two-pad placements exercise identity mapping, not physical package suitability.
-    for (symbol, x, y) in [(&input, 0, -8), (&r1, -6, -2), (&d1, 6, -2), (&r2, -6, 4), (&d2, 6, 4), (&capacitor, 0, 10)] {
+    // Q1 is an unconnected package/mapping example alongside the existing wired indicator circuit.
+    let transistor = place(&mut session, "npn", "Q1", "PMBT3904", 32, 0)?;
+    session.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":session.revision()}))?;
+    for (symbol, definition, mapping, x, y) in [
+        (&input, "header-1x02-254", json!({"1":"1","2":"2"}), 0, -4),
+        (&r1, "resistor-0402", json!({"1":"1","2":"2"}), -2, -1),
+        (&d1, "led-0402", json!({"1":"2","2":"1"}), 2, -1),
+        (&r2, "resistor-0603", json!({"1":"1","2":"2"}), -2, 2),
+        (&d2, "led-0402", json!({"1":"2","2":"1"}), 2, 2),
+        (&capacitor, "capacitor-0603", json!({"1":"1","2":"2"}), -2, 5),
+        (&transistor, "sot23", json!({"1":"1","2":"2","3":"3"}), 2, 5),
+    ] {
         session.apply(
             PLACE_FOOTPRINT,
-            &json!({"symbol": symbol, "definition": "generic-through-hole-2", "pin_1_pad": 1,
-                "x_nm": x * GRID_NM, "y_nm": y * GRID_NM, "expected_revision": session.revision()}),
+            &json!({"symbol":symbol,"definition":definition,"mapping":mapping,
+            "x_nm":x*GRID_NM,"y_nm":y*GRID_NM,"expected_revision":session.revision()}),
         )?;
     }
     Ok(session)

@@ -14,13 +14,16 @@ so each later slice builds on the same terms.
 ## What exists today
 
 - **One built-in source.** The starter library in `libraries/starter` is embedded
-  at build time (see [symbol-library.md](symbol-library.md)). It holds symbols only.
+  at build time (see [symbol-library.md](symbol-library.md)). It holds symbols and a bounded set of original
+  [SMD footprint definitions](footprint-library.md).
 - **Symbols are pinned into projects.** Each project keeps a full copy of every
   symbol it uses at `library/symbols/<library>/<symbol>.r<revision>.json`, so it
   opens without the library (see [native-project-storage.md](native-project-storage.md)).
-- **One footprint, defined in code.** The engine knows a single two-pad footprint,
-  `generic-through-hole-2`, in `crates/engine/src/board.rs`. There are no footprint
-  libraries yet.
+- **Pinned physical footprints.** `libraries/starter/footprints` supplies rounded
+  0402/0603 resistor/capacitor, 0402 LED, SOT-23 and plated two-pin header definitions. The shared placement
+  command pins definitions and validates explicit terminal mappings. The legacy
+  `generic-through-hole-2` remains a marker-only compatibility definition; source
+  registration, footprint browsing and general assignment UI are still proposed.
 - **The Parts card** lists the built-in symbols with search and three tile sizes,
   at a fixed 260 × 490 points, floating or docked. Clicking or dragging places a
   symbol through `schematic.place_symbol`.
@@ -69,7 +72,7 @@ symbol-only and footprint-only libraries are both ordinary libraries.
 
 | Source | Reads | Status |
 | --- | --- | --- |
-| Built-in starter | Embedded native library | Exists (symbols only) |
+| Built-in starter | Embedded native library | Exists (symbols and starter SMD footprints) |
 | Native folder | A folder with `library.json` | Proposed, [#92](https://github.com/tangency-labs/pcbcraft/issues/92) |
 | KiCad library | `.kicad_sym` files and `.pretty` footprint folders | Proposed below |
 | Vendor download | A zip of KiCad files from a part provider | Proposed below |
@@ -111,13 +114,13 @@ Removing a registration never removes definitions a project has already pinned.
 
 Pinning copies the exact definition into the project with its provenance: source
 kind, library ID, item ID, revision, license and the locator it was read from.
-The symbol copies that exist today extend to footprints and parts in the same
+Symbols and starter footprints are pinned today; parts would use the same
 layout:
 
 ```text
 library/
   symbols/<library>/<symbol>.r<revision>.json
-  footprints/<library>/<footprint>.r<revision>.json    proposed
+  footprints/<library>/<footprint>.r<revision>.json    implemented
   parts/<library>/<part>.r<revision>.json              proposed
 ```
 

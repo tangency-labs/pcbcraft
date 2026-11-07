@@ -124,11 +124,17 @@ pub(super) struct SchematicState {
     pub(super) move_requested: bool,
 }
 
-/// Board inspection state. Layer visibility and selection are local, never authored edits.
+/// Board interaction state. Layer visibility and selection are local, never authored edits.
+/// New views hide fabrication/courtyard layers once setup exists; restores preserve user choices.
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
+    pub(super) silkscreen_draft: Option<crate::board_panels::SilkscreenDraft>,
+    pub(super) draft: Option<crate::board_canvas::Draft>,
+    pub(super) move_requested: bool,
+    pub(super) rotate_requested: u16,
     pub(super) selection: std::collections::BTreeSet<String>,
     pub(super) hidden_layers: std::collections::BTreeSet<String>,
+    pub(super) layer_defaults_applied: bool,
     pub(super) active_layer: Option<String>,
     pub(super) layers_collapsed: bool,
     pub(super) browser_collapsed: bool,
@@ -255,6 +261,7 @@ impl EditorView {
         view.camera = Camera::from_state(&state.camera);
         view.parked_camera = Camera::from_state(&state.parked_camera);
         view.board.hidden_layers = state.hidden_layers.clone();
+        view.board.layer_defaults_applied = true;
         view.board.active_layer = state.active_layer.clone();
         view.board.layers_collapsed = state.layers_collapsed;
         view.board.browser_collapsed = state.browser_collapsed;
@@ -303,6 +310,7 @@ impl EditorView {
                 browser_collapsed: self.board.browser_collapsed,
                 properties_collapsed: self.board.properties_collapsed,
                 hidden_layers: self.board.hidden_layers.clone(),
+                layer_defaults_applied: self.board.layer_defaults_applied,
                 active_layer: self.board.active_layer.clone(),
                 ..BoardState::default()
             },
@@ -384,6 +392,9 @@ impl EditorView {
 
     /// Drop unfinished gestures without altering selection or the document.
     pub(super) fn cancel_gesture(&mut self) {
+        self.board.draft = None;
+        self.board.move_requested = false;
+        self.board.rotate_requested = 0;
         self.schematic.tool = None;
         self.schematic.wire_draft = Draft::default();
         self.schematic.rotate_requested = false;
@@ -465,6 +476,9 @@ impl EditorView {
             });
             self.snapshot_root = root;
         }
+        if self.board.draft.as_ref().is_some_and(|draft| !self.accepts(draft.source, session)) {
+            self.cancel_gesture();
+        }
         if self.schematic.tool.as_ref().is_some_and(|tool| tool.revision() != session.revision()) {
             self.cancel_gesture();
         }
@@ -493,6 +507,19 @@ impl EditorView {
             let setup = self.board.target.and_then(|target| project.board_view(target)).and_then(|board| board.setup());
             let layers: std::collections::BTreeSet<_> =
                 setup.into_iter().flat_map(|setup| setup.layers()).map(|layer| layer.id.to_string()).collect();
+            if !self.board.layer_defaults_applied
+                && let Some(setup) = setup
+            {
+                use pcbcraft_engine::board::setup::LayerPurpose;
+                self.board.hidden_layers.extend(
+                    setup
+                        .layers()
+                        .iter()
+                        .filter(|layer| matches!(layer.purpose, LayerPurpose::Fabrication | LayerPurpose::Courtyard))
+                        .map(|layer| layer.id.to_string()),
+                );
+                self.board.layer_defaults_applied = true;
+            }
             self.board.hidden_layers.retain(|id| layers.contains(id));
             if self.board.active_layer.as_ref().is_none_or(|id| !layers.contains(id)) {
                 self.board.active_layer = setup.and_then(|setup| {

@@ -318,6 +318,17 @@ starter definitions through shared engine commands. The current slice omits the
 reference's routing tools, selection filters, Flip view and fabrication geometry.
 It extends the existing chrome card primitives; their provenance is recorded above.
 
+## Existing-footprint transform slice
+
+Movement and quarter-turn orientation in `crates/engine/src/board/transform.rs`,
+`board.rs`, `board/view.rs` and the board canvas are original upstream code over
+the existing session, view identity, camera and persistence contracts. Control
+behavior was checked against the published [KiCad 9 PCB Editor manual](https://docs.kicad.org/9.0/en/pcbnew/pcbnew.html)
+(Move and Rotate operations); no KiCad implementation source or library assets
+were used. The Move and Rotate ribbon glyphs are original vector drawings using
+the existing shared chrome palette. Legacy pad-center markers remain inspection
+proxies; the later SMD geometry and its dimensional references are recorded below.
+
 ## Eframe native window lifecycle patch
 
 `vendor/eframe/` contains the crates.io eframe 0.36.2 package from egui revision
@@ -378,3 +389,62 @@ Disconnect and Move preview and engine command. Its selected-symbol priority and
 leave-wiring-in-place behavior follow the published [KiCad 9 Schematic Editor manual](https://docs.kicad.org/9.0/en/eeschema/eeschema.html#moving-symbols).
 The shortcut routing and tests are original upstream code; no KiCad
 implementation source or artwork was used.
+
+## Original starter SMD footprints and NPN symbol
+
+`libraries/starter/footprints/*.json`, `libraries/starter/symbols/npn.json`,
+their engine definition/validation/persistence code and physical pad rendering
+are original upstream work under MIT OR Apache-2.0. The regenerated Dual LED
+example pins these definitions through shared engine commands.
+
+Dimensional references are Vishay's [D/CRCW e3](https://www.vishay.com/docs/20035/dcrcwe3.pdf)
+(14-Apr-2026, p. 11, 0402/0603 reflow lands),
+[Kyocera's MLCC mounting guide](https://ele.kyocera.com/en/product/capacitor/ceramic/mlcc-handling/mounting-01/)
+(original capacitor lands selected within its nominal ranges, consulted 7-Nov-2026),
+[Kingbright APG1005CGC-T](https://www.kingbrightusa.com/images/catalog/spec/apg1005cgc-t.pdf)
+(DSAM9856 V11B, 12-Mar-2025, p. 1, 0402 LED lands and polarity), and
+[Nexperia SOT23](https://assets.nexperia.com/documents/outline-drawing/SOT23.pdf)
+(12-Oct-2022, body and same-side pin pitch). SOT-23 copper lands, courtyards and
+silkscreen are original demo choices, not vendor-qualified manufacturing data.
+NPN terminal naming follows [Nexperia PMBT3904](https://assets.nexperia.com/documents/data-sheet/PMBT3904.pdf)
+(16-Feb-2024); the symbol's vector drawing is original. The definition metadata
+and [footprint contract](docs/footprint-library.md) record exact dimensions.
+No manufacturer artwork, PDF, third-party footprint asset or GPL implementation
+source was incorporated. The manufacturers' documents retain their own rights;
+only dimensional facts informed these original definitions.
+
+The follow-up rendering revision uses the user's supplied PCB screenshots as a
+visual reference for copper contrast, rounded lands and pad labels. It imports
+no screenshot assets or external implementation. Starter SMD revision 2 adds
+original rounded corners (25% of the shorter land dimension) and removes the
+misleading closed silkscreen strips between passive pads. The original
+`header-1x02-254` definition uses chosen demo dimensions: 2.54 mm pitch, 1.70 mm
+lands and 1.00 mm plated drills. Its drawing and geometry are MIT OR Apache-2.0,
+without a third-party library asset or a vendor qualification claim.
+
+The initial physical silkscreen slice adds original `pcbcraft-stroke-1` monoline
+lettering in `crates/engine/src/board/silkscreen.rs`, original centerline outlines
+and polarity marks, and original conservative pad-clearance clipping. No font,
+KiCad drawing data or external implementation was copied. The starting print
+style follows dimensional guidance in
+[JLCPCB ordering instructions](https://jlcpcb.com/help/article/instructions-for-ordering)
+and [character design specifications](https://jlcpcb.com/blog/character-design-specifications),
+consulted 7-Nov-2026: 1 mm text, 0.15 mm lines and 0.25 mm chosen pad clearance.
+The board's editable settings and original font/path data are MIT OR Apache-2.0;
+the linked manufacturer guidance retains its own rights and is not bundled.
+
+
+## PCBcraft Technical stroke font
+
+`crates/engine/assets/fonts/pcbcraft-technical/strokes.json` is a converted,
+renamed font-data derivative of [Relief SingleLine SVG Regular](https://github.com/isdat-type/Relief-SingleLine),
+revision `01dfc5779ec1e9e4b288d96c6c96c23bfccbaf9d`, copyright 2022 The Relief
+SingleLine Project Authors (François Chastanet, Noëlie Dayma and Élisa Garzelli,
+with contributors retained in the asset notices). This font data remains
+**OFL-1.1**, independently of the project's code license. The asset directory
+retains OFL.txt, AUTHORS.txt and CONTRIBUTORS.txt, plus the exact source hash
+and [conversion recipe](crates/engine/assets/fonts/pcbcraft-technical/README.md).
+The original converter flattens Bézier centerlines and preserves proportional
+advances; runtime spacing and reference placement are original upstream code.
+No external implementation, KiCad font data or artwork was incorporated. The
+prior original font remains a distinct compatibility identity.

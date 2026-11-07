@@ -1469,3 +1469,43 @@ fn schematic_move_hotkey_in_detached_window_uses_its_own_view() {
     h.run();
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// Detached PCB tools use that host's input, cancel on focus loss, and commit through the shared
+/// session. Quarter-turn UI steps also preserve a pre-existing non-quarter-turn orientation.
+#[test]
+fn footprint_transforms_in_detached_windows_share_history_and_cancel_on_focus_loss() {
+    use pcbcraft_engine::{PLACE_FOOTPRINT, SET_FOOTPRINT_TRANSFORM, persistence::encode_documents};
+    let (mut h, peer) = multi_window();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    let revision = h.state().session.revision();
+    h.state_mut().run(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":"footprint-3","x_nm":0,"y_nm":0,"rotation":45,"expected_revision":revision}));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB layout in new window");
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let canvas = child_rect(&peer, "PCB canvas");
+    let origin = h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+    child_click_at(&mut h, &peer, origin);
+    child_key(&mut h, &peer, Key::M, Modifiers::NONE);
+    assert!(h.state().views.view(child).unwrap().board.draft.is_some());
+    focus(&mut h, &peer, false);
+    assert!(h.state().views.view(child).unwrap().board.draft.is_none());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    child_key(&mut h, &peer, Key::M, Modifiers::NONE);
+    let destination = origin + vec2(80., 60.);
+    peer.borrow_mut().events.push(Event::PointerMoved(destination));
+    h.run();
+    child_key(&mut h, &peer, Key::R, Modifiers::NONE);
+    child_click_at(&mut h, &peer, destination);
+    assert_eq!(h.state().session.inspect()["project"]["board"]["footprints"][0]["rotation"], 135);
+    assert_eq!(h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
+    focus(&mut h, &peer, false);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
