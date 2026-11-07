@@ -289,7 +289,9 @@ impl Assistant {
     /// [`Self::remove_agent`], with `delete_key` removing its key from the keychain. When the key
     /// can't be removed, nothing else is: the agent's row stays and says why. A connected chat
     /// with the agent ends first, so it doesn't run on, or keep a key, after the agent is gone.
+    /// A connection test still running for it is dropped, so its result can't replace the reason.
     fn remove_agent_with(&mut self, id: &str, delete_key: impl FnOnce(&str) -> Result<(), String>) {
+        self.tests.retain(|(test, _)| test != id);
         if self.settings.agents.agents.iter().any(|agent| agent.id == id && agent.key)
             && let Err(error) = delete_key(id)
         {
@@ -422,8 +424,9 @@ impl Assistant {
     }
 
     /// Store the agent under a stable id, and an endpoint's new key in the keychain. Changing
-    /// what the connected agent starts or calls disconnects it; its name, request timeout and
-    /// reasoning effort apply to it at once. Nothing is saved on an error.
+    /// what an agent starts or calls disconnects it if connected, and drops its connection test
+    /// and result, which were for the old settings; its name, request timeout and reasoning effort
+    /// apply to a connected one at once. Nothing is saved on an error.
     fn save_agent(&mut self, form: &mut Form) -> Result<(), String> {
         let name = form.name.trim().to_owned();
         if name.is_empty() {
@@ -473,6 +476,10 @@ impl Assistant {
                     || existing.key != agent.key
                     || !key.is_empty();
                 *existing = agent.clone();
+                if restart {
+                    self.tests.retain(|(test, _)| *test != agent.id);
+                    self.test_results.remove(&agent.id);
+                }
                 if restart && connected {
                     self.chat.disconnect();
                 } else if connected {
@@ -628,9 +635,16 @@ mod tests {
         let entry = assistant.chat.agent.as_ref().unwrap_or_else(|| panic!("connected"));
         assert_eq!((entry.name.as_str(), entry.request_timeout_s, entry.reasoning_effort.as_str()), ("Local fast", 300, "high"));
 
+        // A test result, and a test still running, were for the old model: both go.
+        assistant.test_results.insert("api-1".to_owned(), Ok("Answers: Local fast".to_owned()));
+        let (finish, running) = std::sync::mpsc::sync_channel(1);
+        assistant.tests.push(("api-1".to_owned(), running));
         let mut form = Form { model: "qwen3-large".to_owned(), ..form };
         assert_eq!(assistant.save_agent(&mut form), Ok(()));
         assert!(!assistant.chat.connected(), "a new model restarts the agent");
+        let _ = finish.send(Ok("Answers: Local fast".to_owned()));
+        assistant.poll_jobs();
+        assert!(assistant.tests.is_empty() && !assistant.test_results.contains_key("api-1"));
     }
 
     /// Removing the connected agent ends its chat. A key the keychain won't give up keeps the
@@ -641,7 +655,12 @@ mod tests {
         if let Some(agent) = assistant.settings.agents.agents.first_mut() {
             agent.key = true;
         }
+        // A connection test still running when the removal fails can't hide why the agent stayed.
+        let (finish, running) = std::sync::mpsc::sync_channel(1);
+        assistant.tests.push(("api-1".to_owned(), running));
         assistant.remove_agent_with("api-1", |_| Err("locked".to_owned()));
+        let _ = finish.send(Ok("Answers: Local".to_owned()));
+        assistant.poll_jobs();
         assert_eq!(assistant.settings.agents.agents.len(), 1, "the agent stays");
         assert!(assistant.chat.connected());
         assert!(matches!(assistant.test_results.get("api-1"), Some(Err(error)) if error.contains("locked")));
