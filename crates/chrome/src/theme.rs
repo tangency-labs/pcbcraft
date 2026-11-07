@@ -130,8 +130,15 @@ pub struct Tokens {
     pub file_nav_height: f32,
     pub file_back_height: f32,
     pub file_tile_height: f32,
-    pub file_preview_height: f32,
+    /// Preferred preview width divided by height.
+    pub file_preview_aspect_ratio: f32,
+    /// Minimum preview height in logical points.
+    pub file_preview_min_height: f32,
+    /// Maximum preview height in logical points.
+    pub file_preview_max_height: f32,
     pub file_card_inset: f32,
+    /// Recent-project cards stay compact even when a grid row has few entries.
+    pub file_recent_card_max_width: f32,
     pub file_tile_icon: f32,
     pub file_tile_min_width: f32,
     pub file_grid_gap: f32,
@@ -235,8 +242,11 @@ impl Tokens {
             file_nav_height: 38.0,
             file_back_height: 40.0,
             file_tile_height: 84.0,
-            file_preview_height: 84.0,
+            file_preview_aspect_ratio: 16.0 / 9.0,
+            file_preview_min_height: 112.0,
+            file_preview_max_height: 180.0,
             file_card_inset: 10.0,
+            file_recent_card_max_width: 320.0,
             file_tile_icon: 44.0,
             file_tile_min_width: 240.0,
             file_grid_gap: 14.0,

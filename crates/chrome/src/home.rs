@@ -285,10 +285,15 @@ pub struct RecentCard<'a> {
 
 /// A bounded card with an app-rendered picture above its title/path and a separate removal
 /// button. The full path stays in accessible labels and hover text, including at compact widths.
-/// `paint` runs only for visible images, with a clipped painter and fixed image rectangle.
+/// `paint` runs only for visible images, with a clipped painter and the computed image rectangle.
+/// The requested width is capped by `file_recent_card_max_width` and the available space.
+/// Preview height follows the inset width's aspect ratio within the theme's height bounds.
 pub fn recent_card(ui: &mut Ui, id: &str, width: f32, card: RecentCard<'_>, paint: impl FnOnce(&egui::Painter, Rect)) -> RecentAction {
     let t = Tokens::get();
-    let height = t.file_preview_height + t.file_card_inset * 2.0 + t.space_8 * 2.0 + t.font_button + t.font_small;
+    let width = width.min(t.file_recent_card_max_width).min(ui.available_width()).max(0.0);
+    let image_width = (width - t.file_card_inset * 2.0).max(0.0);
+    let image_height = (image_width / t.file_preview_aspect_ratio).clamp(t.file_preview_min_height, t.file_preview_max_height);
+    let height = image_height + t.file_card_inset * 2.0 + t.space_8 * 2.0 + t.font_button + t.font_small;
     let label = format!("Open {} ({})", card.title, card.path);
     let (rect, response) = allocate(ui, id, width, height, &label, card.enabled, None);
     let hot = card.enabled && (response.hovered() || response.has_focus());
@@ -300,7 +305,7 @@ pub fn recent_card(ui: &mut Ui, id: &str, width: f32, card: RecentCard<'_>, pain
         StrokeKind::Inside,
     );
     let inner = rect.shrink(t.file_card_inset);
-    let image = Rect::from_min_size(inner.min, vec2(inner.width(), t.file_preview_height));
+    let image = Rect::from_min_size(inner.min, vec2(inner.width(), image_height));
     ui.painter().rect(image, t.radius_md, t.canvas, Stroke::new(1.0, t.file_border), StrokeKind::Inside);
     let image_label = format!("Schematic preview: {} ({})", card.title, card.path);
     let image_response = ui.interact(image, ui.make_persistent_id(("recent:preview", id)), Sense::hover());
