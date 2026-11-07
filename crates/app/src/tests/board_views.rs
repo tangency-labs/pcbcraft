@@ -140,7 +140,9 @@ fn board_browser_properties_and_layers_share_stable_addresses() {
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
     let before = h.state().session.inspect();
-    click(&mut h, "R1  1k");
+    h.state_mut().browser.open = true;
+    h.run();
+    click(&mut h, "Footprint R1  1k");
     h.get_by_label("Reference");
     h.get_by_label("generic-through-hole-2");
     let target = h.state().views.active.board.target.unwrap();

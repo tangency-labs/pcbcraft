@@ -64,7 +64,7 @@ pub fn layer_swatch(ui: &mut egui::Ui, color: Color32) {
 
 /// Reserve a bounded upper-left Browser above Layers, keeping its header visible in short areas.
 pub fn browser_bottom(area: Rect) -> f32 {
-    area.top() + (area.height() * 0.42).min(260.0).max(crate::workspace::floating_card_min_height()).min(area.height())
+    area.top() + (area.height() * 0.5).min(320.0).max(crate::workspace::floating_card_min_height()).min(area.height())
 }
 
 /// Paint the board's own canvas with the preferred grid style, independently of the schematic

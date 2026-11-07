@@ -146,6 +146,42 @@ fn detach(h: &mut Harness<'_, PcbApp>) {
     assert!(!h.state().views.detached_hosts().is_empty());
 }
 
+/// The common Browser navigates and selects within its native host, without changing the
+/// primary host's document, camera or edit selection. Browsing leaves the project untouched.
+#[test]
+fn detached_browser_navigation_and_selection_stay_in_the_child_host() {
+    let (mut h, peer) = multi_window();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,
+            "x_nm":127_000_000,"y_nm":25_400_000,"expected_revision":revision}),
+    );
+    h.run();
+    detach(&mut h);
+    let root = h.state().views.active.id();
+    let target = h.state().views.active.target();
+    let camera = h.state().views.active.camera.saved_state();
+    let before = h.state().session.snapshot().unwrap();
+    for label in ["Sheets", "Main", "Boards"] {
+        child_rect(&peer, label);
+    }
+    let at = child_rect(&peer, "Open board Board").center();
+    child_click_at(&mut h, &peer, at);
+    let at = child_rect(&peer, "Footprint R1  1k").center();
+    child_click_at(&mut h, &peer, at);
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let app = h.state();
+    assert_eq!(app.views.view(child).unwrap().workspace, crate::editor_view::Workspace::Board);
+    assert_eq!(app.views.view(child).unwrap().board.selection.len(), 1);
+    assert_eq!(app.views.active.id(), root);
+    assert_eq!(app.views.active.target(), target);
+    assert_eq!(app.views.active.camera.saved_state(), camera);
+    assert!(app.views.active.board.selection.is_empty());
+    assert!(app.views.active.schematic.selection.is_empty());
+    assert!(std::sync::Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+}
+
 /// A direct detach inherits the primary window's chrome policy. Integrated controls address
 /// only the child viewport, whose close event dismisses the view without changing the root layout.
 #[test]

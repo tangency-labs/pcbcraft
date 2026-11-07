@@ -37,6 +37,8 @@ pub(crate) struct Camera {
     zoom: f32,
     offset: Vec2,
     fit_requested: bool,
+    /// A Browser destination waits for its own panel geometry before centering.
+    center_requested: Option<Point>,
     /// Usable canvas rectangle relative to its center, clear of floating cards.
     uncovered: Option<Rect>,
     /// Spacing of the points the pointer snaps to, in nanometres. It never changes the scale:
@@ -46,7 +48,14 @@ pub(crate) struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { zoom: 1.0, offset: Vec2::ZERO, fit_requested: false, uncovered: None, snap_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM }
+        Self {
+            zoom: 1.0,
+            offset: Vec2::ZERO,
+            fit_requested: false,
+            center_requested: None,
+            uncovered: None,
+            snap_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
+        }
     }
 }
 
@@ -70,10 +79,11 @@ impl Camera {
     }
 
     /// Seed another view from the currently displayed transform and grid, leaving its host
-    /// geometry unset. Splitting supersedes any unpainted Fit request so both views start at
+    /// geometry unset. Splitting supersedes unpainted Fit and centering requests so both views start at
     /// this zoom.
     pub(crate) fn fork_navigation(&mut self) -> Self {
         self.fit_requested = false;
+        self.center_requested = None;
         Self { zoom: self.zoom, offset: self.offset, snap_nm: self.snap_nm, ..Self::default() }
     }
 
@@ -132,15 +142,26 @@ impl Camera {
         }
     }
 
-    /// Fit the project after the menu closes, using the next canvas rectangle.
+    /// Fit after the menu closes using the next canvas rectangle, superseding pending centering.
     pub(crate) fn request_fit(&mut self) {
+        self.center_requested = None;
         self.fit_requested = true;
     }
 
+    /// Center a Browser pick once the destination workspace has supplied its panel geometry.
+    /// This supersedes Fit while retaining zoom, including for a newly created document view.
+    pub(crate) fn request_center(&mut self, point: Point) {
+        self.fit_requested = false;
+        self.center_requested = Some(point);
+    }
+
     /// Set the rectangle available to Fit and centering, relative to the full canvas. Opening
-    /// or moving a card changes this target without moving the camera until navigation is requested.
+    /// or moving a card changes this target without moving the camera unless centering is pending.
     pub(crate) fn set_uncovered(&mut self, canvas: Rect, uncovered: Rect) {
         self.uncovered = Some(uncovered.translate(-canvas.center().to_vec2()));
+        if let Some(point) = self.center_requested.take() {
+            self.center_on(point);
+        }
     }
 
     /// The canvas offset that puts the drawing's origin at the middle of the uncovered part.
@@ -149,8 +170,9 @@ impl Camera {
     }
 
     /// Pan so a model point sits at the center of the uncovered canvas, keeping the zoom.
-    /// Cancels a pending fit, which would otherwise move the view away again.
+    /// Cancels pending fit and centering requests, which would otherwise move the view away again.
     pub(crate) fn center_on(&mut self, point: Point) {
+        self.center_requested = None;
         let scale = self.unit_step() / GRID_NM as f32;
         self.offset = self.uncovered_center() - vec2(point.x_nm as f32, point.y_nm as f32) * scale;
         self.fit_requested = false;

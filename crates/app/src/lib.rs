@@ -743,7 +743,7 @@ impl PcbApp {
                 label: "Browser",
                 description: "Toggle Browser",
                 shortcut: "",
-                enabled: has_project && schematic,
+                enabled: has_project,
                 active: has_project && self.browser.open,
                 toggle: true,
             },
@@ -964,6 +964,52 @@ impl PcbApp {
         }
         self.select(if pick.wire { Selection::one_wire(pick.id) } else { Selection::one_symbol(pick.id) });
         self.views.active.camera.center_on(pick.at);
+    }
+
+    /// Apply a Browser intent after deferred view validation. Only the originating pane
+    /// navigates; object picks then use the existing selection coordinator and camera methods.
+    /// Invalid targets select nothing, and native render slots return to the main host.
+    fn apply_browser_action(&mut self, source: ViewId, action: project_browser::Action) {
+        use project_browser::Action;
+        let Some(project) = self.session.project() else {
+            return;
+        };
+        let valid = match &action {
+            Action::OpenDocument(_) => true,
+            Action::Schematic { sheet, pick } => {
+                *sheet == project.sheet_target()
+                    && if pick.wire {
+                        project.wires().iter().any(|wire| wire.id() == pick.id)
+                    } else {
+                        project.symbols().iter().any(|symbol| symbol.id() == pick.id)
+                    }
+            }
+            Action::Footprint { board, id, .. } => {
+                project.board_view(*board).is_some_and(|board| board.footprints().any(|footprint| footprint.id == *id))
+            }
+        };
+        if !valid {
+            return;
+        }
+        let Some(view) = self.views.open_document(source, action.target(), &self.session) else {
+            return;
+        };
+        self.views.bind(view);
+        match action {
+            Action::OpenDocument(_) => {}
+            Action::Schematic { pick, .. } => {
+                if let Some(source) = self.views.active.input(&self.session) {
+                    let at = pick.at;
+                    self.show_pick(source, pick);
+                    self.views.active.camera.request_center(at);
+                }
+            }
+            Action::Footprint { id, at, .. } => {
+                self.views.select_board(std::collections::BTreeSet::from([id]), &self.session, self.preferences.selection_follow);
+                self.views.active.camera.request_center(at);
+            }
+        }
+        self.views.bind_main();
     }
 
     /// Show the command error or placement hint alongside the project name, and at the right

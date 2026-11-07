@@ -8,7 +8,7 @@ impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
     /// Browsing explicitly selects and centers a placement; layer and collapse changes are local.
     pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> [Rect; 3] {
-        let Some(project) = self.session.project() else {
+        let Some(project) = self.session.snapshot() else {
             return [Rect::NOTHING; 3];
         };
         let view_id = self.views.active.id();
@@ -20,33 +20,19 @@ impl PcbApp {
         let mut browser_area = area;
         browser_area.max.y = board::browser_bottom(area);
         let mut pick = None;
-        let mut sheet = None;
-        let (browser, collapse) =
+        let (browser, collapse) = if self.browser.open {
             workspace::floating_card_with_id(ui, host.with("browser"), "Browser", browser_area, state.browser_collapsed, |ui| {
-                ui.label(&project.name);
-                egui::CollapsingHeader::new("Sheets").id_salt("board_browser_sheets").default_open(true).show(ui, |ui| {
-                    if ui.selectable_label(false, "Main").clicked() {
-                        sheet = Some(project.sheet_target());
-                    }
-                });
-                egui::CollapsingHeader::new(target.name()).id_salt((target.target, "board")).default_open(true).show(ui, |ui| {
-                    egui::CollapsingHeader::new("Footprints").id_salt((target.target, "footprints")).default_open(true).show(ui, |ui| {
-                        for footprint in target.footprints() {
-                            let response = ui
-                                .push_id(&footprint.id, |ui| {
-                                    ui.selectable_label(
-                                        state.selection.contains(&footprint.id),
-                                        format!("{}  {}", footprint.reference, footprint.value),
-                                    )
-                                })
-                                .inner;
-                            if response.clicked() {
-                                pick = Some((footprint.id, footprint.position));
-                            }
-                        }
-                    });
-                });
-            });
+                pick = self.browser.tree(
+                    ui,
+                    project.clone(),
+                    crate::editor_view::DocumentTarget::Board(target.target),
+                    &self.views.active.schematic.selection,
+                    &state.selection,
+                );
+            })
+        } else {
+            (Rect::NOTHING, false)
+        };
         if collapse {
             state.browser_collapsed = !state.browser_collapsed;
         }
@@ -94,17 +80,8 @@ impl PcbApp {
         if collapse {
             state.properties_collapsed = !state.properties_collapsed;
         }
-        if let Some((id, position)) = pick {
-            self.views.select_board(std::collections::BTreeSet::from([id]), &self.session, self.preferences.selection_follow);
-            self.views.active.camera.center_on(position);
-            self.repaint_editors(ui.ctx());
-        }
-        if let Some(target) = sheet {
-            self.queue_view_action(
-                ui.ctx(),
-                view_id,
-                crate::editor_windows::ViewAction::OpenDocument(crate::editor_view::DocumentTarget::Sheet(target)),
-            );
+        if let Some(action) = pick {
+            self.queue_view_action(ui.ctx(), view_id, crate::editor_windows::ViewAction::Browse(action));
         }
         [browser, layers, properties]
     }

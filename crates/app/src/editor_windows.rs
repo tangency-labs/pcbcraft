@@ -20,9 +20,9 @@ pub(super) struct EditorWindows {
 }
 
 /// Presentation actions address an existing view, independently of its current render slot.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(super) enum ViewAction {
-    OpenDocument(crate::editor_view::DocumentTarget),
+    Browse(crate::project_browser::Action),
     Workspace { workspace: crate::editor_view::Workspace, placement: pcbcraft_chrome::workspace::Placement },
     OpenWindow,
     Detach,
@@ -195,15 +195,14 @@ impl PcbApp {
         }
     }
 
-    /// Place, move or close one existing view: the handler behind the sheet-tab and ribbon
-    /// actions and their window commands. Call it only while the current main host is bound and
-    /// no project dialog or action is pending. Unknown views, a sole primary pane's Close, or
-    /// Dock of an already docked view leave every layout unchanged.
+    /// Apply Browser navigation/selection/centering, sheet-tab and ribbon actions, and their
+    /// window commands. Call only with the main host bound and no project dialog or action
+    /// pending. The deferred queue drops stale captured input before reaching this handler;
+    /// invalid Browser targets leave every view unchanged. Unknown views, a sole primary pane's
+    /// Close and Dock of an already docked view also leave layouts unchanged.
     pub(super) fn apply_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
         match action {
-            ViewAction::OpenDocument(target) => {
-                self.views.open_document(id, target, &self.session);
-            }
+            ViewAction::Browse(action) => self.apply_browser_action(id, action),
             ViewAction::Workspace { workspace, placement } => self.apply_workspace(id, workspace, placement),
             ViewAction::OpenWindow => {
                 self.views.open_window(id);
