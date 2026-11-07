@@ -346,9 +346,22 @@ impl PcbApp {
     /// to the first save, and enter the workspace. The open project is replaced as an undoable
     /// step, as for an agent; a failure shows in the status bar and leaves Home as it was.
     fn start_new_project(&mut self) {
+        self.start_new_project_in(Workspace::Schematic);
+    }
+
+    /// Create through the shared command, then explicitly target the new project's sheet or
+    /// board in the focused pane. A failed command preserves Home and the existing view target.
+    fn start_new_project_in(&mut self, workspace: Workspace) {
         self.checkpoint_arrangements();
         self.run("project.new", &Value::Null);
         if self.message.is_none() {
+            if let Some(project) = self.session.project() {
+                let target = match workspace {
+                    Workspace::Schematic => editor_view::DocumentTarget::Sheet(project.sheet_target()),
+                    Workspace::Board => editor_view::DocumentTarget::Board(project.board_target()),
+                };
+                self.views.active.open_document(target, &self.session);
+            }
             self.home = false;
         }
     }

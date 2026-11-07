@@ -208,12 +208,62 @@ fn open_asks_the_same_question() {
     assert!(matches!(h.state().dialog, Dialog::OpenLocation));
 }
 
+/// New PCB carries its workspace choice through a successful Save; a cancelled or failed save
+/// and edits made during a save keep the original project and Home available.
+#[test]
+fn home_new_pcb_waits_for_save_and_keeps_work_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    for outcome in ["saved", "cancelled", "failed", "edited"] {
+        let mut h = unsaved_project();
+        open_home(&mut h);
+        click(&mut h, "New PCB");
+        assert!(matches!(h.state().dialog, Dialog::SaveChanges(Then::NewBoard)));
+        let original = h.state().session().snapshot().unwrap();
+        // Home also has a Save row; choose the dialog's button to its right.
+        h.query_all_by_label("Save").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap().click();
+        settle(&mut h);
+        assert!(h.state().files.stand_in_waiting());
+        assert!(h.state().home);
+        assert!(Arc::ptr_eq(&h.state().session().snapshot().unwrap(), &original));
+        match outcome {
+            "cancelled" => h.state_mut().files.end_stand_in(None),
+            "failed" => h.state_mut().files.end_stand_in(Some("Disk full")),
+            _ => {
+                if outcome == "edited" {
+                    let revision = h.state().session().revision();
+                    h.state_mut().run(PLACE_SYMBOL, &json!({"definition": "led", "x_nm": 0, "y_nm": 25_400_000, "expected_revision": revision}));
+                }
+                h.state_mut().files.finish_stand_in(dir.path().join(outcome));
+            }
+        }
+        settle(&mut h);
+        let current = h.state().session().snapshot().unwrap();
+        if outcome == "saved" {
+            assert!(!h.state().home);
+            assert!(!current.same_document(&original));
+            assert_eq!(h.state().views.active.workspace, Workspace::Board);
+            assert_eq!(h.state().views.active.board.target, Some(current.board_target()));
+            h.get_by_label("PCB canvas");
+            h.state_mut().run("edit.undo", &Value::Null);
+            assert!(h.state().session().snapshot().unwrap().same_document(&original));
+            assert!(!h.state().files.dirty(h.state().session()));
+        } else {
+            assert!(h.state().home);
+            assert!(current.same_document(&original));
+            assert!(h.state().files.dirty(h.state().session()));
+            assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+            assert_eq!(current.symbols().len(), if outcome == "edited" { 2 } else { 1 });
+            assert_eq!(h.state().message.as_deref(), (outcome == "failed").then_some("Disk full"));
+        }
+    }
+}
+
 /// Don't Save while a save is running waits for it, so Open doesn't replace the running job and
 /// drop its result, then carries on. New Project, which can be asked about mid-save, waits too.
 #[test]
 fn dont_save_waits_for_a_running_save() {
     let dir = tempfile::tempdir().unwrap();
-    for then in [Then::Open, Then::New] {
+    for then in [Then::Open, Then::New, Then::NewBoard] {
         let mut h = unsaved_project();
         let original = h.state().session().snapshot().unwrap();
         h.key_press_modifiers(Modifiers::COMMAND, Key::S);

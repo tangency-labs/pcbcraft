@@ -12,6 +12,7 @@ use super::{COMMAND_COMMA, COMMAND_N, COMMAND_O, COMMAND_S, Dialog, IN_BROWSER, 
 enum Action {
     Back,
     New,
+    NewBoard,
     Open,
     Save,
     SaveAs,
@@ -88,7 +89,7 @@ impl PcbApp {
 
     /// The Start section: project actions, followed by desktop history from successful file jobs.
     fn home_start(&self, ui: &mut Ui, action: &mut Option<Action>) {
-        home::heading(ui, "Start", "Create a schematic project, or open a .pc project you saved.");
+        home::heading(ui, "Start", "Create a schematic or PCB, or open a saved project.");
         let open_caption = if IN_BROWSER {
             "Choose a .pc project file".to_owned()
         } else {
@@ -98,16 +99,25 @@ impl PcbApp {
             (
                 "home:new_tile",
                 MenuIcon::New,
-                "New Project",
+                "New Schematic",
                 "Start an empty schematic".to_owned(),
                 true,
                 self.session.available("project.new"),
                 Action::New,
             ),
+            (
+                "home:new_board_tile",
+                MenuIcon::NewBoard,
+                "New PCB",
+                "Start an empty PCB".to_owned(),
+                false,
+                self.session.available("project.new"),
+                Action::NewBoard,
+            ),
             ("home:open_tile", MenuIcon::Open, "Open Project", open_caption, false, !self.files.busy(), Action::Open),
         ];
         home::section(ui, "New", |ui| {
-            home::grid(ui, "home_new", tiles.len(), |ui, index, width| {
+            home::action_grid(ui, "home_new", tiles.len(), |ui, index, width| {
                 let Some((id, icon, label, caption, primary, enabled, picked)) = tiles.get(index) else { return };
                 let tile = home::Tile { icon: *icon, label, caption, primary: *primary, enabled: *enabled };
                 if home::action_tile(ui, id, width, tile).clicked() {
@@ -157,6 +167,7 @@ impl PcbApp {
         match action {
             Action::Back => self.home = false,
             Action::New => self.new_project(ctx),
+            Action::NewBoard => self.unless_unsaved(super::unsaved::Then::NewBoard, ctx),
             Action::Open => self.open_project_file(ctx),
             Action::Save => {
                 self.home = false;

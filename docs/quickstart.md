@@ -48,8 +48,10 @@ trunk serve --locked
 Open [the local app](http://127.0.0.1:8781) and upload
 `crates/app/tests/fixtures/split/two-resistors.pc.zip`. The browser needs the
 archive, because uploading `project.pc` alone does not include its companion
-documents. To begin an empty design on either platform, choose **New Project**
-on Home. It opens an editable **Untitled** schematic at once. On the desktop, the
+documents. To begin an empty design on either platform, choose **New Schematic**
+or **New PCB** on Home. Each opens an **Untitled** project in the chosen workspace,
+with an empty sheet and board. The compact cards wrap as the window narrows.
+On the desktop, the
 first **Save** asks for a project folder, and the project takes that folder's name.
 
 ## Make an edit and keep it
