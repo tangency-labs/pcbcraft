@@ -82,6 +82,8 @@ impl Terminal {
 pub enum WireEndpoint {
     Terminal(Terminal),
     Junction(u64),
+    Label(u64),
+    SheetPin(u64),
 }
 
 impl WireEndpoint {
@@ -89,11 +91,13 @@ impl WireEndpoint {
     pub fn inspect(self) -> Value {
         match self {
             Self::Terminal(terminal) => terminal.inspect(),
+            Self::Label(id) => json!({"label":format!("label-{id}")}),
+            Self::SheetPin(id) => json!({"sheet_pin":format!("label-{id}")}),
             Self::Junction(id) => json!({"junction": format!("junction-{id}")}),
         }
     }
 
-    /// Parse an existing terminal or junction identity, rejecting extra fields.
+    /// Parse a terminal, junction, hierarchical label or sheet pin, rejecting extra fields.
     pub fn parse(value: &Value) -> Option<Self> {
         if let Some(terminal) = Terminal::parse(value) {
             return Some(Self::Terminal(terminal));
@@ -101,6 +105,12 @@ impl WireEndpoint {
         let object = value.as_object()?;
         if object.len() != 1 {
             return None;
+        }
+        if let Some(id) = object.get("label").and_then(Value::as_str).and_then(|s| parse_id(s, "label-")) {
+            return Some(Self::Label(id));
+        }
+        if let Some(id) = object.get("sheet_pin").and_then(Value::as_str).and_then(|s| parse_id(s, "label-")) {
+            return Some(Self::SheetPin(id));
         }
         parse_id(object.get("junction")?.as_str()?, "junction-").map(Self::Junction)
     }
@@ -137,13 +147,13 @@ impl Wire {
         self.endpoints
     }
 
-    /// Return the directly attached symbol terminals, excluding free endpoints and junctions.
+    /// Return directly attached component terminals; hierarchy anchors have separate identities.
     pub fn terminals(&self) -> Vec<Terminal> {
         self.endpoints
             .iter()
             .filter_map(|end| match end {
                 WireEndpoint::Terminal(pin) => Some(*pin),
-                WireEndpoint::Junction(_) => None,
+                _ => None,
             })
             .collect()
     }
@@ -170,6 +180,7 @@ pub struct Connectivity {
     pub nets: Vec<Vec<Terminal>>,
     pub unconnected: Vec<Terminal>,
     junctions: Vec<Vec<u64>>,
+    interfaces: Vec<Vec<WireEndpoint>>,
     by_terminal: BTreeMap<Terminal, usize>,
 }
 
@@ -185,16 +196,20 @@ impl Connectivity {
         self.by_terminal.get(&terminal).map(|&index| self.nets[index].as_slice())
     }
 
-    /// Preserve the existing terminal report and include junction identities for free wiring.
+    /// Report terminal groups with explicit junction and hierarchical interface identities.
     pub(crate) fn inspect(&self) -> Value {
         let nets: Vec<_> = self
             .nets
             .iter()
             .zip(&self.junctions)
-            .map(|(group, junctions)| {
+            .zip(&self.interfaces)
+            .map(|((group, junctions), interfaces)| {
                 let mut net = json!({"terminals": group.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()});
                 if !junctions.is_empty() {
                     net["junctions"] = json!(junctions.iter().map(|id| format!("junction-{id}")).collect::<Vec<_>>());
+                }
+                if !interfaces.is_empty() {
+                    net["interfaces"] = json!(interfaces.iter().map(|end| end.inspect()).collect::<Vec<_>>());
                 }
                 net
             })
@@ -204,9 +219,18 @@ impl Connectivity {
 
     /// Walk explicit endpoint identities; crossings and coincident distinct points stay separate.
     pub(crate) fn build(symbols: &[SymbolPlacement], wires: &[Wire]) -> Self {
+        Self::build_linked(symbols, wires, std::iter::empty())
+    }
+
+    /// Include explicit hierarchy edges without merging names or coincident coordinates.
+    pub(crate) fn build_linked(symbols: &[SymbolPlacement], wires: &[Wire], links: impl IntoIterator<Item = [WireEndpoint; 2]>) -> Self {
         let mut adjacency = BTreeMap::<WireEndpoint, Vec<WireEndpoint>>::new();
         for wire in wires {
             let [from, to] = wire.endpoints;
+            adjacency.entry(from).or_default().push(to);
+            adjacency.entry(to).or_default().push(from);
+        }
+        for [from, to] in links {
             adjacency.entry(from).or_default().push(to);
             adjacency.entry(to).or_default().push(from);
         }
@@ -215,6 +239,7 @@ impl Connectivity {
             .flat_map(SymbolPlacement::terminals)
             .filter(|terminal| !adjacency.contains_key(&WireEndpoint::Terminal(*terminal)))
             .collect();
+        let mut interfaces = Vec::new();
         let mut nets = Vec::new();
         let mut junctions = Vec::new();
         let mut by_terminal = BTreeMap::new();
@@ -222,11 +247,15 @@ impl Connectivity {
             let mut pending = vec![first];
             let mut group = BTreeSet::new();
             let mut points = BTreeSet::new();
+            let mut ports = BTreeSet::new();
             while let Some(endpoint) = pending.pop() {
                 if let Some(neighbors) = adjacency.remove(&endpoint) {
                     match endpoint {
                         WireEndpoint::Terminal(terminal) => {
                             group.insert(terminal);
+                        }
+                        WireEndpoint::Label(_) | WireEndpoint::SheetPin(_) => {
+                            ports.insert(endpoint);
                         }
                         WireEndpoint::Junction(id) => {
                             points.insert(id);
@@ -238,8 +267,9 @@ impl Connectivity {
             by_terminal.extend(group.iter().map(|&terminal| (terminal, nets.len())));
             nets.push(group.into_iter().collect());
             junctions.push(points.into_iter().collect());
+            interfaces.push(ports.into_iter().collect());
         }
-        Self { nets, junctions, unconnected, by_terminal }
+        Self { nets, junctions, interfaces, unconnected, by_terminal }
     }
 }
 

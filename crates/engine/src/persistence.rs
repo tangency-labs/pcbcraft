@@ -361,6 +361,8 @@ struct Connection<'a> {
 enum Endpoint<'a> {
     Pin { symbol: u64, pin: std::borrow::Cow<'a, str> },
     Junction { junction: u64 },
+    Label { label: u64 },
+    SheetPin { sheet_pin: u64 },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -377,6 +379,8 @@ impl From<WireEndpoint> for Endpoint<'static> {
         match endpoint {
             WireEndpoint::Terminal(terminal) => Self::Pin { symbol: terminal.symbol, pin: terminal.number().to_owned().into() },
             WireEndpoint::Junction(junction) => Self::Junction { junction },
+            WireEndpoint::Label(label) => Self::Label { label },
+            WireEndpoint::SheetPin(sheet_pin) => Self::SheetPin { sheet_pin },
         }
     }
 }
@@ -418,6 +422,9 @@ impl Encoder {
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if project.sheets.len() != 1 || project.sheet_name() != "Main" {
             return Err("legacy single-file encoding cannot represent multiple or renamed sheets; use split documents or a packed archive".to_owned());
+        }
+        if !project.labels.is_empty() || !project.subsheets.is_empty() {
+            return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
         }
         if project.board.silkscreen.is_some()
             || project.board.setup.is_some()
@@ -614,6 +621,17 @@ fn validate_document(
     upgraded_from: Option<u32>,
     definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
 ) -> Result<Arc<Project>, String> {
+    validate_with_hierarchy(document, upgraded_from, definitions, &BTreeSet::new(), &BTreeSet::new())
+}
+
+/// Validate hierarchy anchors and pinned footprint definitions with one object-ID and wire validator.
+fn validate_with_hierarchy(
+    document: Document,
+    upgraded_from: Option<u32>,
+    definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
+    anchors: &BTreeSet<WireEndpoint>,
+    hierarchy_ids: &BTreeSet<u64>,
+) -> Result<Arc<Project>, String> {
     let Document { format, id, name, symbol_definitions, components: records, sheet, board } = document;
     if format != FORMAT {
         return Err(format!("unsupported project format {format}"));
@@ -682,7 +700,7 @@ fn validate_document(
     if let Some(((library, id, revision), _)) = saved.iter().find(|(_, (_, used))| !used) {
         return Err(format!("symbol {id} revision {revision} from library {library} is saved but no component uses it"));
     }
-    let mut ids = BTreeSet::new();
+    let mut ids = hierarchy_ids.clone();
     let mut symbols = Vec::with_capacity(sheet.symbols.len());
     let mut units = BTreeMap::new();
     for record in sheet.symbols {
@@ -729,6 +747,14 @@ fn validate_document(
         junctions.insert(record.id, point);
     }
     let resolve = |endpoint: Endpoint<'_>| match endpoint {
+        Endpoint::Label { label } => anchors
+            .contains(&WireEndpoint::Label(label))
+            .then_some(WireEndpoint::Label(label))
+            .ok_or_else(|| "wire points to missing hierarchical label".to_owned()),
+        Endpoint::SheetPin { sheet_pin } => anchors
+            .contains(&WireEndpoint::SheetPin(sheet_pin))
+            .then_some(WireEndpoint::SheetPin(sheet_pin))
+            .ok_or_else(|| "wire points to missing sheet pin".to_owned()),
         Endpoint::Pin { symbol, pin } => symbols
             .binary_search_by_key(&symbol, |placed| placed.ordinal)
             .ok()
@@ -797,6 +823,8 @@ fn validate_document(
         sheets: Arc::new(vec![crate::sheets::SchematicSheet {
             sheet_id: sheet.id,
             sheet_name: "Main".to_owned(),
+            labels: Arc::default(),
+            subsheets: Arc::default(),
             symbols: Arc::new(symbols),
             wires: Arc::new(wires),
             junctions: Arc::new(junctions),
@@ -812,7 +840,7 @@ fn validate_document(
 }
 
 /// Require unique positive object IDs with room for subsequent runtime revisions.
-fn validate_id(ids: &mut BTreeSet<u64>, id: u64) -> Result<(), String> {
+pub(crate) fn validate_id(ids: &mut BTreeSet<u64>, id: u64) -> Result<(), String> {
     if !(1..=MAX_OBJECT_ID).contains(&id) || !ids.insert(id) {
         return Err(format!("invalid or duplicate object ID {id}"));
     }

@@ -448,3 +448,10 @@ The original converter flattens Bézier centerlines and preserves proportional
 advances; runtime spacing and reference placement are original upstream code.
 No external implementation, KiCad font data or artwork was incorporated. The
 prior original font remains a distinct compatibility identity.
+
+The hierarchical sheet model, commands, UI, native sheet/2 records and Sheet/Label
+ribbon glyphs are original PCBcraft work. Control names and connection scope were
+checked against the published [KiCad schematic editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
+without consulting implementation source or copying icons. PCBcraft synchronizes
+parent pins directly from child label identities; repeated sheet instances are
+not included in this feature.

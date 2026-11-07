@@ -537,6 +537,7 @@ mod live {
     /// Name the view's unfinished gesture, if any.
     fn tool_name(tool: &Tool) -> &'static str {
         match tool {
+            Tool::Hierarchy { .. } => "hierarchy",
             Tool::PlaceSymbol { .. } => "place_symbol",
             Tool::Wire { .. } => "wire",
             Tool::BoxSelect { .. } => "box_select",

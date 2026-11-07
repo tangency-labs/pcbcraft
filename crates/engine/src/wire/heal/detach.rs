@@ -42,7 +42,8 @@ impl Edit {
                 .iter()
                 .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins()))
                 .filter(|(_, pin)| *pin == point)
-                .map(|(pin, _)| pin)
+                .map(|(pin, _)| WireEndpoint::Terminal(pin))
+                .chain(self.project.hierarchy_endpoints().filter(|(_, p)| *p == point).map(|(end, _)| end))
                 .collect();
             if pins.len() > 1 {
                 return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
@@ -53,7 +54,7 @@ impl Edit {
                 joined = self.merge(source, target)?;
             }
             if let Some(&pin) = pins.first() {
-                self.merge(joined, WireEndpoint::Terminal(pin))?;
+                self.merge(joined, pin)?;
             }
         }
         Ok(())

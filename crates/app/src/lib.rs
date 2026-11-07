@@ -17,6 +17,7 @@ mod editor_layout;
 mod editor_view;
 mod editor_windows;
 mod editor_workspace;
+mod hierarchy;
 mod home;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
@@ -137,6 +138,7 @@ enum Dialog {
     Arrangement(arrangements::Edit),
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
+    Hierarchy(hierarchy::Edit),
     /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
     EditFields {
         source: ViewInput,
@@ -860,17 +862,40 @@ impl PcbApp {
         use workspace::{RibbonTool, ToolIcon};
 
         let has_project = self.session.project().is_some();
-        let place = [RibbonTool {
-            icon: ToolIcon::Symbol,
-            label: "Symbol",
-            description: "Add symbol (A)",
-            shortcut: "A",
-            enabled: self.session.available(PLACE_SYMBOL),
-            active: matches!(self.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
-            toggle: false,
-        }];
-        if workspace::ribbon_group(ui, "Place", &place).is_some() {
-            self.parts.focus_search();
+        let place = [
+            RibbonTool {
+                icon: ToolIcon::Symbol,
+                label: "Symbol",
+                description: "Add symbol (A)",
+                shortcut: "A",
+                enabled: self.session.available(PLACE_SYMBOL),
+                active: matches!(self.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
+                toggle: false,
+            },
+            RibbonTool {
+                icon: ToolIcon::Sheet,
+                label: "Sheet",
+                description: "Place hierarchical sheet (S)",
+                shortcut: "S",
+                enabled: has_project,
+                active: matches!(self.views.active.schematic.tool, Some(Tool::Hierarchy { kind: hierarchy::Kind::Sheet, .. })),
+                toggle: false,
+            },
+            RibbonTool {
+                icon: ToolIcon::HierarchicalLabel,
+                label: "Label",
+                description: "Place hierarchical label (Shift+H)",
+                shortcut: "Shift+H",
+                enabled: has_project,
+                active: matches!(self.views.active.schematic.tool, Some(Tool::Hierarchy { kind: hierarchy::Kind::Label, .. })),
+                toggle: false,
+            },
+        ];
+        match workspace::ribbon_group(ui, "Place", &place) {
+            Some(0) => self.parts.focus_search(),
+            Some(1) => self.begin_hierarchy(hierarchy::Kind::Sheet),
+            Some(2) => self.begin_hierarchy(hierarchy::Kind::Label),
+            _ => {}
         }
         workspace::ribbon_separator(ui);
         let connect = [RibbonTool {
@@ -1066,6 +1091,7 @@ impl PcbApp {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
+                        Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
@@ -1198,6 +1224,9 @@ impl PcbApp {
         self.views.active.schematic.wire_draft.start_requested = false;
         if let (Some(source), Some(click)) = (source, click) {
             self.view_click(source, click);
+            if matches!(self.dialog, Dialog::Hierarchy(_) | Dialog::Sheet(_)) {
+                ui.ctx().send_viewport_cmd_to(editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+            }
             // Selection can change after the other pane was painted, without a document edit.
             self.repaint_editors(ui.ctx());
         }
@@ -1214,6 +1243,8 @@ impl PcbApp {
             return;
         }
         match (self.views.active.schematic.tool.clone(), click) {
+            (Some(Tool::Hierarchy { kind, id, .. }), Click::HierarchyPlace(at)) => self.hierarchy_place(source, kind, id, at),
+            (None, Click::HierarchyAction(kind, id, action)) => self.hierarchy_action(source, kind, id, action),
             (Some(Tool::PlaceSymbol { definition, revision, turns }), Click::Place(point)) => {
                 self.views.active.schematic.tool = None;
                 self.run(PLACE_SYMBOL, &json!({"definition": definition.id, "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}));
@@ -1377,6 +1408,20 @@ impl PcbApp {
                 self.cycle_grid(true);
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::ALT, Key::Backspace)) {
+                self.leave_sheet();
+                return;
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::H)) {
+                self.begin_hierarchy(hierarchy::Kind::Label);
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::S)) {
+                self.begin_hierarchy(hierarchy::Kind::Sheet);
+            }
+            let hierarchy_hovered = ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M].into_iter().any(|key| i.key_pressed(key)))
+                && self.views.active.snapshot(&self.session).is_some_and(|project| {
+                    ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| hierarchy::hovered(&project, &self.views.active.camera, pointer))
+                });
             // Ctrl temporarily bypasses the wire grid without disabling tool controls.
             let wire_keys = Modifiers {
                 ctrl: matches!(self.views.active.schematic.tool, Some(Tool::Wire { .. })) && ctx.input(|i| i.modifiers.ctrl),
@@ -1399,23 +1444,27 @@ impl PcbApp {
                 }
                 self.views.active.schematic.wire_draft.finish_requested = ctx.input_mut(|i| i.consume_key(wire_keys, Key::Enter));
             }
-            if self.views.active.schematic.tool.is_none()
+            if !hierarchy_hovered
+                && self.views.active.schematic.tool.is_none()
                 && !self.views.active.schematic.selection.is_empty()
                 && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace))
             {
                 self.delete_selection();
             }
-            if self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M)) {
+            if !hierarchy_hovered && self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M)) {
                 self.views.active.schematic.move_requested = true;
             }
-            if pressed(&ROTATE) {
+            if !hierarchy_hovered && pressed(&ROTATE) {
                 if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.schematic.tool {
                     *turns = (*turns + 1) % 4;
                 } else if self.views.active.schematic.tool.is_none() {
                     self.views.active.schematic.rotate_requested = true;
                 }
             }
-            if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.single_symbol().is_some() && pressed(&EDIT_FIELDS)
+            if !hierarchy_hovered
+                && self.views.active.schematic.tool.is_none()
+                && self.views.active.schematic.selection.single_symbol().is_some()
+                && pressed(&EDIT_FIELDS)
             {
                 self.edit_selected(SymbolAction::EditFields);
             }
@@ -1549,6 +1598,7 @@ impl PcbApp {
                 }
             }
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
+            Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;

@@ -198,12 +198,21 @@ the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
 Inspector panels, and fits the view. Each ribbon group's caption, such as
 **Place ⌄**, opens a menu of the same actions.
 
-A project supports up to 64 flat sheets. Right-click **Sheets** or a sheet row
+A project supports up to 64 sheets, either at the project root or nested under a parent. Right-click **Sheets** or a sheet row
 to create a sheet; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
 Deleting a sheet removes its symbols, wires and associated board footprints in
 one undo step, and the project always retains at least one sheet. Each pane keeps
-its sheet target, camera and selection independently. Hierarchical sheet symbols,
-pins and labels remain separate work (#41).
+its sheet target, camera and selection independently.
+
+Use **S** or **Capture → Place → Sheet** to place a hierarchical sheet symbol,
+then choose a new child or an existing unparented sheet. Double-click inside the
+symbol to enter its child; **Alt+Backspace** returns to the parent. **Shift+H** or
+**Place → Label** places a hierarchical label inside a child. Its matching pin
+appears on the parent symbol automatically, with the same name and direction;
+**W** connects wires to either end. The Browser nests child sheets beneath their
+parent. Each child has one parent, and repeated names on different sheets do not
+connect them. See [hierarchical sheets](docs/hierarchical-sheets.md) for editing
+and deletion behavior.
 
 **View → Split** opens another view of the current schematic in that window.
 Each pane keeps its camera, grid and edit selection while sharing the project's

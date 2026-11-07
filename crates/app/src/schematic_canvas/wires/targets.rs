@@ -81,7 +81,7 @@ impl Targets {
         let end = nearest_node(&self.endpoints, pointer).ok()??;
         let degree = self.degree.get(&end).copied().unwrap_or(0);
         let allowed = match end {
-            WireEndpoint::Terminal(_) => degree == 0,
+            WireEndpoint::Terminal(_) | WireEndpoint::Label(_) | WireEndpoint::SheetPin(_) => degree == 0,
             WireEndpoint::Junction(_) => degree == 1,
         };
         allowed.then_some(Anchor::Existing(end))

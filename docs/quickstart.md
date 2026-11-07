@@ -142,14 +142,22 @@ the saved project restores the last active arrangement. Selecting a sheet in
 Browser or a workspace changes what the focused pane shows, without adding tabs,
 switching arrangements or moving views elsewhere. A single view has no lower tab
 strip; split panes each show one document header whose **×** closes the pane.
-The engine supports up to 64 flat sheets and one legacy board. Right-click
+The engine supports up to 64 sheets and one legacy board. Right-click
 **Sheets** in the Browser and choose **New Sheet…**; sheet rows also offer
 **Rename Sheet…** and **Delete Sheet…**. Creating a sheet opens it in that pane.
 The breadcrumb uses the actual sheet name and its position in the sheet count.
 Deletion asks for confirmation and removes its symbols, wires and associated
 footprints together; Undo restores them. Other views of a deleted sheet become
-unavailable until it is restored or another document is opened. Hierarchical
-sheet symbols, pins and labels remain tracked by #41.
+unavailable until it is restored or another document is opened.
+
+To add a subsheet, press **S**, click its parent canvas and give the child a name,
+or choose an existing unparented sheet in **Child sheet**. Double-click inside
+the placed rectangle to enter it; **Alt+Backspace** returns to its parent.
+Place a hierarchical label with **Shift+H**, enter its name and direction, then
+connect its pointed anchor with **W**. A matching sheet pin appears automatically
+on the parent symbol. Names and directions stay synchronized when you edit the
+label with **E** or its context menu. The Browser shows the same nesting in
+schematic and PCB workspaces. See [hierarchical sheets](hierarchical-sheets.md).
 See [arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
 for storage and monitor-restoration limits.
 

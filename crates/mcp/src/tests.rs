@@ -39,6 +39,43 @@ fn tools_list_names_every_tool() {
     assert_eq!(reply["result"]["tools"].as_array().unwrap().len(), tool_definitions().len());
 }
 
+/// Headless MCP discovers hierarchy commands and observes synchronized parent pins and
+/// explicit electrical links through the ordinary execute/inspect protocol.
+#[test]
+fn hierarchy_tools_share_engine_transactions_and_endpoint_schemas() {
+    use pcbcraft_engine::hierarchy::{ADD_LABEL, CREATE_CHILD, EDIT_LABEL};
+    let mut s = server();
+    call(&mut s, "execute", json!({"command":"project.new","params":{}}));
+    let schema = body(&call(&mut s, "describe_command", json!({"command":CREATE_CHILD})));
+    assert_eq!(schema["params"]["properties"]["sheet"]["format"], "uuid");
+    let state = body(&call(&mut s, "execute", json!({"command":CREATE_CHILD,"params":{"name":"Child","x_nm":0,"y_nm":0,"expected_revision":1}})));
+    let child = state["project"]["sheets"][1]["id"].clone();
+    let state = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":ADD_LABEL,"params":{"sheet":child,"name":"DATA","direction":"input","x_nm":0,"y_nm":0,"expected_revision":state["revision"]}}),
+    ));
+    let label = state["project"]["sheets"][1]["schematic"]["hierarchical_labels"][0]["id"].clone();
+    let parent_pin = &state["project"]["sheets"][0]["schematic"]["sheet_symbols"][0]["pins"][0];
+    assert_eq!(parent_pin["name"], "DATA");
+    assert_eq!(parent_pin["endpoint"]["sheet_pin"], label);
+    assert_eq!(state["project"]["netlist"]["nets"][0]["interfaces"].as_array().unwrap().len(), 2);
+    let state = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":EDIT_LABEL,"params":{"sheet":child,"id":label,"name":"RENAMED","direction":"output","x_nm":0,"y_nm":0,"expected_revision":state["revision"]}}),
+    ));
+    assert_eq!(state["project"]["sheets"][0]["schematic"]["sheet_symbols"][0]["pins"][0]["name"], "RENAMED");
+    assert_eq!(state["project"]["sheets"][0]["schematic"]["sheet_symbols"][0]["pins"][0]["direction"], "output");
+    let stale = call(
+        &mut s,
+        "execute",
+        json!({"command":ADD_LABEL,"params":{"sheet":child,"name":"STALE","direction":"input","x_nm":0,"y_nm":0,"expected_revision":1}}),
+    );
+    assert_eq!(stale["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), state);
+}
+
 /// MCP discovers explicit sheet targets and shares the same lifecycle, isolation, physical
 /// correspondence and project-wide undo behavior as GUI/engine calls.
 #[test]
@@ -383,7 +420,7 @@ fn mcp_attaches_junctions_and_rejects_stale_retries() {
     let command = pcbcraft_engine::ATTACH_JUNCTION;
     let description = body(&call(&mut server, "describe_command", json!({"command":command})));
     assert_eq!(description["params"]["required"], json!(["junction", "to", "expected_revision"]));
-    assert_eq!(description["params"]["properties"]["to"]["oneOf"].as_array().unwrap().len(), 3);
+    assert_eq!(description["params"]["properties"]["to"]["oneOf"].as_array().unwrap().len(), 5);
     let mut state = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Attach"}})));
     let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
     for y in [0, 6] {

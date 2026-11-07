@@ -15,6 +15,7 @@ mod detached_editors;
 mod display_units;
 mod editor_views;
 mod grid_spacing;
+mod hierarchy;
 mod multiple_sheets;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;

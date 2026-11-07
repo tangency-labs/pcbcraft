@@ -32,6 +32,8 @@ const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 pub enum ToolIcon {
     Move,
     Rotate,
+    Sheet,
+    HierarchicalLabel,
     Symbol,
     Wire,
     Slice,
@@ -939,6 +941,24 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
     let stroke = |width: f32, color| Stroke::new(width * size / 64.0, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
+        ToolIcon::Sheet => {
+            p.rect_stroke(Rect::from_center_size(center, vec2(size * 0.85, size * 0.65)), 0, stroke(3., ink), egui::StrokeKind::Middle);
+            p.line_segment([center + vec2(-size * 0.55, 0.), center + vec2(-size * 0.25, 0.)], stroke(3., ink));
+            p.line_segment([center + vec2(size * 0.25, 0.), center + vec2(size * 0.55, 0.)], stroke(3., ink));
+        }
+        ToolIcon::HierarchicalLabel => {
+            p.add(Shape::line(
+                vec![
+                    center + vec2(-size * 0.5, 0.),
+                    center + vec2(-size * 0.2, -size * 0.25),
+                    center + vec2(size * 0.5, -size * 0.25),
+                    center + vec2(size * 0.5, size * 0.25),
+                    center + vec2(-size * 0.2, size * 0.25),
+                    center + vec2(-size * 0.5, 0.),
+                ],
+                stroke(3., ink),
+            ));
+        }
         ToolIcon::Symbol => {
             let s = stroke(3.0, ink);
             line(&[(21.0, 8.0), (21.0, 56.0), (55.0, 32.0), (21.0, 8.0)], s);

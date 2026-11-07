@@ -27,6 +27,12 @@ use pcbcraft_engine::{
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Debug)]
 pub(crate) enum Tool {
+    Hierarchy {
+        kind: crate::hierarchy::Kind,
+        id: Option<u64>,
+        offset: Vec2,
+        revision: u64,
+    },
     PlaceSymbol {
         definition: Arc<SymbolDefinition>,
         revision: u64,
@@ -63,7 +69,8 @@ impl Tool {
     /// Return the revision used to reject stale canvas actions.
     pub(crate) fn revision(&self) -> u64 {
         match self {
-            Self::PlaceSymbol { revision, .. }
+            Self::Hierarchy { revision, .. }
+            | Self::PlaceSymbol { revision, .. }
             | Self::Wire { revision, .. }
             | Self::Move { revision, .. }
             | Self::BoxSelect { revision, .. }
@@ -75,6 +82,8 @@ impl Tool {
 
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
+    HierarchyPlace(Point),
+    HierarchyAction(crate::hierarchy::Kind, u64, crate::hierarchy::Action),
     Place(Point),
     StartBox(BoxDrag),
     SelectItems(Selection),
@@ -245,7 +254,19 @@ pub(crate) fn show(
         (Some(Tool::Reshape { drag, .. }), _, Some(to)) => drag.preview(project, to, revision, auto_heal),
         _ => None,
     };
-    let project = group_preview.as_ref().unwrap_or(project);
+    let hierarchy_preview = if let Some(Tool::Hierarchy { kind, id: Some(id), offset, .. }) = &tool {
+        response.hover_pos().and_then(|p| {
+            project
+                .moved_hierarchy(
+                    &format!("{}-{id}", if *kind == crate::hierarchy::Kind::Sheet { "sheet-symbol" } else { "label" }),
+                    camera.snap(p + *offset, rect),
+                )
+                .ok()
+        })
+    } else {
+        None
+    };
+    let project = hierarchy_preview.as_ref().or(group_preview.as_ref()).unwrap_or(project);
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();
     let screen = |point| camera.screen(point, rect);
@@ -290,6 +311,7 @@ pub(crate) fn show(
         }
     }
 
+    crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos());
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
         && matches!(tool, None | Some(Tool::Reshape { .. }))
@@ -340,6 +362,9 @@ pub(crate) fn show(
         return (input_enabled && valid_position(point)).then(|| Click::Drop(PartDrag::clone(&drag), point));
     }
 
+    if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled) {
+        return click;
+    }
     // Handle active rectangles before context menus: a secondary drag consumes its release.
     let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
     if let Some(Tool::BoxSelect { drag, .. }) = &tool {
@@ -532,7 +557,7 @@ pub(crate) fn show(
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
-        Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } | Tool::Reshape { .. } => None,
+        Tool::Hierarchy { .. } | Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } | Tool::Reshape { .. } => None,
     }
 }
 
