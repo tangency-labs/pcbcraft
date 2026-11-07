@@ -50,6 +50,12 @@ Search finds any setting; changes show at once, and **Cancel** puts them back. T
 open with its history while Home is shown. See [VISION.md](VISION.md) for the
 project's direction.
 
+The schematic ribbon follows PCBcraft Next: **Capture**, **Analyze**, **Libraries**,
+**Manage** and **View**. Capture groups placement, sheet creation, wiring,
+modification, inspection and design actions. Unavailable tools are disabled;
+compact windows keep them in the group caption menus. **Fit** and **Net Inspector**
+are also available beside the tabs; View contains their full controls.
+
 Choose **Capture → Symbol** or press **A** to open the **Parts** browser and focus
 its search. It lists schematic symbols from
 [`libraries/starter`](libraries/starter): a resistor, LED, capacitor, two-pin
@@ -95,8 +101,8 @@ direction to adjust alignment, or hover it and press **G**, then click to finish
 and junctions stay fixed while the adjoining legs adjust. **Esc** cancels the preview.
 Right-click → **Select Wire** selects the whole route for dragging or deletion; box and
 modifier selections continue to select whole wires. Crossings stay disconnected.
-Select a wire segment, then use Capture → **Wire edits** for **Slice**, **Heal**
-or **Delete**. The group caption opens the same actions as a menu.
+Select a wire segment, then use Capture → **Modify** for **Slice**, **Heal**
+or **Delete** in the group caption menu.
 Right-click a wire for these edits and whole-wire selection/deletion:
 **Slice** splits it at the grid point under the pointer and keeps it connected, so a new wire
 can start from the slice point. **Break**, available in this context menu, detaches the
@@ -150,7 +156,7 @@ geometry-only moves retain the shorter-route policy.
 While drawing, retracing the draft shortens its preview immediately, including a
 reversal that runs past an earlier corner. Backspace restores the previous clicked
 corner, and finishing keeps the shortened route in one undo step.
-The Wire edits menu's **Auto-heal wires** toggle defaults on and is remembered as a
+The Modify menu's **Auto-heal wires** toggle defaults on and is remembered as a
 user preference. Turn it off to keep detours and loops during editing, then use **Heal**
 on selected wires when you want cleanup. Commands that draw, place, move or attach
 support the optional `auto_heal` boolean with the same default; `schematic.heal_wires`
@@ -199,17 +205,17 @@ Inspector panels, and fits the view. Each ribbon group's caption, such as
 **Place ⌄**, opens a menu of the same actions.
 
 A project supports up to 64 sheets, either at the project root or nested under a parent. Right-click **Sheets** or a sheet row
-to create a sheet; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
+to create a sheet, or use **Capture → Sheets → New sheet**; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
 Deleting a sheet removes its symbols, wires and associated board footprints in
 one undo step, and the project always retains at least one sheet. Each pane keeps
 its sheet target, camera and selection independently.
 
-Use **S** or **Capture → Place → Sheet** to place a hierarchical sheet symbol,
+Use **S** or **Capture → Sheets → Subsheet** to place a hierarchical sheet symbol,
 then choose a new child or an existing unparented sheet. Double-click inside the
 symbol to enter its child; **Alt+Backspace** returns to the parent. The sheet name
 sits above the outline; drag either to move it, or select it and drag a corner
 handle to resize. Attached wires follow, and each gesture is one undo step. **H** or
-**Place → Label** places a hierarchical label inside a child. Its matching pin
+**Capture → Place → Port** places a hierarchical label inside a child. Its matching pin
 appears on the parent symbol automatically, with the same name and direction;
 **W** connects wires to either end. The Browser nests child sheets beneath their
 parent. Each child has one parent, and repeated names on different sheets do not
@@ -421,7 +427,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `pcb.set_footprint_transform` | Set a footprint center and whole-degree orientation through the same atomic command used by the PCB canvas |
 | `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing; click and box selection in a schematic; footprint and Browser selection in a PCB view |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | The named arrangement tabs: click, **+** and **Duplicate…**, **Rename…**, **Delete** |
-| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture or Layout, and View), closing a non-last window |
+| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Analyze, Libraries, Manage and View for schematics; Layout and View for PCB), closing a non-last window |
 | `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, PCB grid style, selection following, navigation) and **Home** |
 | `file.save` | **File → Save** for a project that already has a location |
 

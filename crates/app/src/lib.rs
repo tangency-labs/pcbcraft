@@ -28,6 +28,7 @@ mod project_browser;
 mod project_files;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod ribbon;
 mod schematic_canvas;
 mod sheet_editing;
 mod unsaved;
@@ -212,7 +213,7 @@ pub struct PcbApp {
 }
 
 /// The Schematic workspace's ribbon tabs, in order.
-const RIBBON_TABS: [&str; 2] = ["Capture", "View"];
+const RIBBON_TABS: [&str; 5] = ["Capture", "Analyze", "Libraries", "Manage", "View"];
 const VIEW_TAB: usize = 1;
 
 /// Built-in workspace contributions. The picker handles presentation only; each document
@@ -717,26 +718,65 @@ impl PcbApp {
         !self.home && self.assistant.shortcuts(ctx)
     }
 
-    /// Show the ribbon tab picked: placement, wiring, inspection and fit actions on Capture, and
-    /// the panel toggles and fit on View. The workspace picker is on its tile.
+    /// Render the workspace toolbar using ported schematic groups and upstream PCB/View controls.
+    /// Saved tab slots stay stable while visual ordering follows Next; quick actions use the focused view.
     fn ribbon(&mut self, ui: &mut Ui) {
-        let mut tab = self.ribbon_tab;
+        use workspace::{RibbonTool, ToolIcon};
         let current = self.views.active.workspace;
+        let board = current == Workspace::Board;
+        let mut tab = if board {
+            usize::from(self.ribbon_tab == VIEW_TAB)
+        } else {
+            ribbon::TAB_ORDER.iter().position(|slot| *slot == self.ribbon_tab).unwrap_or(0)
+        };
         let mut entries = WORKSPACES.entries.to_vec();
         entries[0].current = current == Workspace::Schematic && !self.views.active.unavailable();
-        entries[1].current = current == Workspace::Board && !self.views.active.unavailable();
-        let tabs = if current == Workspace::Board { ["Layout", "View"] } else { RIBBON_TABS };
-        let picked =
-            workspace::ribbon(ui, current.title(), &tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, |ui, shown| {
-                if shown == VIEW_TAB {
+        entries[1].current = board && !self.views.active.unavailable();
+        let tabs: &[&str] = if board { &["Layout", "View"] } else { &RIBBON_TABS };
+        let has_project = self.session.project().is_some();
+        let mut quick = Vec::new();
+        if self.ribbon_tab != VIEW_TAB {
+            if !board {
+                quick.push(RibbonTool {
+                    icon: ToolIcon::Nets,
+                    label: "Nets",
+                    description: "Toggle Net Inspector",
+                    shortcut: "",
+                    enabled: has_project,
+                    active: has_project && self.net_inspector.open,
+                    toggle: true,
+                });
+            }
+            quick.push(RibbonTool {
+                icon: ToolIcon::Fit,
+                label: "Fit",
+                description: if board { "Fit board" } else { "Fit schematic" },
+                shortcut: "",
+                enabled: has_project,
+                active: false,
+                toggle: false,
+            });
+        }
+        let response =
+            workspace::ribbon(ui, current.title(), tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, &quick, |ui, shown| {
+                let slot = if board { shown } else { ribbon::TAB_ORDER[shown] };
+                if slot == VIEW_TAB {
                     self.view_tab(ui);
-                } else if current == Workspace::Board {
+                } else if board {
                     self.board_tab(ui);
                 } else {
-                    self.capture_tab(ui);
+                    self.ported_ribbon_tab(ui, slot);
                 }
             });
-        self.ribbon_tab = tab;
+        self.ribbon_tab = if board { tab } else { ribbon::TAB_ORDER[tab] };
+        if let Some(action) = response.quick {
+            if !board && action == 0 {
+                self.set_panel(ui.ctx(), Panel::Nets, !self.net_inspector.open);
+            } else {
+                self.fit_view(self.views.active.id());
+            }
+        }
+        let picked = response.workspace;
         if let Some(pick) = picked {
             let target = match pick.index {
                 0 => Some(Workspace::Schematic),
@@ -854,143 +894,6 @@ impl PcbApp {
             Some(1) => self.dialog = Dialog::Preferences(preferences::PreferencesWindow::at_views(self.preferences)),
             Some(2) => self.toggle_editor_window(ui.ctx()),
             Some(3) => self.open_editor_window(ui.ctx()),
-            _ => {}
-        }
-    }
-
-    /// The Capture tab: place symbols, draw wires, inspect nets and fit. Each group's caption
-    /// also lists its actions in a menu.
-    fn capture_tab(&mut self, ui: &mut Ui) {
-        use workspace::{RibbonTool, ToolIcon};
-
-        let has_project = self.session.project().is_some();
-        let place = [
-            RibbonTool {
-                icon: ToolIcon::Symbol,
-                label: "Symbol",
-                description: "Add symbol (A)",
-                shortcut: "A",
-                enabled: self.session.available(PLACE_SYMBOL),
-                active: matches!(self.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
-                toggle: false,
-            },
-            RibbonTool {
-                icon: ToolIcon::Sheet,
-                label: "Sheet",
-                description: "Place hierarchical sheet (S)",
-                shortcut: "S",
-                enabled: has_project,
-                active: matches!(self.views.active.schematic.tool, Some(Tool::Hierarchy { kind: hierarchy::Kind::Sheet, .. })),
-                toggle: false,
-            },
-            RibbonTool {
-                icon: ToolIcon::HierarchicalLabel,
-                label: "Label",
-                description: "Place hierarchical label (H)",
-                shortcut: "H",
-                enabled: has_project,
-                active: matches!(self.views.active.schematic.tool, Some(Tool::Hierarchy { kind: hierarchy::Kind::Label, .. })),
-                toggle: false,
-            },
-        ];
-        match workspace::ribbon_group(ui, "Place", &place) {
-            Some(0) => self.parts.focus_search(),
-            Some(1) => self.begin_hierarchy(hierarchy::Kind::Sheet),
-            Some(2) => self.begin_hierarchy(hierarchy::Kind::Label),
-            _ => {}
-        }
-        workspace::ribbon_separator(ui);
-        let connect = [RibbonTool {
-            icon: ToolIcon::Wire,
-            label: "Wire",
-            description: "Draw wire (W)",
-            shortcut: "W",
-            enabled: self.session.available(CONNECT_PINS),
-            active: matches!(self.views.active.schematic.tool, Some(Tool::Wire { .. })),
-            toggle: false,
-        }];
-        if workspace::ribbon_group(ui, "Connect", &connect).is_some() {
-            self.begin_wire();
-        }
-        workspace::ribbon_separator(ui);
-        let inspect = [
-            RibbonTool {
-                icon: ToolIcon::Nets,
-                label: "Nets",
-                description: "Toggle Net Inspector",
-                shortcut: "",
-                enabled: has_project,
-                active: has_project && self.net_inspector.open,
-                toggle: true,
-            },
-            RibbonTool {
-                icon: ToolIcon::Fit,
-                label: "Fit",
-                description: "Fit schematic",
-                shortcut: "",
-                enabled: has_project,
-                active: false,
-                toggle: false,
-            },
-        ];
-        match workspace::ribbon_group(ui, "Inspect", &inspect) {
-            Some(0) => self.set_panel(ui.ctx(), Panel::Nets, !self.panel_open(Panel::Nets)),
-            Some(1) => self.fit_view(self.views.active.id()),
-            _ => {}
-        }
-        workspace::ribbon_separator(ui);
-        self.wire_edit_ribbon(ui);
-    }
-
-    /// Expose implemented wire edits through both ribbon buttons and their caption menu.
-    /// Slice uses the selected leg's captured point and revision; Heal and Delete act on
-    /// the selected wires, with Delete retaining the narrower segment-selection semantics.
-    /// The menu-only Auto-heal toggle changes the saved preference for future edits, not history.
-    fn wire_edit_ribbon(&mut self, ui: &mut egui::Ui) {
-        use workspace::{RibbonTool, ToolIcon};
-        let leg = self.views.active.schematic.selected_leg.clone();
-        let selection = &self.views.active.schematic.selection;
-        let wires = !selection.wires.is_empty() && selection.symbols.is_empty();
-        let tools = [
-            (ToolIcon::Slice, "Slice", "Slice selected wire", "", leg.as_ref().is_some_and(|l| l.split.is_some())),
-            (ToolIcon::Heal, "Heal", "Heal selected wires", "", wires),
-            (ToolIcon::Delete, "Delete", "Delete selected wire or segment", "Del", wires),
-        ]
-        .map(|(icon, label, description, shortcut, enabled)| RibbonTool {
-            icon,
-            label,
-            description,
-            shortcut,
-            enabled,
-            active: false,
-            toggle: false,
-        });
-        let options = [RibbonTool {
-            icon: ToolIcon::Heal,
-            label: "Auto-heal wires",
-            description: "Auto-heal wires",
-            shortcut: "",
-            enabled: true,
-            active: self.preferences.auto_heal_wires,
-            toggle: true,
-        }];
-        match workspace::ribbon_group_with_menu(ui, "Wire edits", &tools, &options) {
-            Some(0) => {
-                if let Some(leg) = leg {
-                    self.edit_wire(schematic_canvas::WireAction::Slice, &leg);
-                }
-            }
-            Some(1) => {
-                self.run(
-                    pcbcraft_engine::HEAL_WIRES,
-                    &json!({"items":self.views.active.schematic.selection,"expected_revision":self.session.revision()}),
-                );
-                if self.message.is_none() {
-                    self.select(Selection::default());
-                }
-            }
-            Some(2) => self.delete_selection(),
-            Some(3) => self.preferences.auto_heal_wires = !self.preferences.auto_heal_wires,
             _ => {}
         }
     }
@@ -1503,6 +1406,9 @@ impl PcbApp {
             } else if pressed(&FINER_GRID) {
                 self.cycle_grid(true);
             }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::V)) {
+                self.views.active.cancel_gesture();
+            }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
                 self.parts.focus_search();
             }
@@ -1705,6 +1611,7 @@ impl PcbApp {
                     ui.label(format!("PCBCraft {VERSION}"));
                     ui.label("Electronics design that feels like KiCad, built for people and agents to work on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
+                    workspace::ribbon_licenses(ui);
                     ui.hyperlink_to("Report a bug", BUG_REPORT_URL);
                     close = ui.button("Close").clicked();
                 });
@@ -1959,6 +1866,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
+    list.push(("Schematic", "Select and move items", "V".to_owned()));
     list.push(("Schematic", "Drag wire segment", "G".to_owned()));
     list.push(("Schematic", "Rotate the selected symbol", key(&ROTATE)));
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));

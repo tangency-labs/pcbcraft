@@ -11,4 +11,5 @@ workspace = true
 
 [dependencies]
 egui = { workspace = true }
+egui_extras = { version = "=0.36.2", default-features = false, features = ["svg"] }
 serde = { workspace = true }

@@ -1,0 +1,323 @@
+//! PCBcraft Next's grouped ribbon adapted to the upstream command and view owners.
+//! Presentation tables are qualified in ATTRIBUTION.md; no prototype engine is imported.
+
+use crate::{Dialog, PcbApp, Selection, SymbolAction, Tool, Workspace, editor_windows};
+use pcbcraft_chrome::workspace::{self, RibbonTool, ToolIcon as Icon};
+use serde_json::json;
+
+/// Stable saved indices retain legacy View=1 while visual tab order follows PCBcraft Next.
+pub(super) const TAB_ORDER: [usize; 5] = [0, 2, 3, 4, 1];
+
+/// Names shared by live control inspection and its explicit tab-selection command.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn tab_name(slot: usize) -> &'static str {
+    match slot {
+        1 => "view",
+        2 => "analyze",
+        3 => "libraries",
+        4 => "manage",
+        _ => "capture",
+    }
+}
+
+/// Unknown names are already rejected by command validation; legacy Layout selects slot zero.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn tab_slot(name: &str) -> usize {
+    match name {
+        "view" => 1,
+        "analyze" => 2,
+        "libraries" => 3,
+        "manage" => 4,
+        _ => 0,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action {
+    Symbol,
+    Power,
+    Port,
+    Text,
+    NewSheet,
+    Subsheet,
+    Wire,
+    Bus,
+    Label,
+    Move,
+    Rotate,
+    Mirror,
+    Rules,
+    Erc,
+    Annotate,
+    Bom,
+    Sync,
+    Delete,
+    Slice,
+    Heal,
+    AutoHeal,
+    Sources,
+    Updates,
+    Save,
+    Variants,
+    Undo,
+    Redo,
+}
+
+/// A single metadata table drives both promoted controls and caption-menu actions.
+#[derive(Clone, Copy)]
+struct ToolSpec {
+    action: Action,
+    label: &'static str,
+    icon: Icon,
+    hint: &'static str,
+    key: &'static str,
+}
+struct Group {
+    title: &'static str,
+    tools: &'static [ToolSpec],
+    extras: &'static [ToolSpec],
+}
+
+const fn tool(action: Action, label: &'static str, icon: Icon, hint: &'static str, key: &'static str) -> ToolSpec {
+    ToolSpec { action, label, icon, hint, key }
+}
+const SHEETS: &[ToolSpec] = &[
+    tool(Action::NewSheet, "New sheet", Icon::Sheet, "Create an independent sheet", ""),
+    tool(Action::Subsheet, "Subsheet", Icon::Subsheet, "Place hierarchical sheet (S)", "S"),
+];
+const CAPTURE: &[Group] = &[
+    Group {
+        title: "Place",
+        tools: &[
+            tool(Action::Symbol, "Symbol", Icon::Symbol, "Add symbol (A)", "A"),
+            tool(Action::Power, "Power", Icon::Power, "Power symbols are not available yet.", ""),
+            tool(Action::Port, "Port", Icon::HierarchicalLabel, "Place hierarchical label (H)", "H"),
+            tool(Action::Text, "Text", Icon::Text, "Text placement is not available yet.", "T"),
+        ],
+        extras: &[],
+    },
+    Group { title: "Sheets", tools: SHEETS, extras: &[] },
+    Group {
+        title: "Connect",
+        tools: &[
+            tool(Action::Wire, "Wire", Icon::Wire, "Draw wire (W)", "W"),
+            tool(Action::Bus, "Bus", Icon::Bus, "Buses are not available yet.", ""),
+            tool(Action::Label, "Label", Icon::NetLabel, "Local and global net labels are not available yet.", "L"),
+        ],
+        extras: &[],
+    },
+    Group {
+        title: "Modify",
+        tools: &[
+            tool(Action::Move, "Move", Icon::Move, "Select and move items", "V"),
+            tool(Action::Rotate, "Rotate", Icon::Rotate, "Rotate selected symbol", "R"),
+            tool(Action::Mirror, "Mirror", Icon::Mirror, "Mirroring is not available yet.", ""),
+        ],
+        extras: &[
+            tool(Action::Delete, "Delete", Icon::Delete, "Delete selected items", "Del"),
+            tool(Action::Slice, "Slice", Icon::Slice, "Slice selected wire", ""),
+            tool(Action::Heal, "Heal", Icon::Heal, "Heal selected wires", ""),
+            tool(Action::AutoHeal, "Auto-heal wires", Icon::Heal, "Auto-heal wires", ""),
+        ],
+    },
+    Group {
+        title: "Inspect",
+        tools: &[
+            tool(Action::Rules, "Rules", Icon::Rules, "Electrical rules are not available yet.", ""),
+            tool(Action::Erc, "ERC", Icon::Erc, "Electrical rule checking is not available yet.", ""),
+            tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
+            tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", ""),
+        ],
+        extras: &[],
+    },
+    Group {
+        title: "Design",
+        tools: &[tool(Action::Sync, "Sync", Icon::Sync, "Schematic-to-board synchronization is not available yet.", "")],
+        extras: &[],
+    },
+];
+const ANALYZE: &[Group] = &[
+    Group {
+        title: "Electrical",
+        tools: &[
+            tool(Action::Erc, "ERC", Icon::Erc, "Electrical rule checking is not available yet.", ""),
+            tool(Action::Rules, "Rules", Icon::Rules, "Electrical rules are not available yet.", ""),
+        ],
+        extras: &[],
+    },
+    Group { title: "Reports", tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", "")], extras: &[] },
+];
+const LIBRARIES: &[Group] = &[Group {
+    title: "Components",
+    tools: &[
+        tool(Action::Symbol, "Parts", Icon::Symbol, "Add symbol (A)", "A"),
+        tool(Action::Sources, "Sources", Icon::Browser, "External library sources are not available yet.", ""),
+        tool(Action::Updates, "Updates", Icon::Sync, "Library update review is not available yet.", ""),
+    ],
+    extras: &[],
+}];
+const MANAGE: &[Group] = &[
+    Group { title: "Sheets", tools: SHEETS, extras: &[] },
+    Group {
+        title: "Project",
+        tools: &[
+            tool(Action::Save, "Save", Icon::Save, "Save project", "Ctrl+S"),
+            tool(Action::Variants, "Variants", Icon::Bom, "Assembly variants are not available yet.", ""),
+        ],
+        extras: &[],
+    },
+    Group {
+        title: "History",
+        tools: &[
+            tool(Action::Undo, "Undo", Icon::Undo, "Undo project edit", "Ctrl+Z"),
+            tool(Action::Redo, "Redo", Icon::Redo, "Redo project edit", "Ctrl+Y"),
+        ],
+        extras: &[],
+    },
+];
+
+impl Action {
+    /// Keep future controls visible on wide ribbons but out of compact promoted rows.
+    fn implemented(self) -> bool {
+        matches!(
+            self,
+            Self::Symbol
+                | Self::Port
+                | Self::NewSheet
+                | Self::Subsheet
+                | Self::Wire
+                | Self::Move
+                | Self::Rotate
+                | Self::Delete
+                | Self::Slice
+                | Self::Heal
+                | Self::AutoHeal
+                | Self::Save
+                | Self::Undo
+                | Self::Redo
+        )
+    }
+
+    /// Availability uses the same current view/session state as the existing command handlers.
+    fn enabled(self, app: &PcbApp) -> bool {
+        if !self.implemented() {
+            return false;
+        }
+        let project = app.session.project().is_some();
+        let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
+        match self {
+            Self::NewSheet => app.session.available(pcbcraft_engine::sheets::CREATE_SHEET),
+            Self::Save => app.can_save_project(),
+            Self::Undo => app.session.available("edit.undo"),
+            Self::Redo => app.session.available("edit.redo"),
+            Self::Rotate => schematic && app.views.active.schematic.tool.is_none() && app.views.active.schematic.selection.single_symbol().is_some(),
+            Self::Delete => {
+                schematic && (!app.views.active.schematic.selection.is_empty() || app.views.active.schematic.selected_sheet_symbol.is_some())
+            }
+            Self::Slice => schematic && app.views.active.schematic.selected_leg.as_ref().is_some_and(|leg| leg.split.is_some()),
+            Self::Heal => {
+                schematic && !app.views.active.schematic.selection.wires.is_empty() && app.views.active.schematic.selection.symbols.is_empty()
+            }
+            _ => project && schematic,
+        }
+    }
+
+    /// Tool/toggle ink is local presentation state and never changes authored data.
+    fn active(self, app: &PcbApp) -> bool {
+        match self {
+            Self::Symbol => matches!(app.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
+            Self::Port => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, .. })),
+            Self::Subsheet => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Sheet, .. })),
+            Self::Wire => matches!(app.views.active.schematic.tool, Some(Tool::Wire { .. })),
+            Self::AutoHeal => app.preferences.auto_heal_wires,
+            _ => false,
+        }
+    }
+}
+
+impl PcbApp {
+    /// Render the ported group definitions with the upstream chrome and command authority.
+    /// Compact ribbons retain working controls; planned tools remain in caption menus.
+    pub(super) fn ported_ribbon_tab(&mut self, ui: &mut egui::Ui, slot: usize) {
+        let groups = match slot {
+            2 => ANALYZE,
+            3 => LIBRARIES,
+            4 => MANAGE,
+            _ => CAPTURE,
+        };
+        let compact = workspace::ribbon_is_compact(ui);
+        for (index, group) in groups.iter().enumerate() {
+            if index > 0 {
+                workspace::ribbon_separator(ui);
+            }
+            let promoted: Vec<_> = group.tools.iter().copied().filter(|t| !compact || t.action.implemented()).collect();
+            let extra: Vec<_> =
+                group.tools.iter().copied().filter(|t| compact && !t.action.implemented()).chain(group.extras.iter().copied()).collect();
+            let render = |t: &ToolSpec| RibbonTool {
+                icon: t.icon,
+                label: t.label,
+                description: t.hint,
+                shortcut: t.key,
+                enabled: t.action.enabled(self),
+                active: t.action.active(self),
+                toggle: t.action == Action::AutoHeal,
+            };
+            let tools: Vec<_> = promoted.iter().map(render).collect();
+            let menu: Vec<_> = extra.iter().map(render).collect();
+            if let Some(picked) = workspace::ribbon_group_with_menu(ui, group.title, &tools, &menu)
+                && let Some(tool) = promoted.iter().chain(&extra).nth(picked)
+            {
+                self.ribbon_action(ui.ctx(), tool.action);
+            }
+        }
+    }
+
+    /// Ported toolbar actions dispatch through the existing revision-checked engine/view paths.
+    fn ribbon_action(&mut self, ctx: &egui::Context, action: Action) {
+        if !action.enabled(self) {
+            return;
+        }
+        match action {
+            Action::Symbol => self.parts.focus_search(),
+            Action::Port => self.begin_hierarchy(crate::hierarchy::Kind::Label),
+            Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),
+            Action::NewSheet => {
+                self.begin_sheet_edit(self.views.active.id(), pcbcraft_engine::sheets::CREATE_SHEET, None);
+                if matches!(self.dialog, Dialog::Sheet(_)) {
+                    ctx.send_viewport_cmd_to(editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+                }
+            }
+            Action::Wire => self.begin_wire(),
+            Action::Move => self.views.active.cancel_gesture(),
+            Action::Rotate => self.edit_selected(SymbolAction::Rotate),
+            Action::Delete => {
+                if let Some(id) = self.views.active.schematic.selected_sheet_symbol {
+                    if let Some(source) = self.views.active.input(&self.session) {
+                        self.hierarchy_action(source, crate::hierarchy::Kind::Sheet, id, crate::hierarchy::Action::Delete);
+                    }
+                } else {
+                    self.delete_selection();
+                }
+            }
+            Action::Slice => {
+                if let Some(leg) = self.views.active.schematic.selected_leg.clone() {
+                    self.edit_wire(crate::schematic_canvas::WireAction::Slice, &leg);
+                }
+            }
+            Action::Heal => {
+                self.run(
+                    pcbcraft_engine::HEAL_WIRES,
+                    &json!({"items":self.views.active.schematic.selection,"expected_revision":self.session.revision()}),
+                );
+                if self.message.is_none() {
+                    self.select(Selection::default());
+                }
+            }
+            Action::AutoHeal => self.preferences.auto_heal_wires = !self.preferences.auto_heal_wires,
+            Action::Save => self.primary_save(ctx),
+            Action::Undo => self.run("edit.undo", &serde_json::Value::Null),
+            Action::Redo => self.run("edit.redo", &serde_json::Value::Null),
+            _ => {}
+        }
+    }
+}

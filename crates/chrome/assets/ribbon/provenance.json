@@ -1,0 +1,137 @@
+{
+  "repository": "https://github.com/travle1/pcbcraft-next",
+  "revision": "568cd495397a91563e563e7163efb226d84fa83a",
+  "license": "MIT OR Apache-2.0",
+  "files": [
+    {
+      "file": "sheet.svg",
+      "source": "assets/original/sheet.svg",
+      "sha256": "8300f13bdefdb766877f19fef056ab5ea1ef4c4e8a0ddb56a207a963705b7bbd"
+    },
+    {
+      "file": "subsheet.svg",
+      "source": "assets/original/subsheet.svg",
+      "sha256": "479c38a014de407fe78d81b4116d16b9fa9f1bbd5096df171e1e9268d10c8d6e"
+    },
+    {
+      "file": "port.svg",
+      "source": "assets/original/port.svg",
+      "sha256": "c84fd39722cffa5c4f1f122b5192d78d7da6bd25842c4dd4b521a71ceedd8919"
+    },
+    {
+      "file": "text.svg",
+      "source": "assets/original/text.svg",
+      "sha256": "35f3e590ad29258c2f2f138f621df190431a7b60fe2b5ccfd8b2499c90a7904d"
+    },
+    {
+      "file": "power.svg",
+      "source": "assets/original/power.svg",
+      "sha256": "4ef9b3067641299eb528ec7b092260950ecc1ab3e234dba10ae8459b6db14ba9"
+    },
+    {
+      "file": "bus.svg",
+      "source": "assets/original/bus.svg",
+      "sha256": "aed74219af795251b1306820e9a12f7a0268f057032cdd11fa335c9f6ad53b73"
+    },
+    {
+      "file": "net-label.svg",
+      "source": "assets/original/net-label.svg",
+      "sha256": "b28d8146bc13e4f7df628f742f2dd13e931bc4183227010c3d14efd471ca910e"
+    },
+    {
+      "file": "rules.svg",
+      "source": "assets/original/rules.svg",
+      "sha256": "c0010e30d4f3c37a8f83096dd19ceb590a20baea445649c76d4e58fd869e372b"
+    },
+    {
+      "file": "erc.svg",
+      "source": "assets/original/erc.svg",
+      "sha256": "f1b77a47c9f406ca2eee8892983b03cd06f12d4e5e7d887f1e610780444f6df7"
+    },
+    {
+      "file": "sync.svg",
+      "source": "assets/original/sync.svg",
+      "sha256": "0e14daabb6caa6e88b8b146d8246c826e5b35108a166db0fe3cd92f256beadff"
+    },
+    {
+      "file": "place-symbol.svg",
+      "source": "assets/original/place-symbol.svg",
+      "sha256": "21271ad2fc56c7cc849ddb5ff152f2e7758030d50bac76991ba7fb6909048807"
+    },
+    {
+      "file": "wire.svg",
+      "source": "assets/original/wire.svg",
+      "sha256": "f070ae7f4d99e05cd7d3fc8f9caf3d8b6829a599ce5ba4d516f2374f456e2d05"
+    },
+    {
+      "file": "move.svg",
+      "source": "assets/family/icons/move.svg",
+      "sha256": "9bd2442fea29e10c458559cdf60922f74da39efbe285afb32e8f721b38393d57",
+      "upstream": {
+        "path": "assets/family/icons/move.svg",
+        "source": "assets/icons/ui/design/svg/model/move.svg",
+        "repository": "https://github.com/tangency-labs/solidcraft",
+        "revision": "c553365a2197a689e749389a6fbf707a38df9b61",
+        "sha256": "9bd2442fea29e10c458559cdf60922f74da39efbe285afb32e8f721b38393d57",
+        "license": "MIT OR Apache-2.0",
+        "author": "SolidCraft contributors"
+      }
+    },
+    {
+      "file": "spin.svg",
+      "source": "assets/family/icons/spin.svg",
+      "sha256": "7b61b9b594717a8e8284248ed58ef7bd602c089ca725fe5c21b70b551522d76c",
+      "upstream": {
+        "path": "assets/family/icons/spin.svg",
+        "source": "assets/icons/ui/design/svg/flat/spin.svg",
+        "repository": "https://github.com/tangency-labs/solidcraft",
+        "revision": "60488a0837affcee79832bdb7bf6e860e84b10f2",
+        "sha256": "7b61b9b594717a8e8284248ed58ef7bd602c089ca725fe5c21b70b551522d76c",
+        "license": "MIT OR Apache-2.0",
+        "author": "SolidCraft contributors"
+      }
+    },
+    {
+      "file": "mirror.svg",
+      "source": "assets/family/icons/mirror.svg",
+      "sha256": "1e9d1e8ff7fe351ff4249887381b61a265a7d1f565f5b42417ca40f7bf50a8e8",
+      "upstream": {
+        "path": "assets/family/icons/mirror.svg",
+        "source": "assets/icons/ui/design/svg/model/mirror.svg",
+        "repository": "https://github.com/tangency-labs/solidcraft",
+        "revision": "c553365a2197a689e749389a6fbf707a38df9b61",
+        "sha256": "1e9d1e8ff7fe351ff4249887381b61a265a7d1f565f5b42417ca40f7bf50a8e8",
+        "license": "MIT OR Apache-2.0",
+        "author": "SolidCraft contributors"
+      }
+    },
+    {
+      "file": "list.svg",
+      "source": "assets/family/icons/list.svg",
+      "sha256": "eaf5009fd724130dff9ddac6ddbd65ed02c4af9dd931abd77bdf2562fdb27c53",
+      "upstream": {
+        "path": "assets/family/icons/list.svg",
+        "source": "assets/icons/ui/design/svg/model/list.svg",
+        "repository": "https://github.com/tangency-labs/solidcraft",
+        "revision": "c553365a2197a689e749389a6fbf707a38df9b61",
+        "sha256": "eaf5009fd724130dff9ddac6ddbd65ed02c4af9dd931abd77bdf2562fdb27c53",
+        "license": "MIT OR Apache-2.0",
+        "author": "SolidCraft contributors"
+      }
+    },
+    {
+      "file": "configuration_table.svg",
+      "source": "assets/family/icons/configuration_table.svg",
+      "sha256": "348d67742590c052dece4ca4b94af229de0adaa4612c10733fea602b08101b34",
+      "upstream": {
+        "path": "assets/family/icons/configuration_table.svg",
+        "source": "assets/icons/ui/design/svg/model/configuration_table.svg",
+        "repository": "https://github.com/tangency-labs/solidcraft",
+        "revision": "c553365a2197a689e749389a6fbf707a38df9b61",
+        "sha256": "348d67742590c052dece4ca4b94af229de0adaa4612c10733fea602b08101b34",
+        "license": "MIT OR Apache-2.0",
+        "author": "SolidCraft contributors"
+      }
+    }
+  ]
+}

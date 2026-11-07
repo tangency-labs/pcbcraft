@@ -569,3 +569,24 @@ fn arrangement_window_commands_follow_the_tabs() {
     assert_eq!(inspected(&h), json!({"active": focus, "tabs": [{"id": focus, "name": "Board only"}]}));
     assert_eq!(h.state().session.revision(), revision);
 }
+
+/// Legacy View=1 and the additional tab slots survive the actual arrangement restore path.
+#[test]
+fn saved_ribbon_tabs_keep_the_legacy_view_slot() {
+    let mut h = harness();
+    for (name, slot) in [("View", 1), ("Analyze", 2), ("Libraries", 3), ("Manage", 4)] {
+        click(&mut h, name);
+        let saved = h.state().arrangement_snapshot().unwrap();
+        assert_eq!(saved.hosts[0].panels.ribbon, slot);
+        let decoded: Snapshot = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert!(decoded.valid());
+        click(&mut h, "Capture");
+        assert!(h.state_mut().restore_arrangement(&decoded, &egui::Context::default()));
+        h.run();
+        assert_eq!(h.state().ribbon_tab, slot);
+        assert_eq!(h.state().arrangement_snapshot().unwrap(), saved);
+    }
+    let mut invalid = h.state().arrangement_snapshot().unwrap();
+    invalid.hosts[0].panels.ribbon = 5;
+    assert!(!invalid.valid());
+}

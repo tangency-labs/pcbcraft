@@ -19,6 +19,7 @@ mod hierarchy;
 mod multiple_sheets;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
+mod ribbon;
 mod save_changes;
 mod split_editors;
 
@@ -1673,6 +1674,32 @@ mod live_mcp {
         assert_eq!(refused["isError"], true);
 
         assert_eq!(document(&harness), untouched);
+    }
+
+    /// Live clients can select every schematic tab; PCB-only hosts refuse schematic tabs
+    /// before changing any host state, and tab switches never edit project history.
+    #[test]
+    fn ported_ribbon_tabs_are_addressable_without_changing_the_project() {
+        let mut h = harness();
+        wiring_project(&mut h);
+        let (port, token) = connect(&mut h);
+        let connection = (port, token.as_str());
+        let original = document(&h);
+        for tab in ["analyze", "libraries", "manage", "view", "capture"] {
+            let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":tab}));
+            h.run();
+            assert_eq!(result["windows"][0]["ribbon_tab"], tab);
+        }
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout");
+        let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
+        for tab in ["analyze", "libraries", "manage"] {
+            let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
+            assert_eq!(error["isError"], true);
+            assert!(error["content"][0]["text"].as_str().unwrap().contains("schematic workspace"));
+            assert_eq!(payload(tool(&mut h, connection, "inspect_editor", json!({}))), before);
+        }
+        assert_eq!(document(&h), original);
     }
 
     /// Stale IDs, bad parameters and an open dialog fail visibly and change nothing.

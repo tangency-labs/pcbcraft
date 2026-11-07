@@ -52,6 +52,7 @@ pub(crate) struct PanelState {
     pub browser: [bool; 2],
     pub parts: PartsState,
     pub nets: bool,
+    /// Stable presentation slots: Capture/Layout=0, legacy View=1, Analyze/Libraries/Manage=2..4.
     pub ribbon: usize,
 }
 
@@ -115,7 +116,7 @@ impl Snapshot {
             if !host.layout.members(0, &mut placed)
                 || !host.layout.visible(host.focused)
                 || !host.panels.parts.valid()
-                || host.panels.ribbon > 1
+                || host.panels.ribbon > 4
                 || host.bounds.as_ref().is_some_and(|bounds| !bounds.valid())
             {
                 return false;
