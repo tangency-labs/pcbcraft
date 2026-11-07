@@ -43,6 +43,8 @@ pub const PAD_PICK_PADDING: f32 = 3.0;
 pub const TEXT_PICK_PADDING: f32 = 12.0;
 /// A quiet authoring grid leaves technical ink and copper dominant.
 pub const GRID_OPACITY: u8 = 15;
+/// Physical drawing strokes retain a readable screen-space minimum.
+pub const MIN_DRAWING_STROKE: f32 = 0.7;
 /// Definition graphics share the schematic ink palette and ordinary stroke weight.
 pub fn ink_stroke() -> egui::Stroke {
     egui::Stroke::new(1.5, Tokens::get().canvas_ink)

@@ -267,6 +267,32 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
             closed: true,
         })
         .collect();
+    for artwork in &definition.artwork {
+        for mut points in artwork.graphic.paths() {
+            if artwork.graphic.closed()
+                && points.first() != points.last()
+                && let Some(first) = points.first().copied()
+            {
+                points.push(first);
+            }
+            if artwork.purpose == super::definition::GraphicPurpose::Silkscreen {
+                let style = super::silkscreen::Settings { stroke_width_nm: artwork.graphic.stroke_nm, ..style };
+                result.extend(super::silkscreen::clipped(vec![points], &definition.pads, style).into_iter().map(|path| GraphicView {
+                    purpose: artwork.purpose,
+                    points: path.into_iter().map(|p| footprint.point(p)).collect(),
+                    stroke_nm: Some(artwork.graphic.stroke_nm),
+                    closed: false,
+                }));
+            } else {
+                result.push(GraphicView {
+                    purpose: artwork.purpose,
+                    points: points.into_iter().map(|p| footprint.point(p)).collect(),
+                    stroke_nm: Some(artwork.graphic.stroke_nm),
+                    closed: artwork.graphic.closed(),
+                });
+            }
+        }
+    }
     let mut paths: Vec<_> = definition
         .silkscreen
         .iter()

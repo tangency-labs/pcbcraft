@@ -23,7 +23,7 @@ icons, artwork, library assets or example project files informed the implementat
 | --- | --- | --- |
 | [KiCad 10 Schematic Editor](https://docs.kicad.org/10.0/en/eeschema/eeschema.html), Editing symbol properties / Properties Manager | A selection inspector complements a detailed properties dialog; compatible properties can be edited across a selection. | Keep the compact inspector and expanded form on the same command path. Add bulk editing only for explicitly supported common properties. |
 | Same manual, Creating and editing symbols | The symbol editor separates graphics, terminals and fields; library edits and schematic-copy edits have different update scopes. Pin tables support larger devices. | Preserve stable terminal identities. Make source versus project-copy editing explicit, and review updates to existing components. Treat multi-unit support and pin-table import as later bounded work. |
-| [KiCad 10 PCB Editor](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html), Footprint editor / Footprint pads | Footprint authoring has its own canvas; pads have explicit numbers, geometry and technology. Repeated placement, pad tables, arrays and defaults assist larger packages. | Start with original SMD and plated-hole geometry supported by the native schema. Keep pad numbers distinct from positions and preserve mappings. Add arrays and bulk pad editing after basic authoring is reliable. |
+| [KiCad 10 PCB Editor](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html), Footprint editor / Footprint pads | Footprint authoring has its own canvas; pads have explicit numbers, geometry and technology. Repeated placement, pad tables, arrays and defaults assist larger packages. | Start with original SMD and plated-hole geometry supported by the native schema. Keep pad numbers distinct from positions and preserve mappings. Provide arrays with automatic unused numbers; leave bulk pad tables for a subsequent slice. |
 | Same manual, Checking footprints | Checks cover courtyard problems, holes/annuli, incompatible layers and copper or silkscreen collisions. | Report the checks actually implemented. A definition passing schema validation must not be presented as manufacturing-qualified or as passing full DRC. |
 | [Altium: Creating a Schematic Symbol](https://www.altium.com/documentation/altium-designer/components-libraries/creating-schematic-symbol) | Graphics and electrically active pin ends are separate; symbol-level and primitive-level properties are contextual. | Keep the selected primitive's inspector separate from definition metadata. Show connection points clearly while editing. |
 | [Altium: Creating a PCB Footprint](https://www.altium.com/documentation/altium-designer/components-libraries/creating-pcb-footprint) | Origin/grid setup, numbered pads, overlays and mechanical graphics support footprint construction; dimensions should be checked against component specifications. | Make the placement origin visible, support exact unit-aware dimensions and separate copper, silkscreen, fabrication and courtyard purposes. Mask/paste behavior and 3D need explicit subsequent contracts. |
@@ -79,7 +79,7 @@ multi-unit devices, further source integration, manufacturing layers, arbitrary 
 and reviewed library-to-project updates need their own supported contracts and
 acceptance evidence.
 
-## Initial authoring slice
+## Authoring basics
 
 Choose **Symbol Editor** or **Footprint Editor** from the workspace picker.
 The picker remains accessible in compact headers, and each editor's **Library → New**
@@ -97,24 +97,57 @@ The browser tree selects definition metadata or a stable primitive ID.
 Compact and expanded properties share one revision-bound draft, including invalid
 typed lengths; Apply commits once, and Reset discards only those field edits.
 
-Symbols support numbered terminals, names, electrical types, line/rectangle/circle
-graphics and text. Existing polylines can be edited in expanded properties.
-Footprints support numbered rectangular, rounded or circular SMD/plated-hole pads,
-technical rectangles on fabrication/silkscreen/courtyard and silkscreen paths.
+Symbols have integrated pin leads with length, four directions, name/number visibility,
+label sizes and line, inverted, clock or inverted-clock styles. Electrical type is
+independent of the graphical marker. Newly created pins have a visible lead;
+older saved items without appearance keep their separate drawing intact. An explicit
+Edit copy integrates a legacy lead only when its axis-aligned stroke is unambiguous;
+a legacy pin can also gain a lead through Properties → Add pin lead → Apply.
+
+Both editors draw lines, rectangles, circles, parameterized arcs, polylines and
+stroke text. A two-click arc starts as a semicircle; Properties sets its exact
+start/sweep angles. Polyline clicks add vertices; Enter/double-click finishes an
+open path and clicking the first vertex closes it. Symbol bodies support no fill,
+solid fill or canvas-background fill (filled polygons must be convex). Footprint
+artwork carries fabrication, silkscreen or courtyard purpose and physical stroke
+width; footprint fills are not supported. Text retains editable content, size,
+alignment and rotation rather than becoming anonymous line segments.
+
+Footprints support SMD/plated through-hole rectangular, rounded, circular and oval
+pads. Pad numbers accept the same 1–8 alphanumeric/`+`/`-`/`_` spelling as terminal
+identifiers. Through-hole selection supplies a drill default and validates a
+positive annulus; circles share one diameter. Slot/NPTH/pad-stack/mask/paste editing
+is still outside this slice.
+
+Modifier-click and directional selection boxes select groups; the Browser supports
+modifier selection too. Draw/Modify/Copy ribbon groups expose move, quarter-turn
+rotation, mirrors, delete, duplicate, clipboard and rectangular arrays. An array
+includes its original cell, accepts unit-aware row/column pitches and creates unused
+electrical numbers in row order. The whole operation is one validated undo step.
+Duplicate and paste have a cancellable placement preview. The internal clipboard
+works between documents of the same kind. Pin/pad repeat placement inherits the
+selected prototype's dimensions, type and orientation while allocating an unused
+number. Selected pin names remain unchanged so users can name related signals.
+
 Fields accept explicit mm, mil or inch lengths and store integer nanometres.
-Drawing and movement snap to the editor grid; symbol pins must satisfy the native
-1.27 mm terminal grid. The local origin is fixed at zero and visible on the canvas.
-M previews a move and clicks commit; R quarter-turns physical pads/rectangles.
-Escape cancels unfinished gestures. Schema validation checks supported geometry
-and electrical identities, including unique numbers and valid drills/annuli;
-it does not perform manufacturing DRC.
+Drawing and movement snap to the editor grid; symbol attachment points retain the
+native 1.27 mm grid and ±12.7 mm limit. Non-electrical symbol drawing may extend to
+±100 mm. Set origin moves the entire definition relative to one selected anchor,
+subject to the same validation. The origin remains visible on the canvas.
+M starts a move, R/Shift+R rotates, P places a pin/pad, L draws a line, T places
+text, E/double-click opens expanded properties and Escape cancels a gesture.
+Ctrl/Cmd+A/C/V/D select all, copy, paste and duplicate in the focused canvas.
+Schema validation checks geometry, unique numbers and valid drills/annuli; it does
+not perform manufacturing DRC. Drafts can temporarily have no terminals or pads
+and still save/reopen; native definition export requires at least one.
 
 The editable `pcbcraft-library-item/1` JSON envelope records definition identity,
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
 Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
 and 64 undo snapshots per document. The current footprint schema further limits
-a definition to 64 pads, 64 technical rectangles and 64 silkscreen paths.
+a definition to 128 pads, 128 parameterized artwork objects, 64 legacy technical
+rectangles and 64 legacy silkscreen paths.
 Object/content allocation counters survive
 Undo and save/reopen, so deleted IDs and observed content revisions are not reused.
 Undo can therefore leave allocation bookkeeping unsaved even when geometry returns
@@ -148,5 +181,30 @@ navigation. `app.set_workspace` accepts source pane and placement; ordinary
 `view.close` use the same layout path for definition and project views. Edits require
 that library revision and use the same engine authoring transactions as the GUI.
 Headless project sessions do not yet host these editor documents. Multi-unit
-symbols, arrays, bulk tables, arbitrary pad shapes, mask/paste, 3D, source publishing
+symbols, bulk tables, arbitrary pad shapes, mask/paste, 3D, source publishing
 and reviewed updates to placed components remain follow-up scope under #78/#79.
+
+## Additional manual review and local verification
+
+The November 2026 usability expansion consulted the same publisher manuals above,
+with attention to the KiCad symbol-pin and footprint construction sections and
+Altium pin properties, duplication and footprint origin/grid workflows. These
+informed the feature list; the geometry, forms, commands and glyphs are original
+PCBcraft work using existing Craft chrome and the qualified Technical stroke font.
+No vendor component definitions or implementation sources were used.
+
+Engine regressions build an eight-pin symbol and an eight-pad plated footprint,
+round-trip their editable/native forms, preserve source definitions, swap numbers
+atomically and reject colliding, oversized, stale and partially allocated arrays.
+GUI regressions exercise ribbon arrays, compact/expanded pin fields, cancelled
+duplication, live group selection and stale array refusal. Native lifecycle checks
+remain separate from these widget-driven tests.
+
+A separate shared-state failure review followed the changed command callers,
+per-pane draft binding and existing file-worker completion path. Tests exercise
+partial array failure without identity allocation, stale batches from another
+pane, cancelled placement, save completion with newer edits and disconnected
+file workers. Reading the callers confirmed that transforms/clipboard/arrays
+perform no new blocking I/O, validate temporary candidates before publication
+and leave stale field drafts with their original revision. Native tests exercise
+close cancellation and continued definition editing after the original host closes.

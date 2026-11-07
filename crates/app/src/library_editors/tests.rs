@@ -32,6 +32,7 @@ fn properties_forms_validate_atomically_and_protect_unsaved_fields() {
     let id = h.state().library_editors.active.unwrap();
     let before = h.state().library_editors.documents[&id].session.snapshot();
     crate::tests::click(&mut h, "Pad 1 · 1");
+    assert!(h.query_by_label("Number").is_some());
     h.get_by_label("Width (mm)").click();
     h.run();
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -60,10 +61,11 @@ fn properties_forms_validate_atomically_and_protect_unsaved_fields() {
     assert_eq!(h.state().library_editors.documents[&id].session.snapshot().native().unwrap(), before.native().unwrap());
     crate::tests::click(&mut h, "Redo Library Edit");
     assert_eq!(h.state().library_editors.documents[&id].session.snapshot(), changed);
-    crate::tests::click(&mut h, "Layers");
-    crate::tests::click(&mut h, "All copper");
+    crate::tests::click(&mut h, "Pad type");
+    crate::tests::click(&mut h, "Through hole");
     h.get_by_label("Drill (mm)").click();
     h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.get_by_label("Drill (mm)").type_text("0.3");
     h.run();
     crate::tests::click(&mut h, "Apply");
@@ -214,7 +216,7 @@ fn canvas_selection_move_and_cancel_use_library_history() {
     crate::tests::click(&mut h, "Undo Library Edit");
     assert_eq!(h.state().library_editors.documents[&id].session.snapshot().native().unwrap(), before.native().unwrap());
     h.state_mut().library_editors.documents.get_mut(&id).unwrap().tool =
-        canvas::Tool::Draw { kind: canvas::Place::Outline, start: None, revision: 2 };
+        canvas::Tool::Draw { kind: canvas::Place::Rectangle, start: None, revision: 2 };
     click_at(&mut h, at);
     h.key_press(egui::Key::Escape);
     h.run();
@@ -772,4 +774,71 @@ fn review_pending_fields_after_retargeting_their_original_pane() {
     assert!(h.state().library_editors.documents[&document].pending());
     crate::tests::click(&mut h, "Apply");
     assert!(h.state().library_editors.documents[&document].error.is_some());
+}
+
+/// Ribbon arrays use the captured document revision and one undo entry; duplicate cancellation
+/// and compact/expanded pin forms leave the project session independent.
+#[test]
+fn authoring_basics_ribbon_arrays_and_pin_properties() {
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Symbol);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let id = h.state().library_editors.active.unwrap();
+    crate::tests::click(&mut h, "Pin 1 · 1");
+    assert!(h.query_by_label("Length (mm)").is_some());
+    crate::tests::click(&mut h, "More properties…");
+    assert!(matches!(h.state().dialog, Dialog::LibraryProperties(..)));
+    crate::tests::click(&mut h, "Close");
+    let before = h.state().library_editors.documents[&id].session.snapshot();
+    crate::tests::click(&mut h, "Array");
+    assert!(matches!(h.state().dialog, Dialog::LibraryArray(..)));
+    for (label, value) in [("Columns", "1"), ("Rows", "4"), ("Row pitch (mm)", "2.54")] {
+        h.get_by_label(label).click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label(label).type_text(value);
+        h.run();
+    }
+    crate::tests::click(&mut h, "Create");
+    let changed = h.state().library_editors.documents[&id].session.snapshot();
+    assert_eq!(changed.objects.len(), before.objects.len() + 3);
+    assert_eq!(h.state().library_editors.documents[&id].session.revision(), 1);
+    crate::tests::click(&mut h, "Undo Library Edit");
+    assert_eq!(h.state().library_editors.documents[&id].session.snapshot().native().unwrap(), before.native().unwrap());
+    crate::tests::click(&mut h, "Pin 1 · 1");
+    crate::tests::click(&mut h, "Duplicate");
+    assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }));
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+    assert_eq!(h.state().library_editors.documents[&id].session.revision(), 2);
+    assert_eq!(h.state().session.revision(), 0);
+}
+
+/// A stale array cannot overwrite edits from another pane; selection is available through the
+/// same live contract and an invalid duplicate selection is refused before changing presentation.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn library_group_selection_and_stale_array_do_not_overwrite_edits() {
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Footprint);
+    let id = app.library_editors.active.unwrap();
+    let view = app.views.active.id();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let ctx = h.ctx.clone();
+    h.state_mut().run_window_command(&ctx, "app.library_view", &json!({"document":id,"view":view.0,"selected_objects":[1,2]})).unwrap();
+    assert_eq!(h.state().library_editors.documents[&id].selection.len(), 2);
+    assert!(h.state_mut().run_window_command(&ctx, "app.library_view", &json!({"document":id,"view":view.0,"selected_objects":[1,1]})).is_err());
+    let doc = &h.state().library_editors.documents[&id];
+    let draft = editing::ArrayDraft::new(id, view, doc);
+    h.state_mut().library_editors.edit(id, 0, Action::Delete { objects: vec![3] }).unwrap();
+    h.state_mut().dialog = Dialog::LibraryArray(Box::new(draft));
+    h.run();
+    crate::tests::click(&mut h, "Create");
+    assert!(matches!(h.state().dialog, Dialog::LibraryArray(..)));
+    assert_eq!(h.state().library_editors.documents[&id].session.revision(), 1);
+    assert_eq!(h.state().library_editors.documents[&id].session.snapshot().objects.len(), 2);
+    crate::tests::click(&mut h, "Cancel");
 }

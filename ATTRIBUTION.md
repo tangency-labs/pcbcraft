@@ -615,3 +615,11 @@ Definition views now use the existing upstream pane/window layout and native
 close controller. Per-pane authoring presentation, shared-session routing and
 closed-pane field recovery are original upstream code; no external source,
 asset or dependency was added for the layout integration.
+
+The authoring usability expansion adds original integrated pin geometry, editable
+technical artwork, oval pads, group transforms, duplication/arrays and clipboard
+transactions. Published KiCad 10 and Altium user manuals were consulted for the
+behavior comparison recorded in the properties/editor notes; no vendor code,
+icons, library data or fixtures were used. Parameterized text and pin labels reuse
+the existing qualified PCBcraft Technical stroke font, with its existing notices.
+No new dependency or third-party asset was added.

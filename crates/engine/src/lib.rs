@@ -9,6 +9,7 @@ pub mod authoring;
 pub mod board;
 pub mod hierarchy;
 pub mod library;
+pub mod library_graphics;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;

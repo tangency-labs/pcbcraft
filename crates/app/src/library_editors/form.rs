@@ -27,19 +27,67 @@ impl Draft {
     }
     /// Use human-readable fields rather than exposing serialization keys or a JSON text editor.
     pub(super) fn show(&mut self, ui: &mut Ui, expanded: bool) {
-        fields(
-            ui,
-            &mut self.value,
-            &mut self.numbers,
-            "",
-            expanded,
-            if self.kind == Kind::Footprint && self.object.is_none() { &["reference_prefix", "default_value"] } else { &[] },
-        );
+        if self.value["type"] == "pin" && self.value.get("appearance").is_none() && ui.button("Add pin lead").clicked() {
+            self.value["appearance"] = serde_json::to_value(pcbcraft_engine::schematic::PinAppearance::default()).unwrap_or(Value::Null);
+        }
+        let pad = self.value["type"] == "pad";
+        let mut hidden = Vec::new();
+        if self.kind == Kind::Footprint {
+            hidden.push("fill");
+        }
+        if self.kind == Kind::Footprint && self.object.is_none() {
+            hidden.extend(["reference_prefix", "default_value"]);
+        }
+        if pad {
+            hidden.push("copper");
+            if self.value["pad"]["shape"] != "rounded_rectangle" {
+                hidden.push("corner_radius_nm");
+            }
+            if self.value["pad"]["shape"] == "circle" {
+                hidden.push("height_nm");
+            }
+            let mut kind = if self.value["pad"]["copper"] == "all_copper" { "through_hole" } else { "smd" }.to_owned();
+            let before = kind.clone();
+            properties::choice(
+                ui,
+                "Pad type",
+                egui::Id::new("pad_type"),
+                &mut kind,
+                &[("smd", "SMD".into()), ("through_hole", "Through hole".into())],
+            );
+            if kind != before {
+                self.value["pad"]["copper"] = json!(if kind == "smd" { "component_side" } else { "all_copper" });
+                self.value["pad"]["drill_nm"] = if kind == "smd" {
+                    Value::Null
+                } else {
+                    json!(
+                        self.value["pad"]["width_nm"].as_i64().unwrap_or(600_000).min(self.value["pad"]["height_nm"].as_i64().unwrap_or(600_000)) / 2
+                    )
+                };
+                self.numbers.remove(".pad.drill_nm");
+            }
+        }
+        let old_shape = self.value["pad"]["shape"].clone();
+        fields(ui, &mut self.value, &mut self.numbers, "", expanded, &hidden);
+        if pad && self.value["pad"]["shape"] != old_shape {
+            self.value["pad"]["corner_radius_nm"] = json!(if self.value["pad"]["shape"] == "rounded_rectangle" {
+                self.value["pad"]["width_nm"].as_i64().unwrap_or(600_000).min(self.value["pad"]["height_nm"].as_i64().unwrap_or(600_000)) / 4
+            } else {
+                0
+            });
+            self.numbers.remove(".pad.corner_radius_nm");
+        }
     }
     /// Parse all typed lengths once at Apply; native schema validation then checks the transaction.
     pub(super) fn action(&self) -> Result<Action, String> {
         let mut value = self.value.clone();
         resolve(&mut value, &self.numbers, "")?;
+        if value["type"] == "pin" && value["name"].as_str().is_some_and(|name| name.trim().is_empty()) {
+            value["name"] = Value::Null;
+        }
+        if value["type"] == "pad" && value["pad"]["shape"] == "circle" {
+            value["pad"]["height_nm"] = value["pad"]["width_nm"].clone();
+        }
         if let Some(object) = self.object {
             Ok(Action::Replace { object, primitive: serde_json::from_value(value).map_err(|e| e.to_string())? })
         } else {
@@ -66,13 +114,20 @@ fn label(path: &str) -> String {
             "x_nm" => "X (mm)".into(),
             "y_nm" => "Y (mm)".into(),
             "width_nm" => "Width (mm)".into(),
-            "height_nm" => "Height (mm)".into(),
+            "height_nm" => if path.contains("geometry") { "Text size (mm)" } else { "Height (mm)" }.into(),
             "radius_nm" => "Radius (mm)".into(),
             "corner_radius_nm" => "Corner (mm)".into(),
             "drill_nm" => "Drill (mm)".into(),
             "reference_prefix" => "Ref prefix".into(),
             "default_value" => "Value".into(),
             "electrical_type" => "Electrical".into(),
+            "length_nm" => "Length (mm)".into(),
+            "stroke_nm" => "Stroke (mm)".into(),
+            "name_height_nm" => "Name size (mm)".into(),
+            "number_height_nm" => "Number size (mm)".into(),
+            "show_name" => "Show name".into(),
+            "show_number" => "Show number".into(),
+            "appearance" | "geometry" | "artwork" => String::new(),
             "at" | "center" | "pad" | "graphic" | "path" | "points" => String::new(),
             "number" => "Number".into(),
             "name" => "Name".into(),
@@ -88,8 +143,23 @@ fn label(path: &str) -> String {
 /// Known native enum values are choices, while electrical names/numbers remain editable strings.
 fn choices(path: &str) -> &'static [&'static str] {
     match path.rsplit('.').next().unwrap_or("") {
-        "electrical_type" => &["passive", "input", "output", "bidirectional", "power_in", "power_out", "unspecified"],
-        "shape" => &["rectangle", "rounded_rectangle", "circle"],
+        "electrical_type" => &[
+            "passive",
+            "input",
+            "output",
+            "bidirectional",
+            "power_in",
+            "power_out",
+            "unspecified",
+            "tri_state",
+            "open_collector",
+            "open_emitter",
+            "no_connect",
+        ],
+        "shape" => &["rectangle", "rounded_rectangle", "circle", "oval"],
+        "orientation" => &["right", "down", "left", "up"],
+        "style" => &["line", "inverted", "clock", "inverted_clock"],
+        "fill" => &["none", "solid", "background"],
         "copper" => &["component_side", "all_copper"],
         "purpose" => &["fabrication", "silkscreen", "courtyard"],
         "align" => &["start", "middle", "end"],
@@ -191,6 +261,14 @@ fn priority(key: &str) -> usize {
         "name",
         "number",
         "electrical_type",
+        "appearance",
+        "orientation",
+        "length_nm",
+        "style",
+        "show_name",
+        "show_number",
+        "name_height_nm",
+        "number_height_nm",
         "at",
         "center",
         "from",

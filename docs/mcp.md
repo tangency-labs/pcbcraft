@@ -169,3 +169,12 @@ edits as the editor. Both accept `items: {"symbols": ["symbol-2"], "wires": []}`
 and `expected_revision`; moving also takes `dx_nm` and `dy_nm`. Obtain IDs from
 inspection. Missing IDs, stale revisions and invalid geometry reject the complete
 operation. Selecting a group and the live rectangle remain window state.
+
+Library authoring actions now include atomic `replace_many`, group `transform`,
+`duplicate`, typed-primitives `paste` and rectangular `array`, alongside the
+existing insert/replace/delete/history operations. They all require the current
+library document revision. Array row/column vectors and transform pivot/offset
+use integer-nanometre `Point` objects; copies allocate unused terminal/pad
+numbers. `app.library_view` can set a distinct `selected_objects` ID array instead
+of scalar `selected`; per-pane inspection reports `selection`. These are live
+editor contracts; headless project sessions do not host authoring documents.

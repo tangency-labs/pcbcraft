@@ -6,6 +6,13 @@ use pcbcraft_chrome::workspace::Placement;
 #[derive(Debug)]
 pub(super) struct Presentation {
     selected: Option<u64>,
+    selection: std::collections::BTreeSet<u64>,
+    prototype: Option<pcbcraft_engine::authoring::Primitive>,
+    drawing_purpose: pcbcraft_engine::board::definition::GraphicPurpose,
+    drawing_stroke_nm: i64,
+    drawing_fill: pcbcraft_engine::library_graphics::Fill,
+    array_requested: bool,
+    details_requested: bool,
     draft: Option<form::Draft>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
@@ -18,6 +25,13 @@ impl Presentation {
     fn fresh(doc: &mut Document) -> Self {
         Self {
             selected: None,
+            selection: Default::default(),
+            prototype: doc.prototype.clone(),
+            drawing_purpose: doc.drawing_purpose,
+            drawing_stroke_nm: doc.drawing_stroke_nm,
+            drawing_fill: doc.drawing_fill,
+            array_requested: false,
+            details_requested: false,
             draft: None,
             camera: doc.camera.fork_navigation(),
             collapsed: doc.collapsed,
@@ -29,6 +43,13 @@ impl Presentation {
     /// Only presentation exchanges render slots; the definition's session/history never moves.
     fn swap(&mut self, doc: &mut Document) {
         std::mem::swap(&mut self.selected, &mut doc.selected);
+        std::mem::swap(&mut self.selection, &mut doc.selection);
+        std::mem::swap(&mut self.prototype, &mut doc.prototype);
+        std::mem::swap(&mut self.drawing_purpose, &mut doc.drawing_purpose);
+        std::mem::swap(&mut self.drawing_stroke_nm, &mut doc.drawing_stroke_nm);
+        std::mem::swap(&mut self.drawing_fill, &mut doc.drawing_fill);
+        std::mem::swap(&mut self.array_requested, &mut doc.array_requested);
+        std::mem::swap(&mut self.details_requested, &mut doc.details_requested);
         std::mem::swap(&mut self.draft, &mut doc.draft);
         std::mem::swap(&mut self.camera, &mut doc.camera);
         std::mem::swap(&mut self.collapsed, &mut doc.collapsed);
@@ -108,7 +129,7 @@ impl PcbApp {
     pub(crate) fn inspect_library_view(&self, view: ViewId) -> Option<Value> {
         let id = self.views.view(view)?.definition?;
         let doc = self.library_editors.documents.get(&id)?;
-        macro_rules! state {($state:expr,$pending:expr)=>{json!({"document":id,"selected":$state.selected,"pending_fields":$pending,
+        macro_rules! state {($state:expr,$pending:expr)=>{json!({"document":id,"selected":$state.selected,"selection":$state.selection,"pending_fields":$pending,
             "ribbon_tab":(["draw","library","view"][$state.ribbon_tab]),"browser":!$state.collapsed[0],"properties":!$state.collapsed[1],
             "zoom_percent":($state.camera.zoom()*100.0).round(),"center":$state.camera.center(),"grid_spacing_nm":$state.camera.snap_nm()})};}
         if doc.bound_view == Some(view) { Some(state!(doc, doc.pending())) } else { doc.presentations.get(&view).map(|v| state!(v, v.pending())) }
@@ -244,7 +265,13 @@ impl PcbApp {
     pub(crate) fn library_pane(&mut self, ui: &mut Ui, view: ViewId) {
         let Some(id) = self.bind_library_view(view) else { return };
         let Some(doc) = self.library_editors.documents.get_mut(&id) else { return };
-        if ui.push_id(("library_document", view, id), |ui| doc.show(ui, self.preferences.navigation)).inner {
+        let expanded =
+            ui.push_id(("library_document", view, id), |ui| doc.show(ui, self.preferences.navigation, self.views.active.id() == view)).inner;
+        let array = std::mem::take(&mut doc.array_requested).then(|| editing::ArrayDraft::new(id, view, doc));
+        if let Some(array) = array {
+            self.dialog = Dialog::LibraryArray(Box::new(array));
+        }
+        if expanded {
             self.dialog = Dialog::LibraryProperties(id, view);
             ui.ctx().send_viewport_cmd_to(crate::editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
         }

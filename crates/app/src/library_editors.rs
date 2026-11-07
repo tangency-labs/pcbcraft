@@ -1,5 +1,6 @@
 //! Library definitions are document workspaces, separate from project instances and history.
 mod canvas;
+pub(super) mod editing;
 mod form;
 mod io;
 #[cfg(test)]
@@ -35,6 +36,13 @@ struct Document {
     bound_view: Option<crate::ViewId>,
     presentations: BTreeMap<crate::ViewId, views::Presentation>,
     selected: Option<u64>,
+    selection: std::collections::BTreeSet<u64>,
+    prototype: Option<pcbcraft_engine::authoring::Primitive>,
+    drawing_purpose: pcbcraft_engine::board::definition::GraphicPurpose,
+    drawing_stroke_nm: i64,
+    drawing_fill: pcbcraft_engine::library_graphics::Fill,
+    array_requested: bool,
+    details_requested: bool,
     draft: Option<form::Draft>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
@@ -106,7 +114,7 @@ impl Editors {
     /// Inspection identifies each document and its own revision, never the project revision.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"active":self.active,"file_operation":self.busy(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"state":doc.session.inspect(),"selected":doc.selected,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
+        json!({"active":self.active,"file_operation":self.busy(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
     }
     /// Admit a validated item with fresh runtime identity; duplicate portable IDs never replace
     /// unsaved open documents. Opening files and forks use this same ownership boundary.
@@ -132,6 +140,13 @@ impl Editors {
                 bound_view: None,
                 presentations: BTreeMap::new(),
                 selected: None,
+                selection: Default::default(),
+                prototype: None,
+                drawing_purpose: pcbcraft_engine::board::definition::GraphicPurpose::Fabrication,
+                drawing_stroke_nm: 100_000,
+                drawing_fill: Default::default(),
+                array_requested: false,
+                details_requested: false,
                 draft: None,
                 camera,
                 collapsed: [false, false],
@@ -204,18 +219,24 @@ impl Document {
     fn unsaved(&self) -> bool {
         self.session.dirty() || self.pending_any()
     }
-    /// Selection cannot silently discard unfinished edits; each document retains its own draft.
+    /// Selection cannot discard unfinished fields. Multiple objects retain their stable IDs,
+    /// while a single object remains the scalar inspector's target.
     fn select(&mut self, id: Option<u64>) -> Result<(), String> {
-        if id.is_some_and(|id| !self.session.snapshot().objects.contains_key(&id)) {
+        self.select_many(id.into_iter().collect())
+    }
+    /// Validate a whole selection before changing its primary inspector target or cancelling a tool.
+    fn select_many(&mut self, ids: std::collections::BTreeSet<u64>) -> Result<(), String> {
+        if ids.iter().any(|id| !self.session.snapshot().objects.contains_key(id)) {
             return Err("Unknown library primitive ID.".into());
         }
-        if self.selected != id {
+        if ids != self.selection {
             if self.pending() {
                 let error = "Apply or reset the property fields before changing selection.".to_owned();
                 self.error = Some(error.clone());
                 return Err(error);
             }
-            self.selected = id;
+            self.selection = ids;
+            self.selected = if self.selection.len() == 1 { self.selection.first().copied() } else { None };
             self.draft = None;
             self.tool = canvas::Tool::Select;
             self.error = None;
@@ -227,7 +248,15 @@ impl Document {
         if self.pending() {
             return Err("Apply or reset the property fields before editing the document.".into());
         }
+        let old = self.session.snapshot();
         self.session.execute(revision, action)?;
+        let next = self.session.snapshot();
+        let inserted: std::collections::BTreeSet<_> = next.objects.keys().filter(|id| !old.objects.contains_key(id)).copied().collect();
+        self.selection.retain(|id| next.objects.contains_key(id));
+        if !inserted.is_empty() {
+            self.selection = inserted;
+        }
+        self.selected = if self.selection.len() == 1 { self.selection.first().copied() } else { None };
         self.draft = None;
         self.tool = canvas::Tool::Select;
         if self.selected.is_some_and(|id| !self.session.snapshot().objects.contains_key(&id)) {
@@ -239,6 +268,10 @@ impl Document {
     /// A form retains invalid input and its original revision until Apply or Reset.
     fn properties(&mut self, ui: &mut Ui, expanded: bool) {
         properties::inspector_body(ui);
+        if self.selection.len() > 1 {
+            properties::identity(ui, &format!("{} objects", self.selection.len()), &self.session.snapshot().name);
+            return;
+        }
         if self.draft.as_ref().is_some_and(|draft| draft.revision != self.session.revision()) {
             if self.pending() {
                 self.error = Some("The library document changed; reset these fields before applying new edits.".into());
@@ -293,13 +326,17 @@ impl Document {
         properties::section(ui, if item.kind == Kind::Symbol { "Symbol primitives" } else { "Footprint primitives" });
         for (id, primitive) in &item.objects {
             let label = format!("{} · {}", canvas::name(primitive), id);
-            if ui.selectable_label(self.selected == Some(*id), label).clicked() {
-                let _ = self.select(Some(*id));
+            if ui.selectable_label(self.selection.contains(id), label).clicked() {
+                let mut selection = if ui.input(|i| i.modifiers.shift || i.modifiers.command) { self.selection.clone() } else { Default::default() };
+                if !selection.insert(*id) {
+                    selection.remove(id);
+                }
+                let _ = self.select_many(selection);
             }
         }
     }
     /// Compose cards and canvas from shared chrome while retaining a document-local camera.
-    fn show(&mut self, ui: &mut Ui, navigation: Navigation) -> bool {
+    fn show(&mut self, ui: &mut Ui, navigation: Navigation, active: bool) -> bool {
         let mut expanded = false;
         self.collapsed = authoring::workspace(ui, self.collapsed, |ui, region| match region {
             authoring::Region::Browser => self.browser(ui),
@@ -307,9 +344,9 @@ impl Document {
                 self.properties(ui, false);
                 expanded = ui.button("More properties…").clicked();
             }
-            authoring::Region::Canvas { area, covered } => self.canvas(ui, area, covered, navigation),
+            authoring::Region::Canvas { area, covered } => self.canvas(ui, area, covered, navigation, active),
         });
-        expanded
+        expanded || std::mem::take(&mut self.details_requested)
     }
 }
 impl PcbApp {
@@ -755,7 +792,9 @@ impl PcbApp {
                     self.bind_library_view(crate::ViewId(view));
                 }
                 let doc = self.library_editors.documents.get_mut(&document()?).ok_or("Unknown library document ID.")?;
-                if params["definition"] == true && params.get("selected").is_some() {
+                if (params["definition"] == true && (params.get("selected").is_some() || params.get("selected_objects").is_some()))
+                    || (params.get("selected").is_some() && params.get("selected_objects").is_some())
+                {
                     return Err("Choose a primitive or definition metadata, not both.".into());
                 }
                 if params["fit"] == true && (params.get("zoom_percent").is_some() || params.get("center").is_some()) {
@@ -771,7 +810,9 @@ impl PcbApp {
                 }) {
                     return Err("Choose a grid spacing offered by this library workspace.".into());
                 }
-                if params["definition"] == true {
+                if let Some(ids) = params["selected_objects"].as_array() {
+                    doc.select_many(ids.iter().filter_map(Value::as_u64).collect())?;
+                } else if params["definition"] == true {
                     doc.select(None)?;
                 } else if let Some(id) = params["selected"].as_u64() {
                     doc.select(Some(id))?;

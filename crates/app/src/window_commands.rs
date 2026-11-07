@@ -111,6 +111,7 @@ mod live {
         /// A view ID from inspection.
         View,
         LibraryAction,
+        PrimitiveIds,
         /// A window ID from inspection.
         Window,
         /// An arrangement ID from inspection.
@@ -142,8 +143,9 @@ mod live {
             let coordinate = json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM});
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
+                Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
                 Self::LibraryAction => {
-                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","delete","metadata","undo","redo"]}},"required":["operation"],"description":"A pcbcraft engine authoring Action: insert primitive; replace object and primitive; delete objects; metadata name/license/source/reference_prefix/default_value; undo or redo. Primitive coordinates use integer nanometres; inspect_editor includes native typed primitive records."})
+                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
                 }
                 Self::View | Self::Window | Self::Arrangement => json!({"type": "integer", "minimum": 0}),
                 Self::Object => json!({"type":"string","format":"uuid"}),
@@ -165,6 +167,11 @@ mod live {
         /// Check a raw value without coercion, giving the reason it doesn't fit.
         fn validate(self, value: &Value) -> Result<(), String> {
             let fits = match self {
+                Self::PrimitiveIds => value.as_array().is_some_and(|items| {
+                    items.len() <= 512
+                        && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
+                        && items.iter().filter_map(Value::as_u64).collect::<std::collections::BTreeSet<_>>().len() == items.len()
+                }),
                 Self::LibraryAction => {
                     serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= pcbcraft_engine::authoring::MAX_BYTES)
                         && serde_json::from_value::<pcbcraft_engine::authoring::Action>(value.clone()).is_ok()
@@ -184,6 +191,7 @@ mod live {
                 return Ok(());
             }
             Err(match self {
+                Self::PrimitiveIds => "must be a bounded list of distinct positive primitive IDs".into(),
                 Self::LibraryAction => "must be a bounded native authoring Action".into(),
                 Self::View => "must be a view ID from inspect_editor".to_owned(),
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
@@ -350,6 +358,12 @@ mod live {
                 Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
                 Param { name: "view", summary: "Definition pane ID; defaults to its current presentation", required: false, kind: Kind::View },
                 Param { name: "selected", summary: "Stable primitive ID from library inspection", required: false, kind: Kind::Window },
+                Param {
+                    name: "selected_objects",
+                    summary: "Stable IDs for group selection; cannot combine with selected/definition",
+                    required: false,
+                    kind: Kind::PrimitiveIds,
+                },
                 Param { name: "definition", summary: "Select definition metadata instead of a primitive", required: false, kind: Kind::Bool },
                 Param { name: "fit", summary: "Fit the definition", required: false, kind: Kind::Bool },
                 Param { name: "ribbon_tab", summary: "Authoring ribbon tab", required: false, kind: Kind::Choice(&["draw", "library", "view"]) },

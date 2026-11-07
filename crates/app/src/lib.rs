@@ -16,6 +16,7 @@ mod board_drawing;
 mod board_panels;
 mod board_workspace;
 mod canvas_camera;
+mod definition_graphics;
 mod editor_layout;
 mod editor_view;
 mod editor_windows;
@@ -159,6 +160,7 @@ enum Dialog {
     /// Closing a definition or quitting protects authoring documents separately from the project.
     LibraryClose(Option<u64>),
     LibraryProperties(u64, ViewId),
+    LibraryArray(Box<library_editors::editing::ArrayDraft>),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
     SaveChanges(unsaved::Then),
     OpenLocation,
@@ -1612,6 +1614,7 @@ impl PcbApp {
             Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, edit),
             Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
+            Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),

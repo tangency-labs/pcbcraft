@@ -33,9 +33,10 @@ impl Thumbnail {
         for symbol in project.symbols() {
             points += symbol
                 .definition
-                .drawing
+                .graphics()
                 .iter()
                 .map(|shape| match shape {
+                    Shape::Graphic(graphic) => graphic.paths().iter().map(Vec::len).sum(),
                     Shape::Polyline(points) => points.len(),
                     _ => 4,
                 })

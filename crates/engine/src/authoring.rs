@@ -1,9 +1,13 @@
 //! Native library-item documents own validation and history independently of projects.
+#[cfg(test)]
+mod basics_tests;
+mod operations;
 use crate::{
     board::definition as footprint,
     library,
     schematic::{ElectricalType, Point, Shape, SymbolDefinition, TextAlign},
 };
+pub use operations::next_number;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
@@ -25,21 +29,57 @@ pub enum Kind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Primitive {
-    Pin { number: String, name: Option<String>, electrical_type: ElectricalType, at: Point },
-    Line { from: Point, to: Point },
-    Rectangle { min: Point, max: Point },
-    Circle { center: Point, radius_nm: i64 },
-    Text { at: Point, text: String, align: TextAlign },
-    Polyline { points: Vec<Point> },
-    Pad { pad: footprint::RectPad },
-    Outline { graphic: footprint::GraphicRect },
-    Silkscreen { path: footprint::SilkPath },
+    Pin {
+        number: String,
+        name: Option<String>,
+        electrical_type: ElectricalType,
+        at: Point,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        appearance: Option<crate::schematic::PinAppearance>,
+    },
+    Graphic {
+        graphic: crate::library_graphics::Graphic,
+    },
+    Artwork {
+        artwork: footprint::Artwork,
+    },
+    Line {
+        from: Point,
+        to: Point,
+    },
+    Rectangle {
+        min: Point,
+        max: Point,
+    },
+    Circle {
+        center: Point,
+        radius_nm: i64,
+    },
+    Text {
+        at: Point,
+        text: String,
+        align: TextAlign,
+    },
+    Polyline {
+        points: Vec<Point>,
+    },
+    Pad {
+        pad: footprint::RectPad,
+    },
+    Outline {
+        graphic: footprint::GraphicRect,
+    },
+    Silkscreen {
+        path: footprint::SilkPath,
+    },
 }
 
 impl Primitive {
     /// The grab anchor is independent of electrical numbering and graphical list order.
     pub fn anchor(&self) -> Point {
         match self {
+            Self::Graphic { graphic } => graphic.anchor(),
+            Self::Artwork { artwork } => artwork.graphic.anchor(),
             Self::Pin { at, .. } | Self::Text { at, .. } => *at,
             Self::Line { from, .. } => *from,
             Self::Rectangle { min, max } => Point {
@@ -64,9 +104,34 @@ impl Primitive {
             })
         };
         Ok(match self {
-            Self::Pin { number, name, electrical_type, at: p } => {
-                Self::Pin { number: number.clone(), name: name.clone(), electrical_type: *electrical_type, at: at(*p)? }
-            }
+            Self::Graphic { graphic } => Self::Graphic {
+                graphic: graphic.transformed(crate::library_graphics::Transform {
+                    pivot: Point { x_nm: 0, y_nm: 0 },
+                    offset: delta,
+                    quarter_turns: 0,
+                    mirror_x: false,
+                    mirror_y: false,
+                })?,
+            },
+            Self::Artwork { artwork } => Self::Artwork {
+                artwork: footprint::Artwork {
+                    graphic: artwork.graphic.transformed(crate::library_graphics::Transform {
+                        pivot: Point { x_nm: 0, y_nm: 0 },
+                        offset: delta,
+                        quarter_turns: 0,
+                        mirror_x: false,
+                        mirror_y: false,
+                    })?,
+                    purpose: artwork.purpose,
+                },
+            },
+            Self::Pin { number, name, electrical_type, at: p, appearance } => Self::Pin {
+                number: number.clone(),
+                name: name.clone(),
+                electrical_type: *electrical_type,
+                at: at(*p)?,
+                appearance: appearance.clone(),
+            },
             Self::Line { from, to } => Self::Line { from: at(*from)?, to: at(*to)? },
             Self::Rectangle { min, max } => Self::Rectangle { min: at(*min)?, max: at(*max)? },
             Self::Circle { center, radius_nm } => Self::Circle { center: at(*center)?, radius_nm: *radius_nm },
@@ -154,7 +219,12 @@ fn unique_objects<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<B
 pub enum Action {
     Insert { primitive: Primitive },
     Replace { object: u64, primitive: Primitive },
+    ReplaceMany { primitives: BTreeMap<u64, Primitive> },
     Delete { objects: Vec<u64> },
+    Transform { objects: Vec<u64>, transform: crate::library_graphics::Transform },
+    Duplicate { objects: Vec<u64>, offset: Point },
+    Paste { primitives: Vec<Primitive>, offset: Point },
+    Array { objects: Vec<u64>, columns: u16, rows: u16, column_step: Point, row_step: Point },
     Metadata { name: String, license: String, source: String, reference_prefix: String, default_value: String },
     Undo,
     Redo,
@@ -204,10 +274,25 @@ impl Item {
         if kind == Kind::Symbol {
             item.objects.insert(
                 1,
-                Primitive::Pin { number: "1".into(), name: Some("PIN1".into()), electrical_type: ElectricalType::Passive, at: point(-5_080_000, 0) },
+                Primitive::Pin {
+                    number: "1".into(),
+                    name: Some("IN".into()),
+                    electrical_type: ElectricalType::Passive,
+                    at: point(-5_080_000, 0),
+                    appearance: Some(crate::schematic::PinAppearance::default()),
+                },
             );
             item.objects.insert(2, Primitive::Rectangle { min: point(-2_540_000, -2_540_000), max: point(2_540_000, 2_540_000) });
-            item.objects.insert(3, Primitive::Line { from: point(-5_080_000, 0), to: point(-2_540_000, 0) });
+            item.objects.insert(
+                3,
+                Primitive::Pin {
+                    number: "2".into(),
+                    name: Some("OUT".into()),
+                    electrical_type: ElectricalType::Passive,
+                    at: point(5_080_000, 0),
+                    appearance: Some(crate::schematic::PinAppearance { orientation: crate::schematic::PinOrientation::Left, ..Default::default() }),
+                },
+            );
         } else {
             for (id, x_nm) in [(1, -500_000), (2, 500_000)] {
                 item.objects.insert(
@@ -263,14 +348,25 @@ impl Item {
         item.reference_prefix = definition.reference_prefix().into();
         item.default_value = definition.default_value().into();
         item.unit = definition.unit_id().into();
+        let mut consumed = std::collections::BTreeSet::new();
         for pin in definition.pins() {
             item.objects.insert(
                 item.objects.len() as u64 + 1,
-                Primitive::Pin { number: pin.number.clone(), name: pin.name.clone(), electrical_type: pin.electrical_type, at: pin.offset },
+                Primitive::Pin {
+                    number: pin.number.clone(),
+                    name: pin.name.clone(),
+                    electrical_type: pin.electrical_type,
+                    at: pin.offset,
+                    appearance: pin.appearance.clone().or_else(|| operations::legacy_pin(definition, pin, &mut consumed)),
+                },
             );
         }
-        for shape in &definition.drawing {
+        for (index, shape) in definition.drawing.iter().enumerate() {
+            if consumed.contains(&index) {
+                continue;
+            }
             let primitive = match shape {
+                Shape::Graphic(graphic) => Primitive::Graphic { graphic: graphic.clone() },
                 Shape::Line(a, b) => Primitive::Line { from: *a, to: *b },
                 Shape::Rect(a, b) => Primitive::Rectangle { min: *a, max: *b },
                 Shape::Circle(at, r) => Primitive::Circle { center: *at, radius_nm: *r },
@@ -299,6 +395,7 @@ impl Item {
             .cloned()
             .map(|pad| Primitive::Pad { pad })
             .chain(definition.graphics.iter().cloned().map(|graphic| Primitive::Outline { graphic }))
+            .chain(definition.artwork.iter().cloned().map(|artwork| Primitive::Artwork { artwork }))
             .chain(definition.silkscreen.iter().cloned().map(|path| Primitive::Silkscreen { path }))
         {
             item.objects.insert(item.objects.len() as u64 + 1, primitive);
@@ -311,6 +408,10 @@ impl Item {
     /// Derive a native definition through existing validators. Cross-kind primitives, duplicated
     /// electrical identities and unsupported geometry fail rather than being silently omitted.
     pub fn native(&self) -> Result<Value, String> {
+        self.native_mode(false)
+    }
+    /// Derive draft/native data through one validator path, preserving unsupported-kind rejection.
+    fn native_mode(&self, draft: bool) -> Result<Value, String> {
         let at = |point: Point| json!([point.x_nm, point.y_nm]);
         if self.kind == Kind::Symbol {
             let mut terminals = Vec::new();
@@ -318,11 +419,16 @@ impl Item {
             let mut drawing = Vec::new();
             for object in self.objects.values() {
                 drawing.extend(match object {
-                    Primitive::Pin { number, name, electrical_type, at: point } => {
+                    Primitive::Pin { number, name, electrical_type, at: point, appearance } => {
                         terminals.push(json!({"id":number,"name":name,"electrical_type":electrical_type}));
-                        pins.push(json!({"terminal":number,"at_nm":at(*point)}));
+                        let mut pin = json!({"terminal":number,"at_nm":at(*point)});
+                        if let Some(appearance) = appearance {
+                            pin["appearance"] = serde_json::to_value(appearance).map_err(|e| e.to_string())?;
+                        }
+                        pins.push(pin);
                         None
                     }
+                    Primitive::Graphic { graphic } => Some(json!({"type":"graphic","graphic":graphic})),
                     Primitive::Line { from, to } => Some(json!({"type":"line","from_nm":at(*from),"to_nm":at(*to)})),
                     Primitive::Rectangle { min, max } => Some(json!({"type":"rect","min_nm":at(*min),"max_nm":at(*max)})),
                     Primitive::Circle { center, radius_nm } => Some(json!({"type":"circle","center_nm":at(*center),"radius_nm":radius_nm})),
@@ -335,14 +441,20 @@ impl Item {
             }
             let value = json!({"format":library::SYMBOL_FORMAT,"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":[{"id":self.unit,"drawing":drawing,"pins":pins}]});
-            library::read_saved_copy(value.clone())?;
+            if draft {
+                library::read_saved_draft(value.clone())?;
+            } else {
+                library::read_saved_copy(value.clone())?;
+            }
             Ok(value)
         } else {
             let mut pads = Vec::new();
+            let mut artwork = Vec::new();
             let mut graphics = Vec::new();
             let mut silkscreen = Vec::new();
             for object in self.objects.values() {
                 match object {
+                    Primitive::Artwork { artwork: a } => artwork.push(a.clone()),
                     Primitive::Pad { pad } => pads.push(pad.clone()),
                     Primitive::Outline { graphic } => graphics.push(graphic.clone()),
                     Primitive::Silkscreen { path } => silkscreen.push(path.clone()),
@@ -359,10 +471,15 @@ impl Item {
                 source: footprint::Source { kind: "native-editor".into(), reference: self.source.clone(), locator: self.id.clone() },
                 pads,
                 graphics,
+                artwork,
                 silkscreen,
                 reference: self.reference_font.clone(),
             };
-            definition.validate()?;
+            if draft {
+                definition.validate_draft()?;
+            } else {
+                definition.validate()?;
+            }
             serde_json::to_value(definition).map_err(|e| e.to_string())
         }
     }
@@ -370,7 +487,6 @@ impl Item {
     /// Bound the editor envelope as well as the derived native geometry and electrical metadata.
     pub fn validate(&self) -> Result<(), String> {
         if self.format != FORMAT
-            || self.objects.is_empty()
             || self.objects.len() > 512
             || self.objects.contains_key(&0)
             || self.objects.keys().any(|id| *id > self.allocation.object)
@@ -386,7 +502,7 @@ impl Item {
         {
             return Err("Invalid or oversized native library item.".into());
         }
-        self.native()?;
+        self.native_mode(true)?;
         Ok(())
     }
 
@@ -492,15 +608,21 @@ impl Session {
             }
             action => {
                 let mut next = (*self.item).clone();
-                let mut inserted = false;
+                let mut cursor = self.next_id;
                 match action {
                     Action::Insert { primitive } => {
-                        next.objects.insert(self.next_id, primitive);
-                        inserted = true;
+                        next.objects.insert(cursor, primitive);
+                        cursor = cursor.checked_add(1).ok_or("Primitive ID limit reached.")?;
                     }
                     Action::Replace { object, primitive } => {
                         let slot = next.objects.get_mut(&object).ok_or("Unknown primitive ID.")?;
                         *slot = primitive;
+                    }
+                    Action::ReplaceMany { primitives } => {
+                        if primitives.is_empty() || primitives.len() > 512 || primitives.keys().any(|id| !next.objects.contains_key(id)) {
+                            return Err("Unknown or empty primitive replacement batch.".into());
+                        }
+                        next.objects.extend(primitives);
                     }
                     Action::Delete { objects } => {
                         if objects.is_empty() {
@@ -509,6 +631,41 @@ impl Session {
                         for id in objects {
                             if next.objects.remove(&id).is_none() {
                                 return Err("Unknown or duplicate primitive ID.".into());
+                            }
+                        }
+                    }
+                    Action::Transform { objects, transform } => {
+                        let originals = operations::selected(&next, &objects)?;
+                        for (id, primitive) in objects.into_iter().zip(originals) {
+                            next.objects.insert(id, primitive.transformed(transform)?);
+                        }
+                    }
+                    Action::Duplicate { objects, offset } => {
+                        let originals = operations::selected(&next, &objects)?;
+                        operations::paste(&mut next, &originals, offset, &mut cursor)?;
+                    }
+                    Action::Paste { primitives, offset } => operations::paste(&mut next, &primitives, offset, &mut cursor)?,
+                    Action::Array { objects, columns, rows, column_step, row_step } => {
+                        let originals = operations::selected(&next, &objects)?;
+                        let count = usize::from(columns) * usize::from(rows);
+                        if columns == 0
+                            || rows == 0
+                            || count > 512
+                            || next.objects.len().saturating_add(count.saturating_sub(1).saturating_mul(originals.len())) > 512
+                        {
+                            return Err("Array exceeds the definition's 512 primitive limit.".into());
+                        }
+                        for row in 0..rows {
+                            for column in 0..columns {
+                                if row == 0 && column == 0 {
+                                    continue;
+                                }
+                                let axis = |a: i64, b: i64| {
+                                    i64::try_from(i128::from(a) * i128::from(column) + i128::from(b) * i128::from(row))
+                                        .map_err(|_| "Array offset overflow.")
+                                };
+                                let offset = Point { x_nm: axis(column_step.x_nm, row_step.x_nm)?, y_nm: axis(column_step.y_nm, row_step.y_nm)? };
+                                operations::paste(&mut next, &originals, offset, &mut cursor)?;
                             }
                         }
                     }
@@ -525,10 +682,10 @@ impl Session {
                     return Ok(self.revision);
                 }
                 next.revision = self.next_content_revision;
-                next.allocation = Allocation { object: if inserted { self.next_id } else { self.next_id - 1 }, revision: self.next_content_revision };
+                next.allocation = Allocation { object: cursor - 1, revision: self.next_content_revision };
                 next.validate()?;
                 let next_content_revision = self.next_content_revision.checked_add(1).ok_or("Content revision limit reached.")?;
-                let next_id = if inserted { self.next_id.checked_add(1).ok_or("Primitive ID limit reached.")? } else { self.next_id };
+                let next_id = cursor;
                 self.undo.push(std::mem::replace(&mut self.item, Arc::new(next)));
                 self.redo.clear();
                 if self.undo.len() > HISTORY {
@@ -612,8 +769,14 @@ mod tests {
         assert!(!s.dirty());
         let Primitive::Pin { number, name, electrical_type, .. } = s.snapshot().objects[&1].clone() else { panic!("pin expected") };
         assert!(
-            s.execute(0, Action::Replace { object: 1, primitive: Primitive::Pin { number, name, electrical_type, at: Point { x_nm: 1, y_nm: 0 } } })
-                .is_err()
+            s.execute(
+                0,
+                Action::Replace {
+                    object: 1,
+                    primitive: Primitive::Pin { number, name, electrical_type, at: Point { x_nm: 1, y_nm: 0 }, appearance: None }
+                }
+            )
+            .is_err()
         );
         assert!(!s.dirty());
     }
@@ -624,7 +787,7 @@ mod tests {
         let native = item.export_native().unwrap();
         let parsed = library::parse_symbol(&native.to_string()).unwrap();
         assert_eq!(parsed.id, item.id);
-        assert_eq!(parsed.pins().len(), 1);
+        assert_eq!(parsed.pins().len(), 2);
         let footprint = Item::new(Kind::Footprint).unwrap();
         let parsed: footprint::FootprintDefinition = serde_json::from_value(footprint.export_native().unwrap()).unwrap();
         parsed.validate().unwrap();

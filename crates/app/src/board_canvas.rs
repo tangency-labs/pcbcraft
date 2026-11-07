@@ -276,6 +276,7 @@ fn drawing(
                         .length(),
                     },
                     pcbcraft_engine::board::definition::PadShape::Circle => board::PadContour::Circle,
+                    pcbcraft_engine::board::definition::PadShape::Oval => board::PadContour::Oval,
                 },
                 drill_radius: pad.drill_nm.map(|diameter| {
                     (camera.screen(Point { x_nm: pad.center.x_nm + diameter, y_nm: pad.center.y_nm }, rect) - camera.screen(pad.center, rect))
