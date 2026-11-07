@@ -287,6 +287,27 @@ impl Camera {
         self.interact(response, rect, enabled, navigation);
     }
 
+    /// Fit native library primitives and navigate without a project, sheet or placed board.
+    /// Caller-provided extents use integer nanometres in the definition's local coordinates.
+    pub(crate) fn navigate_definition(
+        &mut self,
+        response: &Response,
+        rect: Rect,
+        points: impl Iterator<Item = Point>,
+        enabled: bool,
+        navigation: Navigation,
+    ) {
+        self.schematic_rect = Some(rect);
+        if std::mem::take(&mut self.fit_requested) {
+            *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
+            let bounds = points.fold(Rect::NOTHING, |bounds, point| {
+                bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
+            });
+            self.fit_bounds(bounds, rect, MAX_ZOOM);
+        }
+        self.interact(response, rect, enabled, navigation);
+    }
+
     /// Reveal selected board placements in their own coordinate space without changing zoom.
     pub(crate) fn reveal_board(&mut self, project: pcbcraft_engine::board::view::BoardView<'_>, selected: &std::collections::BTreeSet<String>) {
         let bounds =

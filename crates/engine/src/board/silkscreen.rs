@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod technical;
-pub(super) use technical::lettering;
+pub(crate) use technical::lettering;
 
 /// Board-local print dimensions in nanometers. Defaults follow a 1 mm / 0.15 mm text style
 /// and a 0.25 mm copper clearance; they are editable design choices, not a fabrication approval.

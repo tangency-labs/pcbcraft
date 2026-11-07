@@ -187,13 +187,12 @@ impl<'a> BoardView<'a> {
                     .into_iter()
                     .filter_map(|pad| {
                         let center = footprint.pad_position(pad, &self.project.board)?;
-                        let definition =
-                            self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.to_string()));
+                        let definition = self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.as_str()));
                         let copper = definition.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
                         let terminal = footprint.component_pin(pad).and_then(|(component, pin)| self.project.component_terminal(component, pin));
                         let net = terminal.and_then(|terminal| net_label(self.project, terminal));
                         Some(PadView {
-                            number: pad.to_string(),
+                            number: pad.as_str().to_owned(),
                             center,
                             copper,
                             copper_layers: definition.map(|pad| CopperLayers::resolve(self.setup(), pad.copper)),
@@ -267,6 +266,32 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
             closed: true,
         })
         .collect();
+    for artwork in &definition.artwork {
+        for mut points in artwork.graphic.paths() {
+            if artwork.graphic.closed()
+                && points.first() != points.last()
+                && let Some(first) = points.first().copied()
+            {
+                points.push(first);
+            }
+            if artwork.purpose == super::definition::GraphicPurpose::Silkscreen {
+                let style = super::silkscreen::Settings { stroke_width_nm: artwork.graphic.stroke_nm, ..style };
+                result.extend(super::silkscreen::clipped(vec![points], &definition.pads, style).into_iter().map(|path| GraphicView {
+                    purpose: artwork.purpose,
+                    points: path.into_iter().map(|p| footprint.point(p)).collect(),
+                    stroke_nm: Some(artwork.graphic.stroke_nm),
+                    closed: false,
+                }));
+            } else {
+                result.push(GraphicView {
+                    purpose: artwork.purpose,
+                    points: points.into_iter().map(|p| footprint.point(p)).collect(),
+                    stroke_nm: Some(artwork.graphic.stroke_nm),
+                    closed: artwork.graphic.closed(),
+                });
+            }
+        }
+    }
     let mut paths: Vec<_> = definition
         .silkscreen
         .iter()

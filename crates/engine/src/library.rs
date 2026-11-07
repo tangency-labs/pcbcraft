@@ -15,11 +15,11 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::schematic::{
-    ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, TextAlign, check_value,
-};
+use crate::schematic::{ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, TextAlign, check_value};
 
 pub mod sources;
+#[cfg(test)]
+use crate::schematic::PIN_OFFSET_NM;
 
 mod starter_files {
     include!(concat!(env!("OUT_DIR"), "/starter_library.rs"));
@@ -35,7 +35,7 @@ const MAX_SHAPES: usize = 256;
 /// Most points in one polyline.
 const MAX_POINTS: usize = 64;
 /// How far a drawing may reach from the symbol's center on either axis, in nanometers.
-const MAX_DRAWING_NM: i64 = 2 * PIN_OFFSET_NM;
+const MAX_DRAWING_NM: i64 = 100_000_000;
 /// Most terminals in one symbol.
 const MAX_TERMINALS: usize = 128;
 /// Longest text label in a drawing, in characters.
@@ -174,6 +174,7 @@ struct UnitFile {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ShapeFile {
+    Graphic { graphic: crate::library_graphics::Graphic },
     Line { from_nm: [i64; 2], to_nm: [i64; 2] },
     Polyline { points_nm: Vec<[i64; 2]> },
     Rect { min_nm: [i64; 2], max_nm: [i64; 2] },
@@ -186,6 +187,8 @@ enum ShapeFile {
 struct PinFile {
     terminal: String,
     at_nm: [i64; 2],
+    #[serde(default)]
+    appearance: Option<crate::schematic::PinAppearance>,
 }
 
 /// Parse and check one symbol file.
@@ -194,7 +197,7 @@ struct PinFile {
 /// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. This build places symbols with one unit
 /// that has exactly one pin per terminal. Pins sit on the 1.27 mm grid, at most 12.7 mm from the
 /// center on each axis and apart from each other. Drawings have at most 256 strokes within
-/// 12.7 mm of the center. Errors name the first problem found.
+/// 100 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
     let value: Value = serde_json::from_str(text).map_err(|error| format!("invalid symbol JSON: {error}"))?;
     parse_symbol_value(value)
@@ -203,6 +206,11 @@ pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
 /// [`parse_symbol`] for a symbol already read as JSON, such as a project's saved copy. The
 /// definition's `library` is left empty for the caller to fill in.
 fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
+    parse_symbol_mode(value, false)
+}
+
+/// Draft documents may temporarily have no pins; published symbols retain the strict minimum.
+fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, String> {
     let file: SymbolFile = serde_json::from_value(versioned(value, SYMBOL_FORMAT, "symbol")?).map_err(|error| error.to_string())?;
     check_id(&file.id)?;
     if file.revision == 0 {
@@ -213,7 +221,7 @@ fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
         return Err("`reference_prefix` must be 1 to 4 capital letters".to_owned());
     }
     check_value(&file.default_value).map_err(|error| error.replace("`value`", "`default_value`"))?;
-    if !(1..=MAX_TERMINALS).contains(&file.terminals.len()) {
+    if file.terminals.len() > MAX_TERMINALS || (!draft && file.terminals.is_empty()) {
         return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals"));
     }
     let mut numbers = BTreeSet::new();
@@ -246,7 +254,11 @@ fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
         if !positions.insert((x_nm, y_nm)) {
             return Err(format!("pin {} shares a position with another pin", terminal.id));
         }
+        if let Some(appearance) = &pin.appearance {
+            appearance.validate(Point { x_nm, y_nm })?;
+        }
         pins.push(PinDefinition {
+            appearance: pin.appearance.clone(),
             number: terminal.id,
             offset: Point { x_nm, y_nm },
             name: terminal.name,
@@ -284,6 +296,16 @@ fn check_pin_number(number: &str) -> Result<(), String> {
 /// lives only as long as the projects and edits that use it. Fails on any symbol file rule or a
 /// bad library ID.
 pub(crate) fn read_saved_copy(value: Value) -> Result<Arc<SymbolDefinition>, String> {
+    read_saved_mode(value, false)
+}
+
+/// Validate an editable draft with the same structural/geometry rules while permitting zero pins.
+pub(crate) fn read_saved_draft(value: Value) -> Result<Arc<SymbolDefinition>, String> {
+    read_saved_mode(value, true)
+}
+
+/// Retain identity/provenance and share known immutable definitions after mode-specific validation.
+fn read_saved_mode(value: Value, draft: bool) -> Result<Arc<SymbolDefinition>, String> {
     let Value::Object(mut fields) = value else {
         return Err("a saved symbol definition must be a JSON object".to_owned());
     };
@@ -296,7 +318,7 @@ pub(crate) fn read_saved_copy(value: Value) -> Result<Arc<SymbolDefinition>, Str
     if let Some(provenance) = &provenance {
         provenance.validate()?;
     }
-    let mut definition = parse_symbol_value(Value::Object(fields))?;
+    let mut definition = parse_symbol_mode(Value::Object(fields), draft)?;
     definition.provenance = provenance;
     definition.library = library;
     let starter = starter();
@@ -377,6 +399,7 @@ pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
                 .drawing
                 .iter()
                 .map(|shape| match shape {
+                    Shape::Graphic(graphic) => SavedShape::Graphic { graphic: graphic.clone() },
                     Shape::Line(from, to) => SavedShape::Line { from_nm: point(from), to_nm: point(to) },
                     Shape::Polyline(points) => SavedShape::Polyline { points_nm: points.iter().map(point).collect() },
                     Shape::Rect(min, max) => SavedShape::Rect { min_nm: point(min), max_nm: point(max) },
@@ -384,7 +407,11 @@ pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
                     Shape::Text(at, text, align) => SavedShape::Text { at_nm: point(at), text, align: *align },
                 })
                 .collect(),
-            pins: definition.pins.iter().map(|pin| SavedPin { terminal: &pin.number, at_nm: point(&pin.offset) }).collect(),
+            pins: definition
+                .pins
+                .iter()
+                .map(|pin| SavedPin { terminal: &pin.number, at_nm: point(&pin.offset), appearance: pin.appearance.as_ref() })
+                .collect(),
         }],
     }
 }
@@ -422,6 +449,7 @@ struct SavedUnit<'a> {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SavedShape<'a> {
+    Graphic { graphic: crate::library_graphics::Graphic },
     Line { from_nm: [i64; 2], to_nm: [i64; 2] },
     Polyline { points_nm: Vec<[i64; 2]> },
     Rect { min_nm: [i64; 2], max_nm: [i64; 2] },
@@ -433,6 +461,8 @@ enum SavedShape<'a> {
 struct SavedPin<'a> {
     terminal: &'a str,
     at_nm: [i64; 2],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    appearance: Option<&'a crate::schematic::PinAppearance>,
 }
 
 /// Parse JSON and check its `format` before the strict read, so an older or newer file reports
@@ -451,11 +481,15 @@ fn versioned(value: Value, format: &str, what: &str) -> Result<Value, String> {
 fn shape(file: ShapeFile) -> Result<Shape, String> {
     let point = |[x_nm, y_nm]: [i64; 2]| -> Result<Point, String> {
         if !(-MAX_DRAWING_NM..=MAX_DRAWING_NM).contains(&x_nm) || !(-MAX_DRAWING_NM..=MAX_DRAWING_NM).contains(&y_nm) {
-            return Err("a drawing must stay within 12.7 mm of the symbol's center".to_owned());
+            return Err("a drawing must stay within 100 mm of the symbol's center".to_owned());
         }
         Ok(Point { x_nm, y_nm })
     };
     Ok(match file {
+        ShapeFile::Graphic { graphic } => {
+            graphic.validate(MAX_DRAWING_NM)?;
+            Shape::Graphic(graphic)
+        }
         ShapeFile::Line { from_nm, to_nm } => Shape::Line(point(from_nm)?, point(to_nm)?),
         ShapeFile::Polyline { points_nm } => {
             if !(2..=MAX_POINTS).contains(&points_nm.len()) {
@@ -466,7 +500,7 @@ fn shape(file: ShapeFile) -> Result<Shape, String> {
         ShapeFile::Rect { min_nm, max_nm } => Shape::Rect(point(min_nm)?, point(max_nm)?),
         ShapeFile::Circle { center_nm, radius_nm } => {
             if !(1..=MAX_DRAWING_NM).contains(&radius_nm) {
-                return Err("a circle's radius must be positive and at most 12.7 mm".to_owned());
+                return Err("a circle's radius must be positive and at most 100 mm".to_owned());
             }
             Shape::Circle(point(center_nm)?, radius_nm)
         }
@@ -566,9 +600,9 @@ mod tests {
         assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([i64::MIN, 0])).contains("within 12.7 mm"));
         assert!(error(|file| file["units"][0]["pins"][1]["at_nm"] = json!([-5_080_000, 0])).contains("shares a position"));
         assert!(error(|file| file["units"][0]["pins"][1]["terminal"] = json!("1")).contains("exactly one pin"));
-        assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([12_700_001, 0])).contains("12.7 mm"));
-        assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([i64::MIN, 0])).contains("12.7 mm"));
-        assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([0, i64::MIN])).contains("12.7 mm"));
+        assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([100_000_001, 0])).contains("100 mm"));
+        assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([i64::MIN, 0])).contains("100 mm"));
+        assert!(error(|file| file["units"][0]["drawing"][0]["to_nm"] = json!([0, i64::MIN])).contains("100 mm"));
         assert!(error(|file| file["units"][0]["drawing"][0] = json!({"type": "circle", "center_nm": [0, 0], "radius_nm": 0})).contains("radius"));
         assert!(error(|file| file["units"][0]["drawing"][0] = json!({"type": "arc"})).contains("unknown variant"));
         let label = |text: &str| json!({"type": "text", "at_nm": [0, 0], "text": text, "align": "middle"});
@@ -615,7 +649,7 @@ mod tests {
         let library = Library::load(starter_files::MANIFEST, &[("bad.json", &bad.to_string()), ("good.json", &good)]);
         assert_eq!(library.symbols().len(), 1);
         assert!(library.symbol("resistor").is_some());
-        assert_eq!(library.problems(), ["bad.json: a drawing must stay within 12.7 mm of the symbol's center"]);
+        assert_eq!(library.problems(), ["bad.json: a drawing must stay within 100 mm of the symbol's center"]);
     }
 
     /// A bad or repeated file is left out with a message, and the rest of the library still loads.

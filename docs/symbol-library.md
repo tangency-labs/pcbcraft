@@ -82,7 +82,7 @@ downward, before any rotation. The schematic grid is 1.27 mm (1,270,000 nm).
 | `name` | Shown in the parts browser, 1 to 64 characters. |
 | `reference_prefix` | 1 to 4 capital letters that start automatic references, such as `R`. |
 | `default_value` | The value a newly placed symbol shows, 1 to 64 characters. |
-| `terminals` | 1 to 128 logical connections, each with a stable `id` (the pin number: 1 to 8 letters, digits, `+`, `-` or `_`, unique in the symbol), an optional `name` up to 32 characters and an `electrical_type`: `passive`, `input`, `output`, `bidirectional`, `power_in`, `power_out` or `unspecified`. Wires and footprints refer to a pin by its `id`. |
+| `terminals` | 1 to 128 logical connections, each with a stable `id` (the pin number: 1 to 8 letters, digits, `+`, `-` or `_`, unique in the symbol), an optional `name` up to 32 characters and an `electrical_type`: `passive`, `input`, `output`, `bidirectional`, `power_in`, `power_out`, `tri_state`, `open_collector`, `open_emitter`, `no_connect` or `unspecified`. Wires and footprints refer to a pin by its `id`. |
 | `units` | Drawn sections of the symbol. Each has an `id`, a `drawing` and `pins` that place each terminal. |
 
 Drawing strokes are `line` (`from_nm`, `to_nm`), `polyline` (`points_nm`, 2 to
@@ -91,8 +91,23 @@ Drawing strokes are `line` (`from_nm`, `to_nm`), `polyline` (`points_nm`, 2 to
 characters, and `align`: `start`, `middle` or `end`). Text labels such as pin
 names stay upright when the symbol turns: a half turn swaps `start` and `end` so
 a label inside a body edge stays inside, and a quarter turn centers it. Each
-drawing has at most 256 strokes, and every point stays within 12.7 mm of the
+drawing has at most 256 strokes, and every point stays within 100 mm of the
 center.
+
+Pins may add optional `appearance`: `orientation` (`right`, `down`, `left`, `up`)
+points from attachment toward the body; `length_nm`, `style` (`line`, `inverted`,
+`clock`, `inverted_clock`), `show_name`, `show_number`, `name_height_nm` and
+`number_height_nm` control their integrated rendering. Omission preserves legacy
+separately drawn leads and labels without changing saved bytes.
+
+A `graphic` drawing entry wraps a shared `graphic` object with `geometry`,
+`stroke_nm` and `fill` (`none`, `solid`, `background`). Geometry is a tagged `type`
+of `line`, `rectangle`, `circle`, `arc`, `polyline` or `text`; coordinates use
+`Point` objects (`x_nm`, `y_nm`). Arcs store center/radius/start/sweep; polylines
+store points and `closed`; text stores anchor/content/height/rotation/alignment.
+Parameterized text permits 128 characters, closed fills require convex geometry,
+and physical stroke widths must be positive and at most 2 mm. These optional
+additions use `pcbcraft-symbol/1`; old entries retain their original serialization.
 
 Unknown fields are refused, so a misspelled field can't be silently ignored.
 A file that fails any check is left out of the library with a message naming
@@ -105,7 +120,7 @@ The format leaves room for more than the engine places today:
 - **Any number of terminals**, each placed by exactly one pin of the unit. The
   legacy two-pad footprint only maps symbols with exactly pins `"1"` and `"2"`.
   [Physical footprints](footprint-library.md) validate an explicit bijection
-  between the symbol terminals and the definition's numeric pad identifiers;
+  between the symbol terminals and the definition's pad identifiers;
   the starter NPN uses three SOT-23 pads.
 - **One unit.** Multi-unit symbols, such as a dual op-amp, are planned (issue #28).
 - **Pins** on the 1.27 mm grid, at most 12.7 mm from the center on each axis,

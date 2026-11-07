@@ -424,7 +424,7 @@ fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
     let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB layout").is_some();
     click(&mut harness, "Choose workspace");
     assert!(picker_open(&harness));
-    harness.get_by_label("One project across workspaces. Board placement and routing tools are still in development.");
+    harness.get_by_label("Symbol and footprint definitions keep their own histories while schematic and PCB views share the project.");
     for planned in ["3D render", "Simulate"] {
         assert!(harness.get_by_label(planned).accesskit_node().is_disabled(), "{planned} is planned");
     }
@@ -1751,8 +1751,11 @@ mod live_mcp {
         }
         click(&mut h, "Choose workspace");
         click(&mut h, "PCB layout");
+        let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":"libraries"}));
+        h.run();
+        assert_eq!(result["windows"][0]["ribbon_tab"], "libraries");
         let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
-        for tab in ["analyze", "libraries", "manage"] {
+        for tab in ["analyze", "manage"] {
             let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
             assert_eq!(error["isError"], true);
             assert!(error["content"][0]["text"].as_str().unwrap().contains("schematic workspace"));

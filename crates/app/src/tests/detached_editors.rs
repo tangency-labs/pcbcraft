@@ -1312,6 +1312,9 @@ fn window_commands_switch_workspaces_and_select_footprints() {
     };
     assert_eq!(shown(&h, board)["workspace"], "board");
     assert_eq!(window_commands::inspect_editor(h.state())["windows"][0]["ribbon_tab"], "layout");
+    run(&mut h, "window.set_ribbon_tab", json!({"window":0,"tab":"libraries"})).unwrap();
+    assert_eq!(window_commands::inspect_editor(h.state())["windows"][0]["ribbon_tab"], "libraries");
+    run(&mut h, "window.set_ribbon_tab", json!({"window":0,"tab":"layout"})).unwrap();
     run(&mut h, "view.select_footprints", json!({"view": board.0, "footprints": ["footprint-3"]})).unwrap();
     assert_eq!(shown(&h, board)["board"]["selection"], json!(["footprint-3"]));
     let missing = json!({"view": board.0, "footprints": ["footprint-99"]});
@@ -1565,4 +1568,24 @@ fn detached_board_edge_preview_cancels_on_focus_loss_and_close() {
     h.run();
     assert!(h.state().views.view(child).is_none());
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// A main-host definition pane cannot render an arrangement form owned by a detached project host.
+#[test]
+fn arrangement_dialog_stays_in_its_host_when_main_enters_a_library_workspace() {
+    let (mut h, peer) = multi_window();
+    let source = h.state().views.active.id();
+    h.state_mut().views.open_window(source).unwrap();
+    h.run();
+    child_tab_menu(&mut h, &peer, "Arrangement Views");
+    let at = child_rect(&peer, "Rename…").center();
+    window_click(&mut h, Some(&peer), at);
+    h.run();
+    assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
+    h.state_mut().new_library_item(pcbcraft_engine::authoring::Kind::Symbol);
+    h.run();
+    assert!(h.state().views.active.definition.is_some());
+    assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
+    assert!(h.query_by_label("Arrangement name").is_none());
+    assert!(peer.borrow().nodes.values().any(|n| n.role() == egui::accesskit::Role::TextInput));
 }

@@ -61,6 +61,7 @@ pub enum PadContour {
     Rectangle,
     RoundedRectangle { radius: f32 },
     Circle,
+    Oval,
 }
 
 /// Tessellate a physical contour in its own rotated axes without inflating its copper bounds.
@@ -82,8 +83,11 @@ pub fn pad_contour(pad: &PadDrawing) -> Vec<Pos2> {
                 at(width * (1. + angle.cos()) / 2., height * (1. + angle.sin()) / 2.)
             })
             .collect(),
-        PadContour::RoundedRectangle { radius } => {
-            let radius = radius.min(width.min(height) / 2.);
+        PadContour::RoundedRectangle { .. } | PadContour::Oval => {
+            let radius = match pad.contour {
+                PadContour::RoundedRectangle { radius } => radius.min(width.min(height) / 2.),
+                _ => width.min(height) / 2.,
+            };
             [(width - radius, radius), (width - radius, height - radius), (radius, height - radius), (radius, radius)]
                 .into_iter()
                 .enumerate()

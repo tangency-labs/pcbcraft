@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+mod app_workspace;
 mod arrangements;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
@@ -15,6 +16,7 @@ mod board_drawing;
 mod board_panels;
 mod board_workspace;
 mod canvas_camera;
+mod definition_graphics;
 mod editor_layout;
 mod editor_view;
 mod editor_windows;
@@ -22,6 +24,7 @@ mod editor_workspace;
 mod footprint_assignment;
 mod hierarchy;
 mod home;
+mod library_editors;
 mod library_preview;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
@@ -154,6 +157,10 @@ enum Dialog {
     LayerColor(board_appearance::Edit),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(properties::Edit),
+    /// Closing a definition or quitting protects authoring documents separately from the project.
+    LibraryClose(Option<u64>),
+    LibraryProperties(u64, ViewId),
+    LibraryArray(Box<library_editors::editing::ArrayDraft>),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
     SaveChanges(unsaved::Then),
     OpenLocation,
@@ -173,7 +180,8 @@ enum Dialog {
     About,
 }
 
-/// The project host owns one session, file lifecycle and services. Its schematic view holds
+/// The host owns the project session and independent library authoring documents, each with
+/// its own file/history lifecycle. Its schematic view holds
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
@@ -185,6 +193,7 @@ pub struct PcbApp {
     #[cfg(not(target_arch = "wasm32"))]
     assistant: assistant::Assistant,
     session: Session,
+    library_editors: library_editors::Editors,
     #[cfg(not(target_arch = "wasm32"))]
     live_control: Option<live_control::LiveControl>,
     files: project_files::ProjectFiles,
@@ -228,6 +237,8 @@ const VIEW_TAB: usize = 1;
 const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
     entries: &[
         workspace::Workspace {
+            id: "schematic",
+            multiple_views: true,
             title: "Schematic",
             description: "Capture circuits, place symbols and connect pins",
             tabs: Some("Capture · Analyze · Libraries · Manage · View"),
@@ -235,13 +246,35 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             current: true,
         },
         workspace::Workspace {
+            id: "board",
+            multiple_views: true,
             title: "PCB layout",
             description: "Inspect footprint placements and linked schematic components",
-            tabs: Some("Layout · View"),
+            tabs: Some("Layout · Libraries · View"),
             icon: workspace::WorkspaceIcon::Layout,
             current: false,
         },
         workspace::Workspace {
+            id: "symbol_editor",
+            title: "Symbol Editor",
+            description: "Author symbol definitions and pins",
+            tabs: Some("Draw · Library · View"),
+            icon: workspace::WorkspaceIcon::Schematic,
+            multiple_views: true,
+            current: false,
+        },
+        workspace::Workspace {
+            id: "footprint_editor",
+            title: "Footprint Editor",
+            description: "Author footprint definitions and pads",
+            tabs: Some("Draw · Library · View"),
+            icon: workspace::WorkspaceIcon::Layout,
+            multiple_views: true,
+            current: false,
+        },
+        workspace::Workspace {
+            id: "render",
+            multiple_views: true,
             title: "3D render",
             description: "Inspect the assembled board, layers and components",
             tabs: None,
@@ -249,6 +282,8 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             current: false,
         },
         workspace::Workspace {
+            id: "simulate",
+            multiple_views: true,
             title: "Simulate",
             description: "Set up circuit models, analyses and waveform probes",
             tabs: None,
@@ -256,7 +291,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             current: false,
         },
     ],
-    footer: "One project across workspaces. Board placement and routing tools are still in development.",
+    footer: "Symbol and footprint definitions keep their own histories while schematic and PCB views share the project.",
     native_windows: !IN_BROWSER,
 };
 
@@ -756,15 +791,10 @@ impl PcbApp {
         use workspace::{RibbonTool, ToolIcon};
         let current = self.views.active.workspace;
         let board = current == Workspace::Board;
-        let mut tab = if board {
-            usize::from(self.ribbon_tab == VIEW_TAB)
-        } else {
-            ribbon::TAB_ORDER.iter().position(|slot| *slot == self.ribbon_tab).unwrap_or(0)
-        };
-        let mut entries = WORKSPACES.entries.to_vec();
-        entries[0].current = current == Workspace::Schematic && !self.views.active.unavailable();
-        entries[1].current = board && !self.views.active.unavailable();
-        let tabs: &[&str] = if board { &["Layout", "View"] } else { &RIBBON_TABS };
+        let order: &[usize] = if board { &ribbon::BOARD_TAB_ORDER } else { &ribbon::TAB_ORDER };
+        let mut tab = order.iter().position(|slot| *slot == self.ribbon_tab).unwrap_or(0);
+        let entries = self.workspace_entries();
+        let tabs: &[&str] = if board { &["Layout", "Libraries", "View"] } else { &RIBBON_TABS };
         let has_project = self.session.project().is_some();
         let mut quick = Vec::new();
         if self.ribbon_tab != VIEW_TAB {
@@ -791,16 +821,16 @@ impl PcbApp {
         }
         let response =
             workspace::ribbon(ui, current.title(), tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, &quick, |ui, shown| {
-                let slot = if board { shown } else { ribbon::TAB_ORDER[shown] };
+                let slot = order[shown];
                 if slot == VIEW_TAB {
                     self.view_tab(ui);
-                } else if board {
+                } else if board && slot == 0 {
                     self.board_tab(ui);
                 } else {
                     self.ported_ribbon_tab(ui, slot);
                 }
             });
-        self.ribbon_tab = if board { tab } else { ribbon::TAB_ORDER[tab] };
+        self.ribbon_tab = order[tab];
         if let Some(action) = response.quick {
             if !board && action == 0 {
                 self.set_panel(ui.ctx(), Panel::Nets, !self.net_inspector.open);
@@ -808,16 +838,8 @@ impl PcbApp {
                 self.fit_view(self.views.active.id());
             }
         }
-        let picked = response.workspace;
-        if let Some(pick) = picked {
-            let target = match pick.index {
-                0 => Some(Workspace::Schematic),
-                1 => Some(Workspace::Board),
-                _ => None,
-            };
-            if let Some(target) = target {
-                self.open_workspace(target, pick.placement, ui.ctx());
-            }
+        if let Some(pick) = response.workspace {
+            self.pick_workspace(ui.ctx(), pick);
         }
     }
 
@@ -1590,6 +1612,9 @@ impl PcbApp {
                 }
             }
             Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, edit),
+            Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
+            Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
+            Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
@@ -1764,15 +1789,18 @@ impl PcbApp {
         self.repaint_editors(ctx);
     }
 
-    /// Poll the shared project exactly once through the framework root, even after its native
+    /// Poll project and library file owners once through the framework root, even after its native
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.poll_library_sources(&ctx);
-        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
+        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
         self.sync_style(&ctx);
         self.checkpoint_arrangements();
         self.handle_close_request(&ctx);
+        self.library_editors.poll();
+        self.adopt_opened_library(&ctx);
+        self.sync_library_bindings();
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {
@@ -1807,27 +1835,32 @@ impl PcbApp {
         if let Some(notice) = self.arrangements.notice.take() {
             self.message = Some(notice);
         }
-        if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home) {
+        if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp()) {
             self.repaint_editors(&ctx);
         }
     }
 
     /// Draw the same editor in any visible window. Project dialogs, Home and the assistant
     /// belong to the current main host, whose native identity can survive the original window.
-    /// Arrangement forms stay in their initiating host and block edits in every window.
+    /// Definition and project panes share the same host layout and focus routing. Arrangement forms stay in their initiating host and block edits in every window.
     /// Blocked project actions disable editor controls, while native window interactions remain
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
         self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
-        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home);
-        let had_dialog = !matches!(self.dialog, Dialog::None);
-        let was_home = self.home;
-        self.pointer = self.pointer_next.take();
         self.editor_window_focus(&ctx);
         self.views.sync(&self.session);
         self.editor_pointer_focus(&ctx);
+        self.sync_library_focus();
+        if self.views.active.definition.is_some() && !(main && self.home) {
+            self.library_frame(ui, integrated_titlebar);
+            return;
+        }
+        let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
+        let had_dialog = !matches!(self.dialog, Dialog::None);
+        let was_home = self.home;
+        self.pointer = self.pointer_next.take();
         #[cfg(not(target_arch = "wasm32"))]
         let assistant_keys = main && self.assistant_shortcuts(&ctx);
         #[cfg(target_arch = "wasm32")]
@@ -1860,7 +1893,7 @@ impl PcbApp {
             #[cfg(not(target_arch = "wasm32"))]
             if main {
                 let can_edit = workspace.is_some() && matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
-                self.assistant.show(&ctx, workspace, &self.session, can_edit);
+                self.assistant.show(&ctx, workspace, &self.session, can_edit, self.session.project().is_some());
                 self.serve_chat(&ctx);
                 if let Some(request) = self.assistant.take_settings_request() {
                     self.dialog = match request {
@@ -1889,7 +1922,7 @@ impl PcbApp {
             ctx.request_repaint();
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
-        if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home) {
+        if before != (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp()) {
             self.repaint_editors(&ctx);
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         }

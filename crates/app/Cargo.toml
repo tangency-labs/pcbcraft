@@ -34,6 +34,7 @@ tempfile = "=3.27.0"
 pcbcraft-storage = { workspace = true }
 
 [dev-dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["wayland"] }
 egui_kittest = { workspace = true, features = ["eframe"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

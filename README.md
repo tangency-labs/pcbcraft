@@ -32,6 +32,8 @@ and rotation. Routing, full ERC/DRC and fabrication output are still planned.
   control layer visibility and highlight corresponding schematic components.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
+- **Library editors:** author native symbol and footprint definitions in independent
+  workspaces, with primitive properties, undo/redo and save-copy/open/export.
 - **Projects:** save a Git-friendly project folder or share a `.pc.zip` archive.
   Pinned symbol and footprint definitions travel with the project.
 - **AI tools:** use the desktop Assistant with an installed agent or model

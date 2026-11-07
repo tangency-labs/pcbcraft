@@ -360,6 +360,17 @@ Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).
 
+The same picker includes **Symbol Editor** and **Footprint Editor** as independent
+authoring workspaces with Draw, Library and View ribbons. Switching retains each
+definition's history, camera, selection and pending Properties fields, and returns
+to the last document of the selected kind. Their picker rows and View ribbons
+support the same split, detach/dock and native-window placements as project views.
+A definition can share a split with a schematic or PCB view; multiple views of
+one definition share its history while retaining independent navigation and
+selection. Closing a pane retains the definition and any unapplied fields.
+Definition placements currently last for the session, with the last saved project
+arrangement retained while definition panes are open.
+
 ## Opening and saving projects
 
 Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**. Opening from PCB layout binds the incoming project's board before restoring

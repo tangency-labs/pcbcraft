@@ -697,15 +697,21 @@ pub(super) fn grid_bounds(definition: &SymbolDefinition, turns: u8) -> Rect {
 /// [`grid_bounds`] before rotation.
 fn unturned_bounds(definition: &SymbolDefinition) -> Rect {
     let pins = definition.pins().iter().map(|pin| Rect::from_pos(grid_pos(pin.offset)));
-    pins.fold(drawing_bounds(definition), Rect::union)
+    pins.fold(shape_bounds(definition.graphics().iter()), Rect::union)
 }
 
 /// The bounds of a symbol's strokes alone, in grid steps before rotation, or nothing when it
 /// has none.
 fn drawing_bounds(definition: &SymbolDefinition) -> Rect {
+    shape_bounds(definition.drawing.iter())
+}
+
+/// Measure a chosen drawing set: Fit includes generated pin ink; body selection uses native drawing only.
+fn shape_bounds<'a>(shapes: impl Iterator<Item = &'a Shape>) -> Rect {
     let point = |point: &Point| Rect::from_pos(grid_pos(*point));
-    definition.drawing.iter().fold(Rect::NOTHING, |bounds, shape| {
+    shapes.fold(Rect::NOTHING, |bounds, shape| {
         bounds.union(match shape {
+            Shape::Graphic(graphic) => graphic.paths().iter().flatten().map(point).fold(Rect::NOTHING, Rect::union),
             Shape::Line(from, to) | Shape::Rect(from, to) => point(from).union(point(to)),
             Shape::Polyline(points) => points.iter().map(point).fold(Rect::NOTHING, Rect::union),
             Shape::Circle(center, radius) => point(center).expand(*radius as f32 / GRID),
@@ -745,8 +751,26 @@ fn paint_symbol(painter: &Painter, definition: &SymbolDefinition, center: Pos2, 
         let (x, y) = turn(x, y, turns);
         pos2(center.x + x * step, center.y + y * step)
     };
-    for shape in &definition.drawing {
+    for shape in &definition.graphics() {
         match shape {
+            Shape::Graphic(graphic) => {
+                if matches!(graphic.geometry, pcbcraft_engine::library_graphics::Geometry::Text { .. }) {
+                    if step < theme::SCHEMATIC_MIN_GRID_SPACING {
+                        continue;
+                    }
+                    let text = crate::definition_graphics::symbol_text(graphic, turns);
+                    crate::definition_graphics::paint(
+                        painter,
+                        &text,
+                        |p| center + vec2(p.x_nm as f32, p.y_nm as f32) * (step / GRID),
+                        step / GRID,
+                        color,
+                        Tokens::get().canvas,
+                    );
+                } else {
+                    crate::definition_graphics::paint(painter, graphic, |p| xy(&p), step / GRID, color, Tokens::get().canvas);
+                }
+            }
             Shape::Line(from, to) => {
                 painter.line_segment([xy(from), xy(to)], stroke);
             }

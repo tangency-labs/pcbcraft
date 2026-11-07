@@ -36,6 +36,12 @@ const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 /// The glyphs used by the schematic ribbon actions and Browser rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
+    Select,
+    Pin,
+    Pad,
+    Line,
+    Rectangle,
+    Circle,
     Subsheet,
     Power,
     Text,
@@ -63,8 +69,6 @@ pub enum ToolIcon {
     SplitView,
     EditorWindow,
     Settings,
-    Rectangle,
-    Line,
 }
 
 /// The glyph at the start of a Browser row: a container or one of the ribbon's own glyphs.
@@ -143,7 +147,11 @@ pub enum WorkspaceIcon {
 /// One row of the workspace picker. The app owns the list; the picker only draws it.
 #[derive(Clone, Copy, Debug)]
 pub struct Workspace<'a> {
+    /// Stable application-owned workspace key, independent of its label and visual order.
+    pub id: &'a str,
     pub title: &'a str,
+    /// Whether this workspace supports split or native-window placements.
+    pub multiple_views: bool,
     pub description: &'a str,
     /// The ribbon tabs the workspace offers. `None` marks a planned workspace, which is drawn
     /// dimmed with a Planned badge and can't be picked.
@@ -201,7 +209,8 @@ pub fn ribbon(
     add: impl FnOnce(&mut Ui, usize),
 ) -> RibbonResponse {
     let t = Tokens::get();
-    let height = RIBBON_HEIGHT;
+    let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
+    let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 };
     // Let the app bar color show behind the two rounded workspace corners.
     let top = ui.available_rect_before_wrap();
     ui.painter().rect_filled(Rect::from_min_size(top.min, vec2(top.width(), f32::from(t.radius_lg))), 0, t.app_bar);
@@ -216,7 +225,6 @@ pub fn ribbon(
                 .inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)),
         )
         .show(ui, |ui| {
-            let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
             let mut picked = None;
             let mut quick_pick = None;
             ui.horizontal_top(|ui| {
@@ -240,6 +248,15 @@ pub fn ribbon(
                     ui.vertical(|ui| {
                         ui.set_width(ui.available_width());
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
+                        if !wide {
+                            let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id());
+                            let tile = ui.small_button(format!("{workspace}    "));
+                            let c = tile.rect.right_center() - vec2(t.space_6, 0.0);
+                            ui.painter()
+                                .add(Shape::line(vec![c + vec2(-3.0, -1.5), c + vec2(0.0, 1.5), c + vec2(3.0, -1.5)], Stroke::new(1.0, t.text_dim)));
+                            tile.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Choose workspace"));
+                            picked = picker(ui, &tile, workspaces, !was_open);
+                        }
                         ui.spacing_mut().item_spacing.y = 1.0;
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = if wide { t.space_6 } else { t.space_2 };
@@ -293,7 +310,10 @@ pub fn ribbon(
 fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32) -> Response {
     let t = Tokens::get();
     let inset = t.space_8 + 1.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(WORKSPACE_WIDTH - 2.0 * inset, height - 2.0 * inset), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(if workspace.len() > 10 { WORKSPACE_WIDTH + 32.0 } else { WORKSPACE_WIDTH } - 2.0 * inset, height - 2.0 * inset),
+        Sense::click(),
+    );
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Choose workspace"));
     let open = egui::Popup::is_id_open(ui.ctx(), picker_id());
     let center = rect.center();
@@ -434,7 +454,7 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -
     let soft = t.panel.lerp_to_gamma(accent, 0.10);
     let row_height = if available { t.space_24 * 3.0 } else { t.space_24 * 2.0 + t.space_12 };
     let (rect, allocated) = ui.allocate_exact_size(vec2(width, row_height), Sense::hover());
-    let action_count = if available { if native { 2 } else { 1 } } else { 0 };
+    let action_count = if available && entry.multiple_views { if native { 2 } else { 1 } } else { 0 };
     let action_width = action_count as f32 * (t.space_24 + t.space_4);
     let text_right = rect.right() - t.space_8 - action_width;
     let body = Rect::from_min_max(rect.min, pos2(text_right, rect.bottom()));
@@ -460,18 +480,13 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -
     let title = painter.layout_no_wrap(entry.title.to_owned(), fonts::interface_heading(ui, t.font_heading), ink);
     let badge_x = x + title.size().x + t.space_8 + 1.0;
     painter.galley(pos2(x, y - title.size().y / 2.0), title, ink);
-    let (badge_fill, badge_ink) = if entry.current { (t.badge, t.badge_ink) } else { (soft, accent) };
-    let label = if entry.current {
-        "Current"
-    } else if available {
-        "Available"
-    } else {
-        "Planned"
-    };
-    let badge = painter.layout_no_wrap(label.to_owned(), FontId::proportional(t.font_small), badge_ink);
-    let badge_rect = Rect::from_min_size(pos2(badge_x, y - t.space_8), badge.size() + vec2(t.space_12, t.space_3));
-    painter.rect_filled(badge_rect, t.radius_lg, badge_fill);
-    painter.galley(badge_rect.min + vec2(t.space_6, t.space_3 / 2.0), badge, badge_ink);
+    if entry.current || !available {
+        let (fill, ink) = if entry.current { (t.badge, t.badge_ink) } else { (soft, accent) };
+        let badge = painter.layout_no_wrap(if entry.current { "Current" } else { "Planned" }.into(), FontId::proportional(t.font_small), ink);
+        let badge_rect = Rect::from_min_size(pos2(badge_x, y - t.space_8), badge.size() + vec2(t.space_12, t.space_3));
+        painter.rect_filled(badge_rect, t.radius_lg, fill);
+        painter.galley(badge_rect.min + vec2(t.space_6, t.space_3 / 2.0), badge, ink);
+    }
     let line = |text: &str, y: f32| {
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), FontId::proportional(t.font_body), ink);
         job.wrap.max_width = (text_right - x - t.space_6).max(0.0);
@@ -675,6 +690,23 @@ pub struct RibbonTool<'a> {
 /// the tool picked from either this frame.
 pub fn ribbon_group(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]) -> Option<usize> {
     ribbon_group_with_menu(ui, title, tools, &[])
+}
+
+/// Align an inline control and its non-interactive caption with neighboring ribbon groups.
+/// The caller owns control state; chrome owns the group's height and caption metrics.
+pub fn ribbon_control(ui: &mut Ui, title: &str, width: f32, add: impl FnOnce(&mut Ui)) {
+    let t = Tokens::get();
+    let height = RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP + t.font_small + t.space_4;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let body = Rect::from_min_size(rect.min + vec2(t.space_6, t.space_8), vec2(width - t.space_12, RIBBON_TOOL_HEIGHT - t.space_8));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body), add);
+    ui.painter().text(
+        pos2(rect.center().x, rect.top() + RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP),
+        Align2::CENTER_TOP,
+        title,
+        FontId::proportional(t.font_small),
+        t.text_dim,
+    );
 }
 
 /// Draw a ribbon group with additional menu-only options after a separator. Returned indices
@@ -1118,6 +1150,21 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
             for (x, y) in [(10.0, 16.0), (54.0, 16.0), (54.0, 48.0), (10.0, 48.0)] {
                 p.rect_filled(Rect::from_center_size(at(x, y), vec2(7.0, 7.0) * (size / 64.0)), 0, accent);
             }
+        }
+        ToolIcon::Select => {
+            line(&[(18.0, 8.0), (18.0, 52.0), (30.0, 39.0), (40.0, 56.0), (47.0, 51.0), (36.0, 34.0), (54.0, 32.0), (18.0, 8.0)], stroke(3.5, ink));
+        }
+        ToolIcon::Pin => {
+            line(&[(12.0, 32.0), (46.0, 32.0)], stroke(4.0, ink));
+            p.circle_stroke(at(12.0, 32.0), 5.0 * size / 64.0, stroke(3.0, accent));
+            line(&[(46.0, 18.0), (46.0, 46.0)], stroke(4.0, accent));
+        }
+        ToolIcon::Pad => {
+            p.rect_filled(Rect::from_min_max(at(15.0, 10.0), at(49.0, 54.0)), size / 10.0, accent);
+            p.circle(at(32.0, 32.0), 7.0 * size / 64.0, t.panel, stroke(3.0, ink));
+        }
+        ToolIcon::Circle => {
+            p.circle_stroke(at(32.0, 32.0), 22.0 * size / 64.0, stroke(4.0, ink));
         }
         ToolIcon::Subsheet
         | ToolIcon::Power

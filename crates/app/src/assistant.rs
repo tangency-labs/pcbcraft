@@ -215,7 +215,8 @@ impl Assistant {
     /// Advance the agent and render the conversation. Home passes no workspace and suspends its
     /// view. Held tool calls the person answers are handed to the editor through
     /// [`Self::take_answers`]; the conversation itself never edits the session.
-    pub(super) fn show(&mut self, ctx: &Context, workspace: Option<Rect>, session: &Session, can_edit: bool) {
+    /// `has_document` also admits independent library workspaces without a project.
+    pub(super) fn show(&mut self, ctx: &Context, workspace: Option<Rect>, session: &Session, can_edit: bool, has_document: bool) {
         self.sync_project(session);
         if !self.settings.show_features {
             return;
@@ -247,12 +248,12 @@ impl Assistant {
                 }
                 None
             }
-            Visibility::Open if self.popped => self.show_window(ctx, session, can_edit),
+            Visibility::Open if self.popped => self.show_window(ctx, session, can_edit, has_document),
             Visibility::Open => {
                 let mut dock = self.dock;
                 let ready = matches!(self.chat.state, State::Ready | State::Running);
                 let (action, rect) = chrome::drawer(ctx, workspace, &mut dock, self.connection_status(), ready, |ui| {
-                    self.panel(ui, session, can_edit);
+                    self.panel(ui, session, can_edit, has_document);
                 });
                 self.dock = dock;
                 self.panel_rect = Some(rect);
@@ -266,7 +267,7 @@ impl Assistant {
     }
 
     /// Move the conversation into a native viewport and remember where it was on this run.
-    fn show_window(&mut self, ctx: &Context, session: &Session, can_edit: bool) -> Option<chrome::Action> {
+    fn show_window(&mut self, ctx: &Context, session: &Session, can_edit: bool, has_document: bool) -> Option<chrome::Action> {
         let title = session.project().map_or_else(|| "Assistant".to_owned(), |p| format!("{} — Assistant", p.name));
         let mut builder = egui::ViewportBuilder::default().with_title(title).with_min_inner_size([320.0, 320.0]);
         if !self.window_placed {
@@ -297,7 +298,7 @@ impl Assistant {
             }
             let status = self.connection_status();
             let ready = matches!(self.chat.state, State::Ready | State::Running);
-            chrome::window(ui, status, ready, |ui| self.panel(ui, session, can_edit))
+            chrome::window(ui, status, ready, |ui| self.panel(ui, session, can_edit, has_document))
         })
     }
 
@@ -575,8 +576,9 @@ impl Assistant {
         self.chat.push(Item::Notice(text));
     }
 
-    /// Draw the agent row, the conversation, waiting questions and the request field.
-    fn panel(&mut self, ui: &mut Ui, session: &Session, can_edit: bool) {
+    /// Draw the agent row, conversation and questions for the active document context.
+    /// Document availability is separate from temporary edit refusals.
+    fn panel(&mut self, ui: &mut Ui, session: &Session, can_edit: bool, has_document: bool) {
         let t = Tokens::get();
         if self.confirm_new {
             ui.label("Start a new chat? This clears the conversation and draft.");
@@ -593,9 +595,9 @@ impl Assistant {
         self.option_pickers(ui);
         if self.chat.items.is_empty() {
             ui.add_space(t.space_8);
-            ui.label(dim("The agent works on the open project through the same commands as the menus. Edits are undoable."));
+            ui.label(dim("The agent works on open documents through the same commands as the menus. Edits are undoable."));
         }
-        chrome::composer(ui, |ui| self.composer(ui, session, can_edit));
+        chrome::composer(ui, |ui| self.composer(ui, session, can_edit, has_document));
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
             self.approvals(ui);
             ui.separator();
@@ -816,20 +818,21 @@ impl Assistant {
         }
     }
 
-    /// Keep the prompt above its Send or Stop action. Long drafts scroll inside the input.
-    fn composer(&mut self, ui: &mut Ui, session: &Session, can_edit: bool) {
+    /// Keep the prompt above Send/Stop, retaining typed input while edits are paused.
+    /// A library document can provide context even when no project session is open.
+    fn composer(&mut self, ui: &mut Ui, _session: &Session, can_edit: bool, has_document: bool) {
         let running = self.chat.state == State::Running;
-        let can_send = session.project().is_some() && can_edit && self.chat.state == State::Ready && !self.draft.trim().is_empty();
+        let can_send = has_document && can_edit && self.chat.state == State::Ready && !self.draft.trim().is_empty();
         let draft_id = egui::Id::new("assistant_draft_input");
         let enter = can_send
             && ui.memory(|memory| memory.has_focus(draft_id))
             && ui.input_mut(|input| input.modifiers == egui::Modifiers::NONE && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         ScrollArea::vertical().id_salt("assistant_draft").max_height(96.0).auto_shrink([false, true]).show(ui, |ui| {
             ui.add_enabled(
-                session.project().is_some(),
+                has_document,
                 TextEdit::multiline(&mut self.draft)
                     .id(draft_id)
-                    .hint_text("Ask about the project or request a change…")
+                    .hint_text("Ask about the document or request a change…")
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
                     .char_limit(8192),
@@ -847,8 +850,8 @@ impl Assistant {
                     self.draft.clear();
                 }
             }
-            if session.project().is_none() {
-                ui.label(dim("Open or create a project to start."));
+            if !has_document {
+                ui.label(dim("Open or create a document to start."));
             } else if !self.chat.connected() {
                 ui.label(dim("Connect an agent to start."));
             }

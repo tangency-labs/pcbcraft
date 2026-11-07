@@ -79,22 +79,33 @@ A `pcbcraft-footprint/1` document has `library`, `id`, positive `revision`, `nam
 Identity is the library/item/revision tuple, independently of the file's location.
 A conflicting definition claiming an already-pinned identity is refused.
 
-Pads have a canonical numeric-string `number` from `"1"` through `"255"`, an
+Pads have a unique `number` of 1–8 letters, digits, `+`, `-` or `_`, an
 integer-nanometer `center`, positive `width_nm` and `height_nm`, whole-degree
 counterclockwise `rotation` in 0…359 and a `shape` of `rectangle`,
-`rounded_rectangle` or `circle`. Rounded rectangles carry a positive
+`rounded_rectangle`, `circle` or `oval`. Rounded rectangles carry a positive
 `corner_radius_nm` at most half the shorter dimension. Other shapes omit that
 field (zero); circles require equal width and height. Surface lands use
 `copper: "component_side"` without a drill. Plated through-hole lands use
 `copper: "all_copper"` and a positive `drill_nm` smaller than both land dimensions.
-Slots and arbitrary pad stacks remain unsupported. Definitions allow 1…64 distinct pads and up to 64
+Slots and arbitrary pad stacks remain unsupported. Definitions allow 1…128 distinct pads and up to 64
 graphics. Graphics use the same rectangular geometry and a `purpose` of
 `fabrication`, `silkscreen` or `courtyard`. Coordinates and dimensions are bounded
 by 100,000,000 nm; unknown fields and invalid geometry fail validation.
 
+Optional `artwork` adds up to 128 parameterized drawing objects. Each carries a
+`purpose` (`fabrication`, `silkscreen`, `courtyard`) and `graphic` with editable
+`geometry`, physical `stroke_nm` and `fill: "none"`. The shared geometry supports
+lines, rectangles, circles, arcs, polylines and stroke text as described in the
+[symbol format](symbol-library.md). Silkscreen paths are clipped against pad
+clearance by the board renderer. Absent artwork is omitted on save, preserving
+legacy definitions. These additions retain `pcbcraft-footprint/1`; old readers
+will reject unknown fields/shapes rather than silently dropping them.
+
 Placement supplies the built-in definition ID and an explicit `mapping` object
-from symbol terminal ID to pad-number string. Every terminal and every pad must
-appear exactly once. Two-pad callers may instead supply the legacy `pin_1_pad`
+from symbol terminal ID to pad-number string. Mapping validation, placement,
+board views and cross-probing preserve the complete identifier spelling, including
+alphanumeric names and numeric-looking names such as `01`. Maps support up to 128
+pads. Every terminal and every pad must appear exactly once. Two-pad callers may instead supply the legacy `pin_1_pad`
 shortcut; it cannot be combined with `mapping`. Invalid assignments change
 neither the project nor its undo history.
 
@@ -125,7 +136,7 @@ sized and oriented to fit the land. Connected pads also show snapshot-local Net 
 lines fit; these labels are derived presentation and never persist net identity. With multiple
 sheets, the annotation includes its owning sheet name and is independent of the
 active schematic view.
-Side flipping, mask/paste apertures, arbitrary shapes, footprint authoring and general
+Side flipping, mask/paste apertures, arbitrary shapes and general
 library source registration remain future work.
 
 The marker-only `generic-through-hole-2` compatibility definition is unchanged.

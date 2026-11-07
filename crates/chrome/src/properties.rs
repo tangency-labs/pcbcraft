@@ -5,7 +5,7 @@ use egui::{Align, Layout, RichText, Ui, vec2};
 /// Render a compact selected-object heading with a secondary value and no instructional copy.
 pub fn identity(ui: &mut Ui, reference: &str, value: &str) {
     let t = Tokens::get();
-    ui.label(RichText::new(reference).font(fonts::semibold(t.font_intro)));
+    ui.label(RichText::new(reference).font(fonts::interface_heading(ui, t.font_intro)));
     ui.add(egui::Label::new(RichText::new(value).color(t.text_dim)).truncate());
     ui.add_space(t.space_8);
 }
@@ -26,6 +26,26 @@ pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
         ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width())).labelled_by(label.id)
+    })
+    .inner
+}
+
+/// A labelled choice field keeps stored enum names separate from readable option labels and
+/// supplies an accessible name even when the selected value contains no field identity.
+pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, options: &[(&str, String)]) -> egui::Response {
+    let t = Tokens::get();
+    ui.horizontal(|ui| {
+        let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
+        let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, text)| text.as_str()).unwrap_or(value.as_str()).to_owned();
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for (key, text) in options {
+                    ui.selectable_value(value, (*key).into(), text);
+                }
+            })
+            .response
+            .labelled_by(label.id)
     })
     .inner
 }
@@ -73,7 +93,7 @@ pub fn browser_area(mut area: egui::Rect) -> egui::Rect {
 pub fn section(ui: &mut Ui, title: &str) {
     let t = Tokens::get();
     ui.add_space(t.space_8);
-    ui.label(RichText::new(title).font(fonts::semibold(t.font_heading)));
+    ui.label(RichText::new(title).font(fonts::interface_heading(ui, t.font_heading)));
     ui.add_space(t.space_4);
 }
 

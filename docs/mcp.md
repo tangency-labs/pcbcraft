@@ -97,14 +97,16 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 
 | Commands | Matching control |
 |---|---|
-| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Sheet tabs and **View → Split / Detach / New window** |
+| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Project and definition pane headers and **View → Split / Detach / New window** |
 | `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
 | `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
-| `view.set_workspace` | The workspace picker: schematic or PCB layout, here, beside or in a new window |
+| `app.set_workspace` | Choose Schematic, PCB layout, Symbol Editor or Footprint Editor in an addressed pane, here/beside/in a native window; definition workspaces resume their last document |
+| `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
+| `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
 | `pcb.set_footprint_transform` | Set a footprint center and whole-degree orientation through the same atomic command used by the PCB canvas |
 | `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing; click and box selection in a schematic; footprint and Browser selection in a PCB view |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | The named arrangement tabs: click, **+** and **Duplicate…**, **Rename…**, **Delete** |
-| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Analyze, Libraries, Manage and View for schematics; Layout and View for PCB), closing a non-last window |
+| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Analyze, Libraries, Manage and View for schematics; Layout, Libraries and View for PCB), closing a non-last window |
 | `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, PCB grid style, selection following, navigation) and **Home** |
 | `file.save` | **File → Save** for a project that already has a location |
 
@@ -167,3 +169,12 @@ edits as the editor. Both accept `items: {"symbols": ["symbol-2"], "wires": []}`
 and `expected_revision`; moving also takes `dx_nm` and `dy_nm`. Obtain IDs from
 inspection. Missing IDs, stale revisions and invalid geometry reject the complete
 operation. Selecting a group and the live rectangle remain window state.
+
+Library authoring actions now include atomic `replace_many`, group `transform`,
+`duplicate`, typed-primitives `paste` and rectangular `array`, alongside the
+existing insert/replace/delete/history operations. They all require the current
+library document revision. Array row/column vectors and transform pivot/offset
+use integer-nanometre `Point` objects; copies allocate unused terminal/pad
+numbers. `app.library_view` can set a distinct `selected_objects` ID array instead
+of scalar `selected`; per-pane inspection reports `selection`. These are live
+editor contracts; headless project sessions do not host authoring documents.

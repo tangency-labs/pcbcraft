@@ -50,6 +50,7 @@ pub enum PadShape {
     Rectangle,
     RoundedRectangle,
     Circle,
+    Oval,
 }
 
 /// Copper binding distinguishes a component-side surface land from a plated through-hole land.
@@ -67,6 +68,14 @@ pub enum GraphicPurpose {
     Fabrication,
     Silkscreen,
     Courtyard,
+}
+
+/// A technical graphic retains its layer role and parameterized geometry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Artwork {
+    pub purpose: GraphicPurpose,
+    pub graphic: crate::library_graphics::Graphic,
 }
 
 /// One unfilled rectangle with physical dimensions and local orientation.
@@ -112,6 +121,8 @@ pub struct FootprintDefinition {
     pub pads: Vec<RectPad>,
     pub graphics: Vec<GraphicRect>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artwork: Vec<Artwork>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub silkscreen: Vec<SilkPath>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
@@ -146,6 +157,7 @@ impl RectPad {
             && match self.shape {
                 PadShape::Rectangle => self.corner_radius_nm == 0,
                 PadShape::RoundedRectangle => (1..=self.width_nm.min(self.height_nm) / 2).contains(&self.corner_radius_nm),
+                PadShape::Oval => self.corner_radius_nm == 0,
                 PadShape::Circle => self.width_nm == self.height_nm && self.corner_radius_nm == 0,
             }
             && match (self.copper, self.drill_nm) {
@@ -162,9 +174,17 @@ impl FootprintDefinition {
         (self.library.clone(), self.id.clone(), self.revision)
     }
 
-    /// Validate the schema, provenance, bounded graphics and the explicit numeric pad identities.
-    /// Arbitrary pad stacks, slots and alphanumeric pad names remain unsupported.
+    /// Validate the schema, provenance, bounded graphics and distinct electrical pad identifiers.
+    /// Arbitrary pad stacks, slots and non-plated drills remain unsupported.
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.validate_mode(false)
+    }
+    /// Empty pad sets are permitted only in editable drafts, never silently published.
+    pub(crate) fn validate_draft(&self) -> Result<(), String> {
+        self.validate_mode(true)
+    }
+    /// Check shared constraints before accepting either an editable draft or a published package.
+    fn validate_mode(&self, draft: bool) -> Result<(), String> {
         let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
         if self.format != "pcbcraft-footprint/1"
             || !valid_id(&self.library)
@@ -175,10 +195,12 @@ impl FootprintDefinition {
             || !text(&self.source.kind, 64)
             || !text(&self.source.reference, 2048)
             || !text(&self.source.locator, 1024)
-            || self.pads.is_empty()
-            || self.pads.len() > 64
+            || (!draft && self.pads.is_empty())
+            || self.pads.len() > 128
             || numbers.len() != self.pads.len()
-            || self.pads.iter().any(|p| p.number.parse::<u8>().ok().is_none_or(|n| n == 0 || n.to_string() != p.number))
+            || self.pads.iter().any(|p| crate::schematic::PinNumber::new(&p.number).is_none())
+            || self.artwork.len() > 128
+            || self.artwork.iter().any(|a| a.graphic.fill != crate::library_graphics::Fill::None || a.graphic.validate(MAX_OFFSET_NM).is_err())
             || self.graphics.len() > 64
             || self.silkscreen.len() > 64
             || self.reference.as_deref().is_some_and(|font| !matches!(font, "pcbcraft-stroke-1" | "pcbcraft-technical-1"))

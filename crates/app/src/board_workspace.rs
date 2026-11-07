@@ -23,6 +23,10 @@ impl PcbApp {
     /// and target changes share the same queue and stale-input checks as Detach and Dock.
     pub(super) fn apply_workspace(&mut self, source: ViewId, workspace: Workspace, placement: Placement) {
         if placement == Placement::Here {
+            if let Some(view) = self.views.view_mut(source) {
+                view.definition = None;
+                view.release_input();
+            }
             if let Some(project) = self.session.project() {
                 let target = match workspace {
                     Workspace::Schematic => DocumentTarget::Sheet(

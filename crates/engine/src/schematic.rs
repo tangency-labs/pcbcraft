@@ -2,6 +2,9 @@
 
 pub(crate) mod wiring;
 
+pub mod pins;
+pub use pins::{PinAppearance, PinOrientation, PinStyle};
+
 pub use wiring::{Connectivity, PinNumber, Terminal, Wire, WireEndpoint, orthogonal_path};
 
 use std::sync::Arc;
@@ -47,6 +50,10 @@ pub enum ElectricalType {
     PowerIn,
     PowerOut,
     Unspecified,
+    TriState,
+    OpenCollector,
+    OpenEmitter,
+    NoConnect,
 }
 
 impl ElectricalType {
@@ -60,6 +67,10 @@ impl ElectricalType {
             Self::PowerIn => "power_in",
             Self::PowerOut => "power_out",
             Self::Unspecified => "unspecified",
+            Self::TriState => "tri_state",
+            Self::OpenCollector => "open_collector",
+            Self::OpenEmitter => "open_emitter",
+            Self::NoConnect => "no_connect",
         }
     }
 }
@@ -67,6 +78,8 @@ impl ElectricalType {
 /// One stroke of a symbol's drawing, in nanometers from the symbol's center before rotation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Shape {
+    /// Parameterized authoring graphics retain physical stroke/fill and editable curves/text.
+    Graphic(crate::library_graphics::Graphic),
     Line(Point, Point),
     /// Connected segments through each point in order; repeat the first point to close it.
     Polyline(Vec<Point>),
@@ -99,6 +112,8 @@ pub struct PinDefinition {
     pub offset: Point,
     pub name: Option<String>,
     pub electrical_type: ElectricalType,
+    /// None preserves legacy definitions whose pin leads are separate drawing strokes.
+    pub appearance: Option<PinAppearance>,
 }
 
 /// A schematic symbol definition loaded from a symbol library (see [`crate::library`]). It
@@ -127,6 +142,21 @@ pub struct SymbolDefinition {
 }
 
 impl SymbolDefinition {
+    /// Resolve raw drawing plus integrated pin graphics without changing native serialization.
+    pub fn graphics(&self) -> Vec<Shape> {
+        self.drawing
+            .iter()
+            .cloned()
+            .chain(self.pins.iter().flat_map(|pin| {
+                pin.appearance
+                    .as_ref()
+                    .map(|a| a.graphics(pin.offset, &pin.number, pin.name.as_deref()))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Shape::Graphic)
+            }))
+            .collect()
+    }
     /// Return the unit identity supplied by the library, used by saved placements.
     pub fn unit_id(&self) -> &str {
         &self.unit

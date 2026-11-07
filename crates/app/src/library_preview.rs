@@ -6,12 +6,17 @@ use pcbcraft_engine::board::definition::{CopperBinding, FootprintDefinition, Gra
 /// and technical graphics. Copper remains distinct from fabrication/courtyard drawing.
 pub(super) fn footprint(ui: &mut egui::Ui, definition: &FootprintDefinition) {
     properties::preview(ui, |painter, rect| {
-        let extent = definition
+        let mut extent = definition
             .pads
             .iter()
             .map(|p| (p.center, p.width_nm, p.height_nm))
             .chain(definition.graphics.iter().map(|g| (g.center, g.width_nm, g.height_nm)))
             .fold(1_000_000.0_f32, |extent, (p, w, h)| extent.max(p.x_nm.abs().max(p.y_nm.abs()) as f32 + w.max(h) as f32));
+        for artwork in &definition.artwork {
+            for p in artwork.graphic.paths().iter().flatten() {
+                extent = extent.max(p.x_nm.abs().max(p.y_nm.abs()) as f32 + artwork.graphic.stroke_nm as f32);
+            }
+        }
         let scale = rect.width().min(rect.height()) / (2.0 * extent);
         let at = |point: pcbcraft_engine::schematic::Point| rect.center() + egui::vec2(point.x_nm as f32, point.y_nm as f32) * scale;
         let corners = |center: pcbcraft_engine::schematic::Point, width: i64, height: i64, rotation: u16| {
@@ -36,6 +41,7 @@ pub(super) fn footprint(ui: &mut egui::Ui, definition: &FootprintDefinition) {
                 contour: match pad.shape {
                     PadShape::Rectangle => board::PadContour::Rectangle,
                     PadShape::Circle => board::PadContour::Circle,
+                    PadShape::Oval => board::PadContour::Oval,
                     PadShape::RoundedRectangle => board::PadContour::RoundedRectangle { radius: pad.corner_radius_nm as f32 * scale },
                 },
                 drill_radius: pad.drill_nm.map(|d| d as f32 * scale / 2.0),
@@ -43,7 +49,7 @@ pub(super) fn footprint(ui: &mut egui::Ui, definition: &FootprintDefinition) {
                 net: None,
             })
             .collect();
-        let graphics: Vec<_> = definition
+        let mut graphics: Vec<_> = definition
             .graphics
             .iter()
             .map(|g| board::GraphicDrawing {
@@ -58,6 +64,21 @@ pub(super) fn footprint(ui: &mut egui::Ui, definition: &FootprintDefinition) {
                 stroke_width: None,
             })
             .collect();
+        for artwork in &definition.artwork {
+            for points in artwork.graphic.paths() {
+                graphics.push(board::GraphicDrawing {
+                    color: None,
+                    points: points.into_iter().map(at).collect(),
+                    style: match artwork.purpose {
+                        GraphicPurpose::Fabrication => board::GraphicStyle::Fabrication,
+                        GraphicPurpose::Silkscreen => board::GraphicStyle::Silkscreen,
+                        GraphicPurpose::Courtyard => board::GraphicStyle::Courtyard,
+                    },
+                    closed: artwork.graphic.closed(),
+                    stroke_width: Some(artwork.graphic.stroke_nm as f32 * scale),
+                });
+            }
+        }
         board::footprint(painter, &pads, &graphics, "", rect.center(), board::copper_color(Some(true)), false, false);
     });
 }

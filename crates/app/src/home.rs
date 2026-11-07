@@ -1,6 +1,6 @@
 //! The Home page: open from the house button in the app bar. It replaces the ribbon and canvas
 //! while it is shown and leaves the open project, its history and any unsaved edits untouched.
-//! Each action reuses the same dialogs, file jobs and engine commands as the File menu.
+//! Document actions reuse the existing dialogs and file jobs.
 
 use egui::Ui;
 use pcbcraft_chrome::{home, menu::MenuIcon};

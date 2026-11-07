@@ -40,6 +40,10 @@ impl PcbApp {
     /// Open a form in the initiating window, or queue selection directly. Menus never hold
     /// editable text. Context actions capture the clicked tab without activating its saved layout.
     pub(crate) fn arrangement_intent(&mut self, ctx: &egui::Context, intent: Intent) {
+        if let Some(error) = self.arrangement_unavailable() {
+            self.message = Some(error.into());
+            return;
+        }
         if self.home || self.files.busy() || self.project_action_pending() || !matches!(self.dialog, Dialog::None) {
             return;
         }

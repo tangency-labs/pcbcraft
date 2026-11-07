@@ -591,3 +591,35 @@ The new package preview projects native definitions through existing chrome
 primitives. Published manual observations and deliberate differences are recorded
 in [the properties/editor notes](docs/properties-and-library-editors.md); no EDA
 implementation source, external drawings, icons or example assets were used.
+
+
+## Native library authoring workspaces
+
+`crates/engine/src/authoring.rs`, `crates/app/src/library_editors*` and
+`crates/chrome/src/authoring.rs` are original upstream code. Their workspace
+composition uses the already qualified Craft chrome and properties primitives
+above. The feature comparisons in `docs/properties-and-library-editors.md`
+reference only published KiCad/Altium manuals; no implementation code, artwork,
+external component definitions or examples were imported. Built-in definition
+fork tests use this repository's original starter library data. The native
+Close regression adds a direct development dependency on the already locked
+winit 0.30.13 crate (Apache-2.0), already used by the desktop lifecycle tests;
+no new dependency version or asset is introduced.
+
+The shared picker integration, authoring ribbon groups and Select/Pin/Pad/Line/Rectangle/Circle
+vector glyphs are original upstream code and artwork using the existing Craft
+palette. Workspace identity and focus remain separate from project view targets;
+no additional external source or asset was introduced.
+
+Definition views now use the existing upstream pane/window layout and native
+close controller. Per-pane authoring presentation, shared-session routing and
+closed-pane field recovery are original upstream code; no external source,
+asset or dependency was added for the layout integration.
+
+The authoring usability expansion adds original integrated pin geometry, editable
+technical artwork, oval pads, group transforms, duplication/arrays and clipboard
+transactions. Published KiCad 10 and Altium user manuals were consulted for the
+behavior comparison recorded in the properties/editor notes; no vendor code,
+icons, library data or fixtures were used. Parameterized text and pin labels reuse
+the existing qualified PCBcraft Technical stroke font, with its existing notices.
+No new dependency or third-party asset was added.

@@ -110,6 +110,16 @@ mod live {
     enum Kind {
         /// A view ID from inspection.
         View,
+        /// A typed engine authoring transaction.
+        LibraryAction,
+        /// A runtime document ID from inspect_editor.library_editors.
+        LibraryDocument,
+        /// A library document revision from inspect_editor.library_editors.
+        LibraryRevision,
+        /// A stable primitive ID from library inspection.
+        LibraryPrimitive,
+        /// A bounded group of distinct positive library primitive IDs.
+        PrimitiveIds,
         /// A window ID from inspection.
         Window,
         /// An arrangement ID from inspection.
@@ -141,7 +151,13 @@ mod live {
             let coordinate = json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM});
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
-                Self::View | Self::Window | Self::Arrangement => json!({"type": "integer", "minimum": 0}),
+                Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
+                Self::LibraryAction => {
+                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
+                }
+                Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
+                    json!({"type": "integer", "minimum": 0})
+                }
                 Self::Object => json!({"type":"string","format":"uuid"}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
@@ -161,7 +177,18 @@ mod live {
         /// Check a raw value without coercion, giving the reason it doesn't fit.
         fn validate(self, value: &Value) -> Result<(), String> {
             let fits = match self {
-                Self::View | Self::Window | Self::Arrangement => value.as_u64().is_some(),
+                Self::PrimitiveIds => value.as_array().is_some_and(|items| {
+                    items.len() <= 512
+                        && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
+                        && items.iter().filter_map(Value::as_u64).collect::<std::collections::BTreeSet<_>>().len() == items.len()
+                }),
+                Self::LibraryAction => {
+                    serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= pcbcraft_engine::authoring::MAX_BYTES)
+                        && serde_json::from_value::<pcbcraft_engine::authoring::Action>(value.clone()).is_ok()
+                }
+                Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
+                    value.as_u64().is_some()
+                }
                 Self::Name => value.as_str().is_some(),
                 Self::Bool => value.is_boolean(),
                 Self::Color => value.is_null() || value.as_str().is_some_and(|text| crate::board_appearance::parse_color(text).is_ok()),
@@ -176,6 +203,11 @@ mod live {
                 return Ok(());
             }
             Err(match self {
+                Self::PrimitiveIds => "must be a bounded list of distinct positive primitive IDs".into(),
+                Self::LibraryAction => "must be a bounded native authoring Action".into(),
+                Self::LibraryDocument => "must be a library document ID from inspect_editor.library_editors".into(),
+                Self::LibraryRevision => "must be the library document revision from inspect_editor.library_editors".into(),
+                Self::LibraryPrimitive => "must be a primitive ID from library inspection".into(),
                 Self::View => "must be a view ID from inspect_editor".to_owned(),
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
@@ -290,6 +322,112 @@ mod live {
     }
 
     const CATALOG: &[WindowCommand] = &[
+        WindowCommand {
+            id: "app.set_workspace",
+            title: "Choose Workspace",
+            summary: "Choose a workspace in an addressed pane (default: focused main pane), here, beside it or in a native window. Definition sessions and project history remain independent.",
+            params: &[
+                Param {
+                    name: "workspace",
+                    summary: "Workspace to enter",
+                    required: true,
+                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor"]),
+                },
+                Param { name: "view", summary: "Source pane; defaults to focused main pane", required: false, kind: Kind::View },
+                Param { name: "placement", summary: "Where to open it", required: false, kind: Kind::Choice(PLACEMENTS) },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_new",
+            title: "New Library Item",
+            summary: "Create an independent symbol or footprint definition workspace without editing project instances.",
+            params: &[Param { name: "kind", summary: "Definition kind", required: true, kind: Kind::Choice(&["symbol", "footprint"]) }],
+        },
+        WindowCommand {
+            id: "app.library_fork_selected",
+            title: "Edit Definition Copy",
+            summary: "Fork the actual focused symbol or footprint selection under a new identity, leaving its source and project instances unchanged.",
+            params: &[VIEW, Param { name: "kind", summary: "Definition kind", required: true, kind: Kind::Choice(&["symbol", "footprint"]) }],
+        },
+        WindowCommand {
+            id: "app.library_edit",
+            title: "Edit Library Item",
+            summary: "Apply one revision-checked authoring transaction to a library document, using its separate undo history.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
+                Param {
+                    name: "expected_revision",
+                    summary: "Library document revision from inspection",
+                    required: true,
+                    kind: Kind::LibraryRevision,
+                },
+                Param { name: "action", summary: "Typed authoring Action", required: true, kind: Kind::LibraryAction },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_focus",
+            title: "Focus Library Workspace",
+            summary: "Focus an open library document; omit document to return to the project with library edits retained.",
+            params: &[Param {
+                name: "document",
+                summary: "Runtime library document ID; omit for project",
+                required: false,
+                kind: Kind::LibraryDocument,
+            }],
+        },
+        WindowCommand {
+            id: "app.library_view",
+            title: "Library View",
+            summary: "Select a library primitive or definition metadata and navigate its canvas without changing authored data or history.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "view", summary: "Definition pane ID; defaults to its current presentation", required: false, kind: Kind::View },
+                Param { name: "selected", summary: "Stable primitive ID from library inspection", required: false, kind: Kind::LibraryPrimitive },
+                Param {
+                    name: "selected_objects",
+                    summary: "Stable IDs for group selection; cannot combine with selected/definition",
+                    required: false,
+                    kind: Kind::PrimitiveIds,
+                },
+                Param { name: "definition", summary: "Select definition metadata instead of a primitive", required: false, kind: Kind::Bool },
+                Param { name: "fit", summary: "Fit the definition", required: false, kind: Kind::Bool },
+                Param { name: "ribbon_tab", summary: "Authoring ribbon tab", required: false, kind: Kind::Choice(&["draw", "library", "view"]) },
+                Param { name: "browser", summary: "Whether the definition Browser is visible", required: false, kind: Kind::Bool },
+                Param { name: "properties", summary: "Whether compact Properties is visible", required: false, kind: Kind::Bool },
+                Param { name: "zoom_percent", summary: "Camera zoom percentage", required: false, kind: Kind::Integer { min: 1, max: 800, step: 1 } },
+                Param { name: "center", summary: "Center in definition nanometres", required: false, kind: Kind::Point },
+                Param {
+                    name: "grid_spacing_nm",
+                    summary: "Grid spacing offered by this editor, in nanometres",
+                    required: false,
+                    kind: Kind::Integer { min: 25_000, max: 1_270_000, step: 1 },
+                },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_close",
+            title: "Close Library Item",
+            summary: "Close an addressed library document. Unsaved fields or edits require an explicit discard; running file jobs prevent closing.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "discard", summary: "Explicitly discard unsaved library edits", required: false, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_open",
+            title: "Open Library Item",
+            summary: "Open the library item picker in the editor; bounded input opens a new document and never replaces unsaved work.",
+            params: &[],
+        },
+        WindowCommand {
+            id: "app.library_save",
+            title: "Save Library Copy",
+            summary: "Choose a new destination for the captured library document. Export writes its native definition; browser downloads do not confirm durable saving.",
+            params: &[
+                Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
+                Param { name: "export", summary: "Export native definition rather than editable item", required: false, kind: Kind::Bool },
+            ],
+        },
         WindowCommand {
             id: "view.open_sheet",
             title: "Open Sheet",
@@ -460,7 +598,7 @@ mod live {
         WindowCommand {
             id: "window.set_ribbon_tab",
             title: "Ribbon Tab",
-            summary: "Show a schematic ribbon tab (Capture, Analyze, Libraries, Manage, View) or a PCB ribbon tab (Layout, View).",
+            summary: "Show a schematic ribbon tab (Capture, Analyze, Libraries, Manage, View) or a PCB ribbon tab (Layout, Libraries, View).",
             params: &[WINDOW, Param { name: "tab", summary: "Which tab", required: true, kind: Kind::Choice(TABS) }],
         },
         WindowCommand {
@@ -652,11 +790,11 @@ mod live {
                     "focused_view": host.focused.0,
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties},
-                    "ribbon_tab": match panels.ribbon {
+                    "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
                         0 if app.views.view(host.focused).is_some_and(|view| view.workspace == Workspace::Board) => "layout",
                         0 => "capture",
                         slot => crate::ribbon::tab_name(slot),
-                    },
+                    })),
                 })
             })
             .collect();
@@ -672,10 +810,9 @@ mod live {
                     "window": window.0,
                     "focused": focused,
                     "primary": id == app.views.primary(),
-                    "workspace": match view.workspace {
-                        Workspace::Schematic => "schematic",
-                        Workspace::Board => "board",
-                    },
+                    "workspace": view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"}),
+                    "definition":view.definition,
+                    "library_view":app.inspect_library_view(id),
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
                     "grid_spacing_nm": view.camera.snap_nm(),
@@ -705,8 +842,10 @@ mod live {
             "file_operation": app.files.busy(),
             "dialog_open": !matches!(app.dialog, Dialog::None),
             "home": app.home,
+            "workspace": app.workspace_key(),
             "message": app.message,
             "windows": windows,
+            "library_editors":app.library_editors.inspect(),
             "views": views,
             "arrangements": {
                 "active": app.arrangements.active(),
@@ -725,6 +864,9 @@ mod live {
         /// Check an arrangement command as the tabs and their forms do, so a refusal names its
         /// reason; the accepted action is applied after the windows draw, like a tab click.
         fn arrangement_action(&self, id: &str, params: &Value) -> Result<Action, String> {
+            if let Some(error) = self.arrangement_unavailable() {
+                return Err(error.into());
+            }
             if self.home {
                 return Err("Home is showing. Return to the workspace first (app.set_home).".to_owned());
             }
@@ -783,7 +925,39 @@ mod live {
         pub(crate) fn run_window_command(&mut self, ctx: &Context, id: &str, params: &Value) -> Result<(), String> {
             let command = CATALOG.iter().find(|command| command.id == id).ok_or_else(|| format!("unknown command `{id}`"))?;
             command.check(params)?;
-            if (id.starts_with("view.") || id.starts_with("arrangement.") || id == "window.set_panel") && self.session.project().is_none() {
+            if id == "app.set_workspace" {
+                let source = ViewId(params["view"].as_u64().unwrap_or_else(|| self.views.hosts[&self.views.main].focused.0));
+                let host = self.views.owner(source).ok_or("Unknown source view ID.")?;
+                self.bind_editor_host(host);
+                self.activate_editor(ctx, source);
+                let placement = match params["placement"].as_str() {
+                    Some("beside") => pcbcraft_chrome::workspace::Placement::Beside,
+                    Some("window") => pcbcraft_chrome::workspace::Placement::Window,
+                    _ => pcbcraft_chrome::workspace::Placement::Here,
+                };
+                let result = self.enter_workspace(ctx, params["workspace"].as_str().unwrap_or_default(), placement);
+                self.bind_editor_host(self.views.main);
+                return result;
+            }
+            if id.starts_with("app.library_") {
+                return self.library_command(ctx, id, params);
+            }
+            if (id.starts_with("arrangement.")
+                || id == "window.set_panel"
+                || (id.starts_with("view.")
+                    && !matches!(
+                        id,
+                        "view.focus"
+                            | "view.split"
+                            | "view.open_beside"
+                            | "view.open_window"
+                            | "view.detach"
+                            | "view.dock"
+                            | "view.close"
+                            | "view.fit"
+                    )))
+                && self.session.project().is_none()
+            {
                 return Err("No project is open. Open or create one first.".to_owned());
             }
             self.bind_editor_host(self.views.main);
@@ -799,6 +973,28 @@ mod live {
                 Some(view) => Some((view, self.view_window(view)?)),
                 None => None,
             };
+            if let Some((view, _)) = view {
+                let definition = self.views.view(view).and_then(|view| view.definition);
+                if definition.is_none() && self.session.project().is_none() {
+                    return Err("No project is open.".into());
+                }
+                if definition.is_some()
+                    && !matches!(
+                        id,
+                        "view.focus"
+                            | "view.split"
+                            | "view.open_beside"
+                            | "view.open_window"
+                            | "view.detach"
+                            | "view.dock"
+                            | "view.close"
+                            | "view.fit"
+                            | "view.set_workspace"
+                    )
+                {
+                    return Err("Use app.library_view for definition selection and navigation.".into());
+                }
+            }
             match (id, view, window) {
                 ("view.focus", Some((view, host)), _) => self.in_window(host, |app| app.activate_editor(ctx, view)),
                 ("view.split", Some((view, host)), _) => {
@@ -824,7 +1020,13 @@ mod live {
                     };
                     self.apply_view_action(ctx, view, action);
                 }
-                ("view.fit", Some((view, _)), _) => self.fit_view(view),
+                ("view.fit", Some((view, _)), _) => {
+                    if let Some(document) = self.bind_library_view(view) {
+                        self.fit_library_document(document);
+                    } else {
+                        self.fit_view(view);
+                    }
+                }
                 ("view.center", Some((view, _)), _) => {
                     let at = point(&params["at"]).ok_or("`at` must be a point")?;
                     if let Some(view) = self.views.view_mut(view) {
@@ -952,8 +1154,11 @@ mod live {
                     self.in_window(host, |app| app.set_panel(ctx, panel, open));
                 }
                 ("window.set_ribbon_tab", _, Some(host)) => {
+                    if self.views.hosts.get(&host).and_then(|host| self.views.view(host.focused)).is_some_and(|view| view.definition.is_some()) {
+                        return Err("Use app.library_view to select the authoring ribbon tab.".into());
+                    }
                     let tab = crate::ribbon::tab_slot(params["tab"].as_str().unwrap_or_default());
-                    if tab > 1
+                    if !crate::ribbon::BOARD_TAB_ORDER.contains(&tab)
                         && self
                             .views
                             .hosts
@@ -973,6 +1178,7 @@ mod live {
                 }
                 ("app.set_preferences", _, _) => self.preferences = updated_preferences(self.preferences, params),
                 ("app.set_home", _, _) => {
+                    self.library_editors.focus(None)?;
                     if params["shown"].as_bool() == Some(true) {
                         if !self.home {
                             self.show_home();
@@ -996,6 +1202,7 @@ mod live {
                 _ => return Err(format!("`{id}` can't run now")),
             }
             debug_assert!(self.views.host == self.views.main);
+            self.sync_library_focus();
             self.repaint_editors(ctx);
             ctx.request_repaint_of(egui::ViewportId::ROOT);
             Ok(())
@@ -1033,6 +1240,28 @@ mod live {
             assert!(center.check(&json!({"view": 0, "at": {"x_nm": 0}})).is_err());
             assert!(center.check(&json!({"view": -1, "at": {"x_nm": 0, "y_nm": 0}})).is_err());
             assert!(center.check(&json!({"at": {"x_nm": 0, "y_nm": 0}})).is_err());
+        }
+
+        /// Invalid library identifiers must direct recovery to library inspection, with the
+        /// existing nonnegative-integer schema retained for every library command parameter.
+        #[test]
+        fn library_parameter_refusals_identify_the_correct_inspection_state() {
+            for command in CATALOG.iter().filter(|c| c.id.starts_with("app.library_")) {
+                for param in command.params {
+                    let expected = match param.name {
+                        "document" => "must be a library document ID from inspect_editor.library_editors",
+                        "expected_revision" => "must be the library document revision from inspect_editor.library_editors",
+                        "selected" => "must be a primitive ID from library inspection",
+                        _ => continue,
+                    };
+                    assert_eq!(param.kind.schema(), json!({"type":"integer","minimum":0}));
+                    assert!(param.kind.validate(&json!(0)).is_ok());
+                    assert!(param.kind.validate(&json!(u64::MAX)).is_ok());
+                    for bad in [json!(-1), json!("1"), json!(true), json!(1.5), Value::Null] {
+                        assert_eq!(param.kind.validate(&bad).unwrap_err(), expected, "{} {}", command.id, param.name);
+                    }
+                }
+            }
         }
 
         /// The names inspection reports are the names the command takes, and unnamed settings stay.

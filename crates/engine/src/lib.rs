@@ -5,9 +5,11 @@
 //! [`Session::execute`] also includes an inspection result for existing callers.
 //! The native codec snapshots authored data independently of editing history and transport.
 
+pub mod authoring;
 pub mod board;
 pub mod hierarchy;
 pub mod library;
+pub mod library_graphics;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;
@@ -126,7 +128,7 @@ impl ParamKind {
                 json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::STARTER_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
-                json!({"type":"object","minProperties":1,"maxProperties":64,"additionalProperties":{"type":"string","pattern":"^[1-9][0-9]{0,2}$"}})
+                json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
             }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
             Self::SymbolDefinition => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -244,7 +246,7 @@ impl ParamKind {
             Self::AutoHeal | Self::Disconnect => Err("must be a boolean"),
             Self::Junctions => Err("must contain at most two distinct junction IDs"),
             Self::FootprintDefinition => Err("must identify an available built-in footprint"),
-            Self::FootprintMapping => Err("must map terminal IDs to canonical numeric pad IDs"),
+            Self::FootprintMapping => Err("must map terminal IDs to pad IDs of 1 to 8 letters, digits, +, - or _"),
             Self::BoardRotation => Err("must be a whole-degree orientation from 0 through 359"),
             Self::FootprintId => Err("must identify a placed footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
