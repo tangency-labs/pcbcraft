@@ -212,6 +212,7 @@ impl Sources {
                     {
                         if job.generation != session.libraries().generation() {
                             self.statuses.insert(job.source, "Library sources changed during loading; load this source again".into());
+                            ctx.request_repaint();
                             return;
                         }
                         match result {
@@ -245,6 +246,7 @@ impl Sources {
                     {
                         if job.generation != session.libraries().generation() {
                             self.statuses.insert(job.source, "Library sources changed during loading; load this source again".into());
+                            ctx.request_repaint();
                             return;
                         }
                         session.mark_library_unavailable(&job.source);
