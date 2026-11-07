@@ -36,7 +36,7 @@ the checkout. **View → Fit** brings the circuit into view; collapse Parts if y
 want more space. Reopening the distributed example resets the exercise without
 changing your saved copy.
 
-In the [browser build](../README.md#run-it), upload
+In the [browser build](../README.md#get-started), upload
 [`dual-led.pc.zip`](dual-led.pc.zip) instead. It contains the same project as the
 folder, including its symbols. **Download** produces an edited archive; reopen
 that download to check it. Uploading again from the original archive resets the
@@ -110,7 +110,7 @@ engine; selecting a symbol or footprint in the GUI also highlights its
 counterpart in the other workspace.
 
 For a live edit in the desktop window, follow the
-[live MCP setup](../README.md#live-mcp-in-the-desktop-editor) with your demo copy
+[live MCP setup](../docs/mcp.md#live-mcp-in-the-desktop-editor) with your demo copy
 open. Inspect R1 and the current revision, then execute
 `schematic.move_symbol` with its ID, its current `x_nm`, `y_nm` reduced by
 `2540000`, and the inspected numeric `expected_revision`. The wire follows in

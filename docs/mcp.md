@@ -1,0 +1,140 @@
+# AI assistants and MCP
+
+PCBCraft offers an in-app Assistant and a live MCP connection on desktop.
+The CLI can also run a separate headless session. Project edits use the
+same engine commands and undo history within each session.
+
+## Assistant in the desktop editor
+
+Open **Assistant** from the chat icon next to Preferences or press
+**Ctrl+Shift+A** (**Cmd+Shift+A** on Mac). Drag the title to switch sides,
+drag the inside edge to resize, or use **Pop out Assistant** to move the chat
+into its own window. **Dock Assistant** returns it to the workspace.
+Minimize folds the panel into the bottom-right strip. Close hides the panel
+and keeps the conversation available when you reopen it.
+
+The Assistant talks to a coding agent you already have, over the
+[Agent Client Protocol](https://agentclientprotocol.com) (ACP), as SolidCraft's agent chat does.
+PCBCraft finds installed agents by itself: Claude Code (through
+`npm install -g @agentclientprotocol/claude-agent-acp`), Codex
+(`npm install -g @agentclientprotocol/codex-acp`), Gemini CLI, OpenCode, GitHub Copilot CLI,
+Grok and Antigravity. Agents that aren't installed are listed with their install command. Pick an
+agent in the dropdown and choose **Connect**; if it needs a sign-in, its own sign-in methods
+appear. The agent's own options, such as its model, reasoning effort and mode, appear under the
+dropdown when it lists them, and the chosen model is remembered for that agent.
+
+The agent works on the open project through its own live MCP connection, which PCBCraft starts
+for the chat and revokes when it disconnects. It runs the same commands as the menus and any MCP
+client (see [Live MCP](#live-mcp-in-the-desktop-editor)), so every edit shows at once and is one
+**Undo**; the conversation notes each edit. Its own shell and file tools are turned off where
+the agent allows it. `pcbcraft-cli` must be beside the PCBCraft program (as in `target/debug`)
+for the agent to reach the project. The agent starts it as
+`pcbcraft-cli mcp --connect PORT --token-file FILE --wait 300`: the endpoint's credential stays in a
+file only you can read, in its own temporary folder apart from the agent's, so it is never in the
+agent's session, command line or environment, and the file goes when the chat disconnects.
+
+The permission mode decides what the agent may do without asking. **Auto-allow project edits**
+(the default, as in SolidCraft) runs project and view commands at once, while saving, starting
+a new project, closing windows and deleting arrangements wait for **Allow**, **Always allow** or **Deny** in the chat.
+A call nobody answers within four minutes is declined, and the agent is told it didn't run.
+**Ask every time** asks before any command; **Allow everything** asks before none. Reading the
+project always runs. Questions the agent asks about its own tools appear in the chat too.
+**Stop** (or **Esc** in the chat) ends the answer and denies anything waiting. Tool calls run
+only while a message is being answered: after **Stop** or a new chat (switching projects starts
+one), a call still on its way is refused. The agent's own questions about using PCBCraft's tools are
+answered for it, since the permission mode still applies to each command, but only for this
+chat's server, which gets a random name per connection. Turn off **Approve agents' requests to
+use PCBCraft's tools automatically** in Preferences → AI to confirm those questions too.
+
+Open **Preferences → AI** from Home or the gear in the app bar to set the permission mode for all
+agents or one, choose the default agent, **Test** that an agent starts and answers, forget its
+**Always allow** answers, **Refresh** the installed agents, and set where and when the Assistant
+opens. **Add agent…** adds another ACP agent by its command line, which runs without a shell, or
+a model endpoint: OpenAI-compatible (Ollama, LM Studio, OpenAI, OpenRouter and other presets) or
+Anthropic-compatible, with its base URL, model, optional key, request timeout and reasoning
+effort. For an endpoint PCBCraft runs the conversation itself and gives the model the same project
+tools through the same permission gate. Its key is kept in the system keychain (Keychain on macOS,
+Credential Manager on Windows, the Secret Service on Linux), never in PCBCraft's settings, and is
+only sent over HTTPS or to this computer, and only to the address it was entered for: changing an
+endpoint's address asks for its key again. **Test** lists an endpoint's models and checks that its
+model answers.
+
+## Live MCP in the desktop editor
+
+Build the desktop and CLI binaries with `cargo build --locked -p pcbcraft -p pcbcraft-cli`.
+Open a project in the desktop app and choose **Help (?) → Connect AI assistants…
+→ Enable local connection**. In a narrow window, use the same row on **Home**. Copy the configuration into your MCP client. If `pcbcraft-cli`
+isn't on your PATH, set its command to the full path of the binary in
+`target/debug`. Close the setup dialog before editing. The copied configuration
+grants access to this window until you disable the connection or close the app.
+
+For a quick check, open `crates/app/tests/fixtures/split/two-resistors/project.pc`. Use
+`inspect_project` to get R1's symbol ID and the current revision. Call `execute`
+with `schematic.move_symbol` and pass the ID as `symbol`, coordinates as integer
+`x_nm` and `y_nm`, and the inspected revision as `expected_revision`. Move R1 to
+`(0, 5_080_000)` and watch the attached wire follow it. Undo and redo in the
+editor, then inspect again to confirm the position. The edit stays unsaved
+until you save the project.
+
+For a project with several sheets, pass its inspected sheet UUID as `sheet` to
+schematic commands and footprint placement. Omission remains compatible with
+single-sheet projects; ambiguous and unknown targets are refused. `sheet.create`,
+`sheet.rename` and `sheet.delete` use the same project-wide undo history as edits.
+Inspection includes each sheet's own schematic, while the legacy top-level
+`schematic` is available only for single-sheet projects.
+
+The live connection runs every project command in `list_commands`, such as
+`schematic.delete_wire` or `edit.undo`, in the window's own session, so the
+editor and the agent share one undo history and the status bar names each edit
+(for example **Delete Wire through MCP**). `project.new` waits until the open
+project's unsaved changes are saved or discarded in the editor, and every
+command waits while a dialog or file operation is open.
+
+It also lists window commands, marked `"scope": "window"`, which run through the
+same handlers as the editor's own controls and never edit the project, its
+revision or undo history; only `file.save` changes the unsaved state. Call `inspect_editor` for the window,
+view and arrangement IDs they take, with each view's workspace, selection, zoom, center and grid:
+
+| Commands | Matching control |
+|---|---|
+| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Sheet tabs and **View → Split / Detach / New window** |
+| `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
+| `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
+| `view.set_workspace` | The workspace picker: schematic or PCB layout, here, beside or in a new window |
+| `pcb.set_footprint_transform` | Set a footprint center and whole-degree orientation through the same atomic command used by the PCB canvas |
+| `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing; click and box selection in a schematic; footprint and Browser selection in a PCB view |
+| `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | The named arrangement tabs: click, **+** and **Duplicate…**, **Rename…**, **Delete** |
+| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Analyze, Libraries, Manage and View for schematics; Layout and View for PCB), closing a non-last window |
+| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, PCB grid style, selection following, navigation) and **Home** |
+| `file.save` | **File → Save** for a project that already has a location |
+
+Closing the last window and choosing where to save an Untitled project stay in
+the editor, which asks about unsaved changes. Headless sessions refuse window
+commands with a reason.
+
+## Headless MCP
+
+To start the MCP server from the repository root, run
+`cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it
+at `pcbcraft-cli mcp`. Pass
+`--project path/to/project.pc` (or a folder or `.pc.zip`) after `mcp` to start with a saved snapshot. The
+headless session is separate from the app window. Send `inspect: false` with
+`execute` to return just the resulting revision. Use `inspect_project` to read
+the project, or `cross_probe` to look up a linked terminal or pad.
+
+An MCP client can use `schematic.connect_pins` to join two terminals from
+`inspect_project`. Describe the command for its input shape, and send the current
+project revision with the two endpoints. Project inspection returns the wires,
+connected terminal groups and unconnected pins. `schematic.draw_wire` accepts
+terminal references, `{"junction":"junction-N"}` references from inspection, or
+new free points as `{"x_nm":0,"y_nm":0}`, plus an ordered `bends` array and
+`expected_revision`. Every leg must be horizontal or vertical. One complete route
+is one undo step; `schematic.delete_wire` removes an inspected wire ID.
+`schematic.place_symbol` also accepts an optional `rotation` of 0, 90, 180 or 270
+counterclockwise degrees, defaulting to 0.
+
+`schematic.move_items` and `schematic.delete_items` perform the same atomic group
+edits as the editor. Both accept `items: {"symbols": ["symbol-2"], "wires": []}`
+and `expected_revision`; moving also takes `dx_nm` and `dy_nm`. Obtain IDs from
+inspection. Missing IDs, stale revisions and invalid geometry reject the complete
+operation. Selecting a group and the live rectangle remain window state.
