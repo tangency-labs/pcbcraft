@@ -210,9 +210,7 @@ fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
 #[test]
 fn ribbon_wire_edits_work_from_buttons_and_caption_menu() {
     for caption in [false, true] {
-        for (label, button, count) in
-            [("Slice", "Slice selected wire", 2), ("Break", "Break selected wire segment", 2), ("Delete", "Delete selected wire or segment", 1)]
-        {
+        for (label, button, count) in [("Slice", "Slice selected wire", 2), ("Delete", "Delete selected wire or segment", 1)] {
             let mut h = harness();
             assert!(h.get_by_label(button).accesskit_node().is_disabled());
             let pos = screen(&h, grid(8, 3));

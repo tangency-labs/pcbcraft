@@ -1,4 +1,5 @@
 mod attachment;
+mod detachment;
 mod healing;
 mod redraws;
 mod segments;

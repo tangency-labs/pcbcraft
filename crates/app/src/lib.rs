@@ -438,8 +438,8 @@ impl PcbApp {
         project.symbols().iter().find(|symbol| symbol.id() == id).map(|symbol| project.reference(symbol))
     }
 
-    /// Rotate, delete or open Edit Fields for the selected symbol through the shared commands.
-    /// Deleting clears the selection; a failed command shows in the status bar.
+    /// Rotate, delete, edit fields or pick up a symbol for disconnected movement.
+    /// Pickup is view-only until placement; deleting clears selection and failures show in status.
     fn edit_selected(&mut self, action: SymbolAction) {
         if self.views.active.workspace != Workspace::Schematic {
             return;
@@ -448,6 +448,12 @@ impl PcbApp {
         let Some(id) = self.views.active.schematic.selection.single_symbol().map(str::to_owned) else { return };
         let revision = self.session.revision();
         match action {
+            SymbolAction::DisconnectMove => {
+                if let Some(symbol) = self.session.project().and_then(|project| project.symbols().iter().find(|symbol| symbol.id() == id)) {
+                    self.views.active.schematic.tool =
+                        Some(Tool::Move { symbol: symbol.clone(), offset: egui::Vec2::ZERO, revision, disconnect: true });
+                }
+            }
             SymbolAction::Rotate => self.run(ROTATE_SYMBOL, &json!({"symbol": id, "expected_revision": revision})),
             SymbolAction::Delete => {
                 self.run(DELETE_SYMBOL, &json!({"symbol": id, "expected_revision": revision}));
@@ -511,7 +517,11 @@ impl PcbApp {
     fn reshape_wire(&mut self, drag: &schematic_canvas::ReshapeDrag, to: pcbcraft_engine::wire::Anchor, revision: u64) {
         use pcbcraft_engine::wire::{Anchor, Reshape};
         let (command, params) = match (&drag.edit, to) {
-            (Reshape::Segment { wire, at }, Anchor::Free(to)) => (pcbcraft_engine::MOVE_WIRE_SEGMENT, json!({"wire": wire, "at": at, "to": to})),
+            (Reshape::Segment { wire, at }, Anchor::Free(to)) => (
+                pcbcraft_engine::MOVE_WIRE_SEGMENT,
+                json!({"wire": wire, "at": at, "to": to,
+                "connect_ends":drag.connection_ends().iter().map(|id|format!("junction-{id}")).collect::<Vec<_>>()}),
+            ),
             (Reshape::Corner { wire, at }, Anchor::Free(to)) => (pcbcraft_engine::MOVE_WIRE_CORNER, json!({"wire": wire, "at": at, "to": to})),
             (Reshape::Junction(id), Anchor::Free(to)) => (pcbcraft_engine::MOVE_JUNCTION, json!({"junction": format!("junction-{id}"), "to": to})),
             (Reshape::Junction(id), Anchor::Existing(_) | Anchor::Split { .. }) => {
@@ -894,7 +904,7 @@ impl PcbApp {
     }
 
     /// Expose implemented wire edits through both ribbon buttons and their caption menu.
-    /// Slice/Break use the selected leg's captured point and revision; Heal and Delete act on
+    /// Slice uses the selected leg's captured point and revision; Heal and Delete act on
     /// the selected wires, with Delete retaining the narrower segment-selection semantics.
     /// The menu-only Auto-heal toggle changes the saved preference for future edits, not history.
     fn wire_edit_ribbon(&mut self, ui: &mut egui::Ui) {
@@ -904,7 +914,6 @@ impl PcbApp {
         let wires = !selection.wires.is_empty() && selection.symbols.is_empty();
         let tools = [
             (ToolIcon::Slice, "Slice", "Slice selected wire", "", leg.as_ref().is_some_and(|l| l.split.is_some())),
-            (ToolIcon::Break, "Break", "Break selected wire segment", "", leg.as_ref().is_some_and(|l| l.route.len() > 2)),
             (ToolIcon::Heal, "Heal", "Heal selected wires", "", wires),
             (ToolIcon::Delete, "Delete", "Delete selected wire or segment", "Del", wires),
         ]
@@ -933,11 +942,6 @@ impl PcbApp {
                 }
             }
             Some(1) => {
-                if let Some(leg) = leg {
-                    self.edit_wire(schematic_canvas::WireAction::Break, &leg);
-                }
-            }
-            Some(2) => {
                 self.run(
                     pcbcraft_engine::HEAL_WIRES,
                     &json!({"items":self.views.active.schematic.selection,"expected_revision":self.session.revision()}),
@@ -946,8 +950,8 @@ impl PcbApp {
                     self.select(Selection::default());
                 }
             }
-            Some(3) => self.delete_selection(),
-            Some(4) => self.preferences.auto_heal_wires = !self.preferences.auto_heal_wires,
+            Some(2) => self.delete_selection(),
+            Some(3) => self.preferences.auto_heal_wires = !self.preferences.auto_heal_wires,
             _ => {}
         }
     }
@@ -1001,6 +1005,7 @@ impl PcbApp {
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
+                        Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
                         Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
                         Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
@@ -1174,7 +1179,7 @@ impl PcbApp {
             }
             (None, Click::Grab(symbol, offset)) => {
                 self.select(Selection::one_symbol(symbol.id()));
-                self.views.active.schematic.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision() });
+                self.views.active.schematic.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision(), disconnect: false });
             }
             (None, Click::StartBox(drag)) => {
                 self.views.active.schematic.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
@@ -1233,13 +1238,13 @@ impl PcbApp {
                 self.select(Selection::one_symbol(symbol));
                 self.edit_selected(action);
             }
-            (Some(Tool::Move { symbol, revision, .. }), Click::FinishMove(position)) => {
+            (Some(Tool::Move { symbol, revision, disconnect, .. }), Click::FinishMove(position)) => {
                 self.views.active.schematic.tool = None;
                 if let Some(point) = position {
                     self.run(
                         MOVE_SYMBOL,
                         &json!({
-                            "symbol": symbol.id(), "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision,
+                            "symbol": symbol.id(), "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "disconnect":disconnect,
                         }),
                     );
                 }

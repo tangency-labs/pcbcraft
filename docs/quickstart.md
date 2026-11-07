@@ -56,7 +56,10 @@ first **Save** asks for a project folder, and the project takes that folder's na
 
 1. Drag a resistor on the canvas; its wire endpoint follows. Use **Undo**, then
    **Redo**, to check that the move is one edit. Select a resistor and press
-   **E** to change its reference or value, or **R** to rotate it.
+   **E** to change its reference or value, or **R** to rotate it. Right-click →
+   **Disconnect and Move** leaves its old wiring in place; click to place the symbol
+   elsewhere, or **Esc** to cancel. A replacement placed at the old pins reconnects
+   to the preserved wire ends.
 2. Press **A** to open Parts and focus search. Search for a capacitor, click the
    result and click the canvas to place it. **R** rotates a placement preview;
    **Esc** cancels it. Parts stays open until you close or hide it. Dragging a
@@ -83,8 +86,10 @@ first **Save** asks for a project folder, and the project takes that folder's na
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
    **Esc** cancels a preview. Right-click → **Select Wire** selects the complete
    route for whole-wire movement or deletion. Capture → **Wire edits** offers
-   **Slice**, **Break**, **Heal** and **Delete** for the selection; the context
-   menu also offers whole-wire deletion. Moves and draws clean up overlapping
+   **Slice**, **Heal** and **Delete** for the selection. The context menu also offers
+   **Break** to detach a leg and whole-wire deletion. A detached straight piece carries
+   its free ends when dragged; its original contacts remain disconnected until pulled
+   clear, after which dropping back onto them reconnects normally. Moves and draws clean up overlapping
    runs, and **Heal** applies that cleanup to existing selected wires. Dropping
    a part with a pin exactly on a wire connects it; a two-pin part placed across
    a straight run replaces the wire between its pins. **Auto-heal wires** in the

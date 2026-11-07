@@ -9,6 +9,7 @@ use pcbcraft_engine::{
 use super::Camera;
 use std::cell::RefCell;
 
+mod departure;
 mod targets;
 
 #[cfg(test)]
@@ -70,34 +71,59 @@ pub(crate) struct ReshapeDrag {
     /// For a segment, whether its leg runs horizontally, so it moves only vertically.
     horizontal: Option<bool>,
     origin: Point,
+    /// Transient suppression of contacts occupied when a detached straight piece is grabbed.
+    departure: std::rc::Rc<RefCell<departure::Departure>>,
 }
 
 impl ReshapeDrag {
     /// Resolve a drag destination using drawing's unambiguous pin/junction hit test for a
     /// movable endpoint. Other handles and empty space keep their snapped pointer travel.
     /// The source itself is never an attachment target; coincident candidates cancel the drop.
+    /// Straight free pieces release their original-contact guard only after leaving its hit region.
     pub(crate) fn destination(&self, project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Anchor> {
         if !rect.contains(pointer) {
             return None;
         }
+        let point = self.target(camera.snap(pointer, rect));
+        if !super::valid_position(point) {
+            return None;
+        }
+        self.departure.borrow_mut().update(camera, rect, self.grabbed, point);
         if let Reshape::Junction(id) = self.edit {
-            let anchor = targets::Targets::new(project, camera, rect).anchor(camera, rect, pointer, Some(WireEndpoint::Junction(id)), true)?;
-            if !matches!(anchor, Anchor::Free(_)) && anchor != Anchor::Existing(WireEndpoint::Junction(id)) {
+            let suppressed = self.departure.borrow().suppressed_wires();
+            let anchor = targets::Targets::new(project, camera, rect).anchor_excluding(
+                camera,
+                rect,
+                pointer,
+                Some(WireEndpoint::Junction(id)),
+                true,
+                &suppressed,
+            )?;
+            if !matches!(anchor, Anchor::Free(_)) {
                 return Some(anchor);
             }
         }
-        let point = self.target(camera.snap(pointer, rect));
-        super::valid_position(point).then_some(Anchor::Free(point))
+        Some(Anchor::Free(point))
     }
 
     /// Validate a disposable preview with the same engine operation used on release.
-    /// Only a junction handle can attach; invalid geometry or topology yields no preview.
+    /// Junction handles use explicit targets; straight pieces can join exact end contacts after
+    /// departure. Invalid geometry or ambiguous topology yields no preview.
     pub(crate) fn preview(&self, project: &Project, to: Anchor, revision: u64, auto_heal: bool) -> Option<Project> {
         match (&self.edit, to) {
             (Reshape::Junction(id), Anchor::Existing(_) | Anchor::Split { .. }) => project.attached(*id, to, revision, auto_heal).ok(),
-            (_, Anchor::Free(point)) => project.reshaped(&self.edit, point).and_then(|next| next.healed(project, revision, auto_heal)).ok(),
+            (_, Anchor::Free(point)) => project
+                .reshaped(&self.edit, point)
+                .and_then(|next| next.healed_with_connections(project, revision, auto_heal, &self.connection_ends()))
+                .ok(),
             _ => None,
         }
+    }
+
+    /// Free ends eligible for exact wire contact on this drop. Original contacts are withheld
+    /// until that end has left their hit region; returning later can deliberately reconnect.
+    pub(crate) fn connection_ends(&self) -> Vec<u64> {
+        if matches!(self.edit, Reshape::Segment { .. }) { self.departure.borrow().connection_ends() } else { Vec::new() }
     }
 
     /// Where the grabbed point goes with the pointer snapped at `pointer`: moved by the snapped
@@ -123,7 +149,10 @@ pub(super) fn reshape_at(project: &Project, camera: &Camera, rect: Rect, wire: &
     let found = project.wires().iter().find(|candidate| candidate.id() == wire)?;
     let route = project.wire_path(found);
     let near = |point: Point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_HANDLE_HIT_RADIUS;
-    let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| ReshapeDrag { wire: wire.to_owned(), edit, grabbed, horizontal, origin };
+    let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| {
+        let departure = std::rc::Rc::new(RefCell::new(departure::Departure::new(project, wire, &edit)));
+        ReshapeDrag { wire: wire.to_owned(), edit, grabbed, horizontal, origin, departure }
+    };
     for end in found.endpoints() {
         if let WireEndpoint::Junction(id) = end
             && let Some(point) = project.endpoint_position(end)

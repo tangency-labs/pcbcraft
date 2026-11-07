@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
 };
 
+mod detach;
 mod loops;
 mod tails;
 
@@ -710,6 +711,16 @@ impl Project {
     /// Preview and commit use the same revision for deterministic new IDs. Loading never calls it.
     /// `auto_heal = false` still connects exact contacts, but preserves route geometry.
     pub fn healed(&self, before: &Project, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
+        self.healed_with_connections(before, revision, auto_heal, &[])
+    }
+
+    /// Normalize changed routes and optionally join explicitly requested free ends to exact
+    /// stationary wire contacts. Ordinary geometry moves do not request these connections.
+    /// Accept at most two distinct degree-one ends; ambiguous targets fail the entire candidate.
+    pub fn healed_with_connections(&self, before: &Project, revision: u64, auto_heal: bool, connect_ends: &[u64]) -> Result<Project, CommandError> {
+        if connect_ends.len() > 2 || (connect_ends.len() == 2 && connect_ends[0] == connect_ends[1]) {
+            return Err(CommandError::InvalidParams("choose at most two distinct free ends".into()));
+        }
         let mut edit = Edit::new(self, revision);
         for wire in self.wires.iter() {
             if before.wires.iter().find(|w| w.ordinal == wire.ordinal).is_none_or(|old| old != wire || before.wire_path(old) != self.wire_path(wire))
@@ -717,6 +728,7 @@ impl Project {
                 edit.touched.insert(wire.ordinal);
             }
         }
+        edit.connect_wire_ends(connect_ends)?;
         edit.contacts(before)?;
         if edit.touched.is_empty() {
             return Ok(self.clone());

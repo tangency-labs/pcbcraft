@@ -2,6 +2,7 @@ use super::*;
 use crate::{ATTACH_JUNCTION, DRAW_WIRE, HEAL_WIRES, MOVE_ITEMS, MOVE_SYMBOL, PLACE_SYMBOL, Session, persistence};
 use serde_json::{Value, json};
 
+mod detach;
 mod redraws;
 mod segment_slides;
 

@@ -38,6 +38,8 @@ pub const UNTITLED: &str = "Untitled";
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
     AutoHeal,
+    Disconnect,
+    Junctions,
     Name,
     /// Free text for a symbol's reference or value. Its length and characters are checked by the command.
     Text,
@@ -71,6 +73,8 @@ impl ParamKind {
             Self::BoardId => json!({"type":"string", "format":"uuid"}),
             Self::CopperLayers => json!({"type":"integer", "enum":[2,4]}),
             Self::AutoHeal => json!({"type":"boolean","default":true}),
+            Self::Disconnect => json!({"type":"boolean","default":false}),
+            Self::Junctions => json!({"type":"array","maxItems":2,"uniqueItems":true,"items":Self::JunctionId.schema()}),
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()}
@@ -114,7 +118,14 @@ impl ParamKind {
             Self::BoardId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup if value.is_object() => Ok(()),
             Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
-            Self::AutoHeal if value.is_boolean() => Ok(()),
+            Self::AutoHeal | Self::Disconnect if value.is_boolean() => Ok(()),
+            Self::Junctions
+                if value.as_array().is_some_and(|ends| {
+                    ends.len() <= 2 && ends.iter().all(|end| Self::JunctionId.validate(end).is_ok()) && (ends.len() < 2 || ends[0] != ends[1])
+                }) =>
+            {
+                Ok(())
+            }
             Self::Selection if selection::Selection::parse(value).is_some() => Ok(()),
             Self::FootprintDefinition if value.as_str() == Some(FOOTPRINT_DEFINITION) => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
@@ -136,7 +147,8 @@ impl ParamKind {
             Self::BoardId => Err("must identify a board by UUID"),
             Self::BoardSetup => Err("must contain a board setup object"),
             Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
-            Self::AutoHeal => Err("must be a boolean"),
+            Self::AutoHeal | Self::Disconnect => Err("must be a boolean"),
+            Self::Junctions => Err("must contain at most two distinct junction IDs"),
             Self::FootprintDefinition => Err("must identify the built-in footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name | Self::Text => Err("must be a string"),
@@ -230,7 +242,7 @@ pub const HEAL_WIRES: &str = "schematic.heal_wires";
 pub const BREAK_WIRE: &str = "schematic.break_wire";
 /// Remove one straight leg of a wire, leaving the rest of its route with free ends.
 pub const DELETE_WIRE_SEGMENT: &str = "schematic.delete_wire_segment";
-/// Move an existing symbol without changing its terminals or wiring.
+/// Move a symbol, optionally disconnecting it while preserving its old wire paths.
 pub const MOVE_SYMBOL: &str = "schematic.move_symbol";
 /// Turn a symbol a quarter turn counterclockwise.
 pub const ROTATE_SYMBOL: &str = "schematic.rotate_symbol";
@@ -360,13 +372,19 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_WIRE_SEGMENT,
         title: "Move Wire Segment",
-        summary: "Slide the straight leg of a wire that contains a point across its direction. The wire's endpoints stay put, gaining orthogonal legs as needed. Positive overlaps heal; crossings stay separate. Undoable.",
+        summary: "Slide the straight leg of a wire that contains a point across its direction. A straight piece carries its free ends; pins and shared junctions stay anchored. Positive overlaps heal; crossings stay separate. Undoable.",
         params: &[
             WIRE,
             Param { required: true, name: "at", summary: "Point inside one leg of the wire's drawn route, not on a corner", kind: ParamKind::Point },
             Param { required: true, name: "to", summary: "Where that point goes; it may differ from at only across the leg", kind: ParamKind::Point },
             EXPECTED_REVISION,
             AUTO_HEAL,
+            Param {
+                required: false,
+                name: "connect_ends",
+                summary: "Free ends of this wire to join to exact stationary wire contacts on drop",
+                kind: ParamKind::Junctions,
+            },
         ],
     },
     Command {
@@ -427,13 +445,19 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_SYMBOL,
         title: "Move Symbol",
-        summary: "Move an existing symbol, retain attached pins and connect exact wire contacts. Heal touched routes. Undoable.",
+        summary: "Move a symbol, retaining attached wires by default. With disconnect, leave its wiring in place. Exact destination contacts still connect. Undoable.",
         params: &[
             Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
             AUTO_HEAL,
+            Param {
+                required: false,
+                name: "disconnect",
+                summary: "Leave the old wires in place with free ends before moving the symbol",
+                kind: ParamKind::Disconnect,
+            },
         ],
     },
     Command {
@@ -1005,8 +1029,8 @@ impl Session {
         Ok(())
     }
 
-    /// Move a placement at the expected revision, retaining existing pin connections, joining
-    /// exact new wire contacts and healing affected geometry as one undo step.
+    /// Move a placement as one undo step, retaining connections by default. With `disconnect`,
+    /// leave old routes at their original coordinates; destination contacts still connect.
     fn move_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1017,7 +1041,11 @@ impl Session {
             .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         if project.symbols[index].position != position {
-            let next = project.moved_symbol(&project.symbols[index].id(), position, self.revision(), wire::auto_heal(params))?;
+            let next = if params["disconnect"].as_bool().unwrap_or(false) {
+                project.moved_symbol_disconnected(&project.symbols[index].id(), position, self.revision(), wire::auto_heal(params))?
+            } else {
+                project.moved_symbol(&project.symbols[index].id(), position, self.revision(), wire::auto_heal(params))?
+            };
             self.change(next);
         }
         Ok(())

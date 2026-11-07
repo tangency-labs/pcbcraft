@@ -91,14 +91,38 @@ impl Targets {
     /// exact positions when grid snapping is bypassed; stroke splits project the current
     /// pointer coordinate onto the segment. Neither policy rebuilds the cached geometry.
     pub(super) fn anchor(&self, camera: &Camera, rect: Rect, at: Pos2, ignore: Option<WireEndpoint>, snap_to_grid: bool) -> Option<Anchor> {
-        if let Some(end) = nearest_node(&self.endpoints, at).ok()? {
+        self.anchor_excluding(camera, rect, at, ignore, snap_to_grid, &std::collections::BTreeSet::new())
+    }
+
+    /// Endpoint departures can hide their source identity and original neighboring routes
+    /// temporarily. Drawing passes no exclusions and retains ordinary magnetic targeting.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn anchor_excluding(
+        &self,
+        camera: &Camera,
+        rect: Rect,
+        at: Pos2,
+        ignore: Option<WireEndpoint>,
+        snap_to_grid: bool,
+        suppressed: &std::collections::BTreeSet<u64>,
+    ) -> Option<Anchor> {
+        let nodes;
+        let endpoints = if ignore.is_none() && suppressed.is_empty() {
+            &self.endpoints
+        } else {
+            let suppressed_nodes: std::collections::BTreeSet<_> =
+                self.segments.iter().filter(|segment| suppressed.contains(&segment.wire)).flat_map(|segment| segment.ends).collect();
+            nodes = self.endpoints.iter().copied().filter(|(end, _)| Some(*end) != ignore && !suppressed_nodes.contains(end)).collect();
+            &nodes
+        };
+        if let Some(end) = nearest_node(endpoints, at).ok()? {
             return Some(Anchor::Existing(end));
         }
         let snapped = if snap_to_grid { camera.snap(at, rect) } else { camera.unsnapped(at, rect) };
         let mut nearest = theme::SCHEMATIC_WIRE_HIT_RADIUS.powi(2);
         let (mut hit, mut ambiguous) = (None, false);
         for segment in &self.segments {
-            if !segment.hit.contains(at) || ignore.is_some_and(|end| segment.ends.contains(&end)) {
+            if !segment.hit.contains(at) || suppressed.contains(&segment.wire) || ignore.is_some_and(|end| segment.ends.contains(&end)) {
                 continue;
             }
             let distance = distance_sq(at, segment.a, segment.b);

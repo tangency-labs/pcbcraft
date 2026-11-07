@@ -3,7 +3,8 @@
 //!
 //! The pure `Project::reshaped` candidate changes geometry only. Every endpoint keeps its identity, so connections and
 //! component pins are never changed; a route end that is attached to something stays put and
-//! gains an orthogonal leg when the moved part leaves it. Routes stay horizontal and vertical,
+//! gains an orthogonal leg when the moved part leaves it. A straight one-leg piece carries its
+//! degree-one free ends when slid. Routes stay horizontal and vertical,
 //! with repeated and redundant straight-through points removed. Healing overlapping or
 //! doubled-back runs is performed by the command through `Project::healed`.
 //! Explicit attachment is a separate edit: it reshapes a junction's routes to an existing
@@ -23,7 +24,8 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reshape {
     /// The straight leg of wire `wire` strictly containing `at`, which slides across its
-    /// direction. Its ends follow; the wire's own endpoints stay put.
+    /// direction. Interior corners follow; pins and shared junctions stay anchored. A
+    /// straight one-leg wire carries its degree-one free ends with the slide.
     Segment { wire: String, at: Point },
     /// The interior corner of wire `wire` at `at`. The two legs meeting there slide with it.
     Corner { wire: String, at: Point },
@@ -88,7 +90,9 @@ fn follow(neighbour: Point, old: Point, to: Point) -> Point {
 
 impl Project {
     /// Build the result of moving the grabbed point of `edit` to `to`, for a drag preview or a
-    /// command, without changing this snapshot. A segment moves only across its direction, so
+    /// command, without changing this snapshot. A straight one-leg piece carries degree-one
+    /// free ends with it; pins, shared junctions and ends of longer routes remain anchored.
+    /// A segment moves only across its direction, so
     /// `to` must keep `at`'s coordinate along the leg. A corner must be an interior corner, not
     /// a route end. Every endpoint keeps its identity, so connectivity is unchanged. Moving to
     /// the grabbed point is checked like any other move, then returns this project unchanged,
@@ -125,7 +129,20 @@ impl Project {
                     (_, OnPath::Corner(k)) => vec![(k - 1, follow(path[k - 1], path[k], to)), (k, to), (k + 1, follow(path[k + 1], path[k], to))],
                     (_, OnPath::Leg(_)) => return Err(CommandError::InvalidParams("that point is not a corner of the wire".to_owned())),
                 };
-                let bends = bends_of(&rebuilt(&path, &moved, [true, true]))?;
+                let mut fixed = [true, true];
+                // A detached straight piece translates its free ends. Pins and junctions
+                // shared with other wires remain anchored, as do ends of longer routes.
+                if path.len() == 2 && matches!(edit, Reshape::Segment { .. }) {
+                    for (end, endpoint) in self.wires[index].endpoints.iter().enumerate() {
+                        if let WireEndpoint::Junction(id) = endpoint
+                            && self.wires.iter().filter(|wire| wire.endpoints.contains(endpoint)).count() == 1
+                        {
+                            fixed[end] = false;
+                            Arc::make_mut(&mut next.junctions).insert(*id, moved[end].1);
+                        }
+                    }
+                }
+                let bends = bends_of(&rebuilt(&path, &moved, fixed))?;
                 Arc::make_mut(&mut next.wires)[index].bends = Some(bends);
             }
             Reshape::Junction(id) => {
@@ -215,13 +232,21 @@ impl Session {
     }
 
     /// Check the revision, build the reshaped project and adopt it as one revision and undo
-    /// step, including local healing and exact pin contacts. A move that changes nothing
-    /// leaves the revision and history alone.
+    /// step, including local healing, exact pin contacts and any explicitly requested free-end
+    /// wire contacts. A no-travel move without connection requests leaves history alone.
     fn reshape(&mut self, params: &Value, edit: &Reshape) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let to = point_param(params, "to")?;
         let project = self.open_project()?;
-        let next = project.reshaped(edit, to)?.healed(project, self.revision(), super::auto_heal(params))?;
+        let connections: Vec<u64> =
+            params["connect_ends"].as_array().into_iter().flatten().filter_map(|end| end.as_str().and_then(|id| parse_id(id, "junction-"))).collect();
+        if let Reshape::Segment { wire, .. } = edit {
+            let index = project.wire_index(wire)?;
+            if connections.iter().any(|id| !project.wires[index].endpoints.contains(&WireEndpoint::Junction(*id))) {
+                return Err(CommandError::InvalidParams("connection must name a free end of the moved wire".into()));
+            }
+        }
+        let next = project.reshaped(edit, to)?.healed_with_connections(project, self.revision(), super::auto_heal(params), &connections)?;
         if next.wires != project.wires || next.junctions != project.junctions {
             self.change(next);
         }

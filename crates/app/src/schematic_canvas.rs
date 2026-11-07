@@ -49,6 +49,8 @@ pub(crate) enum Tool {
         symbol: SymbolPlacement,
         offset: Vec2,
         revision: u64,
+        /// Context-menu pickup leaves the old wiring in place and finishes on a canvas click.
+        disconnect: bool,
     },
     /// Dragging a segment, corner or free end of the selected wire.
     Reshape {
@@ -139,6 +141,7 @@ pub(crate) enum WireAction {
 /// What the selected symbol's context menu asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SymbolAction {
+    DisconnectMove,
     Rotate,
     EditFields,
     Delete,
@@ -146,9 +149,11 @@ pub(crate) enum SymbolAction {
 
 /// Draw the schematic and its active preview, and report a requested tool action.
 /// A primary drag reshapes one wire, grabs a symbol or moves an explicitly selected whole-wire/group; empty-space and secondary drags draw
-/// selection boxes. Move previews end on release, with no edit outside the canvas or after focus loss.
+/// selection boxes. Drag previews end on release, with no edit outside the canvas or after focus loss.
 /// Junction handles preview explicit pin/junction attachment through the engine before release.
 ///
+/// Disconnect and Move follows the pointer until a primary click commits; Escape, a secondary
+/// click or focus loss discards the preview without changing the document.
 /// Return `Click::CancelWire` when Cancel or Escape dismisses an in-progress wire
 /// through its context menu. An open wire menu can handle cancellation even
 /// while canvas input is blocked.
@@ -216,16 +221,24 @@ pub(crate) fn show(
     };
     let moved = match &tool {
         Some(Tool::Move { symbol, offset, .. }) => response
-            .interact_pointer_pos()
+            .hover_pos()
+            .or_else(|| response.interact_pointer_pos())
             .filter(|pointer| rect.contains(*pointer))
             .map(|pointer| (symbol.clone(), camera.snap(pointer + *offset, rect)))
             .filter(|(_, point)| valid_position(*point)),
         _ => None,
     };
     let group_preview = match (&tool, group_delta, reshape_target) {
-        (Some(Tool::Move { symbol, .. }), _, _) => {
-            moved.as_ref().and_then(|(_, point)| project.moved_symbol(&symbol.id(), *point, revision, auto_heal).ok())
-        }
+        (Some(Tool::Move { symbol, disconnect, .. }), _, _) => moved.as_ref().and_then(|(_, point)| {
+            {
+                if *disconnect {
+                    project.moved_symbol_disconnected(&symbol.id(), *point, revision, auto_heal)
+                } else {
+                    project.moved_symbol(&symbol.id(), *point, revision, auto_heal)
+                }
+            }
+            .ok()
+        }),
         (Some(Tool::MoveItems { items, .. }), Some(delta), _) => {
             items.moved(project, delta).and_then(|next| next.healed(project, revision, auto_heal)).ok()
         }
@@ -442,8 +455,12 @@ pub(crate) fn show(
                 ui.close();
                 return None;
             };
-            let rows =
-                [("Rotate", "R", SymbolAction::Rotate), ("Edit Fields…", "E", SymbolAction::EditFields), ("Delete", "Del", SymbolAction::Delete)];
+            let rows = [
+                ("Disconnect and Move", "", SymbolAction::DisconnectMove),
+                ("Rotate", "R", SymbolAction::Rotate),
+                ("Edit Fields…", "E", SymbolAction::EditFields),
+                ("Delete", "Del", SymbolAction::Delete),
+            ];
             rows.into_iter().find_map(|(label, key, action)| MenuItem::new(label).shortcut(key).show(ui).then(|| Click::Edit(action, id.clone())))
         });
         if let Some(click) = picked.and_then(|shown| shown.inner) {
@@ -457,7 +474,13 @@ pub(crate) fn show(
         }
     }
 
-    if moving && response.drag_stopped_by(egui::PointerButton::Primary) {
+    let disconnecting = matches!(tool, Some(Tool::Move { disconnect: true, .. }));
+    if disconnecting && (lost_focus || response.secondary_clicked()) {
+        return Some(Click::FinishMove(None));
+    }
+    if (disconnecting && response.clicked_by(egui::PointerButton::Primary))
+        || (!disconnecting && moving && response.drag_stopped_by(egui::PointerButton::Primary))
+    {
         return Some(Click::FinishMove(
             moved.map(|(_, point)| point).filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some()),
         ));
