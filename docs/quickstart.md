@@ -61,9 +61,10 @@ first **Save** asks for a project folder, and the project takes that folder's na
    result and click the canvas to place it. **R** rotates a placement preview;
    **Esc** cancels it. Parts stays open until you close or hide it. Dragging a
    result directly onto the canvas also places it.
-3. Click a pin or wire node to start directly, or press **W** to start on a wire
-   segment or empty grid point. The snapped wire cursor rings an existing connection
-   target. Click corners and a destination pin. **Space**
+3. Click an unconnected pin or free wire end to start directly, or hover a pin,
+   wire or grid point and press **W** to start there immediately. Connected nodes
+   use W or **Capture → Wire**, which waits for a first click. The green wire cursor
+   rings an existing connection target. Click corners and a destination pin. **Space**
    flips the current elbow and **Backspace** removes the last corner. **Enter**
    or a double-click finishes a free end; **Esc** cancels the unfinished wire.
    Finish on an existing wire segment to create a connected branch. Dragging a

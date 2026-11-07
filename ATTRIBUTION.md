@@ -336,6 +336,10 @@ Active-route preference during loop cleanup, direct node starts and the larger
 magnetic hit targets are new upstream behavior. The plain crosshair and target ring
 in `crates/chrome/src/cursor.rs` are original vector drawings using the shared
 theme; no KiCad cursor artwork or implementation was used.
+The per-view connection-target cache and edited-wire overlap scan are new upstream
+optimizations. Target identities remain revision-bound, projected geometry is rebuilt
+after navigation or viewport changes, and automatic starts exclude occupied nodes;
+W explicitly begins at the pointer without changing the model until completion.
 The Slice, Break, Heal and Delete glyphs in `crates/chrome/src/workspace.rs` are
 original drawings using the existing shared icon palette and ribbon metrics.
 The horizontal ribbon scrollbar uses Next's five-point `scroll_gutter` from

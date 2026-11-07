@@ -1120,6 +1120,7 @@ impl PcbApp {
             })
             .inner;
         self.views.active.schematic.wire_draft.finish_requested = false;
+        self.views.active.schematic.wire_draft.start_requested = false;
         if let (Some(source), Some(click)) = (source, click) {
             self.view_click(source, click);
             // Selection can change after the other pane was painted, without a document edit.
@@ -1332,6 +1333,7 @@ impl PcbApp {
             }
             if pressed(&ADD_WIRE) && self.session.available(CONNECT_PINS) {
                 self.begin_wire();
+                self.views.active.schematic.wire_draft.start_requested = true;
             }
         }
         if pressed(&COMMAND_Z) && self.session.available("edit.undo") {

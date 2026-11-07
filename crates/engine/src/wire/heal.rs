@@ -408,20 +408,37 @@ impl Edit {
     }
 
     /// Find the first positive overlap involving edited geometry in stable wire/leg order.
+    /// Unchanged pairs are skipped by index instead of walking the quadratic pair set.
     fn next_overlap(&mut self) -> Result<Option<(u64, u64, Point, Point)>, CommandError> {
         let paths: Vec<_> = self.project.wires.iter().map(|w| (w.ordinal, self.project.wire_path(w))).collect();
+        let edited: BTreeSet<_> = paths.iter().enumerate().filter_map(|(i, (id, _))| self.touched.contains(id).then_some(i)).collect();
         for (i, (a, pa)) in paths.iter().enumerate() {
-            for (b, pb) in paths.iter().skip(i + 1) {
-                if !self.touched.contains(a) && !self.touched.contains(b) {
-                    continue;
-                }
-                for x in pa.windows(2) {
-                    for y in pb.windows(2) {
-                        self.compare()?;
-                        if let Some((p, q)) = overlap(x, y) {
-                            return Ok(Some((*a, *b, p, q)));
-                        }
+            if self.touched.contains(a) {
+                for (b, pb) in paths.iter().skip(i + 1) {
+                    if let Some((p, q)) = self.path_overlap(pa, pb)? {
+                        return Ok(Some((*a, *b, p, q)));
                     }
+                }
+            } else {
+                for &j in edited.range(i + 1..) {
+                    let (b, pb) = &paths[j];
+                    if let Some((p, q)) = self.path_overlap(pa, pb)? {
+                        return Ok(Some((*a, *b, p, q)));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Compare two relevant routes within the shared budget. The caller preserves stable
+    /// pair order while skipping pairs in which neither wire participated in this edit.
+    fn path_overlap(&mut self, a: &[Point], b: &[Point]) -> Result<Option<(Point, Point)>, CommandError> {
+        for x in a.windows(2) {
+            for y in b.windows(2) {
+                self.compare()?;
+                if let Some(pair) = overlap(x, y) {
+                    return Ok(Some(pair));
                 }
             }
         }

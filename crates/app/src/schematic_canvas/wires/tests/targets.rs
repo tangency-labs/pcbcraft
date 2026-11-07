@@ -133,3 +133,74 @@ fn direct_node_starts_belong_to_the_clicked_split_pane() {
         }
     }
 }
+
+/// Occupied pins and junctions remain selectable with an ordinary click. W explicitly starts
+/// a branch at the hovered identity without another click, and its green cursor uses wire ink.
+/// Completing and undoing the branch preserves the original connection.
+#[test]
+fn connected_nodes_require_explicit_w_and_start_at_the_pointer() {
+    for pin in [false, true] {
+        let mut h = harness();
+        let endpoint = if pin {
+            let s = &mut h.state_mut().session;
+            s.apply("project.new", &json!({"name":"Connected pin"})).unwrap();
+            s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":grid(-12,0).x_nm,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+            let end = WireEndpoint::Terminal(s.project().unwrap().symbols()[0].terminals()[1]);
+            s.apply(DRAW_WIRE, &json!({"from":end.inspect(),"to":grid(10,8),"bends":[grid(10,0)],"expected_revision":s.revision()})).unwrap();
+            end
+        } else {
+            let s = &mut h.state_mut().session;
+            let end = s.project().unwrap().wires()[0].endpoints()[1];
+            s.apply(DRAW_WIRE, &json!({"from":end.inspect(),"to":grid(20,6),"bends":[],"expected_revision":s.revision()})).unwrap();
+            end
+        };
+        h.state_mut().browser.open = false;
+        h.run();
+        let point = h.state().session.project().unwrap().endpoint_position(endpoint).unwrap();
+        let before = h.state().session.snapshot().unwrap();
+        let pointer = screen(&h, point);
+        click_at(&mut h, pointer);
+        assert!(h.state().views.active.schematic.tool.is_none());
+        h.key_press(egui::Key::W);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool,
+            Some(Tool::Wire{start:Some(Anchor::Existing(end)),..}) if end==endpoint));
+        let center = screen(&h, point);
+        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Circle(circle) if circle.center==center && circle.radius==pcbcraft_chrome::theme::WIRE_CURSOR_TARGET_RADIUS
+                && circle.stroke.color==pcbcraft_chrome::Tokens::get().schematic_wire)));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        let to = Point { y_nm: point.y_nm + 6 * GRID_NM, ..point };
+        h.hover_at(screen(&h, to));
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(h.state().message, None);
+        assert_eq!(
+            h.state().session.project().unwrap().wires().iter().filter(|wire| wire.endpoints().contains(&endpoint)).count(),
+            if pin { 2 } else { 3 }
+        );
+        crate::tests::click(&mut h, "Undo");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// W starts immediately at a hovered grid point; toolbar activation still waits for its first
+/// canvas click. Neither activation creates document data or an undo step.
+#[test]
+fn w_starts_on_the_hovered_grid_and_toolbar_waits_for_a_click() {
+    let mut h = harness();
+    h.state_mut().browser.open = false;
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    h.hover_at(screen(&h, grid(-4, 12)));
+    h.run();
+    h.key_press(egui::Key::W);
+    h.run();
+    assert!(matches!(h.state().views.active.schematic.tool,Some(Tool::Wire{start:Some(Anchor::Free(point)),..})if point==grid(-4,12)));
+    h.key_press(egui::Key::Escape);
+    h.run();
+    crate::tests::click(&mut h, "Draw wire (W)");
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}

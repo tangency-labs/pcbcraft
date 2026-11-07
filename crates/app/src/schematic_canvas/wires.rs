@@ -7,6 +7,9 @@ use pcbcraft_engine::{
 };
 
 use super::Camera;
+use std::cell::RefCell;
+
+mod targets;
 
 #[cfg(test)]
 mod tests;
@@ -15,13 +18,16 @@ mod tests;
 #[derive(Debug)]
 pub(crate) struct Draft {
     corners: Vec<Vec<Point>>,
+    target_cache: RefCell<targets::Cache>,
     pub(crate) horizontal_first: bool,
     pub(crate) finish_requested: bool,
+    /// W begins at the pointer this frame; toolbar activation still waits for a click.
+    pub(crate) start_requested: bool,
 }
 
 impl Default for Draft {
     fn default() -> Self {
-        Self { corners: Vec::new(), horizontal_first: true, finish_requested: false }
+        Self { target_cache: RefCell::default(), corners: Vec::new(), horizontal_first: true, finish_requested: false, start_requested: false }
     }
 }
 
@@ -75,7 +81,7 @@ impl ReshapeDrag {
             return None;
         }
         if let Reshape::Junction(id) = self.edit {
-            let anchor = anchor_at(&endpoints(project, camera, rect), project, camera, rect, pointer, Some(WireEndpoint::Junction(id)))?;
+            let anchor = targets::Targets::new(project, camera, rect).anchor(camera, rect, pointer, Some(WireEndpoint::Junction(id)))?;
             if !matches!(anchor, Anchor::Free(_)) && anchor != Anchor::Existing(WireEndpoint::Junction(id)) {
                 return Some(anchor);
             }
@@ -355,10 +361,11 @@ pub(super) fn pick(
     start: Option<Anchor>,
     draft: &Draft,
     auto_heal: bool,
+    revision: u64,
 ) -> Option<(Anchor, bool)> {
     let clicked = response.clicked_by(PointerButton::Primary);
     let pointer = if clicked { response.interact_pointer_pos() } else { response.hover_pos() };
-    let target = preview(painter, rect, project, camera, start, draft, pointer, auto_heal);
+    let target = preview(painter, rect, project, camera, start, draft, pointer, auto_heal, revision);
     if response.hovered()
         && let Some(pointer) = pointer
     {
@@ -367,7 +374,7 @@ pub(super) fn pick(
         pcbcraft_chrome::cursor::wire(painter, camera.screen(point, rect), target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_))));
     }
     let finish = draft.finish_requested || response.double_clicked_by(PointerButton::Primary);
-    target.filter(|_| clicked || finish).map(|target| (target, finish))
+    target.filter(|_| clicked || finish || (start.is_none() && draft.start_requested)).map(|target| (target, finish))
 }
 
 /// Highlight unambiguous existing endpoints and preview the full route to the current target.
@@ -381,20 +388,22 @@ pub(super) fn preview(
     draft: &Draft,
     pointer: Option<Pos2>,
     auto_heal: bool,
+    revision: u64,
 ) -> Option<Anchor> {
     let tokens = Tokens::get();
-    let endpoints = endpoints(project, camera, rect);
-    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| anchor_at(&endpoints, project, camera, rect, at, None));
+    let mut cache = draft.target_cache.borrow_mut();
+    let targets = cache.get(project, revision, camera, rect);
+    let target = pointer.filter(|pos| rect.contains(*pos)).and_then(|at| targets.anchor(camera, rect, at, None));
     if let Some(from) = start.and_then(|anchor| anchor.position(project))
         && let Some(to) = target.and_then(|anchor| anchor.position(project))
         && let Some(path) = draft.path(from, to, auto_heal)
     {
         paint_route(painter, rect, camera, path, tokens.accent);
     }
-    for (endpoint, pos) in endpoints {
+    for &(endpoint, pos) in &targets.endpoints {
         let anchor = Anchor::Existing(endpoint);
         let active = start == Some(anchor) || target == Some(anchor);
-        paint_pin(painter, pos, if active { tokens.accent } else { tokens.canvas_ink });
+        paint_pin(painter, pos, if active { tokens.schematic_wire } else { tokens.canvas_ink });
     }
     target
 }
@@ -430,60 +439,14 @@ fn nearest_node(endpoints: &[(WireEndpoint, Pos2)], at: Pos2) -> Result<Option<W
     if ambiguous { Err(()) } else { Ok(nearest) }
 }
 
-/// Resolve the nearest node, wire stroke or free grid point without resolving ties
-/// arbitrarily. Interior wire targets use their projected model coordinate.
-fn anchor_at(
-    endpoints: &[(WireEndpoint, Pos2)],
-    project: &Project,
-    camera: &Camera,
-    rect: Rect,
-    at: Pos2,
-    ignore: Option<WireEndpoint>,
-) -> Option<Anchor> {
-    if let Some(endpoint) = nearest_node(endpoints, at).ok()? {
-        Some(Anchor::Existing(endpoint))
-    } else {
-        let mut hit = None;
-        let mut nearest = theme::SCHEMATIC_WIRE_HIT_RADIUS.powi(2);
-        let mut ambiguous = false;
-        for wire in project.wires().iter().filter(|w| ignore.is_none_or(|end| !w.endpoints().contains(&end))) {
-            for pair in project.wire_path(wire).windows(2) {
-                let distance = distance_sq(at, camera.screen(pair[0], rect), camera.screen(pair[1], rect));
-                let snapped = camera.snap(at, rect);
-                let point = if pair[0].x_nm == pair[1].x_nm {
-                    Point { x_nm: pair[0].x_nm, y_nm: snapped.y_nm.clamp(pair[0].y_nm.min(pair[1].y_nm), pair[0].y_nm.max(pair[1].y_nm)) }
-                } else {
-                    Point { x_nm: snapped.x_nm.clamp(pair[0].x_nm.min(pair[1].x_nm), pair[0].x_nm.max(pair[1].x_nm)), y_nm: pair[0].y_nm }
-                };
-                let anchor = Anchor::Split { wire: wire.ordinal(), at: point };
-                if distance < nearest {
-                    hit = Some(anchor);
-                    nearest = distance;
-                    ambiguous = false;
-                } else if distance == nearest && hit.is_some_and(|old| old != anchor) {
-                    ambiguous = true;
-                }
-            }
-        }
-        if ambiguous {
-            None
-        } else {
-            hit.or_else(|| {
-                let point = camera.snap(at, rect);
-                super::valid_position(point).then_some(Anchor::Free(point))
-            })
-        }
-    }
-}
-
-/// Resolve a directly clickable terminal or explicit wire node using drawing's magnetic
-/// target rules. Interior wire strokes remain available for segment selection and dragging.
+/// Resolve an unconnected pin or free wire end for automatic starts. Occupied pins and
+/// junctions keep normal selection behavior; W may still explicitly start at those targets.
 /// Equal-distance nodes are ambiguous and cannot start a connection.
-pub(super) fn node_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Anchor> {
+pub(super) fn node_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, draft: &Draft, revision: u64) -> Option<Anchor> {
     if !rect.contains(pointer) {
         return None;
     }
-    nearest_node(&endpoints(project, camera, rect), pointer).ok()?.map(Anchor::Existing)
+    draft.target_cache.borrow_mut().get(project, revision, camera, rect).automatic_node(pointer)
 }
 
 /// Mark a validated attachment destination using the same pin ring as the wire drawing tool.

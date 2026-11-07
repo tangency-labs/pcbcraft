@@ -304,7 +304,7 @@ pub(crate) fn show(
             return Some(Click::CancelWire);
         }
         let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
-        wires::preview(&painter, rect, project, camera, Some(start), draft, anchor, auto_heal);
+        wires::preview(&painter, rect, project, camera, Some(start), draft, anchor, auto_heal, revision);
         return None;
     }
 
@@ -470,7 +470,7 @@ pub(crate) fn show(
         && !ui.ctx().egui_wants_keyboard_input()
         && !ui.input(|input| input.modifiers.shift || input.modifiers.ctrl || input.modifiers.command)
         && let Some(pointer) = response.hover_pos()
-        && let Some(anchor) = wires::node_at(project, camera, rect, pointer)
+        && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
         && let Some(point) = anchor.position(project)
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
@@ -493,7 +493,7 @@ pub(crate) fn show(
         if !modifiers.shift
             && !modifiers.ctrl
             && !modifiers.command
-            && let Some(anchor) = wires::node_at(project, camera, rect, pointer)
+            && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
         {
             return Some(Click::StartWire(anchor));
         }
@@ -510,9 +510,8 @@ pub(crate) fn show(
         Tool::PlaceSymbol { definition, turns, .. } => {
             placement_preview(&painter, rect, response, camera, tokens, &definition, turns).map(Click::Place)
         }
-        Tool::Wire { start, .. } => {
-            wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal).map(|(anchor, finish)| Click::WirePoint(anchor, finish))
-        }
+        Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
+            .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
         Tool::Move { .. } | Tool::BoxSelect { .. } | Tool::MoveItems { .. } | Tool::Reshape { .. } => None,
     }
 }

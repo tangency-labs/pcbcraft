@@ -73,9 +73,11 @@ for repeated placement. **Fit** and Browser selections keep their targets clear 
 The header chevron collapses Parts to its title bar and expands it again, keeping
 the search, preview size and position. **A** also expands it and focuses search.
 
-Click a symbol pin, wire endpoint or junction to start a wire directly, or choose
-**Capture → Wire** / **W** to start on a wire segment or empty grid space. The snapped
-crosshair marks the drawing point; a ring marks an existing connection target.
+Click an unconnected symbol pin or free wire end to start directly. Press **W** to
+start immediately at the pointer, including on a connected pin, junction, wire segment
+or empty grid point. **Capture → Wire** instead waits for the first canvas click.
+The green snapped crosshair marks the drawing point; a ring marks an existing
+connection target. Ordinary clicks on connected nodes retain selection behavior.
 Click to add corners, **Space** to flip the current
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
 to finish, or press **Enter** or double-click to finish on empty space. **Esc** or

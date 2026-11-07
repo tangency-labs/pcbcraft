@@ -174,6 +174,8 @@ fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
             let restored = crate::preferences::Preferences::parse(&h.state().preferences.to_text());
             assert!(!restored.auto_heal_wires);
         }
+        h.hover_at(screen(&h, grid(6, 6)));
+        h.run();
         h.key_press(egui::Key::W);
         h.run();
         for point in [grid(6, 6), grid(6, 12)] {
