@@ -23,7 +23,7 @@ extracts it as a shared library:
 
 | PCBCraft file | SolidCraft source | What changed |
 |---|---|---|
-| `acp.rs`, `acp_client.rs`, `api_client.rs`, `backend.rs`, `discover.rs`, `markdown.rs`, `process.rs` | same names in `agent_chat/` | Client, bridge and tool names, token variable and system note are PCBCraft's. The MCP bridge runs `pcbcraft-cli mcp --connect PORT` and passes the live endpoint's credential in its environment. |
+| `acp.rs`, `acp_client.rs`, `api_client.rs`, `backend.rs`, `discover.rs`, `markdown.rs`, `process.rs` | same names in `agent_chat/` | Client, bridge and tool names, token variable and system note are PCBCraft's. The MCP bridge runs `pcbcraft-cli mcp --connect PORT --token-file FILE --wait SECONDS`, with the live endpoint's credential in a private file as SolidCraft's token file keeps it, not in its environment. |
 | `agents.rs` | `agent_chat/agents.rs` | Agent settings are an `AgentPrefs` value instead of SolidCraft's window state and preferences; `short_command` moved here from `panel.rs`. |
 | `i18n.rs`, `lib.rs` | `i18n.rs`; `agent_chat/mod.rs` | English messages for the keys these modules use; the model id limits and a small `ControlRequest`. |
 

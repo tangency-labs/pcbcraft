@@ -173,41 +173,30 @@ pub fn is_bridge_tool(title: &str, kind: Option<&str>) -> bool {
     named && matches!(kind, None | Some("other"))
 }
 
-/// The MCP server the agent starts to reach the project: `pcbcraft-cli mcp --connect PORT`
-/// bridged to the chat's own live endpoint. PCBCraft's CLI takes the endpoint's credential from
-/// `PCBCRAFT_CONTROL_TOKEN`, so it goes in the server's environment, never its arguments; the
-/// endpoint serves only this chat and is revoked when the chat disconnects. (SolidCraft keeps the
-/// token out of the session with a token file; PCBCraft's CLI has none yet.)
-#[derive(Clone, PartialEq)]
+/// The MCP server the agent starts to reach the project:
+/// `pcbcraft-cli mcp --connect PORT --token-file FILE --wait SECONDS`, bridged to the chat's own
+/// live endpoint. The endpoint's credential stays in a file only the user can read, written by
+/// the app outside the agent's working folder, so it is never in the agent's session, arguments
+/// or environment; the endpoint serves only this chat and is revoked, and the file removed, when
+/// the chat disconnects. Everything goes in arguments because an agent inside WSL starts the
+/// Windows CLI without passing its environment on.
+#[derive(Clone, Debug, PartialEq)]
 pub struct McpBridge {
     pub cli: std::path::PathBuf,
     pub port: u16,
-    pub token: String,
+    /// The file holding the endpoint's credential, as the CLI (a program on this side) sees it.
+    pub token_file: std::path::PathBuf,
 }
 
-/// The environment variable PCBCraft's CLI reads the live endpoint's credential from.
-pub const TOKEN_ENV: &str = "PCBCRAFT_CONTROL_TOKEN";
-/// The environment variable telling PCBCraft's CLI how long to wait for each reply.
-pub const WAIT_ENV: &str = "PCBCRAFT_CONTROL_WAIT_S";
 /// How long a tool call may wait for the person to allow it, in seconds.
 pub const BRIDGE_WAIT_S: u64 = 600;
 
-impl std::fmt::Debug for McpBridge {
-    /// Name the bridge without its credential.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("McpBridge").field("cli", &self.cli).field("port", &self.port).finish_non_exhaustive()
-    }
-}
-
 impl McpBridge {
-    /// The bridge's arguments after its program: `mcp --connect PORT`.
+    /// The bridge's arguments after its program.
     pub fn args(&self) -> Vec<String> {
-        vec!["mcp".to_owned(), "--connect".to_owned(), self.port.to_string()]
-    }
-
-    /// The bridge's environment: the endpoint's credential and how long a reply may wait.
-    pub fn env(&self) -> Vec<(&'static str, String)> {
-        vec![(TOKEN_ENV, self.token.clone()), (WAIT_ENV, BRIDGE_WAIT_S.to_string())]
+        ["mcp", "--connect", &self.port.to_string(), "--token-file", &self.token_file.to_string_lossy(), "--wait", &BRIDGE_WAIT_S.to_string()]
+            .map(str::to_owned)
+            .to_vec()
     }
 
     pub fn to_json(&self) -> Value {
@@ -215,14 +204,15 @@ impl McpBridge {
             "name": BRIDGE_NAME,
             "command": self.cli.to_string_lossy(),
             "args": self.args(),
-            "env": self.env().into_iter().map(|(name, value)| json!({"name": name, "value": value})).collect::<Vec<_>>(),
+            "env": [],
         })
     }
 
     /// The same bridge for an agent inside WSL: the CLI as WSL sees it. It still runs on the
-    /// Windows side (WSL starts Windows programs itself), so the port is the same.
+    /// Windows side (WSL starts Windows programs itself), so the port and the token file's
+    /// Windows path stay as they are.
     pub fn in_wsl(&self) -> McpBridge {
-        McpBridge { cli: wsl_path(&self.cli), port: self.port, token: self.token.clone() }
+        McpBridge { cli: wsl_path(&self.cli), port: self.port, token_file: self.token_file.clone() }
     }
 }
 
@@ -786,15 +776,13 @@ mod tests {
     }
 
     #[test]
-    fn the_session_gets_the_bridged_mcp_server_with_its_credential_only_in_its_environment() {
-        let b = McpBridge { cli: "/opt/pcbcraft/pcbcraft-cli".into(), port: 41234, token: "secret-value".into() };
+    fn the_session_names_the_token_file_but_never_holds_the_credential() {
+        let b = McpBridge { cli: "/opt/pcbcraft/pcbcraft-cli".into(), port: 41234, token_file: "/run/u/pcbcraft-control-x/41234.token".into() };
         let p = session_new_params(std::path::Path::new("/home/u/designs"), Some(&b), &json!({}));
         let s = &p["mcpServers"][0];
         assert_eq!(s["name"], BRIDGE_NAME);
-        assert_eq!(s["args"], json!(["mcp", "--connect", "41234"]));
-        assert_eq!(s["env"][0], json!({"name": TOKEN_ENV, "value": "secret-value"}), "the credential goes only in the environment");
-        assert_eq!(s["env"][1], json!({"name": WAIT_ENV, "value": "600"}), "tool calls may wait for approval");
-        assert!(!s["args"].to_string().contains("secret-value") && !format!("{b:?}").contains("secret-value"));
+        assert_eq!(s["args"], json!(["mcp", "--connect", "41234", "--token-file", "/run/u/pcbcraft-control-x/41234.token", "--wait", "600"]));
+        assert_eq!(s["env"], json!([]), "nothing secret, and nothing WSL would drop, goes in the environment");
         let text = p.to_string();
         assert!(!text.contains("allow-any-path"), "{text}");
         assert!(p["_meta"]["claudeCode"]["options"]["disallowedTools"].as_array().is_some_and(|t| t.iter().any(|x| x == "Bash")));
@@ -853,11 +841,12 @@ mod tests {
         assert_eq!(wsl("/home/u/designs"), "/home/u/designs");
         assert_eq!(wsl(r"\\server\share\x"), r"\\server\share\x");
 
-        let b = McpBridge { cli: r"C:\Program Files\PCBCraft\pcbcraft-cli.exe".into(), port: 41234, token: "t".into() };
+        let token_file = r"C:\Users\u\AppData\Local\Temp\pcbcraft-control-x\41234.token";
+        let b = McpBridge { cli: r"C:\Program Files\PCBCraft\pcbcraft-cli.exe".into(), port: 41234, token_file: token_file.into() };
         let p = session_new_params(&wsl_path(std::path::Path::new(r"C:\Users\u\work")), Some(&b.in_wsl()), &json!({}));
         assert_eq!(p["cwd"], "/mnt/c/Users/u/work");
         assert_eq!(p["mcpServers"][0]["command"], "/mnt/c/Program Files/PCBCraft/pcbcraft-cli.exe");
-        assert_eq!(p["mcpServers"][0]["args"], json!(["mcp", "--connect", "41234"]));
+        assert_eq!(p["mcpServers"][0]["args"], json!(["mcp", "--connect", "41234", "--token-file", token_file, "--wait", "600"]));
     }
 
     #[test]

@@ -140,6 +140,9 @@ pub(super) struct Chat {
     control: Option<LiveControl>,
     /// An empty working folder for the agent, removed when the chat disconnects.
     workdir: Option<tempfile::TempDir>,
+    /// The private folder holding the endpoint's token file, apart from the agent's working
+    /// folder and removed when the chat disconnects.
+    token_dir: Option<tempfile::TempDir>,
 }
 
 impl std::fmt::Debug for Chat {
@@ -188,11 +191,24 @@ impl Chat {
             }
         };
         let control = LiveControl::start_with_wait(ctx, Duration::from_secs(acp::BRIDGE_WAIT_S)).ok();
-        let bridge =
-            control.as_ref().zip(cli_path()).map(|(control, cli)| McpBridge { cli, port: control.port(), token: control.secret().to_owned() });
-        if bridge.is_none() {
-            self.items.push(Item::Notice("pcbcraft-cli was not found beside PCBCraft, so the agent can talk but not reach the project.".to_owned()));
-        }
+        let token = control.as_ref().map(|control| (control.port(), write_token_file(control.port(), control.secret())));
+        let (bridge, token_dir) = match (token, cli_path()) {
+            (Some((port, Ok((dir, token_file)))), Some(cli)) => (Some(McpBridge { cli, port, token_file }), Some(dir)),
+            (Some((_, Err(error))), Some(_)) => {
+                self.items
+                    .push(Item::Notice(format!("Could not write the chat's token file ({error}), so the agent can talk but not reach the project.")));
+                (None, None)
+            }
+            (None, _) => {
+                self.items.push(Item::Notice("The chat's endpoint did not start, so the agent can talk but not reach the project.".to_owned()));
+                (None, None)
+            }
+            (_, None) => {
+                self.items
+                    .push(Item::Notice("pcbcraft-cli was not found beside PCBCraft, so the agent can talk but not reach the project.".to_owned()));
+                (None, None)
+            }
+        };
         let wake_ctx = ctx.clone();
         let start = StartContext { cwd: workdir.path().to_path_buf(), bridge, tools: None, wake: Box::new(move || wake_ctx.request_repaint()) };
         let started: Result<Box<dyn ChatBackend>, String> = match entry.kind.protocol() {
@@ -216,19 +232,23 @@ impl Chat {
                 self.attach(backend, entry);
                 self.control = control;
                 self.workdir = Some(workdir);
+                self.token_dir = token_dir;
             }
             Err(error) => self.state = State::Failed(entry.problem_hint().unwrap_or(error)),
         }
     }
 
-    /// Attach a scripted backend with a real chat endpoint, as [`Self::connect`] would.
+    /// Attach a scripted backend with a real chat endpoint and token file, as [`Self::connect`]
+    /// would: the endpoint's port and the file the bridge reads.
     #[cfg(test)]
-    pub(super) fn attach_with_endpoint(&mut self, ctx: &egui::Context, backend: Box<dyn ChatBackend>, entry: Entry) -> (u16, String) {
+    pub(super) fn attach_with_endpoint(&mut self, ctx: &egui::Context, backend: Box<dyn ChatBackend>, entry: Entry) -> (u16, std::path::PathBuf) {
         self.attach(backend, entry);
         let control = LiveControl::start_with_wait(ctx, Duration::from_secs(acp::BRIDGE_WAIT_S)).unwrap_or_else(|error| panic!("{error}"));
-        let endpoint = (control.port(), control.secret().to_owned());
+        let (dir, token_file) = write_token_file(control.port(), control.secret()).unwrap_or_else(|error| panic!("{error}"));
+        let port = control.port();
         self.control = Some(control);
-        endpoint
+        self.token_dir = Some(dir);
+        (port, token_file)
     }
 
     /// Use an already started backend for `entry`. Tests attach a scripted one.
@@ -246,6 +266,7 @@ impl Chat {
         self.deny_all("The chat disconnected.");
         self.control = None;
         self.workdir = None;
+        self.token_dir = None;
         self.config.clear();
         self.models = None;
         self.modes = None;
@@ -499,6 +520,30 @@ impl Chat {
     }
 }
 
+/// Write `secret` to `<new private folder>/<port>.token` for the agent's MCP bridge, which
+/// reads it with `--token-file`, so the credential never goes in the agent's session, arguments
+/// or environment. The folder is the user's alone (`0700` on Unix; on Windows, under the user's
+/// own temporary folder) and the file is made `0600` on Unix before the secret goes in. Dropping
+/// the folder removes both.
+fn write_token_file(port: u16, secret: &str) -> std::io::Result<(tempfile::TempDir, std::path::PathBuf)> {
+    use std::io::Write;
+    let dir = tempfile::Builder::new().prefix("pcbcraft-control-").tempdir()?;
+    let path = dir.path().join(format!("{port}.token"));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))?;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path)?;
+    file.write_all(secret.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    Ok((dir, path))
+}
+
 /// `pcbcraft-cli` beside the running app, or on PATH as a fallback when the app's folder can't
 /// be read. `None` when neither exists.
 fn cli_path() -> Option<std::path::PathBuf> {
@@ -529,5 +574,22 @@ mod tests {
             assert_eq!(run(Mode::All, command), Verdict::Run, "{command}");
         }
         assert_eq!(gate(Mode::Ask, "engine.execute", Some("file.save"), |command| command == "file.save"), Verdict::Run);
+    }
+
+    /// The token file holds the secret, is the user's alone and goes when its folder is dropped.
+    #[test]
+    fn the_token_file_is_private_and_removed_with_its_folder() -> std::io::Result<()> {
+        let (dir, path) = write_token_file(41234, "0123456789abcdef0123456789abcdef")?;
+        assert_eq!(std::fs::read_to_string(&path)?, "0123456789abcdef0123456789abcdef\n");
+        assert_eq!(path.file_name().and_then(|name| name.to_str()), Some("41234.token"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(dir.path())?.permissions().mode() & 0o777, 0o700);
+            assert_eq!(std::fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        }
+        drop(dir);
+        assert!(!path.exists());
+        Ok(())
     }
 }

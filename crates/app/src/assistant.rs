@@ -1121,8 +1121,8 @@ mod chat_tests {
         PermissionOption { id: id.to_owned(), name: id.to_owned(), kind: kind.to_owned() }
     }
 
-    /// The window, the scripted agent and the chat endpoint's port and credential.
-    type Fixture = (Harness<'static, PcbApp>, Arc<Mutex<Script>>, (u16, String));
+    /// The window, the scripted agent and the chat endpoint's port and token file.
+    type Fixture = (Harness<'static, PcbApp>, Arc<Mutex<Script>>, (u16, std::path::PathBuf));
 
     /// A project with two wired resistors, the Assistant open and the scripted agent ready.
     fn harness_with_agent() -> Result<Fixture, Box<dyn std::error::Error>> {
@@ -1157,7 +1157,7 @@ mod chat_tests {
     /// `answer` is given, press it once the approval card shows.
     fn call(
         harness: &mut Harness<'_, PcbApp>,
-        endpoint: &(u16, String),
+        endpoint: &(u16, std::path::PathBuf),
         command: &str,
         params: Value,
         answer: Option<&str>,
@@ -1165,7 +1165,7 @@ mod chat_tests {
         thread::scope(|scope| {
             let request = json!({"command": command, "params": params, "inspect": false});
             let worker = scope.spawn(move || {
-                let mut remote = Remote::new(endpoint.0, &endpoint.1)?.with_wait(30);
+                let mut remote = Remote::from_token_file(endpoint.0, &endpoint.1)?.with_wait(30);
                 remote.call("engine.execute", request)
             });
             let deadline = Instant::now() + Duration::from_secs(10);

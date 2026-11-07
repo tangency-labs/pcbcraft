@@ -4,11 +4,13 @@ use std::{ffi::OsString, path::Path, process::ExitCode};
 
 use pcbcraft_mcp::{
     Backend, Headless, Server,
-    live::{Remote, TOKEN_ENV, WAIT_ENV},
+    live::{Remote, TOKEN_ENV},
 };
 
-const USAGE: &str =
-    "Usage: pcbcraft-cli mcp [--project FILE_OR_FOLDER | --connect PORT]    Serve MCP on stdin and stdout\n       pcbcraft-cli --version";
+const USAGE: &str = "Usage: pcbcraft-cli mcp [--project FILE_OR_FOLDER | --connect PORT [--token-file FILE] [--wait SECONDS]]
+                        Serve MCP on stdin and stdout. --connect reads the editor's credential from
+                        --token-file, or else from PCBCRAFT_CONTROL_TOKEN.
+       pcbcraft-cli --version";
 
 /// Dispatch the CLI and report file or server errors on stderr.
 fn main() -> ExitCode {
@@ -18,7 +20,10 @@ fn main() -> ExitCode {
         [command, flag, path] if command == "mcp" && flag == "--project" => {
             load_project(Path::new(path)).and_then(|backend| serve(Box::new(backend)))
         }
-        [command, flag, port] if command == "mcp" && flag == "--connect" => connect_editor(port).and_then(|backend| serve(Box::new(backend))),
+        [command, flag, port, options @ ..] if command == "mcp" && flag == "--connect" => match connect_options(options) {
+            Some((token_file, wait)) => connect_editor(port, token_file, wait).and_then(|backend| serve(Box::new(backend))),
+            None => Err(format!("unrecognized --connect options\n{USAGE}")),
+        },
         [flag] if flag == "--version" => {
             println!("pcbcraft-cli {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
@@ -43,13 +48,33 @@ fn load_project(path: &Path) -> Result<Headless, String> {
     result.map_err(|error| format!("could not open {}: {error}", path.display()))
 }
 
-/// Read the explicitly selected port and the credential supplied by the MCP client, and the
-/// optional reply wait an approving endpoint asks for. An unreadable wait keeps the default.
-fn connect_editor(port: &std::ffi::OsStr) -> Result<Remote, String> {
+/// `--connect`'s optional `--token-file FILE` and `--wait SECONDS`, each at most once; `None`
+/// for anything else.
+fn connect_options(options: &[OsString]) -> Option<(Option<&Path>, Option<u64>)> {
+    let (mut token_file, mut wait) = (None, None);
+    for pair in options.chunks(2) {
+        match pair {
+            [flag, path] if flag == "--token-file" && token_file.is_none() => token_file = Some(Path::new(path)),
+            [flag, seconds] if flag == "--wait" && wait.is_none() => wait = Some(seconds.to_str()?.trim().parse().ok()?),
+            _ => return None,
+        }
+    }
+    Some((token_file, wait))
+}
+
+/// Read the explicitly selected port and the credential: from the token file the editor wrote
+/// (its in-app chat), or else from the environment the person's MCP client sets. `wait`: how
+/// long a reply may take, for an endpoint that holds requests for approval.
+fn connect_editor(port: &std::ffi::OsStr, token_file: Option<&Path>, wait: Option<u64>) -> Result<Remote, String> {
     let port = port.to_str().and_then(|port| port.parse().ok()).ok_or("--connect requires a local port number")?;
-    let token = std::env::var(TOKEN_ENV).map_err(|_| format!("Set {TOKEN_ENV} from the editor's Local MCP configuration"))?;
-    let remote = Remote::new(port, &token)?;
-    Ok(match std::env::var(WAIT_ENV).ok().and_then(|wait| wait.trim().parse().ok()) {
+    let remote = match token_file {
+        Some(path) => Remote::from_token_file(port, path)?,
+        None => {
+            let token = std::env::var(TOKEN_ENV).map_err(|_| format!("Set {TOKEN_ENV} from the editor's Local MCP configuration"))?;
+            Remote::new(port, &token)?
+        }
+    };
+    Ok(match wait {
         Some(seconds) => remote.with_wait(seconds),
         None => remote,
     })
@@ -58,4 +83,26 @@ fn connect_editor(port: &std::ffi::OsStr) -> Result<Remote, String> {
 /// Serve the selected backend on stdio.
 fn serve(backend: Box<dyn Backend>) -> Result<(), String> {
     Server::new(backend).serve(std::io::stdin().lock(), std::io::stdout().lock()).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn connect_takes_a_token_file_and_a_wait_once_each() {
+        assert_eq!(connect_options(&[]), Some((None, None)));
+        let given = options(&["--token-file", "/run/a.token", "--wait", "600"]);
+        assert_eq!(connect_options(&given), Some((Some(Path::new("/run/a.token")), Some(600))));
+        let reversed = options(&["--wait", "30", "--token-file", "b"]);
+        assert_eq!(connect_options(&reversed), Some((Some(Path::new("b")), Some(30))));
+        for bad in [&["--token-file"][..], &["--wait", "soon"], &["--wait", "1", "--wait", "2"], &["--token", "abc"], &["--token-file", "a", "extra"]]
+        {
+            assert_eq!(connect_options(&options(bad)), None, "{bad:?}");
+        }
+    }
 }

@@ -11,11 +11,10 @@ use crate::backend::{Backend, call_session, is_window_command};
 
 /// Environment variable used by the desktop configuration and the MCP CLI.
 pub const TOKEN_ENV: &str = "PCBCRAFT_CONTROL_TOKEN";
-/// Optional environment variable: seconds to wait for the editor's reply, for an endpoint that
-/// may hold a request for the person's approval (the in-app chat's). Defaults to five seconds.
-pub const WAIT_ENV: &str = "PCBCRAFT_CONTROL_WAIT_S";
-/// The longest reply wait [`WAIT_ENV`] may ask for.
+/// The longest reply wait [`Remote::with_wait`] allows.
 pub const MAX_WAIT: Duration = Duration::from_secs(900);
+/// Files bigger than this are not token files.
+const MAX_TOKEN_FILE: u64 = 4096;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REPLY_BYTES: usize = 16 << 20;
@@ -34,6 +33,19 @@ impl Remote {
             return Err("the editor port must be nonzero".to_owned());
         }
         Ok(Self { port, token: Token::parse(token).map_err(|error| error.to_string())?, wait: TIMEOUT })
+    }
+
+    /// Read the credential from a token file the editor wrote (the in-app chat's bridge), so it
+    /// never passes through the agent that starts this server.
+    pub fn from_token_file(port: u16, path: &std::path::Path) -> Result<Self, String> {
+        use std::io::Read;
+        let unreadable = |error: std::io::Error| format!("could not read the token file {}: {error}", path.display());
+        let mut text = String::new();
+        std::fs::File::open(path).and_then(|file| file.take(MAX_TOKEN_FILE + 1).read_to_string(&mut text)).map_err(unreadable)?;
+        if text.len() as u64 > MAX_TOKEN_FILE {
+            return Err(format!("{} is too large to be a token file", path.display()));
+        }
+        Self::new(port, text.trim())
     }
 
     /// Wait up to `seconds` (at least the default five, at most [`MAX_WAIT`]) for each reply, for

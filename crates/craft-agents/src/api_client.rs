@@ -678,7 +678,7 @@ impl ApiBackend {
         let mcp = match &ctx.bridge {
             Some(b) => {
                 let argv: Vec<String> = std::iter::once(b.cli.to_string_lossy().into_owned()).chain(b.args()).collect();
-                Some(AgentProcess::spawn_with_env(&argv, &ctx.cwd, &[], &b.env(), || {})?)
+                Some(AgentProcess::spawn(&argv, &ctx.cwd, &[], || {})?)
             }
             None => None,
         };

@@ -502,3 +502,23 @@ fn headless_sessions_say_window_commands_need_a_live_editor() {
     let listed = body(&call(&mut server, "list_commands", json!({})));
     assert!(listed.as_array().unwrap().iter().all(|command| !crate::is_window_command(command["id"].as_str().unwrap())));
 }
+
+#[test]
+fn a_token_file_is_read_trimmed_and_bounded() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = std::env::temp_dir().join(format!("pcbcraft-mcp-token-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let good = dir.join("good.token");
+    std::fs::write(&good, "0123456789abcdef0123456789abcdef\n")?;
+    assert!(crate::live::Remote::from_token_file(41234, &good).is_ok());
+    let huge = dir.join("huge.token");
+    std::fs::write(&huge, "a".repeat(5000))?;
+    let error = crate::live::Remote::from_token_file(41234, &huge).err().ok_or("an oversized file was accepted")?;
+    assert!(error.contains("too large") && !error.contains("aaaa"), "{error}");
+    let junk = dir.join("junk.token");
+    std::fs::write(&junk, "not a token")?;
+    let error = crate::live::Remote::from_token_file(41234, &junk).err().ok_or("junk was accepted")?;
+    assert!(!error.contains("not a token"), "the file's text stays out of errors: {error}");
+    assert!(crate::live::Remote::from_token_file(41234, &dir.join("missing.token")).is_err());
+    std::fs::remove_dir_all(&dir)?;
+    Ok(())
+}
