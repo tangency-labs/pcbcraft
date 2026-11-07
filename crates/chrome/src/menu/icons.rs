@@ -9,6 +9,8 @@ use crate::Tokens;
 pub enum MenuIcon {
     Home,
     New,
+    /// An empty PCB with an add mark for the Home start action.
+    NewBoard,
     Open,
     Save,
     Download,
@@ -73,6 +75,15 @@ impl MenuIcon {
                 line(&[(8.0, 2.0), (8.0, 5.0), (11.0, 5.0)], stroke);
                 line(&[(9.0, 11.0), (15.0, 11.0)], accent);
                 line(&[(12.0, 8.0), (12.0, 14.0)], accent);
+            }
+            Self::NewBoard => {
+                painter.rect_stroke(rect(2.0, 3.0, 12.0, 13.0), 1, stroke, StrokeKind::Middle);
+                for y in [5.5, 8.0, 10.5] {
+                    painter.circle_filled(at(4.5, y), scale, t.accent);
+                }
+                line(&[(7.0, 5.5), (9.5, 5.5), (9.5, 8.0)], stroke);
+                line(&[(10.0, 11.0), (16.0, 11.0)], accent);
+                line(&[(13.0, 8.0), (13.0, 14.0)], accent);
             }
             Self::Open => {
                 line(&[(2.0, 12.5), (2.0, 3.5), (6.0, 3.5), (7.5, 5.0), (13.0, 5.0), (13.0, 7.0)], stroke);

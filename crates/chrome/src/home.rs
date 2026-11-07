@@ -167,9 +167,16 @@ fn grid_geometry(available: f32, count: usize) -> (usize, f32) {
 }
 
 /// Lay out `count` cells in rows. `cell` gets each index and the cell width.
-pub fn grid(ui: &mut Ui, id: &str, count: usize, mut cell: impl FnMut(&mut Ui, usize, f32)) {
+pub fn grid(ui: &mut Ui, id: &str, count: usize, cell: impl FnMut(&mut Ui, usize, f32)) {
+    bounded_grid(ui, id, count, f32::INFINITY, cell);
+}
+
+/// Allocate rows using the available column count, capping each cell independently so a
+/// partially filled row and a single-column page both retain the requested width bound.
+fn bounded_grid(ui: &mut Ui, id: &str, count: usize, max_width: f32, mut cell: impl FnMut(&mut Ui, usize, f32)) {
     let t = Tokens::get();
     let (columns, width) = grid_geometry(ui.available_width(), count);
+    let width = width.min(max_width);
     ui.push_id(id, |ui| {
         ui.spacing_mut().item_spacing = vec2(t.file_grid_gap, t.file_grid_gap);
         for row in (0..count).step_by(columns) {
@@ -180,6 +187,12 @@ pub fn grid(ui: &mut Ui, id: &str, count: usize, mut cell: impl FnMut(&mut Ui, u
             });
         }
     });
+}
+
+/// Keep action cards compact on wide pages, wrapping into rows when space is limited.
+/// Recent-project grids retain their independent preview sizing.
+pub fn action_grid(ui: &mut Ui, id: &str, count: usize, cell: impl FnMut(&mut Ui, usize, f32)) {
+    bounded_grid(ui, id, count, Tokens::get().file_tile_max_width, cell);
 }
 
 /// What an action tile shows and whether it can be clicked.

@@ -14,6 +14,8 @@ use super::{Dialog, IN_BROWSER, PcbApp, shell};
 pub(crate) enum Then {
     Close,
     New,
+    /// Start an empty project in PCB layout after the same save decision as New Project.
+    NewBoard,
     Open,
     /// Capture the chosen path so a save can reorder history without changing the destination.
     #[cfg(not(target_arch = "wasm32"))]
@@ -113,6 +115,7 @@ impl PcbApp {
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
             }
             Then::New => self.start_new_project(),
+            Then::NewBoard => self.start_new_project_in(crate::editor_view::Workspace::Board),
             Then::Open => self.choose_open_location(ctx),
             #[cfg(not(target_arch = "wasm32"))]
             Then::OpenRecent(path) => {

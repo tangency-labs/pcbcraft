@@ -63,10 +63,9 @@ fn new_project(harness: &mut Harness<'_, PcbApp>) {
     choose(harness, "File", "New Project");
 }
 
-/// Home's New Project tile. The navigation row shares its label, so take the larger control.
+/// Home's schematic start card, distinct from the New Project navigation row.
 fn new_project_tile<'h>(harness: &'h Harness<'_, PcbApp>) -> egui_kittest::Node<'h> {
-    let area = |node: &egui_kittest::Node<'_>| node.rect().area();
-    harness.query_all_by_label("New Project").max_by(|a, b| area(a).total_cmp(&area(b))).unwrap()
+    harness.get_by_label("New Schematic")
 }
 
 /// Empty the focused name field: select all of it, then delete the selection.
@@ -239,7 +238,7 @@ fn canvas_keys_do_nothing_on_home() {
     harness.get_by_label("Back to the workspace");
 }
 
-/// The New Project tile and the navigation row both run `project.new` and show the new Untitled
+/// The New Schematic tile and New Project navigation row run `project.new` and show the new Untitled
 /// schematic. Over unsaved work they first ask, as Open does: Cancel keeps the project and Home,
 /// and discarding starts a new document whose replacement undo brings back. Ctrl+N asks too.
 #[test]
@@ -300,6 +299,62 @@ fn home_rows_reach_the_save_and_preferences_dialogs() {
     click(&mut harness, "Save As…");
     assert!(!harness.state().home);
     harness.get_by_label("Project folder…");
+}
+
+/// The PCB card targets the new board, preserving the requested workspace through Cancel
+/// and Don't Save. Returning to New Schematic explicitly chooses the new sheet.
+#[test]
+fn home_new_pcb_opens_an_empty_board_and_preserves_the_unsaved_decision() {
+    let mut h = startup_harness();
+    click(&mut h, "New PCB");
+    let app = h.state();
+    assert!(!app.home);
+    assert_eq!(app.views.active.workspace, Workspace::Board);
+    let first = app.session.snapshot().unwrap();
+    assert_eq!(app.views.active.board.target, Some(first.board_target()));
+    assert_eq!(first.board_view(first.board_target()).unwrap().footprints().count(), 0);
+    assert_eq!(app.session.revision(), 1, "workspace selection adds no document edit");
+    h.get_by_label("PCB canvas");
+
+    open_home(&mut h);
+    click(&mut h, "New PCB");
+    assert!(matches!(h.state().dialog, Dialog::SaveChanges(unsaved::Then::NewBoard)));
+    click(&mut h, "Cancel");
+    assert!(h.state().home);
+    assert!(Arc::ptr_eq(&h.state().session.snapshot().unwrap(), &first));
+    click(&mut h, "New PCB");
+    click(&mut h, "Don't Save");
+    let second = h.state().session.snapshot().unwrap();
+    assert!(!second.same_document(&first));
+    assert_eq!(h.state().views.active.board.target, Some(second.board_target()));
+    h.get_by_label("PCB canvas");
+
+    open_home(&mut h);
+    new_project_tile(&h).click();
+    h.run();
+    click(&mut h, "Don't Save");
+    assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+    h.get_by_label("Schematic canvas");
+}
+
+/// Start cards stay bounded on wide screens and wrap without overflowing compact pages.
+#[test]
+fn home_start_cards_are_compact_and_wrap_with_the_window() {
+    let mut h = startup_harness();
+    for width in [1920.0, 1000.0, 420.0] {
+        h.set_size(egui::vec2(width, 1000.0));
+        h.run();
+        let cards = ["New Schematic", "New PCB", "Open Project"].map(|label| h.get_by_label(label).rect());
+        for card in cards {
+            assert!(card.width() <= Tokens::get().file_tile_max_width + 0.1, "{width}: {card:?}");
+            assert!(card.height() <= 68.1 && card.right() <= width, "{width}: {card:?}");
+        }
+        if width == 1920.0 {
+            assert_eq!(cards[0].top(), cards[2].top());
+        } else {
+            assert!(cards[2].top() > cards[0].top());
+        }
+    }
 }
 
 /// At narrow widths the navigation sits above the tiles, and both stay inside the window.

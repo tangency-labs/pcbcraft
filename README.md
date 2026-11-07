@@ -7,7 +7,10 @@ the [capability table](docs/capabilities.md) for current limits, or
 [CONTRIBUTING.md](CONTRIBUTING.md) to build and work on an issue.
 
 **Status: just started.** Schematic editing works on desktop and in the browser.
-The app starts on **Home**, where you can create or open a project. On desktop,
+The app starts on **Home**, with compact **New Schematic**, **New PCB** and
+**Open Project** cards. New PCB opens an empty Untitled project in PCB layout;
+New Schematic opens its schematic. Both use the usual unsaved-changes prompt
+before replacing an open project. On desktop,
 **Recent projects** lists the last 12 successfully opened or saved projects, newest
 first, as cards with a rendering of the saved schematic, its name and path. Click
 a card to reopen it; unsaved work gets the
