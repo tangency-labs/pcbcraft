@@ -66,6 +66,7 @@ impl Secrets for Keychain {
         }
     }
 
+    /// Store or replace the key in the system keychain.
     fn set(&self, id: &str, secret: &str) -> Result<(), String> {
         Self::entry(id)?.set_password(secret).map_err(|error| error.to_string())
     }

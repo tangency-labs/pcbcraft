@@ -95,6 +95,7 @@ impl AcpBackend {
         self.request(Pending::SessionNew, "session/new", params);
     }
 
+    /// Apply one message from the agent: match a reply to its request, or pass on what it streams and asks.
     fn handle(&mut self, msg: Incoming, out: &mut Vec<Event>) {
         match msg {
             Incoming::Reply { id, result } => {
@@ -225,6 +226,7 @@ impl AcpBackend {
         Event::Exited { tail }
     }
 
+    /// What arrived by `now` (at most 512 lines), ending an agent that ignored a cancel past the grace period.
     fn poll_at(&mut self, now: Instant) -> Vec<Event> {
         let mut out = Vec::new();
         if self.exited {
@@ -258,12 +260,14 @@ impl ChatBackend for AcpBackend {
         self.poll_at(Instant::now())
     }
 
+    /// Send a message in the current session; nothing happens before one exists.
     fn prompt(&mut self, parts: &[PromptPart]) {
         if let Some(s) = self.session.clone() {
             self.request(Pending::Prompt, "session/prompt", acp::prompt_params(&s, parts));
         }
     }
 
+    /// Cancel open permission questions and the running prompt, starting the grace period.
     fn cancel(&mut self) {
         // Open permission questions are answered "cancelled" first, as the protocol asks.
         for (_, rpc) in self.permissions.drain() {
@@ -279,6 +283,7 @@ impl ChatBackend for AcpBackend {
         }
     }
 
+    /// Cancel a running prompt and open a fresh session on the same agent.
     fn new_session(&mut self) {
         if self.pending.values().any(|p| *p == Pending::Prompt) {
             self.cancel();
@@ -290,6 +295,7 @@ impl ChatBackend for AcpBackend {
         self.new_session();
     }
 
+    /// Answer the permission question `key` with `option` (`None`: cancelled).
     fn answer_permission(&mut self, key: u64, option: Option<&str>) {
         if let Some(rpc) = self.permissions.remove(&key) {
             self.proc.send(&acp::permission_reply(rpc, option));
@@ -300,18 +306,21 @@ impl ChatBackend for AcpBackend {
         self.request(Pending::Authenticate, "authenticate", json!({"methodId": method}));
     }
 
+    /// Ask the agent to switch the session to `mode`.
     fn set_mode(&mut self, mode: &str) {
         if let Some(s) = self.session.clone() {
             self.request(Pending::SetMode, "session/set_mode", json!({"sessionId": s, "modeId": mode}));
         }
     }
 
+    /// Ask the agent to use `model` in the session.
     fn set_model(&mut self, model: &str) {
         if let Some(s) = self.session.clone() {
             self.request(Pending::SetModel, "session/set_model", acp::set_model_params(&s, model));
         }
     }
 
+    /// Ask the agent to set a configuration option, one change at a time.
     fn set_config_option(&mut self, id: &str, value: &str) {
         if self.config_pending.is_some() {
             return;
@@ -373,6 +382,7 @@ mod tests {
     use super::*;
     use crate::backend::StartContext;
 
+    /// A backend with an agent that answered `initialize` and opened session `s1`.
     fn ready_backend() -> Result<AcpBackend, String> {
         let ctx = StartContext { cwd: std::env::temp_dir(), bridge: None, tools: None, wake: Box::new(|| {}) };
         let mut backend = AcpBackend::start(&["sh".into(), "-c".into(), "cat >/dev/null".into()], ctx)?;
@@ -382,6 +392,7 @@ mod tests {
         Ok(backend)
     }
 
+    /// An unresponsive cancel disconnects the agent.
     #[test]
     fn an_unresponsive_cancel_disconnects_the_agent() {
         let mut backend = ready_backend().unwrap();
@@ -397,6 +408,7 @@ mod tests {
         assert!(backend.poll().is_empty(), "the exit is reported only once");
     }
 
+    /// A cancelled prompt reply keeps the connection.
     #[test]
     fn a_cancelled_prompt_reply_keeps_the_connection() {
         for reply in [Ok(json!({"stopReason":"cancelled"})), Err((-32603, "operation aborted".into()))] {
@@ -413,6 +425,7 @@ mod tests {
         }
     }
 
+    /// Cancelling an idle session does not disconnect it.
     #[test]
     fn cancelling_an_idle_session_does_not_disconnect_it() {
         let mut backend = ready_backend().unwrap();
@@ -422,6 +435,7 @@ mod tests {
         backend.shutdown(true);
     }
 
+    /// A new session retires the old cancelled prompt.
     #[test]
     fn a_new_session_retires_the_old_cancelled_prompt() {
         let mut backend = ready_backend().unwrap();
@@ -446,6 +460,7 @@ mod tests {
         json!({"sessionId":session,"configOptions":[{"id":"provider.model","category":"model","name":"Model","type":"select","currentValue":value,"options":[{"value":"fast","name":"Fast"},{"value":"smart","name":"Smart"}]}]})
     }
 
+    /// Config updates and replies are isolated to the active session.
     #[test]
     fn config_updates_and_replies_are_isolated_to_the_active_session() {
         let ctx = StartContext { cwd: std::env::temp_dir(), bridge: None, tools: None, wake: Box::new(|| {}) };

@@ -1083,6 +1083,7 @@ mod chat_tests {
         fn poll(&mut self) -> Vec<Event> {
             self.0.lock().map(|mut script| script.events.drain(..).collect()).unwrap_or_default()
         }
+        /// Record a text message the chat sent.
         fn prompt(&mut self, parts: &[PromptPart]) {
             if let (Ok(mut script), [PromptPart::Text(text)]) = (self.0.lock(), parts) {
                 script.prompts.push(text.clone());
@@ -1090,12 +1091,14 @@ mod chat_tests {
         }
         fn cancel(&mut self) {}
         fn new_session(&mut self) {}
+        /// Record the chat's answer to a permission question.
         fn answer_permission(&mut self, key: u64, option: Option<&str>) {
             if let Ok(mut script) = self.0.lock() {
                 script.answers.push((key, option.map(str::to_owned)));
             }
         }
         fn authenticate(&mut self, _method: &str) {}
+        /// Record that the chat ended the agent.
         fn shutdown(&mut self, _wait: bool) {
             if let Ok(mut script) = self.0.lock() {
                 script.shut_down = true;
@@ -1152,6 +1155,7 @@ mod chat_tests {
         Ok((harness, script, endpoint))
     }
 
+    /// Queue an event for the scripted agent to report on its next poll.
     fn push(script: &Arc<Mutex<Script>>, event: Event) {
         if let Ok(mut script) = script.lock() {
             script.events.push_back(event);

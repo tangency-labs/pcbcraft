@@ -503,6 +503,7 @@ fn headless_sessions_say_window_commands_need_a_live_editor() {
     assert!(listed.as_array().unwrap().iter().all(|command| !crate::is_window_command(command["id"].as_str().unwrap())));
 }
 
+/// A token file is read trimmed and bounded.
 #[test]
 fn a_token_file_is_read_trimmed_and_bounded() -> Result<(), Box<dyn std::error::Error>> {
     let dir = std::env::temp_dir().join(format!("pcbcraft-mcp-token-test-{}", std::process::id()));

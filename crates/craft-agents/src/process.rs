@@ -254,6 +254,7 @@ impl Drop for AgentProcess {
 mod tests {
     use super::*;
 
+    /// Whether process `pid` still runs (a zombie doesn't count on Linux).
     fn alive(pid: u32) -> bool {
         // `kill -0` checks that the process exists without touching it. A zombie still counts
         // on Linux, so /proc's state is checked there too.

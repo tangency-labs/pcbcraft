@@ -553,6 +553,7 @@ pub enum Incoming {
 /// The longest text kept from one tool call's output.
 const MAX_OUTPUT: usize = 2000;
 
+/// A content block's text for the conversation (images and links as placeholders), unwrapping a tool call's content item.
 fn content_text(c: &Value) -> Option<String> {
     // A content block, or a tool call content item wrapping one (`{type: "content", content}`).
     let block = if c.get("type").and_then(Value::as_str) == Some("content") { c.get("content")? } else { c };
@@ -566,6 +567,7 @@ fn content_text(c: &Value) -> Option<String> {
     }
 }
 
+/// A tool call's content as text, from at most 16 parts, cut to [`MAX_OUTPUT`] on a character boundary.
 fn tool_output(u: &Value) -> Option<String> {
     let parts: Vec<String> = u.get("content")?.as_array()?.iter().take(16).filter_map(content_text).collect();
     if parts.is_empty() {
@@ -630,6 +632,7 @@ pub fn parse(line: &str) -> Option<Incoming> {
     }
 }
 
+/// One `session/update` notification for `session` as an [`Incoming`]; unknown kinds are ignored.
 fn update(u: &Value, session: &str) -> Incoming {
     let s = |k: &str| u.get(k).and_then(Value::as_str).map(str::to_string);
     match u.get("sessionUpdate").and_then(Value::as_str) {
@@ -731,6 +734,7 @@ pub fn split_command(line: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// Documents are taken only when the agent says so.
     #[test]
     fn documents_are_taken_only_when_the_agent_says_so() {
         let yes = json!({"agentCapabilities": {"promptCapabilities": {"image": true, "embeddedContext": true}}});
@@ -897,6 +901,7 @@ mod tests {
         assert_eq!(m[1].kind, AuthKind::EnvVar { vars: vec!["OPENAI_API_KEY".into()] });
     }
 
+    /// Only authentication words ask for sign in.
     #[test]
     fn only_authentication_words_ask_for_sign_in() {
         for message in ["Authentication required", "auth: token expired", "401 Unauthorized", "Not authorised", "unauthenticated", "OAuth failed"] {
@@ -941,6 +946,7 @@ mod tests {
         assert_eq!(modes(&new), Some(("default".into(), vec![("default".into(), "Default".into()), ("acceptEdits".into(), "Accept Edits".into())])));
     }
 
+    /// Long tool output is cut on a character boundary.
     #[test]
     fn long_tool_output_is_cut_on_a_character_boundary() {
         let long = "é".repeat(3000);

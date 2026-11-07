@@ -226,6 +226,7 @@ pub fn content_blocks(parts: &[PromptPart]) -> Vec<Value> {
 mod tests {
     use super::*;
 
+    /// Base64 matches the rfc examples.
     #[test]
     fn base64_matches_the_rfc_examples() {
         for (i, o) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")]

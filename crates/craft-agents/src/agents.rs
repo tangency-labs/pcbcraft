@@ -197,6 +197,7 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// An agent from its saved configuration, named by its ID when the name is blank.
     fn from_config(c: &AgentConfig) -> Entry {
         Entry {
             id: c.id.clone(),
@@ -482,6 +483,7 @@ mod tests {
         }
     }
 
+    /// Modes and ids round trip.
     #[test]
     fn modes_and_ids_round_trip() {
         for m in Mode::ALL {
@@ -502,6 +504,7 @@ mod tests {
         assert!(normalize_url("localhost:11434").is_err());
     }
 
+    /// Endpoint kinds keep their protocol and presets.
     #[test]
     fn endpoint_kinds_keep_their_protocol_and_presets() {
         assert_eq!(serde_json::to_string(&Kind::Api).unwrap(), "\"api\"");

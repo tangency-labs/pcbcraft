@@ -93,6 +93,7 @@ mod tests {
         args.iter().map(OsString::from).collect()
     }
 
+    /// Connect takes a token file and a wait once each.
     #[test]
     fn connect_takes_a_token_file_and_a_wait_once_each() {
         assert_eq!(connect_options(&[]), Some((None, None)));

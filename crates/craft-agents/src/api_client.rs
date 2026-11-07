@@ -101,6 +101,7 @@ const GO_PROTOCOL_TABLE: &[(&[&str], GoProtocol)] = &[
     (&["minimax-", "claude-", "qwen"], GoProtocol::Messages),
 ];
 
+/// Which protocol OpenCode Go serves `model` with, by its family prefix.
 fn go_protocol(model: &str) -> GoProtocol {
     let m = model.trim().to_ascii_lowercase();
     for (prefixes, protocol) in GO_PROTOCOL_TABLE {
@@ -715,6 +716,7 @@ impl ChatBackend for ApiBackend {
     fn poll(&mut self) -> Vec<Event> {
         self.events.try_iter().take(512).collect()
     }
+    /// Send a message to the worker, clearing an earlier cancel.
     fn prompt(&mut self, parts: &[PromptPart]) {
         self.cancel.store(false, Ordering::Relaxed);
         if let Some(c) = &self.cmds {
@@ -724,21 +726,25 @@ impl ChatBackend for ApiBackend {
     fn cancel(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
+    /// Use `model` from the next request on.
     fn set_model(&mut self, model: &str) {
         if let Some(c) = &self.cmds {
             let _ = c.send(Cmd::SetModel(model.to_string()));
         }
     }
+    /// Use a new request timeout from the next request on.
     fn set_request_timeout(&mut self, secs: u64) {
         if let Some(c) = &self.cmds {
             let _ = c.send(Cmd::SetRequestTimeout(secs));
         }
     }
+    /// Use a new reasoning effort from the next request on.
     fn set_reasoning_effort(&mut self, effort: &str) {
         if let Some(c) = &self.cmds {
             let _ = c.send(Cmd::SetReasoningEffort(effort.to_string()));
         }
     }
+    /// Cancel a running turn and start a fresh conversation.
     fn new_session(&mut self) {
         // A running turn is cancelled; the worker resets the history once it has ended.
         self.cancel.store(true, Ordering::Relaxed);
@@ -751,6 +757,7 @@ impl ChatBackend for ApiBackend {
     fn pid(&self) -> Option<u32> {
         self.mcp.as_ref().and_then(ProcessHandle::pid)
     }
+    /// Stop the worker and end the MCP bridge (`wait`: block until it has ended).
     fn shutdown(&mut self, wait: bool) {
         self.cancel.store(true, Ordering::Relaxed);
         self.cmds = None;
@@ -794,6 +801,7 @@ impl Worker {
         (self.wake)();
     }
 
+    /// The worker loop: start the bridge, report readiness and the models, then answer commands until the backend is dropped.
     fn run(&mut self, cmds: Receiver<Cmd>) {
         if let Err(e) = self.start_mcp() {
             self.emit(Event::Error(e));
@@ -885,6 +893,7 @@ impl Worker {
         }
     }
 
+    /// Initialize the MCP bridge and list its tools for the model; without a bridge there are none.
     fn start_mcp(&mut self) -> Result<(), String> {
         if self.mcp.is_none() {
             return Ok(());
@@ -905,6 +914,8 @@ impl Worker {
         Ok(())
     }
 
+    /// Answer one message: send the history, run the tool calls the model asks for and repeat until
+    /// it stops calling tools or Stop cancels the turn; a cancel restores the last complete history.
     fn turn(&mut self, parts: Vec<PromptPart>) {
         self.history.push(user_message(self.cfg.protocol, &parts));
         let dropped = drop_old_views(&mut self.history, MAX_HISTORY_IMAGES);
@@ -1016,6 +1027,7 @@ impl Worker {
         (!self.cfg.reasoning_effort.trim().is_empty()).then(|| self.cfg.reasoning_effort.trim())
     }
 
+    /// Send the history to the endpoint once and read its reply, retrying once where an endpoint refuses a known request shape.
     fn request(&self) -> Result<Reply, String> {
         // OpenCode Go serves one protocol per model family behind a single base URL.
         if self.cfg.protocol == Protocol::OpenAi && is_opencode_go(&self.cfg.base_url) {
@@ -1218,6 +1230,7 @@ impl Worker {
         self.send(req)
     }
 
+    /// POST `body` to the endpoint's chat or messages URL with the protocol's headers and the key; the status and parsed body.
     fn post(&self, body: &Value) -> Result<(u16, Value), String> {
         let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
         let url = match self.cfg.protocol {
@@ -1420,6 +1433,7 @@ fn sanitize_reasoning_details(details: Option<&Value>) -> Option<Value> {
     Some(Value::Array(clean))
 }
 
+/// An OpenAI-compatible reply's text, complete tool calls and stop reason.
 fn openai_reply(body: &Value) -> Reply {
     let message = body.pointer("/choices/0/message").cloned().unwrap_or(Value::Null);
     let text = message.get("content").and_then(Value::as_str).filter(|t| !t.is_empty()).map(|t| vec![(false, t.to_string())]).unwrap_or_default();
@@ -1461,6 +1475,7 @@ fn openai_reply(body: &Value) -> Reply {
     Reply { text, calls, assistant, stop }
 }
 
+/// An Anthropic reply's text, thinking, tool calls and stop reason.
 fn anthropic_reply(body: &Value) -> Reply {
     let content = body.get("content").cloned().unwrap_or(Value::Null);
     let stop = stop_reason(body.get("stop_reason").and_then(Value::as_str));
@@ -1848,6 +1863,7 @@ mod tests {
         assert_eq!(h[4]["content"], "plain text");
     }
 
+    /// A long chat with a view per message does not grow without end.
     #[test]
     fn a_long_chat_with_a_view_per_message_does_not_grow_without_end() {
         let mut h = vec![json!({"role": "system", "content": "note"})];
@@ -2156,6 +2172,7 @@ mod tests {
         }
     }
 
+    /// A start context without a bridge, for OpenCode Go tests.
     fn go_ctx() -> StartContext {
         StartContext { cwd: std::env::temp_dir(), bridge: None, tools: None, wake: Box::new(|| {}) }
     }
@@ -2664,6 +2681,7 @@ mod tests {
         assert!(model_list(&empty, "http://localhost:18789/v1", None).unwrap().is_empty());
     }
 
+    /// Tool arguments are an object or an error.
     #[test]
     fn tool_arguments_are_an_object_or_an_error() {
         assert_eq!(tool_arguments(None), Ok(json!({})));
@@ -2717,6 +2735,7 @@ mod tests {
         b.shutdown(true);
     }
 
+    /// Keys never go over plain http to another computer.
     #[test]
     fn keys_never_go_over_plain_http_to_another_computer() {
         let http: HttpFn = Arc::new(|_: &HttpRequest| Ok((200, b"{}".to_vec())));
@@ -2779,6 +2798,7 @@ mod tests {
         (w, seen)
     }
 
+    /// OpenAI's reply refusing function tools without `reasoning_effort: none`.
     fn refusal() -> (u16, Value) {
         (400, json!({"error": {"message": "Function tools with reasoning_effort are not supported for gpt-6.1-sol in /v1/chat/completions."}}))
     }
@@ -3055,6 +3075,7 @@ mod tests {
         assert_eq!(fourth[2][0]["signature"], "s3");
     }
 
+    /// The anthropic test sends one small message and checks the key rule.
     #[test]
     fn the_anthropic_test_sends_one_small_message_and_checks_the_key_rule() {
         let seen = Arc::new(std::sync::Mutex::new(Vec::<HttpRequest>::new()));

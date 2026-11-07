@@ -203,6 +203,7 @@ pub struct Detection {
     pub took_ms: u64,
 }
 
+/// The user's home folder, when it is an absolute path.
 fn home() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).filter(|p| p.is_absolute())
 }
@@ -324,6 +325,8 @@ fn probe(program: &Path, limit: Duration) -> Probe {
     probe_command(program, command_for(program), limit)
 }
 
+/// Run `program --version` (as `cmd` prepares it) for at most `limit`, without a console window,
+/// and read what it prints.
 fn probe_command(program: &Path, mut cmd: Command, limit: Duration) -> Probe {
     #[cfg(windows)]
     {
@@ -453,6 +456,7 @@ pub fn detect() -> Detection {
     detect_in(&search_dirs(), home().as_deref(), PROBE_LIMIT)
 }
 
+/// Find the known agents in `dirs`, with their versions and login state, within `limit` each.
 fn detect_in(dirs: &[PathBuf], home: Option<&Path>, limit: Duration) -> Detection {
     let t0 = Instant::now();
     let mut d = Detection::default();
@@ -618,6 +622,7 @@ mod tests {
         assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     }
 
+    /// Node import attributes require a supported release.
     #[test]
     fn node_import_attributes_require_a_supported_release() {
         for version in ["v18.20.0", "v18.20.8", "v20.10.0", "v20.19.0", "v21.0.0", "v22.0.0"] {
@@ -631,6 +636,7 @@ mod tests {
         }
     }
 
+    /// Node recovery does not rewrite shell shims or pinned interpreters.
     #[test]
     fn node_recovery_does_not_rewrite_shell_shims_or_pinned_interpreters() {
         let path = std::env::temp_dir().join(format!("sc-agent-shebang-{}", std::process::id()));
@@ -646,6 +652,7 @@ mod tests {
         assert!(!uses_env_node(&path));
     }
 
+    /// Ollama capabilities distinguish tools chat and unknown.
     #[test]
     fn ollama_capabilities_distinguish_tools_chat_and_unknown() {
         use serde_json::json;
@@ -678,6 +685,7 @@ mod tests {
         assert_eq!(ollama_tools(&unavailable, "http://localhost:11434/v1", "chat:4b", false), None);
     }
 
+    /// A program is found in the first folder that has it.
     #[test]
     fn a_program_is_found_in_the_first_folder_that_has_it() {
         let root = std::env::temp_dir().join(format!("sc-agent-find-{}", std::process::id()));
@@ -720,6 +728,7 @@ mod tests {
         assert_eq!(version_of("dev build"), "dev build");
     }
 
+    /// Signed in comes from the agents own file or a key variable.
     #[test]
     fn signed_in_comes_from_the_agents_own_file_or_a_key_variable() {
         let home = std::env::temp_dir().join(format!("sc-agent-login-{}", std::process::id()));
@@ -791,6 +800,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Every known agent has a program and an install hint.
     #[test]
     fn every_known_agent_has_a_program_and_an_install_hint() {
         for k in KNOWN {

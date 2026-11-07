@@ -150,6 +150,7 @@ pub fn parse(src: &str) -> Vec<Block> {
     out
 }
 
+/// `s` cut to at most `max` bytes on a character boundary.
 fn cut(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
@@ -161,22 +162,26 @@ fn cut(s: &str, max: usize) -> &str {
     &s[..e]
 }
 
+/// The code fence a line opens (three or more backticks or tildes), if any.
 fn fence_of(t: &str) -> Option<String> {
     let c = t.chars().next().filter(|c| *c == '`' || *c == '~')?;
     let n = t.chars().take_while(|x| *x == c).count();
     (n >= 3).then(|| c.to_string().repeat(n))
 }
 
+/// Whether a line is a thematic break: three or more of one of `-`, `*` or `_`.
 fn is_rule(t: &str) -> bool {
     let s: String = t.chars().filter(|c| !c.is_whitespace()).collect();
     s.len() >= 3 && (s.chars().all(|c| c == '-') || s.chars().all(|c| c == '*') || s.chars().all(|c| c == '_'))
 }
 
+/// A heading line's level (1 to 6) and text.
 fn heading(t: &str) -> Option<(u8, &str)> {
     let n = t.chars().take_while(|c| *c == '#').count();
     if (1..=6).contains(&n) && t[n..].starts_with(' ') { Some((n as u8, t[n..].trim())) } else { None }
 }
 
+/// A list item's kind (ordered or not), its number and its text.
 fn list_item(t: &str) -> Option<(bool, u64, &str)> {
     for m in ["- ", "* ", "+ "] {
         if let Some(r) = t.strip_prefix(m) {
@@ -220,6 +225,7 @@ struct Closers {
 }
 
 impl Closers {
+    /// Every closer table of `c`, in linear passes.
     fn new(c: &[char]) -> Self {
         let pair = |d: char| next_where(c, |j| c[j] == d && c.get(j + 1) == Some(&d));
         let italic = |d: char| {
@@ -271,6 +277,7 @@ pub fn spans(s: &str) -> Vec<Span> {
     let mut out: Vec<Span> = Vec::new();
     let mut text = String::new();
     let mut i = 0;
+    /// End the plain text run so far as a text span.
     fn flush(out: &mut Vec<Span>, text: &mut String) {
         if !text.is_empty() {
             out.push(Span::Text(std::mem::take(text)));
@@ -363,6 +370,7 @@ mod tests {
         Span::Text(s.into())
     }
 
+    /// Blocks.
     #[test]
     fn blocks() {
         let md = "# Title\n\nSome *emphasis* and **bold** with `code`.\nSecond line.\n\n- one\n- two\n  wrapped\n\n1. a\n2. b\n\n> quoted\n\n---\n\n```rust\nlet x = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
@@ -398,6 +406,7 @@ mod tests {
         assert_eq!(spans(r"\*not italic\*"), vec![t("*not italic*")]);
     }
 
+    /// Only web links are links.
     #[test]
     fn only_web_links_are_links() {
         assert_eq!(spans("[docs](https://example.com/a)"), vec![Span::Link { label: "docs".into(), url: "https://example.com/a".into() }]);
@@ -417,6 +426,7 @@ mod tests {
         assert_eq!(b, vec![Block::Code { lang: String::new(), text: "still code".into() }]);
     }
 
+    /// Hostile input is bounded and never panics.
     #[test]
     fn hostile_input_is_bounded_and_never_panics() {
         let mut seed = 0x1234_5678_u32;
@@ -480,6 +490,7 @@ mod tests {
         let mut out: Vec<Span> = Vec::new();
         let mut text = String::new();
         let mut i = 0;
+        /// End the plain text run so far as a text span.
         fn flush(out: &mut Vec<Span>, text: &mut String) {
             if !text.is_empty() {
                 out.push(Span::Text(std::mem::take(text)));
@@ -571,6 +582,7 @@ mod tests {
         None
     }
 
+    /// The next pair of `d` at or after `from`.
     fn find_pair(c: &[char], from: usize, d: char) -> Option<usize> {
         (from..c.len().saturating_sub(1)).find(|&j| c[j] == d && c[j + 1] == d)
     }
