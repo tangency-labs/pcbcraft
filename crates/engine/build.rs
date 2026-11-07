@@ -8,7 +8,10 @@ use std::{env, error::Error, fs, path::Path};
 /// files sorted by path. Environment and filesystem errors fail the build; the engine parses
 /// and validates the embedded contents at startup.
 fn main() -> Result<(), Box<dyn Error>> {
-    let library = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../libraries/starter");
+    // Cargo may reuse this executable after the source moves between worktrees.
+    // Resolve the invocation's manifest directory rather than the compiler's old path.
+    let manifest = env::var_os("CARGO_MANIFEST_DIR").ok_or("Cargo did not provide CARGO_MANIFEST_DIR")?;
+    let library = Path::new(&manifest).join("../../libraries/starter");
     let symbols = library.join("symbols");
     println!("cargo:rerun-if-changed={}", library.display());
     println!("cargo:rerun-if-changed={}", symbols.display());
