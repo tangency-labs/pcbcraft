@@ -304,8 +304,10 @@ A call nobody answers within four minutes is declined, and the agent is told it 
 project always runs. Questions the agent asks about its own tools appear in the chat too.
 **Stop** (or **Esc** in the chat) ends the answer and denies anything waiting. Tool calls run
 only while a message is being answered: after **Stop** or a new chat (switching projects starts
-one), a call still on its way is refused. The agent's own questions about PCBCraft's tools are
-answered for it only for this chat's server, which gets a random name per connection.
+one), a call still on its way is refused. The agent's own questions about using PCBCraft's tools are
+answered for it, since the permission mode still applies to each command, but only for this
+chat's server, which gets a random name per connection. Turn off **Approve agents' requests to
+use PCBCraft's tools automatically** in Preferences → AI to confirm those questions too.
 
 Open **Preferences → AI** from Home or the gear in the app bar to set the permission mode for all
 agents or one, choose the default agent, **Test** that an agent starts and answers, forget its

@@ -476,8 +476,9 @@ impl Chat {
 
     /// Advance the backend: apply its events to the conversation and the options, answer its
     /// permission questions about PCBCraft's own tools (the gate checks those calls), and drop
-    /// held requests whose caller gave up. `mode` decides the agent's other questions.
-    pub(super) fn poll(&mut self, mode: Mode) {
+    /// held requests whose caller gave up. `mode` decides the agent's other questions; with
+    /// `auto_bridge` off, its questions about PCBCraft's tools are asked too.
+    pub(super) fn poll(&mut self, mode: Mode, auto_bridge: bool) {
         self.decline_overdue(Instant::now());
         let events = self.backend.as_mut().map(|backend| backend.poll()).unwrap_or_default();
         for event in events {
@@ -485,12 +486,12 @@ impl Chat {
             if self.backend.is_none() {
                 break;
             }
-            self.event(event, mode);
+            self.event(event, mode, auto_bridge);
         }
     }
 
     /// Apply one backend event.
-    fn event(&mut self, event: Event, mode: Mode) {
+    fn event(&mut self, event: Event, mode: Mode, auto_bridge: bool) {
         match event {
             Event::Documents(_) => {}
             Event::ToolsAvailable(available) => self.tools = Some(available),
@@ -508,7 +509,7 @@ impl Chat {
             },
             Event::Permission { key, title, kind, options } => {
                 let allow = options.iter().find(|option| option.kind == "allow_once").map(|option| option.id.clone());
-                let ours = self.bridge_name.as_deref().is_some_and(|name| acp::is_bridge_tool(&title, kind.as_deref(), name));
+                let ours = auto_bridge && self.bridge_name.as_deref().is_some_and(|name| acp::is_bridge_tool(&title, kind.as_deref(), name));
                 if ours || mode == Mode::All {
                     self.answer_agent(key, allow.as_deref());
                 } else {

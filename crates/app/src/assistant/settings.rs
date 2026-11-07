@@ -135,6 +135,14 @@ impl Assistant {
                     }
                 }
             });
+            let auto = ui
+                .checkbox(&mut self.settings.agents.auto_approve_bridge, "Approve agents' requests to use PCBCraft's tools automatically")
+                .on_hover_text(
+                    "PCBCraft still applies the permission mode to every command. Turn this off to also confirm each \
+                     request in the agent's own words, which shows that the call comes from it, at the cost of a \
+                     second question for commands the mode asks about.",
+                );
+            self.settings_changed |= auto.changed();
             ui.separator();
             ui.horizontal(|ui| {
                 ui.strong("Agents");
@@ -488,6 +496,18 @@ mod tests {
         let settings = Settings::load(Some(saved));
         assert_eq!(settings.agents.agents.iter().map(|agent| agent.id.as_str()).collect::<Vec<_>>(), ["custom-1", "api-1"]);
         assert_eq!(settings.agents.ai_permissions, Mode::Ask);
+        assert!(settings.agents.auto_approve_bridge, "settings saved before the choice existed keep approving");
+    }
+
+    /// The choice to approve requests for PCBCraft's tools is the person's, and it is kept.
+    #[test]
+    fn the_auto_approval_choice_is_kept() -> Result<(), serde_json::Error> {
+        let mut settings = Settings::load(None);
+        assert!(settings.agents.auto_approve_bridge, "on by default, as in SolidCraft");
+        settings.agents.auto_approve_bridge = false;
+        let saved = serde_json::to_string(&settings)?;
+        assert!(!Settings::load(Some(&saved)).agents.auto_approve_bridge);
+        Ok(())
     }
 
     /// An endpoint saves without a key; a key for a plain-HTTP remote endpoint is refused before

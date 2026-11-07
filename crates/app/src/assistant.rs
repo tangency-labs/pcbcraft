@@ -224,7 +224,7 @@ impl Assistant {
             self.ensure_detection(ctx);
         }
         self.poll_jobs();
-        self.chat.poll(self.mode());
+        self.chat.poll(self.mode(), self.settings.agents.auto_approve_bridge);
         if let Some(due) = self.chat.next_expiry() {
             ctx.request_repaint_after(due);
         }
@@ -1385,11 +1385,19 @@ mod chat_tests {
             kind: Some("other".to_owned()),
             options: vec![option("ok", "allow_once"), option("no", "reject_once")],
         };
-        push(&script, ask(1, format!("mcp__{}__execute", craft_agents::acp::bridge_name("0123456789ab"))));
+        let ours = format!("mcp__{}__execute", craft_agents::acp::bridge_name("0123456789ab"));
+        push(&script, ask(1, ours.clone()));
         push(&script, ask(2, "mcp__pcbcraft-app__execute".to_owned()));
         harness.run();
         assert_eq!(script.lock().map_err(|_| "poisoned")?.answers, [(1, Some("ok".to_owned()))]);
         harness.get_by_label("mcp__pcbcraft-app__execute");
+
+        // The person can choose to confirm the agent's requests for PCBCraft's tools too.
+        harness.state_mut().assistant.settings.agents.auto_approve_bridge = false;
+        push(&script, ask(3, ours.clone()));
+        harness.run();
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.answers.len(), 1, "nothing more was answered for the person");
+        harness.get_by_label(&ours);
         Ok(())
     }
 

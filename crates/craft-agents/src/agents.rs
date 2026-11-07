@@ -252,6 +252,11 @@ pub struct AgentPrefs {
     pub agent_default: String,
     /// The permission mode for agents without their own.
     pub ai_permissions: Mode,
+    /// Answer an agent's own permission questions about the chat's MCP tools for the person, so
+    /// each call is confirmed once, by the gate that checks the command itself. Off: they are
+    /// asked like any other tool's. The question only names a tool the agent says it is calling,
+    /// so turning this off also confirms that the call comes from the agent's request.
+    pub auto_approve_bridge: bool,
     pub agent_permissions: std::collections::BTreeMap<String, Mode>,
     /// The model chosen for each agent, by agent id.
     pub agent_models: std::collections::BTreeMap<String, String>,
@@ -264,6 +269,7 @@ impl Default for AgentPrefs {
             agents: Vec::new(),
             agent_default: String::new(),
             ai_permissions: Mode::Edits,
+            auto_approve_bridge: true,
             agent_permissions: Default::default(),
             agent_models: Default::default(),
             agent_always_allow: Default::default(),
