@@ -161,6 +161,7 @@ pub enum Login {
 }
 
 impl Login {
+    /// The login state's name in saved test results.
     pub fn id(self) -> &'static str {
         match self {
             Login::LooksLoggedIn => "login_found",
@@ -282,13 +283,10 @@ pub(super) fn command_for(program: &Path) -> Command {
     // Older saved Windows commands may name npm's bare Unix script rather than its .cmd shim.
     let shim = if cfg!(windows) { runnable_sibling(program) } else { None };
     let program = shim.as_deref().unwrap_or(program);
-    let mut cmd = if cfg!(windows) && program.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(program);
-        c
-    } else {
-        Command::new(program)
-    };
+    // A `.cmd` or `.bat` program (npm's shims) starts directly: the standard library runs it
+    // through `cmd.exe` itself and escapes each argument for it, refusing any it can't escape,
+    // so `&`, `|` or `%VAR%` in an argument never become shell syntax.
+    let mut cmd = Command::new(program);
     let mut dirs = search_dirs();
     if program.is_absolute()
         && program.file_name().is_some_and(|n| n == "node" || n == "node.exe")

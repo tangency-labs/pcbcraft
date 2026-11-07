@@ -42,6 +42,7 @@ pub struct AgentProcess {
 pub struct ProcessHandle(std::sync::Arc<std::sync::Mutex<Option<Child>>>);
 
 impl ProcessHandle {
+    /// The process's ID while it runs.
     pub fn pid(&self) -> Option<u32> {
         self.0.lock().ok().and_then(|c| c.as_ref().map(Child::id))
     }
@@ -217,16 +218,19 @@ impl AgentProcess {
         Ok(AgentProcess { child: ProcessHandle(std::sync::Arc::new(std::sync::Mutex::new(Some(child)))), to_agent: Some(to_agent), from_agent })
     }
 
+    /// Send one JSON message to the agent, as a line; nothing happens once its input has closed.
     pub fn send(&self, msg: &serde_json::Value) {
         if let Some(t) = &self.to_agent {
             let _ = t.send(msg.to_string());
         }
     }
 
+    /// The agent's process ID while it runs.
     pub fn pid(&self) -> Option<u32> {
         self.child.pid()
     }
 
+    /// A handle that can end the process from another thread.
     pub fn handle(&self) -> ProcessHandle {
         self.child.clone()
     }

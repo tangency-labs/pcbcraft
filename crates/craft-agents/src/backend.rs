@@ -19,6 +19,7 @@ pub enum TestError {
 }
 
 impl TestError {
+    /// What to tell the person: a sign-in request, or the agent's own message.
     pub fn message(&self) -> &str {
         match self {
             Self::AuthRequired => crate::i18n::tr("ui.agent_chat_state_auth"),
@@ -112,6 +113,9 @@ pub enum Event {
     TurnEnded {
         reason: String,
     },
+    /// The agent refused to start (its `initialize` or `session/new` failed for a reason other
+    /// than signing in), so no message can be sent until the person retries.
+    SetupFailed(String),
     /// Something failed; the backend is still running unless [`Event::Exited`] follows.
     Error(String),
     /// It ended; its last error output.

@@ -25,6 +25,7 @@ pub enum Mode {
 
 impl Mode {
     pub const ALL: [Mode; 3] = [Mode::Ask, Mode::Edits, Mode::All];
+    /// The mode's name in saved preferences.
     pub fn id(self) -> &'static str {
         match self {
             Mode::Ask => "ask",
@@ -32,9 +33,11 @@ impl Mode {
             Mode::All => "all",
         }
     }
+    /// The mode a saved name means; `None` for an unknown one.
     pub fn parse(s: &str) -> Option<Mode> {
         Mode::ALL.into_iter().find(|m| m.id() == s)
     }
+    /// The mode's label in the settings.
     pub fn label(self) -> &'static str {
         crate::i18n::tr(match self {
             Mode::Ask => "ui.ai_mode_ask",
@@ -90,6 +93,7 @@ pub enum Protocol {
 }
 
 impl Protocol {
+    /// The kind of agent an endpoint with this protocol is.
     pub fn kind(self) -> Kind {
         match self {
             Protocol::OpenAi => Kind::Api,

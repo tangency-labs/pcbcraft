@@ -38,6 +38,7 @@ pub enum ConfigParse {
     Invalid,
     Snapshot(Vec<ConfigOption>),
 }
+/// An agent's `configOptions`: absent, present but unusable, or a validated snapshot.
 pub fn config_options(v: &Value) -> ConfigParse {
     let Some(raw_list) = v.get("configOptions") else {
         return ConfigParse::Absent;
@@ -128,20 +129,39 @@ pub const METHOD_NOT_FOUND: i64 = -32601;
 /// The error code ACP agents use for "authentication required".
 pub const AUTH_REQUIRED: i64 = -32000;
 
+/// Whether an error reply means the agent wants the person to sign in: ACP's
+/// [`AUTH_REQUIRED`] code, or, for adapters that send another code, a message with an
+/// authentication word in it ("auth", "OAuth", "authentication", "unauthenticated",
+/// "unauthorized" and their forms). Other words that start the same way, such as "author" or "authority", don't
+/// count, so an unrelated error doesn't end the session.
+pub fn needs_sign_in(code: i64, message: &str) -> bool {
+    code == AUTH_REQUIRED
+        || message.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|word| {
+            let word = word.to_ascii_lowercase();
+            let word = word.strip_prefix("un").unwrap_or(&word);
+            word == "auth" || word == "oauth" || ["authent", "authoriz", "authoris"].iter().any(|stem| word.starts_with(stem))
+        })
+}
+
 /// One request or notification to send.
 pub fn request(id: u64, method: &str, params: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 }
+/// A JSON-RPC notification (no reply expected).
 pub fn notification(method: &str, params: Value) -> Value {
     json!({"jsonrpc": "2.0", "method": method, "params": params})
 }
+/// A JSON-RPC success reply to the agent's request `id`.
 pub fn reply(id: Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
+/// A JSON-RPC error reply to the agent's request `id`.
 pub fn reply_error(id: Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
+/// The `initialize` request's parameters: the protocol version, this client's name and
+/// `version`, and the capabilities it offers.
 pub fn initialize_params(version: &str) -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
@@ -199,6 +219,7 @@ impl McpBridge {
             .to_vec()
     }
 
+    /// The bridge as an ACP stdio MCP server entry for `session/new`.
     pub fn to_json(&self) -> Value {
         json!({
             "name": BRIDGE_NAME,
@@ -295,6 +316,7 @@ fn takes_antigravity_note(init: &Value) -> bool {
     init.pointer("/agentCapabilities/_meta/antigravity/systemPrompt/append").and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// The `session/prompt` request's parameters: the message's parts as content blocks.
 pub fn prompt_params(session: &str, parts: &[super::backend::PromptPart]) -> Value {
     json!({"sessionId": session, "prompt": super::backend::content_blocks(parts)})
 }
@@ -350,6 +372,7 @@ pub fn models(session: &Value) -> Option<(String, Vec<ModelInfo>)> {
 pub fn set_model_params(session: &str, model: &str) -> Value {
     json!({"sessionId": session, "modelId": model})
 }
+/// The `session/set_config_option` request's parameters.
 pub fn set_config_option_params(session: &str, id: &str, value: &str) -> Value {
     json!({"sessionId": session, "configId": id, "value": value})
 }
@@ -384,6 +407,8 @@ pub enum AuthKind {
     EnvVar { vars: Vec<String> },
 }
 
+/// The sign-in methods an `initialize` reply offers, bounded in number and length; terminal
+/// logins keep the command their adapter names.
 pub fn auth_methods(init: &Value) -> Vec<AuthMethod> {
     let strings = |v: Option<&Value>| -> Vec<String> {
         v.and_then(Value::as_array).map(|a| a.iter().take(64).filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
@@ -453,6 +478,7 @@ pub enum ToolStatus {
 }
 
 impl ToolStatus {
+    /// A tool call's status as ACP names it; `None` for a name it doesn't define.
     pub fn parse(s: &str) -> Option<ToolStatus> {
         Some(match s {
             "pending" => ToolStatus::Pending,
@@ -869,6 +895,17 @@ mod tests {
         let codex2 = json!({"authMethods": [{"id": "api-key", "name": "API Key", "_meta": {"api-key": {"provider": "openai"}}}]});
         assert_eq!(auth_methods(&codex2)[0].kind, AuthKind::EnvVar { vars: vec!["OPENAI_API_KEY".into()] });
         assert_eq!(m[1].kind, AuthKind::EnvVar { vars: vec!["OPENAI_API_KEY".into()] });
+    }
+
+    #[test]
+    fn only_authentication_words_ask_for_sign_in() {
+        for message in ["Authentication required", "auth: token expired", "401 Unauthorized", "Not authorised", "unauthenticated", "OAuth failed"] {
+            assert!(needs_sign_in(-32603, message), "{message}");
+        }
+        for message in ["Unknown author field", "certificate authority rejected", "Internal error", ""] {
+            assert!(!needs_sign_in(-32603, message), "{message}");
+        }
+        assert!(needs_sign_in(AUTH_REQUIRED, "anything"));
     }
 
     #[test]

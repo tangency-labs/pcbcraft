@@ -847,11 +847,11 @@ fn test_endpoint(entry: &Entry, protocol: craft_agents::agents::Protocol) -> Res
 fn conversation_item(ui: &mut Ui, item: &Item, agent: &str) {
     match item {
         Item::User(text) => chrome::user_bubble(ui, text),
-        Item::Agent { thought: false, text } => {
+        Item::Agent { thought: false, text, parsed } => {
             ui.strong(agent);
-            markdown_view(ui, text);
+            markdown_view(ui, parsed.get_or_init(|| markdown::parse(text)));
         }
-        Item::Agent { thought: true, text } => {
+        Item::Agent { thought: true, text, .. } => {
             ui.label(dim(text.chars().take(MAX_TOOL_DETAIL).collect::<String>()));
         }
         Item::Tool { id, title, status, input, output } => {
@@ -888,12 +888,12 @@ fn conversation_item(ui: &mut Ui, item: &Item, agent: &str) {
 }
 
 /// An agent's Markdown reply: paragraphs, headings, lists, quotes, code and links.
-fn markdown_view(ui: &mut Ui, text: &str) {
-    for block in markdown::parse(text) {
+fn markdown_view(ui: &mut Ui, blocks: &[Block]) {
+    for block in blocks {
         match block {
-            Block::Paragraph(spans) => spans_view(ui, &spans),
+            Block::Paragraph(spans) => spans_view(ui, spans),
             Block::Heading { spans, .. } => {
-                ui.strong(markdown::plain(&spans));
+                ui.strong(markdown::plain(spans));
             }
             Block::Code { text, .. } | Block::Pre(text) => {
                 egui::Frame::group(ui.style()).show(ui, |ui| ui.monospace(text));
@@ -901,13 +901,13 @@ fn markdown_view(ui: &mut Ui, text: &str) {
             Block::List { ordered, start, items } => {
                 for (index, item) in items.iter().enumerate() {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(if ordered { format!("{}.", start.saturating_add(index as u64)) } else { "•".to_owned() });
+                        ui.label(if *ordered { format!("{}.", start.saturating_add(index as u64)) } else { "•".to_owned() });
                         spans_view(ui, item);
                     });
                 }
             }
             Block::Quote(spans) => {
-                ui.label(dim(markdown::plain(&spans)));
+                ui.label(dim(markdown::plain(spans)));
             }
             Block::Rule => {
                 ui.separator();

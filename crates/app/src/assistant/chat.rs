@@ -39,10 +39,13 @@ pub(super) enum State {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Item {
     User(String),
-    /// Streamed text; `thought` is the agent's reasoning, shown dimmed.
+    /// Streamed text; `thought` is the agent's reasoning, shown dimmed. `parsed` holds the
+    /// reply's Markdown once drawn, so it is parsed once rather than every frame; it is cleared
+    /// whenever more text arrives and goes with the item when old items are dropped.
     Agent {
         thought: bool,
         text: String,
+        parsed: std::cell::OnceCell<Vec<craft_agents::markdown::Block>>,
     },
     Tool {
         id: String,
@@ -448,6 +451,7 @@ impl Chat {
                     self.state = State::Ready;
                 }
             }
+            Event::SetupFailed(reason) => self.state = State::Failed(format!("The agent could not start a session: {reason}")),
             Event::Error(error) => self.push(Item::Notice(error)),
             Event::Exited { tail } => {
                 let reason = tail.last().cloned().unwrap_or_else(|| "The agent stopped.".to_owned());
@@ -460,15 +464,16 @@ impl Chat {
 
     /// Append streamed text to the agent's current reply or thought, or start a new one.
     fn stream(&mut self, thought: bool, text: &str) {
-        if let Some(Item::Agent { thought: current, text: reply }) = self.items.last_mut()
+        if let Some(Item::Agent { thought: current, text: reply, parsed }) = self.items.last_mut()
             && *current == thought
         {
             if reply.len() + text.len() <= MAX_TEXT {
                 reply.push_str(text);
+                parsed.take();
             }
             return;
         }
-        self.push(Item::Agent { thought, text: text.chars().take(MAX_TEXT).collect() });
+        self.push(Item::Agent { thought, text: text.chars().take(MAX_TEXT).collect(), parsed: Default::default() });
     }
 
     /// Record a new tool call or update one already shown.
@@ -635,6 +640,24 @@ mod tests {
             assert_eq!(run(Mode::All, command), Verdict::Run, "{command}");
         }
         assert_eq!(gate(Mode::Ask, "engine.execute", Some("file.save"), |command| command == "file.save"), Verdict::Run);
+    }
+
+    /// A reply's parsed Markdown is kept until more of it streams in, so drawing doesn't reparse it.
+    #[test]
+    fn streamed_text_clears_the_parsed_reply() {
+        let mut chat = Chat::default();
+        chat.stream(false, "**Hello**");
+        let parsed = |chat: &Chat| match chat.items.last() {
+            Some(Item::Agent { parsed, .. }) => parsed.get().cloned(),
+            _ => None,
+        };
+        if let Some(Item::Agent { text, parsed, .. }) = chat.items.last() {
+            parsed.get_or_init(|| craft_agents::markdown::parse(text));
+        }
+        assert!(parsed(&chat).is_some());
+        chat.stream(false, " world");
+        assert_eq!(parsed(&chat), None, "new text is parsed again when drawn");
+        assert!(matches!(chat.items.as_slice(), [Item::Agent { text, .. }] if text == "**Hello** world"));
     }
 
     /// The token file holds the secret, is the user's alone and goes when its folder is dropped.

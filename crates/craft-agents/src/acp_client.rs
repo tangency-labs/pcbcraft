@@ -171,7 +171,7 @@ impl AcpBackend {
                         {
                             out.push(Event::ConfigOptionFinished { id: config_id, result: Err(message.clone()) });
                         }
-                        let auth = code == acp::AUTH_REQUIRED || message.to_ascii_lowercase().contains("auth");
+                        let auth = acp::needs_sign_in(code, &message);
                         if auth {
                             self.session = None;
                             self.modern_config = false;
@@ -183,6 +183,8 @@ impl AcpBackend {
                             out.push(Event::AuthRequired { methods: self.auth.clone() });
                         } else if what == Pending::SetModel {
                             out.push(Event::ModelRejected(message));
+                        } else if matches!(what, Pending::Initialize | Pending::SessionNew) {
+                            out.push(Event::SetupFailed(message));
                         } else if !config_error {
                             if what == Pending::Prompt {
                                 out.push(Event::TurnEnded { reason: "error".into() });
@@ -342,13 +344,7 @@ pub fn test_agent(argv: &[String], cwd: &std::path::Path) -> Result<String, Test
                     if let Some(Incoming::Reply { id: got, result }) = acp::parse(&l)
                         && got == id
                     {
-                        return result.map_err(|(code, m)| {
-                            if code == acp::AUTH_REQUIRED || m.to_ascii_lowercase().contains("auth") {
-                                TestError::AuthRequired
-                            } else {
-                                TestError::Other(m)
-                            }
-                        });
+                        return result.map_err(|(code, m)| if acp::needs_sign_in(code, &m) { TestError::AuthRequired } else { TestError::Other(m) });
                     }
                 }
                 Ok(FromAgent::Exited(tail)) => {
@@ -508,5 +504,24 @@ mod tests {
         backend.handle(Incoming::Reply { id: backend.next_id, result: Err((acp::AUTH_REQUIRED, "sign in".into())) }, &mut events);
         assert!(matches!(events.as_slice(), [Event::AuthRequired { .. }]), "{events:?}");
         backend.shutdown(true);
+    }
+
+    /// An agent that refuses the handshake for another reason fails setup, so the panel can offer
+    /// Retry, while an error that only mentions an author is no sign-in request.
+    #[test]
+    fn a_refused_handshake_fails_setup() {
+        for (id, reply) in [(1, Err((-32603, "Unknown author in config".to_owned()))), (2, Err((-32603, "no workspace".to_owned())))] {
+            let ctx = StartContext { cwd: std::env::temp_dir(), bridge: None, tools: None, wake: Box::new(|| {}) };
+            let mut backend = AcpBackend::start(&["sh".into(), "-c".into(), "cat >/dev/null".into()], ctx).unwrap();
+            let mut events = Vec::new();
+            if id == 2 {
+                backend.handle(Incoming::Reply { id: 1, result: Ok(json!({"agentInfo":{"name":"fake"}})) }, &mut events);
+                events.clear();
+            }
+            let expected = reply.clone().err().map(|(_, message)| message);
+            backend.handle(Incoming::Reply { id, result: reply.map(|()| Value::Null) }, &mut events);
+            assert!(matches!(events.as_slice(), [Event::SetupFailed(message)] if Some(message) == expected.as_ref()), "{events:?}");
+            backend.shutdown(true);
+        }
     }
 }

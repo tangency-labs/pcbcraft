@@ -193,9 +193,73 @@ fn list_item(t: &str) -> Option<(bool, u64, &str)> {
     None
 }
 
+/// For each position `j` of `c` (and its end), the first position at or after `j` where `at`
+/// holds, or `usize::MAX`: one pass, so every opener finds its closer in constant time.
+fn next_where(c: &[char], at: impl Fn(usize) -> bool) -> Vec<usize> {
+    let mut next = vec![usize::MAX; c.len() + 1];
+    for j in (0..c.len()).rev() {
+        next[j] = if at(j) { j } else { next[j + 1] };
+    }
+    next
+}
+
+/// Where each closer `spans` looks for is, computed once per paragraph so that unclosed
+/// openers (`*a *a …`, `[[[…`) cost linear rather than quadratic time.
+struct Closers {
+    /// `**` and `__` pairs.
+    bold: [Vec<usize>; 2],
+    /// A `*` or `_` that can end an italic span.
+    italic: [Vec<usize>; 2],
+    bracket: Vec<usize>,
+    paren: Vec<usize>,
+    /// The start of every maximal run of backticks, by run length.
+    ticks: std::collections::HashMap<usize, Vec<usize>>,
+}
+
+impl Closers {
+    fn new(c: &[char]) -> Self {
+        let pair = |d: char| next_where(c, |j| c[j] == d && c.get(j + 1) == Some(&d));
+        let italic = |d: char| {
+            next_where(c, |j| c[j] == d && j > 0 && !c[j - 1].is_whitespace() && (d == '*' || c.get(j + 1).is_none_or(|n| !n.is_alphanumeric())))
+        };
+        let mut ticks: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+        let mut j = 0;
+        while j < c.len() {
+            let run = c[j..].iter().take_while(|x| **x == '`').count();
+            if run > 0 {
+                ticks.entry(run).or_default().push(j);
+            }
+            j += run.max(1);
+        }
+        Self {
+            bold: [pair('*'), pair('_')],
+            italic: [italic('*'), italic('_')],
+            bracket: next_where(c, |j| c[j] == ']'),
+            paren: next_where(c, |j| c[j] == ')'),
+            ticks,
+        }
+    }
+
+    fn index(d: char) -> usize {
+        usize::from(d == '_')
+    }
+
+    /// The first position at or after `from` in a [`next_where`] table.
+    fn at(table: &[usize], from: usize) -> Option<usize> {
+        table.get(from).copied().filter(|j| *j != usize::MAX)
+    }
+
+    /// The start of the next run of exactly `n` backticks at or after `from`.
+    fn run(&self, from: usize, n: usize) -> Option<usize> {
+        let starts = self.ticks.get(&n)?;
+        starts.get(starts.partition_point(|start| *start < from)).copied()
+    }
+}
+
 /// Inline spans of `s`.
 pub fn spans(s: &str) -> Vec<Span> {
     let c: Vec<char> = s.chars().collect();
+    let closers = Closers::new(&c);
     let mut out: Vec<Span> = Vec::new();
     let mut text = String::new();
     let mut i = 0;
@@ -209,7 +273,7 @@ pub fn spans(s: &str) -> Vec<Span> {
         // Inline code.
         if c[i] == '`' {
             let n = rest.iter().take_while(|x| **x == '`').count();
-            if let Some(end) = find_run(&c, i + n, '`', n) {
+            if let Some(end) = closers.run(i + n, n) {
                 flush(&mut out, &mut text);
                 out.push(Span::Code(c[i + n..end].iter().collect::<String>().trim().to_string()));
                 i = end + n;
@@ -219,7 +283,7 @@ pub fn spans(s: &str) -> Vec<Span> {
         // Bold.
         if (rest.starts_with(&['*', '*']) || rest.starts_with(&['_', '_'])) && rest.len() > 4 {
             let d = c[i];
-            if let Some(end) = find_pair(&c, i + 2, d)
+            if let Some(end) = Closers::at(&closers.bold[Closers::index(d)], i + 2)
                 && end > i + 2
             {
                 flush(&mut out, &mut text);
@@ -231,8 +295,7 @@ pub fn spans(s: &str) -> Vec<Span> {
         // Italic (not inside words for `_`, so snake_case stays text).
         if (c[i] == '*' || (c[i] == '_' && (i == 0 || !c[i - 1].is_alphanumeric()))) && rest.len() > 2 && !rest[1].is_whitespace() {
             let d = c[i];
-            let closes = |j: &usize| c[*j] == d && !c[*j - 1].is_whitespace() && (d == '*' || c.get(*j + 1).is_none_or(|n| !n.is_alphanumeric()));
-            if let Some(end) = (i + 1..c.len()).find(closes)
+            if let Some(end) = Closers::at(&closers.italic[Closers::index(d)], i + 1)
                 && end > i + 1
             {
                 flush(&mut out, &mut text);
@@ -243,9 +306,9 @@ pub fn spans(s: &str) -> Vec<Span> {
         }
         // Link.
         if c[i] == '['
-            && let Some(close) = c[i + 1..].iter().position(|x| *x == ']').map(|p| p + i + 1)
+            && let Some(close) = Closers::at(&closers.bracket, i + 1)
             && c.get(close + 1) == Some(&'(')
-            && let Some(end) = c[close + 2..].iter().position(|x| *x == ')').map(|p| p + close + 2)
+            && let Some(end) = Closers::at(&closers.paren, close + 2)
         {
             let label: String = c[i + 1..close].iter().collect();
             let url: String = c[close + 2..end].iter().collect::<String>().trim().to_string();
@@ -271,27 +334,6 @@ pub fn spans(s: &str) -> Vec<Span> {
     }
     flush(&mut out, &mut text);
     out
-}
-
-/// The index of the next run of exactly `n` `ch` at or after `from`.
-fn find_run(c: &[char], from: usize, ch: char, n: usize) -> Option<usize> {
-    let mut j = from;
-    while j < c.len() {
-        if c[j] == ch {
-            let run = c[j..].iter().take_while(|x| **x == ch).count();
-            if run == n {
-                return Some(j);
-            }
-            j += run;
-        } else {
-            j += 1;
-        }
-    }
-    None
-}
-
-fn find_pair(c: &[char], from: usize, d: char) -> Option<usize> {
-    (from..c.len().saturating_sub(1)).find(|&j| c[j] == d && c[j + 1] == d)
 }
 
 /// The plain text of spans, for copying and for exports.
@@ -386,6 +428,141 @@ mod tests {
         let _ = parse(&nested);
         let _ = parse(&"[".repeat(100_000));
         let _ = parse(&"`a".repeat(50_000));
+    }
+
+    /// Unclosed openers in one long paragraph cost linear time: each `*`, `_`, `[` or backtick
+    /// run that never closes once scanned the rest of the paragraph.
+    #[test]
+    fn unclosed_openers_take_linear_time() {
+        let start = std::time::Instant::now();
+        for hostile in ["*a ".repeat(80_000), "_a ".repeat(80_000), "[".repeat(200_000), "[a](".repeat(50_000)] {
+            let parsed = spans(&hostile);
+            assert_eq!(plain(&parsed).chars().count(), hostile.chars().count(), "nothing closes, so it all stays text");
+        }
+        let decreasing: String = (1..=600).rev().map(|n| "`".repeat(n) + "a").collect();
+        let _ = spans(&decreasing);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
+    }
+
+    /// The linear matcher finds exactly the spans the previous one did.
+    #[test]
+    fn linear_spans_match_the_reference() {
+        let mut seed = 0x9e37_79b9_u32;
+        let alphabet: Vec<char> = "*_`[]() \\ab1ä".chars().collect();
+        for _ in 0..3000 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let len = (seed >> 24) as usize % 60;
+            let mut s = String::new();
+            for _ in 0..len {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                s.push(alphabet[(seed >> 16) as usize % alphabet.len()]);
+            }
+            assert_eq!(spans(&s), reference_spans(&s), "{s:?}");
+        }
+        for s in ["**a** *b* _c_ snake_case `d` ``e`` [f](https://g.h) [i](j) \\*k*", "``a` b``c`", "*a **b** c*", "__a_b__"] {
+            assert_eq!(spans(s), reference_spans(s), "{s:?}");
+        }
+    }
+
+    /// The previous, quadratic matcher: the reference the linear one must agree with.
+    fn reference_spans(s: &str) -> Vec<Span> {
+        let c: Vec<char> = s.chars().collect();
+        let mut out: Vec<Span> = Vec::new();
+        let mut text = String::new();
+        let mut i = 0;
+        fn flush(out: &mut Vec<Span>, text: &mut String) {
+            if !text.is_empty() {
+                out.push(Span::Text(std::mem::take(text)));
+            }
+        }
+        while i < c.len() {
+            let rest = &c[i..];
+            // Inline code.
+            if c[i] == '`' {
+                let n = rest.iter().take_while(|x| **x == '`').count();
+                if let Some(end) = find_run(&c, i + n, '`', n) {
+                    flush(&mut out, &mut text);
+                    out.push(Span::Code(c[i + n..end].iter().collect::<String>().trim().to_string()));
+                    i = end + n;
+                    continue;
+                }
+            }
+            // Bold.
+            if (rest.starts_with(&['*', '*']) || rest.starts_with(&['_', '_'])) && rest.len() > 4 {
+                let d = c[i];
+                if let Some(end) = find_pair(&c, i + 2, d)
+                    && end > i + 2
+                {
+                    flush(&mut out, &mut text);
+                    out.push(Span::Bold(c[i + 2..end].iter().collect()));
+                    i = end + 2;
+                    continue;
+                }
+            }
+            // Italic (not inside words for `_`, so snake_case stays text).
+            if (c[i] == '*' || (c[i] == '_' && (i == 0 || !c[i - 1].is_alphanumeric()))) && rest.len() > 2 && !rest[1].is_whitespace() {
+                let d = c[i];
+                let closes = |j: &usize| c[*j] == d && !c[*j - 1].is_whitespace() && (d == '*' || c.get(*j + 1).is_none_or(|n| !n.is_alphanumeric()));
+                if let Some(end) = (i + 1..c.len()).find(closes)
+                    && end > i + 1
+                {
+                    flush(&mut out, &mut text);
+                    out.push(Span::Italic(c[i + 1..end].iter().collect()));
+                    i = end + 1;
+                    continue;
+                }
+            }
+            // Link.
+            if c[i] == '['
+                && let Some(close) = c[i + 1..].iter().position(|x| *x == ']').map(|p| p + i + 1)
+                && c.get(close + 1) == Some(&'(')
+                && let Some(end) = c[close + 2..].iter().position(|x| *x == ')').map(|p| p + close + 2)
+            {
+                let label: String = c[i + 1..close].iter().collect();
+                let url: String = c[close + 2..end].iter().collect::<String>().trim().to_string();
+                flush(&mut out, &mut text);
+                let lower = url.to_ascii_lowercase();
+                let web = lower.starts_with("https://") || lower.starts_with("http://");
+                if web && url.len() <= MAX_URL && !url.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+                    out.push(Span::Link { label, url });
+                } else {
+                    out.push(Span::Text(label));
+                }
+                i = end + 1;
+                continue;
+            }
+            // A backslash escapes the next marker.
+            if c[i] == '\\' && c.get(i + 1).is_some_and(|n| "\\`*_[]()#-".contains(*n)) {
+                text.push(c[i + 1]);
+                i += 2;
+                continue;
+            }
+            text.push(c[i]);
+            i += 1;
+        }
+        flush(&mut out, &mut text);
+        out
+    }
+
+    /// The index of the next run of exactly `n` `ch` at or after `from`.
+    fn find_run(c: &[char], from: usize, ch: char, n: usize) -> Option<usize> {
+        let mut j = from;
+        while j < c.len() {
+            if c[j] == ch {
+                let run = c[j..].iter().take_while(|x| **x == ch).count();
+                if run == n {
+                    return Some(j);
+                }
+                j += run;
+            } else {
+                j += 1;
+            }
+        }
+        None
+    }
+
+    fn find_pair(c: &[char], from: usize, d: char) -> Option<usize> {
+        (from..c.len().saturating_sub(1)).find(|&j| c[j] == d && c[j + 1] == d)
     }
 
     #[test]

@@ -668,6 +668,8 @@ pub struct ApiBackend {
 }
 
 impl ApiBackend {
+    /// Start talking to the endpoint `cfg` names, with the MCP bridge as its tools when `ctx`
+    /// has one. Refuses a key for an endpoint it may not go to (plain HTTP to another computer).
     pub fn start(cfg: ApiConfig, ctx: StartContext) -> Result<ApiBackend, String> {
         if cfg.key.is_some() && !super::agents::key_safe_for(&cfg.base_url) {
             return Err(crate::i18n::tr("ui.ai_key_needs_https").to_string());
