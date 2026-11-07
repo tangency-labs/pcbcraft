@@ -10,7 +10,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, channel, sync_channel};
 use std::time::{Duration, Instant};
 
 #[cfg(unix)]
@@ -22,15 +22,23 @@ use nix::unistd::Pid;
 const MAX_LINE: usize = 8 << 20;
 /// Lines of the agent's stderr kept to explain a failed start.
 const STDERR_LINES: usize = 40;
+/// Longest stderr line read, in bytes: room for the 400 characters kept of each.
+const MAX_STDERR_LINE: usize = 1600;
+/// Lines read ahead of the panel. When the panel falls behind, the reader waits, and so does an
+/// agent that keeps writing, instead of the queue growing without end.
+const QUEUE: usize = 256;
 /// How long an agent gets to end by itself once its input is closed, and then once asked to stop.
 const GRACE: Duration = Duration::from_millis(1200);
 
+/// What the agent's stdout reader hands the panel.
 pub enum FromAgent {
+    /// One complete line (oversized lines are skipped).
     Line(String),
     /// stdout closed: the agent ended. Its last stderr lines, for the panel.
     Exited(Vec<String>),
 }
 
+/// A running agent: its process, a channel to its stdin and the lines read from its stdout.
 pub struct AgentProcess {
     child: ProcessHandle,
     to_agent: Option<Sender<String>>,
@@ -144,6 +152,39 @@ fn end_tree(mut child: Child) {
     let _ = child.wait();
 }
 
+/// Read one line of at most `max` bytes, its newline not counted, holding no more than that in
+/// memory. A longer line is skipped to its end without being buffered: `keep_start` returns its
+/// first `max` bytes, otherwise it comes back empty. `None` at the end of input or on an error.
+fn read_line(reader: &mut impl BufRead, max: usize, keep_start: bool) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    match reader.take(max as u64 + 1).read_until(b'\n', &mut buf) {
+        Ok(0) | Err(_) => None,
+        // `max` bytes and the newline: a complete line, not an oversized one.
+        Ok(_) if buf.len() <= max || buf.ends_with(b"\n") => Some(buf),
+        Ok(_) => {
+            skip_line(reader).ok()?;
+            buf.truncate(max);
+            Some(if keep_start { buf } else { Vec::new() })
+        }
+    }
+}
+
+/// Discard input up to and including the next newline, a buffer at a time.
+fn skip_line(reader: &mut impl BufRead) -> std::io::Result<()> {
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(());
+        }
+        let newline = available.iter().position(|&b| b == b'\n');
+        let used = newline.map_or(available.len(), |end| end + 1);
+        reader.consume(used);
+        if newline.is_some() {
+            return Ok(());
+        }
+    }
+}
+
 impl AgentProcess {
     /// Start `argv` (program first) in `cwd`; `wake` is called whenever a line arrives.
     /// `env_remove`: variables the agent must not inherit.
@@ -177,37 +218,30 @@ impl AgentProcess {
         let tail = std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::<String>::new()));
         let tail_w = tail.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let mut reader = BufReader::new(stderr);
+            // A long line keeps its first part: the 400 characters shown of it.
+            while let Some(line) = read_line(&mut reader, MAX_STDERR_LINE, true) {
                 if let Ok(mut t) = tail_w.lock() {
                     if t.len() >= STDERR_LINES {
                         t.pop_front();
                     }
-                    t.push_back(line.chars().take(400).collect());
+                    t.push_back(String::from_utf8_lossy(&line).trim_end_matches(['\r', '\n']).chars().take(400).collect());
                 }
             }
         });
-        let (tx, from_agent) = channel::<FromAgent>();
+        let (tx, from_agent) = sync_channel::<FromAgent>(QUEUE);
         let wake = std::sync::Arc::new(wake);
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
-            loop {
-                let mut buf = Vec::new();
-                match (&mut reader).take(MAX_LINE as u64 + 1).read_until(b'\n', &mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) if buf.len() > MAX_LINE => {
-                        // Skip the rest of an oversized line.
-                        let mut rest = Vec::new();
-                        if reader.read_until(b'\n', &mut rest).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(_) => {
-                        if tx.send(FromAgent::Line(String::from_utf8_lossy(&buf).into_owned())).is_err() {
-                            return;
-                        }
-                        wake();
-                    }
+            // A protocol message cut short is no message, so an oversized line is skipped whole.
+            while let Some(line) = read_line(&mut reader, MAX_LINE, false) {
+                if line.is_empty() {
+                    continue;
                 }
+                if tx.send(FromAgent::Line(String::from_utf8_lossy(&line).into_owned())).is_err() {
+                    return;
+                }
+                wake();
             }
             // Give stderr a moment to deliver the agent's last words.
             std::thread::sleep(Duration::from_millis(100));
@@ -314,5 +348,22 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(!alive(helper) && !alive(leader), "leader {leader} or helper {helper} still running");
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    /// A line of exactly the limit is kept; a longer one is skipped without taking the next line
+    /// with it, or kept as its first part where asked; unterminated input ends cleanly.
+    #[test]
+    fn lines_are_read_within_their_limit() {
+        let input = format!("{}\n{}\nnext\n{}", "a".repeat(8), "b".repeat(20), "c".repeat(30));
+        let mut reader = std::io::Cursor::new(input.clone().into_bytes());
+        let lines: Vec<Vec<u8>> = std::iter::from_fn(|| super::read_line(&mut reader, 8, false)).collect();
+        assert_eq!(lines, [b"aaaaaaaa\n".to_vec(), Vec::new(), b"next\n".to_vec(), Vec::new()]);
+        let mut reader = std::io::Cursor::new(input.into_bytes());
+        let kept: Vec<Vec<u8>> = std::iter::from_fn(|| super::read_line(&mut reader, 8, true)).collect();
+        assert_eq!(kept[1], b"bbbbbbbb".to_vec());
+        assert_eq!(kept[3], b"cccccccc".to_vec());
     }
 }

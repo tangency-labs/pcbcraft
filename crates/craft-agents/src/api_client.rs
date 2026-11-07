@@ -34,11 +34,12 @@ const MAX_HISTORY_IMAGES: usize = 2;
 /// What an older view becomes in the history.
 const DROPPED_VIEW_NOTE: &str = "[an earlier picture of the view, removed to keep the request small]";
 const DROPPED_THINKING_NOTE: &str = "[earlier reasoning, removed with older history]";
-/// How long one tool call may take (it may wait for the user's Allow, declined after four
-/// minutes). It does not depend on the endpoint's request timeout: a tool call is PCBCraft's own
-/// work and the user's answer, never a wait for the model, so a longer request timeout does not
-/// need a longer tool timeout.
-const TOOL_TIMEOUT: Duration = Duration::from_secs(330);
+/// How long one tool call may take (it may wait for the user's Allow, declined after
+/// [`super::acp::APPROVAL_WAIT_S`]): longer than the bridge's own wait, so the bridge's answer,
+/// a decline included, always arrives first. It does not depend on the endpoint's request
+/// timeout: a tool call is PCBCraft's own work and the user's answer, never a wait for the model.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(super::acp::BRIDGE_WAIT_S + 30);
+const _: () = assert!(TOOL_TIMEOUT.as_secs() > super::acp::BRIDGE_WAIT_S);
 /// How often a waiting request or tool call looks at the cancel flag.
 const CANCEL_POLL: Duration = Duration::from_millis(40);
 /// The Anthropic Messages API requires `max_tokens`; it caps one answer, which is plenty for a
@@ -638,6 +639,7 @@ fn go_gemini_signatures(body: &Value) -> Vec<Option<String>> {
         .unwrap_or_default()
 }
 
+/// The endpoint a model chat talks to, and how.
 pub struct ApiConfig {
     pub name: String,
     pub protocol: Protocol,
@@ -661,6 +663,8 @@ enum Cmd {
     SetReasoningEffort(String),
 }
 
+/// A chat backend that talks to a model endpoint itself and runs the tool loop, with the MCP
+/// bridge as its tools.
 pub struct ApiBackend {
     cmds: Option<Sender<Cmd>>,
     events: Receiver<Event>,

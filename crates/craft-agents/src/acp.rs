@@ -208,8 +208,15 @@ pub struct McpBridge {
     pub token_file: std::path::PathBuf,
 }
 
-/// How long a tool call may wait for the person to allow it, in seconds.
-pub const BRIDGE_WAIT_S: u64 = 600;
+/// How long a held tool call waits for the person's Allow before the chat declines it, in
+/// seconds: SolidCraft's four minutes. Each wait after this one outlasts the one before, so the
+/// decline reaches the agent as an answer, never as a lost connection.
+pub const APPROVAL_WAIT_S: u64 = 240;
+/// How long the chat's endpoint keeps each request open for its reply, in seconds.
+pub const ENDPOINT_WAIT_S: u64 = 270;
+/// How long the bridge (`pcbcraft-cli --wait`) waits for each reply, in seconds.
+pub const BRIDGE_WAIT_S: u64 = 300;
+const _: () = assert!(APPROVAL_WAIT_S < ENDPOINT_WAIT_S && ENDPOINT_WAIT_S < BRIDGE_WAIT_S);
 
 impl McpBridge {
     /// The bridge's arguments after its program.
@@ -397,6 +404,7 @@ pub struct AuthMethod {
     pub kind: AuthKind,
 }
 
+/// How a sign-in method works.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuthKind {
     /// The agent signs in by itself when asked (`authenticate`), e.g. by opening a browser.
@@ -811,7 +819,7 @@ mod tests {
         let p = session_new_params(std::path::Path::new("/home/u/designs"), Some(&b), &json!({}));
         let s = &p["mcpServers"][0];
         assert_eq!(s["name"], BRIDGE_NAME);
-        assert_eq!(s["args"], json!(["mcp", "--connect", "41234", "--token-file", "/run/u/pcbcraft-control-x/41234.token", "--wait", "600"]));
+        assert_eq!(s["args"], json!(["mcp", "--connect", "41234", "--token-file", "/run/u/pcbcraft-control-x/41234.token", "--wait", "300"]));
         assert_eq!(s["env"], json!([]), "nothing secret, and nothing WSL would drop, goes in the environment");
         let text = p.to_string();
         assert!(!text.contains("allow-any-path"), "{text}");
@@ -876,7 +884,7 @@ mod tests {
         let p = session_new_params(&wsl_path(std::path::Path::new(r"C:\Users\u\work")), Some(&b.in_wsl()), &json!({}));
         assert_eq!(p["cwd"], "/mnt/c/Users/u/work");
         assert_eq!(p["mcpServers"][0]["command"], "/mnt/c/Program Files/PCBCraft/pcbcraft-cli.exe");
-        assert_eq!(p["mcpServers"][0]["args"], json!(["mcp", "--connect", "41234", "--token-file", token_file, "--wait", "600"]));
+        assert_eq!(p["mcpServers"][0]["args"], json!(["mcp", "--connect", "41234", "--token-file", token_file, "--wait", "300"]));
     }
 
     #[test]

@@ -148,6 +148,7 @@ pub const KNOWN: &[Known] = &[
     },
 ];
 
+/// What discovery can tell about an agent's login without starting it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Login {
     /// Its credentials file is there.
@@ -180,6 +181,7 @@ pub struct Missing {
     pub install: &'static str,
 }
 
+/// An installed agent that discovery found.
 #[derive(Clone, Debug)]
 pub struct Found {
     pub id: &'static str,
@@ -195,6 +197,7 @@ pub struct Found {
     pub install: &'static str,
 }
 
+/// What one discovery run found: installed agents, known ones missing, and how long it took.
 #[derive(Clone, Debug, Default)]
 pub struct Detection {
     pub found: Vec<Found>,

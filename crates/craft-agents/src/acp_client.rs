@@ -24,11 +24,16 @@ enum Pending {
 
 /// Give a cancelled prompt time to finish before disconnecting an unresponsive agent.
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
+/// How long the agent may take to answer `initialize` or `session/new` before setup fails and
+/// the panel offers Retry. Signing in (`authenticate`), which waits for the person, has no limit.
+const SETUP_LIMIT: Duration = Duration::from_secs(120);
 
 /// Variables the agent doesn't inherit: a control token set for the app's own `--control` port
 /// would otherwise reach the agent and outrank the chat endpoint's own token file.
 const ENV_REMOVE: &[&str] = &["PCBCRAFT_CONTROL_TOKEN"];
 
+/// A chat backend that drives an installed agent over the Agent Client Protocol, as a child
+/// process speaking JSON-RPC on its stdin and stdout.
 pub struct AcpBackend {
     proc: AgentProcess,
     cwd: std::path::PathBuf,
@@ -49,6 +54,8 @@ pub struct AcpBackend {
     exited: bool,
     config_pending: Option<(u64, String)>,
     modern_config: bool,
+    /// When the `initialize` or `session/new` request waiting for its reply was sent.
+    setup_since: Option<Instant>,
 }
 
 impl AcpBackend {
@@ -77,12 +84,17 @@ impl AcpBackend {
             exited: false,
             config_pending: None,
             modern_config: false,
+            setup_since: None,
         };
         b.request(Pending::Initialize, "initialize", acp::initialize_params(env!("CARGO_PKG_VERSION")));
         Ok(b)
     }
 
+    /// Send a request and remember what its reply answers; a setup request starts the setup clock.
     fn request(&mut self, what: Pending, method: &str, params: Value) {
+        if matches!(what, Pending::Initialize | Pending::SessionNew) {
+            self.setup_since = Some(Instant::now());
+        }
         self.next_id += 1;
         self.pending.insert(self.next_id, what);
         self.proc.send(&acp::request(self.next_id, method, params));
@@ -100,6 +112,9 @@ impl AcpBackend {
         match msg {
             Incoming::Reply { id, result } => {
                 let Some(what) = self.pending.remove(&id) else { return };
+                if matches!(what, Pending::Initialize | Pending::SessionNew) {
+                    self.setup_since = None;
+                }
                 if self.cancelling.is_some_and(|(request, _)| request == id) {
                     self.cancelling = None;
                 }
@@ -139,7 +154,7 @@ impl AcpBackend {
                             out.push(Event::Documents(self.documents));
                             out.push(Event::Ready { agent: self.agent.clone(), images: self.images });
                         }
-                        None => out.push(Event::Error("session/new: no sessionId".into())),
+                        None => out.push(Event::SetupFailed("the agent opened no session (its reply had no sessionId)".into())),
                     },
                     (Pending::Prompt, Ok(v)) => {
                         let reason = v.get("stopReason").and_then(Value::as_str).unwrap_or("");
@@ -186,6 +201,10 @@ impl AcpBackend {
                             out.push(Event::ModelRejected(message));
                         } else if matches!(what, Pending::Initialize | Pending::SessionNew) {
                             out.push(Event::SetupFailed(message));
+                        } else if what == Pending::Authenticate {
+                            // The agent still runs: offer its sign-in methods again, with the reason.
+                            out.push(Event::Error(format!("Sign-in failed: {message}")));
+                            out.push(Event::AuthRequired { methods: self.auth.clone() });
                         } else if !config_error {
                             if what == Pending::Prompt {
                                 out.push(Event::TurnEnded { reason: "error".into() });
@@ -246,7 +265,12 @@ impl AcpBackend {
                 Err(_) => break,
             }
         }
-        // Drain replies first: an acknowledgement already waiting must keep the connection.
+        // Drain replies first: a setup reply or acknowledgement already waiting counts.
+        if self.setup_since.is_some_and(|since| now.saturating_duration_since(since) >= SETUP_LIMIT) {
+            self.setup_since = None;
+            self.pending.retain(|_, request| !matches!(request, Pending::Initialize | Pending::SessionNew));
+            out.push(Event::SetupFailed(format!("the agent didn't answer within {} seconds", SETUP_LIMIT.as_secs())));
+        }
         if self.cancelling.is_some_and(|(_, started)| now.saturating_duration_since(started) >= CANCEL_GRACE) {
             self.proc.shutdown(false);
             out.push(self.finish_exit(vec![crate::i18n::tr("ui.agent_chat_cancel_timeout").to_string()]));
@@ -518,6 +542,44 @@ mod tests {
         backend.set_model("zzz");
         backend.handle(Incoming::Reply { id: backend.next_id, result: Err((acp::AUTH_REQUIRED, "sign in".into())) }, &mut events);
         assert!(matches!(events.as_slice(), [Event::AuthRequired { .. }]), "{events:?}");
+        backend.shutdown(true);
+    }
+
+    /// Setup that can't finish fails, so the panel offers Retry: a session reply without an ID, or
+    /// an agent silent past the setup limit. A failed sign-in offers the methods again instead,
+    /// since the agent still runs.
+    #[test]
+    fn setup_that_cannot_finish_fails_and_a_failed_sign_in_asks_again() {
+        let start = || {
+            let ctx = StartContext { cwd: std::env::temp_dir(), bridge: None, tools: None, wake: Box::new(|| {}) };
+            AcpBackend::start(&["sh".into(), "-c".into(), "cat >/dev/null".into()], ctx).unwrap()
+        };
+        let mut backend = start();
+        let mut events = Vec::new();
+        backend.handle(Incoming::Reply { id: 1, result: Ok(json!({"agentInfo":{"name":"fake"}})) }, &mut events);
+        backend.handle(Incoming::Reply { id: 2, result: Ok(json!({})) }, &mut events);
+        assert!(matches!(events.as_slice(), [Event::SetupFailed(_)]), "{events:?}");
+        backend.shutdown(true);
+
+        let mut backend = start();
+        assert!(backend.poll_at(Instant::now() + SETUP_LIMIT / 2).is_empty());
+        let late = backend.poll_at(Instant::now() + SETUP_LIMIT + Duration::from_secs(1));
+        assert!(matches!(late.as_slice(), [Event::SetupFailed(reason)] if reason.contains("didn't answer")), "{late:?}");
+        assert!(backend.poll_at(Instant::now() + SETUP_LIMIT * 3).is_empty(), "it fails once");
+        backend.shutdown(true);
+
+        let mut backend = start();
+        let mut events = Vec::new();
+        backend.handle(Incoming::Reply { id: 1, result: Ok(json!({"agentInfo":{"name":"fake"}})) }, &mut events);
+        backend.handle(Incoming::Reply { id: 2, result: Err((acp::AUTH_REQUIRED, "sign in".into())) }, &mut events);
+        events.clear();
+        backend.authenticate("browser");
+        backend.handle(Incoming::Reply { id: backend.next_id, result: Err((-32603, "the browser could not open".into())) }, &mut events);
+        assert!(
+            matches!(events.as_slice(), [Event::Error(message), Event::AuthRequired { .. }] if message.contains("browser could not open")),
+            "{events:?}"
+        );
+        assert!(backend.poll_at(Instant::now() + SETUP_LIMIT * 3).is_empty(), "signing in has no time limit");
         backend.shutdown(true);
     }
 

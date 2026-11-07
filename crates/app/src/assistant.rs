@@ -225,6 +225,9 @@ impl Assistant {
         }
         self.poll_jobs();
         self.chat.poll(self.mode());
+        if let Some(due) = self.chat.next_expiry() {
+            ctx.request_repaint_after(due);
+        }
         self.restore_model();
         if self.connect_on_first_frame && self.detection.is_some() {
             self.connect_on_first_frame = false;
@@ -699,7 +702,13 @@ impl Assistant {
                 ui.label(pcbcraft_chrome::shell::error(error));
             }
             State::SignIn(methods) => {
-                ui.label("Sign in to continue.");
+                ui.horizontal(|ui| {
+                    ui.label("Sign in to continue.");
+                    // A terminal or environment sign-in happens outside; the agent restarts to see it.
+                    if ui.button("Retry").on_hover_text("Restart the agent after signing in elsewhere").clicked() {
+                        self.connect(ui.ctx());
+                    }
+                });
                 ui.horizontal_wrapped(|ui| {
                     for method in methods {
                         match &method.kind {
@@ -847,9 +856,12 @@ fn test_endpoint(entry: &Entry, protocol: craft_agents::agents::Protocol) -> Res
 fn conversation_item(ui: &mut Ui, item: &Item, agent: &str) {
     match item {
         Item::User(text) => chrome::user_bubble(ui, text),
-        Item::Agent { thought: false, text, parsed } => {
+        Item::Agent { thought: false, text, parsed, cut } => {
             ui.strong(agent);
             markdown_view(ui, parsed.get_or_init(|| markdown::parse(text)));
+            if *cut {
+                ui.label(dim("The rest of this reply was dropped: it passed 64 KiB."));
+            }
         }
         Item::Agent { thought: true, text, .. } => {
             ui.label(dim(text.chars().take(MAX_TOOL_DETAIL).collect::<String>()));
@@ -1236,6 +1248,50 @@ mod chat_tests {
         push(&script, Event::TurnEnded { reason: "end_turn".to_owned() });
         harness.run();
         assert_eq!(harness.state().assistant.chat.state, State::Ready);
+        Ok(())
+    }
+
+    /// A held tool call nobody answers is declined before any connection gives up: the agent
+    /// hears that the command did not run, the card goes and nothing changes.
+    #[test]
+    fn an_unanswered_tool_call_is_declined_with_an_answer() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, _script, endpoint) = harness_with_agent()?;
+        let unsaved = harness.state().files.dirty(&harness.state().session);
+        let result = thread::scope(|scope| {
+            let request = json!({"command": "file.save", "params": {}, "inspect": false});
+            let endpoint = &endpoint;
+            let worker = scope.spawn(move || {
+                let mut remote = Remote::from_token_file(endpoint.0, &endpoint.1)?.with_wait(30);
+                remote.call("engine.execute", request)
+            });
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !worker.is_finished() && Instant::now() < deadline {
+                harness.run();
+                if let Some(approval) = harness.state_mut().assistant.chat.approvals.first_mut()
+                    && let Some(long_ago) = Instant::now().checked_sub(Duration::from_secs(craft_agents::acp::APPROVAL_WAIT_S + 1))
+                {
+                    approval.since = long_ago;
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            worker.join().unwrap_or_else(|_| Err("worker panicked".to_owned()))
+        });
+        let error = result.err().ok_or("the unanswered save ran")?;
+        assert!(error.contains("`file.save` was not run"), "{error}");
+        assert!(harness.state().assistant.chat.approvals.is_empty());
+        harness.get_by_label("`file.save` waited 4 minutes without an answer and was declined.");
+        assert_eq!(harness.state().files.dirty(&harness.state().session), unsaved);
+        Ok(())
+    }
+
+    /// Signing in from a terminal happens outside the chat, so the sign-in state offers Retry.
+    #[test]
+    fn the_sign_in_state_offers_retry() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, script, _) = harness_with_agent()?;
+        push(&script, Event::AuthRequired { methods: Vec::new() });
+        harness.run();
+        harness.get_by_label("Sign in to continue.");
+        harness.get_by_label("Retry");
         Ok(())
     }
 

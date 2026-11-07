@@ -11,6 +11,7 @@ pub const MAX_BLOCKS: usize = 4000;
 /// Longest link target kept.
 const MAX_URL: usize = 2048;
 
+/// A piece of inline text and how it is shown.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Span {
     Text(String),
@@ -24,6 +25,7 @@ pub enum Span {
     },
 }
 
+/// One block of a reply: a paragraph, heading, code, list, quote or rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
     Paragraph(Vec<Span>),
@@ -69,7 +71,7 @@ pub fn parse(src: &str) -> Vec<Block> {
             let lang = t[fence.len()..].trim().to_string();
             let mut body = Vec::new();
             i += 1;
-            while i < lines.len() && !lines[i].trim_start().starts_with(&fence) {
+            while i < lines.len() && !closes_fence(lines[i], &fence) {
                 body.push(lines[i]);
                 i += 1;
             }
@@ -160,6 +162,14 @@ fn cut(s: &str, max: usize) -> &str {
         e -= 1;
     }
     &s[..e]
+}
+
+/// Whether `line` closes a block opened by `fence`: a run of the same character at least as long,
+/// with nothing but whitespace after it. A line such as "```rust" inside the block is code.
+fn closes_fence(line: &str, fence: &str) -> bool {
+    let (Some(mark), t) = (fence.chars().next(), line.trim()) else { return false };
+    let run = t.chars().take_while(|c| *c == mark).count();
+    run >= fence.len() && t[run..].trim().is_empty()
 }
 
 /// The code fence a line opens (three or more backticks or tildes), if any.
@@ -587,6 +597,17 @@ mod tests {
         (from..c.len().saturating_sub(1)).find(|&j| c[j] == d && c[j + 1] == d)
     }
 
+    /// Only a bare run of the fence's character, at least as long, closes a code block.
+    #[test]
+    fn a_fence_with_text_after_it_does_not_close_the_block() {
+        let b = parse("```\n```rust\nlet a = 1;\n````\nafter");
+        assert_eq!(b[0], Block::Code { lang: String::new(), text: "```rust\nlet a = 1;".into() });
+        assert_eq!(b[1], Block::Paragraph(vec![Span::Text("after".into())]));
+        let b = parse("~~~~\n~~~\n~~~~");
+        assert_eq!(b, vec![Block::Code { lang: String::new(), text: "~~~".into() }]);
+    }
+
+    /// Plain text of spans.
     #[test]
     fn plain_text_of_spans() {
         assert_eq!(plain(&spans("**a** [b](https://c.d) `e`")), "a b (https://c.d) e");

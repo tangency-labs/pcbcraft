@@ -160,6 +160,8 @@ pub trait ChatBackend {
     fn set_request_timeout(&mut self, _secs: u64) {}
     /// An endpoint's new reasoning effort (empty: send nothing), from the next request on.
     fn set_reasoning_effort(&mut self, _effort: &str) {}
+    /// Set one of the options it reported in [`Event::ConfigOptions`] to `value`; the result
+    /// arrives as [`Event::ConfigOptionFinished`]. Backends without options ignore it.
     fn set_config_option(&mut self, _id: &str, _value: &str) {}
     /// Its process, for status and tests.
     fn pid(&self) -> Option<u32> {
@@ -185,8 +187,11 @@ pub type HttpFn = std::sync::Arc<dyn Fn(&HttpRequest) -> Result<(u16, Vec<u8>), 
 
 /// The system keychain (the desktop host's), for API keys: never in the preferences.
 pub trait Secrets: Send + Sync {
+    /// The secret stored for `id`; `Ok(None)` when there is none.
     fn get(&self, id: &str) -> Result<Option<String>, String>;
+    /// Store `secret` for `id`, replacing any stored one.
     fn set(&self, id: &str, secret: &str) -> Result<(), String>;
+    /// Remove the secret stored for `id`; one that isn't there counts as removed (`Ok`).
     fn delete(&self, id: &str) -> Result<(), String>;
 }
 

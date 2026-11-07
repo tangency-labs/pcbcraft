@@ -292,13 +292,14 @@ client (see [Live MCP](#live-mcp-in-the-desktop-editor)), so every edit shows at
 **Undo**; the conversation notes each edit. Its own shell and file tools are turned off where
 the agent allows it. `pcbcraft-cli` must be beside the PCBCraft program (as in `target/debug`)
 for the agent to reach the project. The agent starts it as
-`pcbcraft-cli mcp --connect PORT --token-file FILE --wait 600`: the endpoint's credential stays in a
+`pcbcraft-cli mcp --connect PORT --token-file FILE --wait 300`: the endpoint's credential stays in a
 file only you can read, in its own temporary folder apart from the agent's, so it is never in the
 agent's session, command line or environment, and the file goes when the chat disconnects.
 
 The permission mode decides what the agent may do without asking. **Auto-allow project edits**
 (the default, as in SolidCraft) runs project and view commands at once, while saving, starting
 a new project, closing windows and deleting arrangements wait for **Allow**, **Always allow** or **Deny** in the chat.
+A call nobody answers within four minutes is declined, and the agent is told it didn't run.
 **Ask every time** asks before any command; **Allow everything** asks before none. Reading the
 project always runs. Questions the agent asks about its own tools appear in the chat too.
 **Stop** (or **Esc** in the chat) ends the answer and denies anything waiting.

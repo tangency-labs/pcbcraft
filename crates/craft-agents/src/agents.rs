@@ -24,6 +24,7 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// Every mode, in the order the settings list them.
     pub const ALL: [Mode; 3] = [Mode::Ask, Mode::Edits, Mode::All];
     /// The mode's name in saved preferences.
     pub fn id(self) -> &'static str {
@@ -47,6 +48,7 @@ impl Mode {
     }
 }
 
+/// What kind of agent an entry is: an installed ACP program or a model endpoint.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {

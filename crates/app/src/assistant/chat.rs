@@ -4,7 +4,7 @@
 //! endpoint; every request from that endpoint passes [`gate`] before the editor runs it, and the
 //! ones that need the person's answer wait here as [`Approval`]s.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use craft_agents::backend::Secrets as _;
 use craft_agents::{
@@ -18,8 +18,22 @@ use crate::live_control::{LiveControl, Request};
 
 /// Most conversation items kept; older ones scroll away.
 const MAX_ITEMS: usize = 400;
-/// Longest text kept for one item, so a runaway reply stays bounded.
+/// Longest text kept for one item, in bytes, so a runaway reply stays bounded.
 const MAX_TEXT: usize = 64 * 1024;
+/// How long a held tool call waits for Allow or Deny before the chat declines it.
+const APPROVAL_WAIT: Duration = Duration::from_secs(acp::APPROVAL_WAIT_S);
+
+/// `text` cut to at most `max` bytes on a character boundary, and whether it was cut.
+fn capped(text: &str, max: usize) -> (&str, bool) {
+    if text.len() <= max {
+        return (text, false);
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], true)
+}
 
 /// Where the connection stands.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -46,6 +60,8 @@ pub(super) enum Item {
         thought: bool,
         text: String,
         parsed: std::cell::OnceCell<Vec<craft_agents::markdown::Block>>,
+        /// The reply reached [`MAX_TEXT`]: the rest was dropped, and the panel says so.
+        cut: bool,
     },
     Tool {
         id: String,
@@ -65,6 +81,8 @@ pub(crate) struct Approval {
     pub(super) title: String,
     pub(super) detail: String,
     pub(crate) source: Source,
+    /// When it began waiting; a held tool call is declined after [`APPROVAL_WAIT`].
+    pub(super) since: Instant,
 }
 
 impl std::fmt::Debug for Approval {
@@ -193,7 +211,7 @@ impl Chat {
                 return;
             }
         };
-        let control = LiveControl::start_with_wait(ctx, Duration::from_secs(acp::BRIDGE_WAIT_S)).ok();
+        let control = LiveControl::start_with_wait(ctx, Duration::from_secs(acp::ENDPOINT_WAIT_S)).ok();
         let token = control.as_ref().map(|control| (control.port(), write_token_file(control.port(), control.secret())));
         let (bridge, token_dir) = match (token, cli_path()) {
             (Some((port, Ok((dir, token_file)))), Some(cli)) => (Some(McpBridge { cli, port, token_file }), Some(dir)),
@@ -246,7 +264,7 @@ impl Chat {
     #[cfg(test)]
     pub(super) fn attach_with_endpoint(&mut self, ctx: &egui::Context, backend: Box<dyn ChatBackend>, entry: Entry) -> (u16, std::path::PathBuf) {
         self.attach(backend, entry);
-        let control = LiveControl::start_with_wait(ctx, Duration::from_secs(acp::BRIDGE_WAIT_S)).unwrap_or_else(|error| panic!("{error}"));
+        let control = LiveControl::start_with_wait(ctx, Duration::from_secs(acp::ENDPOINT_WAIT_S)).unwrap_or_else(|error| panic!("{error}"));
         let (dir, token_file) = write_token_file(control.port(), control.secret()).unwrap_or_else(|error| panic!("{error}"));
         let port = control.port();
         self.control = Some(control);
@@ -362,7 +380,8 @@ impl Chat {
     /// Hold a request until the person answers. `title` and `detail` describe it.
     pub(super) fn hold(&mut self, request: Request, command: String, detail: String) {
         let id = self.next_id();
-        self.approvals.push(Approval { id, title: format!("Allow `{command}`?"), detail, source: Source::Tool { request, command } });
+        let since = Instant::now();
+        self.approvals.push(Approval { id, title: format!("Allow `{command}`?"), detail, source: Source::Tool { request, command }, since });
     }
 
     /// Take the approval answered with `id`, for the editor to act on.
@@ -378,20 +397,43 @@ impl Chat {
         }
     }
 
+    /// Decline held tool calls nobody answered within [`APPROVAL_WAIT`], telling the agent the
+    /// command did not run, before its connection gives up waiting. One whose caller already
+    /// gave up is dropped the same way; its answer goes nowhere.
+    fn decline_overdue(&mut self, now: Instant) {
+        let overdue: Vec<u64> = self
+            .approvals
+            .iter()
+            .filter(|approval| match &approval.source {
+                Source::Tool { request, .. } => request.expired() || now.saturating_duration_since(approval.since) >= APPROVAL_WAIT,
+                Source::Agent { .. } => false,
+            })
+            .map(|approval| approval.id)
+            .collect();
+        for id in overdue {
+            if let Some(Approval { source: Source::Tool { request, command }, .. }) = self.take_approval(id) {
+                let minutes = APPROVAL_WAIT.as_secs() / 60;
+                request.answer(Err(format!("Nobody answered within {minutes} minutes, so `{command}` was not run.")));
+                self.push(Item::Notice(format!("`{command}` waited {minutes} minutes without an answer and was declined.")));
+            }
+        }
+    }
+
+    /// How long until the next held tool call is declined, so the window can repaint then.
+    pub(super) fn next_expiry(&self) -> Option<Duration> {
+        let now = Instant::now();
+        self.approvals
+            .iter()
+            .filter(|approval| matches!(approval.source, Source::Tool { .. }))
+            .map(|approval| APPROVAL_WAIT.saturating_sub(now.saturating_duration_since(approval.since)))
+            .min()
+    }
+
     /// Advance the backend: apply its events to the conversation and the options, answer its
     /// permission questions about PCBCraft's own tools (the gate checks those calls), and drop
     /// held requests whose caller gave up. `mode` decides the agent's other questions.
     pub(super) fn poll(&mut self, mode: Mode) {
-        let expired: Vec<u64> = self
-            .approvals
-            .iter()
-            .filter(|approval| matches!(&approval.source, Source::Tool { request, .. } if request.expired()))
-            .map(|approval| approval.id)
-            .collect();
-        for id in expired {
-            self.take_approval(id);
-            self.push(Item::Notice("A tool call waited too long for an answer and was cancelled.".to_owned()));
-        }
+        self.decline_overdue(Instant::now());
         let events = self.backend.as_mut().map(|backend| backend.poll()).unwrap_or_default();
         for event in events {
             // Events after the backend ended (a failed setup, an exit) belong to no session.
@@ -426,7 +468,7 @@ impl Chat {
                 } else {
                     let id = self.next_id();
                     let detail = kind.map(|kind| format!("The agent wants to run a {kind} tool of its own.")).unwrap_or_default();
-                    self.approvals.push(Approval { id, title, detail, source: Source::Agent { key, options } });
+                    self.approvals.push(Approval { id, title, detail, source: Source::Agent { key, options }, since: Instant::now() });
                 }
             }
             Event::AuthRequired { methods } => self.state = State::SignIn(methods),
@@ -472,16 +514,20 @@ impl Chat {
 
     /// Append streamed text to the agent's current reply or thought, or start a new one.
     fn stream(&mut self, thought: bool, text: &str) {
-        if let Some(Item::Agent { thought: current, text: reply, parsed }) = self.items.last_mut()
+        if let Some(Item::Agent { thought: current, text: reply, parsed, cut }) = self.items.last_mut()
             && *current == thought
         {
-            if reply.len() + text.len() <= MAX_TEXT {
-                reply.push_str(text);
+            // Once cut, the reply takes nothing more, so it never skips a part and goes on.
+            if !*cut {
+                let (part, short) = capped(text, MAX_TEXT.saturating_sub(reply.len()));
+                reply.push_str(part);
+                *cut = short;
                 parsed.take();
             }
             return;
         }
-        self.push(Item::Agent { thought, text: text.chars().take(MAX_TEXT).collect(), parsed: Default::default() });
+        let (part, cut) = capped(text, MAX_TEXT);
+        self.push(Item::Agent { thought, text: part.to_owned(), parsed: Default::default(), cut });
     }
 
     /// Record a new tool call or update one already shown.
@@ -502,15 +548,25 @@ impl Chat {
                     *current_input = input;
                 }
                 if let Some(output) = output {
-                    *current_output = Some(output.chars().take(MAX_TEXT).collect());
+                    *current_output = Some(capped(&output, MAX_TEXT).0.to_owned());
                 }
             }
-            None => self.push(Item::Tool { title: title.unwrap_or_else(|| id.clone()), id, status, input, output }),
+            None => {
+                let output = output.map(|output| capped(&output, MAX_TEXT).0.to_owned());
+                self.push(Item::Tool { title: title.unwrap_or_else(|| id.clone()), id, status, input, output });
+            }
         }
     }
 
     /// Add an item, dropping the oldest beyond the limit.
-    pub(super) fn push(&mut self, item: Item) {
+    pub(super) fn push(&mut self, mut item: Item) {
+        // Notices carry agent and endpoint messages; they are bounded like replies.
+        if let Item::Notice(text) | Item::User(text) = &mut item {
+            let (part, short) = capped(text, MAX_TEXT);
+            if short {
+                *text = format!("{part}…");
+            }
+        }
         if self.items.len() >= MAX_ITEMS {
             self.items.remove(0);
         }
@@ -666,6 +722,31 @@ mod tests {
         chat.stream(false, " world");
         assert_eq!(parsed(&chat), None, "new text is parsed again when drawn");
         assert!(matches!(chat.items.as_slice(), [Item::Agent { text, .. }] if text == "**Hello** world"));
+    }
+
+    /// Replies are capped in bytes on a character boundary, from their first chunk on, and once
+    /// cut take nothing more; notices are capped the same way.
+    #[test]
+    fn long_replies_are_cut_once_in_bytes() {
+        let mut chat = Chat::default();
+        chat.stream(false, &"ä".repeat(MAX_TEXT));
+        let reply = |chat: &Chat| match chat.items.last() {
+            Some(Item::Agent { text, cut, .. }) => Some((text.len(), *cut)),
+            _ => None,
+        };
+        assert_eq!(reply(&chat), Some((MAX_TEXT, true)), "two-byte characters fill exactly the cap");
+        chat.stream(false, "more");
+        assert_eq!(reply(&chat), Some((MAX_TEXT, true)), "a cut reply takes nothing more");
+
+        let mut chat = Chat::default();
+        chat.stream(false, &"a".repeat(MAX_TEXT - 3));
+        chat.stream(false, "ääää");
+        assert_eq!(reply(&chat), Some((MAX_TEXT - 1, true)), "the part that fits is kept, on a character boundary");
+        chat.stream(false, "b");
+        assert_eq!(reply(&chat), Some((MAX_TEXT - 1, true)), "no later chunk fills the gap");
+
+        chat.push(Item::Notice("x".repeat(MAX_TEXT * 2)));
+        assert!(matches!(chat.items.last(), Some(Item::Notice(text)) if text.len() <= MAX_TEXT + '…'.len_utf8()));
     }
 
     /// The token file holds the secret, is the user's alone and goes when its folder is dropped.
