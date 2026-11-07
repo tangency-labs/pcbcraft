@@ -196,6 +196,13 @@ impl AcpBackend {
                             if what == Pending::Prompt {
                                 out.push(Event::TurnEnded { reason: "auth".into() });
                             }
+                            // Say why, unless it is only the protocol's generic wording, which the
+                            // sign-in prompt already says. A failed sign-in always says why.
+                            if what == Pending::Authenticate {
+                                out.push(Event::Error(format!("Sign-in failed: {message}")));
+                            } else if !message.trim().is_empty() && !message.trim().eq_ignore_ascii_case("authentication required") {
+                                out.push(Event::AuthStatus(message));
+                            }
                             out.push(Event::AuthRequired { methods: self.auth.clone() });
                         } else if what == Pending::SetModel {
                             out.push(Event::ModelRejected(message));
@@ -540,7 +547,7 @@ mod tests {
         backend.handle(Incoming::Reply { id: backend.next_id, result: Ok(json!({})) }, &mut events);
         assert!(events.is_empty(), "{events:?}");
         backend.set_model("zzz");
-        backend.handle(Incoming::Reply { id: backend.next_id, result: Err((acp::AUTH_REQUIRED, "sign in".into())) }, &mut events);
+        backend.handle(Incoming::Reply { id: backend.next_id, result: Err((acp::AUTH_REQUIRED, "Authentication required".into())) }, &mut events);
         assert!(matches!(events.as_slice(), [Event::AuthRequired { .. }]), "{events:?}");
         backend.shutdown(true);
     }
@@ -580,6 +587,37 @@ mod tests {
             "{events:?}"
         );
         assert!(backend.poll_at(Instant::now() + SETUP_LIMIT * 3).is_empty(), "signing in has no time limit");
+        // A failed sign-in whose reason is itself about signing in still says why.
+        events.clear();
+        backend.authenticate("browser");
+        backend.handle(Incoming::Reply { id: backend.next_id, result: Err((-32603, "authentication failed: code expired".into())) }, &mut events);
+        assert!(
+            matches!(events.as_slice(), [Event::Error(message), Event::AuthRequired { .. }] if message == "Sign-in failed: authentication failed: code expired"),
+            "{events:?}"
+        );
+        backend.shutdown(true);
+    }
+
+    /// A reply that needs sign-in says why when the agent says more than the protocol's generic
+    /// "Authentication required", which the sign-in prompt already shows.
+    #[test]
+    fn sign_in_requests_keep_the_agents_reason() {
+        let ctx = StartContext { cwd: std::env::temp_dir(), bridge: None, tools: None, wake: Box::new(|| {}) };
+        let mut backend = AcpBackend::start(&["sh".into(), "-c".into(), "cat >/dev/null".into()], ctx).unwrap();
+        let mut events = Vec::new();
+        backend.handle(Incoming::Reply { id: 1, result: Ok(json!({"agentInfo":{"name":"fake"}})) }, &mut events);
+        backend.handle(Incoming::Reply { id: 2, result: Err((acp::AUTH_REQUIRED, "Authentication required".into())) }, &mut events);
+        assert!(matches!(events.as_slice(), [Event::AuthRequired { .. }]), "{events:?}");
+        events.clear();
+        backend.new_session();
+        backend.handle(Incoming::Reply { id: backend.next_id, result: Ok(json!({"sessionId": "s1"})) }, &mut events);
+        events.clear();
+        backend.prompt(&[PromptPart::Text("hi".into())]);
+        backend.handle(Incoming::Reply { id: backend.next_id, result: Err((-32603, "401 Unauthorized: token expired".into())) }, &mut events);
+        assert!(
+            matches!(events.as_slice(), [Event::TurnEnded { .. }, Event::AuthStatus(reason), Event::AuthRequired { .. }] if reason.contains("token expired")),
+            "{events:?}"
+        );
         backend.shutdown(true);
     }
 
