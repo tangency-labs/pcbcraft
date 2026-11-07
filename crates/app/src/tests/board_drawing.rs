@@ -22,6 +22,125 @@ fn at(h: &Harness<'_, PcbApp>, x: i64, y: i64) -> egui::Pos2 {
     h.state().views.active.camera.screen(Point { x_nm: x, y_nm: y }, h.get_by_label("PCB canvas").rect())
 }
 
+/// Original physical pads overlap an edge, exercising input ownership rather than distant hits.
+fn overlapping_footprint<'a>() -> Harness<'a, PcbApp> {
+    let mut h = board();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    let symbol = h.state().session.project().unwrap().symbols().first().unwrap().id();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        ADD_DRAWING,
+        &json!({"layer":layer,"points":[{"x_nm":-20_320_000,"y_nm":0},{"x_nm":20_320_000,"y_nm":0}],"closed":false,"expected_revision":revision}),
+    );
+    h.run();
+    h
+}
+
+/// Placing an M-move on an edge must commit the footprint once, leaving edge geometry intact.
+#[test]
+fn footprint_move_placement_on_board_edge_keeps_input_ownership() {
+    let mut h = overlapping_footprint();
+    let edges = drawings(&h);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let origin = at(&h, 0, 0);
+    h.hover_at(origin);
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    assert!(h.state().views.active.board.draft.is_some());
+    let destination = at(&h, 10_160_000, 0);
+    click_canvas_at(&mut h, destination);
+    assert!(h.state().views.active.board.draft.is_none());
+    let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap();
+    assert_eq!(footprint.position, Point { x_nm: 10_160_000, y_nm: 0 });
+    assert_eq!(drawings(&h), edges);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// A pad-over-edge drag moves the footprint rather than the edge, with one undoable edit.
+#[test]
+fn footprint_drag_overlapping_board_edge_keeps_input_ownership() {
+    let mut h = overlapping_footprint();
+    let edges = drawings(&h);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let edge_only = at(&h, 20_320_000, 0);
+    click_canvas_at(&mut h, edge_only);
+    assert!(h.state().views.active.board.drawing.selected.is_some());
+    let pad = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().pads[0].center;
+    let origin = at(&h, pad.x_nm, pad.y_nm);
+    h.hover_at(origin);
+    h.run();
+    h.drag_at(origin);
+    h.run();
+    let destination = at(&h, pad.x_nm + 10_160_000, pad.y_nm + 5_080_000);
+    h.hover_at(destination);
+    h.run();
+    assert!(h.state().views.active.board.draft.is_some());
+    assert!(h.state().views.active.board.drawing.source().is_none());
+    assert!(h.state().views.active.board.drawing.selected.is_none());
+    h.drop_at(destination);
+    h.run();
+    let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap();
+    assert_eq!(footprint.position, Point { x_nm: 10_160_000, y_nm: 5_080_000 });
+    assert_eq!(drawings(&h), edges);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Explicit drawing tools still accept canvas clicks over footprints instead of selecting them.
+#[test]
+fn explicit_board_edge_tool_can_draw_over_footprint() {
+    let mut h = overlapping_footprint();
+    click(&mut h, "Draw lines on Board Edge");
+    let origin = at(&h, 0, 0);
+    click_canvas_at(&mut h, origin);
+    let destination = at(&h, 0, 10_160_000);
+    click_canvas_at(&mut h, destination);
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(drawings(&h).len(), 2);
+    let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap();
+    assert_eq!(footprint.position, Point { x_nm: 0, y_nm: 0 });
+    assert!(h.state().views.active.board.draft.is_none());
+}
+
+/// An edge edit started away from a footprint retains its gesture when moved onto the pad.
+#[test]
+fn existing_board_edge_edit_can_finish_over_footprint() {
+    let mut h = overlapping_footprint();
+    let original = drawings(&h)[0].clone();
+    let origin = at(&h, -20_320_000, 0);
+    h.hover_at(origin);
+    h.run();
+    h.drag_at(origin);
+    h.run();
+    let destination = at(&h, 0, 0);
+    h.hover_at(destination);
+    h.run();
+    assert!(h.state().views.active.board.drawing.source().is_some());
+    assert!(h.state().views.active.board.draft.is_none());
+    h.drop_at(destination);
+    h.run();
+    let edited = drawings(&h)[0].clone();
+    assert_eq!(edited.id, original.id);
+    assert_eq!(edited.points[0], Point { x_nm: 0, y_nm: 0 });
+    assert_eq!(edited.points[1], original.points[1]);
+    let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap();
+    assert_eq!(footprint.position, Point { x_nm: 0, y_nm: 0 });
+}
+
 /// Rectangle clicks author one closed layer graphic; previews and cancellations author nothing.
 #[test]
 fn rectangle_canvas_create_cancel_delete_and_undo() {

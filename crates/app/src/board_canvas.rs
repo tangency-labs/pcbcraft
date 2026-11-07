@@ -38,6 +38,8 @@ pub(super) struct Interaction {
 /// Select or preview one footprint at a time. Drags retain their grab offset; M moves the origin
 /// to the pointer. R rotates counterclockwise, including during a move. Only completion on the
 /// canvas emits an edit; secondary click, disabled input or stale authority discards the draft.
+/// Footprint moves retain placement clicks over edges and win overlapping drag starts unless
+/// an explicit drawing tool or an existing drawing edit already owns the gesture.
 /// Physical pad color/visibility follow engine-resolved copper membership; the active copper
 /// layer changes display priority for spanning lands without rebinding any geometry.
 #[allow(clippy::too_many_arguments)]
@@ -59,19 +61,6 @@ pub(super) fn show(
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     camera.navigate_board(&response, rect, project, enabled, navigation);
-    let edge = crate::board_drawing::interact(
-        ui,
-        &response,
-        camera,
-        project,
-        &mut state.drawing,
-        state.active_layer.as_deref(),
-        &state.hidden_layers,
-        source,
-        enabled,
-        state.move_requested,
-    );
-    let enabled = enabled && !edge.consumed;
     let copper = project.setup().map(|setup| {
         setup
             .layers()
@@ -96,6 +85,28 @@ pub(super) fn show(
     let hit =
         |pointer: egui::Pos2| footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| bounds.contains(pointer).then_some(footprint));
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
+    let modifiers = ui.input(|i| i.modifiers);
+    let drag_start = response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
+    // A footprint gesture owns its completion and overlapping drag origin. Explicit drawing
+    // tools and existing drawing edits keep their own input even when crossing a footprint.
+    let footprint_drag = drag_start
+        && visible
+        && state.drawing.tool.is_none()
+        && state.drawing.source().is_none()
+        && ui.input(|i| i.pointer.press_origin()).and_then(hit).is_some();
+    let edge = crate::board_drawing::interact(
+        ui,
+        &response,
+        camera,
+        project,
+        &mut state.drawing,
+        state.active_layer.as_deref(),
+        &state.hidden_layers,
+        source,
+        enabled && state.draft.is_none() && !footprint_drag,
+        state.move_requested,
+    );
+    let enabled = enabled && !edge.consumed;
     let mut out = Interaction { drawing_edit: edge.command, ..Interaction::default() };
     if edge.consumed && !state.selection.is_empty() {
         out.selection = Some(BTreeSet::new());
@@ -111,8 +122,6 @@ pub(super) fn show(
         state.draft = None;
     }
     if enabled && !cancelled {
-        let modifiers = ui.input(|i| i.modifiers);
-        let drag_start = response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
         if state.draft.is_none()
             && visible
             && let Some(source) = source
@@ -125,6 +134,7 @@ pub(super) fn show(
                 None
             };
             if let Some(footprint) = picked {
+                state.drawing.selected = None;
                 out.selection = Some(BTreeSet::from([footprint.id.clone()]));
                 let anchor = if drag_start {
                     ui.input(|i| i.pointer.press_origin()).map(|p| camera.unsnapped(p, rect)).unwrap_or(footprint.position)
