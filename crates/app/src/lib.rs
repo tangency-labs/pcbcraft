@@ -426,7 +426,6 @@ impl PcbApp {
     /// Open and save actions are disabled while a file job is in flight. The browser offers
     /// Download, while desktop Save As opens the encoding chooser. Preferences and Keyboard
     /// Shortcuts sit above Quit, as in SolidCraft.
-    /// Library entries create independent documents or fork the actual focused selection.
     fn file_menu(&mut self, ui: &mut Ui) {
         let new_shortcut = if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(&COMMAND_N) };
         if self.command_row(ui, "project.new", "", &new_shortcut, MenuIcon::New) {
@@ -458,30 +457,6 @@ impl PcbApp {
         menu::separator(ui);
         if self.command_row(ui, "project.rename", "…", "", MenuIcon::Rename) {
             self.ask_name("project.rename");
-        }
-
-        menu::separator(ui);
-        for (label, kind) in
-            [("New Symbol", pcbcraft_engine::authoring::Kind::Symbol), ("New Footprint", pcbcraft_engine::authoring::Kind::Footprint)]
-        {
-            if MenuItem::new(label).show(ui) {
-                self.new_library_item(kind);
-            }
-        }
-        if MenuItem::new("Open Library Item…").enabled(!self.library_editors.busy()).show(ui) {
-            self.message = self.library_editors.open_picker(ui.ctx()).err();
-        }
-        if MenuItem::new("Library Workspaces").enabled(self.library_editors.has_documents()).show(ui) {
-            self.library_editors.resume();
-        }
-        menu::separator(ui);
-        for (label, kind) in [
-            ("Edit Selected Symbol Copy", pcbcraft_engine::authoring::Kind::Symbol),
-            ("Edit Selected Footprint Copy", pcbcraft_engine::authoring::Kind::Footprint),
-        ] {
-            if MenuItem::new(label).enabled(self.session.project().is_some()).show(ui) {
-                self.message = self.fork_library_selection(kind).err();
-            }
         }
 
         // SolidCraft ends File with Preferences and Keyboard Shortcuts, above Quit.
@@ -787,15 +762,12 @@ impl PcbApp {
         use workspace::{RibbonTool, ToolIcon};
         let current = self.views.active.workspace;
         let board = current == Workspace::Board;
-        let mut tab = if board {
-            usize::from(self.ribbon_tab == VIEW_TAB)
-        } else {
-            ribbon::TAB_ORDER.iter().position(|slot| *slot == self.ribbon_tab).unwrap_or(0)
-        };
+        let order: &[usize] = if board { &ribbon::BOARD_TAB_ORDER } else { &ribbon::TAB_ORDER };
+        let mut tab = order.iter().position(|slot| *slot == self.ribbon_tab).unwrap_or(0);
         let mut entries = WORKSPACES.entries.to_vec();
         entries[0].current = current == Workspace::Schematic && !self.views.active.unavailable();
         entries[1].current = board && !self.views.active.unavailable();
-        let tabs: &[&str] = if board { &["Layout", "View"] } else { &RIBBON_TABS };
+        let tabs: &[&str] = if board { &["Layout", "Libraries", "View"] } else { &RIBBON_TABS };
         let has_project = self.session.project().is_some();
         let mut quick = Vec::new();
         if self.ribbon_tab != VIEW_TAB {
@@ -822,16 +794,16 @@ impl PcbApp {
         }
         let response =
             workspace::ribbon(ui, current.title(), tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, &quick, |ui, shown| {
-                let slot = if board { shown } else { ribbon::TAB_ORDER[shown] };
+                let slot = order[shown];
                 if slot == VIEW_TAB {
                     self.view_tab(ui);
-                } else if board {
+                } else if board && slot == 0 {
                     self.board_tab(ui);
                 } else {
                     self.ported_ribbon_tab(ui, slot);
                 }
             });
-        self.ribbon_tab = if board { tab } else { ribbon::TAB_ORDER[tab] };
+        self.ribbon_tab = order[tab];
         if let Some(action) = response.quick {
             if !board && action == 0 {
                 self.set_panel(ui.ctx(), Panel::Nets, !self.net_inspector.open);

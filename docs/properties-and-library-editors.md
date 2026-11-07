@@ -70,11 +70,14 @@ acceptance evidence.
 
 ## Initial authoring slice
 
-File → New Symbol / New Footprint opens an original definition. File → Edit
-Selected Symbol Copy / Edit Selected Footprint Copy forks the focused view's
-actual selection under a new identity; the source and placed instances remain
-unchanged. Libraries also contains Symbol Editor and Footprint Editor entry
-points. The browser tree selects definition metadata or a stable primitive ID.
+The **Libraries** ribbon is available in both schematic and PCB workspaces.
+**Symbol Editor** and **Footprint Editor** create original definitions; **Open**
+loads a saved editor item, and **Resume** returns to retained editor documents.
+**Edit copy** forks the focused view's selected symbol or physical footprint under
+a new identity, leaving its source and placed instances unchanged. Home's
+**Library editors** row reaches the same ribbon without creating a project.
+These workspace entry points are grouped on the ribbon rather than in File.
+The browser tree selects definition metadata or a stable primitive ID.
 Compact and expanded properties share one revision-bound draft, including invalid
 typed lengths; Apply commits once, and Reset discards only those field edits.
 

@@ -328,3 +328,83 @@ fn completed_save_releases_close_without_reusing_a_cancelled_decision() {
     assert!(!app.library_editors.has_documents());
     assert!(!app.close_allowed);
 }
+
+/// Both project workspaces expose editor launch/resume and Sources on the same Libraries
+/// ribbon, with no launcher duplicates in File and no project data changes at either width.
+#[test]
+fn library_launchers_live_on_the_ribbon_in_schematic_and_pcb() {
+    for width in [1200.0, 420.0] {
+        for board in [false, true] {
+            let mut h = crate::tests::harness();
+            h.state_mut().run("project.new", &json!({"name":"Ribbon editors"}));
+            h.run();
+            if board {
+                crate::tests::click(&mut h, "Choose workspace");
+                crate::tests::click(&mut h, "PCB layout");
+            }
+            h.set_size(egui::vec2(width, 900.0));
+            h.run();
+            let before = h.state().session.snapshot().unwrap();
+            let revision = h.state().session.revision();
+            crate::tests::click(&mut h, "Libraries");
+            assert_eq!(h.state().ribbon_tab, 3);
+            crate::tests::click(&mut h, "File");
+            for label in [
+                "New Symbol",
+                "New Footprint",
+                "Library Workspaces",
+                "Open Library Item…",
+                "Edit Selected Symbol Copy",
+                "Edit Selected Footprint Copy",
+            ] {
+                assert!(h.query_by_label(label).is_none(), "{label}");
+            }
+            h.key_press(egui::Key::Escape);
+            h.run();
+            crate::tests::click(&mut h, "Create a symbol definition");
+            let id = h.state().library_editors.active.unwrap();
+            assert_eq!(h.state().library_editors.documents[&id].session.snapshot().kind, Kind::Symbol);
+            crate::tests::click(&mut h, "Project workspace");
+            assert_eq!(h.state().views.active.workspace, if board { crate::Workspace::Board } else { crate::Workspace::Schematic });
+            h.get_by_label("Return to open library editors").scroll_to_me();
+            h.run();
+            crate::tests::click(&mut h, "Return to open library editors");
+            assert_eq!(h.state().library_editors.active, Some(id));
+            crate::tests::click(&mut h, "Project workspace");
+            h.get_by_label("Manage native library sources").scroll_to_me();
+            h.run();
+            crate::tests::click(&mut h, "Manage native library sources");
+            assert!(matches!(h.state().dialog, Dialog::LibrarySources));
+            crate::tests::click(&mut h, "Close");
+            h.get_by_label("Create a footprint definition").scroll_to_me();
+            h.run();
+            crate::tests::click(&mut h, "Create a footprint definition");
+            let id = h.state().library_editors.active.unwrap();
+            assert_eq!(h.state().library_editors.documents[&id].session.snapshot().kind, Kind::Footprint);
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            assert_eq!(h.state().session.revision(), revision);
+        }
+    }
+}
+/// Home reaches the same ribbon without creating a placeholder project; selected-copy uses
+/// the actual schematic selection and retains its original project authority.
+#[test]
+fn home_and_selected_copy_use_the_library_ribbon() {
+    let mut h = crate::tests::startup_harness();
+    crate::tests::click(&mut h, "Library editors");
+    assert!(!h.state().home);
+    assert!(h.state().session.project().is_none());
+    assert_eq!(h.state().ribbon_tab, 3);
+    crate::tests::click(&mut h, "Create a symbol definition");
+    assert!(h.state().library_editors.active.is_some());
+    assert!(h.state().session.project().is_none());
+    let mut h = crate::tests::harness();
+    crate::tests::resistor_at_origin(&mut h);
+    h.state_mut().select(pcbcraft_engine::selection::Selection::one_symbol("symbol-2".into()));
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    crate::tests::click(&mut h, "Libraries");
+    crate::tests::click(&mut h, "Edit the selected definition as an independent copy");
+    assert!(h.state().library_editors.active.is_some());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}

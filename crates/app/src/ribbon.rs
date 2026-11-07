@@ -7,6 +7,8 @@ use serde_json::json;
 
 /// Stable saved indices retain legacy View=1 while visual tab order follows PCBcraft Next.
 pub(super) const TAB_ORDER: [usize; 5] = [0, 2, 3, 4, 1];
+/// PCB shares the saved Libraries and View slots with schematic hosts.
+pub(super) const BOARD_TAB_ORDER: [usize; 3] = [0, 3, 1];
 
 /// Names shared by live control inspection and its explicit tab-selection command.
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,6 +59,9 @@ enum Action {
     AutoHeal,
     SymbolEditor,
     FootprintEditor,
+    OpenLibraryItem,
+    ResumeLibraryEditors,
+    EditDefinitionCopy,
     Sources,
     Updates,
     Variants,
@@ -130,16 +135,31 @@ const ANALYZE: &[Group] = &[
     },
     Group { title: "Reports", tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", "")], extras: &[] },
 ];
-const LIBRARIES: &[Group] = &[Group {
-    title: "Libraries",
-    tools: &[
-        tool(Action::SymbolEditor, "Symbol Editor", Icon::Symbol, "Create a symbol definition", ""),
-        tool(Action::FootprintEditor, "Footprint Editor", Icon::Symbol, "Create a footprint definition", ""),
-        tool(Action::Sources, "Sources", Icon::Browser, "Manage native library sources", ""),
-        tool(Action::Updates, "Updates", Icon::Sync, "Library update review is not available yet.", ""),
-    ],
-    extras: &[],
-}];
+const LIBRARIES: &[Group] = &[
+    Group {
+        title: "Editors",
+        tools: &[
+            tool(Action::SymbolEditor, "Symbol Editor", Icon::Symbol, "Create a symbol definition", ""),
+            tool(Action::FootprintEditor, "Footprint Editor", Icon::Symbol, "Create a footprint definition", ""),
+            tool(Action::OpenLibraryItem, "Open", Icon::Browser, "Open a saved library item", ""),
+            tool(Action::ResumeLibraryEditors, "Resume", Icon::EditorWindow, "Return to open library editors", ""),
+        ],
+        extras: &[],
+    },
+    Group {
+        title: "Selected definition",
+        tools: &[tool(Action::EditDefinitionCopy, "Edit copy", Icon::Symbol, "Edit the selected definition as an independent copy", "")],
+        extras: &[],
+    },
+    Group {
+        title: "Library sources",
+        tools: &[
+            tool(Action::Sources, "Sources", Icon::Browser, "Manage native library sources", ""),
+            tool(Action::Updates, "Updates", Icon::Sync, "Library update review is not available yet.", ""),
+        ],
+        extras: &[],
+    },
+];
 const MANAGE: &[Group] = &[
     Group { title: "Sheets", tools: &[tool(Action::NewSheet, "New sheet", Icon::Sheet, "Create an independent sheet", "")], extras: &[] },
     Group {
@@ -162,6 +182,9 @@ impl Action {
                 | Self::Sources
                 | Self::SymbolEditor
                 | Self::FootprintEditor
+                | Self::OpenLibraryItem
+                | Self::ResumeLibraryEditors
+                | Self::EditDefinitionCopy
                 | Self::HierarchicalLabel
                 | Self::NewSheet
                 | Self::Subsheet
@@ -183,7 +206,26 @@ impl Action {
         let project = app.session.project().is_some();
         let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
         match self {
-            Self::SymbolEditor | Self::FootprintEditor => true,
+            Self::SymbolEditor | Self::FootprintEditor | Self::Sources => true,
+            Self::OpenLibraryItem => !app.library_editors.busy(),
+            Self::ResumeLibraryEditors => app.library_editors.has_documents(),
+            Self::EditDefinitionCopy => {
+                project
+                    && !app.views.active.unavailable()
+                    && match app.views.active.workspace {
+                        Workspace::Schematic => app.views.active.schematic.selection.single_symbol().is_some(),
+                        Workspace::Board => {
+                            app.views.active.board.selection.len() == 1
+                                && app.views.active.snapshot(&app.session).is_some_and(|project| {
+                                    project.board_view(project.board_target()).is_some_and(|board| {
+                                        board
+                                            .footprints()
+                                            .any(|footprint| footprint.physical_reference && app.views.active.board.selection.contains(&footprint.id))
+                                    })
+                                })
+                        }
+                    }
+            }
             Self::NewSheet => app.session.available(pcbcraft_engine::sheets::CREATE_SHEET),
             Self::Move | Self::Rotate => {
                 schematic && app.views.active.schematic.tool.is_none() && app.views.active.schematic.selection.single_symbol().is_some()
@@ -256,6 +298,15 @@ impl PcbApp {
         }
         match action {
             Action::Sources => self.dialog = Dialog::LibrarySources,
+            Action::OpenLibraryItem => self.message = self.library_editors.open_picker(ctx).err(),
+            Action::ResumeLibraryEditors => self.library_editors.resume(),
+            Action::EditDefinitionCopy => {
+                let kind = match self.views.active.workspace {
+                    Workspace::Schematic => pcbcraft_engine::authoring::Kind::Symbol,
+                    Workspace::Board => pcbcraft_engine::authoring::Kind::Footprint,
+                };
+                self.message = self.fork_library_selection(kind).err();
+            }
             Action::Symbol => self.parts.focus_search(),
             Action::SymbolEditor => self.new_library_item(pcbcraft_engine::authoring::Kind::Symbol),
             Action::FootprintEditor => self.new_library_item(pcbcraft_engine::authoring::Kind::Footprint),

@@ -1751,8 +1751,11 @@ mod live_mcp {
         }
         click(&mut h, "Choose workspace");
         click(&mut h, "PCB layout");
+        let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":"libraries"}));
+        h.run();
+        assert_eq!(result["windows"][0]["ribbon_tab"], "libraries");
         let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
-        for tab in ["analyze", "libraries", "manage"] {
+        for tab in ["analyze", "manage"] {
             let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
             assert_eq!(error["isError"], true);
             assert!(error["content"][0]["text"].as_str().unwrap().contains("schematic workspace"));

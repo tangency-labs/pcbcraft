@@ -329,7 +329,6 @@ impl PcbApp {
             .collect();
         enum Intent {
             Project,
-            New(Kind),
             Open,
             Save(bool),
             Edit(Action),
@@ -358,15 +357,16 @@ impl PcbApp {
             },
             |ui| {
                 menu::file(ui, |ui| {
-                    for (label, kind) in [("New Symbol", Kind::Symbol), ("New Footprint", Kind::Footprint)] {
-                        if pcbcraft_chrome::MenuItem::new(label).show(ui) {
-                            intents.borrow_mut().push(Intent::New(kind));
-                        }
-                    }
-                    if pcbcraft_chrome::MenuItem::new("Open Library Item…").show(ui) {
+                    if pcbcraft_chrome::MenuItem::new("Open Library Item…").enabled(!self.library_editors.busy()).show(ui) {
                         intents.borrow_mut().push(Intent::Open);
                     }
-                    if pcbcraft_chrome::MenuItem::new("Export Native Definition…").show(ui) {
+                    if pcbcraft_chrome::MenuItem::new(if IN_BROWSER { "Download Library Item…" } else { "Save Library Copy…" })
+                        .enabled(can_save)
+                        .show(ui)
+                    {
+                        intents.borrow_mut().push(Intent::Save(false));
+                    }
+                    if pcbcraft_chrome::MenuItem::new("Export Native Definition…").enabled(can_save).show(ui) {
                         intents.borrow_mut().push(Intent::Save(true));
                     }
                     if pcbcraft_chrome::MenuItem::new("Close Library Item").show(ui) {
@@ -438,9 +438,10 @@ impl PcbApp {
             let result = match intent {
                 Intent::Project => {
                     self.library_editors.active = None;
+                    self.home = false;
+                    self.ribbon_tab = 3;
                     Ok(())
                 }
-                Intent::New(kind) => Item::new(kind).and_then(|item| self.library_editors.open(item, false)).map(|_| ()),
                 Intent::Open => self.library_editors.files.start(&ctx, None),
                 Intent::Save(export) => active.ok_or("No active library item.".into()).and_then(|id| self.library_editors.save(&ctx, id, export)),
                 Intent::Edit(action) => active.ok_or("No active library item.".into()).and_then(|id| {

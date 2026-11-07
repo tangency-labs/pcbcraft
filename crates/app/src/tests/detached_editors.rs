@@ -1312,6 +1312,9 @@ fn window_commands_switch_workspaces_and_select_footprints() {
     };
     assert_eq!(shown(&h, board)["workspace"], "board");
     assert_eq!(window_commands::inspect_editor(h.state())["windows"][0]["ribbon_tab"], "layout");
+    run(&mut h, "window.set_ribbon_tab", json!({"window":0,"tab":"libraries"})).unwrap();
+    assert_eq!(window_commands::inspect_editor(h.state())["windows"][0]["ribbon_tab"], "libraries");
+    run(&mut h, "window.set_ribbon_tab", json!({"window":0,"tab":"layout"})).unwrap();
     run(&mut h, "view.select_footprints", json!({"view": board.0, "footprints": ["footprint-3"]})).unwrap();
     assert_eq!(shown(&h, board)["board"]["selection"], json!(["footprint-3"]));
     let missing = json!({"view": board.0, "footprints": ["footprint-99"]});

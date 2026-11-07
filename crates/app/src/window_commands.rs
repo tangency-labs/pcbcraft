@@ -540,7 +540,7 @@ mod live {
         WindowCommand {
             id: "window.set_ribbon_tab",
             title: "Ribbon Tab",
-            summary: "Show a schematic ribbon tab (Capture, Analyze, Libraries, Manage, View) or a PCB ribbon tab (Layout, View).",
+            summary: "Show a schematic ribbon tab (Capture, Analyze, Libraries, Manage, View) or a PCB ribbon tab (Layout, Libraries, View).",
             params: &[WINDOW, Param { name: "tab", summary: "Which tab", required: true, kind: Kind::Choice(TABS) }],
         },
         WindowCommand {
@@ -1037,7 +1037,7 @@ mod live {
                 }
                 ("window.set_ribbon_tab", _, Some(host)) => {
                     let tab = crate::ribbon::tab_slot(params["tab"].as_str().unwrap_or_default());
-                    if tab > 1
+                    if !crate::ribbon::BOARD_TAB_ORDER.contains(&tab)
                         && self
                             .views
                             .hosts
