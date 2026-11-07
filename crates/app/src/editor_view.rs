@@ -166,6 +166,18 @@ impl EditorView {
         self.binding.map(|binding| binding.target)
     }
 
+    /// Start a successfully opened project's default document in this workspace. Runtime identity
+    /// and snap spacing survive, while old document addresses, navigation and edit authority expire.
+    /// Saved arrangements are restored separately afterward and still validate explicit targets.
+    pub(super) fn bind_opened_project(&mut self, session: &Session) {
+        let workspace = self.workspace;
+        let snap_nm = self.camera.snap_nm();
+        *self = Self::new(self.id);
+        self.workspace = workspace;
+        self.camera.set_snap_nm(snap_nm);
+        self.sync(session);
+    }
+
     /// Explicitly retarget a view after the host validates the document's existence.
     pub(super) fn open_document(&mut self, target: DocumentTarget, session: &Session) {
         match target {
