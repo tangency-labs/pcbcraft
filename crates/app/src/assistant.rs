@@ -482,9 +482,12 @@ impl Assistant {
         }
     }
 
-    /// Send the model last chosen for this agent once it lists its models.
+    /// Send the model last chosen for this agent once it lists its models. An endpoint is Ready
+    /// before its listing arrives (that takes a request), so this waits for a model option or
+    /// list, trying again each frame, and only then counts as done.
     fn restore_model(&mut self) {
-        if self.model_restored || self.chat.state != State::Ready {
+        let listed = self.chat.models.is_some() || self.chat.config.iter().any(|option| option.category == "model");
+        if self.model_restored || self.chat.state != State::Ready || !listed {
             return;
         }
         self.model_restored = true;
@@ -1104,6 +1107,7 @@ mod chat_tests {
         prompts: Vec<String>,
         answers: Vec<(u64, Option<String>)>,
         shut_down: bool,
+        models: Vec<String>,
     }
 
     /// A backend that reports scripted events and records what the chat sends it.
@@ -1128,6 +1132,12 @@ mod chat_tests {
             }
         }
         fn authenticate(&mut self, _method: &str) {}
+        /// Record a model the chat chose.
+        fn set_model(&mut self, model: &str) {
+            if let Ok(mut script) = self.0.lock() {
+                script.models.push(model.to_owned());
+            }
+        }
         /// Record that the chat ended the agent.
         fn shutdown(&mut self, _wait: bool) {
             if let Ok(mut script) = self.0.lock() {
@@ -1398,6 +1408,24 @@ mod chat_tests {
         harness.run();
         assert_eq!(script.lock().map_err(|_| "poisoned")?.answers.len(), 1, "nothing more was answered for the person");
         harness.get_by_label(&ours);
+        Ok(())
+    }
+
+    /// An endpoint reports Ready before it lists its models; the model chosen last time is still
+    /// sent once the list arrives, and only once.
+    #[test]
+    fn the_saved_model_is_restored_when_the_list_arrives_after_ready() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, script, _) = harness_with_agent()?;
+        harness.state_mut().assistant.settings.agents.agent_models.insert("fake".to_owned(), "large".to_owned());
+        harness.state_mut().assistant.model_restored = false;
+        harness.run();
+        assert!(script.lock().map_err(|_| "poisoned")?.models.is_empty(), "nothing to restore before the list");
+        let model = |id: &str| craft_agents::acp::ModelInfo { id: id.to_owned(), name: id.to_owned(), description: String::new() };
+        push(&script, Event::Models { current: "small".to_owned(), available: vec![model("small"), model("large")] });
+        harness.run();
+        push(&script, Event::Models { current: "small".to_owned(), available: Vec::new() });
+        harness.run();
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.models, ["large"]);
         Ok(())
     }
 
