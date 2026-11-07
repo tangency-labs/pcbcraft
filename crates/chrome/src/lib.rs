@@ -18,6 +18,7 @@ pub mod home;
 pub mod menu;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview;
+pub mod properties;
 mod ribbon_icons;
 pub mod selection;
 pub mod settings;

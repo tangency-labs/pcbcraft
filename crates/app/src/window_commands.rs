@@ -15,6 +15,7 @@ pub(super) enum Panel {
     Browser,
     Parts,
     Nets,
+    Properties,
 }
 
 impl PcbApp {
@@ -30,6 +31,7 @@ impl PcbApp {
             }
             Panel::Parts => self.parts.close(ctx),
             Panel::Nets => self.net_inspector.open = open,
+            Panel::Properties => self.properties_open = open,
         }
     }
 
@@ -39,6 +41,7 @@ impl PcbApp {
             Panel::Browser => self.browser.open,
             Panel::Parts => self.parts.open,
             Panel::Nets => self.net_inspector.open,
+            Panel::Properties => self.properties_open,
         }
     }
 
@@ -239,7 +242,7 @@ mod live {
     const FOLLOW: &[&str] = &["off", "both", "secondary_follows_primary", "primary_follows_secondary"];
     const SCROLL: &[&str] = &["zoom", "pan"];
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
-    const PANELS: &[&str] = &["browser", "parts", "nets"];
+    const PANELS: &[&str] = &["browser", "parts", "nets", "properties"];
     const TABS: &[&str] = &["capture", "layout", "analyze", "libraries", "manage", "view"];
     const WORKSPACES: &[&str] = &["schematic", "board"];
     const PLACEMENTS: &[&str] = &["here", "beside", "window"];
@@ -563,7 +566,7 @@ mod live {
                     "views": host.layout.views().iter().map(|view| view.0).collect::<Vec<_>>(),
                     "focused_view": host.focused.0,
                     "split": host.split(),
-                    "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets},
+                    "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties},
                     "ribbon_tab": match panels.ribbon {
                         0 if app.views.view(host.focused).is_some_and(|view| view.workspace == Workspace::Board) => "layout",
                         0 => "capture",
@@ -811,6 +814,7 @@ mod live {
                     let panel = match params["panel"].as_str() {
                         Some("browser") => Panel::Browser,
                         Some("parts") => Panel::Parts,
+                        Some("properties") => Panel::Properties,
                         _ => Panel::Nets,
                     };
                     let open = params["open"].as_bool() == Some(true);

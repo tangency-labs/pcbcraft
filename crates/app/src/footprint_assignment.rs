@@ -68,7 +68,7 @@ impl PcbApp {
         let mut assign = false;
         let mut place = false;
         let mut cancel = false;
-        let closing = shell::scrolling_dialog(ctx, "footprint_assignment", "Assign Footprint", |ui| {
+        let closing = shell::scrolling_dialog_width(ctx, "footprint_assignment", "Assign Footprint", 760.0, |ui| {
             let previous = edit.component.clone();
             let component = project.components().find(|c| c.id() == edit.component);
             egui::ComboBox::from_label("Component")
@@ -90,46 +90,57 @@ impl PcbApp {
             } else {
                 "Unassigned"
             });
-            ui.add_enabled_ui(!placed, |ui| {
-                let label = ui.label("Search footprints");
-                ui.add(egui::TextEdit::singleline(&mut edit.query)).labelled_by(label.id);
-                let old = edit.definition.as_ref().map(|d| (d.library.clone(), d.id.clone(), d.revision));
-                egui::ComboBox::from_label("Package")
-                    .selected_text(edit.definition.as_ref().map_or("Choose footprint".into(), |d| format!("{} · r{}", d.name, d.revision)))
-                    .show_ui(ui, |ui| {
-                        for d in project.footprint_catalog() {
-                            let text = format!("{} / {} · r{}", d.library, d.name, d.revision);
-                            if !text.to_lowercase().contains(&edit.query.to_lowercase()) && !d.id.contains(&edit.query.to_lowercase()) {
-                                continue;
+            pcbcraft_chrome::properties::split(ui, |ui, column| {
+                if column == 0 {
+                    ui.add_enabled_ui(!placed, |ui| {
+                        let label = ui.label("Search footprints");
+                        ui.add(egui::TextEdit::singleline(&mut edit.query)).labelled_by(label.id);
+                        let old = edit.definition.as_ref().map(|d| (d.library.clone(), d.id.clone(), d.revision));
+                        ui.label("Package");
+                        egui::ScrollArea::vertical().id_salt("package_results").max_height(150.0).show(ui, |ui| {
+                            for d in project.footprint_catalog() {
+                                let text = format!("{} / {} · r{}", d.library, d.name, d.revision);
+                                if !text.to_lowercase().contains(&edit.query.to_lowercase()) && !d.id.contains(&edit.query.to_lowercase()) {
+                                    continue;
+                                }
+                                if ui.selectable_label(edit.definition.as_ref().is_some_and(|current| current == &d), text).clicked() {
+                                    edit.definition = Some(d);
+                                }
                             }
-                            if ui.selectable_label(edit.definition.as_ref().is_some_and(|current| current == &d), text).clicked() {
-                                edit.definition = Some(d);
-                            }
+                        });
+                        if old != edit.definition.as_ref().map(|d| (d.library.clone(), d.id.clone(), d.revision)) {
+                            edit.mapping.clear();
                         }
                     });
-                if old != edit.definition.as_ref().map(|d| (d.library.clone(), d.id.clone(), d.revision)) {
-                    edit.mapping.clear();
+                } else {
+                    if let Some(definition) = &edit.definition {
+                        crate::library_preview::footprint(ui, definition);
+                        pcbcraft_chrome::properties::identity(
+                            ui,
+                            &definition.name,
+                            &format!("{} / {} · revision {}", definition.library, definition.id, definition.revision),
+                        );
+                        ui.collapsing("Source and license", |ui| {
+                            ui.label(&definition.license);
+                            ui.add(egui::Label::new(&definition.source.reference).wrap());
+                        });
+                        if let Some(component) = project.components().find(|c| c.id() == edit.component) {
+                            ui.add_enabled_ui(!placed, |ui| {
+                                for pin in component.definition.pins() {
+                                    let mapped = edit.mapping.entry(pin.number.clone()).or_default();
+                                    egui::ComboBox::from_label(format!("Terminal {}", pin.number))
+                                        .selected_text(if mapped.is_empty() { "Choose pad".into() } else { format!("Pad {mapped}") })
+                                        .show_ui(ui, |ui| {
+                                            for pad in &definition.pads {
+                                                ui.selectable_value(mapped, pad.number.clone(), format!("Pad {}", pad.number));
+                                            }
+                                        });
+                                }
+                            });
+                        }
+                    }
                 }
             });
-            if let Some(definition) = &edit.definition {
-                ui.label(format!("{} / {} · revision {}", definition.library, definition.id, definition.revision));
-                ui.label(&definition.license);
-                ui.add(egui::Label::new(&definition.source.reference).truncate()).on_hover_text(&definition.source.reference);
-                if let Some(component) = project.components().find(|c| c.id() == edit.component) {
-                    ui.add_enabled_ui(!placed, |ui| {
-                        for pin in component.definition.pins() {
-                            let mapped = edit.mapping.entry(pin.number.clone()).or_default();
-                            egui::ComboBox::from_label(format!("Terminal {}", pin.number))
-                                .selected_text(if mapped.is_empty() { "Choose pad".into() } else { format!("Pad {mapped}") })
-                                .show_ui(ui, |ui| {
-                                    for pad in &definition.pads {
-                                        ui.selectable_value(mapped, pad.number.clone(), format!("Pad {}", pad.number));
-                                    }
-                                });
-                        }
-                    });
-                }
-            }
             if placed {
                 ui.label("Changing a placed package requires a reviewed board update.");
             }

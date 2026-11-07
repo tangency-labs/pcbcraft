@@ -502,3 +502,18 @@ prototype's broader **Port** label. The imported SVG master retains its original
 M/Disconnect and Move handler, and redundant Save/Undo/Redo ribbon actions were
 removed in favor of the existing app bar. These layout/label changes are
 original upstream adaptation code and do not import further prototype sources.
+
+
+## Compact and expanded selection properties
+
+The compact inspector and expanded component/placement form follow PCBcraft
+Next's `src/desktop/inspector.rs` at
+`568cd495397a91563e563e7163efb226d84fa83a` (MIT OR Apache-2.0, copyright
+2026 Travis Lowe and contributors), and Travis's FigCraft schematic-properties
+export supplied in this workspace. The upstream implementation retains its own
+view identities, revision checks, command transactions, field validation and
+physical board painter. No prototype model, session or file format is imported.
+The new package preview projects native definitions through existing chrome
+primitives. Published manual observations and deliberate differences are recorded
+in [the properties/editor notes](docs/properties-and-library-editors.md); no EDA
+implementation source, external drawings, icons or example assets were used.

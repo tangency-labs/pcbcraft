@@ -115,6 +115,7 @@ impl Binding {
 /// Schematic interaction state is separate from board selection and input handling.
 #[derive(Debug, Default)]
 pub(super) struct SchematicState {
+    pub(super) properties: crate::properties::State,
     pub(super) selection: Selection,
     pub(super) selected_sheet_symbol: Option<u64>,
     pub(super) selected_leg: Option<LegTarget>,

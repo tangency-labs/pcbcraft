@@ -179,6 +179,16 @@ windows show the same document. There is no hidden original editor or automatic
 switch away from Wayland. Native close/reopen verification currently covers Linux
 Wayland and X11; Windows and macOS still need platform qualification.
 
+## Inspect and edit component properties
+
+Select a symbol to use the compact **Properties** card. Edit reference, value or
+rotation and choose **Apply changes**, or open **More properties** for the
+expanded form. **E** opens the same form. **OK** applies the supported properties
+as one undo step; **Cancel** leaves the project unchanged. The Pin functions and
+Library tabs show the exact definition retained by the project. The **Footprint**
+control opens the package chooser; apply pending component edits before changing
+packages. **View → Properties** controls this window's inspector.
+
 ## Inspect a board beside its schematic
 
 Generate an original example into a directory that does not already exist:

@@ -526,7 +526,7 @@ fn detached_fields_dialog_keeps_its_target_and_blocks_other_input() {
     child_key(&mut h, &peer, Key::A, Modifiers::NONE);
     child_key(&mut h, &peer, Key::Escape, Modifiers::NONE);
     child_key(&mut h, &peer, Key::E, Modifiers::NONE);
-    assert!(matches!(h.state().dialog, Dialog::EditFields { .. }));
+    assert!(matches!(h.state().dialog, Dialog::EditFields(_)));
     let before = h.state().session.inspect();
     child_key(&mut h, &peer, Key::Delete, Modifiers::NONE);
     let part = child_rect(&peer, "Resistor").center();
@@ -556,7 +556,7 @@ fn closing_a_detached_view_invalidates_its_pending_fields_dialog() {
     let origin = h.state().views.view(child).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, child_rect(&peer, "Schematic canvas"));
     child_click_at(&mut h, &peer, origin);
     child_key(&mut h, &peer, Key::E, Modifiers::NONE);
-    assert!(matches!(h.state().dialog, Dialog::EditFields { .. }));
+    assert!(matches!(h.state().dialog, Dialog::EditFields(_)));
     let before = h.state().session.inspect();
     focus(&mut h, &peer, false);
     h.get_by_label("Reference").click();
@@ -1043,7 +1043,7 @@ fn closing_another_window_keeps_a_surviving_fields_dialog_valid() {
     let origin = h.state().views.view(id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
     child_click_at(&mut h, &second, origin);
     child_key(&mut h, &second, Key::E, Modifiers::NONE);
-    assert!(matches!(h.state().dialog, Dialog::EditFields { .. }));
+    assert!(matches!(h.state().dialog, Dialog::EditFields(_)));
     focus_host(&mut h, &peers, HostId::ROOT);
     h.get_by_label("Reference").click();
     h.run();

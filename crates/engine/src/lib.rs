@@ -631,11 +631,17 @@ const CATALOG: &[Command] = &[
     Command {
         id: SET_SYMBOL_FIELDS,
         title: "Edit Symbol Fields",
-        summary: "Set the reference and value shown for a symbol. References are unique and have no spaces. Undoable.",
+        summary: "Set reference, value and optional orientation together. References are unique and have no spaces. Undoable.",
         params: &[
             SYMBOL,
             Param { required: true, name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
             Param { required: true, name: "value", summary: "Value text, such as 4.7k", kind: ParamKind::Text },
+            Param {
+                required: false,
+                name: "rotation",
+                summary: "Counterclockwise degrees; omission preserves orientation",
+                kind: ParamKind::Rotation,
+            },
             EXPECTED_REVISION,
         ],
     },
@@ -1401,7 +1407,8 @@ impl Session {
     }
 
     /// Set component-owned fields through a placed unit. References must be unique across
-    /// components; both fields are bounded single-line text. An unchanged pair is a no-op.
+    /// components; both fields are bounded single-line text. Optional orientation changes in the
+    /// same transaction, preserving attached endpoints. Omission retains it; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1415,7 +1422,8 @@ impl Session {
         if project.components.values().any(|other| other.ordinal != component.ordinal && other.reference == reference) {
             return Err(CommandError::InvalidParams(format!("another component is already {reference}")));
         }
-        if component.reference == reference && component.value == value {
+        let rotation = params["rotation"].as_u64().map_or(project.symbols[index].rotation, |degrees| (degrees / 90) as u8);
+        if component.reference == reference && component.value == value && project.symbols[index].rotation == rotation {
             return Ok(());
         }
         let mut component = component.clone();
@@ -1423,6 +1431,7 @@ impl Session {
         component.value = value;
         let mut project = project.clone();
         Arc::make_mut(&mut project.components).insert(component.ordinal, component);
+        Arc::make_mut(&mut project.sheet_mut().symbols)[index].rotation = rotation;
         self.change(project);
         Ok(())
     }
@@ -1626,6 +1635,36 @@ mod tests {
         s.execute("edit.redo", &Value::Null).unwrap();
         assert_eq!(name(&s), Some("a"));
         assert_eq!(s.revision(), 5);
+    }
+
+    /// An inspector can change fields and orientation in one history step. Invalid input or a
+    /// stale revision cannot partially change either, and older callers retain orientation.
+    #[test]
+    fn property_fields_and_orientation_are_one_atomic_edit() {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({})).unwrap();
+        s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":1})).unwrap();
+        let before = s.snapshot().unwrap();
+        let mut params = json!({"symbol":"symbol-2","reference":"R7","value":"4.7k","rotation":90,"expected_revision":s.revision()});
+        let revision = s.revision();
+        s.apply(SET_SYMBOL_FIELDS, &params).unwrap();
+        assert_eq!(s.revision(), revision + 1);
+        let changed = s.snapshot().unwrap();
+        assert_eq!(changed.symbols()[0].turns(), 1);
+        assert_eq!(changed.reference(&changed.symbols()[0]), "R7");
+        params["expected_revision"] = json!(s.revision());
+        s.apply(SET_SYMBOL_FIELDS, &params).unwrap();
+        assert_eq!(s.revision(), revision + 1);
+        params["rotation"] = json!(45);
+        params["value"] = json!("invalid turn");
+        assert!(s.apply(SET_SYMBOL_FIELDS, &params).is_err());
+        assert!(Arc::ptr_eq(&changed, &s.snapshot().unwrap()));
+        params["rotation"] = json!(180);
+        params["expected_revision"] = json!(revision);
+        assert!(s.apply(SET_SYMBOL_FIELDS, &params).is_err());
+        assert!(Arc::ptr_eq(&changed, &s.snapshot().unwrap()));
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     }
 
     /// Rotating turns the pins and the wire follows; deleting removes the symbol with its wires

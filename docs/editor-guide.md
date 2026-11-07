@@ -183,8 +183,17 @@ local cleanup does not route around obstacles or resolve conflicting net names
 
 ## Symbol properties and selection
 
+The schematic **Properties** card shows the focused selection's reference,
+value, orientation and footprint. **Apply changes** commits a draft in one undo
+step. **More properties** or **E** opens the expanded General, Pin functions and
+Library form; **Cancel** leaves the project unchanged. **View → Properties**
+shows or hides the inspector for that window. Footprint choice opens a responsive
+package browser with a physical preview, explicit terminal mapping and expandable
+source/license details. Library-definition authoring remains separate from changing
+an instance's properties.
+
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
-**E** edits its reference and value and **Delete** removes it with its wires.
+**E** opens its expanded properties and **Delete** removes it with its wires.
 Right-click a symbol for the same actions, and press **Esc** to clear the selection.
 Reference and value belong to the component; position and rotation belong to
 its placed unit. Native formats 2 and 3 record these separately, and opening a format 1

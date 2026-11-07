@@ -20,6 +20,7 @@ mod editor_workspace;
 mod footprint_assignment;
 mod hierarchy;
 mod home;
+mod library_preview;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
 mod net_inspector;
@@ -27,6 +28,7 @@ mod parts_browser;
 mod preferences;
 mod project_browser;
 mod project_files;
+mod properties;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod ribbon;
@@ -49,10 +51,10 @@ use pcbcraft_chrome::{
     shell::{self, dim},
     theme, units, workspace,
 };
+#[cfg(test)]
+use pcbcraft_engine::SET_SYMBOL_FIELDS;
 use pcbcraft_engine::selection::Selection;
-use pcbcraft_engine::{
-    CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, SET_SYMBOL_FIELDS, Session, command, schematic::SymbolDefinition,
-};
+use pcbcraft_engine::{CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, Session, command, schematic::SymbolDefinition};
 use serde_json::{Value, json};
 
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
@@ -145,15 +147,8 @@ enum Dialog {
     Hierarchy(hierarchy::Edit),
     /// Chooses and pins a package independently of board placement.
     Footprint(footprint_assignment::Edit),
-    /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
-    EditFields {
-        source: ViewInput,
-        symbol: String,
-        reference: String,
-        value: String,
-        error: Option<String>,
-        focused: bool,
-    },
+    /// Expanded selection properties retain their originating view and revision.
+    EditFields(properties::Edit),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
     SaveChanges(unsaved::Then),
     OpenLocation,
@@ -199,6 +194,8 @@ pub struct PcbApp {
     home: bool,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
+    /// Selection inspector visibility belongs to this native host.
+    properties_open: bool,
     /// Set once closing the window has been answered for, so the next close request passes.
     close_allowed: bool,
     /// Close, New Project or Open held back until the running file operation finishes.
@@ -268,6 +265,7 @@ impl PcbApp {
         views.set_grid_everywhere(preferences.schematic_grid_nm);
         Self {
             home: true,
+            properties_open: true,
             arrangements: arrangements::Arrangements::from_storage(cc.storage.and_then(|storage| storage.get_string(arrangements::STORAGE_KEY))),
             preferences,
             views,
@@ -502,11 +500,9 @@ impl PcbApp {
                 self.begin_footprint_assignment(component);
             }
             SymbolAction::EditFields => {
-                let Some(project) = self.views.active.snapshot(&self.session) else { return };
-                let Some(symbol) = project.symbols().iter().find(|symbol| symbol.id() == id) else { return };
-                let (reference, value) = (project.reference(symbol), project.value(symbol).to_owned());
-                let Some(source) = self.views.active.input(&self.session) else { return };
-                self.dialog = Dialog::EditFields { source, symbol: id, reference, value, error: None, focused: false };
+                if let Some(edit) = self.read_property_edit() {
+                    self.dialog = Dialog::EditFields(edit);
+                }
             }
         }
     }
@@ -849,11 +845,21 @@ impl PcbApp {
                 active: has_project && self.net_inspector.open,
                 toggle: true,
             },
+            RibbonTool {
+                icon: ToolIcon::Settings,
+                label: "Properties",
+                description: "Toggle Properties",
+                shortcut: "",
+                enabled: has_project && schematic,
+                active: self.properties_open,
+                toggle: true,
+            },
         ];
         let toggled = match workspace::ribbon_group(ui, "Panels", &panels) {
             Some(0) => Some(Panel::Browser),
             Some(1) => Some(Panel::Parts),
             Some(2) => Some(Panel::Nets),
+            Some(3) => Some(Panel::Properties),
             _ => None,
         };
         if let Some(panel) = toggled {
@@ -1512,47 +1518,7 @@ impl PcbApp {
                     self.dialog = Dialog::Name { command: id, text, error, focused };
                 }
             }
-            Dialog::EditFields { source, symbol, mut reference, mut value, mut error, mut focused } => {
-                let (mut submit, mut cancel) = (false, false);
-                let closing = shell::dialog(ctx, "edit_fields", "Edit Symbol Fields", |ui| {
-                    let label = ui.label("Reference");
-                    let field = ui.add(egui::TextEdit::singleline(&mut reference).desired_width(f32::INFINITY)).labelled_by(label.id);
-                    if !focused {
-                        field.request_focus();
-                        focused = true;
-                    }
-                    let label = ui.label("Value");
-                    let value_field = ui.add(egui::TextEdit::singleline(&mut value).desired_width(f32::INFINITY)).labelled_by(label.id);
-                    submit = (field.lost_focus() || value_field.lost_focus()) && ui.input(|i| i.key_pressed(Key::Enter));
-                    if let Some(error) = &error {
-                        ui.label(shell::error(error.as_str()));
-                    }
-                    ui.horizontal(|ui| {
-                        submit |= ui.button("OK").clicked();
-                        cancel = ui.button("Cancel").clicked();
-                    });
-                });
-                if submit {
-                    // Stale dialogs close with a status message; validation errors stay editable.
-                    if !self.views.active.accepts(source, &self.session) {
-                        self.message = Some("View or project changed; reopen the symbol fields to continue editing.".to_owned());
-                        return;
-                    }
-                    let mut params = json!({"symbol": symbol, "reference": reference, "value": value, "expected_revision": source.revision});
-                    if let Some(crate::editor_view::DocumentTarget::Sheet(sheet)) = self.views.active.target() {
-                        params["sheet"] = json!(sheet.id());
-                    }
-                    match self.session.apply(SET_SYMBOL_FIELDS, &params) {
-                        Ok(_) => self.message = None,
-                        Err(e) => {
-                            error = Some(e.to_string());
-                            self.dialog = Dialog::EditFields { source, symbol, reference, value, error, focused };
-                        }
-                    }
-                } else if !(closing || cancel) {
-                    self.dialog = Dialog::EditFields { source, symbol, reference, value, error, focused };
-                }
-            }
+            Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, edit),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),

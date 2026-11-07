@@ -15,7 +15,6 @@ fn component_harness() -> Harness<'static, PcbApp> {
 
 /// Choose a package through the actual UI; every pad remains explicit rather than guessed.
 fn choose_resistor(h: &mut Harness<'_, PcbApp>) {
-    click(h, "Package");
     click(h, "starter / Resistor 0402 (1005 metric) · r4");
     click(h, "Terminal 1");
     click(h, "Pad 2");
@@ -66,7 +65,6 @@ fn footprint_assignment_invalid_cancel_and_stale_dialog_preserve_state() {
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     h.state_mut().begin_footprint_assignment(None);
     h.run();
-    click(&mut h, "Package");
     click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
     click(&mut h, "Assign");
     assert!(matches!(h.state().dialog, Dialog::Footprint(_)));
