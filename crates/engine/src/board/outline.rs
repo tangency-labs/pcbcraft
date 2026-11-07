@@ -1,10 +1,9 @@
-//! Board-local closed boundaries, independent of footprints and display layers.
-use crate::{CommandError, Session, schematic::Point};
+//! Read compatibility for the superseded local rectangle preview. New edits use layer drawings.
+use crate::schematic::Point;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-/// A validated physical boundary in board nanometers. The first supported shape is one
-/// axis-aligned rectangle without cutouts; closure is implicit rather than a duplicated vertex.
+/// The earlier local rectangle record, retained for byte-stable read compatibility.
+/// New edits materialize layer-addressed drawings, without inferring manufacturing validity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "shape", rename_all = "snake_case", try_from = "OutlineRecord")]
 pub enum Outline {
@@ -42,23 +41,6 @@ impl Outline {
         match self {
             Self::Rectangle { min, max } => [min, Point { x_nm: max.x_nm, y_nm: min.y_nm }, max, Point { x_nm: min.x_nm, y_nm: max.y_nm }],
         }
-    }
-}
-
-impl Session {
-    /// Replace or clear the addressed board's boundary in one undo step. Invalid targets,
-    /// stale revisions and malformed geometry leave the project intact; equal input is a no-op.
-    pub(crate) fn set_outline(&mut self, params: &Value) -> Result<(), CommandError> {
-        self.check_revision(params)?;
-        let outline: Option<Outline> =
-            serde_json::from_value(params["outline"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
-        let project = self.open_project()?;
-        if project.board.outline != outline {
-            let mut project = project.clone();
-            std::sync::Arc::make_mut(&mut project.board).outline = outline;
-            self.change(project);
-        }
-        Ok(())
     }
 }
 

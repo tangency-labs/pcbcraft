@@ -98,8 +98,8 @@ mod live {
         Selection,
         /// A list of distinct footprint IDs.
         Footprints,
-        /// Persistent sheet UUID, validated against the current project before navigation.
-        Sheet,
+        /// Persistent document/object UUID, resolved against the addressed view before acting.
+        Object,
     }
 
     impl Kind {
@@ -109,7 +109,7 @@ mod live {
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
                 Self::View | Self::Window | Self::Arrangement => json!({"type": "integer", "minimum": 0}),
-                Self::Sheet => json!({"type":"string","format":"uuid"}),
+                Self::Object => json!({"type":"string","format":"uuid"}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
                 Self::Choice(values) => json!({"type": "string", "enum": values}),
@@ -133,7 +133,7 @@ mod live {
                 Self::Choice(values) => value.as_str().is_some_and(|value| values.contains(&value)),
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
-                Self::Sheet => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
+                Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
                 Self::Selection => Selection::parse(value).is_some(),
                 Self::Footprints => footprints(value).is_some(),
             };
@@ -144,7 +144,7 @@ mod live {
                 Self::View => "must be a view ID from inspect_editor".to_owned(),
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
-                Self::Sheet => "must be a sheet UUID from project inspection".to_owned(),
+                Self::Object => "must be an object UUID from project inspection".to_owned(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
                 Self::Choice(values) => format!("must be one of {}", values.join(", ")),
@@ -258,7 +258,7 @@ mod live {
             id: "view.open_sheet",
             title: "Open Sheet",
             summary: "Open an explicitly addressed sheet in this pane, as its Browser row does. Other panes retain their targets.",
-            params: &[VIEW, Param { name: "sheet", summary: "Sheet UUID from project inspection", required: true, kind: Kind::Sheet }],
+            params: &[VIEW, Param { name: "sheet", summary: "Sheet UUID from project inspection", required: true, kind: Kind::Object }],
         },
         WindowCommand {
             id: "view.focus",
@@ -330,6 +330,17 @@ mod live {
                     required: true,
                     kind: Kind::Integer { min: *grid::SPACING_RANGE_NM.start(), max: *grid::SPACING_RANGE_NM.end(), step: 1 },
                 },
+            ],
+        },
+        WindowCommand {
+            id: "view.set_layer",
+            title: "Layer",
+            summary: "Activate or show/hide an addressed PCB layer through the Layers controls. Changes only the addressed view and cancels unfinished drawing when necessary.",
+            params: &[
+                VIEW,
+                Param { name: "layer", summary: "Layer UUID on this view's board", required: true, kind: Kind::Object },
+                Param { name: "active", summary: "Make this the active drawing layer", required: false, kind: Kind::Bool },
+                Param { name: "visible", summary: "Show or hide this layer", required: false, kind: Kind::Bool },
             ],
         },
         WindowCommand {
@@ -603,6 +614,8 @@ mod live {
                         "selection": view.board.selection,
                         "hidden_layers": view.board.hidden_layers,
                         "active_layer": view.board.active_layer,
+                        "drawing_selection": view.board.drawing.selected,
+                        "drawing_tool": view.board.drawing.tool.map(|tool| match tool {crate::board_drawing::Tool::Lines=>"lines",crate::board_drawing::Tool::Rectangle=>"rectangle"}),
                     })),
                 }))
             })
@@ -744,6 +757,28 @@ mod live {
                     if let Some(view) = self.views.view_mut(view) {
                         view.camera.set_zoom(percent as f32 / 100.0);
                     }
+                }
+                ("view.set_layer", Some((view, _)), _) => {
+                    let target = self
+                        .views
+                        .view(view)
+                        .filter(|view| view.workspace == Workspace::Board)
+                        .and_then(|view| view.board.target)
+                        .ok_or("The addressed view must show a board")?;
+                    let layer = params["layer"].as_str().unwrap_or_default();
+                    if !self
+                        .session
+                        .project()
+                        .and_then(|project| project.board_view(target))
+                        .is_some_and(|board| board.layers().iter().any(|record| record.id.to_string() == layer))
+                    {
+                        return Err("Unknown layer on this view's board".into());
+                    }
+                    self.views.view_mut(view).ok_or("The addressed view closed")?.board.set_layer(
+                        layer,
+                        params["active"].as_bool() == Some(true),
+                        params["visible"].as_bool(),
+                    );
                 }
                 ("view.set_grid", Some((view, _)), _) => self.set_view_grid(view, params["spacing_nm"].as_i64().unwrap_or_default()),
                 ("view.select" | "view.select_footprints", Some((view, _)), _)

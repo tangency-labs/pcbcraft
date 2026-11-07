@@ -426,6 +426,10 @@ impl EditorViews {
         if self.active.workspace != Workspace::Board {
             return;
         }
+        if !selection.is_empty() {
+            self.active.board.drawing.cancel();
+            self.active.board.drawing.selected = None;
+        }
         self.active.board.selection = selection;
         self.selection_changed(session, policy);
     }

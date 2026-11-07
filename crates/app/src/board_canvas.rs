@@ -30,6 +30,7 @@ pub(super) struct Draft {
 /// Selection and authored intent are handled after the renderer releases its view/session borrows.
 #[derive(Default)]
 pub(super) struct Interaction {
+    pub(super) drawing_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) edit: Option<Draft>,
 }
@@ -56,6 +57,19 @@ pub(super) fn show(
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     camera.navigate_board(&response, rect, project, enabled, navigation);
+    let edge = crate::board_drawing::interact(
+        ui,
+        &response,
+        camera,
+        project,
+        &mut state.drawing,
+        state.active_layer.as_deref(),
+        &state.hidden_layers,
+        source,
+        enabled,
+        state.move_requested,
+    );
+    let enabled = enabled && !edge.consumed;
     let copper = project.setup().map(|setup| {
         setup
             .layers()
@@ -80,7 +94,10 @@ pub(super) fn show(
     let hit =
         |pointer: egui::Pos2| footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| bounds.contains(pointer).then_some(footprint));
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
-    let mut out = Interaction::default();
+    let mut out = Interaction { drawing_edit: edge.command, ..Interaction::default() };
+    if edge.consumed && !state.selection.is_empty() {
+        out.selection = Some(BTreeSet::new());
+    }
     if !enabled || state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source) {
         state.draft = None;
     }
@@ -164,14 +181,7 @@ pub(super) fn show(
     }
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
-    if let Some(outline) = project.outline()
-        && project.setup().is_none_or(|setup| {
-            let mut layers = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Outline).peekable();
-            layers.peek().is_none() || layers.any(|layer| !state.hidden_layers.contains(&layer.id.to_string()))
-        })
-    {
-        board::outline(&p, outline.corners().map(|point| camera.screen(point, rect)));
-    }
+    crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers);
     for mut footprint in footprints {
         if let Some(draft) = state.draft.as_ref().filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -193,7 +203,7 @@ pub(super) fn show(
             highlighted.contains(&footprint.id),
         );
     }
-    if project.footprints().next().is_none() && project.outline().is_none() {
+    if project.footprints().next().is_none() && project.drawings().is_empty() && state.drawing.tool.is_none() {
         board::empty(&p, rect);
     }
     if state.draft.is_some() {

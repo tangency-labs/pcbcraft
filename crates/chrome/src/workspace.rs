@@ -63,7 +63,8 @@ pub enum ToolIcon {
     SplitView,
     EditorWindow,
     Settings,
-    Outline,
+    Rectangle,
+    Line,
 }
 
 /// The glyph at the start of a Browser row: a container or one of the ribbon's own glyphs.
@@ -1010,7 +1011,12 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
     let stroke = |width: f32, color| Stroke::new(width * size / 64.0, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
-        ToolIcon::Outline => {
+        ToolIcon::Line => {
+            line(&[(10., 50.), (54., 14.)], stroke(4., ink));
+            p.circle_filled(at(10., 50.), 4. * size / 64., accent);
+            p.circle_filled(at(54., 14.), 4. * size / 64., accent);
+        }
+        ToolIcon::Rectangle => {
             line(&[(10.0, 16.0), (54.0, 16.0), (54.0, 48.0), (10.0, 48.0), (10.0, 16.0)], stroke(4.0, ink));
             for (x, y) in [(10.0, 16.0), (54.0, 16.0), (54.0, 48.0), (10.0, 48.0)] {
                 p.rect_filled(Rect::from_center_size(at(x, y), vec2(7.0, 7.0) * (size / 64.0)), 0, accent);

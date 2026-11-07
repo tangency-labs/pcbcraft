@@ -2,14 +2,23 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
-## Rectangular board outlines
+## Board Edge drawings
 
-The rectangle model, command, native board version 8 codec, outline form and ribbon
-glyph are original PCBcraft work under MIT OR Apache-2.0. Closure and rectangle
-terminology were checked against the published [KiCad 10 PCB Editor manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#board_outlines_edge_cuts),
+The layer-addressed drawing model, commands, native board version 9 codec, canvas
+tools and ribbon glyphs are original PCBcraft work under MIT OR Apache-2.0.
+The earlier local rectangle codec remains for read compatibility. Layer-based
+board-boundary terminology was checked against the published [KiCad 10 PCB Editor
+manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#board_outlines_edge_cuts),
 consulted November 7, 2026. No KiCad implementation, fixtures, icons or artwork
-were used. This slice supports one axis-aligned rectangle without cutouts and
-does not implement edge-clearance or manufacturing checks.
+were used.
+
+PCBcraft Next's original workspace documentation and the existing FigCraft exports
+`03-layout-top.png` and `pcb-workspace.png` were reviewed as visual references
+for grouped Layers and canvas drawing. No board geometry, project fixtures or
+implementation code was imported from those references. The hosted Next demo
+could not be opened in this environment; that review is limited to the local
+documentation and exported visuals. This slice implements straight paths and
+rectangles without closure, edge-clearance or manufacturing validation.
 
 ## Adapted from SolidCraft
 

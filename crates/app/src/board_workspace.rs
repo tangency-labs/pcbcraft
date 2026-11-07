@@ -111,22 +111,36 @@ impl PcbApp {
             self.begin_footprint_assignment(component);
         }
         workspace::ribbon_separator(ui);
-        if workspace::ribbon_group(
-            ui,
-            "Board",
-            &[RibbonTool {
-                icon: ToolIcon::Outline,
-                label: "Outline",
-                description: "Edit board outline",
+        let can_draw =
+            self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))).is_some_and(
+                |board| {
+                    crate::board_drawing::can_draw(board, self.views.active.board.active_layer.as_deref(), &self.views.active.board.hidden_layers)
+                },
+            );
+        let drawing_tools = [
+            RibbonTool {
+                icon: ToolIcon::Line,
+                label: "Line",
+                description: "Draw lines on Board Edge",
                 shortcut: "",
-                enabled: enabled && !editing,
-                active: false,
+                enabled: enabled && can_draw && !editing,
+                active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Lines),
                 toggle: false,
-            }],
-        )
-        .is_some()
-        {
-            self.begin_board_outline();
+            },
+            RibbonTool {
+                icon: ToolIcon::Rectangle,
+                label: "Rectangle",
+                description: "Draw rectangle on Board Edge",
+                shortcut: "",
+                enabled: enabled && can_draw && !editing,
+                active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Rectangle),
+                toggle: false,
+            },
+        ];
+        if let Some(index) = workspace::ribbon_group(ui, "Draw", &drawing_tools) {
+            let tool = if index == 0 { crate::board_drawing::Tool::Lines } else { crate::board_drawing::Tool::Rectangle };
+            let layer = self.views.active.board.active_layer.clone();
+            self.views.active.board.drawing.start(tool, layer);
         }
         workspace::ribbon_separator(ui);
         let tools = [
@@ -193,12 +207,19 @@ impl PcbApp {
                 })
             })
             .inner;
-        if (pick.selection.is_some() || pick.edit.is_some())
+        if (pick.selection.is_some() || pick.edit.is_some() || pick.drawing_edit.is_some())
             && enabled
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some(selection) = pick.selection {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(mut edit) = pick.drawing_edit
+                && self.views.active.accepts(edit.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                edit.params["board"] = serde_json::json!(target.board);
+                self.run(edit.id, &edit.params);
             }
             if let Some(draft) = pick.edit
                 && self.views.active.accepts(draft.source, &self.session)

@@ -276,7 +276,7 @@ impl Camera {
     ) {
         if std::mem::take(&mut self.fit_requested) {
             *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
-            let bounds = project.footprints().flat_map(board_extent).chain(project.outline().into_iter().flat_map(|outline| outline.corners())).fold(
+            let bounds = project.footprints().flat_map(board_extent).chain(project.drawings().into_iter().flat_map(|drawing| drawing.points)).fold(
                 Rect::NOTHING,
                 |bounds, point| {
                     bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))

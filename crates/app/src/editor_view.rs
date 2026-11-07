@@ -130,6 +130,7 @@ pub(super) struct SchematicState {
 /// New views hide fabrication/courtyard layers once setup exists; restores preserve user choices.
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
+    pub(super) drawing: crate::board_drawing::State,
     pub(super) silkscreen_draft: Option<crate::board_panels::SilkscreenDraft>,
     pub(super) draft: Option<crate::board_canvas::Draft>,
     pub(super) move_requested: bool,
@@ -142,6 +143,25 @@ pub(super) struct BoardState {
     pub(super) browser_collapsed: bool,
     pub(super) properties_collapsed: bool,
     pub(super) target: Option<BoardTarget>,
+}
+
+impl BoardState {
+    /// Apply view-local layer choices through the same handler for Layers and live control.
+    /// Changing the active layer or hiding it cancels disposable drawing gestures.
+    pub(super) fn set_layer(&mut self, id: &str, active: bool, visible: Option<bool>) {
+        if active && self.active_layer.as_deref() != Some(id) {
+            self.drawing.cancel();
+            self.active_layer = Some(id.to_owned());
+        }
+        if let Some(visible) = visible {
+            if visible {
+                self.hidden_layers.remove(id);
+            } else {
+                self.drawing.cancel();
+                self.hidden_layers.insert(id.to_owned());
+            }
+        }
+    }
 }
 
 /// One view retains independent navigation and selection for each built-in workspace.
@@ -394,6 +414,7 @@ impl EditorView {
 
     /// Drop unfinished gestures without altering selection or the document.
     pub(super) fn cancel_gesture(&mut self) {
+        self.board.drawing.cancel();
         self.board.draft = None;
         self.board.move_requested = false;
         self.board.rotate_requested = 0;
@@ -481,6 +502,9 @@ impl EditorView {
         if self.board.draft.as_ref().is_some_and(|draft| !self.accepts(draft.source, session)) {
             self.cancel_gesture();
         }
+        if self.board.drawing.source().is_some_and(|source| !self.accepts(source, session)) {
+            self.cancel_gesture();
+        }
         if self.schematic.tool.as_ref().is_some_and(|tool| tool.revision() != session.revision()) {
             self.cancel_gesture();
         }
@@ -510,8 +534,14 @@ impl EditorView {
                 .collect();
             self.board.selection.retain(|id| placed.contains(id));
             let setup = self.board.target.and_then(|target| project.board_view(target)).and_then(|board| board.setup());
-            let layers: std::collections::BTreeSet<_> =
-                setup.into_iter().flat_map(|setup| setup.layers()).map(|layer| layer.id.to_string()).collect();
+            let layers: std::collections::BTreeSet<_> = self
+                .board
+                .target
+                .and_then(|target| project.board_view(target))
+                .into_iter()
+                .flat_map(|board| board.layers())
+                .map(|layer| layer.id.to_string())
+                .collect();
             if !self.board.layer_defaults_applied
                 && let Some(setup) = setup
             {

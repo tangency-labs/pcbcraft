@@ -2,7 +2,7 @@
 use crate::{PcbApp, editor_view::BoardState};
 use egui::{Id, Rect, Ui};
 use pcbcraft_chrome::{board, units, workspace};
-use pcbcraft_engine::board::setup::{BoardSetup, Layer, LayerPurpose, Side, Stratum};
+use pcbcraft_engine::board::setup::{Layer, LayerPurpose, Side, Stratum};
 
 impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
@@ -43,11 +43,7 @@ impl PcbApp {
             layers_area.min.y = browser.max.y;
         }
         let (layers, collapse) = workspace::floating_card_with_id(ui, host.with("layers"), "Layers", layers_area, state.layers_collapsed, |ui| {
-            if let Some(setup) = target.setup() {
-                layer_groups(ui, setup, state, Id::new((view_id, target.target)));
-            } else {
-                ui.label("Stackup unspecified");
-            }
+            layer_groups(ui, target, state, Id::new((view_id, target.target)));
         });
         if collapse {
             state.layers_collapsed = !state.layers_collapsed;
@@ -124,11 +120,15 @@ fn group(purpose: LayerPurpose) -> usize {
 
 /// Copper follows physical stack order; technical layers group by purpose and sort by display
 /// name. Renaming or regrouping does not change local visibility keyed by stable layer identity.
-fn layer_groups(ui: &mut Ui, setup: &BoardSetup, state: &mut BoardState, id: Id) {
-    let mut layers: Vec<_> = setup.layers().iter().collect();
+fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>, state: &mut BoardState, id: Id) {
+    let records = board.layers();
+    let mut layers: Vec<_> = records.iter().collect();
     layers.sort_by_cached_key(|layer| {
         (
-            setup.stackup().strata.iter().position(|stratum| matches!(stratum,Stratum::Copper{layer:id,..}if *id==layer.id)).unwrap_or(usize::MAX),
+            board
+                .setup()
+                .and_then(|setup| setup.stackup().strata.iter().position(|stratum| matches!(stratum,Stratum::Copper{layer:id,..}if *id==layer.id)))
+                .unwrap_or(usize::MAX),
             layer.name.to_lowercase(),
         )
     });
@@ -137,7 +137,7 @@ fn layer_groups(ui: &mut Ui, setup: &BoardSetup, state: &mut BoardState, id: Id)
         if items.is_empty() {
             continue;
         }
-        egui::CollapsingHeader::new(title).id_salt(id.with(index)).default_open(index == 0).show(ui, |ui| {
+        egui::CollapsingHeader::new(title).id_salt(id.with(index)).default_open(index <= 1).show(ui, |ui| {
             for layer in items {
                 layer_row(ui, layer, state);
             }
@@ -149,23 +149,20 @@ fn layer_groups(ui: &mut Ui, setup: &BoardSetup, state: &mut BoardState, id: Id)
 /// geometry; the current legacy through-hole inspection markers use visible copper only.
 fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState) {
     let id = layer.id.to_string();
+    let label = if layer.purpose == LayerPurpose::Outline && layer.name == "Board outline" { "Board Edge" } else { &layer.name };
     ui.push_id(&id, |ui| {
         ui.horizontal(|ui| {
             let mut visible = !state.hidden_layers.contains(&id);
             let response = ui.checkbox(&mut visible, "");
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, visible, format!("Show layer {}", layer.name)));
+            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, visible, format!("Show layer {}", label)));
             if response.changed() {
-                if visible {
-                    state.hidden_layers.remove(&id);
-                } else {
-                    state.hidden_layers.insert(id.clone());
-                }
+                state.set_layer(&id, false, Some(visible));
             }
             if layer.purpose == LayerPurpose::Copper {
                 board::layer_swatch(ui, board::copper_color(layer.side.map(|side| side == Side::Front)));
             }
-            if ui.selectable_label(state.active_layer.as_ref() == Some(&id), &layer.name).clicked() {
-                state.active_layer = Some(id.clone());
+            if ui.selectable_label(state.active_layer.as_ref() == Some(&id), label).clicked() {
+                state.set_layer(&id, true, None);
             }
         })
     });

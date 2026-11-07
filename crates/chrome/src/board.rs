@@ -2,61 +2,26 @@
 use crate::Tokens;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, vec2};
 
-/// Paint a closed physical boundary without treating its stroke as copper or filled board material.
-pub fn outline(p: &Painter, corners: [Pos2; 4]) {
-    p.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.5, Tokens::get().board_ink)));
-}
-
-/// The board outline form's intent; only the application can commit authored geometry.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum OutlineAction {
-    /// Continue editing the draft.
-    #[default]
-    None,
-    /// Validate and apply the entered dimensions.
-    Apply,
-    /// Remove the existing boundary through the document command.
-    Remove,
-    /// Discard the draft and close the form.
-    Cancel,
-}
-
-/// Render position and size in a shared modal. Values retain explicit unit suffixes; errors
-/// remain beside the fields, and cancellation returns no authored edit.
-pub fn outline_dialog(ctx: &egui::Context, values: &mut [String; 4], focused: &mut bool, error: Option<&str>, can_remove: bool) -> OutlineAction {
-    let mut action = OutlineAction::None;
-    let closing = crate::shell::dialog(ctx, "board_outline", "Board Outline", |ui| {
-        ui.label("Rectangle");
-        egui::Grid::new("outline_dimensions").num_columns(2).show(ui, |ui| {
-            for (index, (label, value)) in ["Left", "Top", "Width", "Height"].into_iter().zip(values).enumerate() {
-                let caption = ui.label(label);
-                let field = ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width())).labelled_by(caption.id);
-                if !*focused && index == 0 {
-                    field.request_focus();
-                    *focused = true;
-                }
-                if field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                    action = OutlineAction::Apply;
-                }
-                ui.end_row();
-            }
-        });
-        if let Some(error) = error {
-            ui.label(crate::shell::error(error));
+/// Paint a layer graphic and its selected vertex handles using the shared board palette.
+pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, selected: bool, preview: bool) {
+    let t = Tokens::get();
+    let color = if selected || preview { t.accent } else { t.board_ink };
+    p.add(egui::Shape::Path(egui::epaint::PathShape {
+        points: points.clone(),
+        closed,
+        fill: Color32::TRANSPARENT,
+        stroke: Stroke::new(1.5, color).into(),
+    }));
+    if selected {
+        for point in points {
+            p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, t.accent);
         }
-        ui.horizontal(|ui| {
-            if ui.button("Apply outline").clicked() {
-                action = OutlineAction::Apply;
-            }
-            if can_remove && ui.button("Remove outline").clicked() {
-                action = OutlineAction::Remove;
-            }
-            if ui.button("Cancel").clicked() {
-                action = OutlineAction::Cancel;
-            }
-        });
-    });
-    if closing { OutlineAction::Cancel } else { action }
+    }
+}
+
+/// Distinguish the snapped drawing target from authored vertices without changing its position.
+pub fn drawing_target(p: &Painter, point: Pos2) {
+    p.circle_stroke(point, 5., Stroke::new(1., Tokens::get().accent));
 }
 
 /// Return the shared palette's copper colors; `None` denotes an internal layer.

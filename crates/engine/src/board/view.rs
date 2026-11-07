@@ -109,6 +109,10 @@ impl Project {
 }
 
 impl<'a> BoardView<'a> {
+    /// Access the resolved owner for board-local projections within the engine.
+    pub(crate) fn project(self) -> &'a Project {
+        self.project
+    }
     /// Display name of the legacy board; identity never depends on this label.
     pub fn name(self) -> &'a str {
         "Board"

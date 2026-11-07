@@ -9,6 +9,7 @@ use std::{
 
 pub mod assignment;
 pub mod definition;
+pub mod drawing;
 pub mod materials;
 pub mod outline;
 pub mod setup;
@@ -190,6 +191,7 @@ pub(crate) fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
 pub(crate) struct Board {
     pub(crate) assignments: BTreeMap<u64, assignment::Assignment>,
     pub(crate) outline: Option<outline::Outline>,
+    pub(crate) drawings: Option<drawing::Drawings>,
     pub(crate) setup: Option<setup::BoardSetup>,
     pub(crate) silkscreen: Option<silkscreen::Settings>,
     pub(crate) definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,

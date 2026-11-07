@@ -114,13 +114,17 @@ commands with a reason.
 
 ## Headless MCP
 
-`pcb.set_outline` creates, resizes or removes an addressed board's rectangular
-boundary through the same transaction as **Layout → Board → Outline**. Pass
-`board`, `expected_revision` and an `outline` object with `shape: "rectangle"`
-and ordered `min`/`max` points (`x_nm`, `y_nm`). Set `outline` to null to remove
-it. Inspection reports the boundary under `project.board.outline`; edits do not
-move footprints or perform clearance/manufacturing checks. Both live and
-headless sessions support this command.
+`pcb.add_drawing`, `pcb.set_drawing` and `pcb.delete_drawing` use the same
+transactions as canvas Board Edge editing. Each takes `board` and
+`expected_revision`; creation also takes a `layer` UUID, ordered `points`
+(`x_nm`, `y_nm` integers) and `closed`. Updating takes `drawing`, `points` and
+`closed`; deleting takes `drawing`. Inspection exposes layer metadata and drawing
+identities at `project.boards[].layers` and `.drawings`. Paths contain 2–256
+vertices (at least three when closed), without a repeated closing vertex. Only
+Board Edge layers accept these graphics in this slice. Open paths are allowed,
+without a manufacturing or clearance claim. Live `view.set_layer` uses the same
+Layers handler for `active` and `visible` changes on an addressed view; those
+presentation changes do not alter project revision or undo.
 
 To start the MCP server from the repository root, run
 `cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it

@@ -545,37 +545,6 @@ fn detached_fields_dialog_keeps_its_target_and_blocks_other_input() {
     assert_eq!(project.reference(&project.symbols()[0]), "R42");
 }
 
-/// A boundary form opened by a child keeps its board address when the root receives modal focus.
-/// Closing the source expires the form; successful edits share undo with the schematic window.
-#[test]
-fn detached_board_outline_retains_target_and_expires_when_source_closes() {
-    use pcbcraft_engine::persistence::encode_documents;
-    for close_source in [false, true] {
-        let (mut h, peer) = multi_window();
-        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-        click(&mut h, "Choose workspace");
-        click(&mut h, "Open PCB layout in new window");
-        let action = child_rect(&peer, "Edit board outline").center();
-        child_click_at(&mut h, &peer, action);
-        assert!(matches!(h.state().dialog, Dialog::BoardOutline(_)));
-        focus(&mut h, &peer, false);
-        if close_source {
-            peer.borrow_mut().close = true;
-            h.run();
-            assert!(matches!(h.state().dialog, Dialog::None));
-            assert!(h.state().message.is_some());
-        } else {
-            click(&mut h, "Apply outline");
-            assert!(matches!(h.state().dialog, Dialog::None));
-            assert_eq!(h.state().message, None);
-            assert!(h.state().session.inspect()["project"]["board"]["outline"].is_object());
-            h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
-            h.run();
-        }
-        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
-    }
-}
-
 /// A dialog cannot edit through a dismissed child's captured address. Closing that child
 /// during the modal leaves the root alone and rejects a later submission without an edit.
 #[test]
@@ -1568,4 +1537,32 @@ fn closing_detached_editor_expires_footprint_assignment() {
     h.run();
     assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Edge previews belong to the drawing view; focus loss or closing that host cannot author them.
+#[test]
+fn detached_board_edge_preview_cancels_on_focus_loss_and_close() {
+    use pcbcraft_engine::persistence::encode_documents;
+    let (mut h, peer) = multi_window();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB layout in new window");
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let layer = child_rect(&peer, "Board Edge").center();
+    child_click_at(&mut h, &peer, layer);
+    let tool = child_rect(&peer, "Draw rectangle on Board Edge").center();
+    child_click_at(&mut h, &peer, tool);
+    let origin = child_rect(&peer, "PCB canvas").center();
+    child_click_at(&mut h, &peer, origin);
+    assert!(h.state().views.view(child).unwrap().board.drawing.source().is_some());
+    focus(&mut h, &peer, false);
+    assert!(h.state().views.view(child).unwrap().board.drawing.source().is_none());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    child_click_at(&mut h, &peer, tool);
+    child_click_at(&mut h, &peer, origin);
+    assert!(h.state().views.view(child).unwrap().board.drawing.source().is_some());
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(h.state().views.view(child).is_none());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }

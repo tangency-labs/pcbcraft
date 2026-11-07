@@ -10,7 +10,7 @@ mod arrangements;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
 mod board_canvas;
-mod board_outline;
+mod board_drawing;
 mod board_panels;
 mod board_workspace;
 mod canvas_camera;
@@ -150,8 +150,6 @@ enum Dialog {
     Hierarchy(hierarchy::Edit),
     /// Chooses and pins a package independently of board placement.
     Footprint(footprint_assignment::Edit),
-    /// Create, resize or remove a boundary on an explicitly addressed board.
-    BoardOutline(board_outline::Edit),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(properties::Edit),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
@@ -1364,8 +1362,18 @@ impl PcbApp {
                 self.home = false;
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && self.views.active.board.draft.take().is_none() {
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+                && !self.views.active.board.drawing.escape()
+                && self.views.active.board.draft.take().is_none()
+            {
                 self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);
+            }
+            if self.views.active.board.drawing.selected.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
+                self.views.active.board.drawing.delete_requested = true;
+            }
+            if self.views.active.board.drawing.tool == Some(board_drawing::Tool::Lines) {
+                self.views.active.board.drawing.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                self.views.active.board.drawing.backspace_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace));
             }
             self.views.active.board.move_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M));
             self.views.active.board.rotate_requested = if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::R)) {
@@ -1534,7 +1542,6 @@ impl PcbApp {
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
-            Dialog::BoardOutline(edit) => self.board_outline_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;

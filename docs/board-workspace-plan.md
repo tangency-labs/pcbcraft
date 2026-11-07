@@ -302,11 +302,13 @@ and windows, independently of snap spacing. Copper
 markers use visible layers; active layer, layer visibility and document ownership
 remain distinct. Pinned starter SMD definitions now provide rounded rectangular copper pads, body
 outlines, courtyards and silkscreen. Legacy placements retain their markers;
-slots, nonrectangular outlines/cutouts and tracks remain future work. One closed
-rectangle can be created, resized or removed through **Layout → Board → Outline**
-and `pcb.set_outline`, with exact unit-aware fields, shared undo and board-local
-folder/archive persistence. Fit includes that boundary even on an empty board;
-configured outline layers control its display. This slice performs no edge-clearance checks.
+arcs, slots and tracks remain future work. The Board Edge layer now accepts
+open/closed line paths and rectangles through the Layout ribbon's Draw tools.
+Selection, vertex dragging, whole-graphic movement and deletion use the same
+revision-checked commands as live/headless MCP, with shared undo and board-local
+folder/archive persistence. Fit and per-view visibility include these drawings,
+and technical edge layers work independently of copper setup. This slice does
+not validate closure across paths, edge clearance or manufacturing validity.
 Selection filters, Flip view and the broader layout ribbon remain future work.
 
 A bounded transform slice now moves and rotates existing legacy and physical SMD
@@ -315,7 +317,7 @@ ribbon actions, local previews, revision checks, shared undo and persistence.
 Board format 4 stores orientation; unchanged legacy boards retain their encoding.
 A subsequent bounded slice adds [pinned physical definitions](footprint-library.md)
 and validated terminal mappings through the shared placement command. General
-footprint libraries/assignment UI under #92 and freeform outline tools remain future work. Before adding a normal
+footprint libraries under #92 and arc tools remain future work. Before adding a normal
 schematic-to-board editing workflow, #55 must replace immediate footprint removal
 with reviewed updates. Live-MCP presentation discovery and dispatch cover
 schematic and PCB views under #61; board edits join them with the board canvas.

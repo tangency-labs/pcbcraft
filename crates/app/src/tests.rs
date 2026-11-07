@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
-mod board_outline;
+mod board_drawing;
 mod board_views;
 #[cfg(not(target_arch = "wasm32"))]
 mod detached_editors;
@@ -1928,13 +1928,18 @@ fn ribbon_group_menus_run_their_actions() {
 }
 
 /// Independently created projects have distinct UUIDs; compare the shared command results
-/// while checking the sheet list apart from its generated identity and derived path.
+/// while checking sheet/layer records apart from generated identities and derived paths.
+/// These comparisons cover empty boards, so no authored drawing references are normalized.
 fn assert_equivalent_sessions(actual: &Session, expected: &Session) {
     let mut a = actual.inspect();
     let mut b = expected.inspect();
     for state in [&mut a, &mut b] {
         for board in state["project"]["boards"].as_array_mut().unwrap() {
             board["id"] = Value::Null;
+            assert!(board["drawings"].as_array().unwrap().is_empty());
+            for layer in board["layers"].as_array_mut().unwrap() {
+                layer["id"] = Value::Null;
+            }
         }
         for sheet in state["project"]["sheets"].as_array_mut().unwrap() {
             sheet["id"] = Value::Null;

@@ -27,7 +27,7 @@ the current single-board compatibility model. Unknown IDs fail before mutation.
 New renderers consume the resolved board, not a global project placement list.
 
 This is an address bridge, not the full #122 storage migration. The board remains
-in `board.json`; rectangular outlines use board document version 8 without adding
+in `board.json`; layer-addressed Board Edge graphics use board document version 9 without adding
 a persisted board list. The board UUID is derived deterministically from
 SHA-256 of the UTF-8 bytes `pcbcraft:legacy-board:1` followed by a zero byte and
 the saved project UUID's 16 bytes. The first 16 digest bytes use UUID v8 version

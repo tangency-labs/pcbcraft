@@ -325,13 +325,18 @@ and explicit terminal-to-pad mapping. Assigning pins the package without placing
 it. In PCB layout, **Place on board** places an assigned component at unit-aware
 X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
-registration, slots, nonrectangular outlines/cutouts and routing remain planned.
-**Layout → Board → Outline** opens the rectangular boundary's Left, Top, Width
-and Height fields. Explicit mil/mm suffixes override the display unit; untouched
-fields keep their exact nanometers. Apply outline, Remove outline and Undo share
-the project history, while Cancel and Esc discard only the form. Fit includes
-the boundary on empty boards, and configured outline layers control its visibility.
-Boundary edits do not move footprints or check edge clearance.
+registration, arcs, slots and routing remain planned.
+For a board boundary, select **Board Edge** in the Layers card's Board group and
+use **Layout → Draw → Line** or **Rectangle**. Line accepts successive clicked
+vertices, closes when you click the first vertex, and finishes an open path with
+Enter. Rectangle uses two opposite corners. Both snap to the grid and nearby edge
+vertices, and Esc cancels unfinished geometry before exiting the tool. After
+exiting, click an edge to select it, drag a vertex to reshape it, drag a segment
+or press M to move the drawing, and Delete to remove it. These edits share project
+Undo; Fit and layer visibility include the edge geometry. A Board Edge layer is
+available independently of copper setup, including on older populated boards.
+Open paths remain valid editing state; no closure, clearance or manufacturing
+validation is implemented yet.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

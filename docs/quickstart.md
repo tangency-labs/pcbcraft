@@ -252,17 +252,21 @@ assigning an unassigned component directly from PCB layout. Already placed
 packages remain read-only pending reviewed board updates. See the
 [footprint contract](footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
-Choose **Layout → Board → Outline** to create or edit a rectangular boundary.
-Set **Left**, **Top**, **Width** and **Height**; fields accept explicit mil/mm
-suffixes, and bare numbers use the display unit. **Apply outline** commits one
-undoable edit; **Cancel** or **Esc** leaves the board unchanged. Reopen the form
-to resize it or choose **Remove outline**. **Fit** includes the boundary even
-on an empty board, and the Board outline layer controls its visibility when
-that layer is in the board setup. Saving and reopening retains the exact
-boundary. Changing it leaves placements in place and performs no edge-clearance
-or manufacturing checks.
+In **Layers → Board**, select **Board Edge**, then choose **Layout → Draw → Line**
+or **Rectangle**. Click successive vertices for a line path; click its first vertex
+to close it, or press **Enter** to finish an open path. Rectangle uses two opposite
+corner clicks. Points snap to the current grid and nearby existing edge vertices.
+**Esc** discards the unfinished path, then exits the tool on a second press.
 
-Slots, nonrectangular outlines/cutouts, routing, individual pad selection, selection
+With the tool exited, click an edge to select it. Drag a vertex to reshape the
+path, drag a segment or press **M** to move the whole drawing, and use **Delete**
+to remove it. Each completed edit shares project Undo. Fit includes edge geometry
+even on an empty board; the layer's visibility checkbox only affects this view.
+Saving retains drawing and layer identities without moving footprints or creating
+a copper stackup. Open paths are editing geometry, and this slice does not check
+closure across drawings, edge clearance or manufacturing validity.
+
+Arcs, slots, routing, individual pad selection, selection
 filters and Flip view still need implementation. Removing the last schematic
 unit currently removes its footprint too; reviewed board updates are tracked
 separately in #55.
