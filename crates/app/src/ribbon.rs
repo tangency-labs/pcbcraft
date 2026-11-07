@@ -92,7 +92,6 @@ const CAPTURE: &[Group] = &[
         ],
         extras: &[],
     },
-    Group { title: "Sheets", tools: SHEETS, extras: &[] },
     Group {
         title: "Connect",
         tools: &[
@@ -102,6 +101,7 @@ const CAPTURE: &[Group] = &[
         ],
         extras: &[],
     },
+    Group { title: "Sheets", tools: SHEETS, extras: &[] },
     Group {
         title: "Modify",
         tools: &[
