@@ -161,6 +161,7 @@ pub(crate) enum SymbolAction {
     DisconnectMove,
     Rotate,
     EditFields,
+    AssignFootprint,
     Delete,
 }
 
@@ -495,6 +496,7 @@ pub(crate) fn show(
                 ("Disconnect and Move", "M", SymbolAction::DisconnectMove),
                 ("Rotate", "R", SymbolAction::Rotate),
                 ("Edit Fields…", "E", SymbolAction::EditFields),
+                ("Assign Footprint…", "", SymbolAction::AssignFootprint),
                 ("Delete", "Del", SymbolAction::Delete),
             ];
             rows.into_iter().find_map(|(label, key, action)| MenuItem::new(label).shortcut(key).show(ui).then(|| Click::Edit(action, id.clone())))

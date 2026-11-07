@@ -1,0 +1,188 @@
+use super::*;
+use crate::{
+    PLACE_RESISTOR,
+    persistence::{decode_documents, decode_packed, encode_documents, encode_packed},
+};
+
+/// Start with an unassigned component; callers must explicitly choose every terminal mapping.
+fn fixture() -> Session {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":1})).unwrap();
+    s
+}
+
+/// Use a deliberately swapped map so tests detect accidental matching by pin number.
+fn choice(s: &Session) -> Value {
+    json!({"component":"component-1", "library":"starter", "definition":"resistor-0402",
+        "definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})
+}
+
+/// Assignment creates no board geometry or object ID; it survives offline folder/archive reopen
+/// and placement consumes only its pinned data. Undo distinguishes choosing from placing.
+#[test]
+fn assignment_and_placement_are_independent_offline_transactions() {
+    let mut s = fixture();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let component = s.inspect()["project"]["components"][0]["id"].clone();
+    let mut params = choice(&s);
+    params["component"] = component.clone();
+    s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
+    assert!(s.project().unwrap().board.footprints().is_empty());
+    let assigned = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert!(std::str::from_utf8(&assigned["board.json"]).unwrap().contains("pcbcraft-board/7"));
+    assert_eq!(encode_documents(decode_documents(&assigned).unwrap()).unwrap(), assigned);
+    let mut encoder = crate::persistence::DocumentsEncoder::new(s.snapshot().unwrap());
+    let mut steps = 0;
+    loop {
+        steps += 1;
+        assert!(steps < 100);
+        if let Some(documents) = encoder.step(1).unwrap() {
+            assert_eq!(documents, assigned);
+            break;
+        }
+    }
+    let mut deleted = Session::default();
+    deleted.open_snapshot(s.snapshot().unwrap());
+    deleted.apply(crate::DELETE_SYMBOL, &json!({"symbol":"symbol-2","expected_revision":deleted.revision()})).unwrap();
+    assert!(deleted.project().unwrap().board.assignments.is_empty());
+    assert!(deleted.project().unwrap().board.definitions.is_empty());
+    let reopened = decode_packed(&encode_packed(s.snapshot().unwrap()).unwrap()).unwrap().project;
+    assert_eq!(encode_documents(reopened.clone()).unwrap(), assigned);
+    let mut restored = Session::default();
+    restored.open_snapshot(reopened);
+    let placement = json!({"component":component,"x_nm":2_540_000,"y_nm":-1_270_000,"expected_revision":restored.revision()});
+    restored.apply(PLACE_ASSIGNED_FOOTPRINT, &placement).unwrap();
+    let stored = restored.inspect();
+    assert_eq!(stored["project"]["board"]["footprints"][0]["mapping"], params["mapping"]);
+    assert_eq!(stored["project"]["board"]["footprints"][0]["x_nm"], 2_540_000);
+    assert_eq!(stored["project"]["schematic"], s.inspect()["project"]["schematic"]);
+    restored.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(restored.snapshot().unwrap()).unwrap(), assigned);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Missing/duplicated terminals or pads, stale edits and unknown component/board/source IDs
+/// cannot pin data or consume history. Already placed packages cannot be silently remapped.
+#[test]
+fn assignment_failures_are_atomic_and_placed_remaps_require_review() {
+    let mut s = fixture();
+    let mut params = choice(&s);
+    params["component"] = s.inspect()["project"]["components"][0]["id"].clone();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    for (field, value) in [
+        ("mapping", json!({"1":"1","2":"1"})),
+        ("mapping", json!({"1":"1"})),
+        ("component", json!("component-999")),
+        ("library", json!("missing")),
+        ("definition_revision", json!(0)),
+        ("board", json!("00000000-0000-0000-0000-000000000001")),
+        ("expected_revision", json!(0)),
+    ] {
+        let mut invalid = params.clone();
+        invalid[field] = value;
+        assert!(s.apply(ASSIGN_FOOTPRINT, &invalid).is_err());
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    }
+    s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
+    let rev = s.revision();
+    params["expected_revision"] = json!(rev);
+    s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
+    assert_eq!(s.revision(), rev);
+    s.apply(PLACE_ASSIGNED_FOOTPRINT, &json!({"component":params["component"],"x_nm":0,"y_nm":0,"expected_revision":rev})).unwrap();
+    let placed = encode_documents(s.snapshot().unwrap()).unwrap();
+    params["expected_revision"] = json!(s.revision());
+    params["mapping"] = json!({"1":"1","2":"2"});
+    assert!(s.apply(ASSIGN_FOOTPRINT, &params).is_err());
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), placed);
+    let mut corrupt: Value = serde_json::from_slice(&placed["board.json"]).unwrap();
+    corrupt["assignments"][0]["mapping"] = params["mapping"].clone();
+    let mut invalid = placed.clone();
+    invalid.insert("board.json".into(), serde_json::to_vec(&corrupt).unwrap());
+    assert!(decode_documents(&invalid).is_err());
+    corrupt["format"] = json!("pcbcraft-board/6");
+    invalid.insert("board.json".into(), serde_json::to_vec(&corrupt).unwrap());
+    assert!(decode_documents(&invalid).is_err());
+}
+
+/// An original domain fixture pins a package absent from this build's source catalog. Encoding
+/// and reopening it uses production serializers, and later placement never consults a source.
+#[test]
+fn unavailable_source_is_not_needed_for_pinned_assignment_or_placement() {
+    let mut s = fixture();
+    let mut params = choice(&s);
+    params["component"] = s.inspect()["project"]["components"][0]["id"].clone();
+    s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
+    let mut project = s.project().unwrap().clone();
+    let board = Arc::make_mut(&mut project.board);
+    let mut definition = board.definitions.values().next().unwrap().as_ref().clone();
+    definition.library = "offline-fixture".into();
+    definition.id = "custom-passive".into();
+    definition.revision = 19;
+    board.definitions.clear();
+    board.definitions.insert(definition.key(), Arc::new(definition));
+    let assigned = board.assignments.values_mut().next().unwrap();
+    assigned.library = "offline-fixture".into();
+    assigned.definition = "custom-passive".into();
+    assigned.definition_revision = 19;
+    assert!(super::definition::starter("custom-passive").is_none());
+    let bytes = encode_documents(Arc::new(project)).unwrap();
+    s.open_snapshot(decode_documents(&bytes).unwrap());
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
+    s.apply(PLACE_ASSIGNED_FOOTPRINT, &json!({"component":params["component"],"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    assert_eq!(s.inspect()["project"]["board"]["footprints"][0]["definition_revision"], 19);
+    s.apply(crate::DELETE_SYMBOL, &json!({"symbol":"symbol-2","expected_revision":s.revision()})).unwrap();
+    assert!(s.project().unwrap().board.assignments.is_empty());
+    assert!(s.project().unwrap().board.definitions.is_empty());
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.project().unwrap().board.assignments.len(), 1);
+}
+
+/// Hierarchy and assignments share the incremental writer without sharing ownership: assigning
+/// a child component changes only board data, while deleting its sheet removes its package.
+#[test]
+fn child_sheet_assignment_round_trips_and_deletes_with_its_component() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    s.apply(crate::hierarchy::CREATE_CHILD, &json!({"name":"Child","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let child = s.project().unwrap().sheets().nth(1).unwrap().target;
+    s.apply(
+        crate::hierarchy::ADD_LABEL,
+        &json!({"sheet":child.id(),"name":"IN","direction":"input","x_nm":0,"y_nm":0,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    s.apply(PLACE_RESISTOR, &json!({"sheet":child.id(),"x_nm":10_000_000,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let mut params = choice(&s);
+    params["component"] = s.inspect()["project"]["components"][0]["id"].clone();
+    s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
+    let assigned = encode_documents(s.snapshot().unwrap()).unwrap();
+    for (path, bytes) in &before {
+        if path != "board.json" {
+            assert_eq!(assigned.get(path), Some(bytes), "{path}");
+        }
+    }
+    let mut writer = crate::persistence::DocumentsEncoder::new(s.snapshot().unwrap());
+    let mut streamed = None;
+    for _ in 0..100 {
+        if let Some(done) = writer.step(1).unwrap() {
+            streamed = Some(done);
+            break;
+        }
+    }
+    assert_eq!(streamed, Some(assigned.clone()));
+    s.open_snapshot(decode_packed(&encode_packed(s.snapshot().unwrap()).unwrap()).unwrap().project);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), assigned);
+    s.apply(PLACE_ASSIGNED_FOOTPRINT, &json!({"component":params["component"],"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let placed = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&placed).unwrap()).unwrap(), placed);
+    s.apply(crate::sheets::DELETE_SHEET, &json!({"sheet":child.id(),"expected_revision":s.revision()})).unwrap();
+    let project = s.project().unwrap();
+    assert!(project.board.assignments.is_empty());
+    assert!(project.board.footprints().is_empty());
+    assert!(project.board.definitions.is_empty());
+    decode_documents(&encode_documents(s.snapshot().unwrap()).unwrap()).unwrap();
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), placed);
+}

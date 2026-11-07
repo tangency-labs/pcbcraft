@@ -49,6 +49,8 @@ impl SavedLayout {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PanelState {
+    #[serde(default = "properties_default")]
+    pub properties: bool,
     pub browser: [bool; 2],
     pub parts: PartsState,
     pub nets: bool,
@@ -58,8 +60,13 @@ pub(crate) struct PanelState {
 
 impl Default for PanelState {
     fn default() -> Self {
-        Self { browser: [true, false], parts: PartsState::default(), nets: false, ribbon: 0 }
+        Self { properties: properties_default(), browser: [true, false], parts: PartsState::default(), nets: false, ribbon: 0 }
     }
+}
+
+/// Arrangements saved before Properties existed show it, as a fresh editor does.
+fn properties_default() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

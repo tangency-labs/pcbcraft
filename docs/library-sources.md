@@ -23,7 +23,7 @@ so each later slice builds on the same terms.
   0402/0603 resistor/capacitor, 0402 LED, SOT-23 and plated two-pin header definitions. The shared placement
   command pins definitions and validates explicit terminal mappings. The legacy
   `generic-through-hole-2` remains a marker-only compatibility definition; source
-  registration, footprint browsing and general assignment UI are still proposed.
+  registration remains proposed. A shared schematic/PCB chooser now assigns exact starter or pinned packages and explicit mappings without placing them, then places those assignments separately.
 - **The Parts card** lists the built-in symbols with search and three tile sizes,
   at a fixed 260 × 490 points, floating or docked. Clicking or dragging places a
   symbol through `schematic.place_symbol`.

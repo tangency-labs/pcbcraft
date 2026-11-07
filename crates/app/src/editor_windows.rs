@@ -33,7 +33,7 @@ pub(super) enum ViewAction {
 
 /// Stationary contextual controls belong to one host even as its focused pane changes.
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Panels {
     browser: crate::project_browser::ProjectBrowser,
     parts: crate::parts_browser::PartsBrowser,
@@ -42,6 +42,24 @@ struct Panels {
     pointer: Option<pcbcraft_engine::schematic::Point>,
     pointer_next: Option<pcbcraft_engine::schematic::Point>,
     placed: bool,
+    properties: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for Panels {
+    /// New native hosts use the same Properties visibility as a fresh arrangement.
+    fn default() -> Self {
+        Self {
+            browser: Default::default(),
+            parts: Default::default(),
+            nets: Default::default(),
+            ribbon: 0,
+            pointer: None,
+            pointer_next: None,
+            placed: false,
+            properties: crate::arrangements::PanelState::default().properties,
+        }
+    }
 }
 
 /// A host's panel visibility and ribbon tab, as window inspection reports them.
@@ -51,6 +69,7 @@ pub(super) struct HostPanels {
     pub(super) browser: bool,
     pub(super) parts: bool,
     pub(super) nets: bool,
+    pub(super) properties: bool,
     pub(super) ribbon: usize,
 }
 
@@ -67,6 +86,7 @@ impl PcbApp {
                 browser: self.browser.saved_state(),
                 parts: self.parts.saved_state(),
                 nets: self.net_inspector.open,
+                properties: self.properties_open,
                 ribbon: self.ribbon_tab,
             };
         }
@@ -76,6 +96,7 @@ impl PcbApp {
                 browser: panels.browser.saved_state(),
                 parts: panels.parts.saved_state(),
                 nets: panels.nets.open,
+                properties: panels.properties,
                 ribbon: panels.ribbon,
             };
         }
@@ -98,12 +119,15 @@ impl PcbApp {
                 self.browser = browser;
                 self.parts = parts;
                 self.net_inspector = nets;
+                self.properties_open = host.panels.properties;
                 self.ribbon_tab = host.panels.ribbon;
                 self.pointer = None;
                 self.pointer_next = None;
             } else {
                 #[cfg(not(target_arch = "wasm32"))]
-                self.windows.panels.insert(id, Panels { browser, parts, nets, ribbon: host.panels.ribbon, ..Panels::default() });
+                self.windows
+                    .panels
+                    .insert(id, Panels { browser, parts, nets, properties: host.panels.properties, ribbon: host.panels.ribbon, ..Panels::default() });
             }
         }
     }
@@ -234,11 +258,23 @@ impl PcbApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn host_panels(&self, host: HostId) -> HostPanels {
         if host == self.views.host {
-            return HostPanels { browser: self.browser.open, parts: self.parts.open, nets: self.net_inspector.open, ribbon: self.ribbon_tab };
+            return HostPanels {
+                browser: self.browser.open,
+                parts: self.parts.open,
+                nets: self.net_inspector.open,
+                properties: self.properties_open,
+                ribbon: self.ribbon_tab,
+            };
         }
         let fresh = Panels::default();
         let panels = self.windows.panels.get(&host).unwrap_or(&fresh);
-        HostPanels { browser: panels.browser.open, parts: panels.parts.open, nets: panels.nets.open, ribbon: panels.ribbon }
+        HostPanels {
+            browser: panels.browser.open,
+            parts: panels.parts.open,
+            nets: panels.nets.open,
+            properties: panels.properties,
+            ribbon: panels.ribbon,
+        }
     }
 
     /// Cancel old host input on actual native focus changes, never on repaint. A modal retains
@@ -272,14 +308,20 @@ impl PcbApp {
         }
     }
 
-    /// Draw project dialogs once in their owner window (normally the main host). A fields dialog
-    /// temporarily binds its originating editor for revision validation. Sheet forms can change
+    /// Draw project dialogs once in their owner window (normally the main host). A fields
+    /// or package dialog temporarily binds its originating editor for revision validation. Sheet forms can change
     /// the focused document, so they restore the host's resulting focus rather than its old slot.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
         let previous = self.views.active.id();
         let sheet_form = matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_));
-        if let Dialog::EditFields { source, .. } = &self.dialog {
-            self.views.bind(source.view());
+        match &self.dialog {
+            Dialog::EditFields(edit) => {
+                self.views.bind(edit.source.view());
+            }
+            Dialog::Footprint(edit) => {
+                self.views.bind(edit.source.view());
+            }
+            _ => {}
         }
         self.dialogs(ctx);
         if sheet_form {
@@ -355,6 +397,7 @@ impl PcbApp {
         std::mem::swap(&mut self.browser, &mut panels.browser);
         std::mem::swap(&mut self.parts, &mut panels.parts);
         std::mem::swap(&mut self.net_inspector, &mut panels.nets);
+        std::mem::swap(&mut self.properties_open, &mut panels.properties);
         std::mem::swap(&mut self.ribbon_tab, &mut panels.ribbon);
         std::mem::swap(&mut self.pointer, &mut panels.pointer);
         std::mem::swap(&mut self.pointer_next, &mut panels.pointer_next);

@@ -56,6 +56,8 @@ impl PcbApp {
 
     /// Offer single-footprint transforms alongside navigation, keeping board tools separate from
     /// schematic tools. Completed placements use the same atomic engine command as MCP.
+    /// Components › Footprints opens the package chooser for the selected footprint's component,
+    /// or leaves the component unselected when no footprint is selected.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().is_some();
         let selected = enabled && self.views.active.board.selection.len() == 1;
@@ -84,6 +86,29 @@ impl PcbApp {
             Some(0) => self.views.active.board.move_requested = true,
             Some(1) => self.views.active.board.rotate_requested = 90,
             _ => {}
+        }
+        workspace::ribbon_separator(ui);
+        if workspace::ribbon_group(
+            ui,
+            "Components",
+            &[RibbonTool {
+                icon: ToolIcon::Symbol,
+                label: "Footprints",
+                description: "Assign and place component footprints",
+                shortcut: "",
+                enabled: enabled && self.session.project().is_some_and(|p| p.components().next().is_some()),
+                active: false,
+                toggle: false,
+            }],
+        )
+        .is_some()
+        {
+            let component = self
+                .session
+                .project()
+                .and_then(|p| p.board_view(p.board_target()))
+                .and_then(|board| board.footprints().find(|f| self.views.active.board.selection.contains(&f.id)).map(|f| f.component));
+            self.begin_footprint_assignment(component);
         }
         workspace::ribbon_separator(ui);
         let tools = [

@@ -206,7 +206,9 @@ pub(crate) fn read_saved(bytes: &[u8]) -> Result<Arc<FootprintDefinition>, Strin
 /// Resolve an original built-in definition. A project pins this copy once, rather than resolving
 /// its placement geometry from the installed catalog on every load.
 pub(crate) fn starter(id: &str) -> Option<Arc<FootprintDefinition>> {
-    STARTER_IDS.iter().position(|name| *name == id).and_then(|index| read_saved(STARTER[index].as_bytes()).ok())
+    static CATALOG: std::sync::LazyLock<Vec<Option<Arc<FootprintDefinition>>>> =
+        std::sync::LazyLock::new(|| STARTER.iter().map(|text| read_saved(text.as_bytes()).ok()).collect());
+    STARTER_IDS.iter().position(|name| *name == id).and_then(|index| CATALOG[index].clone())
 }
 
 #[cfg(test)]

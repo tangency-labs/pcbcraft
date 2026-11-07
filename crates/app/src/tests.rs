@@ -14,6 +14,7 @@ mod board_views;
 mod detached_editors;
 mod display_units;
 mod editor_views;
+mod footprint_assignment;
 mod grid_spacing;
 mod hierarchy;
 mod multiple_sheets;
@@ -24,14 +25,14 @@ mod save_changes;
 mod split_editors;
 
 /// Start directly in the workspace for editor-control tests; startup tests use the real constructor.
-fn harness<'a>() -> Harness<'a, PcbApp> {
+pub(super) fn harness<'a>() -> Harness<'a, PcbApp> {
     let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), PcbApp::default());
     harness.run();
     harness
 }
 
 /// Exercise the same constructor used by both launchers, with no saved application settings.
-fn startup_harness<'a>() -> Harness<'a, PcbApp> {
+pub(super) fn startup_harness<'a>() -> Harness<'a, PcbApp> {
     let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc));
     harness.run();
     harness
@@ -64,7 +65,7 @@ fn new_project(harness: &mut Harness<'_, PcbApp>) {
 }
 
 /// Home's schematic start card, distinct from the New Project navigation row.
-fn new_project_tile<'h>(harness: &'h Harness<'_, PcbApp>) -> egui_kittest::Node<'h> {
+pub(super) fn new_project_tile<'h>(harness: &'h Harness<'_, PcbApp>) -> egui_kittest::Node<'h> {
     harness.get_by_label("New Schematic")
 }
 
@@ -1292,7 +1293,7 @@ fn an_intervening_edit_cancels_a_browser_drag() {
 }
 
 /// Place a resistor at the schematic origin, which sits at the canvas center.
-fn resistor_at_origin(harness: &mut Harness<'_, PcbApp>) {
+pub(super) fn resistor_at_origin(harness: &mut Harness<'_, PcbApp>) {
     new_project(harness);
     let revision = harness.state().session().revision();
     harness.state_mut().session.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": revision})).unwrap();
@@ -1378,7 +1379,7 @@ fn the_symbol_context_menu_rotates_and_edits() {
     harness.run();
     click(&mut harness, "OK");
     harness.get_by_label("another component is already R2");
-    assert!(matches!(harness.state().dialog, Dialog::EditFields { .. }));
+    assert!(matches!(harness.state().dialog, Dialog::EditFields(_)));
 }
 
 fn open_wire_context(harness: &mut Harness<'_, PcbApp>) {

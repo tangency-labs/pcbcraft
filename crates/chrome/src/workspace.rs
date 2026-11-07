@@ -830,8 +830,25 @@ pub fn floating_card_aligned(
     right: bool,
     add: impl FnOnce(&mut Ui),
 ) -> (Rect, bool) {
-    let t = Tokens::get();
     let width = (area.width() * 0.4).min(260.0);
+    floating_card_width(ui, id, title, area, collapsed, right, width, add)
+}
+
+/// Anchor a card with an explicit preferred width while keeping its complete frame inside the
+/// host. Uses the same collapse, scroll and pointer ownership behavior as other workspace cards.
+#[allow(clippy::too_many_arguments)]
+pub fn floating_card_width(
+    ui: &Ui,
+    id: egui::Id,
+    title: &str,
+    area: Rect,
+    collapsed: bool,
+    right: bool,
+    width: f32,
+    add: impl FnOnce(&mut Ui),
+) -> (Rect, bool) {
+    let t = Tokens::get();
+    let width = width.min((area.width() - 2.0 * FLOATING_GAP).max(1.0));
     if area.height() < floating_card_min_height() {
         return (Rect::NOTHING, false);
     }

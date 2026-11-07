@@ -314,6 +314,7 @@ pub const DELETE_SYMBOL: &str = "schematic.delete_symbol";
 pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
+pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT};
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
 pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
 /// Initialize an empty board's stable layers and rigid stackup without specifying materials.
@@ -630,11 +631,17 @@ const CATALOG: &[Command] = &[
     Command {
         id: SET_SYMBOL_FIELDS,
         title: "Edit Symbol Fields",
-        summary: "Set the reference and value shown for a symbol. References are unique and have no spaces. Undoable.",
+        summary: "Set reference, value and optional orientation together. References are unique and have no spaces. Undoable.",
         params: &[
             SYMBOL,
             Param { required: true, name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
             Param { required: true, name: "value", summary: "Value text, such as 4.7k", kind: ParamKind::Text },
+            Param {
+                required: false,
+                name: "rotation",
+                summary: "Counterclockwise degrees; omission preserves orientation",
+                kind: ParamKind::Rotation,
+            },
             EXPECTED_REVISION,
         ],
     },
@@ -655,6 +662,37 @@ const CATALOG: &[Command] = &[
             },
             Param { required: true, name: "x_nm", summary: "Footprint center X in nanometers", kind: ParamKind::Coordinate },
             Param { required: true, name: "y_nm", summary: "Footprint center Y in nanometers", kind: ParamKind::Coordinate },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: ASSIGN_FOOTPRINT,
+        title: "Assign Footprint",
+        summary: "Pin an exact physical package and explicit terminal mapping without placing it. Changing a placed package requires a reviewed update.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "component", summary: "Stable component ID from project inspection", kind: ParamKind::Text },
+            Param { required: true, name: "library", summary: "Exact footprint library identity", kind: ParamKind::Text },
+            Param { required: true, name: "definition", summary: "Exact physical footprint identity", kind: ParamKind::Text },
+            Param { required: true, name: "definition_revision", summary: "Pinned content revision", kind: ParamKind::Revision },
+            Param {
+                required: true,
+                name: "mapping",
+                summary: "Explicit bijection from logical terminals to pad numbers",
+                kind: ParamKind::FootprintMapping,
+            },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: PLACE_ASSIGNED_FOOTPRINT,
+        title: "Place Assigned Footprint",
+        summary: "Place an assigned component using only its project-pinned package and mapping. Undoable.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "component", summary: "Assigned component ID", kind: ParamKind::Text },
+            Param { required: true, name: "x_nm", summary: "Footprint origin X in nanometers", kind: ParamKind::Coordinate },
+            Param { required: true, name: "y_nm", summary: "Footprint origin Y in nanometers", kind: ParamKind::Coordinate },
             EXPECTED_REVISION,
         ],
     },
@@ -1030,6 +1068,8 @@ impl Session {
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
             | PLACE_FOOTPRINT
+            | ASSIGN_FOOTPRINT
+            | PLACE_ASSIGNED_FOOTPRINT
             | SET_FOOTPRINT_TRANSFORM
             | SET_SILKSCREEN
             | DRAW_WIRE
@@ -1062,6 +1102,8 @@ impl Session {
     /// display names, relative document paths and per-sheet schematic inspection. The legacy
     /// top-level schematic is populated only for a single-sheet project. Sheet entries include
     /// their parent UUID; project `netlist` follows the complete parent/child electrical graph.
+    /// Physical assignments report their placed/unplaced status; `footprint_catalog` lists exact
+    /// available revisions with pad identities and provenance, without duplicating drawing data.
     /// A configured board also reports setup and laminate thickness (null when unspecified).
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
@@ -1073,8 +1115,9 @@ impl Session {
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
-            if p.board.setup.is_some() || p.board.silkscreen.is_some() || !p.board.footprints().is_empty() {
+            if !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"id":p.board_target().board, "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
+                inspected["board"]["assignments"] = json!(p.footprint_assignments());
                 inspected["board"]["silkscreen"] = json!(p.board.silkscreen.unwrap_or_default());
                 if !p.board.definitions.is_empty() {
                     inspected["board"]["definitions"] = json!(p.board.definitions.values().map(Arc::as_ref).collect::<Vec<_>>());
@@ -1088,6 +1131,7 @@ impl Session {
         });
         json!({
             "project": project,
+            "footprint_catalog": self.project.as_ref().map(|p| p.inspect_footprint_catalog()),
             "revision": self.revision,
             "can_undo": !self.undo.is_empty(),
             "can_redo": !self.redo.is_empty(),
@@ -1115,7 +1159,16 @@ impl Session {
     fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        if matches!(id, PLACE_FOOTPRINT | SET_FOOTPRINT_TRANSFORM | INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP | SET_SILKSCREEN) {
+        if matches!(
+            id,
+            ASSIGN_FOOTPRINT
+                | PLACE_ASSIGNED_FOOTPRINT
+                | PLACE_FOOTPRINT
+                | SET_FOOTPRINT_TRANSFORM
+                | INITIALIZE_BOARD_SETUP
+                | SET_BOARD_SETUP
+                | SET_SILKSCREEN
+        ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
         let handler_checks_state = self.project.is_some()
@@ -1134,6 +1187,8 @@ impl Session {
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
                 | PLACE_FOOTPRINT
+                | ASSIGN_FOOTPRINT
+                | PLACE_ASSIGNED_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
                 | SET_SILKSCREEN
                 | DRAW_WIRE
@@ -1212,6 +1267,8 @@ impl Session {
             ROTATE_SYMBOL => self.rotate_symbol(params)?,
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
+            ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
+            PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
             PLACE_FOOTPRINT => self.place_footprint(params)?,
             SET_FOOTPRINT_TRANSFORM => self.set_footprint_transform(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
@@ -1350,7 +1407,8 @@ impl Session {
     }
 
     /// Set component-owned fields through a placed unit. References must be unique across
-    /// components; both fields are bounded single-line text. An unchanged pair is a no-op.
+    /// components; both fields are bounded single-line text. Optional orientation changes in the
+    /// same transaction, preserving attached endpoints. Omission retains it; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1364,7 +1422,8 @@ impl Session {
         if project.components.values().any(|other| other.ordinal != component.ordinal && other.reference == reference) {
             return Err(CommandError::InvalidParams(format!("another component is already {reference}")));
         }
-        if component.reference == reference && component.value == value {
+        let rotation = params["rotation"].as_u64().map_or(project.symbols[index].rotation, |degrees| (degrees / 90) as u8);
+        if component.reference == reference && component.value == value && project.symbols[index].rotation == rotation {
             return Ok(());
         }
         let mut component = component.clone();
@@ -1372,13 +1431,15 @@ impl Session {
         component.value = value;
         let mut project = project.clone();
         Arc::make_mut(&mut project.components).insert(component.ordinal, component);
+        Arc::make_mut(&mut project.sheet_mut().symbols)[index].rotation = rotation;
         self.change(project);
         Ok(())
     }
 
     /// Place one footprint per component, pinning its exact physical definition and validating
     /// the terminal-to-pad bijection before changing state. Legacy two-pad callers retain their
-    /// original encoding. Supplying both mapping forms or an incomplete mapping is refused.
+    /// original encoding. Supplying both mapping forms, an incomplete mapping, or a placement
+    /// that disagrees with an existing independent assignment is refused.
     fn place_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1421,6 +1482,14 @@ impl Session {
         }
         if !project.board.mapping_valid(&footprint, &symbol) {
             return Err(CommandError::InvalidParams("footprint pads must map exactly once to every symbol terminal".into()));
+        }
+        if project
+            .board
+            .assignments
+            .get(&component)
+            .is_some_and(|a| footprint.key() != Some(a.key()) || footprint.mapping.as_ref() != Some(&a.mapping))
+        {
+            return Err(CommandError::InvalidParams("placement conflicts with the pinned assignment; use pcb.place_assigned_footprint".into()));
         }
         Arc::make_mut(&mut project.board).append(footprint).map_err(|error| CommandError::InvalidParams(error.into()))?;
         self.change(project);
@@ -1566,6 +1635,36 @@ mod tests {
         s.execute("edit.redo", &Value::Null).unwrap();
         assert_eq!(name(&s), Some("a"));
         assert_eq!(s.revision(), 5);
+    }
+
+    /// An inspector can change fields and orientation in one history step. Invalid input or a
+    /// stale revision cannot partially change either, and older callers retain orientation.
+    #[test]
+    fn property_fields_and_orientation_are_one_atomic_edit() {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({})).unwrap();
+        s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":1})).unwrap();
+        let before = s.snapshot().unwrap();
+        let mut params = json!({"symbol":"symbol-2","reference":"R7","value":"4.7k","rotation":90,"expected_revision":s.revision()});
+        let revision = s.revision();
+        s.apply(SET_SYMBOL_FIELDS, &params).unwrap();
+        assert_eq!(s.revision(), revision + 1);
+        let changed = s.snapshot().unwrap();
+        assert_eq!(changed.symbols()[0].turns(), 1);
+        assert_eq!(changed.reference(&changed.symbols()[0]), "R7");
+        params["expected_revision"] = json!(s.revision());
+        s.apply(SET_SYMBOL_FIELDS, &params).unwrap();
+        assert_eq!(s.revision(), revision + 1);
+        params["rotation"] = json!(45);
+        params["value"] = json!("invalid turn");
+        assert!(s.apply(SET_SYMBOL_FIELDS, &params).is_err());
+        assert!(Arc::ptr_eq(&changed, &s.snapshot().unwrap()));
+        params["rotation"] = json!(180);
+        params["expected_revision"] = json!(revision);
+        assert!(s.apply(SET_SYMBOL_FIELDS, &params).is_err());
+        assert!(Arc::ptr_eq(&changed, &s.snapshot().unwrap()));
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     }
 
     /// Rotating turns the pins and the wire follows; deleting removes the symbol with its wires

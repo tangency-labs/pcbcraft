@@ -131,7 +131,7 @@ impl SymbolDefinition {
     }
 
     /// Return the definition revision pinned by a component.
-    pub(crate) fn revision(&self) -> u32 {
+    pub fn revision(&self) -> u32 {
         self.revision
     }
 

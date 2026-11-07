@@ -183,8 +183,17 @@ local cleanup does not route around obstacles or resolve conflicting net names
 
 ## Symbol properties and selection
 
+The schematic **Properties** card shows the focused selection's reference,
+value, orientation and footprint. **Apply changes** commits a draft in one undo
+step. **More properties** or **E** opens the expanded General, Pin functions and
+Library form; **Cancel** leaves the project unchanged. **View → Properties**
+shows or hides the inspector for that window. Footprint choice opens a responsive
+package browser with a physical preview, explicit terminal mapping and expandable
+source/license details. Library-definition authoring remains separate from changing
+an instance's properties.
+
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
-**E** edits its reference and value and **Delete** removes it with its wires.
+**E** opens its expanded properties and **Delete** removes it with its wires.
 Right-click a symbol for the same actions, and press **Esc** to clear the selection.
 Reference and value belong to the component; position and rotation belong to
 its placed unit. Native formats 2 and 3 record these separately, and opening a format 1
@@ -310,7 +319,13 @@ into projects with explicit terminal mappings. New views hide fabrication and
 courtyard graphics by default; Layers can show them. **Properties → Silkscreen**
 edits physical text height, stroke width and pad clearance in one undoable board
 change. Defaults are 1 mm, 0.15 mm and 0.25 mm respectively; lengths accept mil/mm
-input and save with the project. Slots, board outlines, general assignment UI and routing remain planned.
+input and save with the project. **Assign Footprint…** in a schematic symbol's
+context menu, or **Footprints** in the PCB Layout ribbon, opens package selection
+and explicit terminal-to-pad mapping. Assigning pins the package without placing
+it. In PCB layout, **Place on board** places an assigned component at unit-aware
+X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
+Changing an already placed package awaits reviewed board updates. Native-folder
+registration, slots, board outlines and routing remain planned.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

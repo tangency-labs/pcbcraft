@@ -787,6 +787,9 @@ impl PcbApp {
         };
         let mut covered = board_panel.map_or_else(|| vec![self.browser.rect(), self.parts.rect()], |panels| panels.to_vec());
         covered.push(assistant);
+        if !board {
+            covered.push(self.selection_properties(ui, area));
+        }
         for (id, rect) in panes {
             let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();
             let pane_id = tab_ids.first().copied().unwrap_or(id);
@@ -933,9 +936,12 @@ impl PcbApp {
     /// with its originating view address so centering can use that pane's actual uncovered canvas.
     fn editor_panels(&mut self, ui: &mut Ui, area: Rect) -> Option<(crate::ViewInput, crate::project_browser::Action)> {
         let source = self.views.active.input(&self.session)?;
+        let browser_area = self.parts.browser_area(area).intersect(area);
+        let browser_area =
+            if self.properties_open && !self.parts.open { pcbcraft_chrome::properties::browser_area(browser_area) } else { browser_area };
         let pick = self.browser.show(
             ui,
-            self.parts.browser_area(area).intersect(area),
+            browser_area,
             &self.session,
             self.views.active.target()?,
             &self.views.active.schematic.selection,
