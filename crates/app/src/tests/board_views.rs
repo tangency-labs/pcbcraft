@@ -366,3 +366,70 @@ fn pcb_grid_preferences_are_shared_display_settings() {
     assert_eq!(h.state().preferences.board_grid_style, Style::Off);
     click(&mut h, "OK");
 }
+
+/// A successful folder/archive Open from PCB layout binds the incoming project's board before
+/// constructing its fallback arrangement, including cached views of the outgoing project.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn opening_another_project_from_pcb_layout_binds_its_board() {
+    for (archive, split) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut h = board_harness();
+        if split {
+            click(&mut h, "Choose workspace");
+            click(&mut h, "Open PCB layout beside current view");
+            let at = h.get_by_label("PCB canvas 3").rect().center();
+            click_canvas_at(&mut h, at);
+        } else {
+            click(&mut h, "Choose workspace");
+            click(&mut h, "PCB layout");
+        }
+        let before = h.state().views.active.input(&h.state().session).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(if archive {
+            "../../examples/dual-led.pc.zip"
+        } else {
+            "../../examples/dual-led/project.pc"
+        });
+        let revision = h.state().session.revision();
+        h.state_mut().files.open_path_for_test(&path, revision);
+        h.run();
+        assert_eq!(h.state().session.project().unwrap().name, "Dual LED · editing demo");
+        assert_eq!(h.state().views.active.workspace, Workspace::Board);
+        assert!(!h.state().views.active.unavailable());
+        assert!(h.query_by_label("This document is unavailable. Choose a workspace to replace this view.").is_none());
+        let target = h.state().session.project().unwrap().board_target();
+        assert_eq!(h.state().views.active.board.target, Some(target));
+        assert!(!h.state().views.active.accepts(before, &h.state().session));
+        assert!(!h.state().files.dirty(&h.state().session));
+        let snapshot = h.state().arrangement_snapshot().unwrap();
+        assert!(snapshot.valid());
+        assert!(h.query_by_label("This arrangement exceeds the supported layout limits; its last saved layout has been kept.").is_none());
+        let encoded = serde_json::to_string(&snapshot).unwrap();
+        assert!(!encoded.contains("unavailable"));
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Schematic");
+        assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout");
+        assert!(!h.state().views.active.unavailable());
+        assert_eq!(h.state().views.active.board.target, Some(target));
+    }
+}
+
+/// Refused file loads do not run project rebinding or replace the current PCB document.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn failed_project_open_preserves_current_pcb_binding() {
+    let mut h = board_harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    let before = h.state().session.snapshot().unwrap();
+    let target = h.state().views.active.board.target;
+    let revision = h.state().session.revision();
+    let dir = tempfile::tempdir().unwrap();
+    h.state_mut().files.open_path_for_test(&dir.path().join("missing.pc"), revision);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(h.state().views.active.board.target, target);
+    assert!(!h.state().views.active.unavailable());
+}

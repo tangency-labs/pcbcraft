@@ -1421,3 +1421,27 @@ fn child_tab_menu(h: &mut Harness<'_, PcbApp>, peer: &Rc<RefCell<Peer>>, label: 
     }
     h.run();
 }
+
+/// File adoption rebinds a detached PCB view and the main schematic together, while retaining
+/// window membership and clearing outgoing document identities before layout capture.
+#[test]
+fn project_open_rebinds_detached_pcb_and_main_schematic() {
+    let (mut h, peer) = multi_window();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB layout in new window");
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    let stale = h.state().views.view(child).unwrap().input(&h.state().session).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led/project.pc");
+    let revision = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&path, revision);
+    h.run();
+    assert_eq!(h.state().views.detached_hosts(), vec![HostId(1)]);
+    assert_eq!(h.state().views.view(child).unwrap().workspace, Workspace::Board);
+    assert!(!h.state().views.view(child).unwrap().unavailable());
+    assert!(!h.state().views.view(child).unwrap().accepts(stale, &h.state().session));
+    assert_eq!(h.state().views.view(child).unwrap().board.target, Some(h.state().session.project().unwrap().board_target()));
+    h.get_by_label("Schematic canvas");
+    child_rect(&peer, "PCB canvas");
+    assert!(h.state().arrangement_snapshot().unwrap().valid());
+    assert!(!h.state().files.dirty(&h.state().session));
+}

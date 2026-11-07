@@ -1708,7 +1708,7 @@ impl PcbApp {
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {
-                    self.views.sync(&self.session);
+                    self.views.bind_opened_project(&self.session);
                     for view in self.views.all_mut() {
                         view.camera.request_fit();
                     }

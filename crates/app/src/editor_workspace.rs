@@ -388,6 +388,17 @@ impl EditorViews {
         }
     }
 
+    /// Bind all live and cached views after successful file adoption, preserving host placement
+    /// and workspace choices. This explicit project replacement precedes saved-layout restoration;
+    /// ordinary synchronization must still retain genuinely missing document placeholders.
+    pub(super) fn bind_opened_project(&mut self, session: &Session) {
+        for view in self.all_mut() {
+            view.bind_opened_project(session);
+        }
+        self.selection_source = None;
+        self.pending_reveal.clear();
+    }
+
     /// Synchronize every visible and parked view with the authoritative project opening.
     pub(super) fn sync(&mut self, session: &Session) {
         let mut changed = false;

@@ -261,7 +261,8 @@ board; board editing remains planned. Live MCP reaches these view, workspace and
 window controls too (see below). See the
 [board inspection walkthrough](docs/quickstart.md#inspect-a-board-beside-its-schematic).
 
-Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**.
+Open `project.pc`, its project folder, or a `.pc.zip` archive from **File → Open…**. Opening from PCB layout binds the incoming project's board before restoring
+its saved views, including split panes and detached windows.
 Desktop projects default to a folder containing separate project, schematic,
 board and saved symbol documents. **Save** keeps the opened form, and
 **File → Save As…** offers **Project folder…** and **Packed project (.pc.zip)…**.
