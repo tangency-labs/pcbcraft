@@ -527,3 +527,45 @@ fn inactive_tab_context_actions_preserve_the_working_arrangement() {
     assert_eq!(h.state().arrangement_snapshot().unwrap(), review);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }
+
+/// Arrangement window commands take the tab strip's path: create, rename, switch and delete by
+/// ID, with each refusal naming its reason before anything changes and the project untouched.
+#[test]
+#[allow(clippy::unwrap_used)]
+fn arrangement_window_commands_follow_the_tabs() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let revision = h.state().session.revision();
+    let run = |h: &mut Harness<'_, PcbApp>, id: &str, params: serde_json::Value| {
+        let result = h.state_mut().run_window_command(&ctx, id, &params);
+        h.run();
+        result
+    };
+    let inspected = |h: &Harness<'_, PcbApp>| crate::window_commands::inspect_editor(h.state())["arrangements"].clone();
+    let first = h.state().arrangements.active();
+    assert_eq!(inspected(&h), json!({"active": first, "tabs": [{"id": first, "name": "Views"}]}));
+    assert!(run(&mut h, "arrangement.delete", json!({"arrangement": first})).unwrap_err().contains("only arrangement"));
+    assert!(run(&mut h, "arrangement.create", json!({"name": "views"})).unwrap_err().contains("already uses that name"));
+    assert!(run(&mut h, "arrangement.create", json!({"name": " "})).unwrap_err().contains("1–80 characters"));
+    assert!(run(&mut h, "arrangement.select", json!({"arrangement": 99})).unwrap_err().contains("no arrangement 99"));
+
+    let view = h.state().views.active.id().0;
+    run(&mut h, "view.set_workspace", json!({"view": view, "workspace": "board", "placement": "beside"})).unwrap();
+    let split = h.state().arrangement_snapshot().unwrap();
+    run(&mut h, "arrangement.create", json!({"name": "Focus", "single_view": true})).unwrap();
+    let focus = h.state().arrangements.active();
+    assert_ne!(focus, first);
+    assert!(!h.state().views.is_split(), "a single-view arrangement shows only the focused view");
+    let copy = json!({"name": "Both", "single_view": true, "copy_of": first});
+    assert!(run(&mut h, "arrangement.create", copy).unwrap_err().contains("not both"));
+
+    run(&mut h, "arrangement.select", json!({"arrangement": first})).unwrap();
+    assert_eq!(h.state().arrangements.active(), first);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), split, "the first arrangement's views come back");
+    run(&mut h, "arrangement.rename", json!({"arrangement": focus, "name": "Board only"})).unwrap();
+    assert_eq!(inspected(&h)["tabs"][1], json!({"id": focus, "name": "Board only"}));
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), split, "renaming another tab keeps the views");
+    run(&mut h, "arrangement.delete", json!({"arrangement": first})).unwrap();
+    assert_eq!(inspected(&h), json!({"active": focus, "tabs": [{"id": focus, "name": "Board only"}]}));
+    assert_eq!(h.state().session.revision(), revision);
+}

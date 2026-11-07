@@ -75,7 +75,7 @@ impl Backend for Remote {
     fn describe(&self) -> String {
         format!(
             "the open PCBCraft editor on port {}. Project commands share the window's undo history; \
-view., window., app. and file. commands change its views, windows and settings. `inspect_editor` shows them",
+view., window., arrangement., app. and file. commands change its views, windows, arrangements and settings. `inspect_editor` shows them",
             self.port
         )
     }

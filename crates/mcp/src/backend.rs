@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 /// Only a live editor can run them, and they never change the project, its revision or its undo
 /// history; only `file.save` changes the unsaved state, by saving. The editor publishes their
 /// catalog during live discovery.
-pub const WINDOW_NAMESPACES: &[&str] = &["view.", "window.", "app.", "file."];
+pub const WINDOW_NAMESPACES: &[&str] = &["view.", "window.", "arrangement.", "app.", "file."];
 
 /// Whether `id` names a window command, which only an open editor can run.
 pub fn is_window_command(id: &str) -> bool {
@@ -53,7 +53,8 @@ impl Backend for Headless {
     }
 
     fn describe(&self) -> String {
-        "a headless session in this process, not an open window. Window commands (view., window., app. and file.) need a live editor".to_owned()
+        "a headless session in this process, not an open window. Window commands (view., window., arrangement., app. and file.) need a live editor"
+            .to_owned()
     }
 }
 

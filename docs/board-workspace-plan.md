@@ -300,7 +300,7 @@ serialized through the existing session, and all affected views repaint.
 
 Following [#61](https://github.com/tangency-labs/pcbcraft/issues/61), presentation
 actions use the same GUI and live-MCP handlers (the app's `view.`, `window.`,
-`app.` and `file.` commands). Inspecting, selecting, fitting,
+`arrangement.`, `app.` and `file.` commands). Inspecting, selecting, fitting,
 splitting or moving a view must not dirty the electrical document, change saved
 bytes, advance its revision or add a document undo step. Live requests identify
 their target view explicitly. Headless sessions report that window actions need

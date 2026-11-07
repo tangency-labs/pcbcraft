@@ -47,7 +47,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "execute",
             "Run a command",
-            "Run a project or window command. Project commands answer with the project, window commands (view., window., app., file.) with the editor; set inspect to false to return only the revision.",
+            "Run a project or window command. Project commands answer with the project, window commands (view., window., arrangement., app., file.) with the editor; set inspect to false to return only the revision.",
             json!({"command": {"type": "string"}, "params": {"type": "object"}, "inspect": {"type": "boolean", "default": true}}),
             &["command"],
             Effect::Edits,

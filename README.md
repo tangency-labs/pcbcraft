@@ -298,7 +298,7 @@ agent's session, command line or environment, and the file goes when the chat di
 
 The permission mode decides what the agent may do without asking. **Auto-allow project edits**
 (the default, as in SolidCraft) runs project and view commands at once, while saving, starting
-a new project and closing windows wait for **Allow**, **Always allow** or **Deny** in the chat.
+a new project, closing windows and deleting arrangements wait for **Allow**, **Always allow** or **Deny** in the chat.
 **Ask every time** asks before any command; **Allow everything** asks before none. Reading the
 project always runs. Questions the agent asks about its own tools appear in the chat too.
 **Stop** (or **Esc** in the chat) ends the answer and denies anything waiting.
@@ -341,16 +341,18 @@ command waits while a dialog or file operation is open.
 
 It also lists window commands, marked `"scope": "window"`, which run through the
 same handlers as the editor's own controls and never edit the project, its
-revision or undo history; only `file.save` changes the unsaved state. Call `inspect_editor` for the window
-and view IDs they take, with each view's selection, zoom, center and grid:
+revision or undo history; only `file.save` changes the unsaved state. Call `inspect_editor` for the window,
+view and arrangement IDs they take, with each view's workspace, selection, zoom, center and grid:
 
 | Commands | Matching control |
 |---|---|
 | `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Sheet tabs and **View → Split / Detach / New window** |
 | `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
-| `view.set_grid`, `view.select` | Status-bar grid spacing; click and box selection |
-| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs, closing a non-last window |
-| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, selection following, navigation) and **Home** |
+| `view.set_workspace` | The workspace picker: schematic or PCB layout, here, beside or in a new window |
+| `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing; click and box selection in a schematic; footprint and Browser selection in a PCB view |
+| `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | The named arrangement tabs: click, **+** and **Duplicate…**, **Rename…**, **Delete** |
+| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture or Layout, and View), closing a non-last window |
+| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, PCB grid style, selection following, navigation) and **Home** |
 | `file.save` | **File → Save** for a project that already has a location |
 
 Closing the last window and choosing where to save an Untitled project stay in

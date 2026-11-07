@@ -63,7 +63,8 @@ mod live {
 
     use super::Panel;
     use crate::{
-        Dialog, PcbApp, RIBBON_TABS, ViewId,
+        Dialog, PcbApp, RIBBON_TABS, ViewId, Workspace,
+        arrangements::{Action, Start},
         editor_layout::HostId,
         editor_windows::ViewAction,
         preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
@@ -77,6 +78,10 @@ mod live {
         View,
         /// A window ID from inspection.
         Window,
+        /// An arrangement ID from inspection.
+        Arrangement,
+        /// An arrangement name: 1 to 80 characters on one line.
+        Name,
         Bool,
         Choice(&'static [&'static str]),
         Integer {
@@ -96,7 +101,8 @@ mod live {
             let coordinate = json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM});
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
-                Self::View | Self::Window => json!({"type": "integer", "minimum": 0}),
+                Self::View | Self::Window | Self::Arrangement => json!({"type": "integer", "minimum": 0}),
+                Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
                 Self::Choice(values) => json!({"type": "string", "enum": values}),
                 Self::Integer { min, max, step } => json!({"type": "integer", "minimum": min, "maximum": max, "multipleOf": step}),
@@ -112,7 +118,8 @@ mod live {
         /// Check a raw value without coercion, giving the reason it doesn't fit.
         fn validate(self, value: &Value) -> Result<(), String> {
             let fits = match self {
-                Self::View | Self::Window => value.as_u64().is_some(),
+                Self::View | Self::Window | Self::Arrangement => value.as_u64().is_some(),
+                Self::Name => value.as_str().is_some(),
                 Self::Bool => value.is_boolean(),
                 Self::Choice(values) => value.as_str().is_some_and(|value| values.contains(&value)),
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
@@ -125,6 +132,8 @@ mod live {
             Err(match self {
                 Self::View => "must be a view ID from inspect_editor".to_owned(),
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
+                Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
+                Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
                 Self::Choice(values) => format!("must be one of {}", values.join(", ")),
                 Self::Integer { min, max, step: 1 } => format!("must be a whole number from {min} to {max}"),
@@ -205,6 +214,8 @@ mod live {
     }
 
     const VIEW: Param = Param { name: "view", summary: "The view's ID, from inspect_editor", required: true, kind: Kind::View };
+    const ARRANGEMENT: Param =
+        Param { name: "arrangement", summary: "An arrangement ID from inspect_editor", required: true, kind: Kind::Arrangement };
     const WINDOW: Param = Param { name: "window", summary: "The window's ID, from inspect_editor", required: true, kind: Kind::Window };
     const THEMES: &[&str] = &["system", "dark", "light"];
     const UNITS: &[&str] = &["mil", "mm"];
@@ -319,6 +330,34 @@ mod live {
             title: "Close Window",
             summary: "Close one editor window and its views while another stays open. The last window can only be closed in the editor.",
             params: &[WINDOW],
+        },
+        WindowCommand {
+            id: "arrangement.select",
+            title: "Show Arrangement",
+            summary: "Switch to a named arrangement, as clicking its tab does: its saved views and windows replace the current ones, which the current arrangement keeps.",
+            params: &[ARRANGEMENT],
+        },
+        WindowCommand {
+            id: "arrangement.create",
+            title: "New Arrangement",
+            summary: "Add a named arrangement and switch to it, as the tabs' plus and Duplicate do: from the current views, from just the focused view, or as a copy of another arrangement. Up to 32.",
+            params: &[
+                Param { name: "name", summary: "Its name, unique ignoring case", required: true, kind: Kind::Name },
+                Param { name: "single_view", summary: "Start with only the focused view", required: false, kind: Kind::Bool },
+                Param { name: "copy_of", summary: "The arrangement to copy instead", required: false, kind: Kind::Arrangement },
+            ],
+        },
+        WindowCommand {
+            id: "arrangement.rename",
+            title: "Rename Arrangement",
+            summary: "Rename an arrangement, as its tab's Rename does. Views and windows are unchanged.",
+            params: &[ARRANGEMENT, Param { name: "name", summary: "Its new name, unique ignoring case", required: true, kind: Kind::Name }],
+        },
+        WindowCommand {
+            id: "arrangement.delete",
+            title: "Delete Arrangement",
+            summary: "Delete an arrangement, as its tab's Delete does; the last one stays. Deleting the shown one switches to the first that remains. This can't be undone.",
+            params: &[ARRANGEMENT],
         },
         WindowCommand {
             id: "app.set_preferences",
@@ -495,6 +534,10 @@ mod live {
             "message": app.message,
             "windows": windows,
             "views": views,
+            "arrangements": {
+                "active": app.arrangements.active(),
+                "tabs": app.arrangements.tabs().into_iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
+            },
             "preferences": inspect_preferences(&app.preferences),
         })
     }
@@ -503,6 +546,53 @@ mod live {
         /// The window that shows `id`, or a reason naming the stale ID.
         fn view_window(&self, id: ViewId) -> Result<HostId, String> {
             self.views.owner(id).ok_or_else(|| format!("There is no open view {}. Inspect the editor for the current view IDs.", id.0))
+        }
+
+        /// Check an arrangement command as the tabs and their forms do, so a refusal names its
+        /// reason; the accepted action is applied after the windows draw, like a tab click.
+        fn arrangement_action(&self, id: &str, params: &Value) -> Result<Action, String> {
+            if self.home {
+                return Err("Home is showing. Return to the workspace first (app.set_home).".to_owned());
+            }
+            let tabs = self.arrangements.tabs();
+            if tabs.is_empty() {
+                return Err("The project's arrangements aren't ready yet. Try again.".to_owned());
+            }
+            let known = |key: &str| -> Result<Option<u64>, String> {
+                match params.get(key).and_then(Value::as_u64) {
+                    Some(arrangement) if !tabs.iter().any(|(tab, _)| *tab == arrangement) => {
+                        Err(format!("There is no arrangement {arrangement}. Inspect the editor for the current arrangement IDs."))
+                    }
+                    found => Ok(found),
+                }
+            };
+            let target = known("arrangement")?;
+            let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+            let named = |except| self.arrangements.name_error(name, except).map_or(Ok(()), |error| Err(error.to_owned()));
+            match (id, target) {
+                ("arrangement.select", Some(arrangement)) => Ok(Action::Select(arrangement)),
+                ("arrangement.rename", Some(arrangement)) => {
+                    named(Some(arrangement))?;
+                    Ok(Action::Rename { id: arrangement, name: name.trim().to_owned() })
+                }
+                ("arrangement.delete", Some(_)) if tabs.len() <= 1 => Err("This is the only arrangement, which stays.".to_owned()),
+                ("arrangement.delete", Some(arrangement)) => Ok(Action::Remove(arrangement)),
+                ("arrangement.create", _) => {
+                    named(None)?;
+                    if tabs.len() >= 32 {
+                        return Err("An arrangement collection can contain up to 32 arrangements.".to_owned());
+                    }
+                    let single = params.get("single_view").and_then(Value::as_bool) == Some(true);
+                    let start = match known("copy_of")? {
+                        Some(_) if single => return Err("Give single_view or copy_of, not both.".to_owned()),
+                        Some(source) => Start::Copy(source),
+                        None if single => Start::SingleView,
+                        None => Start::Current,
+                    };
+                    Ok(Action::Create { name: name.trim().to_owned(), start })
+                }
+                _ => Err(format!("unknown command `{id}`")),
+            }
         }
 
         /// Run `act` with `host`'s panels and focused view bound, then rebind the main window,
@@ -519,7 +609,7 @@ mod live {
         pub(crate) fn run_window_command(&mut self, ctx: &Context, id: &str, params: &Value) -> Result<(), String> {
             let command = CATALOG.iter().find(|command| command.id == id).ok_or_else(|| format!("unknown command `{id}`"))?;
             command.check(params)?;
-            if (id.starts_with("view.") || id == "window.set_panel") && self.session.project().is_none() {
+            if (id.starts_with("view.") || id.starts_with("arrangement.") || id == "window.set_panel") && self.session.project().is_none() {
                 return Err("No project is open. Open or create one first.".to_owned());
             }
             self.bind_editor_host(self.views.main);
@@ -588,6 +678,10 @@ mod live {
                     self.views.active.cancel_gesture();
                     self.select(items);
                     self.views.bind(previous);
+                }
+                (arrangement, _, _) if arrangement.starts_with("arrangement.") => {
+                    let action = self.arrangement_action(id, params)?;
+                    self.queue_arrangement(ctx, action);
                 }
                 ("window.set_panel", _, Some(host)) => {
                     let panel = match params["panel"].as_str() {

@@ -118,7 +118,7 @@ pub(crate) fn gate(mode: Mode, method: &str, command: Option<&str>, always: impl
 
 /// Commands that touch files, replace the project or close a window: they ask even under Edits.
 fn asks_under_edits(command: &str) -> bool {
-    command.starts_with("file.") || matches!(command, "project.new" | "window.close")
+    command.starts_with("file.") || matches!(command, "project.new" | "window.close" | "arrangement.delete")
 }
 
 /// The chat: its backend, conversation, the agent's own options and pending approvals.
@@ -630,7 +630,7 @@ mod tests {
             assert_eq!(run(Mode::Edits, command), Verdict::Run, "{command}");
             assert_eq!(run(Mode::Ask, command), Verdict::Ask, "{command}");
         }
-        for command in ["file.save", "project.new", "window.close"] {
+        for command in ["file.save", "project.new", "window.close", "arrangement.delete"] {
             assert_eq!(run(Mode::Edits, command), Verdict::Ask, "{command}");
             assert_eq!(run(Mode::All, command), Verdict::Run, "{command}");
         }
