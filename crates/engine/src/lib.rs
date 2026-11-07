@@ -39,6 +39,12 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    LibrarySource,
+    LibraryDocuments,
+    LibraryQuery,
+    LibraryKind,
+    LibraryDigest,
+    DefinitionRevision,
     AutoHeal,
     Disconnect,
     Junctions,
@@ -79,6 +85,14 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::DefinitionRevision => json!({"type":"integer","minimum":1,"maximum":u32::MAX}),
+            Self::LibraryDigest => json!({"type":"string","pattern":"^[0-9a-f]{64}$"}),
+            Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
+            Self::LibraryDocuments => {
+                json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
+            }
+            Self::LibraryQuery => json!({"type":"string","maxLength":128}),
+            Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint"]}),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
@@ -108,9 +122,7 @@ impl ParamKind {
                 json!({"type":"object","minProperties":1,"maxProperties":64,"additionalProperties":{"type":"string","pattern":"^[1-9][0-9]{0,2}$"}})
             }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
-            Self::SymbolDefinition => {
-                json!({"type": "string", "enum": library::starter().symbols().iter().map(|definition| definition.id.as_str()).collect::<Vec<_>>()})
-            }
+            Self::SymbolDefinition => json!({"type":"string","minLength":1,"maxLength":64}),
             Self::Displacement => json!({"type": "integer", "minimum": -2 * MAX_CENTER_NM, "maximum": 2 * MAX_CENTER_NM}),
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
             Self::WireId => json!({"type": "string", "pattern": "^wire-[1-9][0-9]*$"}),
@@ -144,6 +156,22 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::DefinitionRevision if value.as_u64().is_some_and(|n| n > 0 && n <= u32::MAX as u64) => Ok(()),
+            Self::DefinitionRevision => Err("must be a positive 32-bit native definition revision"),
+            Self::LibraryDigest
+                if value.as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) =>
+            {
+                Ok(())
+            }
+            Self::LibraryDigest => Err("must contain a lowercase SHA-256 content digest"),
+            Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
+            Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
+            Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
+            Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint")) => Ok(()),
+            Self::LibrarySource => Err("must be a portable source or library ID"),
+            Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
+            Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
+            Self::LibraryKind => Err("must be symbol or footprint"),
             Self::HierarchyId
                 if value.as_str().is_some_and(|s| {
                     schematic::wiring::parse_id(s, "label-").is_some() || schematic::wiring::parse_id(s, "sheet-symbol-").is_some()
@@ -176,7 +204,7 @@ impl ParamKind {
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::Name | Self::Text if value.is_string() => Ok(()),
             Self::SymbolId if value.as_str().and_then(schematic::parse_symbol_id).is_some() => Ok(()),
-            Self::SymbolDefinition if value.as_str().and_then(library_symbol).is_some() => Ok(()),
+            Self::SymbolDefinition if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
             Self::Coordinate if value.as_i64().is_some_and(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Displacement if value.as_i64().is_some_and(|n| (-2 * MAX_CENTER_NM..=2 * MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::Revision if value.as_u64().is_some() => Ok(()),
@@ -205,7 +233,7 @@ impl ParamKind {
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),
-            Self::SymbolDefinition => Err("must identify a symbol in the starter library"),
+            Self::SymbolDefinition => Err("must identify a native symbol"),
             Self::Coordinate => Err("must be a whole number of nanometers within the schematic bounds"),
             Self::Displacement => Err("must be a whole displacement within twice the schematic coordinate bounds"),
             Self::Revision => Err("must be a nonnegative integer revision"),
@@ -452,9 +480,22 @@ const CATALOG: &[Command] = &[
     Command {
         id: PLACE_SYMBOL,
         title: "Place Symbol",
-        summary: "Place a starter library symbol on the open schematic. Undoable.",
+        summary: "Place a native symbol on the open schematic. External definitions require library, definition_revision and definition_digest from library.search. Undoable.",
         params: &[
-            Param { required: true, name: "definition", summary: "ID of a symbol in the starter library", kind: ParamKind::SymbolDefinition },
+            Param { required: true, name: "definition", summary: "Native symbol item ID", kind: ParamKind::SymbolDefinition },
+            Param {
+                required: false,
+                name: "definition_digest",
+                summary: "SHA-256 digest from library.search; required for external symbols",
+                kind: ParamKind::LibraryDigest,
+            },
+            Param { required: false, name: "library", summary: "Native library ID; omit for the embedded starter", kind: ParamKind::LibrarySource },
+            Param {
+                required: false,
+                name: "definition_revision",
+                summary: "Exact loaded symbol revision; required for external libraries",
+                kind: ParamKind::DefinitionRevision,
+            },
             Param { required: false, name: "rotation", summary: "Counterclockwise degrees; defaults to 0", kind: ParamKind::Rotation },
             SYMBOL_X,
             SYMBOL_Y,
@@ -772,6 +813,10 @@ const CATALOG: &[Command] = &[
             EXPECTED_REVISION,
         ],
     },
+    library::sources::COMMANDS[0],
+    library::sources::COMMANDS[1],
+    library::sources::COMMANDS[2],
+    library::sources::COMMANDS[3],
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -972,6 +1017,7 @@ impl Project {
 /// separate session. Window placement and navigation are not part of the project history.
 #[derive(Debug, Default)]
 pub struct Session {
+    libraries: Arc<library::sources::Catalog>,
     project: Option<Arc<Project>>,
     undo: Vec<Option<Arc<Project>>>,
     redo: Vec<Option<Arc<Project>>>,
@@ -1047,6 +1093,7 @@ impl Session {
     /// stops at the sheet limit and deletion retains one sheet. Unknown IDs are unavailable.
     pub fn available(&self, id: &str) -> bool {
         match id {
+            library::sources::LOAD | library::sources::REMOVE | library::sources::LIST | library::sources::SEARCH => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -1138,8 +1185,13 @@ impl Session {
         })
     }
 
-    /// Run a command. On success, answers [`Self::inspect`]. On failure, nothing has changed.
+    /// Run a shared command. Document commands answer [`Self::inspect`]; library commands return
+    /// catalog inspection/search and never change the project or its history. Failed commands
+    /// leave the current state intact.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        if id.starts_with("library.") {
+            return self.library_command(id, params);
+        }
         self.apply(id, params)?;
         Ok(self.inspect())
     }
@@ -1149,6 +1201,10 @@ impl Session {
     /// Setup handlers retain their revision checks and specific state diagnostics even when
     /// availability disables the command on an open project.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        if id.starts_with("library.") {
+            self.library_command(id, params)?;
+            return Ok(self.revision);
+        }
         if sheets::scoped_command(id) {
             return self.apply_to_sheet(id, params);
         }
@@ -1244,10 +1300,24 @@ impl Session {
                 self.place_symbol(resistor, params)?;
             }
             PLACE_SYMBOL => {
-                let definition = params["definition"]
-                    .as_str()
-                    .and_then(library_symbol)
-                    .ok_or_else(|| CommandError::InvalidParams("unknown symbol definition".to_owned()))?;
+                let library = params["library"].as_str().unwrap_or("starter");
+                let id = params["definition"].as_str().unwrap_or_default();
+                let revision = params.get("definition_revision").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+                let definition = if library == "starter" {
+                    match revision {
+                        Some(revision) => library::starter().symbol_revision(id, revision).cloned(),
+                        None => library_symbol(id),
+                    }
+                } else {
+                    revision.and_then(|revision| self.libraries.symbol(library, id, revision))
+                }
+                .ok_or_else(|| CommandError::InvalidParams("unknown symbol definition".to_owned()))?;
+                if (library != "starter" || params.get("definition_digest").is_some())
+                    && params["definition_digest"].as_str()
+                        != Some(library::sources::symbol_digest(&definition).map_err(CommandError::InvalidParams)?.as_str())
+                {
+                    return Err(CommandError::InvalidParams("external symbol content changed; search the library again".into()));
+                }
                 self.place_symbol(definition, params)?;
             }
             CONNECT_PINS => self.connect_pins(params)?,
@@ -1289,6 +1359,8 @@ impl Session {
     /// Add a symbol from validated parameters if the caller's revision is still current.
     /// Use the resulting revision as the identity so undo and a new placement cannot reuse it.
     /// Exact wire contacts connect; a two-pin placement on a straight run inserts the part.
+    /// Explicit native selections reject conflicting pinned content. Legacy starter-only calls
+    /// retain their compatibility behavior of reusing the project's existing saved definition.
     fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1299,7 +1371,13 @@ impl Session {
         let same = |saved: &&Arc<SymbolDefinition>| {
             (&saved.library, &saved.id, saved.revision()) == (&definition.library, &definition.id, definition.revision())
         };
-        let definition = project.components.values().map(|component| &component.definition).find(same).cloned().unwrap_or(definition);
+        let definition = match project.components.values().map(|component| &component.definition).find(same) {
+            Some(saved) if (definition.library != "starter" || params.get("definition_digest").is_some()) && **saved != *definition => {
+                return Err(CommandError::InvalidParams("symbol identity/revision conflicts with its pinned project copy".into()));
+            }
+            Some(saved) => saved.clone(),
+            None => definition,
+        };
         let mut reference_number = project
             .components
             .values()

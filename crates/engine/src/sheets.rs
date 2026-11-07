@@ -143,6 +143,7 @@ impl Session {
         let target = project.resolve_sheet(params.get("sheet").and_then(Value::as_str))?;
         let projected = project.for_sheet(target).ok_or_else(|| CommandError::InvalidParams("unknown sheet ID".into()))?;
         let mut transaction = Self {
+            libraries: self.libraries.clone(),
             project: Some(Arc::new(projected)),
             revision: self.revision,
             history_root_revision: self.history_root_revision,

@@ -1,4 +1,4 @@
-//! The parts browser: a movable card floating over the canvas that lists the starter library's
+//! The parts browser: a movable card floating over the canvas that lists embedded and loaded native
 //! symbols as searchable thumbnails. Click a part to place it, or
 //! drag parts onto the sheet one after another. Browsing never edits the project; placing goes through the same
 //! `schematic.place_symbol` command as before. Adapted from PCBcraft Next's parts browser.
@@ -98,6 +98,7 @@ impl PartsBrowser {
 
     /// The starter library's symbols whose name or ID contains the search text, or whose reference
     /// prefix is it. Matching ignores case; an empty search lists every symbol.
+    #[cfg(test)]
     fn matches(&self) -> Vec<Arc<SymbolDefinition>> {
         matches(&self.query)
     }
@@ -123,16 +124,17 @@ impl PartsBrowser {
         browser: Rect,
         placing: Option<&Arc<SymbolDefinition>>,
         source: ViewInput,
+        libraries: &library::sources::Catalog,
     ) -> Option<Arc<SymbolDefinition>> {
         if !self.open {
             self.rect = None;
             return None;
         }
         let mut picked = None;
-        let count = self.matches().len();
+        let count = matches_sources(&self.query, libraries).len();
         let Self { panel, query, view, focus, search_focused, .. } = self;
         let (rect, closed) = panel.show(ui, canvas, browser, |ui, compact| {
-            catalog::source(ui, "Built-in symbols", count);
+            catalog::source(ui, "Symbols", count);
             let search = catalog::search(ui, query);
             if std::mem::take(focus) {
                 search.request_focus();
@@ -140,17 +142,31 @@ impl PartsBrowser {
             *search_focused = search.has_focus();
             let enter = search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let view = catalog::view_picker(ui, view, compact);
-            let parts = matches(query);
+            let parts = matches_sources(query, libraries);
             if enter {
                 picked = parts.first().cloned();
             }
             catalog::grid(ui, view, &parts, |ui, definition, width| {
+                let identity =
+                    (definition.library != "starter").then(|| format!("{}/{} r{}", definition.library, definition.id, definition.revision()));
+                let detail = identity.as_ref().map_or_else(
+                    || definition.default_value().to_owned(),
+                    |_| format!("{} · {} r{}", definition.default_value(), definition.library, definition.revision()),
+                );
                 let item = catalog::Item {
                     name: &definition.name,
-                    value: definition.default_value(),
+                    value: &detail,
+                    identity: identity.as_deref(),
                     selected: placing.is_some_and(|placing| Arc::ptr_eq(placing, definition)),
                 };
                 let response = catalog::tile(ui, view, width, item, |painter, rect, ink| paint_preview(painter, definition, rect, ink));
+                let response = response.on_hover_text(format!(
+                    "{}/{} · revision {}{}",
+                    definition.library,
+                    definition.id,
+                    definition.revision(),
+                    definition.provenance.as_ref().map(|p| format!("\n{}", p.license)).unwrap_or_default()
+                ));
                 response.dnd_set_drag_payload(PartDrag { definition: definition.clone(), source });
                 if response.clicked() {
                     picked = Some(definition.clone());
@@ -194,6 +210,13 @@ fn matches(query: &str) -> Vec<Arc<SymbolDefinition>> {
         .collect();
     let order = ["resistor", "capacitor", "led", "connector"];
     parts.sort_by_key(|part| order.iter().position(|id| *id == part.id).unwrap_or(order.len()));
+    parts
+}
+
+/// Combine embedded symbols with unambiguous current native revisions from the session catalog.
+fn matches_sources(query: &str, catalog: &library::sources::Catalog) -> Vec<Arc<SymbolDefinition>> {
+    let mut parts = matches(query);
+    parts.extend(catalog.search(query, Some(library::sources::Kind::Symbol)).into_iter().filter_map(|(_, item)| item.symbol()));
     parts
 }
 

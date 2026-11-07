@@ -11,6 +11,7 @@ use std::{
 };
 
 mod folder;
+pub mod library;
 pub use folder::{load, save};
 
 /// Open a folder, its project.pc entry point, a packed archive or a legacy single-file project.

@@ -212,6 +212,14 @@ latest revision. The last component using a copy determines its lifetime:
 deleting that component removes the unused copy on the next save. Libraries and
 symbols are identified by their IDs and revisions; paths locate those identities.
 
+Symbols placed from a registered native source also retain an optional
+`provenance` object with `library_name` and `license`. It contains portable source
+attribution rather than a personal registration ID or machine path. The saved-copy
+reader validates it before adoption; copies without this field preserve their
+existing bytes. A new placement refuses different content under an already pinned
+library/item/revision identity. Source registration and cached search data remain
+outside project documents; see [native library sources](native-library-sources.md).
+
 All documents reject unknown fields. Required lists and optional wire geometry
 reject explicit null. Before adoption, validation checks the entire project:
 component ownership and references, unit membership, wire endpoints, junction

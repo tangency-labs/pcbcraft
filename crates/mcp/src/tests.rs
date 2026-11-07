@@ -174,7 +174,7 @@ fn without_sheet_identity(mut state: Value) -> Value {
     state
 }
 
-/// Expose the shared symbol choices without changing the legacy resistor command's inputs.
+/// Publish extensible native symbol identity/content parameters without changing legacy inputs.
 #[test]
 fn placement_commands_expose_integer_coordinates_to_mcp() {
     for command in [PLACE_RESISTOR, PLACE_SYMBOL] {
@@ -188,8 +188,8 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
                 schema["properties"]["definition"],
                 json!({
                     "type": "string",
-                    "enum": ["capacitor", "connector", "header-4", "led", "npn", "resistor"],
-                    "description": "ID of a symbol in the starter library",
+                    "minLength":1,"maxLength":64,
+                    "description": "Native symbol item ID",
                 })
             );
             assert_eq!(schema["required"], json!(["definition", "x_nm", "y_nm", "expected_revision"]));
@@ -197,6 +197,37 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
             assert_eq!(schema["required"], json!(["x_nm", "y_nm", "expected_revision"]));
         }
     }
+}
+
+/// Source discovery and placement use the same session catalog over real MCP tool dispatch,
+/// while source loading/removal leave the project's electrical revision and history alone.
+#[test]
+fn native_source_search_and_placement_share_the_mcp_session() {
+    let mut s = server();
+    let definitions = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/symbols/resistor.json"));
+    let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
+    let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
+    let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
+    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 4);
+    let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
+    assert_ne!(loaded["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), initial);
+    let results = body(&call(&mut s, "execute", json!({"command":"library.search","params":{"kind":"symbol","query":"Workshop"}})));
+    let found = &results[0];
+    assert_eq!(found["key"]["library"], "workshop");
+    let placed = call(
+        &mut s,
+        "execute",
+        json!({"command":PLACE_SYMBOL,"params":{
+            "library":found["key"]["library"],"definition":found["key"]["id"],"definition_revision":found["key"]["revision"],"definition_digest":found["digest"],
+            "x_nm":0,"y_nm":0,"expected_revision":initial["revision"]
+        }}),
+    );
+    assert_ne!(placed["isError"], true, "{placed}");
+    let placed = body(&placed);
+    assert_ne!(call(&mut s, "execute", json!({"command":"library.remove_source","params":{"source":"workshop-source"}}))["isError"], true);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), placed);
 }
 
 /// Headless clients discover the strict setup schema and edit the same revisioned model.

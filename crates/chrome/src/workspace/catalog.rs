@@ -312,6 +312,15 @@ pub enum View {
 }
 
 impl View {
+    /// Shared fixed tile height keeps virtual scrolling and the painter in agreement.
+    fn tile_height(self) -> f32 {
+        (match self {
+            Self::Small => 94.,
+            Self::Medium => 126.,
+            Self::Large => 180.,
+            Self::List => 58.,
+        }) * (Tokens::get().font_body / 12.).max(1.)
+    }
     /// Number of equal-width tiles in a catalog row.
     fn columns(self) -> usize {
         match self {
@@ -378,29 +387,40 @@ pub fn view_picker(ui: &mut Ui, view: &mut View, compact: bool) -> View {
 }
 
 /// Scroll equal-width rows inside the remaining body and keep a single footer visible.
-/// The callback paints each item's engine-owned preview and handles its activation.
+/// Small catalogs retain all accessibility targets; large catalogs paint only visible rows.
 pub fn grid<T>(ui: &mut Ui, view: View, items: &[T], mut add: impl FnMut(&mut Ui, &T, f32)) {
     let columns = view.columns();
     ui.add_space(3.0);
-    egui::ScrollArea::vertical()
+    let scroll = egui::ScrollArea::vertical()
         .id_salt("library_parts")
         .max_height((ui.available_height() - 36.0).max(0.0))
         .min_scrolled_height(0.0)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            if items.is_empty() {
-                ui.label(crate::shell::dim("No matching parts"));
-            }
-            let width = (ui.available_width() - 8.0 * (columns - 1) as f32) / columns as f32;
-            for row in items.chunks(columns) {
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    for item in row {
-                        add(ui, item, width);
-                    }
-                });
-            }
-        });
+        .auto_shrink([false, false]);
+    let rows = items.len().div_ceil(columns).max(1);
+    let mut render = |ui: &mut Ui, rows: std::ops::Range<usize>| {
+        if items.is_empty() {
+            ui.label(crate::shell::dim("No matching parts"));
+            return;
+        }
+        let width = (ui.available_width() - 8.0 * (columns - 1) as f32) / columns as f32;
+        for index in rows {
+            let start = index * columns;
+            let row = &items[start..(start + columns).min(items.len())];
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.;
+                for item in row {
+                    add(ui, item, width);
+                }
+            });
+        }
+    };
+    // Small catalogs retain off-screen accessibility targets for direct keyboard navigation.
+    // Large external sources bound geometry preparation to the visible row range.
+    if items.len() <= 64 {
+        scroll.show(ui, |ui| render(ui, 0..rows));
+    } else {
+        scroll.show_rows(ui, view.tile_height(), rows, render);
+    }
     let t = Tokens::get();
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
     ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, t.border));
@@ -413,6 +433,8 @@ pub fn grid<T>(ui: &mut Ui, view: View, items: &[T], mut add: impl FnMut(&mut Ui
 pub struct Item<'a> {
     pub name: &'a str,
     pub value: &'a str,
+    /// Source-qualified identity disambiguates equally named external items for accessibility.
+    pub identity: Option<&'a str>,
     pub selected: bool,
 }
 
@@ -420,14 +442,10 @@ pub struct Item<'a> {
 /// The preview painter is clipped to its tile even when scrolled partly out of the card.
 pub fn tile(ui: &mut Ui, view: View, width: f32, item: Item<'_>, paint: impl FnOnce(&egui::Painter, Rect, egui::Color32)) -> Response {
     let t = Tokens::get();
-    let height = match view {
-        View::Small => 94.0,
-        View::Medium => 126.0,
-        View::Large => 180.0,
-        View::List => 58.0,
-    } * (t.font_body / 12.0).max(1.0);
+    let height = view.tile_height();
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), item.selected, item.name));
+    let accessible = item.identity.map_or_else(|| item.name.to_owned(), |identity| format!("{} · {identity}", item.name));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), item.selected, accessible.as_str()));
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     let preview = if view == View::List {
         Rect::from_min_size(rect.min, vec2(66.0, height - 4.0))
@@ -492,6 +510,23 @@ pub fn uncovered(canvas: Rect, cards: &[Rect]) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Large source catalogs must not decode and paint every off-screen symbol on each frame.
+    #[test]
+    fn catalog_grid_only_paints_visible_rows() {
+        let ctx = egui::Context::default();
+        let mut count = 0;
+        let items: Vec<_> = (0..1000).collect();
+        let output =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(300., 500.))), ..Default::default() }, |ui| {
+                grid(ui, View::Large, &items, |ui, _, width| {
+                    count += 1;
+                    ui.allocate_exact_size(vec2(width, View::Large.tile_height()), Sense::hover());
+                })
+            });
+        output.drop_without_applying_deltas();
+        assert!(count > 0 && count < 20, "painted {count} items");
+    }
 
     /// The available space must handle overlapping cards, equal top edges and hidden cards.
     #[test]
