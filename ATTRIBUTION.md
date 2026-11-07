@@ -333,8 +333,8 @@ Folded-transit tail cleanup in `crates/engine/src/wire/heal/tails.rs` is also ne
 upstream logic. It distinguishes obsolete split points from original free ends,
 pins and branches, retaining that protection through endpoint merges.
 Active-route preference during loop cleanup, direct node starts and the larger
-magnetic hit targets are new upstream behavior. The crosshair, target ring and wire
-badge in `crates/chrome/src/cursor.rs` are original vector drawings using the shared
+magnetic hit targets are new upstream behavior. The plain crosshair and target ring
+in `crates/chrome/src/cursor.rs` are original vector drawings using the shared
 theme; no KiCad cursor artwork or implementation was used.
 The Slice, Break, Heal and Delete glyphs in `crates/chrome/src/workspace.rs` are
 original drawings using the existing shared icon palette and ribbon metrics.

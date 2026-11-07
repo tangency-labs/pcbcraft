@@ -75,7 +75,7 @@ the search, preview size and position. **A** also expands it and focuses search.
 
 Click a symbol pin, wire endpoint or junction to start a wire directly, or choose
 **Capture → Wire** / **W** to start on a wire segment or empty grid space. The snapped
-crosshair carries a small wire glyph; a ring marks an existing connection target.
+crosshair marks the drawing point; a ring marks an existing connection target.
 Click to add corners, **Space** to flip the current
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
 to finish, or press **Enter** or double-click to finish on empty space. **Esc** or
