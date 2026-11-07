@@ -411,4 +411,4 @@ a placed item, return to the project, select one symbol or footprint and use
 **Libraries → Edit copy**. To create another definition, use **Library → New**
 inside its editor. Forking and authoring leave the source and placed copies unchanged. Applying the resulting
 definition to a project is follow-up work; see the
-[editor notes](properties-and-library-editors.md#initial-authoring-slice) for scope.
+[editor notes](properties-and-library-editors.md#authoring-basics) for scope.

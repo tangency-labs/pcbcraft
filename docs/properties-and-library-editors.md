@@ -66,7 +66,11 @@ preserves the remaining window's identity and services.
 
 Definition pane placements currently last for the application session. While
 library panes are present, the last saved project arrangement is retained rather
-than writing runtime definition IDs into project arrangement storage.
+than writing runtime definition IDs into project arrangement storage. Arrangement
+creation, selection, renaming and removal are refused while library panes remain
+in the layout. Opening a project binds arrangement bookkeeping immediately while
+preserving those panes; returning to a project workspace does not trigger a
+delayed saved-layout restore.
 
 Each definition document owns its history and dirty state. A canvas owns only
 selection, camera and tool drafts. Closing or moving a view must not publish a

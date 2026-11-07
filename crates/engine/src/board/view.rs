@@ -187,13 +187,12 @@ impl<'a> BoardView<'a> {
                     .into_iter()
                     .filter_map(|pad| {
                         let center = footprint.pad_position(pad, &self.project.board)?;
-                        let definition =
-                            self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.to_string()));
+                        let definition = self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.as_str()));
                         let copper = definition.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
                         let terminal = footprint.component_pin(pad).and_then(|(component, pin)| self.project.component_terminal(component, pin));
                         let net = terminal.and_then(|terminal| net_label(self.project, terminal));
                         Some(PadView {
-                            number: pad.to_string(),
+                            number: pad.as_str().to_owned(),
                             center,
                             copper,
                             copper_layers: definition.map(|pad| CopperLayers::resolve(self.setup(), pad.copper)),

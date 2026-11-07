@@ -186,3 +186,65 @@ fn child_sheet_assignment_round_trips_and_deletes_with_its_component() {
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), placed);
 }
+
+/// Authored alphanumeric pads survive assignment, placement, cross-probing and offline encoding.
+/// Missing pads and duplicate mappings still reject atomically before geometry is placed.
+#[test]
+fn alphanumeric_pad_ids_roundtrip_through_assignment_and_board_views() {
+    let mut s = fixture();
+    let mut definition = definition::starter("resistor-0402").unwrap().as_ref().clone();
+    definition.library = "authoring-test".into();
+    definition.id = "alpha-pads".into();
+    definition.pads[0].number = "A1".into();
+    definition.pads[1].number = "B_2".into();
+    definition.validate().unwrap();
+    let mut project = s.project().unwrap().clone();
+    Arc::make_mut(&mut project.board).definitions.insert(definition.key(), Arc::new(definition.clone()));
+    s.open_snapshot(Arc::new(project));
+    let component = s.inspect()["project"]["components"][0]["id"].clone();
+    let params = json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"B_2","2":"A1"},"expected_revision":s.revision()});
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    for mapping in [json!({"1":"A1","2":"A1"}), json!({"1":"A1","2":"MISSING"}), json!({"1":"A1","2":"bad pad"})] {
+        let mut bad = params.clone();
+        bad["mapping"] = mapping;
+        assert!(s.apply(ASSIGN_FOOTPRINT, &bad).is_err());
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    }
+    s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
+    s.apply(PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":2_540_000,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let snapshot = s.snapshot().unwrap();
+    let target = snapshot.board_target();
+    let f = snapshot.board_view(target).unwrap().footprints().next().unwrap();
+    assert_eq!(f.pads.iter().map(|p| p.number.as_str()).collect::<Vec<_>>(), ["A1", "B_2"]);
+    assert!(f.pads.iter().all(|p| p.copper.is_some()));
+    for terminal in snapshot.all_symbols().flat_map(|s| s.terminals()) {
+        let pad = snapshot.pad_for_terminal(terminal).unwrap();
+        assert_eq!(pad.inspect()["pad"], if terminal.number() == "1" { "B_2" } else { "A1" });
+        assert_eq!(snapshot.terminal_for_pad(pad.on_board(target.board)), Some(terminal));
+        assert!(snapshot.pad_position(pad).is_some());
+    }
+    let docs = encode_documents(snapshot.clone()).unwrap();
+    let reopened = decode_documents(&docs).unwrap();
+    assert_eq!(encode_documents(reopened.clone()).unwrap(), docs);
+    assert_eq!(reopened.board_view(target).unwrap().footprints().next().unwrap().pads, f.pads);
+    assert_eq!(encode_documents(decode_packed(&encode_packed(snapshot.clone()).unwrap()).unwrap().project).unwrap(), docs);
+    assert!(crate::board::Pad::parse(&f.id, "bad pad").is_none());
+}
+
+/// The 128-pad authoring limit is supported by mappings too; numeric-looking identifiers
+/// retain their spelling instead of aliasing each other through integer conversion.
+#[test]
+fn mapping_capacity_and_numeric_looking_pad_names_are_preserved() {
+    let mut mapping = serde_json::Map::new();
+    for n in 0..128 {
+        mapping.insert(format!("P{n}"), json!(format!("A{n}")));
+    }
+    assert_eq!(crate::board::parse_mapping(&Value::Object(mapping.clone())).unwrap().len(), 128);
+    mapping.insert("P128".into(), json!("A128"));
+    assert!(crate::board::parse_mapping(&Value::Object(mapping)).is_none());
+    let a = crate::board::Pad::parse("footprint-1", "01").unwrap();
+    let b = crate::board::Pad::parse("footprint-1", "1").unwrap();
+    assert_ne!(a, b);
+    assert_eq!(a.inspect()["pad"], "01");
+    assert_eq!(b.inspect()["pad"], "1");
+}

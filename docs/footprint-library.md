@@ -102,8 +102,10 @@ legacy definitions. These additions retain `pcbcraft-footprint/1`; old readers
 will reject unknown fields/shapes rather than silently dropping them.
 
 Placement supplies the built-in definition ID and an explicit `mapping` object
-from symbol terminal ID to pad-number string. Every terminal and every pad must
-appear exactly once. Two-pad callers may instead supply the legacy `pin_1_pad`
+from symbol terminal ID to pad-number string. Mapping validation, placement,
+board views and cross-probing preserve the complete identifier spelling, including
+alphanumeric names and numeric-looking names such as `01`. Maps support up to 128
+pads. Every terminal and every pad must appear exactly once. Two-pad callers may instead supply the legacy `pin_1_pad`
 shortcut; it cannot be combined with `mapping`. Invalid assignments change
 neither the project nor its undo history.
 

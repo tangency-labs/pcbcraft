@@ -208,16 +208,16 @@ impl EditorView {
     /// Start a successfully opened project's default document in this workspace. Runtime identity
     /// and snap spacing survive, while old document addresses, navigation and edit authority expire.
     /// Saved arrangements are restored separately afterward and still validate explicit targets.
+    /// Definition panes retain their document while refreshing the parked project presentation.
     pub(super) fn bind_opened_project(&mut self, session: &Session) {
-        if self.definition.is_some() {
-            return;
-        }
+        let definition = self.definition.take();
         let workspace = self.workspace;
         let snap_nm = self.camera.snap_nm();
         *self = Self::new(self.id);
         self.workspace = workspace;
         self.camera.set_snap_nm(snap_nm);
         self.sync(session);
+        self.definition = definition;
     }
 
     /// Explicitly retarget a view after the host validates the document's existence.

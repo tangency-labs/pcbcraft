@@ -613,3 +613,62 @@ fn saved_ribbon_tabs_keep_the_legacy_view_slot() {
     invalid.hosts[0].panels.ribbon = 5;
     assert!(!invalid.valid());
 }
+
+/// UI/live arrangement changes and already queued actions cannot erase independent definition panes.
+#[test]
+fn library_panes_refuse_arrangement_actions_without_losing_navigation() {
+    let mut h = harness();
+    action(&mut h, Action::Create { name: "Other".into(), start: Start::Current });
+    let ctx = h.ctx.clone();
+    let tabs = h.state().arrangements.tabs();
+    let active = h.state().arrangements.active();
+    h.state_mut().views.active.camera.center_on(Point { x_nm: 25_400_000, y_nm: 12_700_000 });
+    let center = h.state().views.active.camera.center();
+    h.state_mut().queue_arrangement(&ctx, Action::Select(tabs[0].0));
+    h.state_mut().new_library_item(pcbcraft_engine::authoring::Kind::Symbol);
+    let document = h.state().views.active.definition;
+    h.state_mut().finish_arrangement_action(&ctx);
+    assert_eq!(h.state().views.active.definition, document);
+    for (command, params) in [
+        ("arrangement.select", json!({"arrangement":tabs[0].0})),
+        ("arrangement.create", json!({"name":"New"})),
+        ("arrangement.rename", json!({"arrangement":active,"name":"Renamed"})),
+        ("arrangement.delete", json!({"arrangement":active})),
+    ] {
+        assert!(h.state_mut().run_window_command(&ctx, command, &params).unwrap_err().contains("Return library editor panes"));
+    }
+    h.state_mut().arrangement_intent(&ctx, pcbcraft_chrome::arrangements::Intent::New);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    h.state_mut().queue_arrangement(&ctx, Action::Remove(active));
+    assert!(h.state().arrangements.pending.is_none());
+    assert_eq!(h.state().arrangements.tabs(), tabs);
+    assert_eq!(h.state().arrangements.active(), active);
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"workspace":"schematic"})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.active.camera.center(), center);
+    assert_eq!(h.state().arrangements.tabs(), tabs);
+}
+
+/// Project adoption while a library pane is open binds arrangements immediately and never
+/// restores a saved layout later merely because the user leaves the definition workspace.
+#[test]
+fn project_open_with_library_panes_does_not_defer_layout_restoration() {
+    let mut h = harness();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("project");
+    save(&mut h, &path, false);
+    let ctx = h.ctx.clone();
+    h.state_mut().new_library_item(pcbcraft_engine::authoring::Kind::Footprint);
+    h.run();
+    let view = h.state().views.active.id();
+    let document = h.state().views.active.definition;
+    let revision = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&path.join("project.pc"), revision);
+    h.run();
+    assert_eq!(h.state().views.view(view).unwrap().definition, document);
+    assert_eq!(h.state().arrangements.opening, h.state().session.history_root_revision());
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"workspace":"schematic"})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.active.id(), view);
+    assert!(h.state().views.active.input(&h.state().session).is_some());
+}

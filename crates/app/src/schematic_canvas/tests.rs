@@ -46,3 +46,57 @@ fn rotated_led_labels_clear_the_drawing() {
         }
     }
 }
+
+/// Pin labels affect Fit, but must not enlarge body selection into empty wire space.
+#[test]
+fn integrated_pin_labels_do_not_enlarge_the_symbol_body_hitbox() {
+    use pcbcraft_engine::authoring::{Item, Kind, Primitive};
+    let mut item = Item::new(Kind::Symbol).unwrap();
+    let before = item.symbol().unwrap();
+    if let Primitive::Pin { name, .. } = item.objects.get_mut(&1).unwrap() {
+        *name = Some("LONG_PIN_NAME_WITH_THIRTY_CHARS".into());
+    }
+    let after = item.symbol().unwrap();
+    for turns in 0..4 {
+        assert_eq!(body(&before, turns), body(&after, turns));
+    }
+    assert!(grid_bounds(&after, 0).width() > grid_bounds(&before, 0).width());
+}
+
+/// Generated stroke lettering follows the same zoom cutoff as ordinary schematic labels;
+/// leads and body ink remain present at low zoom.
+#[test]
+fn integrated_pin_text_obeys_the_schematic_detail_threshold() {
+    use pcbcraft_engine::authoring::{Item, Kind, Primitive};
+    let item = Item::new(Kind::Symbol).unwrap();
+    let visible = item.symbol().unwrap();
+    let mut hidden = item.clone();
+    for p in hidden.objects.values_mut() {
+        if let Primitive::Pin { appearance: Some(a), .. } = p {
+            a.show_name = false;
+            a.show_number = false;
+        }
+    }
+    let hidden = hidden.symbol().unwrap();
+    let ctx = egui::Context::default();
+    pcbcraft_chrome::fonts::install(&ctx);
+    let count = |definition: &SymbolDefinition, step| {
+        ctx.begin_pass(egui::RawInput::default());
+        paint_symbol(
+            &ctx.layer_painter(egui::LayerId::background()),
+            definition,
+            pos2(100., 100.),
+            step,
+            0,
+            Stroke::new(1., egui::Color32::WHITE),
+            None,
+        );
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        output.shapes.len()
+    };
+    let low = theme::SCHEMATIC_MIN_GRID_SPACING - 0.1;
+    assert!(count(&visible, low) > 0);
+    assert_eq!(count(&visible, low), count(&hidden, low));
+    assert!(count(&visible, theme::SCHEMATIC_MIN_GRID_SPACING) > count(&hidden, theme::SCHEMATIC_MIN_GRID_SPACING));
+}

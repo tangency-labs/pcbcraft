@@ -209,7 +209,8 @@ impl Graphic {
 
         Ok(())
     }
-    /// Transform parameters without flattening editable arcs, text or rectangles.
+    /// Transform parameters without flattening editable geometry. Single-axis reflections
+    /// normalize upside-down text and swap its alignment; ordinary rotations retain authored angles.
     pub fn transformed(&self, t: Transform) -> Result<Self, String> {
         let geometry = match &self.geometry {
             Geometry::Line { from, to } => Geometry::Line { from: t.point(*from)?, to: t.point(*to)? },
@@ -232,7 +233,17 @@ impl Graphic {
                 Geometry::Polyline { points: points.iter().map(|p| t.point(*p)).collect::<Result<_, _>>()?, closed: *closed }
             }
             Geometry::Text { at, text, height_nm, rotation, align } => {
-                Geometry::Text { at: t.point(*at)?, text: text.clone(), height_nm: *height_nm, rotation: t.angle(*rotation as i16), align: *align }
+                let mut rotation = t.angle(*rotation as i16);
+                let mut align = *align;
+                if t.mirror_x ^ t.mirror_y && rotation > 90 && rotation <= 270 {
+                    rotation = (rotation + 180) % 360;
+                    align = match align {
+                        TextAlign::Start => TextAlign::End,
+                        TextAlign::End => TextAlign::Start,
+                        TextAlign::Middle => TextAlign::Middle,
+                    };
+                }
+                Geometry::Text { at: t.point(*at)?, text: text.clone(), height_nm: *height_nm, rotation, align }
             }
         };
         Ok(Self { geometry, ..self.clone() })
@@ -278,5 +289,45 @@ mod tests {
         assert!(matches!(g.transformed(t).unwrap().geometry, Geometry::Arc { start_degrees: 135, sweep_degrees: -90, .. }));
         t.offset = p(i64::MAX, 0);
         assert!(t.point(p(-1, 0)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod mirror_text_tests {
+    use super::*;
+    /// Reflection keeps labels readable and anchored; ordinary rotation retains authored angles.
+    #[test]
+    fn mirrored_text_normalizes_only_upside_down_reflections() {
+        let g = Graphic {
+            geometry: Geometry::Text {
+                at: Point { x_nm: 2_000_000, y_nm: 1_000_000 },
+                text: "TEXT".into(),
+                height_nm: 1_000_000,
+                rotation: 0,
+                align: TextAlign::Start,
+            },
+            stroke_nm: 100_000,
+            fill: Fill::None,
+        };
+        let t =
+            Transform { pivot: Point { x_nm: 0, y_nm: 0 }, offset: Point { x_nm: 0, y_nm: 0 }, quarter_turns: 0, mirror_x: true, mirror_y: false };
+        let reflected = g.transformed(t).unwrap();
+        assert!(matches!(
+            reflected.geometry,
+            Geometry::Text { at: Point { x_nm: -2_000_000, y_nm: 1_000_000 }, rotation: 0, align: TextAlign::End, .. }
+        ));
+        assert_eq!(reflected.transformed(t).unwrap(), g);
+        assert!(matches!(
+            g.transformed(Transform { quarter_turns: 2, mirror_x: false, ..t }).unwrap().geometry,
+            Geometry::Text { rotation: 180, align: TextAlign::Start, .. }
+        ));
+        assert!(matches!(
+            g.transformed(Transform { mirror_x: false, mirror_y: true, ..t }).unwrap().geometry,
+            Geometry::Text { rotation: 0, align: TextAlign::Start, .. }
+        ));
+        assert!(matches!(
+            g.transformed(Transform { mirror_y: true, ..t }).unwrap().geometry,
+            Geometry::Text { rotation: 180, align: TextAlign::Start, .. }
+        ));
     }
 }

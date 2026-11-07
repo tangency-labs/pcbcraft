@@ -587,10 +587,11 @@ impl PcbApp {
                 };
             }
         }
-        if main {
+        let dialog_host = self.arrangement_dialog_host().unwrap_or(self.views.main);
+        if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
         } else if !matches!(self.dialog, Dialog::None) {
-            ctx.send_viewport_cmd_to(crate::editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+            ctx.send_viewport_cmd_to(crate::editor_windows::viewport(dialog_host), egui::ViewportCommand::Focus);
         }
         if integrated {
             shell::resize_window_edges(ui);

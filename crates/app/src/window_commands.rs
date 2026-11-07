@@ -864,6 +864,9 @@ mod live {
         /// Check an arrangement command as the tabs and their forms do, so a refusal names its
         /// reason; the accepted action is applied after the windows draw, like a tab click.
         fn arrangement_action(&self, id: &str, params: &Value) -> Result<Action, String> {
+            if let Some(error) = self.arrangement_unavailable() {
+                return Err(error.into());
+            }
             if self.home {
                 return Err("Home is showing. Return to the workspace first (app.set_home).".to_owned());
             }

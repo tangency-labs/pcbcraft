@@ -1,5 +1,5 @@
 //! Footprint placements, pinned physical definitions and exact schematic-to-board links.
-use crate::schematic::{MAX_CENTER_NM, Point, SymbolDefinition, Terminal};
+use crate::schematic::{MAX_CENTER_NM, PinNumber, Point, SymbolDefinition, Terminal};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -21,20 +21,20 @@ pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
 pub(crate) const FOOTPRINT_REVISION: u32 = 1;
 const HALF_PAD_PITCH_NM: i64 = 1_270_000;
 
-/// A stable numeric pad within a placed footprint. Resolution validates that the pad exists.
+/// A stable electrical pad identifier within a placed footprint. Resolution validates that the pad exists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pad {
     pub(crate) board: Option<uuid::Uuid>,
     footprint: u64,
-    number: u8,
+    number: PinNumber,
 }
 impl Pad {
     /// Parse canonical footprint and pad identities without guessing an owner or pin mapping.
     pub fn parse(footprint: &str, pad: &str) -> Option<Self> {
         let digits = footprint.strip_prefix("footprint-")?;
         let id = digits.parse::<u64>().ok()?;
-        let number = pad.parse::<u8>().ok()?;
-        (id != 0 && digits == id.to_string() && number != 0 && number.to_string() == pad).then_some(Self { board: None, footprint: id, number })
+        let number = PinNumber::new(pad)?;
+        (id != 0 && digits == id.to_string()).then_some(Self { board: None, footprint: id, number })
     }
     /// Qualify a legacy pad address with the board it belongs to. Resolution validates ownership.
     pub fn on_board(self, board: uuid::Uuid) -> Self {
@@ -42,7 +42,7 @@ impl Pad {
     }
     /// Report a stable address suitable for cross-probing. Resolved addresses include their board.
     pub fn inspect(self) -> Value {
-        let mut address = json!({"footprint":format!("footprint-{}",self.footprint),"pad":self.number.to_string()});
+        let mut address = json!({"footprint":format!("footprint-{}",self.footprint),"pad":self.number.as_str()});
         if let Some(board) = self.board {
             address["board"] = json!(board);
         }
@@ -104,7 +104,7 @@ impl Footprint {
                     && definition::valid_id(&self.definition)
                     && self.definition_revision > 0
                     && self.pin_1_pad == 0
-                    && self.mapping.as_ref().is_some_and(|m| !m.is_empty() && m.len() <= 64)
+                    && self.mapping.as_ref().is_some_and(|m| !m.is_empty() && m.len() <= 128)
             }
             None => {
                 self.definition == FOOTPRINT_DEFINITION
@@ -123,22 +123,26 @@ impl Footprint {
         Some((self.library.clone()?, self.definition.clone(), self.definition_revision))
     }
     /// Locate a mapped physical pad from a logical terminal, preserving explicit permutation.
-    fn pad_for(&self, pin: &str) -> Option<u8> {
+    fn pad_for(&self, pin: &str) -> Option<PinNumber> {
         if let Some(mapping) = &self.mapping {
-            return mapping.get(pin)?.parse().ok();
+            return PinNumber::new(mapping.get(pin)?);
         }
-        match pin {
-            "1" => Some(self.pin_1_pad),
-            "2" => Some(3 - self.pin_1_pad),
+        let number = match pin {
+            "1" => self.pin_1_pad,
+            "2" => 3 - self.pin_1_pad,
+            _ => return None,
+        };
+        PinNumber::new(&number.to_string())
+    }
+    /// Find the logical terminal associated with a physical pad, without numeric conversion.
+    fn component_pin(&self, pad: PinNumber) -> Option<(u64, &str)> {
+        if let Some(mapping) = &self.mapping {
+            return mapping.iter().find(|(_, number)| number.as_str() == pad.as_str()).map(|(pin, _)| (self.component, pin.as_str()));
+        }
+        match pad.as_str() {
+            "1" | "2" => Some((self.component, if pad.as_str() == self.pin_1_pad.to_string() { "1" } else { "2" })),
             _ => None,
         }
-    }
-    /// Find the logical terminal associated with a physical pad, without relying on position.
-    fn component_pin(&self, pad: u8) -> Option<(u64, &str)> {
-        if let Some(mapping) = &self.mapping {
-            return mapping.iter().find(|(_, number)| number.parse::<u8>().ok() == Some(pad)).map(|(pin, _)| (self.component, pin.as_str()));
-        }
-        (1..=2).contains(&pad).then_some((self.component, if pad == self.pin_1_pad { "1" } else { "2" }))
     }
     /// Transform a local point around the footprint origin. Quarter turns are exact; other
     /// whole-degree rotations round local offsets to the nearest nanometer without accumulation.
@@ -147,14 +151,16 @@ impl Footprint {
         Point { x_nm: self.x_nm + x, y_nm: self.y_nm + y }
     }
     /// Locate a real pad center from the pinned definition, or the legacy marker's known pitch.
-    fn pad_position(&self, pad: u8, board: &Board) -> Option<Point> {
+    fn pad_position(&self, pad: PinNumber, board: &Board) -> Option<Point> {
         let local = if self.library.is_some() {
-            board.definition_for(self)?.pads.iter().find(|p| p.number.parse::<u8>().ok() == Some(pad))?.center
+            board.definition_for(self)?.pads.iter().find(|p| p.number == pad.as_str())?.center
         } else {
-            if !(1..=2).contains(&pad) {
-                return None;
-            }
-            Point { x_nm: if pad == 1 { -HALF_PAD_PITCH_NM } else { HALF_PAD_PITCH_NM }, y_nm: 0 }
+            let x_nm = match pad.as_str() {
+                "1" => -HALF_PAD_PITCH_NM,
+                "2" => HALF_PAD_PITCH_NM,
+                _ => return None,
+            };
+            Point { x_nm, y_nm: 0 }
         };
         Some(self.point(local))
     }
@@ -168,7 +174,7 @@ impl Footprint {
                 let (_,pin)=self.component_pin(pad)?;
                 let mut record=json!({"pad":Pad{board:Some(project.board_target().board),footprint:self.id,number:pad}.inspect(),
                     "terminal":project.component_terminal(self.component,pin).map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
-                if let Some(definition)=project.board.definition_for(self).and_then(|definition|definition.pads.iter().find(|item|item.number==pad.to_string())) {
+                if let Some(definition)=project.board.definition_for(self).and_then(|definition|definition.pads.iter().find(|item|item.number==pad.as_str())) {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),definition.copper));
                 }
                 Some(record)
@@ -212,11 +218,11 @@ impl Board {
         self.definitions.get(&footprint.key()?).map(Arc::as_ref)
     }
     /// List real pad identities, retaining the legacy two-marker definition only for old records.
-    pub(crate) fn pad_numbers(&self, footprint: &Footprint) -> Vec<u8> {
+    pub(crate) fn pad_numbers(&self, footprint: &Footprint) -> Vec<PinNumber> {
         if footprint.library.is_none() {
-            return vec![1, 2];
+            return ["1", "2"].into_iter().filter_map(PinNumber::new).collect();
         }
-        self.definition_for(footprint).into_iter().flat_map(|d| d.pads.iter()).filter_map(|p| p.number.parse().ok()).collect()
+        self.definition_for(footprint).into_iter().flat_map(|d| d.pads.iter()).filter_map(|p| PinNumber::new(&p.number)).collect()
     }
     /// Require a bijection between this symbol's terminal set and the pinned footprint's pads.
     pub(crate) fn mapping_valid(&self, footprint: &Footprint, symbol: &SymbolDefinition) -> bool {
@@ -284,22 +290,15 @@ impl Board {
 /// Parse bounded terminal-to-pad mappings before schema dispatch; resolution checks actual identities.
 pub(crate) fn parse_mapping(value: &Value) -> Option<BTreeMap<String, String>> {
     let object = value.as_object()?;
-    if object.is_empty() || object.len() > 64 {
+    if object.is_empty() || object.len() > 128 {
         return None;
     }
     object
         .iter()
         .map(|(terminal, pad)| {
             let pad = pad.as_str()?;
-            let number = pad.parse::<u8>().ok()?;
-            if terminal.is_empty()
-                || terminal.len() > 8
-                || !terminal.bytes().all(|c| c.is_ascii_alphanumeric() || b"+_-".contains(&c))
-                || number == 0
-                || number.to_string() != pad
-            {
-                return None;
-            }
+            PinNumber::new(terminal)?;
+            PinNumber::new(pad)?;
             Some((terminal.clone(), pad.to_owned()))
         })
         .collect()

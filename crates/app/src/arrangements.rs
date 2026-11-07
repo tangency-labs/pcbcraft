@@ -144,11 +144,25 @@ impl PcbApp {
         state.valid().then_some(state)
     }
 
+    /// Runtime library panes cannot enter persisted project arrangements. Refuse layout actions
+    /// until their live or parked panes return to project workspaces, preserving navigation/drafts.
+    pub(super) fn arrangement_unavailable(&self) -> Option<&'static str> {
+        self.views
+            .hosts
+            .values()
+            .any(|host| {
+                host.layout
+                    .views()
+                    .into_iter()
+                    .chain(host.parked.iter().copied())
+                    .any(|id| self.views.view(id).is_some_and(|v| v.definition.is_some()))
+            })
+            .then_some("Return library editor panes to project workspaces before changing arrangements.")
+    }
+
     /// Keep the current arrangement's latest navigation without changing electrical revision.
     pub(super) fn checkpoint_arrangements(&mut self) {
-        // Runtime library panes are independent documents, not saved project view targets.
-        if self.views.hosts.values().flat_map(|host| host.layout.views()).any(|id| self.views.view(id).is_some_and(|view| view.definition.is_some()))
-        {
+        if self.arrangement_unavailable().is_some() {
             return;
         }
         let project = self.session.project().map(|project| project.board_target().project.to_string());
@@ -177,6 +191,8 @@ impl PcbApp {
         self.arrangements.remember();
     }
 
+    /// Bind project-opening identity immediately; while library panes are present, retain them
+    /// and adopt arrangement records without restoring a layout now or on a later pane close.
     /// Adopt saved UI state only after a successful project load. Save As copies the current
     /// arrangement collection to its new location while retaining the original record and
     /// preserving any unsupported or invalid record already associated with the destination.
@@ -202,7 +218,18 @@ impl PcbApp {
             }
             return;
         }
-        let Some(fallback) = self.arrangement_snapshot() else {
+        let definitions = self.arrangement_unavailable().is_some();
+        let fallback = self.arrangement_snapshot().or_else(|| {
+            if !definitions {
+                return None;
+            }
+            // Bind project-opening identity now, without restoring a saved layout over independent
+            // definition panes or deferring that restore until a later workspace switch.
+            let mut views = crate::editor_workspace::EditorViews::default();
+            views.sync(&self.session);
+            views.saved_state(&self.session)
+        });
+        let Some(fallback) = fallback else {
             return;
         };
         let stored = key.as_ref().and_then(|key| self.arrangements.store.projects.get(key));
@@ -213,7 +240,8 @@ impl PcbApp {
             self.arrangements.notice =
                 Some("This project's saved arrangements are unsupported or invalid; the original record has been preserved.".into());
         }
-        if let Some(saved) = &record
+        if !definitions
+            && let Some(saved) = &record
             && let Some(active) = saved.arrangements.iter().find(|a| a.id == saved.active)
             && !self.restore_arrangement(&active.snapshot, ctx)
         {
@@ -235,6 +263,10 @@ impl PcbApp {
 
     /// Queue UI or future live-MCP intents against the current project opening and arrangement.
     pub(super) fn queue_arrangement(&mut self, ctx: &egui::Context, action: Action) {
+        if let Some(error) = self.arrangement_unavailable() {
+            self.message = Some(error.into());
+            return;
+        }
         if self.home || self.files.busy() || self.project_action_pending() || !matches!(self.dialog, Dialog::None) {
             return;
         }
@@ -261,6 +293,10 @@ impl PcbApp {
             || self.session.history_root_revision() != opening
             || self.session.project().is_none_or(|current| current.board_target().project.to_string() != project)
         {
+            return;
+        }
+        if let Some(error) = self.arrangement_unavailable() {
+            self.message = Some(error.into());
             return;
         }
         self.checkpoint_arrangements();
