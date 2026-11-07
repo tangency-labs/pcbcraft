@@ -120,7 +120,7 @@ the circuit into view and **Nets** to open the Net Inspector.
 The **Browser** floats over the left of the canvas and shows the project as
 **Project → Sheets → Main → Symbols / Nets**. With one view open, the sheet path
 and count sit directly on the canvas beside the Browser, without a tab strip.
-Split views have a tab above each canvas showing its sheet path, such as
+Split views have one closable header above each canvas showing its document path, such as
 **Power controller › Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
 items, and click one to select it and center the view on it. A net row selects
 one of its wires. Click the Browser's title to fold it. Browsing never changes the
@@ -131,10 +131,10 @@ Inspector panels, and fits the view. Each ribbon group's caption, such as
 
 **View → Split** opens another view of the current schematic in that window.
 Each pane keeps its camera, grid and edit selection while sharing the project's
-commands, undo history and saving. Click a pane or its sheet tab to activate it;
-the tab underline marks that window's focused view. Browser, Parts and Net
-Inspector stay in place and target that view. Tabs show the sheet path rather
-than a runtime view number.
+commands, undo history and saving. Click a pane or its header to activate it;
+the header underline marks that window's focused view. Browser, Parts and Net
+Inspector stay in place and target that view. Selecting a sheet in Browser or
+switching workspace changes that pane without adding document tabs.
 
 On the desktop, **View → New window** opens another view without moving an
 existing one. Multiple native windows and splits can coexist, and each detached
@@ -142,12 +142,14 @@ window can have its own split. **Detach** moves the active pane to a new window;
 when moving the only primary pane, another view remains at the same zoom and
 position. **Dock** in a detached window moves its focused pane beside the main
 window's focused pane, preserving the other panes and windows. Closing a native
-window dismisses only its views, without a save prompt or an implicit split
-elsewhere. Each window uses the same title-bar style and has its own panels.
+window while another remains dismisses only its views, without a save prompt or
+an implicit split elsewhere. Each window uses the same title-bar style and has
+its own panels.
 
-Right-click a sheet tab for **Open beside**, **Open in new window**, **Detach
+Right-click a split pane's header for **Open beside**, **Open in new window**, **Detach
 view**, **Dock in main window** or **Close view**, as applicable. These actions
-target that tab. Dividers resize panes, with narrow areas stacking vertically.
+target that pane, including its remembered document navigation. Dividers resize
+panes, with narrow areas stacking vertically.
 Opening another view copies the source camera and grid without copying its edit
 selection. Turning Split off keeps the focused pane; turning it back on restores
 the window's remembered split arrangement, seeding restored cameras from the
@@ -167,9 +169,17 @@ Closing any editor window leaves the others open. If the original window closes,
 a surviving window takes over project dialogs and the Assistant without moving
 its panes or resetting its camera. Closing the last editor window, or choosing
 **File → Quit** from any window, uses one **Save / Don’t Save / Cancel** decision
-for the project. Canceling or failing a save leaves the project open. View arrangements last for the app session and do not change
-project files. Browser builds support panes within one tab; native window actions
-are desktop only. The workspace tile can switch to PCB layout, open it beside
+for the project. Canceling or failing a save leaves the project open.
+
+The top **Views** tab represents a named arrangement of the project's panes and
+windows. Use **+** to add one, or right-click a tab to rename, duplicate or delete
+it. Arrangements restore when a saved project is reopened on the same computer;
+they live in user-local app settings and do not change or travel with project
+files. Unsaved projects keep arrangements only for the session until their first
+successful save. See the [arrangement persistence details](docs/board-workspace-plan.md#named-arrangements-and-reopening-a-project).
+
+Browser builds support panes within one tab; native window actions are desktop
+only. The workspace tile can switch to PCB layout, open it beside
 the schematic or create a board window directly. Existing placements render as
 pad-center markers with component counterpart highlights, grouped Layers and
 read-only Properties. The editor still supports one schematic sheet and one
