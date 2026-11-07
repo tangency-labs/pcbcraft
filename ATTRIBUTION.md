@@ -605,3 +605,13 @@ fork tests use this repository's original starter library data. The native
 Close regression adds a direct development dependency on the already locked
 winit 0.30.13 crate (Apache-2.0), already used by the desktop lifecycle tests;
 no new dependency version or asset is introduced.
+
+The shared picker integration, authoring ribbon groups and Select/Pin/Pad/Line/Rectangle/Circle
+vector glyphs are original upstream code and artwork using the existing Craft
+palette. Workspace identity and focus remain separate from project view targets;
+no additional external source or asset was introduced.
+
+Definition views now use the existing upstream pane/window layout and native
+close controller. Per-pane authoring presentation, shared-session routing and
+closed-pane field recovery are original upstream code; no external source,
+asset or dependency was added for the layout integration.

@@ -4,6 +4,7 @@ mod form;
 mod io;
 #[cfg(test)]
 mod tests;
+mod views;
 use crate::{Dialog, IN_BROWSER, Navigation, PcbApp};
 use egui::{Context, Ui};
 use pcbcraft_chrome::{
@@ -21,25 +22,71 @@ pub(super) struct Editors {
     documents: BTreeMap<u64, Document>,
     pub(super) active: Option<u64>,
     next_id: u64,
+    last_focused: [Option<u64>; 2],
+    last_active: Option<u64>,
     files: io::Files,
     notice: Option<String>,
-    pub(super) focus_requested: bool,
+    pending_document: Option<u64>,
+    open_target: Option<crate::ViewId>,
 }
 #[derive(Debug)]
 struct Document {
     session: Session,
+    bound_view: Option<crate::ViewId>,
+    presentations: BTreeMap<crate::ViewId, views::Presentation>,
     selected: Option<u64>,
     draft: Option<form::Draft>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
     tool: canvas::Tool,
+    ribbon_tab: usize,
     error: Option<String>,
 }
 impl Editors {
+    /// A bounded change stamp wakes all views when a definition edit or dirty-state transition occurs.
+    pub(super) fn stamp(&self) -> Vec<(u64, u64, bool)> {
+        self.documents.iter().map(|(id, doc)| (*id, doc.session.revision(), doc.unsaved())).collect()
+    }
+    /// The active document determines its workspace, independent of the parked project view.
+    pub(super) fn active_kind(&self) -> Option<Kind> {
+        self.active.and_then(|id| self.documents.get(&id)).map(|doc| doc.session.snapshot().kind)
+    }
+    /// Validate before focus changes, retain document-local drafts/cameras and cancel only
+    /// an unfinished pointer gesture. Switching never changes a definition or project revision.
+    pub(super) fn focus(&mut self, id: Option<u64>) -> Result<(), String> {
+        if id.is_some_and(|id| !self.documents.contains_key(&id)) {
+            return Err("Unknown library document ID.".into());
+        }
+        if let Some(old) = self.active.and_then(|id| self.documents.get_mut(&id)) {
+            old.tool = canvas::Tool::Select;
+        }
+        if let Some(id) = id {
+            let kind = self.documents[&id].session.snapshot().kind;
+            self.last_focused[usize::from(kind == Kind::Footprint)] = Some(id);
+            self.last_active = Some(id);
+        }
+        self.active = id;
+        Ok(())
+    }
+    /// Enter a definition workspace by resuming its last document or creating its first one.
+    /// Failed creation, including the document limit, retains the previous workspace.
+    pub(super) fn enter(&mut self, kind: Kind) -> Result<(), String> {
+        if self.active_kind() == Some(kind) {
+            return Ok(());
+        }
+        let id = self.last_focused[usize::from(kind == Kind::Footprint)]
+            .filter(|id| self.documents.contains_key(id))
+            .or_else(|| self.documents.iter().rev().find(|(_, doc)| doc.session.snapshot().kind == kind).map(|(id, _)| *id));
+        match id {
+            Some(id) => self.focus(Some(id)),
+            None => self.open(Item::new(kind)?, false).map(|_| ()),
+        }
+    }
+
     /// Return to retained documents without changing their selection or pending property input.
     pub(super) fn resume(&mut self) {
-        self.active = self.documents.keys().next_back().copied();
-        self.focus_requested = self.active.is_some();
+        let id = self.last_active.filter(|id| self.documents.contains_key(id)).or_else(|| self.documents.keys().next_back().copied());
+        let _ = self.focus(id);
     }
     pub(super) fn has_documents(&self) -> bool {
         !self.documents.is_empty()
@@ -59,7 +106,7 @@ impl Editors {
     /// Inspection identifies each document and its own revision, never the project revision.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect(&self) -> Value {
-        json!({"active":self.active,"file_operation":self.busy(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"state":doc.session.inspect(),"selected":doc.selected,"pending_fields":doc.pending(),"view":{"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
+        json!({"active":self.active,"file_operation":self.busy(),"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"state":doc.session.inspect(),"selected":doc.selected,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
     }
     /// Admit a validated item with fresh runtime identity; duplicate portable IDs never replace
     /// unsaved open documents. Opening files and forks use this same ownership boundary.
@@ -82,17 +129,20 @@ impl Editors {
             id,
             Document {
                 session: Session::new(item, saved)?,
+                bound_view: None,
+                presentations: BTreeMap::new(),
                 selected: None,
                 draft: None,
                 camera,
                 collapsed: [false, false],
                 tool: canvas::Tool::Select,
+                ribbon_tab: 0,
                 error: None,
             },
         );
         self.next_id = id;
-        self.active = Some(id);
-        self.focus_requested = true;
+        self.focus(Some(id))?;
+        self.pending_document = Some(id);
         Ok(id)
     }
     /// GUI and MCP edits share this document/revision check and engine transaction path.
@@ -111,13 +161,16 @@ impl Editors {
         }
         self.documents.remove(&id);
         if self.active == Some(id) {
-            self.active = self.documents.keys().next_back().copied();
+            self.focus(self.documents.keys().next_back().copied())?;
         }
         Ok(())
     }
     /// File completion affects its captured document and snapshot only. Newer edits remain dirty.
     pub(super) fn poll(&mut self) {
         let Some(result) = self.files.poll() else { return };
+        if !matches!(&result, Ok(io::Outcome::Opened(_))) {
+            self.open_target = None;
+        }
         let result = match result {
             Ok(io::Outcome::Opened(item)) => self.open(*item, true).map(|_| "Opened library item".into()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -136,7 +189,7 @@ impl Editors {
     /// Capture immutable authoring state; unapplied field input must be resolved before saving.
     fn save(&mut self, ctx: &Context, id: u64, export: bool) -> Result<(), String> {
         let doc = self.documents.get(&id).ok_or("Unknown library document ID.")?;
-        if doc.pending() {
+        if doc.pending_any() {
             return Err("Apply or reset the property fields before saving.".into());
         }
         self.files.start(ctx, Some((id, doc.session.snapshot(), export)))
@@ -149,7 +202,7 @@ impl Document {
     }
     /// Both committed definition changes and retained form input require a close decision.
     fn unsaved(&self) -> bool {
-        self.session.dirty() || self.pending()
+        self.session.dirty() || self.pending_any()
     }
     /// Selection cannot silently discard unfinished edits; each document retains its own draft.
     fn select(&mut self, id: Option<u64>) -> Result<(), String> {
@@ -187,8 +240,12 @@ impl Document {
     fn properties(&mut self, ui: &mut Ui, expanded: bool) {
         properties::inspector_body(ui);
         if self.draft.as_ref().is_some_and(|draft| draft.revision != self.session.revision()) {
-            self.draft = None;
-            self.error = Some("The library document changed; property fields were refreshed.".into());
+            if self.pending() {
+                self.error = Some("The library document changed; reset these fields before applying new edits.".into());
+            } else {
+                self.draft = None;
+                self.error = Some("The library document changed; property fields were refreshed.".into());
+            }
         }
         let snapshot = self.session.snapshot();
         let draft = self.draft.get_or_insert_with(|| form::Draft::new(&snapshot, self.selected, self.session.revision()));
@@ -245,7 +302,6 @@ impl Document {
     fn show(&mut self, ui: &mut Ui, navigation: Navigation) -> bool {
         let mut expanded = false;
         self.collapsed = authoring::workspace(ui, self.collapsed, |ui, region| match region {
-            authoring::Region::Tools => self.tools(ui),
             authoring::Region::Browser => self.browser(ui),
             authoring::Region::Properties => {
                 self.properties(ui, false);
@@ -259,11 +315,14 @@ impl Document {
 impl PcbApp {
     /// Create a definition document without requiring or modifying a project.
     pub(super) fn new_library_item(&mut self, kind: Kind) {
-        self.message = Item::new(kind).and_then(|item| self.library_editors.open(item, false)).err();
+        self.message = Item::new(kind)
+            .and_then(|item| self.library_editors.open(item, false))
+            .and_then(|id| self.place_library_document(&Context::default(), id, pcbcraft_chrome::workspace::Placement::Here))
+            .err();
     }
     /// Fork the actual focused selection under a fresh identity; highlights grant no edit authority.
     pub(super) fn fork_library_selection(&mut self, kind: Kind) -> Result<(), String> {
-        if self.library_editors.active.is_some()
+        if self.views.active.definition.is_some()
             || !matches!(
                 (kind, self.views.active.workspace),
                 (Kind::Symbol, crate::Workspace::Schematic) | (Kind::Footprint, crate::Workspace::Board)
@@ -304,20 +363,19 @@ impl PcbApp {
                 Item::from_footprint(&definition)?
             }
         };
-        self.library_editors.open(item, false)?;
-        Ok(())
+        let id = self.library_editors.open(item, false)?;
+        self.place_library_document(&Context::default(), id, pcbcraft_chrome::workspace::Placement::Here)
     }
-    /// Dedicated in-window definition workspaces leave project views and services intact.
+    /// Draw authoring chrome for the focused definition; its body shares the host's mixed
+    /// pane layout while project services and modal ownership remain with the main host.
     pub(super) fn library_frame(&mut self, ui: &mut Ui, integrated: bool) {
         let ctx = ui.ctx().clone();
-        let hidden = self.views.hosts.get(&self.views.main).map(|host| host.layout.views()).unwrap_or_default();
-        for view in self.views.all_mut().filter(|view| hidden.contains(&view.id())) {
-            view.cancel_gesture();
-        }
-        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
+        self.sync_library_focus();
+        let main = self.views.host == self.views.main;
+        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending() && (main || !self.home);
         let active = self.library_editors.active;
         let available = active.and_then(|id| self.library_editors.documents.get(&id));
-        let can_save = available.is_some_and(|doc| !doc.pending()) && !self.library_editors.busy();
+        let can_save = available.is_some_and(|doc| !doc.pending_any()) && !self.library_editors.busy();
         let can_undo = available.is_some_and(|doc| !doc.pending() && doc.session.can_undo());
         let can_redo = available.is_some_and(|doc| !doc.pending() && doc.session.can_redo());
         let title = active.and_then(|id| self.library_editors.documents.get(&id)).map(|doc| (doc.session.snapshot().name.clone(), doc.unsaved()));
@@ -325,10 +383,11 @@ impl PcbApp {
             .library_editors
             .documents
             .iter()
+            .filter(|(_, doc)| Some(doc.session.snapshot().kind) == self.library_editors.active_kind())
             .map(|(id, doc)| (*id, format!("{}{}", doc.session.snapshot().name, if doc.unsaved() { " *" } else { "" })))
             .collect();
         enum Intent {
-            Project,
+            Home,
             Open,
             Save(bool),
             Edit(Action),
@@ -351,8 +410,8 @@ impl PcbApp {
             integrated,
             enabled,
             |ui| {
-                if menu::quick_action(ui, MenuIcon::Home, "Project workspace", "", true).clicked() {
-                    intents.borrow_mut().push(Intent::Project);
+                if menu::quick_action(ui, MenuIcon::Home, "Home", "", true).clicked() {
+                    intents.borrow_mut().push(Intent::Home);
                 }
             },
             |ui| {
@@ -436,22 +495,18 @@ impl PcbApp {
         }
         for intent in intents.into_inner() {
             let result = match intent {
-                Intent::Project => {
-                    self.library_editors.active = None;
-                    self.home = false;
-                    self.ribbon_tab = 3;
+                Intent::Home => {
+                    let _ = self.library_editors.focus(None);
+                    self.show_home();
                     Ok(())
                 }
-                Intent::Open => self.library_editors.files.start(&ctx, None),
+                Intent::Open => self.open_library_picker(&ctx),
                 Intent::Save(export) => active.ok_or("No active library item.".into()).and_then(|id| self.library_editors.save(&ctx, id, export)),
                 Intent::Edit(action) => active.ok_or("No active library item.".into()).and_then(|id| {
                     let revision = self.library_editors.documents.get(&id).ok_or("Unknown library document ID.")?.session.revision();
                     self.library_editors.edit(id, revision, action)
                 }),
-                Intent::Focus(id) => {
-                    self.library_editors.active = Some(id);
-                    Ok(())
-                }
+                Intent::Focus(id) => self.place_library_document(&ctx, id, pcbcraft_chrome::workspace::Placement::Here),
                 Intent::Close => {
                     if let Some(id) = active {
                         if self.library_editors.documents.get(&id).is_some_and(Document::unsaved) {
@@ -473,20 +528,16 @@ impl PcbApp {
                 self.library_editors.notice = Some(error);
             }
         }
-        if let Some(notice) = &self.library_editors.notice {
+        ui.add_enabled_ui(enabled, |ui| self.library_ribbon(ui, can_save));
+        if let Some(notice) = self.message.as_ref().or(self.library_editors.notice.as_ref()) {
             ui.label(notice);
         }
-        if let Some(id) = self.library_editors.active
-            && let Some(doc) = self.library_editors.documents.get_mut(&id)
-        {
-            ui.add_enabled_ui(enabled, |ui| {
-                if ui.push_id(("library_document", id), |ui| doc.show(ui, self.preferences.navigation)).inner {
-                    self.dialog = Dialog::LibraryProperties(id);
-                }
-            });
-        }
+        ui.add_enabled_ui(enabled, |ui| {
+            let area = ui.available_rect_before_wrap();
+            self.editor_workspace(ui, area);
+        });
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        if main {
             let area = self.library_editors.active.and_then(|id| self.library_editors.documents.get(&id)).and_then(|doc| doc.camera.schematic_rect());
             self.assistant.show(&ctx, area, &self.session, enabled && !self.library_editors.busy(), self.library_editors.active.is_some());
             self.serve_chat(&ctx);
@@ -499,11 +550,105 @@ impl PcbApp {
                 };
             }
         }
-        self.project_dialogs(&ctx);
+        if main {
+            self.project_dialogs(&ctx);
+        } else if !matches!(self.dialog, Dialog::None) {
+            ctx.send_viewport_cmd_to(crate::editor_windows::viewport(self.views.main), egui::ViewportCommand::Focus);
+        }
         if integrated {
             shell::resize_window_edges(ui);
         }
     }
+    /// Authoring uses the shared workspace picker and ribbon while keeping drawing state,
+    /// file operations and contextual panels owned by the active definition document.
+    fn library_ribbon(&mut self, ui: &mut Ui, can_save: bool) {
+        use pcbcraft_chrome::workspace::{self, RibbonTool, ToolIcon};
+        let entries = self.workspace_entries();
+        let split = self.views.is_split();
+        let detached = self.views.host != self.views.main;
+        let layout_tools = [
+            (ToolIcon::SplitView, "Split", "Split library workspace", true, split),
+            (
+                ToolIcon::EditorWindow,
+                if detached { "Dock" } else { "Detach" },
+                if detached { "Dock library pane" } else { "Detach library pane" },
+                !IN_BROWSER,
+                false,
+            ),
+            (ToolIcon::EditorWindow, "New window", "New library window", !IN_BROWSER, false),
+        ]
+        .map(|(icon, label, description, enabled, active)| RibbonTool {
+            icon,
+            label,
+            description,
+            shortcut: "",
+            enabled,
+            active,
+            toggle: label == "Split",
+        });
+        let mut layout_action = None;
+        let Some(id) = self.library_editors.active else { return };
+        let Some(doc) = self.library_editors.documents.get_mut(&id) else { return };
+        let kind = doc.session.snapshot().kind;
+        let title = if kind == Kind::Symbol { "Symbol Editor" } else { "Footprint Editor" };
+        let mut tab = doc.ribbon_tab;
+        let mut file_action = None;
+        let response = workspace::ribbon(
+            ui,
+            title,
+            &["Draw", "Library", "View"],
+            &mut tab,
+            workspace::Workspaces { entries: &entries, ..crate::WORKSPACES },
+            &[],
+            |ui, shown| match shown {
+                0 => doc.tools(ui),
+                1 => {
+                    let tools = [
+                        (ToolIcon::Sheet, "New", "New definition", true),
+                        (ToolIcon::Browser, "Open", "Open library item", !self.library_editors.files.busy()),
+                        (ToolIcon::Sheet, "Save copy", "Save library copy", can_save),
+                        (ToolIcon::Sheet, "Export", "Export native definition", can_save),
+                    ]
+                    .map(|(icon, label, description, enabled)| RibbonTool {
+                        icon,
+                        label,
+                        description,
+                        shortcut: "",
+                        enabled,
+                        active: false,
+                        toggle: false,
+                    });
+                    file_action = workspace::ribbon_group(ui, "Definition", &tools);
+                }
+                _ => {
+                    doc.view_tools(ui);
+                    workspace::ribbon_separator(ui);
+                    layout_action = workspace::ribbon_group(ui, "Layout", &layout_tools);
+                }
+            },
+        );
+        doc.ribbon_tab = tab;
+        if let Some(index) = layout_action {
+            match index {
+                0 => self.split_editors(ui.ctx(), !split),
+                1 => self.toggle_editor_window(ui.ctx()),
+                _ => self.open_editor_window(ui.ctx()),
+            }
+        }
+        if let Some(pick) = response.workspace {
+            self.pick_workspace(ui.ctx(), pick);
+        } else if let Some(action) = file_action {
+            self.library_editors.notice = match action {
+                0 => {
+                    self.new_library_item(kind);
+                    self.message.take()
+                }
+                1 => self.open_library_picker(ui.ctx()).err(),
+                _ => self.library_editors.save(ui.ctx(), id, action == 3).err(),
+            };
+        }
+    }
+
     /// Explicit close/quit decisions protect every authoring document, including unapplied fields.
     pub(super) fn library_close_dialog(&mut self, ctx: &Context, id: Option<u64>) {
         let busy = self.library_editors.busy();
@@ -537,13 +682,16 @@ impl PcbApp {
                 self.begin_project_close(ctx);
             }
         } else if review {
-            self.library_editors.active = id.or_else(|| self.library_editors.documents.iter().find(|(_, doc)| doc.unsaved()).map(|(id, _)| *id));
+            self.review_library_edits(ctx, id);
         } else if !(cancel || dismissed) {
             self.dialog = Dialog::LibraryClose(id);
         }
     }
     /// Expanded and compact properties operate on the same revision-bound field draft.
-    pub(super) fn library_properties_dialog(&mut self, ctx: &Context, id: u64) {
+    pub(super) fn library_properties_dialog(&mut self, ctx: &Context, id: u64, view: crate::ViewId) {
+        if self.bind_library_view(view) != Some(id) {
+            return;
+        }
         let Some(doc) = self.library_editors.documents.get_mut(&id) else { return };
         let mut close = false;
         let dismissed = shell::scrolling_dialog_width(ctx, &format!("library_details_{id}"), "Library Properties", 760.0, |ui| {
@@ -551,7 +699,7 @@ impl PcbApp {
             close = ui.button("Close").clicked();
         });
         if !(close || dismissed) {
-            self.dialog = Dialog::LibraryProperties(id);
+            self.dialog = Dialog::LibraryProperties(id, view);
         }
     }
 }
@@ -566,7 +714,8 @@ impl PcbApp {
         match id {
             "app.library_new" => {
                 let item = Item::new(kind())?;
-                self.library_editors.open(item, false)?;
+                let document = self.library_editors.open(item, false)?;
+                self.place_library_document(ctx, document, pcbcraft_chrome::workspace::Placement::Here)?;
             }
             "app.library_fork_selected" => {
                 let view = crate::ViewId(params["view"].as_u64().ok_or("A source view ID is required.")?);
@@ -587,16 +736,24 @@ impl PcbApp {
                 self.library_editors.edit(document()?, revision, action)?;
             }
             "app.library_focus" => {
-                let id = params["document"].as_u64();
-                if let Some(id) = id
-                    && !self.library_editors.documents.contains_key(&id)
-                {
-                    return Err("Unknown library document ID.".into());
+                if let Some(id) = params["document"].as_u64() {
+                    self.place_library_document(ctx, id, pcbcraft_chrome::workspace::Placement::Here)?;
+                } else {
+                    self.views.active.definition = None;
+                    self.views.active.release_input();
+                    self.views.active.sync(&self.session);
+                    self.sync_library_focus();
                 }
-                self.library_editors.active = id;
-                self.library_editors.focus_requested = id.is_some();
             }
             "app.library_view" => {
+                if let Some(view) = params["view"].as_u64()
+                    && self.views.view(crate::ViewId(view)).and_then(|view| view.definition) != Some(document()?)
+                {
+                    return Err("This view does not show the addressed definition.".into());
+                }
+                if let Some(view) = params["view"].as_u64() {
+                    self.bind_library_view(crate::ViewId(view));
+                }
                 let doc = self.library_editors.documents.get_mut(&document()?).ok_or("Unknown library document ID.")?;
                 if params["definition"] == true && params.get("selected").is_some() {
                     return Err("Choose a primitive or definition metadata, not both.".into());
@@ -632,12 +789,25 @@ impl PcbApp {
                 if params["fit"] == true {
                     doc.camera.request_fit();
                 }
+                if let Some(tab) = params["ribbon_tab"].as_str() {
+                    doc.ribbon_tab = match tab {
+                        "draw" => 0,
+                        "library" => 1,
+                        _ => 2,
+                    };
+                }
+                for (index, field) in ["browser", "properties"].iter().enumerate() {
+                    if let Some(visible) = params[*field].as_bool() {
+                        doc.collapsed[index] = !visible;
+                    }
+                }
             }
             "app.library_close" => self.library_editors.close(document()?, params["discard"] == true)?,
-            "app.library_open" => self.library_editors.open_picker(ctx)?,
+            "app.library_open" => self.open_library_picker(ctx)?,
             "app.library_save" => self.library_editors.save(ctx, document()?, params["export"] == true)?,
             _ => return Err("Unknown library command.".into()),
         }
+        self.sync_library_bindings();
         ctx.request_repaint();
         Ok(())
     }

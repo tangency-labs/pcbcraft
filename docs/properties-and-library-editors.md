@@ -49,13 +49,24 @@ package cannot be silently exchanged by this chooser.
 
 ## Workspace and window ownership
 
-Symbol editor and Footprint editor are workspace types. This first authoring
-slice opens them in the main window on desktop and in the browser, retaining
-the project and its views behind the Project workspace button. Up to four
-definition documents can remain open with independent histories and fields.
-A separate native editor window remains a possible host for the same workspace;
-pop-out and docking are deferred until their document and close lifecycle can
-be implemented together.
+Symbol Editor and Footprint Editor appear alongside Schematic and PCB layout
+in the shared workspace picker. Each has Draw, Library and View ribbon tabs,
+a canvas, Browser and compact/expanded Properties. The picker can open them
+here, beside the current pane or in a new native window. Their View ribbon
+also provides Split, Detach/Dock and New window, using the same host/layout
+controller as project views. Browser builds support splits within one tab.
+
+Up to four definition documents can remain open, each with one session and undo
+history shared by its views. Selection, camera, panel visibility, ribbon tab and
+pending fields belong to individual panes. Closing a pane or non-last window
+retains the document and its unapplied fields; Review edits can recover fields
+from a closed pane. The last window and explicit Quit protect unsaved definitions
+before the ordinary project-close decision. Closing the original native window
+preserves the remaining window's identity and services.
+
+Definition pane placements currently last for the application session. While
+library panes are present, the last saved project arrangement is retained rather
+than writing runtime definition IDs into project arrangement storage.
 
 Each definition document owns its history and dirty state. A canvas owns only
 selection, camera and tool drafts. Closing or moving a view must not publish a
@@ -70,13 +81,18 @@ acceptance evidence.
 
 ## Initial authoring slice
 
-The **Libraries** ribbon is available in both schematic and PCB workspaces.
-**Symbol Editor** and **Footprint Editor** create original definitions; **Open**
-loads a saved editor item, and **Resume** returns to retained editor documents.
-**Edit copy** forks the focused view's selected symbol or physical footprint under
-a new identity, leaving its source and placed instances unchanged. Home's
-**Library editors** row reaches the same ribbon without creating a project.
-These workspace entry points are grouped on the ribbon rather than in File.
+Choose **Symbol Editor** or **Footprint Editor** from the workspace picker.
+The picker remains accessible in compact headers, and each editor's **Library → New**
+creates another definition of its kind. **Library → Open** loads a saved item.
+Switching through the picker retains document-local selection, camera, ribbon,
+panel visibility and unfinished property fields. It cancels an unfinished pointer
+gesture without committing it.
+
+The project **Libraries** ribbon groups source management, saved-item Open,
+Resume and **Edit copy**. Edit copy forks the focused view's selected symbol or
+physical footprint under a new identity, entering its matching editor workspace
+while leaving the source and placed instances unchanged. File has no workspace
+launchers; inside an editor it holds document operations.
 The browser tree selects definition metadata or a stable primitive ID.
 Compact and expanded properties share one revision-bound draft, including invalid
 typed lengths; Apply commits once, and Reset discards only those field edits.
@@ -119,11 +135,17 @@ before saving or exporting. Native source registration/search is available throu
 Deliberate application of an authored definition to a project remains follow-up
 work; these editors do not yet add their documents to Parts or the package catalog.
 
-Live MCP discovers `app.library_new`, `app.library_fork_selected`,
+Live MCP switches the same four workspace types through `app.set_workspace`
+and discovers `app.library_new`, `app.library_fork_selected`,
 `app.library_edit`, `app.library_view`, `app.library_focus`, `app.library_open`, `app.library_save`
 and `app.library_close`. Forking addresses an explicit source view ID.
+`inspect_editor.workspace` identifies the visible workspace, while
 `inspect_editor.library_editors` reports document IDs,
-primitive records, dirty fields and each document's revision. Edits require
+primitive records, dirty fields and each document's revision. `app.library_view`
+accepts an explicit pane ID and controls its ribbon, Browser, Properties and
+navigation. `app.set_workspace` accepts source pane and placement; ordinary
+`view.split`, `view.open_beside`, `view.detach`, `view.dock`, `view.open_window` and
+`view.close` use the same layout path for definition and project views. Edits require
 that library revision and use the same engine authoring transactions as the GUI.
 Headless project sessions do not yet host these editor documents. Multi-unit
 symbols, arrays, bulk tables, arbitrary pad shapes, mask/paste, 3D, source publishing

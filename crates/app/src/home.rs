@@ -1,7 +1,6 @@
 //! The Home page: open from the house button in the app bar. It replaces the ribbon and canvas
 //! while it is shown and leaves the open project, its history and any unsaved edits untouched.
-//! Document actions reuse the existing dialogs and file jobs; Libraries opens the ribbon
-//! without creating a project.
+//! Document actions reuse the existing dialogs and file jobs.
 
 use egui::Ui;
 use pcbcraft_chrome::{home, menu::MenuIcon};
@@ -14,7 +13,6 @@ enum Action {
     Back,
     New,
     NewBoard,
-    Libraries,
     Open,
     Save,
     SaveAs,
@@ -75,7 +73,6 @@ impl PcbApp {
         }
         let first_save = 3;
         let first_app = rows.len();
-        rows.push(("home:libraries", "Library editors", String::new(), true, Some(Action::Libraries)));
         rows.push(("home:preferences", "Preferences", ui.ctx().format_shortcut(&COMMAND_COMMA), true, Some(Action::Preferences)));
         rows.push(("home:about", "About PCBCraft", String::new(), true, Some(Action::About)));
         #[cfg(not(target_arch = "wasm32"))]
@@ -165,13 +162,9 @@ impl PcbApp {
 
     /// Apply a Home action. New opens an Untitled project in the workspace at once. Open keeps Home
     /// up until the project is opened, so cancelling returns to it; saving returns to the workspace
-    /// like SolidCraft's start page. Libraries opens its ribbon without requiring a project.
+    /// like SolidCraft's start page.
     fn home_action(&mut self, ctx: &egui::Context, action: Action) {
         match action {
-            Action::Libraries => {
-                self.home = false;
-                self.ribbon_tab = 3;
-            }
             Action::Back => self.home = false,
             Action::New => self.new_project(ctx),
             Action::NewBoard => self.unless_unsaved(super::unsaved::Then::NewBoard, ctx),

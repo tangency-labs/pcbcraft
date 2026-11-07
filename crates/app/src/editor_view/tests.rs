@@ -111,7 +111,7 @@ fn replacement_keeps_an_explicit_foreign_board_unavailable() {
     assert!(view.input(&session).is_none());
     assert!(!view.accepts(old_input, &session));
     assert_eq!(view.board.target, Some(old_target));
-    assert_eq!(view.control_input(&session).unwrap().target, DocumentTarget::Board(old_target));
+    assert_eq!(view.control_input(&session).unwrap().target, Some(DocumentTarget::Board(old_target)));
     let saved = view.saved_state(&session).unwrap();
     assert_eq!(saved.target, DocumentTarget::Board(old_target));
     assert_eq!(saved.camera, camera);

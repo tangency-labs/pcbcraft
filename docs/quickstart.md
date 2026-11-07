@@ -384,24 +384,31 @@ small shareable project when relevant. The
 
 ## Try a symbol or footprint definition
 
-Open the **Libraries** ribbon in either schematic or PCB layout, then choose
-**Symbol Editor** or **Footprint Editor**. From Home, **Library editors** opens
-that ribbon without creating a project. These workspaces have their own history, while
-the project remains available through **Project workspace**. Select a primitive
+Choose **Symbol Editor** or **Footprint Editor** from **Workspace** beside the
+ribbon. Each has its own Draw,
+Library and View ribbon tabs, canvas, Browser and Properties. Switch back to
+**Schematic** or **PCB layout** through the same picker; the definition's history
+and pending fields remain available when you return. Select a primitive
 on the canvas or in Browser, edit its Properties and choose **Apply**.
 **More properties…** expands the same draft; lengths accept mm, mil or inches.
+The picker’s split and window icons open a definition beside the current pane
+or in its own native window. Within either editor, **View → Split** creates a
+second pane, and **Detach / Dock** moves the focused pane between windows.
+Closing a pane retains its definition and unfinished Properties fields; the
+last window still asks about unsaved work.
+
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
 To make a plated hole, set Layers to All copper and enter a positive drill smaller
 than the land. Corner radius is zero for rectangular/circular pads.
 
 On desktop, **Save Library Copy** chooses a new `.pcitem.json` filename; an
-existing file is never overwritten. Reopen it through **Libraries → Open**, or
+existing file is never overwritten. Reopen it through the editor’s **Library → Open**, or
 through **File → Open Library Item…** inside a definition editor.
 The browser downloads the same editable format and retains its leave warning.
 **File → Export Native Definition…** produces the existing standalone definition
 schema, while the editor file retains authoring IDs and provenance. To start from
 a placed item, return to the project, select one symbol or footprint and use
-**Libraries → Edit copy**. **Libraries → Resume** returns to an open editor. Forking and
-authoring leave the source and placed copies unchanged. Applying the resulting
+**Libraries → Edit copy**. To create another definition, use **Library → New**
+inside its editor. Forking and authoring leave the source and placed copies unchanged. Applying the resulting
 definition to a project is follow-up work; see the
 [editor notes](properties-and-library-editors.md#initial-authoring-slice) for scope.

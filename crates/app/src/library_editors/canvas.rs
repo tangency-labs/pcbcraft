@@ -70,43 +70,87 @@ fn points(primitive: &Primitive) -> Vec<Point> {
     }
 }
 impl Document {
-    /// Tools do not mutate definitions until a completed click gesture passes revision validation.
+    /// Drawing and modification actions use the same ribbon groups as project workspaces;
+    /// completed gestures still pass through revision-checked document transactions.
     pub(super) fn tools(&mut self, ui: &mut Ui) {
+        use workspace::{RibbonTool, ToolIcon as Icon};
         let item = self.session.snapshot();
-        let mut picked = None;
-        ui.horizontal_wrapped(|ui| {
-            authoring::heading(ui, if item.kind == Kind::Symbol { "Symbol Editor" } else { "Footprint Editor" });
-            if ui.selectable_label(matches!(self.tool, Tool::Select), "Select").clicked() {
-                picked = Some(None);
+        let enabled = !self.pending();
+        let mut tools = vec![(None, "Select", Icon::Select)];
+        if item.kind == Kind::Symbol {
+            tools.extend([
+                (Some(Place::Pin), "Pin", Icon::Pin),
+                (Some(Place::Line), "Line", Icon::Line),
+                (Some(Place::Rectangle), "Rectangle", Icon::Rectangle),
+                (Some(Place::Circle), "Circle", Icon::Circle),
+                (Some(Place::Text), "Text", Icon::Text),
+            ]);
+        } else {
+            tools.extend([
+                (Some(Place::Pad), "Pad", Icon::Pad),
+                (Some(Place::Outline), "Rectangle", Icon::Rectangle),
+                (Some(Place::Silkscreen), "Silkscreen", Icon::Line),
+            ]);
+        }
+        let buttons: Vec<_> = tools
+            .iter()
+            .map(|(kind, label, icon)| RibbonTool {
+                icon: *icon,
+                label,
+                description: label,
+                shortcut: "",
+                enabled,
+                active: match (&self.tool, kind) {
+                    (Tool::Select, None) => true,
+                    (Tool::Draw { kind: current, .. }, Some(kind)) => current == kind,
+                    _ => false,
+                },
+                toggle: true,
+            })
+            .collect();
+        if let Some(index) = workspace::ribbon_group(ui, "Draw", &buttons) {
+            self.tool = tools[index].0.map_or(Tool::Select, |kind| Tool::Draw { kind, start: None, revision: self.session.revision() });
+        }
+        workspace::ribbon_separator(ui);
+        let buttons = [(Icon::Move, "Move"), (Icon::Rotate, "Rotate"), (Icon::Delete, "Delete")].map(|(icon, label)| RibbonTool {
+            icon,
+            label,
+            description: label,
+            shortcut: "",
+            enabled: enabled && self.selected.is_some(),
+            active: false,
+            toggle: false,
+        });
+        if let Some(index) = workspace::ribbon_group(ui, "Modify", &buttons) {
+            match index {
+                0 => self.begin_move(),
+                1 => self.rotate(),
+                _ => self.delete(),
             }
-            let tools = if item.kind == Kind::Symbol {
-                vec![(Place::Pin, "Pin"), (Place::Line, "Line"), (Place::Rectangle, "Rectangle"), (Place::Circle, "Circle"), (Place::Text, "Text")]
-            } else {
-                vec![(Place::Pad, "Pad"), (Place::Outline, "Rectangle"), (Place::Silkscreen, "Silkscreen")]
-            };
-            for (kind, label) in tools {
-                if ui.selectable_label(matches!(self.tool,Tool::Draw{kind:current,..}if current==kind), label).clicked() {
-                    picked = Some(Some(kind));
-                }
+        }
+    }
+    /// Navigation and panel visibility stay local to this definition, as do its grid and camera.
+    pub(super) fn view_tools(&mut self, ui: &mut Ui) {
+        use workspace::{RibbonTool, ToolIcon as Icon};
+        let tools = [(Icon::Fit, "Fit", false), (Icon::Browser, "Browser", !self.collapsed[0]), (Icon::Settings, "Properties", !self.collapsed[1])]
+            .map(|(icon, label, active)| RibbonTool { icon, label, description: label, shortcut: "", enabled: true, active, toggle: label != "Fit" });
+        if let Some(index) = workspace::ribbon_group(ui, "View", &tools) {
+            match index {
+                0 => self.camera.request_fit(),
+                index => self.collapsed[index - 1] ^= true,
             }
-            if ui.button("Move").clicked() {
-                self.begin_move();
-            }
-            if ui.button("Delete").clicked() {
-                self.delete();
-            }
-            if ui.button("Rotate").clicked() {
-                self.rotate();
-            }
-            if ui.button("Fit").clicked() {
-                self.camera.request_fit();
-            }
+        }
+        workspace::ribbon_separator(ui);
+        workspace::ribbon_control(ui, "Grid", Tokens::get().space_24 * 5.0, |ui| {
             egui::ComboBox::from_id_salt("library_grid").selected_text(format!("Grid {} mm", self.camera.snap_nm() as f64 / 1_000_000.0)).show_ui(
                 ui,
                 |ui| {
-                    let spacings =
-                        if item.kind == Kind::Symbol { vec![1_270_000] } else { vec![25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000] };
-                    for spacing in spacings {
+                    let spacings: &[i64] = if self.session.snapshot().kind == Kind::Symbol {
+                        &[1_270_000]
+                    } else {
+                        &[25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000]
+                    };
+                    for &spacing in spacings {
                         if ui.selectable_label(self.camera.snap_nm() == spacing, format!("{} mm", spacing as f64 / 1_000_000.0)).clicked() {
                             self.camera.set_snap_nm(spacing);
                         }
@@ -114,13 +158,6 @@ impl Document {
                 },
             );
         });
-        if let Some(kind) = picked {
-            if self.pending() {
-                self.error = Some("Apply or reset the property fields before changing tools.".into());
-            } else {
-                self.tool = kind.map_or(Tool::Select, |kind| Tool::Draw { kind, start: None, revision: self.session.revision() });
-            }
-        }
     }
     /// Move preserves electrical numbering and captures the revision before the preview begins.
     fn begin_move(&mut self) {
@@ -148,7 +185,9 @@ impl Document {
     fn rotate(&mut self) {
         let Some(object) = self.selected else { return };
         let item = self.session.snapshot();
-        let Some(mut primitive) = item.objects.get(&object).cloned() else { return };
+        let Some(mut primitive) = item.objects.get(&object).cloned() else {
+            return;
+        };
         match &mut primitive {
             Primitive::Pad { pad } => pad.rotation = (pad.rotation + 90) % 360,
             Primitive::Outline { graphic } => graphic.rotation = (graphic.rotation + 90) % 360,
@@ -367,6 +406,7 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
         Primitive::Pad { pad } => board::footprint(
             painter,
             &[board::PadDrawing {
+                color: Some(if pad.copper == CopperBinding::AllCopper { Tokens::get().board_through } else { board::copper_color(Some(true)) }),
                 number: pad.number.clone(),
                 center: at(pad.center),
                 copper: Some(corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation)),
@@ -390,6 +430,7 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
             painter,
             &[],
             &[board::GraphicDrawing {
+                color: None,
                 points: corners(graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation).to_vec(),
                 style: match graphic.purpose {
                     GraphicPurpose::Fabrication => board::GraphicStyle::Fabrication,
@@ -409,6 +450,7 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
             painter,
             &[],
             &[board::GraphicDrawing {
+                color: None,
                 points: path.points.iter().map(|p| at(*p)).collect(),
                 style: board::GraphicStyle::Silkscreen,
                 closed: path.closed,

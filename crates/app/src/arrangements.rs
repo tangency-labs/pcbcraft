@@ -146,6 +146,11 @@ impl PcbApp {
 
     /// Keep the current arrangement's latest navigation without changing electrical revision.
     pub(super) fn checkpoint_arrangements(&mut self) {
+        // Runtime library panes are independent documents, not saved project view targets.
+        if self.views.hosts.values().flat_map(|host| host.layout.views()).any(|id| self.views.view(id).is_some_and(|view| view.definition.is_some()))
+        {
+            return;
+        }
         let project = self.session.project().map(|project| project.board_target().project.to_string());
         if self.arrangements.project != project || self.arrangements.opening != self.session.history_root_revision() {
             return;

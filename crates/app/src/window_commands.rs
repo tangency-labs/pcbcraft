@@ -300,6 +300,21 @@ mod live {
 
     const CATALOG: &[WindowCommand] = &[
         WindowCommand {
+            id: "app.set_workspace",
+            title: "Choose Workspace",
+            summary: "Choose a workspace in an addressed pane (default: focused main pane), here, beside it or in a native window. Definition sessions and project history remain independent.",
+            params: &[
+                Param {
+                    name: "workspace",
+                    summary: "Workspace to enter",
+                    required: true,
+                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor"]),
+                },
+                Param { name: "view", summary: "Source pane; defaults to focused main pane", required: false, kind: Kind::View },
+                Param { name: "placement", summary: "Where to open it", required: false, kind: Kind::Choice(PLACEMENTS) },
+            ],
+        },
+        WindowCommand {
             id: "app.library_new",
             title: "New Library Item",
             summary: "Create an independent symbol or footprint definition workspace without editing project instances.",
@@ -333,9 +348,13 @@ mod live {
             summary: "Select a library primitive or definition metadata and navigate its canvas without changing authored data or history.",
             params: &[
                 Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::Window },
+                Param { name: "view", summary: "Definition pane ID; defaults to its current presentation", required: false, kind: Kind::View },
                 Param { name: "selected", summary: "Stable primitive ID from library inspection", required: false, kind: Kind::Window },
                 Param { name: "definition", summary: "Select definition metadata instead of a primitive", required: false, kind: Kind::Bool },
                 Param { name: "fit", summary: "Fit the definition", required: false, kind: Kind::Bool },
+                Param { name: "ribbon_tab", summary: "Authoring ribbon tab", required: false, kind: Kind::Choice(&["draw", "library", "view"]) },
+                Param { name: "browser", summary: "Whether the definition Browser is visible", required: false, kind: Kind::Bool },
+                Param { name: "properties", summary: "Whether compact Properties is visible", required: false, kind: Kind::Bool },
                 Param { name: "zoom_percent", summary: "Camera zoom percentage", required: false, kind: Kind::Integer { min: 1, max: 800, step: 1 } },
                 Param { name: "center", summary: "Center in definition nanometres", required: false, kind: Kind::Point },
                 Param {
@@ -732,11 +751,11 @@ mod live {
                     "focused_view": host.focused.0,
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties},
-                    "ribbon_tab": match panels.ribbon {
+                    "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
                         0 if app.views.view(host.focused).is_some_and(|view| view.workspace == Workspace::Board) => "layout",
                         0 => "capture",
                         slot => crate::ribbon::tab_name(slot),
-                    },
+                    })),
                 })
             })
             .collect();
@@ -750,12 +769,11 @@ mod live {
                 Some(json!({
                     "id": id.0,
                     "window": window.0,
-                    "focused": focused && !(window==app.views.main && app.library_editors.active.is_some()),
+                    "focused": focused,
                     "primary": id == app.views.primary(),
-                    "workspace": match view.workspace {
-                        Workspace::Schematic => "schematic",
-                        Workspace::Board => "board",
-                    },
+                    "workspace": view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"}),
+                    "definition":view.definition,
+                    "library_view":app.inspect_library_view(id),
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
                     "grid_spacing_nm": view.camera.snap_nm(),
@@ -784,7 +802,8 @@ mod live {
             "unsaved": app.files.dirty(&app.session),
             "file_operation": app.files.busy(),
             "dialog_open": !matches!(app.dialog, Dialog::None),
-            "home": app.home && app.library_editors.active.is_none(),
+            "home": app.home,
+            "workspace": app.workspace_key(),
             "message": app.message,
             "windows": windows,
             "library_editors":app.library_editors.inspect(),
@@ -864,10 +883,39 @@ mod live {
         pub(crate) fn run_window_command(&mut self, ctx: &Context, id: &str, params: &Value) -> Result<(), String> {
             let command = CATALOG.iter().find(|command| command.id == id).ok_or_else(|| format!("unknown command `{id}`"))?;
             command.check(params)?;
+            if id == "app.set_workspace" {
+                let source = ViewId(params["view"].as_u64().unwrap_or_else(|| self.views.hosts[&self.views.main].focused.0));
+                let host = self.views.owner(source).ok_or("Unknown source view ID.")?;
+                self.bind_editor_host(host);
+                self.activate_editor(ctx, source);
+                let placement = match params["placement"].as_str() {
+                    Some("beside") => pcbcraft_chrome::workspace::Placement::Beside,
+                    Some("window") => pcbcraft_chrome::workspace::Placement::Window,
+                    _ => pcbcraft_chrome::workspace::Placement::Here,
+                };
+                let result = self.enter_workspace(ctx, params["workspace"].as_str().unwrap_or_default(), placement);
+                self.bind_editor_host(self.views.main);
+                return result;
+            }
             if id.starts_with("app.library_") {
                 return self.library_command(ctx, id, params);
             }
-            if (id.starts_with("view.") || id.starts_with("arrangement.") || id == "window.set_panel") && self.session.project().is_none() {
+            if (id.starts_with("arrangement.")
+                || id == "window.set_panel"
+                || (id.starts_with("view.")
+                    && !matches!(
+                        id,
+                        "view.focus"
+                            | "view.split"
+                            | "view.open_beside"
+                            | "view.open_window"
+                            | "view.detach"
+                            | "view.dock"
+                            | "view.close"
+                            | "view.fit"
+                    )))
+                && self.session.project().is_none()
+            {
                 return Err("No project is open. Open or create one first.".to_owned());
             }
             self.bind_editor_host(self.views.main);
@@ -883,6 +931,28 @@ mod live {
                 Some(view) => Some((view, self.view_window(view)?)),
                 None => None,
             };
+            if let Some((view, _)) = view {
+                let definition = self.views.view(view).and_then(|view| view.definition);
+                if definition.is_none() && self.session.project().is_none() {
+                    return Err("No project is open.".into());
+                }
+                if definition.is_some()
+                    && !matches!(
+                        id,
+                        "view.focus"
+                            | "view.split"
+                            | "view.open_beside"
+                            | "view.open_window"
+                            | "view.detach"
+                            | "view.dock"
+                            | "view.close"
+                            | "view.fit"
+                            | "view.set_workspace"
+                    )
+                {
+                    return Err("Use app.library_view for definition selection and navigation.".into());
+                }
+            }
             match (id, view, window) {
                 ("view.focus", Some((view, host)), _) => self.in_window(host, |app| app.activate_editor(ctx, view)),
                 ("view.split", Some((view, host)), _) => {
@@ -908,7 +978,13 @@ mod live {
                     };
                     self.apply_view_action(ctx, view, action);
                 }
-                ("view.fit", Some((view, _)), _) => self.fit_view(view),
+                ("view.fit", Some((view, _)), _) => {
+                    if let Some(document) = self.bind_library_view(view) {
+                        self.fit_library_document(document);
+                    } else {
+                        self.fit_view(view);
+                    }
+                }
                 ("view.center", Some((view, _)), _) => {
                     let at = point(&params["at"]).ok_or("`at` must be a point")?;
                     if let Some(view) = self.views.view_mut(view) {
@@ -1036,6 +1112,9 @@ mod live {
                     self.in_window(host, |app| app.set_panel(ctx, panel, open));
                 }
                 ("window.set_ribbon_tab", _, Some(host)) => {
+                    if self.views.hosts.get(&host).and_then(|host| self.views.view(host.focused)).is_some_and(|view| view.definition.is_some()) {
+                        return Err("Use app.library_view to select the authoring ribbon tab.".into());
+                    }
                     let tab = crate::ribbon::tab_slot(params["tab"].as_str().unwrap_or_default());
                     if !crate::ribbon::BOARD_TAB_ORDER.contains(&tab)
                         && self
@@ -1057,7 +1136,7 @@ mod live {
                 }
                 ("app.set_preferences", _, _) => self.preferences = updated_preferences(self.preferences, params),
                 ("app.set_home", _, _) => {
-                    self.library_editors.active = None;
+                    self.library_editors.focus(None)?;
                     if params["shown"].as_bool() == Some(true) {
                         if !self.home {
                             self.show_home();
@@ -1081,6 +1160,7 @@ mod live {
                 _ => return Err(format!("`{id}` can't run now")),
             }
             debug_assert!(self.views.host == self.views.main);
+            self.sync_library_focus();
             self.repaint_editors(ctx);
             ctx.request_repaint_of(egui::ViewportId::ROOT);
             Ok(())

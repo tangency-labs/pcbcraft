@@ -424,7 +424,7 @@ fn the_workspace_tile_opens_a_picker_with_planned_workspaces() {
     let picker_open = |harness: &Harness<'_, PcbApp>| harness.query_by_label("PCB layout").is_some();
     click(&mut harness, "Choose workspace");
     assert!(picker_open(&harness));
-    harness.get_by_label("One project across workspaces. Board placement and routing tools are still in development.");
+    harness.get_by_label("Symbol and footprint definitions keep their own histories while schematic and PCB views share the project.");
     for planned in ["3D render", "Simulate"] {
         assert!(harness.get_by_label(planned).accesskit_node().is_disabled(), "{planned} is planned");
     }

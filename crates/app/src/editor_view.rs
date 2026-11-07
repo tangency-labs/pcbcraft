@@ -36,7 +36,8 @@ impl Workspace {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ViewInput {
     view: ViewId,
-    target: DocumentTarget,
+    target: Option<DocumentTarget>,
+    definition: Option<u64>,
     input_epoch: u64,
     pub(super) revision: u64,
 }
@@ -179,6 +180,8 @@ pub(super) struct EditorView {
     binding: Option<Binding>,
     input_epoch: u64,
     pub(super) workspace: Workspace,
+    /// Runtime definition document, independent of the parked project workspace/target.
+    pub(super) definition: Option<u64>,
     pub(super) camera: Camera,
     parked_camera: Camera,
     pub(super) schematic: SchematicState,
@@ -197,15 +200,18 @@ impl Default for EditorView {
 }
 
 impl EditorView {
-    /// Return the resolved document identity, excluding unavailable placeholders.
+    /// Return a project target only; definition panes and unavailable placeholders grant no project authority.
     pub(super) fn target(&self) -> Option<DocumentTarget> {
-        self.binding.map(|binding| binding.target)
+        if self.definition.is_some() { None } else { self.binding.map(|binding| binding.target) }
     }
 
     /// Start a successfully opened project's default document in this workspace. Runtime identity
     /// and snap spacing survive, while old document addresses, navigation and edit authority expire.
     /// Saved arrangements are restored separately afterward and still validate explicit targets.
     pub(super) fn bind_opened_project(&mut self, session: &Session) {
+        if self.definition.is_some() {
+            return;
+        }
         let workspace = self.workspace;
         let snap_nm = self.camera.snap_nm();
         *self = Self::new(self.id);
@@ -230,9 +236,13 @@ impl EditorView {
         }
     }
 
-    /// Read this view's sheet from the current authoritative revision. A cached immutable
+    /// Read a project view's sheet from the current authoritative revision; definition panes return None.
+    /// A cached immutable
     /// projection avoids rebuilding geometry caches on every frame; stale caches never authorize input.
     pub(super) fn snapshot(&self, session: &Session) -> Option<std::sync::Arc<pcbcraft_engine::Project>> {
+        if self.definition.is_some() {
+            return None;
+        }
         let root = session.snapshot()?;
         let target = self.sheet.unwrap_or_else(|| root.sheet_target());
         if self.snapshot_root.as_ref().is_some_and(|old| std::sync::Arc::ptr_eq(old, &root))
@@ -243,8 +253,12 @@ impl EditorView {
         root.for_sheet(target).map(std::sync::Arc::new).or_else(|| (self.workspace == Workspace::Board).then_some(root))
     }
 
-    /// Capture presentation only; unresolved saved targets remain intact instead of being rebound.
+    /// Capture project presentation only; runtime definition views are excluded from project
+    /// arrangements. Unresolved saved targets remain intact instead of being rebound.
     pub(super) fn saved_state(&self, session: &Session) -> Option<ViewState> {
+        if self.definition.is_some() {
+            return None;
+        }
         if let Some(state) = &self.unavailable {
             return Some(state.clone());
         }
@@ -310,6 +324,7 @@ impl EditorView {
             binding: None,
             input_epoch: 0,
             workspace: Workspace::Schematic,
+            definition: None,
             camera: Camera::default(),
             parked_camera: Camera::default(),
             schematic: SchematicState::default(),
@@ -330,6 +345,7 @@ impl EditorView {
             snapshot_root: self.snapshot_root.clone(),
             sheet_snapshot: self.sheet_snapshot.clone(),
             workspace: self.workspace,
+            definition: self.definition,
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
             unavailable: self.unavailable.clone(),
@@ -350,6 +366,9 @@ impl EditorView {
     /// Switch only this view and restore that workspace's navigation. Old input remains invalid
     /// even when switching back without any document edit.
     pub(super) fn switch(&mut self, workspace: Workspace, session: &Session) {
+        if self.definition.take().is_some() {
+            self.release_input();
+        }
         if self.unavailable.is_some() {
             *self = Self::new(self.id);
             self.sync(session);
@@ -398,16 +417,24 @@ impl EditorView {
 
     /// Capture input only while this view is bound to its current document opening.
     pub(super) fn input(&self, session: &Session) -> Option<ViewInput> {
+        if self.definition.is_some() {
+            return None;
+        }
         let binding = self.binding.filter(|binding| Some(*binding) == Binding::current(session, self.workspace, self.board.target, self.sheet))?;
-        Some(ViewInput { view: self.id, target: binding.target, input_epoch: self.input_epoch, revision: session.revision() })
+        Some(ViewInput { view: self.id, target: Some(binding.target), definition: None, input_epoch: self.input_epoch, revision: session.revision() })
     }
 
-    /// Permit placement/close controls for an unavailable view without granting edit authority.
+    /// Permit layout controls for definition and unavailable views without granting project edit
+    /// authority. Definition tokens include runtime document identity and the view's input epoch.
     pub(super) fn control_input(&self, session: &Session) -> Option<ViewInput> {
+        if let Some(document) = self.definition {
+            return Some(ViewInput { view: self.id, target: None, definition: Some(document), input_epoch: self.input_epoch, revision: 0 });
+        }
         self.input(session).or_else(|| {
             self.unavailable.as_ref().map(|state| ViewInput {
                 view: self.id,
-                target: state.target,
+                target: Some(state.target),
+                definition: None,
                 input_epoch: self.input_epoch,
                 revision: session.revision(),
             })
@@ -443,6 +470,9 @@ impl EditorView {
     /// sheet/board targets that no longer resolve become unavailable, closeable placeholders;
     /// undo restores their address and navigation. Only omitted targets use compatibility defaults.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
+        if self.definition.is_some() {
+            return false;
+        }
         if let Some(state) = &self.unavailable {
             if state.target.available(session) {
                 *self = Self::from_state(self.id, &state.clone(), session);

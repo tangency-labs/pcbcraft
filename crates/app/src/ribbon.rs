@@ -57,8 +57,6 @@ enum Action {
     Slice,
     Heal,
     AutoHeal,
-    SymbolEditor,
-    FootprintEditor,
     OpenLibraryItem,
     ResumeLibraryEditors,
     EditDefinitionCopy,
@@ -139,8 +137,6 @@ const LIBRARIES: &[Group] = &[
     Group {
         title: "Editors",
         tools: &[
-            tool(Action::SymbolEditor, "Symbol Editor", Icon::Symbol, "Create a symbol definition", ""),
-            tool(Action::FootprintEditor, "Footprint Editor", Icon::Symbol, "Create a footprint definition", ""),
             tool(Action::OpenLibraryItem, "Open", Icon::Browser, "Open a saved library item", ""),
             tool(Action::ResumeLibraryEditors, "Resume", Icon::EditorWindow, "Return to open library editors", ""),
         ],
@@ -180,8 +176,6 @@ impl Action {
             self,
             Self::Symbol
                 | Self::Sources
-                | Self::SymbolEditor
-                | Self::FootprintEditor
                 | Self::OpenLibraryItem
                 | Self::ResumeLibraryEditors
                 | Self::EditDefinitionCopy
@@ -206,7 +200,7 @@ impl Action {
         let project = app.session.project().is_some();
         let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
         match self {
-            Self::SymbolEditor | Self::FootprintEditor | Self::Sources => true,
+            Self::Sources => true,
             Self::OpenLibraryItem => !app.library_editors.busy(),
             Self::ResumeLibraryEditors => app.library_editors.has_documents(),
             Self::EditDefinitionCopy => {
@@ -298,8 +292,8 @@ impl PcbApp {
         }
         match action {
             Action::Sources => self.dialog = Dialog::LibrarySources,
-            Action::OpenLibraryItem => self.message = self.library_editors.open_picker(ctx).err(),
-            Action::ResumeLibraryEditors => self.library_editors.resume(),
+            Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),
+            Action::ResumeLibraryEditors => self.resume_library_workspace(ctx),
             Action::EditDefinitionCopy => {
                 let kind = match self.views.active.workspace {
                     Workspace::Schematic => pcbcraft_engine::authoring::Kind::Symbol,
@@ -308,8 +302,6 @@ impl PcbApp {
                 self.message = self.fork_library_selection(kind).err();
             }
             Action::Symbol => self.parts.focus_search(),
-            Action::SymbolEditor => self.new_library_item(pcbcraft_engine::authoring::Kind::Symbol),
-            Action::FootprintEditor => self.new_library_item(pcbcraft_engine::authoring::Kind::Footprint),
             Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),
             Action::NewSheet => {

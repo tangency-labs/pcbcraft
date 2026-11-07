@@ -1,11 +1,10 @@
 //! Library editor presentation uses the same ribbon, cards and canvas palette as the project.
-use crate::{Tokens, fonts, workspace};
-use egui::{Frame, Rect, RichText, Ui};
+use crate::{Tokens, workspace};
+use egui::{Rect, Ui};
 
 /// Sequential regions let a document owner share one draft across its tools and inspectors.
 #[derive(Clone, Copy, Debug)]
 pub enum Region {
-    Tools,
     Canvas { area: Rect, covered: [Rect; 2] },
     Browser,
     Properties,
@@ -14,8 +13,6 @@ pub enum Region {
 /// Lay out a dedicated authoring workspace without owning a library document or project session.
 /// Compact hosts retain a full canvas and collapsible, scrollable cards.
 pub fn workspace(ui: &mut Ui, collapsed: [bool; 2], mut draw: impl FnMut(&mut Ui, Region)) -> [bool; 2] {
-    let t = Tokens::get();
-    egui::Panel::top(ui.id().with("library_tools")).frame(Frame::new().fill(t.panel).inner_margin(t.space_8)).show(ui, |ui| draw(ui, Region::Tools));
     let area = ui.available_rect_before_wrap();
     let (browser, b) = workspace::floating_card_aligned(
         ui,
@@ -32,12 +29,6 @@ pub fn workspace(ui: &mut Ui, collapsed: [bool; 2], mut draw: impl FnMut(&mut Ui
         });
     draw(ui, Region::Canvas { area, covered: [browser, properties] });
     [collapsed[0] ^ b, collapsed[1] ^ p]
-}
-
-/// Identify the active definition workspace beside its compact drawing actions.
-pub fn heading(ui: &mut Ui, title: &str) {
-    let t = Tokens::get();
-    ui.label(RichText::new(title).font(fonts::interface_heading(ui, t.font_intro)));
 }
 
 /// Screen-space affordances stay independent of native copper and symbol dimensions.

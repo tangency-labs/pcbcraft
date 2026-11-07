@@ -656,6 +656,11 @@ impl EditorViews {
             } else {
                 let parked = self.hosts.get_mut(&self.host).and_then(|host| host.parked.pop());
                 if let Some(id) = parked {
+                    if let Some(document) = self.active.definition
+                        && let Some(view) = self.view_mut(id)
+                    {
+                        view.definition = Some(document);
+                    }
                     let camera = self.active.camera.fork_navigation();
                     let workspace = self.active.workspace;
                     if let Some(view) = self.view_mut(id).filter(|view| view.workspace == workspace) {
@@ -720,27 +725,28 @@ impl PcbApp {
 
     /// Apply the presentation action from the View ribbon. A modal owns input until it closes.
     pub(super) fn split_editors(&mut self, ctx: &egui::Context, split: bool) {
-        if self.session.project().is_none() || !matches!(self.dialog, Dialog::None) {
+        if (self.session.project().is_none() && self.views.active.definition.is_none()) || !matches!(self.dialog, Dialog::None) {
             return;
         }
         self.views.set_split(split);
+        self.sync_library_bindings();
         egui::DragAndDrop::clear_payload(ctx);
         ctx.request_repaint();
     }
 
     /// Route focus without moving cameras or editing the document. Release text search and
     /// browser drag ownership when a pane takes over; dialog input remains with its owner.
-    /// Main-host focus returns from authoring even if that project view was already focused.
+    /// Focus preserves the addressed pane's project or definition binding.
     pub(super) fn activate_editor(&mut self, ctx: &egui::Context, id: ViewId) {
         if !matches!(self.dialog, Dialog::None) {
             return;
         }
         let changed = self.views.activate(id);
-        let authoring = self.views.owner(id) == Some(self.views.main) && self.library_editors.active.is_some();
-        if authoring {
-            self.library_editors.active = None;
+        if changed {
+            self.cancel_library_gestures();
         }
-        if !changed && !authoring {
+        self.sync_library_focus();
+        if !changed {
             return;
         }
         self.parts.release_focus(ctx);
@@ -756,8 +762,9 @@ impl PcbApp {
         }
         let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
         if let Some(pointer) = pressed
-            && !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background)
             && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))
+            && (self.views.view(*id).is_some_and(|view| view.definition.is_some())
+                || !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
         {
             self.activate_editor(ctx, *id);
         }
@@ -765,14 +772,21 @@ impl PcbApp {
 
     /// Render split panes with one document header each, or a single canvas with an
     /// overlaid breadcrumb and no tab clearance. Workspace panels address the focused view;
-    /// their geometry changes with the layout, never with focus alone.
+    /// Mixed layouts confine project panels to the focused project pane; each definition pane
+    /// owns its Browser and Properties inside its own rectangle.
     pub(super) fn editor_workspace(&mut self, ui: &mut Ui, workspace: Rect) {
-        if self.session.project().is_none() {
+        let has_library = self
+            .views
+            .hosts
+            .get(&self.views.host)
+            .is_some_and(|host| host.layout.views().iter().any(|id| self.views.view(*id).is_some_and(|view| view.definition.is_some())));
+        if self.session.project().is_none() && !has_library {
             self.canvas(ui);
             return;
         }
-        let board = self.views.active.workspace == Workspace::Board;
-        if !board {
+        let project_focus = self.views.active.definition.is_none();
+        let board = project_focus && self.views.active.workspace == Workspace::Board;
+        if project_focus && !board {
             #[cfg(not(target_arch = "wasm32"))]
             let clearance = if self.views.host != self.views.main { 0.0 } else { self.assistant.rail_clearance() };
             #[cfg(target_arch = "wasm32")]
@@ -788,9 +802,10 @@ impl PcbApp {
             Vec::new()
         };
         let headers = panes.len() > 1;
-        let area = editor::panel_area(area, &panes.iter().map(|(_, rect)| *rect).collect::<Vec<_>>(), headers, ui.spacing().item_spacing.y);
+        let panel_rects: Vec<_> = panes.iter().filter(|(id, _)| !has_library || *id == self.views.active.id()).map(|(_, rect)| *rect).collect();
+        let area = editor::panel_area(area, &panel_rects, headers, ui.spacing().item_spacing.y);
         let board_panel = board.then(|| self.board_panels(ui, area));
-        let mut pick = if board { None } else { self.editor_panels(ui, area) };
+        let mut pick = if board || !project_focus { None } else { self.editor_panels(ui, area) };
         #[cfg(not(target_arch = "wasm32"))]
         let assistant = if self.views.host != self.views.main { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
         #[cfg(target_arch = "wasm32")]
@@ -798,15 +813,18 @@ impl PcbApp {
             let _ = workspace;
             Rect::NOTHING
         };
-        let mut covered = board_panel.map_or_else(|| vec![self.browser.rect(), self.parts.rect()], |panels| panels.to_vec());
+        let mut covered = board_panel.map_or_else(
+            || if project_focus { vec![self.browser.rect(), self.parts.rect()] } else { vec![Rect::NOTHING; 2] },
+            |panels| panels.to_vec(),
+        );
         covered.push(assistant);
-        if !board {
+        if project_focus && !board {
             covered.push(self.selection_properties(ui, area));
         }
         for (id, rect) in panes {
             let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();
             let pane_id = tab_ids.first().copied().unwrap_or(id);
-            let path = self.views.view(id).and_then(|view| view.sheet_path(&self.session)).unwrap_or_default();
+            let path = self.view_title(id);
             ui.scope_builder(egui::UiBuilder::new().id_salt(("editor_pane", pane_id)).max_rect(rect), |ui| {
                 ui.set_clip_rect(rect);
                 let active = self.views.active.id() == id;
@@ -827,6 +845,10 @@ impl PcbApp {
                         };
                         self.queue_view_action(ui.ctx(), id, action);
                     }
+                }
+                if self.views.view(id).is_some_and(|view| view.definition.is_some()) {
+                    self.library_pane(ui, id);
+                    return;
                 }
                 if self.views.view(id).is_some_and(EditorView::unavailable) {
                     shell::canvas(ui, |ui| {
@@ -939,6 +961,7 @@ impl PcbApp {
                 }
             });
         }
+        self.sync_library_focus();
         if !self.views.pending_reveal.is_empty() {
             // A selection in the later-painted pane must wake the earlier target host.
             self.repaint_editors(ui.ctx());

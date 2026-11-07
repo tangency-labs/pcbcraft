@@ -248,6 +248,7 @@ impl PcbApp {
             }
             ViewAction::Close => self.views.close_view(id),
         }
+        self.sync_library_bindings();
         self.parts.release_focus(ctx);
         egui::DragAndDrop::clear_payload(ctx);
         self.repaint_editors(ctx);
@@ -282,12 +283,14 @@ impl PcbApp {
     pub(super) fn editor_window_focus(&mut self, ctx: &Context) {
         if !ctx.input(|input| input.focused) {
             self.views.active.cancel_gesture();
+            self.cancel_library_host_gestures();
             return;
         }
         let host = ctx.viewport_id();
         if self.windows.focused != Some(host) {
             if self.windows.focused.is_some() && matches!(self.dialog, Dialog::None) {
                 self.views.suspend();
+                self.cancel_library_gestures();
                 egui::DragAndDrop::clear_payload(ctx);
             }
             self.windows.focused = Some(host);
@@ -362,7 +365,7 @@ impl PcbApp {
             let Some(id) = self.views.hosts.get(&host).map(|host| host.focused) else {
                 continue;
             };
-            let path = self.views.view(id).and_then(|view| view.sheet_path(&self.session)).unwrap_or_else(|| "Schematic".to_owned());
+            let path = self.view_title(id);
             let integrated_titlebar = self.integrated_titlebar;
             let panels = self.windows.panels.entry(host).or_default();
             let mut builder = egui::ViewportBuilder::default()
@@ -405,16 +408,19 @@ impl PcbApp {
 
     /// Move the render slot and contextual controls together. The surviving native window keeps
     /// its ID, geometry and UI state when it takes over project-level dialogs and the assistant.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn bind_editor_host(&mut self, host: HostId) {
         if host != self.views.host {
-            self.swap_editor_panels(self.views.host);
-            self.swap_editor_panels(host);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.swap_editor_panels(self.views.host);
+                self.swap_editor_panels(host);
+            }
             self.views.host = host;
         }
         if let Some(layout) = self.views.hosts.get(&host) {
             self.views.bind(layout.focused);
         }
+        self.sync_library_focus();
     }
 
     /// Close just the addressed native window and discard its unfinished arrangement form while
