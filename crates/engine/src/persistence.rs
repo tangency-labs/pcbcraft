@@ -418,7 +418,7 @@ pub struct Encoder {
 
 impl Encoder {
     /// Start a legacy single document without walking the schematic. Setup, physical definitions,
-    /// silkscreen settings and rotation require split documents or an archive; refuse lossy export.
+    /// silkscreen settings, outlines and rotation require split documents or an archive; refuse lossy export.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if project.sheets.len() != 1 || project.sheet_name() != "Main" {
             return Err("legacy single-file encoding cannot represent multiple or renamed sheets; use split documents or a packed archive".to_owned());
@@ -428,12 +428,13 @@ impl Encoder {
         }
         if !project.board.assignments.is_empty()
             || project.board.silkscreen.is_some()
+            || project.board.outline.is_some()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
             || project.board.footprints().iter().any(|f| f.rotation != 0)
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, physical footprints, silkscreen settings or footprint rotation; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, physical footprints, independent assignments, silkscreen settings, outlines or footprint rotation; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;

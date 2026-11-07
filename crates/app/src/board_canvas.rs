@@ -37,6 +37,7 @@ pub(super) struct Interaction {
 /// Select or preview one footprint at a time. Drags retain their grab offset; M moves the origin
 /// to the pointer. R rotates counterclockwise, including during a move. Only completion on the
 /// canvas emits an edit; secondary click, disabled input or stale authority discards the draft.
+/// Boundary visibility follows semantic outline layers; without such layers the boundary remains visible.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -163,6 +164,14 @@ pub(super) fn show(
     }
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
+    if let Some(outline) = project.outline()
+        && project.setup().is_none_or(|setup| {
+            let mut layers = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Outline).peekable();
+            layers.peek().is_none() || layers.any(|layer| !state.hidden_layers.contains(&layer.id.to_string()))
+        })
+    {
+        board::outline(&p, outline.corners().map(|point| camera.screen(point, rect)));
+    }
     for mut footprint in footprints {
         if let Some(draft) = state.draft.as_ref().filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -184,7 +193,7 @@ pub(super) fn show(
             highlighted.contains(&footprint.id),
         );
     }
-    if project.footprints().next().is_none() {
+    if project.footprints().next().is_none() && project.outline().is_none() {
         board::empty(&p, rect);
     }
     if state.draft.is_some() {

@@ -252,7 +252,17 @@ assigning an unassigned component directly from PCB layout. Already placed
 packages remain read-only pending reviewed board updates. See the
 [footprint contract](footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
-Slots, outline editing, routing, individual pad selection, selection
+Choose **Layout → Board → Outline** to create or edit a rectangular boundary.
+Set **Left**, **Top**, **Width** and **Height**; fields accept explicit mil/mm
+suffixes, and bare numbers use the display unit. **Apply outline** commits one
+undoable edit; **Cancel** or **Esc** leaves the board unchanged. Reopen the form
+to resize it or choose **Remove outline**. **Fit** includes the boundary even
+on an empty board, and the Board outline layer controls its visibility when
+that layer is in the board setup. Saving and reopening retains the exact
+boundary. Changing it leaves placements in place and performs no edge-clearance
+or manufacturing checks.
+
+Slots, nonrectangular outlines/cutouts, routing, individual pad selection, selection
 filters and Flip view still need implementation. Removing the last schematic
 unit currently removes its footprint too; reviewed board updates are tracked
 separately in #55.

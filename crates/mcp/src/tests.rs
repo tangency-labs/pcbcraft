@@ -23,6 +23,32 @@ fn body(result: &Value) -> Value {
     serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// Headless clients discover board-addressed boundaries and share the engine's exact versioned
+/// transaction, including a no-op, rejected stale call and one undo step.
+#[test]
+fn board_outline_tools_are_discoverable_and_undoable() {
+    use pcbcraft_engine::SET_BOARD_OUTLINE;
+    let mut s = server();
+    let opened = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let schema = body(&call(&mut s, "describe_command", json!({"command":SET_BOARD_OUTLINE})));
+    assert_eq!(schema["params"]["properties"]["board"]["format"], "uuid");
+    let outline = json!({"shape":"rectangle","min":{"x_nm":-10_000_000,"y_nm":0},"max":{"x_nm":10_000_000,"y_nm":20_000_000}});
+    let updated = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":SET_BOARD_OUTLINE,"params":{
+        "board":opened["project"]["boards"][0]["id"],"outline":outline,"expected_revision":opened["revision"]}}),
+    ));
+    assert_eq!(updated["project"]["board"]["outline"], outline);
+    let stale = call(&mut s, "execute", json!({"command":SET_BOARD_OUTLINE,"params":{"outline":null,"expected_revision":opened["revision"]}}));
+    assert_eq!(stale["isError"], true);
+    let same =
+        body(&call(&mut s, "execute", json!({"command":SET_BOARD_OUTLINE,"params":{"outline":outline,"expected_revision":updated["revision"]}})));
+    assert_eq!(same, updated);
+    let undone = body(&call(&mut s, "execute", json!({"command":"edit.undo","params":{}})));
+    assert!(undone["project"]["board"].is_null());
+}
+
 #[test]
 fn initialize_offers_a_version_the_client_can_speak() {
     let mut s = server();

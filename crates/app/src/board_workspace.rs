@@ -111,6 +111,24 @@ impl PcbApp {
             self.begin_footprint_assignment(component);
         }
         workspace::ribbon_separator(ui);
+        if workspace::ribbon_group(
+            ui,
+            "Board",
+            &[RibbonTool {
+                icon: ToolIcon::Outline,
+                label: "Outline",
+                description: "Edit board outline",
+                shortcut: "",
+                enabled: enabled && !editing,
+                active: false,
+                toggle: false,
+            }],
+        )
+        .is_some()
+        {
+            self.begin_board_outline();
+        }
+        workspace::ribbon_separator(ui);
         let tools = [
             RibbonTool { icon: ToolIcon::Fit, label: "Fit", description: "Fit board", shortcut: "", enabled, active: false, toggle: false },
             RibbonTool {

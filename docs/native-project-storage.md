@@ -47,7 +47,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6` | Project UUID, name, ordered sheet list and shared components |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` or `/2` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols |
-| `board.json` | `pcbcraft-board/1` through `/7` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements |
+| `board.json` | `pcbcraft-board/1` through `/8` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 adds a rectangular board outline |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -172,7 +172,19 @@ optional under version 7, with their existing validation. Older boards retain
 their prior encoding until a package assignment is authored. Legacy single-file
 export refuses independent assignments rather than losing them.
 
-An unconfigured board without newer footprint, assignment or silkscreen data
+Board format 8 requires an `outline` object with `shape: "rectangle"` and
+`min`/`max` points in integer nanometers. Both corners must fit the existing
+coordinate range, with `min.x_nm < max.x_nm` and `min.y_nm < max.y_nm`.
+It allows optional setup, silkscreen and a nonempty assignments array with the
+same validation as version 7, alongside existing placements and pinned definitions.
+Versions 1–7 refuse outlines; explicit null, missing corners, unsupported shapes
+and unknown fields are rejected. Removing the outline omits the field and uses
+the lowest board version required by the remaining data, preserving independent
+assignments. Projects without outlines keep their existing encoding. Legacy
+single-file export refuses outlines rather than discarding them. This adds no
+persisted board list or multiboard migration.
+
+An unconfigured board without newer footprint, assignment, outline or silkscreen data
 retains version 1 and its existing encoding. Initializing setup uses version 2, whose required `setup` contains a `layers` catalog and a
 `stackup` profile. Layers have UUIDs, names, typed purposes and optional surface
 sides; the profile has a UUID and front-to-back `strata`. Copper strata reference

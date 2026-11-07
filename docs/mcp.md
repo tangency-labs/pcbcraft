@@ -114,6 +114,14 @@ commands with a reason.
 
 ## Headless MCP
 
+`pcb.set_outline` creates, resizes or removes an addressed board's rectangular
+boundary through the same transaction as **Layout → Board → Outline**. Pass
+`board`, `expected_revision` and an `outline` object with `shape: "rectangle"`
+and ordered `min`/`max` points (`x_nm`, `y_nm`). Set `outline` to null to remove
+it. Inspection reports the boundary under `project.board.outline`; edits do not
+move footprints or perform clearance/manufacturing checks. Both live and
+headless sessions support this command.
+
 To start the MCP server from the repository root, run
 `cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it
 at `pcbcraft-cli mcp`. Pass

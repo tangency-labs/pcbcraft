@@ -10,6 +10,7 @@ mod arrangements;
 #[cfg(not(target_arch = "wasm32"))]
 mod assistant;
 mod board_canvas;
+mod board_outline;
 mod board_panels;
 mod board_workspace;
 mod canvas_camera;
@@ -149,6 +150,8 @@ enum Dialog {
     Hierarchy(hierarchy::Edit),
     /// Chooses and pins a package independently of board placement.
     Footprint(footprint_assignment::Edit),
+    /// Create, resize or remove a boundary on an explicitly addressed board.
+    BoardOutline(board_outline::Edit),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(properties::Edit),
     /// Asks whether to save unsaved changes before closing, New Project or Open.
@@ -1531,6 +1534,7 @@ impl PcbApp {
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
+            Dialog::BoardOutline(edit) => self.board_outline_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;

@@ -325,7 +325,13 @@ and explicit terminal-to-pad mapping. Assigning pins the package without placing
 it. In PCB layout, **Place on board** places an assigned component at unit-aware
 X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
-registration, slots, board outlines and routing remain planned.
+registration, slots, nonrectangular outlines/cutouts and routing remain planned.
+**Layout → Board → Outline** opens the rectangular boundary's Left, Top, Width
+and Height fields. Explicit mil/mm suffixes override the display unit; untouched
+fields keep their exact nanometers. Apply outline, Remove outline and Undo share
+the project history, while Cancel and Esc discard only the form. Fit includes
+the boundary on empty boards, and configured outline layers control its visibility.
+Boundary edits do not move footprints or check edge clearance.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

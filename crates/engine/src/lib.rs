@@ -73,6 +73,7 @@ enum ParamKind {
     Selection,
     BoardSetup,
     SilkscreenSettings,
+    BoardOutline,
     BoardId,
     SheetId,
     CopperLayers,
@@ -97,6 +98,9 @@ impl ParamKind {
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
             Self::BoardSetup => board::setup::BoardSetup::schema(),
+            Self::BoardOutline => json!({"oneOf":[{"type":"null"},{"type":"object","properties":{
+                "shape":{"const":"rectangle"},"min":Self::Point.schema(),"max":Self::Point.schema()
+            },"required":["shape","min","max"],"additionalProperties":false}]}),
             Self::SilkscreenSettings => json!({"type":"object","properties": {
                 "text_height_nm":{"type":"integer","minimum":1,"maximum":10_000_000},
                 "stroke_width_nm":{"type":"integer","minimum":1,"maximum":5_000_000},
@@ -183,6 +187,7 @@ impl ParamKind {
             Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
             Self::BoardId | Self::SheetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup | Self::SilkscreenSettings if value.is_object() => Ok(()),
+            Self::BoardOutline if value.is_null() || value.is_object() => Ok(()),
             Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
             Self::AutoHeal | Self::Disconnect if value.is_boolean() => Ok(()),
             Self::Junctions
@@ -222,6 +227,7 @@ impl ParamKind {
             Self::Direction => Err("must be input, output, bidirectional, tri_state or passive"),
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
+            Self::BoardOutline => Err("must contain a rectangular outline or null to remove it"),
             Self::BoardSetup | Self::SilkscreenSettings => Err("must contain a settings object"),
             Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
             Self::AutoHeal | Self::Disconnect => Err("must be a boolean"),
@@ -351,6 +357,8 @@ pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
 pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
 /// Set board-local physical silkscreen text height, stroke width and pad clearance.
 pub const SET_SILKSCREEN: &str = "pcb.set_silkscreen";
+/// Replace a board's rectangular physical boundary, or clear it with null.
+pub const SET_BOARD_OUTLINE: &str = "pcb.set_outline";
 const BOARD: Param = Param {
     required: false,
     name: "board",
@@ -817,6 +825,21 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[1],
     library::sources::COMMANDS[2],
     library::sources::COMMANDS[3],
+    Command {
+        id: SET_BOARD_OUTLINE,
+        title: "Set Board Outline",
+        summary: "Set a closed rectangular boundary, or remove it with null. Does not move footprints or check clearances. Undoable.",
+        params: &[
+            BOARD,
+            Param {
+                required: true,
+                name: "outline",
+                summary: "Rectangle with ordered min/max corners in integer nanometers, or null",
+                kind: ParamKind::BoardOutline,
+            },
+            EXPECTED_REVISION,
+        ],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -1119,6 +1142,7 @@ impl Session {
             | PLACE_ASSIGNED_FOOTPRINT
             | SET_FOOTPRINT_TRANSFORM
             | SET_SILKSCREEN
+            | SET_BOARD_OUTLINE
             | DRAW_WIRE
             | DELETE_WIRE
             | SLICE_WIRE
@@ -1162,10 +1186,11 @@ impl Session {
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
-            if !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || !p.board.footprints().is_empty() {
+            if !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"id":p.board_target().board, "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
                 inspected["board"]["assignments"] = json!(p.footprint_assignments());
                 inspected["board"]["silkscreen"] = json!(p.board.silkscreen.unwrap_or_default());
+                inspected["board"]["outline"] = json!(p.board.outline);
                 if !p.board.definitions.is_empty() {
                     inspected["board"]["definitions"] = json!(p.board.definitions.values().map(Arc::as_ref).collect::<Vec<_>>());
                 }
@@ -1225,6 +1250,7 @@ impl Session {
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
                 | SET_SILKSCREEN
+                | SET_BOARD_OUTLINE
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
@@ -1248,6 +1274,7 @@ impl Session {
                 | PLACE_ASSIGNED_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
                 | SET_SILKSCREEN
+                | SET_BOARD_OUTLINE
                 | DRAW_WIRE
                 | DELETE_WIRE
                 | SLICE_WIRE
@@ -1351,6 +1378,7 @@ impl Session {
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
+            SET_BOARD_OUTLINE => self.set_outline(params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),

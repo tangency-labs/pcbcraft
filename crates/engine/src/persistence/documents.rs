@@ -21,6 +21,7 @@ const ROTATED_BOARD_FORMAT: &str = "pcbcraft-board/4";
 const PHYSICAL_BOARD_FORMAT: &str = "pcbcraft-board/5";
 const SILKSCREEN_BOARD_FORMAT: &str = "pcbcraft-board/6";
 const ASSIGNED_BOARD_FORMAT: &str = "pcbcraft-board/7";
+const OUTLINE_BOARD_FORMAT: &str = "pcbcraft-board/8";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -67,6 +68,8 @@ struct BoardDocument {
     silkscreen: Option<crate::board::silkscreen::Settings>,
     #[serde(default, deserialize_with = "present")]
     assignments: Option<Vec<crate::board::assignment::Assignment>>,
+    #[serde(default, deserialize_with = "present")]
+    outline: Option<crate::board::outline::Outline>,
     footprints: Vec<Footprint>,
 }
 
@@ -200,6 +203,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         && board.format != PHYSICAL_BOARD_FORMAT
         && board.format != SILKSCREEN_BOARD_FORMAT
         && board.format != ASSIGNED_BOARD_FORMAT
+        && board.format != OUTLINE_BOARD_FORMAT
         && board.footprints.iter().any(|f| f.rotation != 0)
     {
         return Err("board.json: footprint rotation requires board format 4".to_owned());
@@ -207,19 +211,28 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if board.format != PHYSICAL_BOARD_FORMAT
         && board.format != SILKSCREEN_BOARD_FORMAT
         && board.format != ASSIGNED_BOARD_FORMAT
+        && board.format != OUTLINE_BOARD_FORMAT
         && board.footprints.iter().any(|f| f.library.is_some())
     {
         return Err("board.json: pinned physical footprints require board format 5".into());
     }
-    if board.format != ASSIGNED_BOARD_FORMAT && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some() {
+    if !matches!(board.format.as_str(), ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT)
+        && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
+    {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
     }
-    if (board.format == ASSIGNED_BOARD_FORMAT) != board.assignments.is_some()
+    if (board.format == ASSIGNED_BOARD_FORMAT && board.assignments.is_none())
+        || (!matches!(board.format.as_str(), ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > project.components.len())
     {
         return Err("board.json: nonempty assignments require board format 7".into());
     }
+    if (board.format == OUTLINE_BOARD_FORMAT) != board.outline.is_some() {
+        return Err("board.json: an outline requires board format 8".into());
+    }
     let setup = match (board.format.as_str(), board.setup) {
+        (OUTLINE_BOARD_FORMAT, None) => None,
+        (OUTLINE_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (ASSIGNED_BOARD_FORMAT, None) => None,
         (ASSIGNED_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (SILKSCREEN_BOARD_FORMAT, None) => None,
@@ -305,6 +318,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     project_data.sheets = Arc::new(sheets);
     Arc::make_mut(&mut project_data.board).setup = setup;
     Arc::make_mut(&mut project_data.board).silkscreen = board.silkscreen;
+    Arc::make_mut(&mut project_data.board).outline = board.outline;
     for assignment in board.assignments.into_iter().flatten() {
         if !assignment.valid(project_data) || project_data.board.assignments.contains_key(&assignment.component) {
             return Err("board.json: duplicate, unresolved or incompatible footprint assignment".into());
@@ -540,6 +554,7 @@ impl DocumentsEncoder {
                                 !self.project.board.definitions.is_empty(),
                                 self.project.board.silkscreen.as_ref(),
                                 !self.project.board.assignments.is_empty(),
+                                self.project.board.outline.as_ref(),
                             )?;
                         }
                     }
@@ -621,7 +636,7 @@ impl DocumentsEncoder {
 }
 
 /// Keep legacy bytes until material fields, rotation, physical definitions or authored silk
-/// require versions 3–7. Version 7 adds independent component assignments; older bytes stay unchanged.
+/// require versions 3–8. Versions 7/8 add independent assignments/rectangular outlines respectively; older bytes stay unchanged.
 fn board_header(
     bytes: &mut Vec<u8>,
     setup: Option<&crate::board::setup::BoardSetup>,
@@ -629,9 +644,12 @@ fn board_header(
     physical: bool,
     silkscreen: Option<&crate::board::silkscreen::Settings>,
     assignments: bool,
+    outline: Option<&crate::board::outline::Outline>,
 ) -> Result<(), String> {
     if let Some(setup) = setup {
-        let format = if assignments {
+        let format = if outline.is_some() {
+            OUTLINE_BOARD_FORMAT
+        } else if assignments {
             ASSIGNED_BOARD_FORMAT
         } else if silkscreen.is_some() {
             SILKSCREEN_BOARD_FORMAT
@@ -665,7 +683,9 @@ fn board_header(
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if assignments {
+        let format = if outline.is_some() {
+            OUTLINE_BOARD_FORMAT
+        } else if assignments {
             ASSIGNED_BOARD_FORMAT
         } else if silkscreen.is_some() {
             SILKSCREEN_BOARD_FORMAT
@@ -680,6 +700,9 @@ fn board_header(
     }
     if let Some(settings) = silkscreen {
         writeln!(bytes, "  \"silkscreen\": {},", serde_json::to_string(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    if let Some(outline) = outline {
+        writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     bytes.extend_from_slice(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" });
     Ok(())

@@ -119,6 +119,11 @@ impl<'a> BoardView<'a> {
         self.project.board.setup.as_ref()
     }
 
+    /// The addressed board's authored physical boundary; absent boards have no inferred edge.
+    pub fn outline(self) -> Option<super::outline::Outline> {
+        self.project.board.outline
+    }
+
     /// Effective physical silkscreen dimensions; an untouched legacy board uses explicit defaults.
     pub fn silkscreen(self) -> super::silkscreen::Settings {
         self.project.board.silkscreen.unwrap_or_default()

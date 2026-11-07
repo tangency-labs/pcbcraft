@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::*;
 
+mod board_outline;
 mod board_views;
 #[cfg(not(target_arch = "wasm32"))]
 mod detached_editors;

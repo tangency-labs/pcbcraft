@@ -28,7 +28,7 @@ and rotation. Routing, full ERC/DRC and fabrication output are still planned.
 
 - **Schematics:** place and edit symbols, draw and reshape orthogonal wires,
   move groups and organize flat or hierarchical sheets with shared undo/redo.
-- **PCB workspace:** inspect physical starter footprints, move and rotate them,
+- **PCB workspace:** create a rectangular board outline, inspect physical starter footprints, move and rotate them,
   control layer visibility and highlight corresponding schematic components.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.

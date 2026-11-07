@@ -2,6 +2,15 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Rectangular board outlines
+
+The rectangle model, command, native board version 8 codec, outline form and ribbon
+glyph are original PCBcraft work under MIT OR Apache-2.0. Closure and rectangle
+terminology were checked against the published [KiCad 10 PCB Editor manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#board_outlines_edge_cuts),
+consulted November 7, 2026. No KiCad implementation, fixtures, icons or artwork
+were used. This slice supports one axis-aligned rectangle without cutouts and
+does not implement edge-clearance or manufacturing checks.
+
 ## Adapted from SolidCraft
 
 [SolidCraft](https://github.com/tangency-labs/solidcraft), revision `a43cd99e554de879e2abd548f67ca963919823b0`. Copyright (c) 2026 SolidCraft contributors. MIT OR Apache-2.0, the same texts as [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).

@@ -545,6 +545,37 @@ fn detached_fields_dialog_keeps_its_target_and_blocks_other_input() {
     assert_eq!(project.reference(&project.symbols()[0]), "R42");
 }
 
+/// A boundary form opened by a child keeps its board address when the root receives modal focus.
+/// Closing the source expires the form; successful edits share undo with the schematic window.
+#[test]
+fn detached_board_outline_retains_target_and_expires_when_source_closes() {
+    use pcbcraft_engine::persistence::encode_documents;
+    for close_source in [false, true] {
+        let (mut h, peer) = multi_window();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Open PCB layout in new window");
+        let action = child_rect(&peer, "Edit board outline").center();
+        child_click_at(&mut h, &peer, action);
+        assert!(matches!(h.state().dialog, Dialog::BoardOutline(_)));
+        focus(&mut h, &peer, false);
+        if close_source {
+            peer.borrow_mut().close = true;
+            h.run();
+            assert!(matches!(h.state().dialog, Dialog::None));
+            assert!(h.state().message.is_some());
+        } else {
+            click(&mut h, "Apply outline");
+            assert!(matches!(h.state().dialog, Dialog::None));
+            assert_eq!(h.state().message, None);
+            assert!(h.state().session.inspect()["project"]["board"]["outline"].is_object());
+            h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+            h.run();
+        }
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// A dialog cannot edit through a dismissed child's captured address. Closing that child
 /// during the modal leaves the root alone and rejects a later submission without an edit.
 #[test]
