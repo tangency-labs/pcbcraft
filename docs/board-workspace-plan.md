@@ -28,10 +28,12 @@ without changing its layout. Closing the last editor or explicitly choosing Quit
 uses one project-level **Save / Don’t Save / Cancel** decision. Layout transitions expire
 old input without editing the document, and closed view/host IDs are never reused.
 Highlighting and optional selection following reach compatible views across all
-hosts while preserving edit selection, zoom and focus. Live MCP runs the
-presentation actions below by view and window ID. Board rendering and
-schematic-to-board cross-probing remain unimplemented. The engine still exposes one sheet, so this hosting slice does not
-yet offer a different workspace or sheet as the target of a new pane.
+hosts while preserving edit selection, zoom and focus. The first PCB inspection
+view now renders existing footprint pad centers, with schematic/board workspace
+choices and component counterpart highlights. It shares the same single-sheet,
+single-board session; board editing and individual pad/pin selection remain
+incomplete. Live MCP runs the presentation actions below by view and window ID,
+including workspace choices and footprint selection.
 
 ## Existing foundation
 
@@ -284,13 +286,24 @@ runtime retention as well as the named-arrangement persistence described above.
 
 The [representation foundation](pcb-representation.md) defines layer identity,
 physical stackup, units and the proposed shared net/rule contracts before the
-board renderer makes those relationships visible. The next workspace step is to add the board view state and renderer, then wire
-workspace/document target choices into the shared placement handlers. The picker
-interactions above are still planned: current Split/Open beside/New window actions
-create another view of the addressed schematic. Acceptance must include schematic
-beside PCB, plus another detached board view, before #64 is complete. Live-MCP
-presentation discovery and dispatch exist for schematic views; board views join
-them under #61 as they arrive.
+board renderer makes those relationships visible. The inspection slice adds a
+board-addressed renderer, direct workspace/placement choices, a footprint Browser,
+grouped Layers and read-only Properties following the FigCraft exports. PCB
+views have a dedicated near-black canvas, including with light application chrome,
+and a Layout ribbon independent of schematic Capture. The PCB grid is hidden by
+default; Preferences → Appearance offers Off, Dots and Lines across all PCB views
+and windows, independently of snap spacing. Copper
+markers use visible layers; active layer, layer visibility and document ownership
+remain distinct. The current model has no pad shape, drill, outline or copper
+tracks, so the view shows pad-center markers rather than fabrication geometry.
+Selection filters, Flip view and the broader layout ribbon remain future work.
+
+The next authored-layout step is #92's pinned footprint definitions and mapping,
+then outline and placement tools using shared commands. Before adding a normal
+schematic-to-board editing workflow, #55 must replace immediate footprint removal
+with reviewed updates. Live-MCP presentation discovery and dispatch cover
+schematic and PCB views under #61; board edits join them with the board canvas.
+This slice does not complete #54, #64 or #65.
 
 The focused view determines where editing shortcuts and contextual controls act.
 Text fields and dialogs retain keyboard ownership. A tool gesture captures its

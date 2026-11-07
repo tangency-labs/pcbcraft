@@ -1185,3 +1185,152 @@ fn window_commands_reach_views_and_panels_in_every_window() {
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     assert_eq!(h.state().session.revision(), revision);
 }
+
+/// Window commands reach PCB views as the workspace picker and board selection do: switching a
+/// view, opening the board in a new window, selecting footprints and the Layout ribbon tab, all
+/// without changing the project. Each view's selection command matches what it shows.
+#[test]
+fn window_commands_switch_workspaces_and_select_footprints() {
+    let (mut h, _peers) = many_windows();
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.run(pcbcraft_engine::PLACE_FOOTPRINT,&json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}));
+    h.run();
+    let before = h.state().session.inspect();
+    let run = |h: &mut Harness<'_, PcbApp>, id: &str, params: Value| {
+        let result = h.state_mut().run_window_command(&ctx, id, &params);
+        h.run();
+        result
+    };
+    let root = h.state().views.hosts[&HostId::ROOT].focused;
+    let pick = json!({"view": root.0, "footprints": ["footprint-3"]});
+    assert!(run(&mut h, "view.select_footprints", pick).unwrap_err().contains("shows the schematic"));
+
+    run(&mut h, "view.set_workspace", json!({"view": root.0, "workspace": "board"})).unwrap();
+    let board = h.state().views.hosts[&HostId::ROOT].focused;
+    assert_ne!(board, root, "the board opens as a tab in the same pane, as the picker does");
+    assert_eq!(h.state().views.view(board).map(|view| view.workspace), Some(Workspace::Board));
+    let shown = |h: &Harness<'_, PcbApp>, id: ViewId| {
+        let inspected = window_commands::inspect_editor(h.state());
+        inspected["views"].as_array().into_iter().flatten().find(|view| view["id"] == id.0).cloned().unwrap_or_default()
+    };
+    assert_eq!(shown(&h, board)["workspace"], "board");
+    assert_eq!(window_commands::inspect_editor(h.state())["windows"][0]["ribbon_tab"], "layout");
+    run(&mut h, "view.select_footprints", json!({"view": board.0, "footprints": ["footprint-3"]})).unwrap();
+    assert_eq!(shown(&h, board)["board"]["selection"], json!(["footprint-3"]));
+    let missing = json!({"view": board.0, "footprints": ["footprint-99"]});
+    assert!(run(&mut h, "view.select_footprints", missing).unwrap_err().contains("aren't on this view's board"));
+    let symbols = json!({"view": board.0, "items": {"symbols": ["symbol-2"], "wires": []}});
+    assert!(run(&mut h, "view.select", symbols).unwrap_err().contains("shows the PCB layout"));
+    run(&mut h, "window.set_ribbon_tab", json!({"window": 0, "tab": "view"})).unwrap();
+    assert_eq!(window_commands::inspect_editor(h.state())["windows"][0]["ribbon_tab"], "view");
+
+    run(&mut h, "view.set_workspace", json!({"view": board.0, "workspace": "schematic", "placement": "window"})).unwrap();
+    let hosts = h.state().views.detached_hosts();
+    assert_eq!(hosts.len(), 1);
+    let child = h.state().views.hosts[&hosts[0]].focused;
+    assert_eq!(h.state().views.view(child).map(|view| view.workspace), Some(Workspace::Schematic));
+    assert_eq!(h.state().views.view(board).map(|view| view.workspace), Some(Workspace::Board));
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// New-window workspace choices use the existing viewport lifecycle without an intermediate
+/// split. Board selection highlights the schematic and closing one child leaves its peers intact.
+#[test]
+fn board_windows_open_directly_and_share_counterpart_highlights() {
+    let (mut h, peers) = many_windows();
+    let app = h.state_mut();
+    app.run(pcbcraft_engine::PLACE_FOOTPRINT,&json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}));
+    h.run();
+    let before = h.state().session.inspect();
+    for _ in 0..2 {
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Open PCB layout in new window");
+        h.get_by_label("Schematic canvas");
+        assert!(!h.state().views.is_split());
+    }
+    let hosts = h.state().views.detached_hosts();
+    assert_eq!(hosts.len(), 2);
+    let child = h.state().views.hosts[&hosts[0]].focused;
+    let peer = peers.borrow()[&editor_windows::viewport(hosts[0])].clone();
+    child_rect(&peer, "Layout");
+    h.get_by_label("Capture");
+    let canvas = child_rect(&peer, "PCB canvas");
+    child_click_at(&mut h, &peer, canvas.center());
+    assert!(h.state().views.view(child).unwrap().board.selection.contains("footprint-3"));
+    h.get_by_label("Capture");
+    child_rect(&peer, "Layout");
+    assert_eq!(h.state().views.highlight_for(ViewId(0), &h.state().session).single_symbol(), Some("symbol-2"));
+    child_key(&mut h, &peer, Key::Delete, Modifiers::NONE);
+    assert_eq!(h.state().session.inspect(), before);
+    peer.borrow_mut().close = true;
+    h.run();
+    assert_eq!(h.state().views.detached_hosts(), vec![hosts[1]]);
+    assert!(!h.state().views.is_split());
+    assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
+    assert_eq!(h.state().session.inspect(), before);
+}
+
+/// Arrangement naming belongs to the initiating host and must neither rehost nor close it.
+#[test]
+fn arrangement_forms_in_detached_windows_preserve_native_addresses() {
+    let (mut h, peer) = multi_window();
+    h.state_mut().integrated_titlebar = true;
+    let source = h.state().views.active.id();
+    h.state_mut().views.open_window(source).unwrap();
+    h.run();
+    let hosts: Vec<_> = h.state().views.hosts.keys().copied().collect();
+    let snapshot = h.state().arrangement_snapshot().unwrap();
+    let revision = h.state().session.revision();
+    child_tab_menu(&mut h, &peer, "Arrangement Views");
+    let at = child_rect(&peer, "Rename…").center();
+    window_click(&mut h, Some(&peer), at);
+    h.run();
+    assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
+    assert!(peer.borrow().nodes.values().any(|node| node.role() == egui::accesskit::Role::TextInput));
+    assert!(h.query_by_label("Arrangement name").is_none());
+    assert!(h.get_by_label("File").accesskit_node().is_disabled());
+    peer.borrow_mut().events.push(Event::Text("Detached review".into()));
+    h.run();
+    let rename = child_rect(&peer, "Rename").center();
+    window_click(&mut h, Some(&peer), rename);
+    assert!(!h.output().viewport_output.values().any(|output| output.commands.contains(&ViewportCommand::Close)));
+    h.run();
+    assert_eq!(h.state().arrangements.tabs()[0].1, "Detached review");
+    assert_eq!(h.state().views.hosts.keys().copied().collect::<Vec<_>>(), hosts);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), snapshot);
+    assert_eq!(h.state().session.revision(), revision);
+
+    child_tab_menu(&mut h, &peer, "Arrangement Detached review");
+    for label in ["Duplicate…", "Create"] {
+        let at = child_rect(&peer, label).center();
+        window_click(&mut h, Some(&peer), at);
+        h.run();
+    }
+    assert_eq!(h.state().arrangements.tabs().len(), 2);
+    assert_eq!(h.state().views.hosts.keys().copied().collect::<Vec<_>>(), hosts);
+    assert_eq!(h.state().arrangement_snapshot().unwrap(), snapshot);
+
+    let at = child_rect(&peer, "New arrangement").center();
+    window_click(&mut h, Some(&peer), at);
+    h.run();
+    assert_eq!(h.state().arrangement_dialog_host(), Some(HostId(1)));
+    peer.borrow_mut().close = true;
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().arrangements.tabs().len(), 2);
+    assert_eq!(h.state().views.hosts.len(), 1);
+}
+
+/// Open a tab's context menu with native secondary-button events in the addressed child.
+fn child_tab_menu(h: &mut Harness<'_, PcbApp>, peer: &Rc<RefCell<Peer>>, label: &str) {
+    focus(h, peer, true);
+    let pos = child_rect(peer, label).center();
+    peer.borrow_mut().events.push(Event::PointerMoved(pos));
+    h.run();
+    for pressed in [true, false] {
+        peer.borrow_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run();
+}

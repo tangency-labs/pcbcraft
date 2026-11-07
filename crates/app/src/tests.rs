@@ -1507,14 +1507,10 @@ mod live_mcp {
         let moved = payload(tool(&mut harness, connection, "execute", request.clone()));
         let to = &moved["project"]["schematic"];
         assert_eq!(to["symbols"][0]["y_nm"], 5_080_000);
-        let authored = |wires: &Value| {
-            let mut wires = wires.clone();
-            for wire in wires.as_array_mut().into_iter().flatten() {
-                wire.as_object_mut().map(|wire| wire.remove("path"));
-            }
-            wires
-        };
-        assert_eq!(authored(&to["wires"]), authored(&from["wires"]), "the stored wire is unchanged");
+        for key in ["id", "from", "to"] {
+            assert_eq!(to["wires"][0][key], from["wires"][0][key]);
+        }
+        assert_eq!(to["netlist"], from["netlist"]);
         assert_eq!(to["wires"][0]["path"][0], json!({"x_nm": 5_080_000, "y_nm": 5_080_000}), "its drawn route follows the pin");
         let after_wire = painted_wire(&harness);
         assert_ne!(after_wire, before_wire);
@@ -1652,7 +1648,7 @@ mod live_mcp {
         let symbol = untouched.0["project"]["schematic"]["symbols"][0]["id"].clone();
         let selected = window(&mut harness, connection, "view.select", json!({"view": second, "items": {"symbols": [symbol], "wires": []}}));
         assert_eq!(selected["views"][1]["selection"]["symbols"], json!([symbol]));
-        assert_eq!(harness.state().views.active.selection.single_symbol(), symbol.as_str());
+        assert_eq!(harness.state().views.active.schematic.selection.single_symbol(), symbol.as_str());
         let centered = window(&mut harness, connection, "view.center", json!({"view": second, "at": {"x_nm": 2_540_000, "y_nm": -1_270_000}}));
         assert_eq!(centered["views"][1]["center"], json!({"x_nm": 2_540_000, "y_nm": -1_270_000}));
         let gridded = window(&mut harness, connection, "view.set_grid", json!({"view": second, "spacing_nm": 254_000}));

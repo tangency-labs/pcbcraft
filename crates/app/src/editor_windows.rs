@@ -201,6 +201,10 @@ impl PcbApp {
     /// Dock of an already docked view leave every layout unchanged.
     pub(super) fn apply_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
         match action {
+            ViewAction::OpenDocument(target) => {
+                self.views.open_document(id, target, &self.session);
+            }
+            ViewAction::Workspace { workspace, placement } => self.apply_workspace(id, workspace, placement),
             ViewAction::OpenWindow => {
                 self.views.open_window(id);
             }

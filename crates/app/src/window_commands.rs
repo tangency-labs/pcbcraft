@@ -54,7 +54,7 @@ impl PcbApp {
 #[cfg(not(target_arch = "wasm32"))]
 mod live {
     use egui::Context;
-    use pcbcraft_chrome::{grid, units::Unit};
+    use pcbcraft_chrome::{grid, units::Unit, workspace::Placement};
     use pcbcraft_engine::{
         schematic::{MAX_CENTER_NM, Point},
         selection::Selection,
@@ -93,6 +93,8 @@ mod live {
         Point,
         /// Symbol and wire ID lists, as the project's group commands take.
         Selection,
+        /// A list of distinct footprint IDs.
+        Footprints,
     }
 
     impl Kind {
@@ -112,6 +114,7 @@ mod live {
                 Self::Selection => {
                     json!({"type": "object", "properties": {"symbols": ids, "wires": ids}, "required": ["symbols", "wires"], "additionalProperties": false})
                 }
+                Self::Footprints => ids,
             }
         }
 
@@ -125,6 +128,7 @@ mod live {
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
                 Self::Selection => Selection::parse(value).is_some(),
+                Self::Footprints => footprints(value).is_some(),
             };
             if fits {
                 return Ok(());
@@ -140,6 +144,7 @@ mod live {
                 Self::Integer { min, max, step } => format!("must be a multiple of {step} from {min} to {max}"),
                 Self::Point => "must be a point with whole-nanometre x_nm and y_nm within the schematic bounds".to_owned(),
                 Self::Selection => "must contain unique symbol and wire ID lists".to_owned(),
+                Self::Footprints => "must be a list of distinct footprint IDs".to_owned(),
             })
         }
     }
@@ -149,6 +154,13 @@ mod live {
         let object = value.as_object().filter(|object| object.len() == 2)?;
         let coordinate = |key: &str| object.get(key)?.as_i64().filter(|n| (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(n));
         Some(Point { x_nm: coordinate("x_nm")?, y_nm: coordinate("y_nm")? })
+    }
+
+    /// Read a list of distinct footprint IDs.
+    fn footprints(value: &Value) -> Option<std::collections::BTreeSet<String>> {
+        let items = value.as_array()?;
+        let ids: std::collections::BTreeSet<String> = items.iter().map(|item| item.as_str().map(str::to_owned)).collect::<Option<_>>()?;
+        (ids.len() == items.len()).then_some(ids)
     }
 
     /// One parameter of a window command.
@@ -223,7 +235,10 @@ mod live {
     const SCROLL: &[&str] = &["zoom", "pan"];
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
     const PANELS: &[&str] = &["browser", "parts", "nets"];
-    const TABS: &[&str] = &["capture", "view"];
+    const TABS: &[&str] = &["capture", "layout", "view"];
+    const WORKSPACES: &[&str] = &["schematic", "board"];
+    const PLACEMENTS: &[&str] = &["here", "beside", "window"];
+    const BOARD_GRIDS: &[&str] = &["off", "dots", "lines"];
 
     /// Optional, so one call can change any subset; a call with none changes nothing.
     const fn setting(name: &'static str, summary: &'static str, kind: Kind) -> Param {
@@ -306,8 +321,32 @@ mod live {
         WindowCommand {
             id: "view.select",
             title: "Select",
-            summary: "Replace the view's selection with these symbols and wires, as clicking or box selection does. Empty lists clear it. Other views highlight it under the Follow selection setting.",
+            summary: "Replace a schematic view's selection with these symbols and wires, as clicking or box selection does. Empty lists clear it. Other views highlight it under the Follow selection setting. PCB views take view.select_footprints.",
             params: &[VIEW, Param { name: "items", summary: "IDs from inspect_project", required: true, kind: Kind::Selection }],
+        },
+        WindowCommand {
+            id: "view.select_footprints",
+            title: "Select Footprints",
+            summary: "Replace a PCB view's selection with these footprints, as clicking them or their Browser rows does. An empty list clears it. Other views highlight the counterpart symbols under the Follow selection setting.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "footprints",
+                    summary: "Footprint IDs on the view's board, from inspect_project",
+                    required: true,
+                    kind: Kind::Footprints,
+                },
+            ],
+        },
+        WindowCommand {
+            id: "view.set_workspace",
+            title: "Workspace",
+            summary: "Show the schematic or the PCB layout, as the workspace picker does: here (a tab in this view's pane, reusing one that already shows it), in a new view beside it, or in a new window. Inspect the editor for the view that shows it.",
+            params: &[
+                VIEW,
+                Param { name: "workspace", summary: "What to show", required: true, kind: Kind::Choice(WORKSPACES) },
+                Param { name: "placement", summary: "Where; here when not given", required: false, kind: Kind::Choice(PLACEMENTS) },
+            ],
         },
         WindowCommand {
             id: "window.set_panel",
@@ -322,7 +361,7 @@ mod live {
         WindowCommand {
             id: "window.set_ribbon_tab",
             title: "Ribbon Tab",
-            summary: "Show the window's Capture or View ribbon tab.",
+            summary: "Show the window's first ribbon tab (Capture, or Layout when its focused view shows the PCB) or its View tab.",
             params: &[WINDOW, Param { name: "tab", summary: "Which tab", required: true, kind: Kind::Choice(TABS) }],
         },
         WindowCommand {
@@ -368,6 +407,7 @@ mod live {
                 setting("scale_percent", "The interface scale", Kind::Integer { min: 75, max: 200, step: 5 }),
                 setting("units", "The unit lengths and coordinates are shown in", Kind::Choice(UNITS)),
                 setting("grid_opacity_percent", "How strongly the grid shows; 0 hides it", Kind::Integer { min: 0, max: 100, step: 5 }),
+                setting("board_grid_style", "How PCB views draw their grid", Kind::Choice(BOARD_GRIDS)),
                 setting("selection_follow", "Which views pan to reveal another view's selection", Kind::Choice(FOLLOW)),
                 setting("scroll", "What the mouse wheel does on the canvas", Kind::Choice(SCROLL)),
                 setting("reverse_zoom", "Reverse the wheel's zoom direction", Kind::Bool),
@@ -420,6 +460,11 @@ mod live {
             "scale_percent": preferences.scale_percent,
             "units": preferences.units.symbol(),
             "grid_opacity_percent": preferences.grid_opacity_percent,
+            "board_grid_style": match preferences.board_grid_style {
+                grid::Style::Off => "off",
+                grid::Style::Dots => "dots",
+                grid::Style::Lines => "lines",
+            },
             "selection_follow": follow_name(preferences.selection_follow),
             "scroll": match preferences.navigation.scroll { ScrollAction::Zoom => "zoom", ScrollAction::Pan => "pan" },
             "reverse_zoom": preferences.navigation.reverse_zoom,
@@ -447,6 +492,13 @@ mod live {
         }
         if let Some(opacity) = number("grid_opacity_percent").and_then(|n| u8::try_from(n).ok()) {
             preferences.grid_opacity_percent = opacity;
+        }
+        if let Some(style) = text("board_grid_style") {
+            preferences.board_grid_style = match style {
+                "dots" => grid::Style::Dots,
+                "lines" => grid::Style::Lines,
+                _ => grid::Style::Off,
+            };
         }
         if let Some(follow) = text("selection_follow") {
             preferences.selection_follow = match follow {
@@ -499,7 +551,11 @@ mod live {
                     "focused_view": host.focused.0,
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets},
-                    "ribbon_tab": TABS.get(panels.ribbon).copied().unwrap_or("capture"),
+                    "ribbon_tab": match panels.ribbon {
+                        0 if app.views.view(host.focused).is_some_and(|view| view.workspace == Workspace::Board) => "layout",
+                        0 => "capture",
+                        _ => "view",
+                    },
                 })
             })
             .collect();
@@ -515,13 +571,22 @@ mod live {
                     "window": window.0,
                     "focused": focused,
                     "primary": id == app.views.primary(),
+                    "workspace": match view.workspace {
+                        Workspace::Schematic => "schematic",
+                        Workspace::Board => "board",
+                    },
                     "sheet": view.sheet_path(&app.session),
                     "grid_spacing_nm": view.camera.snap_nm(),
                     "zoom_percent": (view.camera.zoom() * 100.0).round(),
                     "center": view.camera.center(),
-                    "selection": view.selection,
-                    "selected_segment": view.selected_leg.as_ref().map(|leg| json!({"wire": leg.wire, "from": leg.route.get(leg.leg), "to": leg.route.get(leg.leg + 1)})),
-                    "tool": view.tool.as_ref().map(tool_name),
+                    "selection": view.schematic.selection,
+                    "selected_segment": view.schematic.selected_leg.as_ref().map(|leg| json!({"wire": leg.wire, "from": leg.route.get(leg.leg), "to": leg.route.get(leg.leg + 1)})),
+                    "tool": view.schematic.tool.as_ref().map(tool_name),
+                    "board": (view.workspace == Workspace::Board).then(|| json!({
+                        "selection": view.board.selection,
+                        "hidden_layers": view.board.hidden_layers,
+                        "active_layer": view.board.active_layer,
+                    })),
                 }))
             })
             .collect();
@@ -664,6 +729,46 @@ mod live {
                     }
                 }
                 ("view.set_grid", Some((view, _)), _) => self.set_view_grid(view, params["spacing_nm"].as_i64().unwrap_or_default()),
+                ("view.select" | "view.select_footprints", Some((view, _)), _)
+                    if self.views.view(view).map(|view| view.workspace)
+                        != Some(if id == "view.select" { Workspace::Schematic } else { Workspace::Board }) =>
+                {
+                    return Err(if id == "view.select" {
+                        format!("View {} shows the PCB layout. Use view.select_footprints, or view.set_workspace to show its schematic.", view.0)
+                    } else {
+                        format!("View {} shows the schematic. Use view.select, or view.set_workspace to show the PCB layout.", view.0)
+                    });
+                }
+                ("view.select_footprints", Some((view, _)), _) => {
+                    let wanted = footprints(&params["footprints"]).ok_or("`footprints` must be a list of distinct footprint IDs")?;
+                    let placed: std::collections::BTreeSet<String> = self
+                        .views
+                        .view(view)
+                        .and_then(|view| view.board.target)
+                        .zip(self.session.project())
+                        .and_then(|(target, project)| project.board_view(target))
+                        .into_iter()
+                        .flat_map(|board| board.footprints())
+                        .map(|footprint| footprint.id)
+                        .collect();
+                    if !wanted.is_subset(&placed) {
+                        return Err("Some of those footprints aren't on this view's board. Inspect the project for current IDs.".to_owned());
+                    }
+                    let previous = self.views.active.id();
+                    self.views.bind(view);
+                    self.views.active.cancel_gesture();
+                    self.views.select_board(wanted, &self.session, self.preferences.selection_follow);
+                    self.views.bind(previous);
+                }
+                ("view.set_workspace", Some((view, _)), _) => {
+                    let workspace = if params["workspace"].as_str() == Some("board") { Workspace::Board } else { Workspace::Schematic };
+                    let placement = match params["placement"].as_str() {
+                        Some("beside") => Placement::Beside,
+                        Some("window") => Placement::Window,
+                        _ => Placement::Here,
+                    };
+                    self.apply_view_action(ctx, view, ViewAction::Workspace { workspace, placement });
+                }
                 ("view.select", Some((view, _)), _) => {
                     let items = Selection::parse(&params["items"]).ok_or("`items` must contain symbol and wire ID lists")?;
                     let mut present = items.clone();
@@ -693,8 +798,7 @@ mod live {
                     self.in_window(host, |app| app.set_panel(ctx, panel, open));
                 }
                 ("window.set_ribbon_tab", _, Some(host)) => {
-                    let tab =
-                        params["tab"].as_str().and_then(|tab| TABS.iter().position(|name| *name == tab)).unwrap_or(0).min(RIBBON_TABS.len() - 1);
+                    let tab = if params["tab"].as_str() == Some("view") { RIBBON_TABS.len() - 1 } else { 0 };
                     self.in_window(host, |app| app.ribbon_tab = tab);
                 }
                 ("window.close", _, Some(host)) => {
@@ -772,7 +876,7 @@ mod live {
         fn preferences_round_trip_through_their_command_names() {
             let changed = updated_preferences(
                 Preferences::default(),
-                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "grid_opacity_percent": 40}),
+                &json!({"theme": "light", "units": "mm", "selection_follow": "both", "scroll": "pan", "zoom_around": "center", "grid_opacity_percent": 40, "board_grid_style": "dots"}),
             );
             let inspected = inspect_preferences(&changed);
             assert_eq!(updated_preferences(Preferences::default(), &inspected), changed);
