@@ -59,7 +59,7 @@ impl DocumentTarget {
     /// Resolve only an explicitly addressed document in this project; names are not identities.
     pub(super) fn available(self, session: &Session) -> bool {
         session.project().is_some_and(|project| match self {
-            Self::Sheet(target) => target == project.sheet_target(),
+            Self::Sheet(target) => project.for_sheet(target).is_some(),
             Self::Board(target) => project.board_view(target).is_some(),
         })
     }
@@ -74,6 +74,8 @@ pub(super) struct ViewState {
     camera: crate::canvas_camera::CameraState,
     parked_camera: crate::canvas_camera::CameraState,
     board: Option<BoardTarget>,
+    #[serde(default)]
+    schematic: Option<SheetTarget>,
     hidden_layers: std::collections::BTreeSet<String>,
     active_layer: Option<String>,
     layers_collapsed: bool,
@@ -100,10 +102,10 @@ struct Binding {
 
 impl Binding {
     /// Resolve a target in the current opening, including a board without setup or placements.
-    fn current(session: &Session, workspace: Workspace, board: Option<BoardTarget>) -> Option<Self> {
+    fn current(session: &Session, workspace: Workspace, board: Option<BoardTarget>, sheet: Option<SheetTarget>) -> Option<Self> {
         let project = session.project()?;
         let target = match workspace {
-            Workspace::Schematic => DocumentTarget::Sheet(project.sheet_target()),
+            Workspace::Schematic => DocumentTarget::Sheet(project.for_sheet(sheet.unwrap_or_else(|| project.sheet_target()))?.sheet_target()),
             Workspace::Board => DocumentTarget::Board(project.board_view(board?)?.target),
         };
         Some(Self { target, history_root_revision: session.history_root_revision() })
@@ -146,6 +148,10 @@ pub(super) struct EditorView {
     pub(super) schematic: SchematicState,
     pub(super) board: BoardState,
     unavailable: Option<ViewState>,
+    /// Explicit sheet address survives workspace switches; immutable projections are cached per revision.
+    sheet: Option<SheetTarget>,
+    snapshot_root: Option<std::sync::Arc<pcbcraft_engine::Project>>,
+    sheet_snapshot: Option<std::sync::Arc<pcbcraft_engine::Project>>,
 }
 
 impl Default for EditorView {
@@ -163,13 +169,30 @@ impl EditorView {
     /// Explicitly retarget a view after the host validates the document's existence.
     pub(super) fn open_document(&mut self, target: DocumentTarget, session: &Session) {
         match target {
-            DocumentTarget::Sheet(_) => self.switch(Workspace::Schematic, session),
+            DocumentTarget::Sheet(sheet) => {
+                self.switch(Workspace::Schematic, session);
+                self.sheet = Some(sheet);
+                self.sync(session);
+            }
             DocumentTarget::Board(board) => {
                 self.switch(Workspace::Board, session);
                 self.board.target = Some(board);
                 self.sync(session);
             }
         }
+    }
+
+    /// Read this view's sheet from the current authoritative revision. A cached immutable
+    /// projection avoids rebuilding geometry caches on every frame; stale caches never authorize input.
+    pub(super) fn snapshot(&self, session: &Session) -> Option<std::sync::Arc<pcbcraft_engine::Project>> {
+        let root = session.snapshot()?;
+        let target = self.sheet.unwrap_or_else(|| root.sheet_target());
+        if self.snapshot_root.as_ref().is_some_and(|old| std::sync::Arc::ptr_eq(old, &root))
+            && self.sheet_snapshot.as_ref().is_some_and(|p| p.sheet_target() == target)
+        {
+            return self.sheet_snapshot.clone();
+        }
+        root.for_sheet(target).map(std::sync::Arc::new).or_else(|| (self.workspace == Workspace::Board).then_some(root))
     }
 
     /// Capture presentation only; unresolved saved targets remain intact instead of being rebound.
@@ -189,6 +212,7 @@ impl EditorView {
             camera: self.camera.saved_state(),
             parked_camera: self.parked_camera.saved_state(),
             board: self.board.target,
+            schematic: self.sheet,
             hidden_layers: self.board.hidden_layers.clone(),
             active_layer: self.board.active_layer.clone(),
             layers_collapsed: self.board.layers_collapsed,
@@ -206,6 +230,10 @@ impl EditorView {
             DocumentTarget::Board(_) => Workspace::Board,
         };
         view.board.target = state.board;
+        view.sheet = state.schematic;
+        if let DocumentTarget::Sheet(sheet) = state.target {
+            view.sheet = Some(sheet);
+        }
         view.sync(session);
         if view.binding.is_none_or(|binding| binding.target != state.target) {
             view.binding = None;
@@ -238,6 +266,9 @@ impl EditorView {
             schematic: SchematicState::default(),
             board: BoardState::default(),
             unavailable: None,
+            sheet: None,
+            snapshot_root: None,
+            sheet_snapshot: None,
         }
     }
 
@@ -246,6 +277,9 @@ impl EditorView {
     pub(super) fn fork(&mut self, id: ViewId) -> Self {
         Self {
             binding: self.binding,
+            sheet: self.sheet,
+            snapshot_root: self.snapshot_root.clone(),
+            sheet_snapshot: self.sheet_snapshot.clone(),
             workspace: self.workspace,
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
@@ -276,7 +310,7 @@ impl EditorView {
         self.release_input();
         std::mem::swap(&mut self.camera, &mut self.parked_camera);
         self.workspace = workspace;
-        self.binding = Binding::current(session, workspace, self.board.target);
+        self.binding = Binding::current(session, workspace, self.board.target, self.sheet);
     }
 
     /// Identify the input owner independently of the currently focused host.
@@ -291,7 +325,7 @@ impl EditorView {
         }
         self.input(session)?;
         let name = match self.workspace {
-            Workspace::Schematic => "Main",
+            Workspace::Schematic => self.sheet_snapshot.as_ref()?.sheet_name(),
             Workspace::Board => session.project()?.board_view(self.board.target?)?.name(),
         };
         Some(format!("{} › {name}", session.project()?.name))
@@ -314,7 +348,7 @@ impl EditorView {
 
     /// Capture input only while this view is bound to its current document opening.
     pub(super) fn input(&self, session: &Session) -> Option<ViewInput> {
-        let binding = self.binding.filter(|binding| Some(*binding) == Binding::current(session, self.workspace, self.board.target))?;
+        let binding = self.binding.filter(|binding| Some(*binding) == Binding::current(session, self.workspace, self.board.target, self.sheet))?;
         Some(ViewInput { view: self.id, target: binding.target, input_epoch: self.input_epoch, revision: session.revision() })
     }
 
@@ -350,12 +384,38 @@ impl EditorView {
 
     /// Reopening resets local state while retaining workspace choice and grid. Ordinary edits
     /// prune removed selections/layers. A stale segment clears its whole selection so Delete
-    /// cannot widen into a wire deletion; no synchronization mutates the session. An explicit
-    /// board target that no longer resolves becomes an unavailable, closeable placeholder;
-    /// only an omitted target defaults to the project's legacy board.
+    /// cannot widen into a wire deletion; synchronization never mutates the session. Explicit
+    /// sheet/board targets that no longer resolve become unavailable, closeable placeholders;
+    /// undo restores their address and navigation. Only omitted targets use compatibility defaults.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
-        if self.unavailable.is_some() {
+        if let Some(state) = &self.unavailable {
+            if state.target.available(session) {
+                *self = Self::from_state(self.id, &state.clone(), session);
+                return true;
+            }
             return false;
+        }
+        let root = session.snapshot();
+        if self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| !old.same_document(new)) {
+            self.sheet = None;
+        }
+        if self.sheet.is_none() {
+            self.sheet = root.as_ref().map(|p| p.sheet_target());
+        }
+        if self.workspace == Workspace::Schematic
+            && self.sheet.is_some()
+            && root.as_ref().is_some_and(|p| self.sheet.and_then(|target| p.for_sheet(target)).is_none())
+        {
+            let target = self.sheet.map(DocumentTarget::Sheet);
+            if let Some(target) = target {
+                let title = self.sheet_snapshot.as_ref().map_or("Sheet", |p| p.sheet_name()).to_owned();
+                self.unavailable = Some(self.presentation_state(target, title));
+                self.binding = None;
+                self.release_input();
+                self.schematic.selection = Selection::default();
+                self.sheet_snapshot = None;
+            }
+            return true;
         }
         let board_target = self.board.target.or_else(|| session.project().map(|p| p.board_target()));
         if self.workspace == Workspace::Board
@@ -369,17 +429,28 @@ impl EditorView {
             self.board.selection.clear();
             return true;
         }
-        let binding = Binding::current(session, self.workspace, board_target);
+        let binding = Binding::current(session, self.workspace, board_target, self.sheet);
         let changed = self.binding != binding;
         if changed {
             let snap_nm = self.camera.snap_nm();
             let workspace = self.workspace;
+            let sheet = self.sheet;
             *self = Self::new(self.id);
+            self.sheet = sheet;
             self.workspace = workspace;
             self.camera.set_snap_nm(snap_nm);
             self.binding = binding;
         }
         self.board.target = board_target;
+        if !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new))
+            || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet
+        {
+            self.sheet_snapshot = root.as_ref().and_then(|p| {
+                let target = self.sheet?;
+                if p.sheet_target() == target { Some(p.clone()) } else { p.for_sheet(target).map(std::sync::Arc::new) }
+            });
+            self.snapshot_root = root;
+        }
         if self.schematic.tool.as_ref().is_some_and(|tool| tool.revision() != session.revision()) {
             self.cancel_gesture();
         }
@@ -391,7 +462,11 @@ impl EditorView {
             self.schematic.wire_draft = Draft::default();
         }
         if let Some(project) = session.project() {
-            self.schematic.selection.retain(project);
+            if let Some(sheet) = &self.sheet_snapshot {
+                self.schematic.selection.retain(sheet);
+            } else {
+                self.schematic.selection = Selection::default();
+            }
             let placed: std::collections::BTreeSet<_> = self
                 .board
                 .target

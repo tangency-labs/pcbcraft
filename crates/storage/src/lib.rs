@@ -44,7 +44,7 @@ fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persisten
     let bytes = read_bytes(File::open(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     if Encoding::detect(&bytes) == Encoding::Json {
         let header: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if header["format"] == "pcbcraft-project/5" {
+        if matches!(header["format"].as_str(), Some("pcbcraft-project/5" | "pcbcraft-project/6")) {
             if name != ENTRY_POINT {
                 return Err("A split project's entry point must be named project.pc.".to_owned());
             }

@@ -25,7 +25,12 @@ impl PcbApp {
         if placement == Placement::Here {
             if let Some(project) = self.session.project() {
                 let target = match workspace {
-                    Workspace::Schematic => DocumentTarget::Sheet(project.sheet_target()),
+                    Workspace::Schematic => DocumentTarget::Sheet(
+                        self.views
+                            .view(source)
+                            .and_then(|view| view.snapshot(&self.session))
+                            .map_or_else(|| project.sheet_target(), |p| p.sheet_target()),
+                    ),
                     Workspace::Board => DocumentTarget::Board(project.board_target()),
                 };
                 self.views.open_document(source, target, &self.session);

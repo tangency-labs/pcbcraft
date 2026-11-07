@@ -465,7 +465,7 @@ impl EditorViews {
         let Some((source, workspace)) = self.probe_source(id, session) else {
             return Selection::default();
         };
-        match workspace {
+        let mut selection = match workspace {
             Workspace::Schematic => {
                 if source.workspace == Workspace::Schematic && !self.view(id).is_some_and(|target| source.shares_sheet(target, session)) {
                     Selection::default()
@@ -477,7 +477,13 @@ impl EditorViews {
                 .project()
                 .and_then(|p| p.board_view(source.board.target?))
                 .map_or_else(Selection::default, |board| board.selection_for_footprints(&source.board.selection)),
+        };
+        if let Some(project) = self.view(id).and_then(|view| view.snapshot(session)) {
+            selection.retain(&project);
+        } else {
+            selection = Selection::default();
         }
+        selection
     }
 
     /// Resolve board counterparts using the shared engine adapter, preserving stable placement IDs.
@@ -516,11 +522,11 @@ impl EditorViews {
     pub(super) fn reveal_highlight(&mut self, id: ViewId, session: &Session) {
         let schematic = self.highlight_for(id, session);
         let board = self.board_highlight_for(id, session);
-        if let Some(project) = session.project()
-            && let Some(view) = self.view_mut(id)
+        if let Some(view) = self.view_mut(id)
+            && let Some(project) = view.snapshot(session)
         {
             match view.workspace {
-                Workspace::Schematic => view.camera.reveal_selection(project, &schematic),
+                Workspace::Schematic => view.camera.reveal_selection(&project, &schematic),
                 Workspace::Board => {
                     if let Some(target) = view.board.target.and_then(|target| project.board_view(target)) {
                         view.camera.reveal_board(target, &board);
@@ -746,7 +752,7 @@ impl PcbApp {
             let clearance = if self.views.host != self.views.main { 0.0 } else { self.assistant.rail_clearance() };
             #[cfg(target_arch = "wasm32")]
             let clearance = 0.0;
-            self.net_inspector.show(ui, &self.session, clearance);
+            self.net_inspector.show(ui, self.views.active.snapshot(&self.session), clearance);
         }
         let area = ui.available_rect_before_wrap();
         let panes = if let Some(host) = self.views.hosts.get_mut(&self.views.host) {
@@ -838,14 +844,14 @@ impl PcbApp {
                     };
                     ui.push_id(view.widget_id(), |ui| {
                         shell::canvas(ui, |ui| {
-                            if let Some(project) = self.session.project() {
+                            if let Some(project) = view.snapshot(&self.session) {
                                 // The readout follows the pointer in either pane, focused or not.
                                 if let Some(point) = super::pointer_on_canvas(ui, &view.camera) {
                                     self.pointer_next = Some(point);
                                 }
                                 schematic_canvas::show(
                                     ui,
-                                    project,
+                                    &project,
                                     self.session.revision(),
                                     &mut view.camera,
                                     None,
@@ -874,7 +880,13 @@ impl PcbApp {
                                 .map_or(0, |board| board.footprints().count())
                         )
                     } else {
-                        "1 / 1".to_owned()
+                        self.session.project().map_or_else(String::new, |project| {
+                            let index = project
+                                .sheets()
+                                .position(|sheet| Some(DocumentTarget::Sheet(sheet.target)) == self.views.active.target())
+                                .unwrap_or(0);
+                            format!("{} / {}", index + 1, project.sheets().len())
+                        })
                     };
                     if self.views.active.workspace == Workspace::Board {
                         workspace::canvas_heading(

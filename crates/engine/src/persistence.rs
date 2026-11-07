@@ -413,6 +413,9 @@ impl Encoder {
     /// Start a legacy single document without walking the schematic. Configured boards need
     /// split documents or a packed archive; refusing them here prevents lossy legacy export.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.sheets.len() != 1 || project.sheet_name() != "Main" {
+            return Err("legacy single-file encoding cannot represent multiple or renamed sheets; use split documents or a packed archive".to_owned());
+        }
         if project.board.setup.is_some() {
             return Err("legacy single-file encoding cannot represent board setup; use split documents or a packed archive".to_owned());
         }
@@ -771,15 +774,18 @@ fn validate_document(document: Document, upgraded_from: Option<u32>) -> Result<A
 
     Ok(Arc::new(Project {
         id,
-        sheet_id: sheet.id,
-        sheet_name: "Schematic".to_owned(),
+        sheets: Arc::new(vec![crate::sheets::SchematicSheet {
+            sheet_id: sheet.id,
+            sheet_name: "Main".to_owned(),
+            symbols: Arc::new(symbols),
+            wires: Arc::new(wires),
+            junctions: Arc::new(junctions),
+            connectivity: Arc::default(),
+        }]),
+        sheet_index: 0,
         name,
-        symbols: Arc::new(symbols),
         components: Arc::new(components),
         units: Arc::new(units),
-        wires: Arc::new(wires),
-        junctions: Arc::new(junctions),
-        connectivity: Arc::default(),
         board: Arc::new(layout),
         upgraded_from,
     }))

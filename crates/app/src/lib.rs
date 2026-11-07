@@ -28,6 +28,7 @@ mod project_files;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod schematic_canvas;
+mod sheet_editing;
 mod unsaved;
 mod window_commands;
 
@@ -134,6 +135,8 @@ enum Dialog {
     },
     /// Names and manages a captured arrangement in the window that opened the form.
     Arrangement(arrangements::Edit),
+    /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
+    Sheet(sheet_editing::Edit),
     /// Edit a symbol's reference and value through `schematic.set_symbol_fields`.
     EditFields {
         source: ViewInput,
@@ -297,6 +300,13 @@ impl PcbApp {
         {
             params.entry("auto_heal").or_insert(json!(self.preferences.auto_heal_wires));
         }
+        if pcbcraft_engine::sheets::scoped_command(id)
+            && let Some(object) = params.as_object_mut()
+            && !object.contains_key("sheet")
+            && let Some(crate::editor_view::DocumentTarget::Sheet(sheet)) = self.views.active.target()
+        {
+            object.insert("sheet".into(), json!(sheet.id()));
+        }
         self.message = self.session.apply(id, &params).err().map(|e| e.to_string());
         self.views.sync(&self.session);
     }
@@ -432,7 +442,7 @@ impl PcbApp {
 
     /// The selected symbol's shown reference, if it still exists.
     fn selected_reference(&self) -> Option<String> {
-        let project = self.session.project()?;
+        let project = self.views.active.snapshot(&self.session)?;
         let id = self.views.active.schematic.selection.single_symbol()?;
         project.symbols().iter().find(|symbol| symbol.id() == id).map(|symbol| project.reference(symbol))
     }
@@ -448,7 +458,9 @@ impl PcbApp {
         let revision = self.session.revision();
         match action {
             SymbolAction::DisconnectMove => {
-                if let Some(symbol) = self.session.project().and_then(|project| project.symbols().iter().find(|symbol| symbol.id() == id)) {
+                if let Some(symbol) =
+                    self.views.active.snapshot(&self.session).and_then(|project| project.symbols().iter().find(|symbol| symbol.id() == id).cloned())
+                {
                     self.views.active.schematic.tool =
                         Some(Tool::Move { symbol: symbol.clone(), offset: egui::Vec2::ZERO, revision, disconnect: true });
                 }
@@ -461,7 +473,7 @@ impl PcbApp {
                 }
             }
             SymbolAction::EditFields => {
-                let Some(project) = self.session.project() else { return };
+                let Some(project) = self.views.active.snapshot(&self.session) else { return };
                 let Some(symbol) = project.symbols().iter().find(|symbol| symbol.id() == id) else { return };
                 let (reference, value) = (project.reference(symbol), project.value(symbol).to_owned());
                 let Some(source) = self.views.active.input(&self.session) else { return };
@@ -534,8 +546,11 @@ impl PcbApp {
         self.run(command, &params);
         if self.message.is_none() && selected_segment {
             if let (Reshape::Segment { wire, .. }, Anchor::Free(to)) = (&drag.edit, to)
-                && let Some(leg) =
-                    self.session.project().and_then(|project| schematic_canvas::LegTarget::at_model(project, wire, to, self.session.revision()))
+                && let Some(leg) = self
+                    .views
+                    .active
+                    .snapshot(&self.session)
+                    .and_then(|project| schematic_canvas::LegTarget::at_model(&project, wire, to, self.session.revision()))
             {
                 self.select_leg(leg);
             } else {
@@ -578,7 +593,7 @@ impl PcbApp {
 
     /// Whether the current project can start a save or download.
     fn can_save_project(&self) -> bool {
-        !self.files.busy() && self.session.project().is_some()
+        !self.files.busy() && self.views.active.snapshot(&self.session).is_some()
     }
 
     /// Save the current desktop file or choose the encoding for a browser download.
@@ -971,19 +986,23 @@ impl PcbApp {
     /// Invalid targets select nothing, and native render slots return to the main host.
     fn apply_browser_action(&mut self, source: ViewId, action: project_browser::Action) {
         use project_browser::Action;
+        if let Action::ManageSheet { command, sheet } = action {
+            self.begin_sheet_edit(source, command, sheet);
+            return;
+        }
         let Some(project) = self.session.project() else {
             return;
         };
         let valid = match &action {
+            Action::ManageSheet { .. } => false,
             Action::OpenDocument(_) => true,
-            Action::Schematic { sheet, pick } => {
-                *sheet == project.sheet_target()
-                    && if pick.wire {
-                        project.wires().iter().any(|wire| wire.id() == pick.id)
-                    } else {
-                        project.symbols().iter().any(|symbol| symbol.id() == pick.id)
-                    }
-            }
+            Action::Schematic { sheet, pick } => project.for_sheet(*sheet).is_some_and(|project| {
+                if pick.wire {
+                    project.wires().iter().any(|wire| wire.id() == pick.id)
+                } else {
+                    project.symbols().iter().any(|symbol| symbol.id() == pick.id)
+                }
+            }),
             Action::Footprint { board, id, .. } => {
                 project.board_view(*board).is_some_and(|board| board.footprints().any(|footprint| footprint.id == *id))
             }
@@ -991,12 +1010,12 @@ impl PcbApp {
         if !valid {
             return;
         }
-        let Some(view) = self.views.open_document(source, action.target(), &self.session) else {
+        let Some(view) = action.target().and_then(|target| self.views.open_document(source, target, &self.session)) else {
             return;
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) => {}
+            Action::OpenDocument(_) | Action::ManageSheet { .. } => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;
@@ -1103,6 +1122,7 @@ impl PcbApp {
     /// Draw the schematic and send completed edits through the shared command catalog using each
     /// gesture's starting revision to reject stale actions. Cancel only clears the local preview.
     fn canvas(&mut self, ui: &mut Ui) {
+        let snapshot = self.views.active.snapshot(&self.session);
         let label = if self.views.is_split() { format!("Schematic canvas {}", self.views.active.id().0 + 1) } else { "Schematic canvas".to_owned() };
         let source = self.views.active.input(&self.session);
         // Web wheel events reach the canvas before it gains keyboard focus. Native windows
@@ -1116,7 +1136,7 @@ impl PcbApp {
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
-                    if self.session.project().is_some()
+                    if snapshot.as_deref().is_some()
                         && let Some(point) = pointer_on_canvas(ui, &self.views.active.camera)
                     {
                         self.pointer_next = Some(point);
@@ -1126,7 +1146,7 @@ impl PcbApp {
                         && self.views.active.schematic.selection.len() <= 1
                     {
                         let rect = ui.available_rect_before_wrap();
-                        let hovered = self.session.project().and_then(|project| {
+                        let hovered = snapshot.as_deref().and_then(|project| {
                             let pointer = ui.input(|input| input.pointer.hover_pos())?;
                             rect.contains(pointer)
                                 .then(|| schematic_canvas::symbol_at(project, &self.views.active.camera, rect, pointer))
@@ -1138,7 +1158,7 @@ impl PcbApp {
                             self.edit_selected(SymbolAction::Rotate);
                         }
                     }
-                    if let Some(project) = self.session.project() {
+                    if let Some(project) = snapshot.as_deref() {
                         let highlight = self.views.highlight_for(self.views.active.id(), &self.session);
                         return schematic_canvas::show(
                             ui,
@@ -1198,8 +1218,8 @@ impl PcbApp {
                 self.views.active.schematic.tool = Some(Tool::Wire { revision: self.session.revision(), start: Some(anchor) });
             }
             (Some(Tool::Wire { revision, start: Some(from) }), Click::WirePoint(to, finish)) => {
-                if let Some(project) = self.session.project()
-                    && let (Some(a), Some(b)) = (from.position(project), to.position(project))
+                if let Some(project) = self.views.active.snapshot(&self.session)
+                    && let (Some(a), Some(b)) = (from.position(&project), to.position(&project))
                     && a != b
                 {
                     if finish || !matches!(to, pcbcraft_engine::wire::Anchor::Free(_)) {
@@ -1248,8 +1268,11 @@ impl PcbApp {
             }
             (None, Click::GrabReshape(drag)) => {
                 if let pcbcraft_engine::wire::Reshape::Segment { wire, at } = &drag.edit {
-                    if let Some(leg) =
-                        self.session.project().and_then(|project| schematic_canvas::LegTarget::at_model(project, wire, *at, self.session.revision()))
+                    if let Some(leg) = self
+                        .views
+                        .active
+                        .snapshot(&self.session)
+                        .and_then(|project| schematic_canvas::LegTarget::at_model(&project, wire, *at, self.session.revision()))
                     {
                         self.select_leg(leg);
                     } else {
@@ -1488,7 +1511,10 @@ impl PcbApp {
                         self.message = Some("View or project changed; reopen the symbol fields to continue editing.".to_owned());
                         return;
                     }
-                    let params = json!({"symbol": symbol, "reference": reference, "value": value, "expected_revision": source.revision});
+                    let mut params = json!({"symbol": symbol, "reference": reference, "value": value, "expected_revision": source.revision});
+                    if let Some(crate::editor_view::DocumentTarget::Sheet(sheet)) = self.views.active.target() {
+                        params["sheet"] = json!(sheet.id());
+                    }
                     match self.session.apply(SET_SYMBOL_FIELDS, &params) {
                         Ok(_) => self.message = None,
                         Err(e) => {
@@ -1500,6 +1526,7 @@ impl PcbApp {
                     self.dialog = Dialog::EditFields { source, symbol, reference, value, error, focused };
                 }
             }
+            Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;

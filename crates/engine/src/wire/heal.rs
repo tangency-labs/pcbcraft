@@ -114,7 +114,7 @@ impl Edit {
             }
         }
         self.project.prune_junctions();
-        self.project.connectivity = Arc::default();
+        self.project.sheet_mut().connectivity = Arc::default();
         Ok(self.project)
     }
     /// Find one unambiguous electrical identity or interior route at a contact point, excluding
@@ -182,7 +182,7 @@ impl Edit {
                 }
                 if let Some(&wire) = spans.first() {
                     let (a, b) = self.cut_pair(wire, pins[0].1, pins[1].1)?;
-                    Arc::make_mut(&mut self.project.wires).retain(|w| w.endpoints != [a, b] && w.endpoints != [b, a]);
+                    Arc::make_mut(&mut self.project.sheet_mut().wires).retain(|w| w.endpoints != [a, b] && w.endpoints != [b, a]);
                     self.merge(a, pins[0].0)?;
                     self.merge(b, pins[1].0)?;
                 }
@@ -271,7 +271,7 @@ impl Edit {
             return Err(CommandError::InvalidParams("wire point is outside schematic bounds".into()));
         }
         let id = self.id()?;
-        Arc::make_mut(&mut self.project.junctions).insert(id, point);
+        Arc::make_mut(&mut self.project.sheet_mut().junctions).insert(id, point);
         Ok(WireEndpoint::Junction(id))
     }
 
@@ -322,7 +322,7 @@ impl Edit {
         }
         let ordinal = self.id()?;
         let bends = super::interior(path)?;
-        Arc::make_mut(&mut self.project.wires).push(Wire { ordinal, endpoints, bends: Some(bends) });
+        Arc::make_mut(&mut self.project.sheet_mut().wires).push(Wire { ordinal, endpoints, bends: Some(bends) });
         self.touched.insert(ordinal);
         self.preferred.insert(ordinal);
         Ok(())
@@ -347,7 +347,7 @@ impl Edit {
         }
         let node = self.free(at)?;
         let ordinal = self.id()?;
-        let wires = Arc::make_mut(&mut self.project.wires);
+        let wires = Arc::make_mut(&mut self.project.sheet_mut().wires);
         wires[index].endpoints[1] = node;
         wires[index].bends = Some(super::interior(&left)?);
         wires.push(Wire { ordinal, endpoints: [node, wire.endpoints[1]], bends: Some(super::interior(&right)?) });
@@ -378,7 +378,7 @@ impl Edit {
         if self.protected.remove(&remove) {
             self.protected.insert(keep);
         }
-        for wire in Arc::make_mut(&mut self.project.wires) {
+        for wire in Arc::make_mut(&mut self.project.sheet_mut().wires) {
             if wire.endpoints.contains(&remove) {
                 for end in &mut wire.endpoints {
                     if *end == remove {
@@ -479,7 +479,7 @@ impl Edit {
                 seen.insert(key, (path, wire.ordinal));
             }
         }
-        Arc::make_mut(&mut self.project.wires).retain(|w| !remove.contains(&w.ordinal));
+        Arc::make_mut(&mut self.project.sheet_mut().wires).retain(|w| !remove.contains(&w.ordinal));
         Ok(())
     }
 
@@ -541,13 +541,13 @@ impl Edit {
             if self.preferred.contains(&a) || self.preferred.contains(&b) {
                 self.preferred.insert(a);
             }
-            for wire in Arc::make_mut(&mut self.project.wires) {
+            for wire in Arc::make_mut(&mut self.project.sheet_mut().wires) {
                 if wire.ordinal == a {
                     wire.endpoints = ends;
                     wire.bends = Some(super::interior(&path)?);
                 }
             }
-            Arc::make_mut(&mut self.project.wires).retain(|w| w.ordinal != b);
+            Arc::make_mut(&mut self.project.sheet_mut().wires).retain(|w| w.ordinal != b);
             self.project.prune_junctions();
             self.touched.insert(a);
         }
@@ -623,11 +623,11 @@ impl Edit {
                 paths.push((index, path));
                 for (index, path) in paths {
                     let bends = super::interior(&path)?;
-                    let wire = &mut Arc::make_mut(&mut self.project.wires)[index];
+                    let wire = &mut Arc::make_mut(&mut self.project.sheet_mut().wires)[index];
                     wire.bends = Some(bends);
                     self.touched.insert(wire.ordinal);
                 }
-                Arc::make_mut(&mut self.project.junctions).insert(id, at);
+                Arc::make_mut(&mut self.project.sheet_mut().junctions).insert(id, at);
                 return Ok(true);
             }
         }
@@ -648,9 +648,9 @@ impl Edit {
             if path.len() < 2 {
                 let [a, b] = self.project.wires[index].endpoints;
                 self.merge(a, b)?;
-                Arc::make_mut(&mut self.project.wires).retain(|w| w.ordinal != id);
+                Arc::make_mut(&mut self.project.sheet_mut().wires).retain(|w| w.ordinal != id);
             } else if path != original {
-                Arc::make_mut(&mut self.project.wires)[index].bends = Some(super::interior(&path)?);
+                Arc::make_mut(&mut self.project.sheet_mut().wires)[index].bends = Some(super::interior(&path)?);
             }
         }
         for _ in 0..64 {
@@ -669,7 +669,7 @@ impl Edit {
                 }
                 self.deduplicate()?;
                 self.project.prune_junctions();
-                self.project.connectivity = Arc::default();
+                self.project.sheet_mut().connectivity = Arc::default();
                 return Ok(self.project);
             };
             let (ap, aq) = self.cut_pair(a, p, q)?;
@@ -737,7 +737,7 @@ impl Project {
         if before.symbols.iter().flat_map(|s| s.terminals()).eq(next.symbols.iter().flat_map(|s| s.terminals()))
             && before.wires.iter().map(|w| (w.ordinal, w.endpoints)).eq(next.wires.iter().map(|w| (w.ordinal, w.endpoints)))
         {
-            next.connectivity = before.connectivity.clone();
+            next.sheet_mut().connectivity = before.connectivity.clone();
         }
         Ok(next)
     }
@@ -756,7 +756,7 @@ impl Project {
         let moved = self.reshaped(&super::Reshape::Junction(junction), point)?;
         let mut edit = Edit::new(&moved, revision);
         let end = edit.resolve(target)?;
-        for wire in Arc::make_mut(&mut edit.project.wires) {
+        for wire in Arc::make_mut(&mut edit.project.sheet_mut().wires) {
             for endpoint in &mut wire.endpoints {
                 if *endpoint == WireEndpoint::Junction(junction) {
                     *endpoint = end;
@@ -782,7 +782,7 @@ impl Project {
             return Ok(self.clone());
         }
         let mut next = self.clone();
-        Arc::make_mut(&mut next.symbols)[index].position = to;
+        Arc::make_mut(&mut next.sheet_mut().symbols)[index].position = to;
         next.healed(self, revision, auto_heal)
     }
 }

@@ -10,7 +10,8 @@ pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
-const PROJECT_FORMAT: &str = "pcbcraft-project/5";
+const PROJECT_FORMAT: &str = "pcbcraft-project/6";
+const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
@@ -85,27 +86,58 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    if project.format != PROJECT_FORMAT {
+    if project.format != PROJECT_FORMAT && project.format != PREVIOUS_PROJECT_FORMAT {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
-    // The schema uses a list so adding sheets does not need another storage redesign. The
-    // current engine edits one sheet; refusing extra sheets prevents silently losing them.
-    if project.sheets.len() != 1 {
-        return Err(format!("{ENTRY_POINT}: this editor supports exactly one schematic sheet"));
-    }
-    let reference = &project.sheets[0];
-    let sheet_path = format!("sheets/{}.json", reference.id);
-    if reference.file != sheet_path
-        || reference.name.is_empty()
-        || reference.name.trim() != reference.name
-        || reference.name.chars().count() > MAX_NAME
-        || reference.name.chars().any(char::is_control)
+    if project.sheets.is_empty()
+        || project.sheets.len() > crate::sheets::MAX_SHEETS
+        || (project.format == PREVIOUS_PROJECT_FORMAT && project.sheets.len() != 1)
     {
-        return Err(format!("{ENTRY_POINT}: invalid sheet name or file for {}", reference.id));
+        return Err(format!("{ENTRY_POINT}: invalid sheet count for {}", project.format));
     }
-    let sheet: SheetDocument = parse(documents, &sheet_path)?;
-    if sheet.format != SHEET_FORMAT || sheet.id != reference.id {
-        return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
+    let mut sheet_ids = BTreeSet::from([project.id]);
+    let mut sheet_names = BTreeSet::new();
+    let mut used = BTreeSet::from([ENTRY_POINT.to_owned(), "board.json".to_owned()]);
+    let mut layouts = Vec::new();
+    let mut combined = Sheet { id: project.sheets[0].id, symbols: Vec::new(), junctions: Some(Vec::new()), wires: Vec::new() };
+    for reference in &project.sheets {
+        let sheet_path = format!("sheets/{}.json", reference.id);
+        if reference.id.is_nil()
+            || !sheet_ids.insert(reference.id)
+            || reference.file != sheet_path
+            || reference.name.is_empty()
+            || reference.name.trim() != reference.name
+            || reference.name.chars().count() > MAX_NAME
+            || reference.name.chars().any(char::is_control)
+            || !sheet_names.insert(reference.name.to_lowercase())
+        {
+            return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
+        }
+        let sheet: SheetDocument = parse(documents, &sheet_path)?;
+        if sheet.format != SHEET_FORMAT || sheet.id != reference.id {
+            return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
+        }
+        let symbols: BTreeSet<_> = sheet.symbols.iter().map(|s| s.id).collect();
+        let junctions: BTreeSet<_> = sheet.junctions.iter().map(|j| j.id).collect();
+        let wires: BTreeSet<_> = sheet.wires.iter().map(|w| w.id).collect();
+        // Validate ownership before global identity/geometry validation. A wire must never
+        // resolve a terminal or junction belonging to another flat sheet.
+        for wire in &sheet.wires {
+            for endpoint in [&wire.from, &wire.to] {
+                let local = match endpoint {
+                    Endpoint::Pin { symbol, .. } => symbols.contains(symbol),
+                    Endpoint::Junction { junction } => junctions.contains(junction),
+                };
+                if !local {
+                    return Err(format!("{sheet_path}: wire endpoint belongs to a missing or different sheet"));
+                }
+            }
+        }
+        used.insert(sheet_path);
+        layouts.push((reference, symbols, junctions, wires));
+        combined.symbols.extend(sheet.symbols);
+        combined.junctions.get_or_insert_with(Vec::new).extend(sheet.junctions);
+        combined.wires.extend(sheet.wires);
     }
     let board: BoardDocument = parse(documents, "board.json")?;
     let setup = match (board.format.as_str(), board.setup) {
@@ -114,7 +146,6 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
-    let mut used = BTreeSet::from([ENTRY_POINT.to_owned(), sheet_path.clone(), "board.json".to_owned()]);
     let mut definitions = Vec::new();
     for component in &project.components {
         let path = format!("library/symbols/{}/{}.r{}.json", component.library, component.definition, component.definition_revision);
@@ -136,18 +167,30 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if let Some(path) = documents.keys().find(|path| !used.contains(*path)) {
         return Err(format!("{path}: unexpected or unused project document"));
     }
+    let previous_format = project.format == PREVIOUS_PROJECT_FORMAT;
     let document = Document {
         format: super::FORMAT.to_owned(),
         id: project.id,
         name: project.name,
         symbol_definitions: definitions,
         components: project.components,
-        sheet: Sheet { id: sheet.id, symbols: sheet.symbols, junctions: Some(sheet.junctions), wires: sheet.wires },
+        sheet: combined,
         board: Some(BoardRecords { footprints: board.footprints }),
     };
-    let mut project = validate_document(document, None).map_err(|error| format!("{ENTRY_POINT}, {sheet_path}, board.json: {error}"))?;
+    let mut project = validate_document(document, None).map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
     let project_data = Arc::make_mut(&mut project);
-    project_data.sheet_name.clone_from(&reference.name);
+    let sheets = layouts
+        .into_iter()
+        .map(|(reference, symbols, junctions, wires)| crate::sheets::SchematicSheet {
+            sheet_id: reference.id,
+            sheet_name: if previous_format && reference.name == "Schematic" { "Main".into() } else { reference.name.clone() },
+            symbols: Arc::new(project_data.symbols.iter().filter(|s| symbols.contains(&s.ordinal)).cloned().collect()),
+            wires: Arc::new(project_data.wires.iter().filter(|w| wires.contains(&w.ordinal)).cloned().collect()),
+            junctions: Arc::new(project_data.junctions.iter().filter(|(id, _)| junctions.contains(id)).map(|(&id, &at)| (id, at)).collect()),
+            connectivity: Arc::default(),
+        })
+        .collect();
+    project_data.sheets = Arc::new(sheets);
     Arc::make_mut(&mut project_data.board).setup = setup;
     Ok(project)
 }
@@ -227,6 +270,7 @@ pub struct DocumentsEncoder {
     documents: Documents,
     bytes: Vec<u8>,
     phase: u8,
+    sheet_cursor: usize,
     cursor: u64,
     first: bool,
     definitions: BTreeMap<(String, String, u32), Arc<crate::schematic::SymbolDefinition>>,
@@ -235,7 +279,16 @@ pub struct DocumentsEncoder {
 impl DocumentsEncoder {
     /// Retain the immutable save snapshot without walking its contents in the input handler.
     pub fn new(project: Arc<Project>) -> Self {
-        Self { project, documents: Documents::new(), bytes: Vec::new(), phase: 0, cursor: 0, first: true, definitions: BTreeMap::new() }
+        Self {
+            project,
+            documents: Documents::new(),
+            bytes: Vec::new(),
+            phase: 0,
+            sheet_cursor: 0,
+            cursor: 0,
+            first: true,
+            definitions: BTreeMap::new(),
+        }
     }
 
     /// Write at most `records` records or phase transitions. The board-header transition also
@@ -246,7 +299,15 @@ impl DocumentsEncoder {
             match self.phase {
                 0 => {
                     let p = &self.project;
-                    let sheets = [SheetReference { id: p.sheet_id, name: p.sheet_name.clone(), file: format!("sheets/{}.json", p.sheet_id) }];
+                    let sheets = p
+                        .sheets
+                        .iter()
+                        .map(|sheet| SheetReference {
+                            id: sheet.sheet_id,
+                            name: sheet.sheet_name.clone(),
+                            file: format!("sheets/{}.json", sheet.sheet_id),
+                        })
+                        .collect::<Vec<_>>();
                     write!(
                         self.bytes,
                         "{{\n  \"format\": \"{PROJECT_FORMAT}\",\n  \"id\": \"{}\",\n  \"name\": {},\n  \"sheets\": {},\n  \"components\": [\n",
@@ -279,12 +340,16 @@ impl DocumentsEncoder {
                     } else {
                         self.finish_document(ENTRY_POINT.to_owned())?;
                         self.next();
-                        write!(self.bytes, "{{\n  \"format\": \"{SHEET_FORMAT}\",\n  \"id\": \"{}\",\n  \"symbols\": [\n", self.project.sheet_id)
-                            .map_err(|e| e.to_string())?;
+                        write!(
+                            self.bytes,
+                            "{{\n  \"format\": \"{SHEET_FORMAT}\",\n  \"id\": \"{}\",\n  \"symbols\": [\n",
+                            self.project.sheets[self.sheet_cursor].sheet_id
+                        )
+                        .map_err(|e| e.to_string())?;
                     }
                 }
                 2 => {
-                    if let Some(s) = self.project.symbols.get(self.cursor as usize) {
+                    if let Some(s) = self.project.sheets[self.sheet_cursor].symbols.get(self.cursor as usize) {
                         record(
                             &mut self.bytes,
                             &mut self.first,
@@ -304,7 +369,10 @@ impl DocumentsEncoder {
                     }
                 }
                 3 => {
-                    if let Some((&id, p)) = self.project.junctions.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
+                    if let Some((&id, p)) = self.project.sheets[self.sheet_cursor]
+                        .junctions
+                        .range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded))
+                        .next()
                     {
                         record(&mut self.bytes, &mut self.first, &Junction { id, x_nm: p.x_nm, y_nm: p.y_nm })?;
                         self.cursor = id;
@@ -314,7 +382,7 @@ impl DocumentsEncoder {
                     }
                 }
                 4 => {
-                    if let Some(w) = self.project.wires.get(self.cursor as usize) {
+                    if let Some(w) = self.project.sheets[self.sheet_cursor].wires.get(self.cursor as usize) {
                         let [from, to] = w.endpoints();
                         record(
                             &mut self.bytes,
@@ -323,9 +391,22 @@ impl DocumentsEncoder {
                         )?;
                         self.cursor += 1;
                     } else {
-                        self.finish_document(format!("sheets/{}.json", self.project.sheet_id))?;
-                        self.next();
-                        board_header(&mut self.bytes, self.project.board.setup.as_ref())?;
+                        self.finish_document(format!("sheets/{}.json", self.project.sheets[self.sheet_cursor].sheet_id))?;
+                        self.sheet_cursor += 1;
+                        if self.sheet_cursor < self.project.sheets.len() {
+                            self.phase = 2;
+                            self.cursor = 0;
+                            self.first = true;
+                            write!(
+                                self.bytes,
+                                "{{\n  \"format\": \"{SHEET_FORMAT}\",\n  \"id\": \"{}\",\n  \"symbols\": [\n",
+                                self.project.sheets[self.sheet_cursor].sheet_id
+                            )
+                            .map_err(|e| e.to_string())?;
+                        } else {
+                            self.next();
+                            board_header(&mut self.bytes, self.project.board.setup.as_ref())?;
+                        }
                     }
                 }
                 5 => {

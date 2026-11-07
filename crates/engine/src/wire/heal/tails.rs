@@ -41,7 +41,7 @@ impl Edit {
             for wire in self.project.wires.iter().filter(|wire| wire.endpoints.iter().any(|end| neighbors.contains(end))) {
                 self.touched.insert(wire.ordinal);
             }
-            Arc::make_mut(&mut self.project.wires).retain(|wire| !remove.contains(&wire.ordinal));
+            Arc::make_mut(&mut self.project.sheet_mut().wires).retain(|wire| !remove.contains(&wire.ordinal));
             self.project.prune_junctions();
         }
         Err(CommandError::Unavailable("too many folded transit corners to heal in one edit".into()))

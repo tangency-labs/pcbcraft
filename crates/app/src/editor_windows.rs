@@ -202,7 +202,12 @@ impl PcbApp {
     /// Close and Dock of an already docked view also leave layouts unchanged.
     pub(super) fn apply_view_action(&mut self, ctx: &Context, id: crate::ViewId, action: ViewAction) {
         match action {
-            ViewAction::Browse(action) => self.apply_browser_action(id, action),
+            ViewAction::Browse(action) => {
+                self.apply_browser_action(id, action);
+                if matches!(self.dialog, Dialog::Sheet(_)) {
+                    ctx.send_viewport_cmd_to(viewport(self.views.main), ViewportCommand::Focus);
+                }
+            }
             ViewAction::Workspace { workspace, placement } => self.apply_workspace(id, workspace, placement),
             ViewAction::OpenWindow => {
                 self.views.open_window(id);
@@ -268,14 +273,20 @@ impl PcbApp {
     }
 
     /// Draw project dialogs once in their owner window (normally the main host). A fields dialog
-    /// temporarily binds its originating editor for revision validation, without moving either camera or stealing selection.
+    /// temporarily binds its originating editor for revision validation. Sheet forms can change
+    /// the focused document, so they restore the host's resulting focus rather than its old slot.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
         let previous = self.views.active.id();
+        let sheet_form = matches!(self.dialog, Dialog::Sheet(_));
         if let Dialog::EditFields { source, .. } = &self.dialog {
             self.views.bind(source.view());
         }
         self.dialogs(ctx);
-        self.views.bind(previous);
+        if sheet_form {
+            self.views.bind_main();
+        } else {
+            self.views.bind(previous);
+        }
         if self.files.busy()
             && matches!(
                 self.waiting,

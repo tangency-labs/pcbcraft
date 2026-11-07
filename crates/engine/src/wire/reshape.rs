@@ -152,12 +152,12 @@ impl Project {
                             && self.wires.iter().filter(|wire| wire.endpoints.contains(endpoint)).count() == 1
                         {
                             fixed[end] = false;
-                            Arc::make_mut(&mut next.junctions).insert(*id, moved[end].1);
+                            Arc::make_mut(&mut next.sheet_mut().junctions).insert(*id, moved[end].1);
                         }
                     }
                 }
                 let bends = bends_of(&rebuilt(&path, &moved, fixed))?;
-                Arc::make_mut(&mut next.wires)[index].bends = Some(bends);
+                Arc::make_mut(&mut next.sheet_mut().wires)[index].bends = Some(bends);
             }
             Reshape::Junction(id) => {
                 let junction = WireEndpoint::Junction(*id);
@@ -179,9 +179,9 @@ impl Project {
                     let moved = [(end, to), (neighbour, follow(path[neighbour], old, to))];
                     let fixed = if ends[0] { [false, true] } else { [true, false] };
                     let bends = bends_of(&rebuilt(&path, &moved, fixed))?;
-                    Arc::make_mut(&mut next.wires)[index].bends = Some(bends);
+                    Arc::make_mut(&mut next.sheet_mut().wires)[index].bends = Some(bends);
                 }
-                Arc::make_mut(&mut next.junctions).insert(*id, to);
+                Arc::make_mut(&mut next.sheet_mut().junctions).insert(*id, to);
             }
         }
         // A move to the grabbed point is valid but changes nothing. Return this project as it
@@ -189,7 +189,7 @@ impl Project {
         if edit.origin(self) == Some(to) {
             return Ok(self.clone());
         }
-        next.connectivity = Arc::default();
+        next.sheet_mut().connectivity = Arc::default();
         Ok(next)
     }
 

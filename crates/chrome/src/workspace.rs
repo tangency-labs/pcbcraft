@@ -72,8 +72,10 @@ pub struct TreeRow<'a> {
 }
 
 /// What happened on a [`tree_row`] this frame. A click on the disclosure arrow only folds.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct TreeResponse {
+    /// The stable row response supports contextual actions owned by the navigator.
+    pub response: Response,
     pub clicked: bool,
     pub fold: bool,
 }
@@ -523,7 +525,7 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
         fold.on_hover_text(if open { "Collapse branch" } else { "Expand branch" });
     }
     let response = if row.tip.is_empty() { response } else { response.on_hover_text(row.tip) };
-    TreeResponse { clicked: response.clicked() && !fold_clicked, fold: fold_clicked }
+    TreeResponse { clicked: response.clicked() && !fold_clicked, fold: fold_clicked, response }
 }
 
 /// Lay out one line of text no wider than `width`, ending in an ellipsis when it is cut short.

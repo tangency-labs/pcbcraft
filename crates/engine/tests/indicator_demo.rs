@@ -11,16 +11,17 @@ use serde_json::json;
 
 const ARCHIVE: &[u8] = include_bytes!("../../../examples/dual-led.pc.zip");
 
-/// The shareable archive and Git working folder must describe the same project without save noise.
+/// The distributed version-5 folder and archive migrate to the same canonical documents.
 #[test]
-fn demo_folder_matches_archive_and_no_op_save() {
+fn demo_folder_and_archive_migrate_to_the_same_documents() {
     let project = decode_packed(ARCHIVE).unwrap().project;
     let documents = encode_documents(project.clone()).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led");
     let saved = documents.keys().map(|path| (path.clone(), fs::read(root.join(path)).unwrap())).collect();
-    assert_eq!(documents, saved);
-    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
-    assert_eq!(encode_packed(project).unwrap(), ARCHIVE);
+    assert_eq!(documents, encode_documents(decode_documents(&saved).unwrap()).unwrap());
+    assert_eq!(decode_packed(ARCHIVE).unwrap().documents.unwrap(), saved);
+    let encoded = encode_packed(project).unwrap();
+    assert_eq!(encode_documents(decode_packed(&encoded).unwrap().project).unwrap(), documents);
 }
 
 /// Check the intended branches and both directions of every pin/pad mapping, including after a move.

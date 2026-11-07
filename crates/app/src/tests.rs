@@ -15,6 +15,7 @@ mod detached_editors;
 mod display_units;
 mod editor_views;
 mod grid_spacing;
+mod multiple_sheets;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod save_changes;
@@ -1686,7 +1687,7 @@ mod live_mcp {
             ("view.fit", json!({"view": 99}), "no open view 99"),
             ("window.set_panel", json!({"window": 7, "panel": "nets", "open": true}), "no open window 7"),
             ("window.close", json!({"window": 0}), "last editor window"),
-            ("view.select", json!({"view": 0, "items": {"symbols": ["symbol-99"], "wires": []}}), "aren't in the project"),
+            ("view.select", json!({"view": 0, "items": {"symbols": ["symbol-99"], "wires": []}}), "aren't on this view's sheet"),
             ("app.set_preferences", json!({"scale_percent": 101}), "multiple of 5"),
             ("view.teleport", json!({}), "unknown command"),
             ("file.save", json!({}), "hasn't been saved"),

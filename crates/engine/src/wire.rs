@@ -144,7 +144,7 @@ impl Project {
                 WireEndpoint::Terminal(_) => None,
             })
             .collect();
-        Arc::make_mut(&mut self.junctions).retain(|id, _| used.contains(id));
+        Arc::make_mut(&mut self.sheet_mut().junctions).retain(|id, _| used.contains(id));
     }
 }
 
@@ -359,7 +359,7 @@ impl Session {
             }
         };
         let mut wires = Vec::new();
-        let junctions = Arc::make_mut(&mut candidate.junctions);
+        let junctions = Arc::make_mut(&mut candidate.sheet_mut().junctions);
         for piece in &pieces {
             let (Some(&first), Some(&last)) = (piece.route.first(), piece.route.last()) else {
                 return Err(CommandError::InvalidParams("a wire piece needs a route".to_owned()));
@@ -367,7 +367,7 @@ impl Session {
             let endpoints = [endpoint(piece.start, from, first, junctions), endpoint(piece.end, to, last, junctions)];
             wires.push((endpoints, interior(&piece.route)?));
         }
-        let list = Arc::make_mut(&mut candidate.wires);
+        let list = Arc::make_mut(&mut candidate.sheet_mut().wires);
         let mut wires = wires.into_iter();
         match wires.next() {
             Some((endpoints, bends)) => list[index] = Wire { ordinal: original.ordinal, endpoints, bends: Some(bends) },
@@ -380,7 +380,7 @@ impl Session {
             next += 1;
         }
         candidate.prune_junctions();
-        candidate.connectivity = Arc::default();
+        candidate.sheet_mut().connectivity = Arc::default();
         self.change(candidate);
         Ok(())
     }
@@ -417,9 +417,9 @@ impl Session {
             .position(|wire| Some(wire.ordinal) == id)
             .ok_or_else(|| CommandError::InvalidParams("wire does not exist".to_owned()))?;
         let mut candidate = project.clone();
-        Arc::make_mut(&mut candidate.wires).remove(index);
+        Arc::make_mut(&mut candidate.sheet_mut().wires).remove(index);
         candidate.prune_junctions();
-        candidate.connectivity = Arc::default();
+        candidate.sheet_mut().connectivity = Arc::default();
         self.change(candidate);
         Ok(())
     }

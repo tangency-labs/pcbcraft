@@ -194,7 +194,14 @@ Split views have one closable header above each canvas showing its document path
 project, and the canvas keeps its full size; **Fit** keeps the drawing clear of
 the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
 Inspector panels, and fits the view. Each ribbon group's caption, such as
-**Place ⌄**, opens a menu of the same actions. A project has one sheet so far.
+**Place ⌄**, opens a menu of the same actions.
+
+A project supports up to 64 flat sheets. Right-click **Sheets** or a sheet row
+to create a sheet; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
+Deleting a sheet removes its symbols, wires and associated board footprints in
+one undo step, and the project always retains at least one sheet. Each pane keeps
+its sheet target, camera and selection independently. Hierarchical sheet symbols,
+pins and labels remain separate work (#41).
 
 **View → Split** opens another view of the current schematic in that window.
 Each pane keeps its camera, grid and edit selection while sharing the project's
@@ -357,6 +364,13 @@ with `schematic.move_symbol` and pass the ID as `symbol`, coordinates as integer
 editor, then inspect again to confirm the position. The edit stays unsaved
 until you save the project.
 
+For a project with several sheets, pass its inspected sheet UUID as `sheet` to
+schematic commands and footprint placement. Omission remains compatible with
+single-sheet projects; ambiguous and unknown targets are refused. `sheet.create`,
+`sheet.rename` and `sheet.delete` use the same project-wide undo history as edits.
+Inspection includes each sheet's own schematic, while the legacy top-level
+`schematic` is available only for single-sheet projects.
+
 The live connection runs every project command in `list_commands`, such as
 `schematic.delete_wire` or `edit.undo`, in the window's own session, so the
 editor and the agent share one undo history and the status bar names each edit
@@ -373,6 +387,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 |---|---|
 | `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Sheet tabs and **View → Split / Detach / New window** |
 | `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
+| `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
 | `view.set_workspace` | The workspace picker: schematic or PCB layout, here, beside or in a new window |
 | `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing; click and box selection in a schematic; footprint and Browser selection in a PCB view |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | The named arrangement tabs: click, **+** and **Duplicate…**, **Rename…**, **Delete** |

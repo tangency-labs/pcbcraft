@@ -1,5 +1,6 @@
 //! One project navigator for schematic and board workspaces. Shared tree rows keep Sheets,
-//! Boards and their object lists consistent; navigation and selection never edit the project.
+//! Boards and their object lists consistent. Navigation and lifecycle intents return to the
+//! host; revision-checked engine commands own every authored sheet change.
 
 use std::{
     cmp::Ordering,
@@ -16,9 +17,6 @@ use pcbcraft_engine::{
 
 use crate::editor_view::DocumentTarget;
 use pcbcraft_engine::{SheetTarget, board::view::BoardTarget, selection::Selection};
-
-/// Existing single-sheet display label, matching the view breadcrumb. Identity uses SheetTarget.
-const MAIN_SHEET: &str = "Main";
 
 /// Folding uses document addresses, so names and row positions are never identities.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -51,15 +49,17 @@ pub(crate) enum Action {
     OpenDocument(DocumentTarget),
     Schematic { sheet: SheetTarget, pick: Pick },
     Footprint { board: BoardTarget, id: String, at: Point },
+    ManageSheet { command: &'static str, sheet: Option<SheetTarget> },
 }
 
 impl Action {
     /// The persistent document to reveal before selecting an object, independent of its label.
-    pub(super) fn target(&self) -> DocumentTarget {
+    pub(super) fn target(&self) -> Option<DocumentTarget> {
         match self {
-            Self::OpenDocument(target) => *target,
-            Self::Schematic { sheet, .. } => DocumentTarget::Sheet(*sheet),
-            Self::Footprint { board, .. } => DocumentTarget::Board(*board),
+            Self::OpenDocument(target) => Some(*target),
+            Self::Schematic { sheet, .. } => Some(DocumentTarget::Sheet(*sheet)),
+            Self::Footprint { board, .. } => Some(DocumentTarget::Board(*board)),
+            Self::ManageSheet { .. } => None,
         }
     }
 }
@@ -89,9 +89,17 @@ struct Item {
 #[derive(Debug)]
 struct Lists {
     project: Arc<Project>,
+    sheets: Vec<SheetItems>,
+    boards: Vec<BoardItems>,
+}
+
+/// Cached object rows belong to exactly one persistent sheet address.
+#[derive(Debug)]
+struct SheetItems {
+    target: SheetTarget,
+    name: String,
     symbols: Vec<Item>,
     nets: Vec<Item>,
-    boards: Vec<BoardItems>,
 }
 
 /// A resolved board's labels and object targets, cached with the immutable project snapshot.
@@ -108,6 +116,33 @@ impl Lists {
     /// a wire attached to one of its pins. Each board's footprints also use natural reference
     /// order, and each footprint row targets its stable ID and board position.
     fn read(project: Arc<Project>) -> Self {
+        let sheets = project.sheets().filter_map(|sheet| project.for_sheet(sheet.target)).map(|sheet| SheetItems::read(&sheet)).collect();
+        let boards = project
+            .boards()
+            .map(|board| {
+                let mut footprints = board
+                    .footprints()
+                    .map(|footprint| {
+                        let reference = footprint.reference.to_owned();
+                        let item = Item {
+                            label: if footprint.value.is_empty() { reference.clone() } else { format!("{reference}  {}", footprint.value) },
+                            tip: footprint.definition.to_owned(),
+                            target: Some((footprint.id, footprint.position)),
+                        };
+                        (reference, item)
+                    })
+                    .collect::<Vec<_>>();
+                footprints.sort_by(|a, b| natural(&a.0, &b.0));
+                BoardItems { target: board.target, name: board.name().to_owned(), footprints: footprints.into_iter().map(|(_, item)| item).collect() }
+            })
+            .collect();
+        Self { project, sheets, boards }
+    }
+}
+
+impl SheetItems {
+    /// Build naturally ordered symbols and local net targets from an explicitly scoped snapshot.
+    fn read(project: &Project) -> Self {
         let mut symbols: Vec<_> = project
             .symbols()
             .iter()
@@ -144,30 +179,11 @@ impl Lists {
             .enumerate()
             .map(|(index, (pins, target))| Item {
                 label: format!("Net {}", index + 1),
-                tip: if pins.is_empty() { "Free wire".to_owned() } else { format!("{} pins · {}", pins.len(), pin_labels(&project, pins)) },
+                tip: if pins.is_empty() { "Free wire".to_owned() } else { format!("{} pins · {}", pins.len(), pin_labels(project, pins)) },
                 target,
             })
             .collect();
-        let boards = project
-            .boards()
-            .map(|board| {
-                let mut footprints = board
-                    .footprints()
-                    .map(|footprint| {
-                        let reference = footprint.reference.to_owned();
-                        let item = Item {
-                            label: if footprint.value.is_empty() { reference.clone() } else { format!("{reference}  {}", footprint.value) },
-                            tip: footprint.definition.to_owned(),
-                            target: Some((footprint.id, footprint.position)),
-                        };
-                        (reference, item)
-                    })
-                    .collect::<Vec<_>>();
-                footprints.sort_by(|a, b| natural(&a.0, &b.0));
-                BoardItems { target: board.target, name: board.name().to_owned(), footprints: footprints.into_iter().map(|(_, item)| item).collect() }
-            })
-            .collect();
-        Self { project, symbols, nets, boards }
+        Self { target: project.sheet_target(), name: project.sheet_name().to_owned(), symbols, nets }
     }
 }
 
@@ -273,47 +289,50 @@ impl ProjectBrowser {
             self.lists = Some(Lists::read(snapshot));
         }
         let lists = self.lists.as_ref()?;
-        let sheet = lists.project.sheet_target();
-        let mut tree = Tree { toggled: &self.toggled, active, folded: None, reset: None, picked: None };
+        let mut tree = Tree { toggled: &self.toggled, active, sheet_count: lists.sheets.len(), folded: None, reset: None, picked: None };
         if tree.branch(ui, Node::Project, 0, TreeIcon::Folder, &lists.project.name, false, None) {
-            if tree.branch(ui, Node::Sheets, 1, TreeIcon::Folder, "Sheets", false, None)
-                && tree.branch(
-                    ui,
-                    Node::Sheet(sheet),
-                    2,
-                    TreeIcon::Sheet,
-                    MAIN_SHEET,
-                    active == DocumentTarget::Sheet(sheet),
-                    Some(Action::OpenDocument(DocumentTarget::Sheet(sheet))),
-                )
-            {
-                for (node, icon, title, items, current) in [
-                    (Node::Symbols(sheet), ToolIcon::Symbol, "Symbols", &lists.symbols, &selected.symbols),
-                    (Node::Nets(sheet), ToolIcon::Wire, "Nets", &lists.nets, &selected.wires),
-                ] {
-                    if !tree.branch(ui, node, 3, TreeIcon::Tool(icon), title, false, None) {
+            if tree.branch(ui, Node::Sheets, 1, TreeIcon::Folder, "Sheets", false, None) {
+                for items in &lists.sheets {
+                    let sheet = items.target;
+                    if !tree.branch(
+                        ui,
+                        Node::Sheet(sheet),
+                        2,
+                        TreeIcon::Sheet,
+                        &items.name,
+                        active == DocumentTarget::Sheet(sheet),
+                        Some(Action::OpenDocument(DocumentTarget::Sheet(sheet))),
+                    ) {
                         continue;
                     }
-                    if items.is_empty() {
-                        empty_row(ui, 4, if matches!(node, Node::Symbols(_)) { "No symbols placed" } else { "No connected nets" });
-                    }
-                    for (index, item) in items.iter().enumerate() {
-                        let id = item.target.as_ref().map(|(id, _)| id.as_str());
-                        let row = TreeRow {
-                            depth: 4,
-                            fold: None,
-                            icon: Some(TreeIcon::Tool(icon)),
-                            label: &item.label,
-                            accessibility_label: None,
-                            tip: &item.tip,
-                            selected: active == DocumentTarget::Sheet(sheet) && id.is_some_and(|id| current.contains(id)),
-                        };
-                        let widget = id.map_or_else(|| ui.make_persistent_id((node, index)), |id| ui.make_persistent_id((node, id)));
-                        if workspace::tree_row(ui, widget, &row).clicked
-                            && let Some((id, at)) = &item.target
-                        {
-                            tree.picked =
-                                Some(Action::Schematic { sheet, pick: Pick { id: id.clone(), wire: matches!(node, Node::Nets(_)), at: *at } });
+                    for (node, icon, title, items, current) in [
+                        (Node::Symbols(sheet), ToolIcon::Symbol, "Symbols", &items.symbols, &selected.symbols),
+                        (Node::Nets(sheet), ToolIcon::Wire, "Nets", &items.nets, &selected.wires),
+                    ] {
+                        if !tree.branch(ui, node, 3, TreeIcon::Tool(icon), title, false, None) {
+                            continue;
+                        }
+                        if items.is_empty() {
+                            empty_row(ui, 4, if matches!(node, Node::Symbols(_)) { "No symbols placed" } else { "No connected nets" });
+                        }
+                        for (index, item) in items.iter().enumerate() {
+                            let id = item.target.as_ref().map(|(id, _)| id.as_str());
+                            let row = TreeRow {
+                                depth: 4,
+                                fold: None,
+                                icon: Some(TreeIcon::Tool(icon)),
+                                label: &item.label,
+                                accessibility_label: None,
+                                tip: &item.tip,
+                                selected: active == DocumentTarget::Sheet(sheet) && id.is_some_and(|id| current.contains(id)),
+                            };
+                            let widget = id.map_or_else(|| ui.make_persistent_id((node, index)), |id| ui.make_persistent_id((node, id)));
+                            if workspace::tree_row(ui, widget, &row).clicked
+                                && let Some((id, at)) = &item.target
+                            {
+                                tree.picked =
+                                    Some(Action::Schematic { sheet, pick: Pick { id: id.clone(), wire: matches!(node, Node::Nets(_)), at: *at } });
+                            }
                         }
                     }
                 }
@@ -374,19 +393,39 @@ impl ProjectBrowser {
 struct Tree<'a> {
     toggled: &'a HashMap<Node, bool>,
     active: DocumentTarget,
+    sheet_count: usize,
     folded: Option<(Node, bool)>,
     reset: Option<Node>,
     picked: Option<Action>,
 }
 
 impl Tree<'_> {
-    /// Body clicks navigate documents or fold containers; the disclosure arrow only folds.
+    /// Body clicks navigate documents or fold containers; the arrow only folds. Sheet context
+    /// menus return lifecycle intents, disabling creation/deletion at the project bounds.
     #[allow(clippy::too_many_arguments)]
     fn branch(&mut self, ui: &mut Ui, node: Node, depth: usize, icon: TreeIcon, label: &str, selected: bool, pick: Option<Action>) -> bool {
         let open = self.toggled.get(&node).copied().unwrap_or_else(|| node.open_by_default(self.active));
         let access = matches!(node, Node::Board(_)).then(|| format!("Open board {label}"));
         let row = TreeRow { depth, fold: Some(open), icon: Some(icon), label, accessibility_label: access.as_deref(), tip: "", selected };
         let response = workspace::tree_row(ui, ui.make_persistent_id(("project_browser", node)), &row);
+        if matches!(node, Node::Sheets | Node::Sheet(_)) {
+            response.response.context_menu(|ui| {
+                if ui.add_enabled(self.sheet_count < pcbcraft_engine::sheets::MAX_SHEETS, egui::Button::new("New Sheet…")).clicked() {
+                    self.picked = Some(Action::ManageSheet { command: pcbcraft_engine::sheets::CREATE_SHEET, sheet: None });
+                    ui.close();
+                }
+                if let Node::Sheet(sheet) = node {
+                    if ui.button("Rename Sheet…").clicked() {
+                        self.picked = Some(Action::ManageSheet { command: pcbcraft_engine::sheets::RENAME_SHEET, sheet: Some(sheet) });
+                        ui.close();
+                    }
+                    if ui.add_enabled(self.sheet_count > 1, egui::Button::new("Delete Sheet…")).clicked() {
+                        self.picked = Some(Action::ManageSheet { command: pcbcraft_engine::sheets::DELETE_SHEET, sheet: Some(sheet) });
+                        ui.close();
+                    }
+                }
+            });
+        }
         if response.fold {
             self.folded = Some((node, !open));
         }
@@ -448,9 +487,9 @@ mod tests {
             let before = app.session.inspect();
             let lists = Lists::read(app.session.snapshot().unwrap());
             let expected = [format!("R2  {value}"), format!("R10  {value}")];
-            assert_eq!(lists.symbols.iter().map(|item| &item.label).collect::<Vec<_>>(), expected.iter().collect::<Vec<_>>());
-            assert_eq!(lists.symbols[0].target.as_ref().unwrap().0, "symbol-3");
-            assert_eq!(lists.symbols[1].target.as_ref().unwrap().0, "symbol-2");
+            assert_eq!(lists.sheets[0].symbols.iter().map(|item| &item.label).collect::<Vec<_>>(), expected.iter().collect::<Vec<_>>());
+            assert_eq!(lists.sheets[0].symbols[0].target.as_ref().unwrap().0, "symbol-3");
+            assert_eq!(lists.sheets[0].symbols[1].target.as_ref().unwrap().0, "symbol-2");
             assert_eq!(app.session.inspect(), before);
         }
     }

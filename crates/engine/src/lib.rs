@@ -10,6 +10,7 @@ pub mod library;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;
+pub mod sheets;
 pub mod wire;
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
@@ -62,6 +63,7 @@ enum ParamKind {
     Selection,
     BoardSetup,
     BoardId,
+    SheetId,
     CopperLayers,
 }
 
@@ -70,7 +72,7 @@ impl ParamKind {
     fn schema(self) -> Value {
         match self {
             Self::BoardSetup => board::setup::BoardSetup::schema(),
-            Self::BoardId => json!({"type":"string", "format":"uuid"}),
+            Self::BoardId | Self::SheetId => json!({"type":"string", "format":"uuid"}),
             Self::CopperLayers => json!({"type":"integer", "enum":[2,4]}),
             Self::AutoHeal => json!({"type":"boolean","default":true}),
             Self::Disconnect => json!({"type":"boolean","default":false}),
@@ -115,7 +117,7 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
-            Self::BoardId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
+            Self::BoardId | Self::SheetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup if value.is_object() => Ok(()),
             Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
             Self::AutoHeal | Self::Disconnect if value.is_boolean() => Ok(()),
@@ -144,6 +146,7 @@ impl ParamKind {
             Self::Rotation if matches!(value.as_u64(), Some(0 | 90 | 180 | 270)) => Ok(()),
             Self::Terminal if Terminal::parse(value).is_some() => Ok(()),
             Self::Selection => Err("must contain bounded unique symbol and wire ID lists"),
+            Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
             Self::BoardSetup => Err("must contain a board setup object"),
             Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
@@ -198,7 +201,7 @@ pub struct Command {
 impl Command {
     /// Describe the command and its required inputs for discovery by MCP clients.
     pub fn to_json(&self) -> Value {
-        let params: Map<String, Value> = self
+        let mut params: Map<String, Value> = self
             .params
             .iter()
             .map(|p| {
@@ -207,6 +210,9 @@ impl Command {
                 (p.name.to_owned(), schema)
             })
             .collect();
+        if sheets::scoped_command(self.id) {
+            params.insert("sheet".to_owned(), json!({"type":"string", "format":"uuid", "description":"Sheet UUID from inspection. Required when the project has multiple sheets; omission is compatible with one-sheet projects."}));
+        }
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
         json!({
             "id": self.id,
@@ -290,6 +296,24 @@ const CATALOG: &[Command] = &[
         title: "New Project",
         summary: "Start a new empty project, named Untitled unless a name is given, replacing the open one. Undoable.",
         params: &[NEW_NAME],
+    },
+    Command {
+        id: sheets::CREATE_SHEET,
+        title: "New Sheet",
+        summary: "Create an empty flat sheet. Undoable.",
+        params: &[sheets::SHEET_NAME, EXPECTED_REVISION],
+    },
+    Command {
+        id: sheets::RENAME_SHEET,
+        title: "Rename Sheet",
+        summary: "Rename an explicitly addressed sheet. Undoable.",
+        params: &[sheets::SHEET, sheets::SHEET_NAME, EXPECTED_REVISION],
+    },
+    Command {
+        id: sheets::DELETE_SHEET,
+        title: "Delete Sheet",
+        summary: "Delete a sheet and its placements, wires and associated board footprints. Retain at least one sheet. Undoable.",
+        params: &[sheets::SHEET, EXPECTED_REVISION],
     },
     Command { id: "project.rename", title: "Rename Project", summary: "Change the open project's name.", params: &[NAME] },
     Command {
@@ -593,17 +617,14 @@ pub struct SheetTarget {
 pub struct Project {
     pub name: String,
     id: uuid::Uuid,
-    sheet_id: uuid::Uuid,
-    /// Display name persisted in the ordered sheet list; the current editor has one sheet.
-    sheet_name: String,
-    symbols: Arc<Vec<SymbolPlacement>>,
+    /// Ordered authored sheets. A projection chooses a sheet without changing this collection.
+    sheets: Arc<Vec<sheets::SchematicSheet>>,
+    /// Transient immutable projection; canonical session snapshots always use index zero.
+    sheet_index: usize,
     /// Logical components own their definition, reference and value.
     components: Arc<BTreeMap<u64, Component>>,
     /// Derived index of each placed component unit to its symbol ID.
     units: Arc<BTreeMap<(u64, String), u64>>,
-    wires: Arc<Vec<Wire>>,
-    junctions: Arc<BTreeMap<u64, Point>>,
-    connectivity: Arc<OnceLock<Connectivity>>,
     board: Arc<Board>,
     /// The older format this snapshot was migrated from when it was opened, if any.
     upgraded_from: Option<u32>,
@@ -616,12 +637,12 @@ impl Project {
         self.board.setup.as_ref()
     }
 
-    /// Address the single supported sheet without exposing or deriving identity from its name.
+    /// Address this snapshot’s schematic projection. Session snapshots default to the first sheet.
     pub fn sheet_target(&self) -> SheetTarget {
         SheetTarget { project: self.id, sheet: self.sheet_id }
     }
 
-    /// Return all schematic symbols in placement order.
+    /// Return this snapshot's addressed sheet symbols in placement order.
     pub fn symbols(&self) -> &[SymbolPlacement] {
         &self.symbols
     }
@@ -659,7 +680,7 @@ impl Project {
         self.upgraded_from
     }
 
-    /// Return committed wires in placement order.
+    /// Return committed wires on this snapshot's addressed sheet in placement order.
     pub fn wires(&self) -> &[Wire] {
         &self.wires
     }
@@ -712,9 +733,11 @@ impl Project {
         Arc::ptr_eq(&self.connectivity, &other.connectivity)
     }
 
-    /// Find the placed board pad for a schematic terminal, if a footprint is assigned.
+    /// Find the placed board pad for a terminal on any sheet, if a footprint is assigned.
     pub fn pad_for_terminal(&self, terminal: Terminal) -> Option<Pad> {
-        self.board.pad_for(self.terminal_symbol(terminal)?.component, terminal.number()).map(|pad| pad.on_board(self.board_target().board))
+        self.board
+            .pad_for(self.all_symbols().find(|symbol| symbol.ordinal == terminal.symbol)?.component, terminal.number())
+            .map(|pad| pad.on_board(self.board_target().board))
     }
 
     /// Locate a mapped physical pad in board coordinates.
@@ -767,18 +790,12 @@ impl Session {
     /// Adopt a validated project as a new history root. Advance past its highest stored ID
     /// so old revision checks fail and newly created objects cannot reuse loaded IDs. Record the
     /// new root revision even when reopening the same snapshot, so views can reset local state.
+    /// A sheet projection is normalized to the first sheet without changing authored documents.
     pub fn open_snapshot(&mut self, project: Arc<Project>) {
-        let highest = project
-            .symbols
-            .last()
-            .map_or(0, |symbol| symbol.ordinal)
-            .max(project.components.last_key_value().map_or(0, |(&id, _)| id))
-            .max(project.wires.last().map_or(0, |wire| wire.ordinal))
-            .max(project.junctions.last_key_value().map_or(0, |(&id, _)| id))
-            .max(project.board.footprints().last().map_or(0, |footprint| footprint.id));
+        let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
         self.history_root_revision = self.revision;
-        self.project = Some(project);
+        self.project = Some(if project.sheet_index == 0 { project } else { Arc::new(Project { sheet_index: 0, ..Project::clone(&project) }) });
         self.undo.clear();
         self.redo.clear();
     }
@@ -821,13 +838,35 @@ impl Session {
     }
 
     /// Whether the command can run now, for greying out a menu item. Setup initialization
-    /// requires an empty, unconfigured board; setup edits require existing setup. Unknown ids can't.
+    /// requires an empty, unconfigured board; setup edits require existing setup. Sheet creation
+    /// stops at the sheet limit and deletion retains one sheet. Unknown IDs are unavailable.
     pub fn available(&self, id: &str) -> bool {
         match id {
             "project.new" => true,
-            "project.rename" | PLACE_RESISTOR | PLACE_SYMBOL | CONNECT_PINS | MOVE_SYMBOL | ROTATE_SYMBOL | DELETE_SYMBOL | SET_SYMBOL_FIELDS
-            | PLACE_FOOTPRINT | DRAW_WIRE | DELETE_WIRE | SLICE_WIRE | BREAK_WIRE | DELETE_WIRE_SEGMENT | MOVE_WIRE_SEGMENT | MOVE_WIRE_CORNER
-            | MOVE_JUNCTION | ATTACH_JUNCTION | HEAL_WIRES | MOVE_ITEMS | DELETE_ITEMS => self.project.is_some(),
+            sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
+            sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
+            sheets::RENAME_SHEET
+            | "project.rename"
+            | PLACE_RESISTOR
+            | PLACE_SYMBOL
+            | CONNECT_PINS
+            | MOVE_SYMBOL
+            | ROTATE_SYMBOL
+            | DELETE_SYMBOL
+            | SET_SYMBOL_FIELDS
+            | PLACE_FOOTPRINT
+            | DRAW_WIRE
+            | DELETE_WIRE
+            | SLICE_WIRE
+            | BREAK_WIRE
+            | DELETE_WIRE_SEGMENT
+            | MOVE_WIRE_SEGMENT
+            | MOVE_WIRE_CORNER
+            | MOVE_JUNCTION
+            | ATTACH_JUNCTION
+            | HEAL_WIRES
+            | MOVE_ITEMS
+            | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none() && p.board.footprints().is_empty()),
             SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
             "edit.undo" => !self.undo.is_empty(),
@@ -843,16 +882,17 @@ impl Session {
     /// The schematic's `junctions` list provides endpoint IDs and positions; its `netlist`
     /// groups connected terminals and junctions, including junction-only nets, and lists
     /// terminals without a wire as `unconnected`. `sheets` reports ordered sheet identities,
-    /// display names and relative document paths (currently one editable sheet).
+    /// display names, relative document paths and per-sheet schematic inspection. The legacy
+    /// top-level schematic is populated only for a single-sheet project.
     /// A configured board also reports setup and laminate thickness (null when unspecified).
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
                 "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json"})).collect::<Vec<_>>(),
-                "sheets": [{"id":p.sheet_id, "name":p.sheet_name, "file":format!("sheets/{}.json", p.sheet_id)}],
+                "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
-                "schematic": p.inspect_schematic(),
+                "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
             if p.board.setup.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"id":p.board_target().board, "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
@@ -882,15 +922,27 @@ impl Session {
     /// Setup handlers retain their revision checks and specific state diagnostics even when
     /// availability disables the command on an open project.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        if sheets::scoped_command(id) {
+            return self.apply_to_sheet(id, params);
+        }
+        self.apply_inner(id, params)
+    }
+
+    /// Dispatch validated commands inside one atomic sheet transaction or the project session.
+    fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
         if matches!(id, PLACE_FOOTPRINT | INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
-        let setup_handler_checks_state = self.project.is_some() && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP);
-        if !setup_handler_checks_state && !self.available(id) {
+        let handler_checks_state =
+            self.project.is_some() && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP | sheets::CREATE_SHEET | sheets::DELETE_SHEET);
+        if !handler_checks_state && !self.available(id) {
             return Err(CommandError::Unavailable(match id {
-                "project.rename"
+                sheets::CREATE_SHEET
+                | sheets::RENAME_SHEET
+                | sheets::DELETE_SHEET
+                | "project.rename"
                 | PLACE_RESISTOR
                 | PLACE_SYMBOL
                 | CONNECT_PINS
@@ -922,14 +974,10 @@ impl Session {
             "project.new" => self.change(Project {
                 name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
                 id: fresh_id()?,
-                sheet_id: fresh_id()?,
-                sheet_name: "Schematic".to_owned(),
-                symbols: Arc::default(),
+                sheets: Arc::new(vec![sheets::SchematicSheet::empty(fresh_id()?, "Main".into())]),
+                sheet_index: 0,
                 components: Arc::default(),
                 units: Arc::default(),
-                wires: Arc::default(),
-                junctions: Arc::default(),
-                connectivity: Arc::default(),
                 board: Arc::default(),
                 upgraded_from: None,
             }),
@@ -941,6 +989,7 @@ impl Session {
                     self.change(project);
                 }
             }
+            sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
             PLACE_RESISTOR => {
                 let resistor =
                     library_symbol("resistor").ok_or_else(|| CommandError::Unavailable("the starter library has no resistor symbol".to_owned()))?;
@@ -991,7 +1040,7 @@ impl Session {
     fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        if project.symbols.len() >= MAX_SYMBOLS {
+        if project.components.len() >= MAX_SYMBOLS {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
         // A project keeps one copy per library, ID and revision: reuse the one it already saves.
@@ -1026,7 +1075,7 @@ impl Session {
         let mut project = project.clone();
         Arc::make_mut(&mut project.components).insert(ordinal, component);
         Arc::make_mut(&mut project.units).insert((ordinal, definition.unit_id().to_owned()), ordinal);
-        Arc::make_mut(&mut project.symbols).push(SymbolPlacement {
+        Arc::make_mut(&mut project.sheet_mut().symbols).push(SymbolPlacement {
             unit: definition.unit_id().to_owned(),
             definition,
             ordinal,
@@ -1034,7 +1083,7 @@ impl Session {
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
             rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
         });
-        project.connectivity = Arc::default();
+        project.sheet_mut().connectivity = Arc::default();
         let project = project.healed(self.open_project()?, self.revision(), wire::auto_heal(params))?;
         self.change(project);
         Ok(())
@@ -1077,7 +1126,7 @@ impl Session {
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
         let mut project = project.clone();
-        let symbol = &mut Arc::make_mut(&mut project.symbols)[index];
+        let symbol = &mut Arc::make_mut(&mut project.sheet_mut().symbols)[index];
         symbol.rotation = (symbol.rotation + 1) % 4;
         self.change(project);
         Ok(())
@@ -1092,15 +1141,15 @@ impl Session {
         let symbol = project.symbols[index].clone();
         let ordinal = symbol.ordinal;
         let mut project = project.clone();
-        Arc::make_mut(&mut project.symbols).remove(index);
-        Arc::make_mut(&mut project.wires).retain(|wire| wire.terminals().iter().all(|terminal| terminal.symbol != ordinal));
+        Arc::make_mut(&mut project.sheet_mut().symbols).remove(index);
+        Arc::make_mut(&mut project.sheet_mut().wires).retain(|wire| wire.terminals().iter().all(|terminal| terminal.symbol != ordinal));
         project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
         if !project.symbols.iter().any(|other| other.component == symbol.component) {
             Arc::make_mut(&mut project.components).remove(&symbol.component);
             Arc::make_mut(&mut project.board).remove_component(symbol.component);
         }
-        project.connectivity = Arc::default();
+        project.sheet_mut().connectivity = Arc::default();
         self.change(project);
         Ok(())
     }
@@ -1175,12 +1224,12 @@ impl Session {
             return Err(CommandError::Unavailable(format!("the schematic already has {MAX_WIRES} wires")));
         }
         let mut project = project.clone();
-        Arc::make_mut(&mut project.wires).push(Wire {
+        Arc::make_mut(&mut project.sheet_mut().wires).push(Wire {
             ordinal: self.next_object_id()?,
             endpoints: terminals.map(WireEndpoint::Terminal),
             bends: None,
         });
-        project.connectivity = Arc::default();
+        project.sheet_mut().connectivity = Arc::default();
         self.change(project);
         Ok(())
     }
@@ -1204,7 +1253,7 @@ impl Session {
     /// Commit a snapshot and bound undo history. New edits clear redo; revisions advance
     /// past every ID allocated by a compound wire edit, preventing reuse after undo.
     fn change(&mut self, project: Project) {
-        let highest = project.wires.last().map_or(0, |wire| wire.ordinal).max(project.junctions.last_key_value().map_or(0, |(&id, _)| id));
+        let highest = project.highest_id();
         self.undo.push(self.project.replace(Arc::new(project)));
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
@@ -1238,8 +1287,13 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
         Value::Object(o) => o,
         _ => return Err(CommandError::InvalidParams(format!("`{}` takes an object of parameters", command.id))),
     };
-    if let Some(extra) = given.keys().find(|k| !command.params.iter().any(|p| p.name == k.as_str())) {
+    if let Some(extra) =
+        given.keys().find(|k| !command.params.iter().any(|p| p.name == k.as_str()) && !(k.as_str() == "sheet" && sheets::scoped_command(command.id)))
+    {
         return Err(CommandError::InvalidParams(format!("`{}` has no parameter `{extra}`", command.id)));
+    }
+    if let Some(sheet) = given.get("sheet") {
+        sheets::SHEET.kind.validate(sheet).map_err(|message| CommandError::InvalidParams(message.to_owned()))?;
     }
     for param in command.params {
         if !param.required && !given.contains_key(param.name) {

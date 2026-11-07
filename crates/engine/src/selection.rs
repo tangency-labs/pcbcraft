@@ -118,7 +118,7 @@ impl Selection {
             return Ok(project.clone());
         }
         let mut next = project.clone();
-        for symbol in Arc::make_mut(&mut next.symbols) {
+        for symbol in Arc::make_mut(&mut next.sheet_mut().symbols) {
             if self.symbols.contains(&symbol.id()) {
                 symbol.position = translated(symbol.position, delta)?;
             }
@@ -133,7 +133,7 @@ impl Selection {
                 _ => None,
             })
             .collect();
-        for (id, point) in Arc::make_mut(&mut next.junctions) {
+        for (id, point) in Arc::make_mut(&mut next.sheet_mut().junctions) {
             if junctions.contains(id) {
                 *point = translated(*point, delta)?;
             }
@@ -150,7 +150,7 @@ impl Selection {
             if path.len() < 2 || path.len() > crate::wire::MAX_BENDS + 2 {
                 return Err(CommandError::InvalidParams("moved wire route exceeds its bounds".to_owned()));
             }
-            Arc::make_mut(&mut next.wires)[index].bends = Some(path[1..path.len() - 1].to_vec());
+            Arc::make_mut(&mut next.sheet_mut().wires)[index].bends = Some(path[1..path.len() - 1].to_vec());
         }
         Ok(next)
     }
@@ -186,8 +186,8 @@ impl Session {
         items.validate(project)?;
         let mut next = project.clone();
         let deleted: BTreeSet<_> = project.symbols().iter().filter(|s| items.symbols.contains(&s.id())).map(|s| s.ordinal).collect();
-        Arc::make_mut(&mut next.symbols).retain(|s| !deleted.contains(&s.ordinal));
-        Arc::make_mut(&mut next.wires)
+        Arc::make_mut(&mut next.sheet_mut().symbols).retain(|s| !deleted.contains(&s.ordinal));
+        Arc::make_mut(&mut next.sheet_mut().wires)
             .retain(|wire| !items.wires.contains(&wire.id()) && wire.terminals().iter().all(|pin| !deleted.contains(&pin.symbol)));
         Arc::make_mut(&mut next.units).retain(|_, symbol| !deleted.contains(symbol));
         let used: BTreeSet<_> = next.symbols.iter().map(|s| s.component).collect();
@@ -198,7 +198,7 @@ impl Session {
             Arc::make_mut(&mut next.board).remove_component(id);
         }
         next.prune_junctions();
-        next.connectivity = Arc::default();
+        next.sheet_mut().connectivity = Arc::default();
         self.change(next);
         Ok(())
     }

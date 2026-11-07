@@ -141,7 +141,14 @@ the saved project restores the last active arrangement. Selecting a sheet in
 Browser or a workspace changes what the focused pane shows, without adding tabs,
 switching arrangements or moving views elsewhere. A single view has no lower tab
 strip; split panes each show one document header whose **×** closes the pane.
-The engine currently exposes one editable sheet and one legacy board.
+The engine supports up to 64 flat sheets and one legacy board. Right-click
+**Sheets** in the Browser and choose **New Sheet…**; sheet rows also offer
+**Rename Sheet…** and **Delete Sheet…**. Creating a sheet opens it in that pane.
+The breadcrumb uses the actual sheet name and its position in the sheet count.
+Deletion asks for confirmation and removes its symbols, wires and associated
+footprints together; Undo restores them. Other views of a deleted sheet become
+unavailable until it is restored or another document is opened. Hierarchical
+sheet symbols, pins and labels remain tracked by #41.
 See [arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
 for storage and monitor-restoration limits.
 
@@ -264,6 +271,13 @@ In the live editor the resistor and attached wire move, the project becomes
 unsaved, and GUI **Undo**/**Redo** use the same history. Inspect after each step
 to verify the result. If another edit changed the revision, inspect again before
 retrying. The live editor runs the same project commands as a headless session.
+
+For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
+and include it as `sheet` in schematic edits and footprint placement. Use
+`sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, with the
+current `expected_revision`. Each inspected sheet includes its own schematic;
+omitting `sheet` is accepted only when one sheet exists. `view.open_sheet` takes
+`view` and `sheet` to navigate a live editor pane without editing the project.
 
 The live editor also offers window commands. Call `inspect_editor` for its view
 IDs, then split the window and switch to the light theme:

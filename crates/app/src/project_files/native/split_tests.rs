@@ -158,6 +158,62 @@ fn unchanged_documents_are_never_rewritten() {
     assert_eq!(fs::read(root.join("sheets/.DS_Store")).unwrap(), b"OS metadata");
 }
 
+/// Version-5 input stays byte-for-byte intact on no-op and geometry saves. The first sheet
+/// lifecycle change upgrades only the entry point and affected documents, then opens via CLI too.
+#[test]
+fn version_five_no_op_and_sheet_upgrade_preserve_unaffected_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let original =
+        pcbcraft_engine::persistence::decode_packed(include_bytes!("../../../tests/fixtures/split/two-resistors.pc.zip")).unwrap().documents.unwrap();
+    folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
+    let loaded = load(&root.join(ENTRY_POINT)).unwrap();
+    let old = loaded.snapshot.clone();
+    save_target(old.clone(), Some(&old), loaded.target.clone(), &mut |_| panic!("no-op must not stage")).unwrap();
+    assert_eq!(folder::load(&root).unwrap(), original);
+    let mut s = Session::default();
+    s.open_snapshot(old.clone());
+    apply(&mut s, MOVE_SYMBOL, json!({"symbol":"symbol-2","x_nm":1_270_000,"y_nm":0}));
+    save_target(s.snapshot().unwrap(), Some(&old), loaded.target, &mut |_| Ok(())).unwrap();
+    assert_eq!(fs::read(root.join(ENTRY_POINT)).unwrap(), original[ENTRY_POINT]);
+    let loaded = load(&root).unwrap();
+    apply(&mut s, pcbcraft_engine::sheets::CREATE_SHEET, json!({"name":"Power"}));
+    save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
+    let after = folder::load(&root).unwrap();
+    let header: serde_json::Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
+    assert_eq!(header["format"], "pcbcraft-project/6");
+    assert_eq!(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap().sheets().len(), 2);
+    for (path, bytes) in original.iter().filter(|(path, _)| path.as_str() != ENTRY_POINT && !path.starts_with("sheets/")) {
+        assert_eq!(&after[path], bytes);
+    }
+}
+
+/// Interrupted sheet deletion recovers a complete project, including its component records,
+/// saved definitions and document removal. A pre-journal interruption retains the old project.
+#[test]
+fn interrupted_sheet_deletion_recovers_without_partial_document_sets() {
+    let mut s = session();
+    apply(&mut s, pcbcraft_engine::sheets::CREATE_SHEET, json!({"name":"Power"}));
+    let power = s.project().unwrap().sheets().nth(1).unwrap().target;
+    apply(&mut s, PLACE_SYMBOL, json!({"sheet":power.id(),"definition":"led","x_nm":0,"y_nm":0}));
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    apply(&mut s, pcbcraft_engine::sheets::DELETE_SHEET, json!({"sheet":power.id()}));
+    let after = encode_documents(s.snapshot().unwrap()).unwrap();
+    for phase in [
+        "staged".to_owned(),
+        "journal".to_owned(),
+        format!("published:{ENTRY_POINT}"),
+        format!("published:sheets/{}.json", power.id()),
+        "completed".to_owned(),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        folder::save(&root, None, &before, &mut |_| Ok(())).unwrap();
+        assert!(folder::save(&root, Some(&before), &after, &mut |at| if at == phase { Err("interrupted".into()) } else { Ok(()) }).is_err());
+        assert_eq!(folder::load(&root).unwrap(), if phase == "staged" { before.clone() } else { after.clone() });
+    }
+}
+
 /// External changes and incomplete documents cannot replace the active project or clear edits.
 #[test]
 fn failed_folder_opens_and_stale_saves_preserve_the_session() {

@@ -95,6 +95,8 @@ mod live {
         Selection,
         /// A list of distinct footprint IDs.
         Footprints,
+        /// Persistent sheet UUID, validated against the current project before navigation.
+        Sheet,
     }
 
     impl Kind {
@@ -104,6 +106,7 @@ mod live {
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
                 Self::View | Self::Window | Self::Arrangement => json!({"type": "integer", "minimum": 0}),
+                Self::Sheet => json!({"type":"string","format":"uuid"}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
                 Self::Choice(values) => json!({"type": "string", "enum": values}),
@@ -127,6 +130,7 @@ mod live {
                 Self::Choice(values) => value.as_str().is_some_and(|value| values.contains(&value)),
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
+                Self::Sheet => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
                 Self::Selection => Selection::parse(value).is_some(),
                 Self::Footprints => footprints(value).is_some(),
             };
@@ -137,6 +141,7 @@ mod live {
                 Self::View => "must be a view ID from inspect_editor".to_owned(),
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
+                Self::Sheet => "must be a sheet UUID from project inspection".to_owned(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
                 Self::Choice(values) => format!("must be one of {}", values.join(", ")),
@@ -246,6 +251,12 @@ mod live {
     }
 
     const CATALOG: &[WindowCommand] = &[
+        WindowCommand {
+            id: "view.open_sheet",
+            title: "Open Sheet",
+            summary: "Open an explicitly addressed sheet in this pane, as its Browser row does. Other panes retain their targets.",
+            params: &[VIEW, Param { name: "sheet", summary: "Sheet UUID from project inspection", required: true, kind: Kind::Sheet }],
+        },
         WindowCommand {
             id: "view.focus",
             title: "Focus View",
@@ -576,6 +587,7 @@ mod live {
                         Workspace::Board => "board",
                     },
                     "sheet": view.sheet_path(&app.session),
+                    "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
                     "grid_spacing_nm": view.camera.snap_nm(),
                     "zoom_percent": (view.camera.zoom() * 100.0).round(),
                     "center": view.camera.center(),
@@ -760,6 +772,11 @@ mod live {
                     self.views.select_board(wanted, &self.session, self.preferences.selection_follow);
                     self.views.bind(previous);
                 }
+                ("view.open_sheet", Some((view, _)), _) => {
+                    let project = self.session.project().ok_or("no project is open")?;
+                    let sheet = project.resolve_sheet(params["sheet"].as_str()).map_err(|e| e.to_string())?;
+                    self.apply_browser_action(view, crate::project_browser::Action::OpenDocument(crate::editor_view::DocumentTarget::Sheet(sheet)));
+                }
                 ("view.set_workspace", Some((view, _)), _) => {
                     let workspace = if params["workspace"].as_str() == Some("board") { Workspace::Board } else { Workspace::Schematic };
                     let placement = match params["placement"].as_str() {
@@ -772,11 +789,11 @@ mod live {
                 ("view.select", Some((view, _)), _) => {
                     let items = Selection::parse(&params["items"]).ok_or("`items` must contain symbol and wire ID lists")?;
                     let mut present = items.clone();
-                    if let Some(project) = self.session.project() {
-                        present.retain(project);
+                    if let Some(project) = self.views.view(view).and_then(|view| view.snapshot(&self.session)) {
+                        present.retain(&project);
                     }
                     if present != items {
-                        return Err("Some of those items aren't in the project. Inspect the project for current IDs.".to_owned());
+                        return Err("Some of those items aren't on this view's sheet. Inspect the project for current IDs.".to_owned());
                     }
                     let previous = self.views.active.id();
                     self.views.bind(view);
