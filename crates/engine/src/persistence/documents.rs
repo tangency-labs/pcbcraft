@@ -265,8 +265,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         sheet: combined,
         board: Some(BoardRecords { footprints: board.footprints }),
     };
-    let mut project =
-        validate_with_hierarchy(document, None, footprint_definitions, &anchors, &hierarchy_ids).map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
+    let mut project = validate_with_hierarchy(document, None, footprint_definitions, &anchors, &hierarchy_ids)
+        .map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
     let project_data = Arc::make_mut(&mut project);
     let sheets = layouts
         .into_iter()
@@ -540,7 +540,7 @@ impl DocumentsEncoder {
                         self.next();
                     }
                 }
-                7 => {
+                9 => {
                     if let Some(((library, id, revision), definition)) = self.footprint_definitions.pop_first() {
                         let mut bytes = serde_json::to_vec_pretty(definition.as_ref()).map_err(|e| e.to_string())?;
                         bytes.push(b'\n');

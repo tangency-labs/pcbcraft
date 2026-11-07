@@ -244,3 +244,24 @@ fn resize_sheet_is_atomic_persistent_and_preserves_pin_identity() {
         assert!(persistence::decode_documents(&bad_docs).is_err());
     }
 }
+
+/// Hierarchy records and pinned physical footprints share the incremental save without skipping
+/// either document family; reopening works from the saved copies alone and gives identical bytes.
+#[test]
+fn hierarchy_and_physical_footprints_round_trip_together() {
+    use crate::persistence::{decode_documents, encode_documents};
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+    let symbol = s.project().unwrap().symbols()[0].id();
+    apply(&mut s, crate::PLACE_FOOTPRINT, json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":0,"y_nm":0}));
+    apply(&mut s, CREATE_CHILD, json!({"name":"Power","x_nm":20_320_000,"y_nm":0}));
+    let child = s.project().unwrap().sheets().nth(1).unwrap().target;
+    apply(&mut s, ADD_LABEL, json!({"sheet":child.id(),"name":"ENABLE","direction":"input","x_nm":0,"y_nm":0}));
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert!(saved.keys().any(|path| path.starts_with("library/footprints/starter/resistor-0402.r")));
+    let reopened = decode_documents(&saved).unwrap();
+    assert_eq!(reopened.board_view(reopened.board_target()).unwrap().footprints().count(), 1);
+    assert_eq!(reopened.for_sheet(child).unwrap().hierarchical_labels()[0].name, "ENABLE");
+    assert_eq!(encode_documents(reopened).unwrap(), saved);
+}
