@@ -36,6 +36,11 @@ modes). The gate's rules are PCBCraft's own command namespaces, and the UI uses 
 `assistant/host.rs` adapts SolidCraft's `agent_http` and `Keychain` from `apps/solidcraft/src/main.rs`
 at the same revision: HTTPS through `ureq` and `rustls` with the platform's certificates, no
 redirects, a bounded response, and keys in the system keychain through `keyring`.
+The chat's token file (`write_token_file` and `restrict_to_user` in `assistant/chat.rs`) adapts
+`write_token_file_with` and `restrict_to_user` from SolidCraft's `crates/engine/src/control_auth.rs`
+at the same revision: an owner-only file on Unix, and on Windows `icacls` replacing the empty file's
+inherited permissions before the secret goes in. PCBCraft calls `icacls` by its full path, keeps the
+file in its own temporary folder, and writes no token when `icacls` fails or times out.
 
 The local transport in `crates/craft-control/` follows the first-request token
 and loopback design in SolidCraft's
