@@ -10,7 +10,7 @@ fn board<'a>() -> Harness<'a, PcbApp> {
     h.run();
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
-    click(&mut h, "Board Edge");
+    click(&mut h, "Activate layer Board Edge");
     h
 }
 

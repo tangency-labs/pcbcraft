@@ -326,7 +326,14 @@ it. In PCB layout, **Place on board** places an assigned component at unit-aware
 X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
 registration, arcs, slots and routing remain planned.
-For a board boundary, select **Board Edge** in the Layers card's Board group and
+The Layout ribbon's **Active layer** selector and status bar identify the drawing
+layer. Click a row in Layers to activate it, with an arrow and color swatch
+beside its name; the Visible checkboxes
+remain independent. Hidden active layers carry a **(hidden)** suffix. **Show all**
+and **Isolate active** change only visibility in the focused view, leaving saved
+board data and document undo unchanged.
+
+For a board boundary, select **Board Edge** in the selector or Layers card and
 use **Layout → Draw → Line** or **Rectangle**. Line accepts successive clicked
 vertices, closes when you click the first vertex, and finishes an open path with
 Enter. Rectangle uses two opposite corners. Both snap to the grid and nearby edge

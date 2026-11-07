@@ -146,6 +146,13 @@ pub(super) struct BoardState {
 }
 
 impl BoardState {
+    /// Replace the view's layer visibility in one action; isolation always reveals the active layer.
+    /// Neither document revision nor saved files change, and unfinished drawing gestures expire.
+    pub(super) fn set_layer_visibility(&mut self, layers: impl IntoIterator<Item = String>, active_only: bool) {
+        self.drawing.cancel();
+        self.hidden_layers = layers.into_iter().filter(|id| active_only && self.active_layer.as_ref() != Some(id)).collect();
+    }
+
     /// Apply view-local layer choices through the same handler for Layers and live control.
     /// Changing the active layer or hiding it cancels disposable drawing gestures.
     pub(super) fn set_layer(&mut self, id: &str, active: bool, visible: Option<bool>) {
@@ -557,11 +564,21 @@ impl EditorView {
             }
             self.board.hidden_layers.retain(|id| layers.contains(id));
             if self.board.active_layer.as_ref().is_none_or(|id| !layers.contains(id)) {
-                self.board.active_layer = setup.and_then(|setup| {
-                    setup.stackup().strata.iter().find_map(|stratum| {
-                        if let pcbcraft_engine::board::setup::Stratum::Copper { layer, .. } = stratum { Some(layer.to_string()) } else { None }
+                self.board.active_layer = setup
+                    .and_then(|setup| {
+                        setup.stackup().strata.iter().find_map(|stratum| {
+                            if let pcbcraft_engine::board::setup::Stratum::Copper { layer, .. } = stratum { Some(layer.to_string()) } else { None }
+                        })
                     })
-                });
+                    .or_else(|| {
+                        self.board
+                            .target
+                            .and_then(|target| project.board_view(target))
+                            .and_then(|board| {
+                                board.layers().into_iter().find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Outline)
+                            })
+                            .map(|layer| layer.id.to_string())
+                    });
             }
         }
         changed

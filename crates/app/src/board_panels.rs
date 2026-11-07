@@ -118,13 +118,12 @@ fn group(purpose: LayerPurpose) -> usize {
     }
 }
 
-/// Copper follows physical stack order; technical layers group by purpose and sort by display
-/// name. Renaming or regrouping does not change local visibility keyed by stable layer identity.
-fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>, state: &mut BoardState, id: Id) {
-    let records = board.layers();
-    let mut layers: Vec<_> = records.iter().collect();
+/// Keep copper in stack order and group technical layers consistently in the picker and card.
+pub(super) fn ordered_layers(board: pcbcraft_engine::board::view::BoardView<'_>) -> Vec<Layer> {
+    let mut layers = board.layers();
     layers.sort_by_cached_key(|layer| {
         (
+            group(layer.purpose),
             board
                 .setup()
                 .and_then(|setup| setup.stackup().strata.iter().position(|stratum| matches!(stratum,Stratum::Copper{layer:id,..}if *id==layer.id)))
@@ -132,24 +131,71 @@ fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>,
             layer.name.to_lowercase(),
         )
     });
+    layers
+}
+
+/// Retain older saved layer names while displaying the product's Board Edge terminology.
+pub(super) fn layer_name(layer: &Layer) -> &str {
+    if layer.purpose == LayerPurpose::Outline && layer.name == "Board outline" { "Board Edge" } else { &layer.name }
+}
+
+/// Copper keys reuse the board palette; technical keys use existing chrome ink roles.
+fn layer_color(layer: &Layer) -> egui::Color32 {
+    if layer.purpose == LayerPurpose::Copper {
+        board::copper_color(layer.side.map(|side| side == Side::Front))
+    } else {
+        board::technical_layer_color(layer.purpose == LayerPurpose::Outline)
+    }
+}
+
+/// Copper follows physical stack order; technical layers group by purpose and sort by display
+/// name. Renaming or regrouping does not change local visibility keyed by stable layer identity.
+/// A new active choice or resized viewport reveals the active row once, without fighting later scrolling.
+fn layer_groups(ui: &mut Ui, board: pcbcraft_engine::board::view::BoardView<'_>, state: &mut BoardState, id: Id) {
+    ui.horizontal(|ui| {
+        if ui.small_button("Show all").clicked() {
+            state.set_layer_visibility(board.layers().iter().map(|layer| layer.id.to_string()), false);
+        }
+        if ui.add_enabled(state.active_layer.is_some(), egui::Button::new("Isolate active").small()).clicked() {
+            state.set_layer_visibility(board.layers().iter().map(|layer| layer.id.to_string()), true);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("Visible");
+        ui.add_space(pcbcraft_chrome::Tokens::get().space_24 + pcbcraft_chrome::Tokens::get().space_16);
+        ui.label("Layer");
+    });
+    let current = (state.active_layer.clone(), ui.clip_rect().height().to_bits());
+    let reveal = ui.ctx().data_mut(|data| {
+        let key = id.with("last_active_layer");
+        let before = data.get_temp::<(Option<String>, u32)>(key);
+        let reveal = before.as_ref() != Some(&current);
+        data.insert_temp(key, current);
+        reveal
+    });
+    let layers = ordered_layers(board);
     for (index, title) in ["Copper", "Board", "Component details", "Manufacturing", "User"].into_iter().enumerate() {
         let items: Vec<_> = layers.iter().filter(|layer| group(layer.purpose) == index).collect();
         if items.is_empty() {
             continue;
         }
-        egui::CollapsingHeader::new(title).id_salt(id.with(index)).default_open(index <= 1).show(ui, |ui| {
-            for layer in items {
-                layer_row(ui, layer, state);
-            }
-        });
+        let contains_active = items.iter().any(|layer| state.active_layer.as_deref() == Some(layer.id.to_string().as_str()));
+        egui::CollapsingHeader::new(title).id_salt(id.with(index)).default_open(index <= 1).open((reveal && contains_active).then_some(true)).show(
+            ui,
+            |ui| {
+                for layer in items {
+                    layer_row(ui, layer, state, reveal);
+                }
+            },
+        );
     }
 }
 
 /// Visibility and active layer are independent. Technical controls retain state for future
 /// geometry; the current legacy through-hole inspection markers use visible copper only.
-fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState) {
+fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState, reveal: bool) {
     let id = layer.id.to_string();
-    let label = if layer.purpose == LayerPurpose::Outline && layer.name == "Board outline" { "Board Edge" } else { &layer.name };
+    let label = layer_name(layer);
     ui.push_id(&id, |ui| {
         ui.horizontal(|ui| {
             let mut visible = !state.hidden_layers.contains(&id);
@@ -158,10 +204,24 @@ fn layer_row(ui: &mut Ui, layer: &Layer, state: &mut BoardState) {
             if response.changed() {
                 state.set_layer(&id, false, Some(visible));
             }
-            if layer.purpose == LayerPurpose::Copper {
-                board::layer_swatch(ui, board::copper_color(layer.side.map(|side| side == Side::Front)));
+            let active = state.active_layer.as_ref() == Some(&id);
+            let row = workspace::tree_row(
+                ui,
+                ui.id().with("activate"),
+                &workspace::TreeRow {
+                    depth: 0,
+                    fold: None,
+                    icon: Some(workspace::TreeIcon::Layer { color: layer_color(layer), active }),
+                    label,
+                    accessibility_label: Some(&format!("Activate layer {label}")),
+                    tip: if active { "Active layer" } else { "Set active layer" },
+                    selected: active,
+                },
+            );
+            if reveal && active {
+                row.response.scroll_to_me(Some(egui::Align::Center));
             }
-            if ui.selectable_label(state.active_layer.as_ref() == Some(&id), label).clicked() {
+            if row.clicked {
                 state.set_layer(&id, true, None);
             }
         })

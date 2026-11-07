@@ -56,6 +56,7 @@ impl PcbApp {
 
     /// Offer single-footprint transforms alongside navigation, keeping board tools separate from
     /// schematic tools. Completed placements use the same atomic engine command as MCP.
+    /// The active-layer field uses the Layers card's view-local handler, without editing the project.
     /// Components › Footprints opens the package chooser for the selected footprint's component,
     /// or leaves the component unselected when no footprint is selected.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
@@ -111,6 +112,25 @@ impl PcbApp {
             self.begin_footprint_assignment(component);
         }
         workspace::ribbon_separator(ui);
+        if let Some(board) = self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))) {
+            let layers = crate::board_panels::ordered_layers(board);
+            let labels: Vec<_> = layers
+                .iter()
+                .map(|layer| {
+                    let label = crate::board_panels::layer_name(layer);
+                    if self.views.active.board.hidden_layers.contains(&layer.id.to_string()) { format!("{label} (hidden)") } else { label.to_owned() }
+                })
+                .collect();
+            let options: Vec<_> = labels.iter().enumerate().map(|(i, label)| (i, label.as_str())).collect();
+            let mut selected =
+                layers.iter().position(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str())).unwrap_or(0);
+            let changed =
+                workspace::ribbon_field(ui, "Active layer", |ui| pcbcraft_chrome::settings::choice(ui, "Active layer", &mut selected, &options));
+            if changed && let Some(layer) = layers.get(selected) {
+                self.views.active.board.set_layer(&layer.id.to_string(), true, None);
+            }
+            workspace::ribbon_separator(ui);
+        }
         let can_draw =
             self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))).is_some_and(
                 |board| {

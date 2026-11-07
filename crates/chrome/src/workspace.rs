@@ -74,6 +74,11 @@ pub enum TreeIcon {
     Sheet,
     Board,
     Tool(ToolIcon),
+    /// A layer uses the same tree row surface, with an explicit active arrow and color key.
+    Layer {
+        color: Color32,
+        active: bool,
+    },
 }
 
 /// One row of a Browser tree. The caller owns the tree and its fold state; the row only draws.
@@ -590,9 +595,21 @@ fn elided(p: &egui::Painter, text: &str, font: FontId, color: Color32, width: f3
     p.layout_job(job)
 }
 
-/// Draw Browser glyphs using shared workspace icons and the existing qualified tree artwork.
+/// Draw tree glyphs using shared workspace icons, qualified artwork and original layer markers.
 fn paint_tree_icon(p: &egui::Painter, icon: TreeIcon, center: Pos2, size: f32, t: Tokens) {
     match icon {
+        TreeIcon::Layer { color, active } => {
+            p.circle_filled(center, t.space_4, color);
+            p.circle_stroke(center, t.space_4, Stroke::new(1.0, t.border));
+            if active {
+                let c = center - vec2(TREE_LABEL_LEFT - t.space_3, 0.0);
+                p.add(Shape::convex_polygon(
+                    vec![c + vec2(-t.space_3, -t.space_4), c + vec2(t.space_3, 0.0), c + vec2(-t.space_3, t.space_4)],
+                    t.accent,
+                    Stroke::NONE,
+                ));
+            }
+        }
         TreeIcon::Board => paint_workspace_glyph(p, WorkspaceIcon::Layout, center, size, t, true),
         TreeIcon::Folder => paint_folder(p, center, size, t.icon_line),
         TreeIcon::Sheet => {
@@ -698,6 +715,28 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
         }
     });
     picked
+}
+
+/// Place a standard themed field in the ribbon using the existing group height and caption.
+/// Its own control opens any menu; the caption adds no second popup or interaction target.
+pub fn ribbon_field<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get();
+    let width = t.control_height * 6.0;
+    let height = RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP + t.font_small + t.space_4;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let field = Rect::from_min_max(
+        rect.min + vec2(RIBBON_GROUP_PADDING, t.space_8),
+        pos2(rect.right() - RIBBON_GROUP_PADDING, rect.top() + RIBBON_TOOL_HEIGHT),
+    );
+    let result = ui.scope_builder(egui::UiBuilder::new().max_rect(field).layout(Layout::top_down(Align::Min)), add).inner;
+    ui.painter().text(
+        pos2(rect.center().x, rect.top() + RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP),
+        Align2::CENTER_TOP,
+        title,
+        FontId::proportional(t.font_small),
+        t.text_dim,
+    );
+    result
 }
 
 /// The quiet rule between two ribbon groups, in a slot as tall as the groups.

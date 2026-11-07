@@ -1548,7 +1548,7 @@ fn detached_board_edge_preview_cancels_on_focus_loss_and_close() {
     click(&mut h, "Choose workspace");
     click(&mut h, "Open PCB layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
-    let layer = child_rect(&peer, "Board Edge").center();
+    let layer = child_rect(&peer, "Activate layer Board Edge").center();
     child_click_at(&mut h, &peer, layer);
     let tool = child_rect(&peer, "Draw rectangle on Board Edge").center();
     child_click_at(&mut h, &peer, tool);

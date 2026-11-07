@@ -253,6 +253,11 @@ pub fn empty(p: &Painter, rect: Rect) {
     p.text(rect.center(), Align2::CENTER_CENTER, "No footprints placed", FontId::proportional(t.font_body), t.board_ink);
 }
 
+/// Technical layer keys use existing theme roles, with board-edge ink distinct from details.
+pub fn technical_layer_color(edge: bool) -> Color32 {
+    if edge { Tokens::get().text } else { Tokens::get().text_dim }
+}
+
 /// Paint a layer-color key without depending on optional font glyph coverage.
 pub fn layer_swatch(ui: &mut egui::Ui, color: Color32) {
     let size = Tokens::get().space_8;

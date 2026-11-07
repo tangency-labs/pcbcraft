@@ -125,6 +125,9 @@ Board Edge layers accept these graphics in this slice. Open paths are allowed,
 without a manufacturing or clearance claim. Live `view.set_layer` uses the same
 Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.
+`view.set_layer_visibility` takes `view` and `mode` (`all` or `active`) through the
+same handler as Show all / Isolate active. Isolation reveals the active layer,
+hides the others and cancels unfinished drawing in that view.
 
 To start the MCP server from the repository root, run
 `cargo run --locked -p pcbcraft-cli -- mcp`. To connect an MCP client, point it

@@ -1001,6 +1001,7 @@ impl PcbApp {
     /// Show the command error or placement hint alongside the project name, and at the right
     /// the focused view's grid spacing, which can be changed there. Home has no canvas, so it
     /// shows no grid. Density annotations follow the visible grid style, independently of snapping.
+    /// PCB views report their active tool/layer and explicitly label a hidden active layer.
     fn status(&mut self, ui: &mut Ui) {
         let name = self.session.project().map_or("No project open", |p| p.name.as_str()).to_owned();
         let message = self.message.clone();
@@ -1018,6 +1019,23 @@ impl PcbApp {
         let mut unit = self.preferences.units;
         let pointer = self.pointer.filter(|_| grid_view.is_some());
         let units_shortcut = ui.ctx().format_shortcut(&SWITCH_UNITS);
+        let board_status = self
+            .session
+            .project()
+            .and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target)))
+            .and_then(|board| {
+                board.layers().into_iter().find(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str()))
+            })
+            .map(|layer| {
+                let name = crate::board_panels::layer_name(&layer);
+                let hidden = self.views.active.board.hidden_layers.contains(&layer.id.to_string());
+                let tool = match self.views.active.board.drawing.tool {
+                    Some(board_drawing::Tool::Lines) => "Line · ",
+                    Some(board_drawing::Tool::Rectangle) => "Rectangle · ",
+                    None => "",
+                };
+                format!("{tool}{name}{}", if hidden { " (hidden)" } else { "" })
+            });
         shell::status_bar(
             ui,
             |ui| {
@@ -1025,7 +1043,7 @@ impl PcbApp {
                 if let Some(message) = message {
                     ui.label(shell::error(message));
                 } else if self.views.active.workspace == Workspace::Board {
-                    ui.label(dim("Board"));
+                    ui.label(dim(board_status.as_deref().unwrap_or("Board")));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {

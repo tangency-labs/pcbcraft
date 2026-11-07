@@ -344,6 +344,20 @@ mod live {
             ],
         },
         WindowCommand {
+            id: "view.set_layer_visibility",
+            title: "Layer Visibility",
+            summary: "Show all layers or isolate the active layer, as the Layers card does. Changes only the addressed board view and cancels unfinished drawing.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "mode",
+                    summary: "all shows every layer; active reveals only the active layer",
+                    required: true,
+                    kind: Kind::Choice(&["all", "active"]),
+                },
+            ],
+        },
+        WindowCommand {
             id: "view.select",
             title: "Select",
             summary: "Replace a schematic view's selection with these symbols and wires, as clicking or box selection does. Empty lists clear it. Other views highlight it under the Follow selection setting. PCB views take view.select_footprints.",
@@ -757,6 +771,18 @@ mod live {
                     if let Some(view) = self.views.view_mut(view) {
                         view.camera.set_zoom(percent as f32 / 100.0);
                     }
+                }
+                ("view.set_layer_visibility", Some((view, _)), _) => {
+                    let state =
+                        self.views.view(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
+                    let target = state.board.target.ok_or("No board is bound to this view")?;
+                    let board = self.session.project().and_then(|project| project.board_view(target)).ok_or("The view's board is unavailable")?;
+                    let active_only = params["mode"].as_str() == Some("active");
+                    if active_only && !board.layers().iter().any(|layer| state.board.active_layer.as_deref() == Some(layer.id.to_string().as_str())) {
+                        return Err("Select an active layer first".into());
+                    }
+                    let layers = board.layers().iter().map(|layer| layer.id.to_string()).collect::<Vec<_>>();
+                    self.views.view_mut(view).ok_or("The addressed view closed")?.board.set_layer_visibility(layers, active_only);
                 }
                 ("view.set_layer", Some((view, _)), _) => {
                     let target = self

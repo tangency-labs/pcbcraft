@@ -20,6 +20,16 @@ could not be opened in this environment; that review is limited to the local
 documentation and exported visuals. This slice implements straight paths and
 rectangles without closure, edge-clearance or manufacturing validation.
 
+## Layer controls
+
+The active-layer selector, full-row activation, active arrow and independent
+visibility behavior were checked against the published [KiCad 10 PCB Editor
+manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#layer_controls) and
+[Altium Designer's layer-view documentation](https://www.altium.com/documentation/altium-designer/pcb/your-view-of-the-board),
+consulted November 7, 2026. These are behavioral references only; no implementation,
+icons or artwork were copied. The controls reuse PCBcraft's existing themed
+choice field, Browser tree rows, checkboxes, cards, typography and palette.
+
 ## Adapted from SolidCraft
 
 [SolidCraft](https://github.com/tangency-labs/solidcraft), revision `a43cd99e554de879e2abd548f67ca963919823b0`. Copyright (c) 2026 SolidCraft contributors. MIT OR Apache-2.0, the same texts as [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).

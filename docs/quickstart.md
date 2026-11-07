@@ -221,7 +221,13 @@ project. Click **Main** or **Board** to navigate within the focused pane, or unf
 either document's arrow to browse its objects without switching. Picking a symbol,
 net or footprint opens its document and selects and centers the object.
 In the board workspace, Properties
-shows its stored reference, value, definition and unit-aware coordinate readouts;
+shows its stored reference, value, definition and unit-aware coordinate readouts.
+
+The Layout ribbon's **Active layer** selector shows the drawing target, also named
+in the status bar. In Layers, click a full row to activate it; the arrow and
+highlight follow that choice. The **Visible** checkboxes are independent, and
+a hidden active layer is labeled **(hidden)** in the selector and status bar.
+**Show all** reveals every layer; **Isolate active** reveals only the active layer.
 Layers groups copper in physical stack order and retains visibility by layer ID.
 **Layout → Fit** fits the placements, and **Layout → Reveal** brings the current
 counterpart highlight into view without changing zoom. Switching back restores
