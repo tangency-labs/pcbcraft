@@ -58,8 +58,10 @@ fn round_trip_and_legacy_migrations_have_identical_documents() {
             include_bytes!("../../../app/tests/fixtures/split/two-resistors/library/symbols/starter/resistor.r1.json").as_slice(),
         ),
     ];
-    assert_eq!(expected, fixtures.into_iter().map(|(path, bytes)| (path.to_owned(), bytes.to_vec())).collect());
-    assert_eq!(encode_packed(session().snapshot().unwrap()).unwrap(), include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc.zip"));
+    let old_documents = fixtures.into_iter().map(|(path, bytes)| (path.to_owned(), bytes.to_vec())).collect();
+    assert_eq!(expected, encode_documents(decode_documents(&old_documents).unwrap()).unwrap());
+    let old_archive = decode_packed(include_bytes!("../../../app/tests/fixtures/split/two-resistors.pc.zip")).unwrap();
+    assert_eq!(expected, encode_documents(old_archive.project).unwrap());
     for bytes in [
         include_bytes!("../../../app/tests/fixtures/two-resistors-format-1.pc").as_slice(),
         include_bytes!("../../../app/tests/fixtures/two-resistors-format-2.pc").as_slice(),

@@ -93,7 +93,7 @@ impl Edit {
                         let remove: BTreeSet<_> =
                             if remove_current { BTreeSet::from([wire.ordinal]) } else { alternative.iter().map(|&i| wires[i].ordinal).collect() };
                         self.touched.extend(alternative.iter().map(|&i| wires[i].ordinal));
-                        Arc::make_mut(&mut self.project.wires).retain(|w| !remove.contains(&w.ordinal));
+                        Arc::make_mut(&mut self.project.sheet_mut().wires).retain(|w| !remove.contains(&w.ordinal));
                         self.project.prune_junctions();
                         return Ok(true);
                     }

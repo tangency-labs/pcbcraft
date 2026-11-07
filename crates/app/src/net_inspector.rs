@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use egui::Ui;
 use pcbcraft_chrome::{shell::dim, workspace};
-use pcbcraft_engine::{Project, Session, schematic::Terminal};
+use pcbcraft_engine::{Project, schematic::Terminal};
 
 #[derive(Debug, Default)]
 pub(super) struct NetInspector {
@@ -62,15 +62,18 @@ impl Snapshot {
 impl NetInspector {
     /// Dock a read-only view next to the schematic. Rebuild the view when the
     /// project's connectivity snapshot changes. Moving a symbol reuses the view.
-    pub(super) fn show(&mut self, ui: &mut Ui, session: &Session, bottom_clearance: f32) {
+    pub(super) fn show(&mut self, ui: &mut Ui, project: Option<Arc<Project>>, bottom_clearance: f32) {
         if !self.open {
             return;
         }
-        if let Some(project) = session.project()
-            && !self.project.as_ref().is_some_and(|previous| previous.same_connectivity(project))
-        {
-            self.snapshot = Some(Snapshot::read(project));
-            self.project = session.snapshot();
+        if let Some(project) = project {
+            if !self.project.as_ref().is_some_and(|previous| previous.same_connectivity(&project)) {
+                self.snapshot = Some(Snapshot::read(&project));
+                self.project = Some(project);
+            }
+        } else {
+            self.project = None;
+            self.snapshot = None;
         }
 
         let close = workspace::right_card(ui, "net_inspector", "Net Inspector", bottom_clearance, |ui| {

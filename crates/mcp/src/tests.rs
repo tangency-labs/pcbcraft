@@ -39,6 +39,54 @@ fn tools_list_names_every_tool() {
     assert_eq!(reply["result"]["tools"].as_array().unwrap().len(), tool_definitions().len());
 }
 
+/// MCP discovers explicit sheet targets and shares the same lifecycle, isolation, physical
+/// correspondence and project-wide undo behavior as GUI/engine calls.
+#[test]
+fn multi_sheet_tools_preserve_explicit_ownership_and_cross_probe() {
+    use pcbcraft_engine::sheets::{CREATE_SHEET, DELETE_SHEET, RENAME_SHEET};
+    let mut server = server();
+    for (command, params) in [("project.new", json!({})), (CREATE_SHEET, json!({"name":"Power","expected_revision":1}))] {
+        assert_ne!(call(&mut server, "execute", json!({"command":command,"params":params}))["isError"], true);
+    }
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let power = before["project"]["sheets"][1]["id"].clone();
+    let main = before["project"]["sheets"][0]["id"].clone();
+    let schema = body(&call(&mut server, "describe_command", json!({"command":PLACE_SYMBOL})));
+    assert_eq!(schema["params"]["properties"]["sheet"]["format"], "uuid");
+    let ambiguous = call(&mut server, "execute", json!({"command":PLACE_RESISTOR,"params":{"x_nm":0,"y_nm":0,"expected_revision":2}}));
+    assert_eq!(ambiguous["isError"], true);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    for (command, params) in [
+        (PLACE_RESISTOR, json!({"sheet":power,"x_nm":0,"y_nm":0,"expected_revision":2})),
+        (
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            json!({"sheet":power,"symbol":"symbol-3","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":3}),
+        ),
+        (RENAME_SHEET, json!({"sheet":power,"name":"Supply","expected_revision":4})),
+    ] {
+        assert_ne!(call(&mut server, "execute", json!({"command":command,"params":params}))["isError"], true);
+    }
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    assert!(before["project"]["schematic"].is_null());
+    assert_eq!(before["project"]["sheets"][0]["schematic"]["symbols"], json!([]));
+    assert_eq!(before["project"]["sheets"][1]["schematic"]["symbols"][0]["id"], "symbol-3");
+    let terminal = json!({"symbol":"symbol-3","terminal":"1"});
+    let mapping = body(&call(&mut server, "cross_probe", json!({"terminal":terminal})));
+    assert_eq!(mapping["pad"]["footprint"], "footprint-4");
+    assert_eq!(body(&call(&mut server, "cross_probe", json!({"pad":mapping["pad"]})))["terminal"], terminal);
+    let foreign = call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::MOVE_SYMBOL,"params":{"sheet":main,"symbol":"symbol-3","x_nm":1,"y_nm":0,"expected_revision":5}}),
+    );
+    assert_eq!(foreign["isError"], true);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+    assert_ne!(call(&mut server, "execute", json!({"command":DELETE_SHEET,"params":{"sheet":power,"expected_revision":5}}))["isError"], true);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({})))["project"]["components"], json!([]));
+    call(&mut server, "execute", json!({"command":"edit.undo","params":{}}));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({})))["project"], before["project"]);
+}
+
 /// The promise of the whole project: an agent's commands do what a person's do.
 #[test]
 fn execute_gives_the_same_state_as_running_the_command_on_a_session() {

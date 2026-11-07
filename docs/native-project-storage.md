@@ -44,15 +44,34 @@ does not confirm a durable write and does not clear the editor's dirty state.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.pc` | `pcbcraft-project/5` | Project UUID, name, ordered sheet list and shared components |
+| `project.pc` | `pcbcraft-project/6` | Project UUID, name, ordered sheet list and shared components |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` | Sheet UUID, unit placements, junctions and wires |
 | `board.json` | `pcbcraft-board/1`, `/2` or `/3` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
-UUID must agree. The current engine supports one editable sheet and explicitly
-refuses multiple sheets, so it cannot silently discard them. The list and file
-layout leave room for later multi-sheet editing.
+UUID must agree. Version 6 supports 1–64 ordered flat sheets with non-nil,
+project-unique UUIDs and names unique without case. Names are trimmed, nonblank,
+control-free and at most 200 characters. Each sheet owns its symbols, junctions,
+wires and connectivity; wire endpoints cannot reference another sheet. Components,
+reference allocation and board placements remain shared project data. The existing
+project-wide object and geometry bounds apply across all sheets.
+
+`sheet.create`, `sheet.rename` and `sheet.delete` are revision-checked project
+commands. Deletion removes the sheet’s components and associated board footprints
+atomically, and cannot remove the last sheet. Schematic editing commands and
+footprint placement take an explicit `sheet` UUID when more than one sheet exists;
+unknown or ambiguous targets never fall back to another sheet. A view’s active
+sheet belongs to user-local presentation state and is never saved in `project.pc`.
+
+Version 5 remains readable with exactly one sheet. Its original default name
+`Schematic`, historically displayed as Main, migrates to `Main`; other names stay
+intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
+Current encoding writes version 6 while retaining sheet/1 and existing board
+encodings. An unchanged save preserves original version-5 document bytes, and
+editing another document preserves an unaffected entry point. Adding or renaming
+a sheet writes the version-6 entry point. Legacy single-file encoding refuses
+multiple or renamed sheets rather than discarding them.
 
 Components own their stable ID, library/definition/revision, reference number,
 displayed reference and value. Unit placements own their ID, component link,
@@ -251,7 +270,7 @@ Archive publication retains the existing single-file staging and baseline check.
 
 ## Legacy migration and fixtures
 
-Plain JSON formats 1–4 and container v1 remain readable. Formats 1–3 resolve the
+Plain JSON formats 1–4, split format 5 and container v1 remain readable. Formats 1–3 resolve the
 exact retained starter revisions; format 4 supplies its full symbol copies.
 All migrate in memory to the same split documents without changing IDs, geometry,
 wire connectivity or footprint mappings. Save asks for a new folder destination
@@ -259,7 +278,7 @@ by default; Save As can instead select `.pc.zip`. It never silently replaces a
 legacy text `.pc` with an archive or a folder entry point requiring missing files.
 
 The original `two-resistors-format-1.pc`, `two-resistors-format-2.pc` and
-`two-resistors.pc` (format 4) fixtures remain legacy inputs. Canonical outputs live
+`two-resistors.pc` (format 4) fixtures remain legacy inputs. Version-5 split inputs live
 under `crates/app/tests/fixtures/split/`, including the folder, a manifested archive
 and a hand-zipped archive without a manifest. Generate a fresh comparison set with:
 

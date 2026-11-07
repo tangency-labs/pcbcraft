@@ -87,15 +87,15 @@ impl Project {
         for (i, wire) in self.wires.iter().enumerate() {
             if wire.endpoints.iter().any(|end| replacements.contains_key(end)) {
                 let path = self.wire_path(wire);
-                let next = &mut Arc::make_mut(&mut edit.project.wires)[i];
+                let next = &mut Arc::make_mut(&mut edit.project.sheet_mut().wires)[i];
                 next.bends = Some(super::super::interior(&path)?);
                 next.endpoints = wire.endpoints.map(|end| replacements.get(&end).copied().unwrap_or(end));
             }
         }
-        edit.project.connectivity = Arc::default();
+        edit.project.sheet_mut().connectivity = Arc::default();
         let detached = edit.project;
         let mut moved = detached.clone();
-        Arc::make_mut(&mut moved.symbols)[index].position = to;
+        Arc::make_mut(&mut moved.sheet_mut().symbols)[index].position = to;
         moved.healed(&detached, revision, auto_heal)
     }
 }

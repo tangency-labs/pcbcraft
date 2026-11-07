@@ -82,11 +82,11 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
     if fs::symlink_metadata(&path).map_err(|e| e.to_string())?.is_dir() {
         return load_folder(&path);
     }
-    // The extension is only a picker hint. A format-5 header identifies a folder entry point.
+    // The extension is only a picker hint. A split-format header identifies a folder entry point.
     let bytes = read(&path).map_err(|error| format!("Could not read project: {error}"))?;
     if Encoding::detect(&bytes) == Encoding::Json {
         let header: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-        if header["format"] == "pcbcraft-project/5" {
+        if matches!(header["format"].as_str(), Some("pcbcraft-project/5" | "pcbcraft-project/6")) {
             if path.file_name().is_none_or(|name| name != ENTRY_POINT) {
                 return Err("A split project's entry point must be named project.pc.".to_owned());
             }

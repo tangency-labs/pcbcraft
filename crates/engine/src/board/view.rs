@@ -119,7 +119,7 @@ impl<'a> BoardView<'a> {
     /// assignments produce no match; reference text and matching object ordinals are not links.
     pub fn footprints_for_selection(self, selection: &Selection) -> BTreeSet<String> {
         let components: BTreeSet<_> =
-            self.project.symbols().iter().filter(|symbol| selection.symbols.contains(&symbol.id())).map(|symbol| symbol.component).collect();
+            self.project.all_symbols().filter(|symbol| selection.symbols.contains(&symbol.id())).map(|symbol| symbol.component).collect();
         self.project
             .board
             .footprints()
@@ -141,7 +141,7 @@ impl<'a> BoardView<'a> {
             .map(|footprint| footprint.component)
             .collect();
         Selection {
-            symbols: self.project.symbols().iter().filter(|symbol| components.contains(&symbol.component)).map(|symbol| symbol.id()).collect(),
+            symbols: self.project.all_symbols().filter(|symbol| components.contains(&symbol.component)).map(|symbol| symbol.id()).collect(),
             ..Selection::default()
         }
     }

@@ -30,7 +30,7 @@ old input without editing the document, and closed view/host IDs are never reuse
 Highlighting and optional selection following reach compatible views across all
 hosts while preserving edit selection, zoom and focus. The first PCB inspection
 view now renders existing footprint pad centers, with schematic/board workspace
-choices and component counterpart highlights. It shares the same single-sheet,
+choices and component counterpart highlights. It shares the same multi-sheet,
 single-board session; board editing and individual pad/pin selection remain
 incomplete. Live MCP runs the presentation actions below by view and window ID,
 including workspace choices and footprint selection.
@@ -111,9 +111,9 @@ Closing that editor discards its unfinished form.
 Selecting a Browser sheet changes the focused pane's document while remembering
 its prior navigation. It adds no document tabs. A view of that sheet elsewhere
 stays independent, and the top arrangement tab
-stays selected. The board Browser includes the current schematic sheet so this
-navigation works from either workspace. The engine currently exposes one editable
-sheet and one legacy board; the typed targets carry sheet and board identity,
+stays selected. The common Browser includes all flat schematic sheets, so this
+navigation works from either workspace. The engine supports flat sheets and one
+legacy board; the typed targets carry sheet and board identity,
 but the UI does not imply that hierarchical or multiple-board editing has shipped.
 Future sheet headers should show occurrence paths such as **Power › Regulators**.
 

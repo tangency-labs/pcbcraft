@@ -233,8 +233,8 @@ fn manual_heal_repairs_saved_returns_without_changing_ids() {
     let ordinal = edit.id().unwrap();
     let wire = Wire { ordinal, endpoints: [from, end], bends: Some(vec![p(6, 0), p(6, 13), p(8, 13)]) };
     let branch = wire.id();
-    Arc::make_mut(&mut edit.project.wires).push(wire);
-    edit.project.connectivity = Arc::default();
+    Arc::make_mut(&mut edit.project.sheet_mut().wires).push(wire);
+    edit.project.sheet_mut().connectivity = Arc::default();
     let saved = persistence::encode_documents(Arc::new(edit.project)).unwrap();
     for selected in [trunk, branch] {
         s.open_snapshot(persistence::decode_documents(&saved).unwrap());

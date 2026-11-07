@@ -182,6 +182,57 @@ fn detached_browser_navigation_and_selection_stay_in_the_child_host() {
     assert!(std::sync::Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
 }
 
+/// A detached pane renders and edits its explicitly selected sheet while the primary host
+/// retains another sheet. The real viewport callback supplies only the child's key events.
+#[test]
+fn detached_sheet_navigation_and_symbol_rotation_keep_other_sheets_untouched() {
+    let (mut h, peer) = multi_window();
+    let revision = h.state().session.revision();
+    h.state_mut().session.apply(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"Power","expected_revision":revision})).unwrap();
+    let power = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+    let revision = h.state().session.revision();
+    h.state_mut()
+        .session
+        .apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"sheet":power.id(),"x_nm":0,"y_nm":0,"expected_revision":revision}))
+        .unwrap();
+    h.run();
+    detach(&mut h);
+    let root = h.state().views.active.id();
+    let target = h.state().views.active.target();
+    let camera = h.state().views.active.camera.saved_state();
+    let at = child_rect(&peer, "Power").center();
+    child_click_at(&mut h, &peer, at);
+    // Deferred navigation and folding settle in the child's next paint. This callback-only
+    // backend does not automatically follow the child viewport's repaint request.
+    h.run();
+    let at = child_rect(&peer, "Symbols").center();
+    child_click_at(&mut h, &peer, at);
+    h.run();
+    let at = child_rect(&peer, "R2  1k").center();
+    child_click_at(&mut h, &peer, at);
+    h.run();
+    child_key(&mut h, &peer, Key::R, Modifiers::NONE);
+    let app = h.state();
+    let child = app.views.hosts[&HostId(1)].focused;
+    assert_eq!(app.views.view(child).unwrap().target(), Some(crate::editor_view::DocumentTarget::Sheet(power)));
+    assert_eq!(app.views.active.id(), root);
+    assert_eq!(app.views.active.target(), target);
+    assert_eq!(app.views.active.camera.saved_state(), camera);
+    assert_eq!(app.session.project().unwrap().symbols()[0].turns(), 0);
+    assert_eq!(app.session.project().unwrap().for_sheet(power).unwrap().symbols()[0].turns(), 1);
+    // The shared form lives in the project-controls host but retains the child address across
+    // the native-style focus transition; it must neither rename nor navigate the root's sheet.
+    h.state_mut().begin_sheet_edit(child, pcbcraft_engine::sheets::RENAME_SHEET, Some(power));
+    focus(&mut h, &peer, false);
+    clear_name(&mut h);
+    h.get_by_label("Name").type_text("Supply");
+    h.run();
+    click(&mut h, "OK");
+    assert_eq!(h.state().session.project().unwrap().for_sheet(power).unwrap().sheet_name(), "Supply");
+    assert_eq!(h.state().views.active.id(), root);
+    assert_eq!(h.state().views.active.target(), target);
+}
+
 /// A direct detach inherits the primary window's chrome policy. Integrated controls address
 /// only the child viewport, whose close event dismisses the view without changing the root layout.
 #[test]
