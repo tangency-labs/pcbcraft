@@ -154,8 +154,10 @@ Separate checkout paths therefore have separate records. In the browser the
 key uses the project UUID, because the file picker provides no durable location;
 copies with the same UUID share that browser-local record. Unsaved projects keep
 arrangements in memory until a successful first Save. Successful Save As copies
-the collection to the new location while retaining the original record; failed
-or cancelled saves do not rebind it. Portable export and cross-device sharing
+the collection to the new location while retaining the original record. If the
+destination already has an invalid or unsupported arrangement record, that record
+is preserved and the current setup remains usable for this session. Failed or
+cancelled saves do not rebind it. Portable export and cross-device sharing
 remain separate future features.
 
 Checkpoints capture the outgoing setup before project or arrangement transitions

@@ -631,11 +631,7 @@ impl WgpuWinitRunning<'_> {
     fn release_suspended_root(&mut self) {
         let mut shared = self.shared.borrow_mut();
         let requested = core::mem::take(&mut self.integration.frame.retire_root_window);
-        let has_driver = shared.viewports.values().any(|viewport| {
-            viewport.ids.this != ViewportId::ROOT
-                && viewport.window.is_some()
-                && viewport.viewport_ui_cb.is_none()
-        });
+        let has_driver = shared.viewports.values().any(Viewport::drives_retired_root);
         let Some(root) = shared.viewports.get_mut(&ViewportId::ROOT) else {
             return;
         };
@@ -662,7 +658,8 @@ impl WgpuWinitRunning<'_> {
     }
 
     /// Drive shared app state and immediate children without rendering or recreating the retired
-    /// root surface. Root Close still enters the ordinary cancellable project-exit flow.
+    /// root surface. Root Close still enters the ordinary cancellable project-exit flow;
+    /// cancellation with no remaining child restores a native root to keep the app usable.
     fn run_without_root_window(&mut self, event_loop: &ActiveEventLoop) -> Result<EventResult> {
         let start = Instant::now();
         let input = {
@@ -714,17 +711,28 @@ impl WgpuWinitRunning<'_> {
             painter,
             viewport_from_window,
         );
-        // An arrangement can replace every child with a new root in one frame. Initialize
-        // it now, before returning to an event loop that otherwise has no window to wake.
+        // An arrangement can replace every child with a new root in one frame. A cancelled
+        // Close may also leave no child. Restore a driver before returning to the event loop,
+        // but do not recreate a window when shutdown has already been accepted.
+        let has_driver = viewports.values().any(Viewport::drives_retired_root);
         if let Some(root) = viewports.get_mut(&ViewportId::ROOT)
-            && !root.suspended_root
+            && !self.integration.should_close()
+            && (!root.suspended_root || !has_driver)
             && root.window.is_none()
         {
+            root.suspended_root = false;
             root.initialize_window(
                 event_loop,
                 &self.integration.egui_ctx,
                 viewport_from_window,
                 painter,
+            );
+            // The original root builder starts hidden. Flush its deferred commands and
+            // show the replacement now: a hidden, childless root otherwise runs logic only,
+            // so no UI pass would apply Visible(true) or show a cancelled-close dialog.
+            root.process_commands(
+                &self.integration.egui_ctx,
+                vec![egui::ViewportCommand::Visible(true)],
             );
             if let Some(window) = root.window.as_ref() {
                 window.request_redraw();
@@ -1189,6 +1197,13 @@ impl WgpuWinitRunning<'_> {
 }
 
 impl Viewport {
+    /// An immediate child with native resources can wake a retired root's app pass.
+    fn drives_retired_root(&self) -> bool {
+        self.ids.this != ViewportId::ROOT
+            && self.window.is_some()
+            && self.viewport_ui_cb.is_none()
+    }
+
     /// Apply the commands, or defer them until we have a window.
     fn process_commands(
         &mut self,
@@ -1432,13 +1447,29 @@ fn render_immediate_viewport(
     );
 }
 
+/// Release omitted viewports, retaining one immediate child only while a retired root's
+/// pending Close still needs an app pass. That pass may accept or cancel shutdown; ordinary
+/// pruning resumes once the Close event has been consumed, without rebinding native IDs.
 pub(crate) fn remove_viewports_not_in(
     viewports: &mut Viewports,
     painter: &mut egui_wgpu::winit::Painter,
     viewport_from_window: &mut HashMap<WindowId, ViewportId>,
     viewport_output: &OrderedViewportIdMap<ViewportOutput>,
 ) {
-    let active_viewports_ids: ViewportIdSet = viewport_output.keys().copied().collect();
+    let mut active_viewports_ids: ViewportIdSet = viewport_output.keys().copied().collect();
+    let pending_root_close = viewports.get(&ViewportId::ROOT).is_some_and(|root| {
+        root.suspended_root && root.info.events.contains(&egui::ViewportEvent::Close)
+    });
+    if pending_root_close
+        && !viewports.iter().any(|(id, viewport)| {
+            active_viewports_ids.contains(id) && viewport.drives_retired_root()
+        })
+        && let Some((id, _)) = viewports
+            .iter()
+            .find(|(_, viewport)| viewport.drives_retired_root())
+    {
+        active_viewports_ids.insert(*id);
+    }
 
     // Prune dead viewports:
     viewports.retain(|id, _| active_viewports_ids.contains(id));

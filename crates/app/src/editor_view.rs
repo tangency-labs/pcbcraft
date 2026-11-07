@@ -177,9 +177,15 @@ impl EditorView {
         if let Some(state) = &self.unavailable {
             return Some(state.clone());
         }
-        Some(ViewState {
-            target: self.binding?.target,
-            title: self.sheet_path(session)?,
+        Some(self.presentation_state(self.binding?.target, self.sheet_path(session)?))
+    }
+
+    /// Capture navigation without resolving a target, including an explicit board that just
+    /// became unavailable. Selection, gestures and input authority never enter the record.
+    fn presentation_state(&self, target: DocumentTarget, title: String) -> ViewState {
+        ViewState {
+            target,
+            title,
             camera: self.camera.saved_state(),
             parked_camera: self.parked_camera.saved_state(),
             board: self.board.target,
@@ -188,7 +194,7 @@ impl EditorView {
             layers_collapsed: self.board.layers_collapsed,
             browser_collapsed: self.board.browser_collapsed,
             properties_collapsed: self.board.properties_collapsed,
-        })
+        }
     }
 
     /// Resolve a saved target with a fresh runtime identity and no selection or gesture.
@@ -344,16 +350,25 @@ impl EditorView {
 
     /// Reopening resets local state while retaining workspace choice and grid. Ordinary edits
     /// prune removed selections/layers. A stale segment clears its whole selection so Delete
-    /// cannot widen into a wire deletion; no synchronization mutates the session.
+    /// cannot widen into a wire deletion; no synchronization mutates the session. An explicit
+    /// board target that no longer resolves becomes an unavailable, closeable placeholder;
+    /// only an omitted target defaults to the project's legacy board.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
         if self.unavailable.is_some() {
             return false;
         }
-        let board_target = self
-            .board
-            .target
-            .filter(|target| session.project().is_some_and(|p| p.board_view(*target).is_some()))
-            .or_else(|| session.project().map(|p| p.board_target()));
+        let board_target = self.board.target.or_else(|| session.project().map(|p| p.board_target()));
+        if self.workspace == Workspace::Board
+            && let Some(target) = board_target
+            && session.project().is_some_and(|project| project.board_view(target).is_none())
+        {
+            self.unavailable = Some(self.presentation_state(DocumentTarget::Board(target), Workspace::Board.title().into()));
+            self.release_input();
+            self.binding = None;
+            self.schematic = SchematicState::default();
+            self.board.selection.clear();
+            return true;
+        }
         let binding = Binding::current(session, self.workspace, board_target);
         let changed = self.binding != binding;
         if changed {

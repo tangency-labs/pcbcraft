@@ -91,6 +91,58 @@ fn replacement_and_reopening_reset_the_view_without_editing_the_project() {
     assert!(session.history_root_revision() > root);
 }
 
+/// Project replacement cannot silently retarget an explicit board; the placeholder keeps its
+/// address and navigation, rejects stale input, and permits an explicit workspace replacement.
+#[test]
+fn replacement_keeps_an_explicit_foreign_board_unavailable() {
+    let replacement = session();
+    let mut session = session();
+    let mut view = EditorView::new(ViewId(7));
+    view.sync(&session);
+    view.switch(Workspace::Board, &session);
+    let old_target = view.board.target.unwrap();
+    view.camera.center_on(Point { x_nm: 15_000_000, y_nm: 4_000_000 });
+    let camera = view.camera.saved_state();
+    let old_input = view.input(&session).unwrap();
+    let bytes = encode(replacement.snapshot().unwrap()).unwrap();
+    session.open_snapshot(replacement.snapshot().unwrap());
+    assert!(view.sync(&session));
+    assert!(view.unavailable());
+    assert!(view.input(&session).is_none());
+    assert!(!view.accepts(old_input, &session));
+    assert_eq!(view.board.target, Some(old_target));
+    assert_eq!(view.control_input(&session).unwrap().target, DocumentTarget::Board(old_target));
+    let saved = view.saved_state(&session).unwrap();
+    assert_eq!(saved.target, DocumentTarget::Board(old_target));
+    assert_eq!(saved.camera, camera);
+    assert!(!view.sync(&session));
+    assert_eq!(view.saved_state(&session).unwrap(), saved);
+    view.switch(Workspace::Board, &session);
+    assert!(!view.unavailable());
+    assert_eq!(view.target(), Some(DocumentTarget::Board(session.project().unwrap().board_target())));
+    assert!(!view.accepts(old_input, &session));
+    assert_eq!(encode(session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// Only an omitted board address may use the legacy default; an unknown ID in this project
+/// remains an addressable placeholder rather than granting input to the default board.
+#[test]
+fn board_sync_defaults_only_an_omitted_target() {
+    let session = session();
+    let target = session.project().unwrap().board_target();
+    let mut view = EditorView::new(ViewId(7));
+    view.workspace = Workspace::Board;
+    assert!(view.sync(&session));
+    assert_eq!(view.target(), Some(DocumentTarget::Board(target)));
+    let unknown = BoardTarget { board: Default::default(), ..target };
+    view.board.target = Some(unknown);
+    assert!(view.sync(&session));
+    assert!(view.unavailable());
+    assert!(view.input(&session).is_none());
+    assert_eq!(view.saved_state(&session).unwrap().target, DocumentTarget::Board(unknown));
+    assert_eq!(view.board.target, Some(unknown));
+}
+
 /// Undoing creation removes the view's target and transient state; redo binds the restored sheet
 /// with fresh input, while deleting or undoing a symbol clears only the missing selection.
 #[test]

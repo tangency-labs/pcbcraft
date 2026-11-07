@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 
 /// Select visible placements without granting input to another workspace or mutating the project.
 /// Grid preferences affect drawing only; camera navigation and snapping remain independent.
+/// Off-screen placements are culled before constructing their labeled drawing markers.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -45,12 +46,12 @@ pub(super) fn show(
         for footprint in project.footprints() {
             count += 1;
             let center = camera.screen(footprint.position, rect);
-            let pads: Vec<_> = footprint.pads.iter().map(|pad| (pad.number.clone(), camera.screen(pad.center, rect))).collect();
-            let points: Vec<_> = pads.iter().map(|(_, point)| *point).collect();
+            let points: Vec<_> = footprint.pads.iter().map(|pad| camera.screen(pad.center, rect)).collect();
             let bounds = board::marker_bounds(&points, center);
             if !rect.intersects(bounds) {
                 continue;
             }
+            let pads: Vec<_> = footprint.pads.into_iter().zip(points).map(|(pad, point)| (pad.number, point)).collect();
             board::footprint(
                 &p,
                 &pads,

@@ -21,6 +21,7 @@ use winit::{
 #[derive(Default)]
 struct Evidence {
     ids: HashSet<WindowId>,
+    destroyed: HashSet<WindowId>,
     created: usize,
     child_frames: usize,
     complete: bool,
@@ -36,8 +37,13 @@ struct Verify {
     cancelled: bool,
     quitting: bool,
     restore_single: bool,
+    drop_child_and_close: bool,
+    cancel_root_close: bool,
+    root_cancellations: usize,
 }
 impl eframe::App for Verify {
+    /// Exercise native teardown and cancellable shutdown, including a Close issued in the
+    /// same pass that omits the final child from the app's viewport output.
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let child = ViewportId::from_hash_of("surviving editor");
@@ -46,8 +52,19 @@ impl eframe::App for Verify {
             self.visible_root = true;
             ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         }
-        if ctx.input(|i| i.viewport().close_requested()) {
-            if !self.quitting && self.child {
+        if std::mem::take(&mut self.drop_child_and_close) {
+            self.child = false;
+            self.quitting = true;
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+        }
+        let close_requested = ctx.input(|i| i.viewport().close_requested());
+        if close_requested {
+            if std::mem::take(&mut self.cancel_root_close) {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+                self.root_cancellations += 1;
+                self.quitting = false;
+                self.visible_root = !self.child;
+            } else if !self.quitting && self.child {
                 ctx.send_viewport_cmd(ViewportCommand::CancelClose);
                 frame.retire_root_window();
                 self.visible_root = false;
@@ -83,7 +100,14 @@ impl eframe::App for Verify {
                 },
             );
         }
-        if Instant::now() < self.due {
+        // Native resource release occurs after this app callback returns, even if a slow
+        // software-rendered frame has already crossed the next checkpoint's time threshold.
+        if close_requested || Instant::now() < self.due {
+            return;
+        }
+        // Destruction notifications can trail the frame that dropped the native Window.
+        // Wait for those events; Observe's deadline still fails a driverless or stuck app.
+        if matches!(self.stage, 1 | 5 | 8 | 13) && self.evidence.lock().unwrap().ids.len() != 1 {
             return;
         }
         self.due = Instant::now() + Duration::from_secs(1);
@@ -146,7 +170,34 @@ impl eframe::App for Verify {
                 assert!(self.cancelled && !self.quitting && self.child);
                 assert_eq!(self.evidence.lock().unwrap().created, 6, "cancel recreated the last window");
                 assert!(self.evidence.lock().unwrap().child_frames > self.frames_before);
+                self.cancel_root_close = true;
                 ctx.send_viewport_cmd_to(child, ViewportCommand::Close);
+            }
+            10 => {
+                assert_eq!(self.root_cancellations, 1, "child-initiated root Close was not cancellable");
+                assert!(self.child);
+                assert_eq!(self.evidence.lock().unwrap().created, 6);
+                self.cancel_root_close = true;
+                self.drop_child_and_close = true;
+            }
+            11 => {
+                assert_eq!(self.root_cancellations, 2, "orphaned root Close was not delivered");
+                assert!(!self.child);
+                assert!(frame.winit_window().is_some(), "cancelling without children must restore a usable root");
+                assert_eq!(self.evidence.lock().unwrap().ids.len(), 1);
+                assert_eq!(self.evidence.lock().unwrap().created, 7);
+                println!("PASS final child removal retained cancellable Close and recovered a native root");
+                self.root = Arc::downgrade(frame.winit_window().unwrap());
+                self.child = true;
+            }
+            12 => {
+                assert_eq!(self.evidence.lock().unwrap().created, 8);
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+            13 => {
+                assert!(self.root.upgrade().is_none());
+                assert_eq!(self.evidence.lock().unwrap().ids.len(), 1);
+                self.drop_child_and_close = true;
             }
             _ => {}
         }
@@ -156,25 +207,33 @@ impl eframe::App for Verify {
 struct Observe<'a> {
     app: eframe::EframeWinitApplication<'a>,
     evidence: Arc<Mutex<Evidence>>,
+    started: Instant,
 }
 impl ApplicationHandler<eframe::UserEvent> for Observe<'_> {
     fn resumed(&mut self, e: &ActiveEventLoop) {
         self.app.resumed(e)
     }
+    /// Late queued events for a destroyed window do not indicate a newly created native window.
     fn window_event(&mut self, e: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         {
             let mut evidence = self.evidence.lock().unwrap();
             if matches!(event, WindowEvent::Destroyed) {
                 evidence.ids.remove(&id);
+                evidence.destroyed.insert(id);
                 println!("Native window destroyed {id:?}");
-            } else if evidence.ids.insert(id) {
+            } else if !evidence.destroyed.contains(&id) && evidence.ids.insert(id) {
                 evidence.created += 1;
                 println!("Native window observed {id:?}");
             }
         }
         self.app.window_event(e, id, event)
     }
+    /// Bound failures even when a retired root has lost every native repaint driver.
     fn new_events(&mut self, e: &ActiveEventLoop, c: StartCause) {
+        if self.started.elapsed() > Duration::from_secs(30) {
+            e.exit();
+            return;
+        }
         self.app.new_events(e, c)
     }
     fn user_event(&mut self, e: &ActiveEventLoop, v: eframe::UserEvent) {
@@ -194,7 +253,8 @@ impl ApplicationHandler<eframe::UserEvent> for Observe<'_> {
     }
 }
 /// Native identities and rendering survive both close orders, root recreation, Cancel and
-/// a final-window exit initiated inside an immediate child callback.
+/// a final-window exit initiated inside an immediate child callback. Removing the last child
+/// while requesting root Close must still deliver that request, whether cancelled or accepted.
 #[test]
 #[ignore = "opens native windows; run with an isolated Wayland or X11 display"]
 fn native_window_lifecycle() -> eframe::Result {
@@ -235,14 +295,19 @@ fn native_window_lifecycle() -> eframe::Result {
                 cancelled: false,
                 quitting: false,
                 restore_single: false,
+                drop_child_and_close: false,
+                cancel_root_close: false,
+                root_cancellations: 0,
             }))
         }),
         &event_loop,
     );
-    let mut observer = Observe { app, evidence: evidence.clone() };
+    let mut observer = Observe { app, evidence: evidence.clone(), started: Instant::now() };
     event_loop.run_app(&mut observer)?;
     done.store(true, Ordering::Relaxed);
-    assert!(evidence.lock().unwrap().complete, "regression did not finish");
+    let evidence = evidence.lock().unwrap();
+    assert!(evidence.complete, "regression did not finish");
+    assert_eq!(evidence.created, 8, "accepted final Close must not recreate a native root");
     println!("PASS native lifecycle regression");
     Ok(())
 }

@@ -133,6 +133,44 @@ fn save_as_and_failed_open_preserve_arrangement_records() {
     assert_eq!(h.state().arrangements.current, before);
 }
 
+/// Reusing a Save As location must not overwrite a newer or invalid user-local record.
+#[test]
+fn save_as_preserves_unsupported_destination_arrangements() {
+    for newer in [true, false] {
+        let mut h = harness();
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("destination");
+        save(&mut h, &destination, false);
+        let destination_key = h.state().arrangements.key.clone().unwrap();
+        let mut unsupported = h.state().arrangements.store.projects[&destination_key].clone();
+        if newer {
+            unsupported["version"] = json!(999);
+        } else {
+            unsupported["arrangements"][0]["snapshot"]["hosts"][0]["focused"] = json!(999);
+        }
+        save(&mut h, &dir.path().join("source"), true);
+        let source_key = h.state().arrangements.key.clone().unwrap();
+        h.state_mut().arrangements.store.projects.insert(destination_key.clone(), unsupported.clone());
+        // The project folder may be removed independently of its retained local settings.
+        std::fs::remove_dir_all(&destination).unwrap();
+        let id = h.state().arrangements.active();
+        action(&mut h, Action::Rename { id, name: "Current setup".into() });
+        let source_record = h.state().arrangements.store.projects[&source_key].clone();
+        let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        save(&mut h, &destination, true);
+        assert_eq!(h.state().arrangements.key.as_ref(), Some(&destination_key));
+        assert!(h.state().arrangements.protected_record);
+        assert!(h.state().message.as_ref().is_some_and(|message| message.contains("destination's saved arrangements")));
+        action(&mut h, Action::Rename { id, name: "Session-only setup".into() });
+        let persisted: Value = serde_json::from_str(&h.state().arrangements.storage_text().unwrap()).unwrap();
+        assert_eq!(persisted["projects"][&destination_key], unsupported);
+        assert_eq!(persisted["projects"][&source_key], source_record);
+        assert_eq!(h.state().arrangements.tabs(), vec![(id, "Session-only setup".into())]);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+        assert!(!h.state().files.dirty(&h.state().session));
+    }
+}
+
 /// Unsupported records remain byte-equivalent as JSON values while the project still opens.
 #[test]
 fn invalid_newer_and_duplicate_placements_do_not_replace_saved_state() {

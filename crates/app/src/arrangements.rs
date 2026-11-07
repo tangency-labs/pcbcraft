@@ -173,7 +173,8 @@ impl PcbApp {
     }
 
     /// Adopt saved UI state only after a successful project load. Save As copies the current
-    /// arrangement collection to its new location while retaining the original record.
+    /// arrangement collection to its new location while retaining the original record and
+    /// preserving any unsupported or invalid record already associated with the destination.
     pub(super) fn sync_arrangements(&mut self, ctx: &egui::Context) {
         let Some(project) = self.session.project().map(|project| project.board_target().project.to_string()) else {
             return;
@@ -184,7 +185,14 @@ impl PcbApp {
             if self.arrangements.key != key {
                 self.checkpoint_arrangements();
                 self.arrangements.key = key;
-                self.arrangements.protected_record = false;
+                self.arrangements.protected_record =
+                    self.arrangements.key.as_ref().and_then(|key| self.arrangements.store.projects.get(key)).is_some_and(|value| {
+                        serde_json::from_value::<ProjectArrangements>(value.clone()).ok().filter(ProjectArrangements::valid).is_none()
+                    });
+                if self.arrangements.protected_record {
+                    self.arrangements.notice =
+                        Some("The destination's saved arrangements are unsupported or invalid; its original record has been preserved.".into());
+                }
                 self.arrangements.remember();
             }
             return;

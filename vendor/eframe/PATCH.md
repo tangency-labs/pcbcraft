@@ -24,10 +24,20 @@ requests are scheduled through an existing child's window; a root Visible(true)
 command recreates a fresh window for arrangement restoration. Deferred-only and
 Glow integrations are outside this patch's contract.
 
+If an app removes its last child while requesting root Close, that child's native
+resources remain until the next app pass consumes the cancellable request.
+Accepted shutdown releases them without recreating a root. If Close is cancelled
+and the app supplies no replacement child, a visible root is recreated so the app
+can continue. Root recreation flushes deferred visibility commands immediately;
+the startup builder's hidden state must not strand a childless restored root.
+
 Native tests must check destruction of the original OS window and retention of
 the survivor's native ID, not merely that one editor remains visible. The isolated
 Linux Wayland and X11 tests also exercise root recreation, replacement of all
-children with a single root, cancelled close and shutdown requested from a child. Windows and
+children with a single root, cancelled close, shutdown requested from a child,
+and accepting/cancelling root Close when the last child is omitted in that same
+frame. Late events for destroyed windows do not count as new windows in the test,
+and a deadline bounds event-driver failures. Windows and
 macOS use the same code path but require native qualification on those systems.
 
 Keep this dependency patch separate from document and workspace models. Reassess
@@ -39,7 +49,7 @@ published fork.
 The failure-path review checks that no shared-state borrow is held while app or
 child callbacks run, stale native IDs stop routing after destruction, and texture
 updates are drained when no root surface is painted. Native tests exercise the
-rootless redraw/quit path and arrangement restoration with no retained child;
+rootless redraw/quit path, last-driver removal and arrangement restoration with no retained child;
 application tests cover modal cancellation, failed saves, outstanding file jobs
 and stale view addresses. Resource creation failure retains the native root when
 no immediate child exists; the public request documents this precondition.
