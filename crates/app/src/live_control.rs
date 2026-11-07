@@ -4,7 +4,7 @@ use std::{
     io,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, ScopedJoinHandle, Thread},
@@ -29,6 +29,9 @@ pub(super) struct LiveControl {
     token: Arc<Token>,
     requests: Receiver<Request>,
     stop: Arc<AtomicBool>,
+    /// The current request generation ([`Self::next_generation`]); each request is stamped with
+    /// it when it authenticates.
+    generation: Arc<AtomicU64>,
     worker: Thread,
 }
 
@@ -37,12 +40,19 @@ pub(super) struct Request {
     body: Value,
     deadline: Instant,
     reply: SyncSender<Value>,
+    /// The endpoint's generation when the request authenticated.
+    generation: u64,
 }
 
 impl Request {
     /// The authenticated request, as `{"method": ..., "params": ...}`.
     pub(super) fn body(&self) -> &Value {
         &self.body
+    }
+
+    /// The endpoint's generation when this request arrived, for [`LiveControl::current`].
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Whether the peer has given up waiting, so an answer would be dropped.
@@ -83,14 +93,28 @@ impl LiveControl {
         let stop = Arc::new(AtomicBool::new(false));
         let (send, requests) = mpsc::sync_channel(1);
         let ctx = ctx.clone();
+        let generation = Arc::new(AtomicU64::new(0));
         let worker_token = Arc::clone(&token);
         let worker_stop = Arc::clone(&stop);
+        let worker_generation = Arc::clone(&generation);
         let worker = thread::Builder::new().name("pcbcraft-live-mcp".to_owned()).spawn(move || {
-            listen(listener, &worker_token, &worker_stop, &send, &ctx, wait);
+            listen(listener, &worker_token, &worker_stop, &worker_generation, &send, &ctx, wait);
             drop(send);
             ctx.request_repaint();
         })?;
-        Ok(Self { port, token, requests, stop, worker: worker.thread().clone() })
+        Ok(Self { port, token, requests, stop, generation, worker: worker.thread().clone() })
+    }
+
+    /// Start a new request generation, revoking every request that arrived before: the chat
+    /// calls it when a reply starts, stops or the chat resets, so a request belonging to an
+    /// earlier turn never runs in a later one, however it was delayed on its way.
+    pub(super) fn next_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// The current request generation.
+    pub(super) fn current(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     /// The endpoint's port, for a bridge the app configures itself.
@@ -138,20 +162,37 @@ impl LiveControl {
 }
 
 impl PcbApp {
-    /// Serve the in-app chat's endpoint on the editor thread: run the tool calls the person
-    /// answered, then gate the next request. Reading and allowed commands run through the same
+    /// Serve the in-app chat's endpoint on the editor thread while a message is being answered:
+    /// run the tool calls the person answered, then gate the next request. Reading and allowed commands run through the same
     /// dispatcher as live MCP, with its refusals; the rest wait in the chat for Allow or Deny.
     /// A project edit is noted in the conversation and the status bar.
     pub(super) fn serve_chat(&mut self, ctx: &egui::Context) {
+        // Calls belong to the message being answered. After Stop or a new chat (a project switch
+        // starts one), anything still queued, answered or arriving is refused unrun, so nothing
+        // the person stopped happens later, on this project or the next.
+        let open = self.assistant.turn_open();
+        let current = self.assistant.generation();
+        let belongs = |request: &Request| open && Some(request.generation()) == current;
+        let stopped = |what: &str| format!("No reply is in progress (it was stopped, or a new chat started), so {what} did not run.");
         for (approval, answer) in self.assistant.take_answers() {
             let crate::assistant::Source::Tool { request, command } = approval.source else { continue };
             if answer == crate::assistant::Answer::Deny {
                 request.answer(Err(format!("The person denied `{command}`. Ask them before trying again.")));
+            } else if !belongs(&request) {
+                request.answer(Err(stopped(&format!("`{command}`"))));
             } else {
                 self.run_chat_request(ctx, request);
             }
         }
-        let Some(request) = self.assistant.take_request() else { return };
+        // Requests from an earlier turn are refused as they come; the first current one is gated.
+        let request = loop {
+            let Some(request) = self.assistant.take_request() else { return };
+            if belongs(&request) {
+                break request;
+            }
+            let what = request.body()["params"]["command"].as_str().map_or_else(|| "the request".to_owned(), |command| format!("`{command}`"));
+            request.answer(Err(stopped(&what)));
+        };
         let method = request.body()["method"].as_str().unwrap_or_default().to_owned();
         let command = request.body()["params"]["command"].as_str().map(str::to_owned);
         let verdict = crate::assistant::gate(self.assistant.mode(), &method, command.as_deref(), |command| self.assistant.always_allowed(command));
@@ -234,7 +275,15 @@ impl Drop for LiveControl {
 
 /// Accept peers independently of authentication and replies. At capacity, leave new peers
 /// in the OS backlog until a worker finishes. Close the listener before waiting for workers.
-fn listen(listener: Listener, token: &Token, stop: &AtomicBool, send: &SyncSender<Request>, ctx: &egui::Context, wait: Duration) {
+fn listen(
+    listener: Listener,
+    token: &Token,
+    stop: &AtomicBool,
+    generation: &AtomicU64,
+    send: &SyncSender<Request>,
+    ctx: &egui::Context,
+    wait: Duration,
+) {
     thread::scope(|scope| {
         let mut workers: Vec<ScopedJoinHandle<'_, ()>> = Vec::with_capacity(MAX_PEERS);
         while !stop.load(Ordering::Acquire) {
@@ -254,7 +303,7 @@ fn listen(listener: Listener, token: &Token, stop: &AtomicBool, send: &SyncSende
                     _ => break,
                 },
             };
-            match thread::Builder::new().spawn_scoped(scope, move || serve_peer(peer, token, stop, send, ctx, wait)) {
+            match thread::Builder::new().spawn_scoped(scope, move || serve_peer(peer, token, stop, generation, send, ctx, wait)) {
                 Ok(worker) => workers.push(worker),
                 Err(_) => thread::park_timeout(ACCEPT_POLL),
             }
@@ -267,7 +316,15 @@ fn listen(listener: Listener, token: &Token, stop: &AtomicBool, send: &SyncSende
 
 /// Configure and authenticate one peer before submitting its request to the editor.
 /// Failed authentication or I/O closes only this peer. A full editor queue gets a busy reply.
-fn serve_peer(peer: AcceptedPeer, token: &Token, stop: &AtomicBool, send: &SyncSender<Request>, ctx: &egui::Context, wait: Duration) {
+fn serve_peer(
+    peer: AcceptedPeer,
+    token: &Token,
+    stop: &AtomicBool,
+    generation: &AtomicU64,
+    send: &SyncSender<Request>,
+    ctx: &egui::Context,
+    wait: Duration,
+) {
     let Ok(mut peer) = peer.configure(IO_TIMEOUT) else {
         return;
     };
@@ -279,7 +336,9 @@ fn serve_peer(peer: AcceptedPeer, token: &Token, stop: &AtomicBool, send: &SyncS
     }
     let (reply, response) = mpsc::sync_channel(1);
     let deadline = Instant::now() + wait;
-    if send.try_send(Request { body, deadline, reply }).is_err() {
+    // Stamped once authenticated: a request belongs to the generation it arrived in.
+    let generation = generation.load(Ordering::Acquire);
+    if send.try_send(Request { body, deadline, reply, generation }).is_err() {
         let _ = peer.send(&json!({"error": "The PCBCraft editor is busy"}));
         return;
     }

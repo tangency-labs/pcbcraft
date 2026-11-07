@@ -164,6 +164,12 @@ pub(super) struct Chat {
     /// The private folder holding the endpoint's token file, apart from the agent's working
     /// folder and removed when the chat disconnects.
     token_dir: Option<tempfile::TempDir>,
+    /// This connection's MCP server name ([`acp::bridge_name`]), random per chat, by which the
+    /// agent's permission questions about PCBCraft's own tools are told apart from others.
+    bridge_name: Option<String>,
+    /// Whether a message is being answered. Tool calls run only then: once the person stops the
+    /// reply or starts a new chat, calls already on their way are refused, not run.
+    turn_open: bool,
 }
 
 impl std::fmt::Debug for Chat {
@@ -213,24 +219,33 @@ impl Chat {
         };
         let control = LiveControl::start_with_wait(ctx, Duration::from_secs(acp::ENDPOINT_WAIT_S)).ok();
         let token = control.as_ref().map(|control| (control.port(), write_token_file(control.port(), control.secret())));
-        let (bridge, token_dir) = match (token, cli_path()) {
-            (Some((port, Ok((dir, token_file)))), Some(cli)) => (Some(McpBridge { cli, port, token_file }), Some(dir)),
-            (Some((_, Err(error))), Some(_)) => {
+        // A fresh random part per connection, so no other MCP server can share the bridge's name.
+        let name = craft_control::loopback::Token::generate().ok().and_then(|nonce| nonce.secret().get(..12).map(acp::bridge_name));
+        let (bridge, token_dir) = match (token, cli_path(), name) {
+            (Some((port, Ok((dir, token_file)))), Some(cli), Some(name)) => (Some(McpBridge { name, cli, port, token_file }), Some(dir)),
+            (_, _, None) => {
+                self.items.push(Item::Notice(
+                    "No random name could be made for the chat's tools, so the agent can talk but not reach the project.".to_owned(),
+                ));
+                (None, None)
+            }
+            (Some((_, Err(error))), Some(_), _) => {
                 self.items
                     .push(Item::Notice(format!("Could not write the chat's token file ({error}), so the agent can talk but not reach the project.")));
                 (None, None)
             }
-            (None, _) => {
+            (None, _, _) => {
                 self.items.push(Item::Notice("The chat's endpoint did not start, so the agent can talk but not reach the project.".to_owned()));
                 (None, None)
             }
-            (_, None) => {
+            (_, None, _) => {
                 self.items
                     .push(Item::Notice("pcbcraft-cli was not found beside PCBCraft, so the agent can talk but not reach the project.".to_owned()));
                 (None, None)
             }
         };
         let wake_ctx = ctx.clone();
+        let bridge_name = bridge.as_ref().map(|bridge| bridge.name.clone());
         let start = StartContext { cwd: workdir.path().to_path_buf(), bridge, tools: None, wake: Box::new(move || wake_ctx.request_repaint()) };
         let started: Result<Box<dyn ChatBackend>, String> = match entry.kind.protocol() {
             None => craft_agents::acp_client::AcpBackend::start(&entry.argv, start).map(|backend| Box::new(backend) as Box<dyn ChatBackend>),
@@ -254,6 +269,7 @@ impl Chat {
                 self.control = control;
                 self.workdir = Some(workdir);
                 self.token_dir = token_dir;
+                self.bridge_name = bridge_name;
             }
             Err(error) => self.state = State::Failed(entry.problem_hint().unwrap_or(error)),
         }
@@ -269,6 +285,7 @@ impl Chat {
         let port = control.port();
         self.control = Some(control);
         self.token_dir = Some(dir);
+        self.bridge_name = Some(acp::bridge_name("0123456789ab"));
         (port, token_file)
     }
 
@@ -288,6 +305,8 @@ impl Chat {
         self.control = None;
         self.workdir = None;
         self.token_dir = None;
+        self.bridge_name = None;
+        self.turn_open = false;
         self.config.clear();
         self.models = None;
         self.modes = None;
@@ -305,6 +324,7 @@ impl Chat {
     /// Clear the conversation; a connected agent starts a fresh session.
     pub(super) fn new_conversation(&mut self) {
         self.items.clear();
+        self.close_turn();
         self.deny_all("A new chat started.");
         if let Some(backend) = self.backend.as_mut() {
             backend.new_session();
@@ -318,15 +338,40 @@ impl Chat {
         backend.prompt(&[PromptPart::Text(text.to_owned())]);
         self.push(Item::User(text.to_owned()));
         self.state = State::Running;
+        self.turn_open = true;
+        // This reply's requests are a generation of their own: nothing from before runs in it.
+        if let Some(control) = &self.control {
+            control.next_generation();
+        }
         true
     }
 
-    /// Stop the message being answered. Held tool calls are denied with it.
+    /// Stop the message being answered. Held tool calls are denied with it, and calls still on
+    /// their way are refused when they arrive (see [`Self::turn_open`]).
     pub(super) fn stop(&mut self) {
+        self.close_turn();
         if let Some(backend) = self.backend.as_mut() {
             backend.cancel();
         }
         self.deny_all("Stopped.");
+    }
+
+    /// Whether a message is being answered, so its tool calls may run.
+    pub(super) fn turn_open(&self) -> bool {
+        self.turn_open
+    }
+
+    /// The endpoint's current request generation; only requests stamped with it may run.
+    pub(super) fn generation(&self) -> Option<u64> {
+        self.control.as_ref().map(LiveControl::current)
+    }
+
+    /// End the turn and revoke every request that arrived in it, wherever it is on its way.
+    fn close_turn(&mut self) {
+        self.turn_open = false;
+        if let Some(control) = &self.control {
+            control.next_generation();
+        }
     }
 
     /// Ask the agent to sign in by itself with `method`.
@@ -463,7 +508,8 @@ impl Chat {
             },
             Event::Permission { key, title, kind, options } => {
                 let allow = options.iter().find(|option| option.kind == "allow_once").map(|option| option.id.clone());
-                if acp::is_bridge_tool(&title, kind.as_deref()) || mode == Mode::All {
+                let ours = self.bridge_name.as_deref().is_some_and(|name| acp::is_bridge_tool(&title, kind.as_deref(), name));
+                if ours || mode == Mode::All {
                     self.answer_agent(key, allow.as_deref());
                 } else {
                     let id = self.next_id();
@@ -471,7 +517,10 @@ impl Chat {
                     self.approvals.push(Approval { id, title, detail, source: Source::Agent { key, options }, since: Instant::now() });
                 }
             }
-            Event::AuthRequired { methods } => self.state = State::SignIn(methods),
+            Event::AuthRequired { methods } => {
+                self.close_turn();
+                self.state = State::SignIn(methods);
+            }
             Event::AuthStatus(status) => self.push(Item::Notice(status)),
             Event::Modes { current, available } => self.modes = Some((current, available)),
             Event::Models { current, available } => match self.models.as_mut() {
@@ -493,6 +542,7 @@ impl Chat {
                 if !reason.is_empty() && reason != "end_turn" {
                     self.push(Item::Notice(format!("Stopped: {reason}")));
                 }
+                self.close_turn();
                 if self.state == State::Running {
                     self.state = State::Ready;
                 }
@@ -747,6 +797,18 @@ mod tests {
 
         chat.push(Item::Notice("x".repeat(MAX_TEXT * 2)));
         assert!(matches!(chat.items.last(), Some(Item::Notice(text)) if text.len() <= MAX_TEXT + '…'.len_utf8()));
+    }
+
+    /// Only the bridge's real tools are taken for its tools: the list in `craft-agents` is the
+    /// MCP server's own.
+    #[test]
+    fn the_bridge_tool_list_matches_the_mcp_server() {
+        let served: Vec<String> = pcbcraft_mcp::tool_definitions().iter().filter_map(|tool| tool["name"].as_str().map(str::to_owned)).collect();
+        let mut listed: Vec<&str> = acp::BRIDGE_TOOLS.to_vec();
+        let mut served: Vec<&str> = served.iter().map(String::as_str).collect();
+        listed.sort_unstable();
+        served.sort_unstable();
+        assert_eq!(listed, served);
     }
 
     /// The token file holds the secret, is the user's alone and goes when its folder is dropped.

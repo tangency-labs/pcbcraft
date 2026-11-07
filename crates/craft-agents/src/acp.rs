@@ -175,23 +175,33 @@ pub fn initialize_params(version: &str) -> Value {
     })
 }
 
-/// The name the chat gives its MCP server (#2592): not `pcbcraft`, the name docs/mcp.md suggests
-/// for a user's own setup, so an agent that merges its own MCP servers with the session's (Codex
-/// keeps its own entry on a clash) can't shadow the bridge with a headless session.
-pub const BRIDGE_NAME: &str = "pcbcraft-app";
+/// How the chat's MCP server is named (#2592): not `pcbcraft`, the name docs/mcp.md suggests for
+/// a user's own setup, and with a random part per chat ([`bridge_name`]), so no server of the
+/// user's own (an agent may merge its MCP servers with the session's; Codex keeps its own entry
+/// on a clash) can share the name, shadow the bridge or pass for it in [`is_bridge_tool`].
+pub const BRIDGE_PREFIX: &str = "pcbcraft-app";
 
-/// Whether a permission question is about a tool of the chat's own MCP server, whose calls
-/// PCBCraft's gate checks. The agent writes both values and ACP has nothing better to go on, so
-/// the test is strict: the whole title is the tool's name as the Claude adapter forms it
-/// (`mcp__pcbcraft-app__batch`), one word with no room for a command line, a path or other free
-/// text, and the kind is `other` (the kind an MCP tool has) or not given. Any other title goes
-/// through the user's mode and remembered answers: agents that word their MCP tools differently,
-/// and a user's own MCP server, which the gate doesn't see.
-pub fn is_bridge_tool(title: &str, kind: Option<&str>) -> bool {
-    let tool = title.strip_prefix("mcp__").and_then(|t| t.strip_prefix(BRIDGE_NAME)).and_then(|t| t.strip_prefix("__"));
-    let named = tool.is_some_and(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'));
-    named && matches!(kind, None | Some("other"))
+/// The bridge's name for one chat: [`BRIDGE_PREFIX`], a dash and `nonce`, a random value the host
+/// makes for each connection (lowercase hex, which agents keep as it is in tool names).
+pub fn bridge_name(nonce: &str) -> String {
+    format!("{BRIDGE_PREFIX}-{nonce}")
 }
+
+/// Whether a permission question is about a tool of this chat's own MCP server, named `server`
+/// ([`bridge_name`]), whose calls PCBCraft's gate checks at the endpoint. The agent writes both
+/// values and ACP ties them to nothing better, so the test is strict: the whole title is the
+/// tool's name as the Claude adapter forms it (`mcp__pcbcraft-app-1a2b…__execute`), for one of
+/// the [`BRIDGE_TOOLS`], with no room for a command line, a path or other free text, and the kind is `other` (the kind an
+/// MCP tool has) or not given. The random part of `server` keeps any other server, the user's own
+/// included, from matching. Any other title goes through the user's mode and remembered answers.
+pub fn is_bridge_tool(title: &str, kind: Option<&str>, server: &str) -> bool {
+    let tool = title.strip_prefix("mcp__").and_then(|t| t.strip_prefix(server)).and_then(|t| t.strip_prefix("__"));
+    tool.is_some_and(|tool| BRIDGE_TOOLS.contains(&tool)) && matches!(kind, None | Some("other"))
+}
+
+/// The tools the bridge serves (`pcbcraft-cli mcp`); only these count as its tools. The desktop
+/// app checks this list against the MCP server's own.
+pub const BRIDGE_TOOLS: &[&str] = &["list_commands", "describe_command", "execute", "inspect_project", "inspect_editor", "cross_probe"];
 
 /// The MCP server the agent starts to reach the project:
 /// `pcbcraft-cli mcp --connect PORT --token-file FILE --wait SECONDS`, bridged to the chat's own
@@ -202,6 +212,8 @@ pub fn is_bridge_tool(title: &str, kind: Option<&str>) -> bool {
 /// Windows CLI without passing its environment on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct McpBridge {
+    /// The server's name in the session, from [`bridge_name`].
+    pub name: String,
     pub cli: std::path::PathBuf,
     pub port: u16,
     /// The file holding the endpoint's credential, as the CLI (a program on this side) sees it.
@@ -229,7 +241,7 @@ impl McpBridge {
     /// The bridge as an ACP stdio MCP server entry for `session/new`.
     pub fn to_json(&self) -> Value {
         json!({
-            "name": BRIDGE_NAME,
+            "name": self.name,
             "command": self.cli.to_string_lossy(),
             "args": self.args(),
             "env": [],
@@ -240,7 +252,7 @@ impl McpBridge {
     /// Windows side (WSL starts Windows programs itself), so the port and the token file's
     /// Windows path stay as they are.
     pub fn in_wsl(&self) -> McpBridge {
-        McpBridge { cli: wsl_path(&self.cli), port: self.port, token_file: self.token_file.clone() }
+        McpBridge { name: self.name.clone(), cli: wsl_path(&self.cli), port: self.port, token_file: self.token_file.clone() }
     }
 }
 
@@ -271,12 +283,12 @@ pub fn wsl_path(path: &std::path::Path) -> std::path::PathBuf {
 /// What every session is told about where it is. An agent with no route for it in
 /// [`session_new_params`] doesn't get it.
 pub const SYSTEM_NOTE: &str = "You are running inside PCBCraft, an electronics design application, as the user's assistant. \
-The open project is reachable through the `pcbcraft-app` MCP server: use its tools (list_commands, describe_command, execute, \
+The open project is reachable through the PCBCraft MCP server, whose name starts with `pcbcraft-app`: use its tools (list_commands, describe_command, execute, \
 inspect_project, inspect_editor, cross_probe) to read and change the project and the editor windows the user is looking at. \
 Inspect the project for its current revision and IDs before an edit, and inspect again to verify. Project commands are undoable \
-with edit.undo; view., window., app. and file. commands change the editor's views, windows and settings, using IDs from \
-inspect_editor. schematic.rotate_symbol turns 90 degrees counterclockwise. Saving and replacing the project wait for the user's \
-approval in the chat. Don't use shell or file tools: work through the PCBCraft tools. Keep answers short.";
+with edit.undo; view., window., arrangement., app. and file. commands change the editor's views, windows, arrangements and \
+settings, using IDs from inspect_editor. schematic.rotate_symbol turns 90 degrees counterclockwise. Saving and replacing the project wait for the user's \
+approval in the chat, and a tool call made after the user stops a reply is refused. Don't use shell or file tools: work through the PCBCraft tools. Keep answers short.";
 
 /// The Claude Code adapter's own tools that reach the computer rather than the design: turned off
 /// for the session (`_meta.claudeCode.options.disallowedTools`), so it works through PCBCraft's.
@@ -763,21 +775,28 @@ mod tests {
     /// docs/mcp.md, and the note tells the agent the name it really has.
     #[test]
     fn the_bridge_has_a_name_of_its_own_and_the_note_uses_it() {
-        assert_ne!(BRIDGE_NAME, "pcbcraft");
-        assert!(SYSTEM_NOTE.contains(&format!("`{BRIDGE_NAME}` MCP server")), "{SYSTEM_NOTE}");
+        let name = bridge_name(NONCE);
+        assert_eq!(name, "pcbcraft-app-0123456789ab");
+        assert!(SYSTEM_NOTE.contains(&format!("name starts with `{BRIDGE_PREFIX}`")), "{SYSTEM_NOTE}");
         assert!(!SYSTEM_NOTE.contains("`pcbcraft` MCP server"));
-        // The panel still recognises the bridge's tools as PCBCraft's (agents name them after
-        // their server, e.g. `mcp__pcbcraft-app__batch`).
-        assert!(BRIDGE_NAME.contains("pcbcraft"));
-        assert!(is_bridge_tool(&format!("mcp__{BRIDGE_NAME}__batch"), Some("other")));
+        // The panel recognises this chat's tools by its server's whole name.
+        assert!(is_bridge_tool(&format!("mcp__{name}__execute"), Some("other"), &name));
     }
+
+    /// A random part every bridge name carries in these tests.
+    const NONCE: &str = "0123456789ab";
 
     /// Only the whole name of a tool of the chat's own server counts, whatever else a title holds.
     #[test]
     fn only_the_bridges_exact_tool_names_are_its_tools() {
-        for tool in ["batch", "inspect_design", "set_parameter"] {
-            assert!(is_bridge_tool(&format!("mcp__pcbcraft-app__{tool}"), None), "{tool}");
-            assert!(is_bridge_tool(&format!("mcp__pcbcraft-app__{tool}"), Some("other")), "{tool}");
+        let name = bridge_name(NONCE);
+        for tool in ["execute", "inspect_project", "describe_command"] {
+            assert!(is_bridge_tool(&format!("mcp__{name}__{tool}"), None, &name), "{tool}");
+            assert!(is_bridge_tool(&format!("mcp__{name}__{tool}"), Some("other"), &name), "{tool}");
+        }
+        // Another chat's bridge, a server with the old fixed name, and near misses aren't this one.
+        for other in [bridge_name("ffffffffffff"), "pcbcraft-app".to_owned(), format!("{name}x"), format!("x{name}")] {
+            assert!(!is_bridge_tool(&format!("mcp__{other}__execute"), None, &name), "{other}");
         }
         for title in [
             "",
@@ -806,19 +825,24 @@ mod tests {
             "MCP__pcbcraft-app__batch",
             "mcp__pcbcraft-app__Batch",
         ] {
-            assert!(!is_bridge_tool(title, None), "{title:?}");
+            assert!(!is_bridge_tool(title, None, &name), "{title:?}");
         }
         for kind in ["execute", "edit", "delete", "move", "read", "search", "fetch", "think", ""] {
-            assert!(!is_bridge_tool("mcp__pcbcraft-app__batch", Some(kind)), "{kind:?}");
+            assert!(!is_bridge_tool(&format!("mcp__{name}__execute"), Some(kind), &name), "{kind:?}");
         }
     }
 
     #[test]
     fn the_session_names_the_token_file_but_never_holds_the_credential() {
-        let b = McpBridge { cli: "/opt/pcbcraft/pcbcraft-cli".into(), port: 41234, token_file: "/run/u/pcbcraft-control-x/41234.token".into() };
+        let b = McpBridge {
+            name: bridge_name(NONCE),
+            cli: "/opt/pcbcraft/pcbcraft-cli".into(),
+            port: 41234,
+            token_file: "/run/u/pcbcraft-control-x/41234.token".into(),
+        };
         let p = session_new_params(std::path::Path::new("/home/u/designs"), Some(&b), &json!({}));
         let s = &p["mcpServers"][0];
-        assert_eq!(s["name"], BRIDGE_NAME);
+        assert_eq!(s["name"], "pcbcraft-app-0123456789ab");
         assert_eq!(s["args"], json!(["mcp", "--connect", "41234", "--token-file", "/run/u/pcbcraft-control-x/41234.token", "--wait", "300"]));
         assert_eq!(s["env"], json!([]), "nothing secret, and nothing WSL would drop, goes in the environment");
         let text = p.to_string();
@@ -880,7 +904,12 @@ mod tests {
         assert_eq!(wsl(r"\\server\share\x"), r"\\server\share\x");
 
         let token_file = r"C:\Users\u\AppData\Local\Temp\pcbcraft-control-x\41234.token";
-        let b = McpBridge { cli: r"C:\Program Files\PCBCraft\pcbcraft-cli.exe".into(), port: 41234, token_file: token_file.into() };
+        let b = McpBridge {
+            name: bridge_name(NONCE),
+            cli: r"C:\Program Files\PCBCraft\pcbcraft-cli.exe".into(),
+            port: 41234,
+            token_file: token_file.into(),
+        };
         let p = session_new_params(&wsl_path(std::path::Path::new(r"C:\Users\u\work")), Some(&b.in_wsl()), &json!({}));
         assert_eq!(p["cwd"], "/mnt/c/Users/u/work");
         assert_eq!(p["mcpServers"][0]["command"], "/mnt/c/Program Files/PCBCraft/pcbcraft-cli.exe");

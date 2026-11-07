@@ -525,6 +525,17 @@ impl Assistant {
 
     /// Tool calls the person answered, once, for the editor to run or refuse. "Always allow" is
     /// remembered here.
+    /// Whether the chat is answering a message, so its tool calls may run.
+    pub(crate) fn turn_open(&self) -> bool {
+        self.chat.turn_open()
+    }
+
+    /// The chat endpoint's current request generation, if it is running.
+    pub(crate) fn generation(&self) -> Option<u64> {
+        self.chat.generation()
+    }
+
+    /// The approvals the person answered since the last frame, for the editor to act on.
     pub(super) fn take_answers(&mut self) -> Vec<(Approval, Answer)> {
         std::mem::take(&mut self.answers)
     }
@@ -1075,7 +1086,14 @@ mod chat_tests {
     use pcbcraft_mcp::{Backend, live::Remote};
     use serde_json::{Value, json};
 
-    use crate::{PcbApp, tests::click};
+    use crate::PcbApp;
+
+    /// Click `label` and draw a few frames: while a reply runs, its spinner keeps repainting, so
+    /// the harness can't wait for the window to settle.
+    fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
+        harness.get_by_label(label).click();
+        harness.run_steps(3);
+    }
 
     use super::*;
 
@@ -1167,6 +1185,12 @@ mod chat_tests {
         Ok((harness, script, endpoint))
     }
 
+    /// Send the scripted agent a message, so its tool calls may run as in a real reply.
+    fn open_turn(harness: &mut Harness<'_, PcbApp>) {
+        assert!(harness.state_mut().assistant.chat.send("Go ahead"));
+        harness.run_steps(2);
+    }
+
     /// Queue an event for the scripted agent to report on its next poll.
     fn push(script: &Arc<Mutex<Script>>, event: Event) {
         if let Ok(mut script) = script.lock() {
@@ -1192,7 +1216,7 @@ mod chat_tests {
             let deadline = Instant::now() + Duration::from_secs(10);
             let mut answered = answer.is_none();
             while !worker.is_finished() && Instant::now() < deadline {
-                harness.run();
+                harness.run_steps(1);
                 if !answered
                     && let Some(answer) = answer
                     && harness.query_by_label(answer).is_some()
@@ -1203,6 +1227,8 @@ mod chat_tests {
                 thread::sleep(Duration::from_millis(2));
             }
             assert!(worker.is_finished(), "the chat endpoint did not answer {command}");
+            // Draw what the answer changed, such as the edit's note.
+            harness.run_steps(2);
             worker.join().unwrap_or_else(|_| Err("worker panicked".to_owned()))
         })
     }
@@ -1224,7 +1250,7 @@ mod chat_tests {
             &script,
             Event::Permission {
                 key: 7,
-                title: "mcp__pcbcraft-app__execute".to_owned(),
+                title: format!("mcp__{}__execute", craft_agents::acp::bridge_name("0123456789ab")),
                 kind: Some("other".to_owned()),
                 options: vec![option("ok", "allow_once"), option("no", "reject_once")],
             },
@@ -1256,6 +1282,7 @@ mod chat_tests {
     #[test]
     fn an_unanswered_tool_call_is_declined_with_an_answer() -> Result<(), Box<dyn std::error::Error>> {
         let (mut harness, _script, endpoint) = harness_with_agent()?;
+        open_turn(&mut harness);
         let unsaved = harness.state().files.dirty(&harness.state().session);
         let result = thread::scope(|scope| {
             let request = json!({"command": "file.save", "params": {}, "inspect": false});
@@ -1266,7 +1293,7 @@ mod chat_tests {
             });
             let deadline = Instant::now() + Duration::from_secs(10);
             while !worker.is_finished() && Instant::now() < deadline {
-                harness.run();
+                harness.run_steps(1);
                 if let Some(approval) = harness.state_mut().assistant.chat.approvals.first_mut()
                     && let Some(long_ago) = Instant::now().checked_sub(Duration::from_secs(craft_agents::acp::APPROVAL_WAIT_S + 1))
                 {
@@ -1281,6 +1308,88 @@ mod chat_tests {
         assert!(harness.state().assistant.chat.approvals.is_empty());
         harness.get_by_label("`file.save` waited 4 minutes without an answer and was declined.");
         assert_eq!(harness.state().files.dirty(&harness.state().session), unsaved);
+        Ok(())
+    }
+
+    /// Tool calls run only while a message is answered: after Stop, or once a new chat starts
+    /// (as a project switch does), a call still on its way is refused and changes nothing.
+    #[test]
+    fn calls_after_stop_or_a_new_chat_do_not_run() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, script, endpoint) = harness_with_agent()?;
+        let revision = harness.state().session.revision();
+        let delete = json!({"wire": "wire-4", "expected_revision": revision});
+        let idle = call(&mut harness, &endpoint, pcbcraft_engine::DELETE_WIRE, delete.clone(), None).unwrap_err();
+        assert!(idle.contains("did not run"), "no reply was asked for: {idle}");
+
+        open_turn(&mut harness);
+        harness.state_mut().assistant.chat.stop();
+        let stopped = call(&mut harness, &endpoint, pcbcraft_engine::DELETE_WIRE, delete.clone(), None).unwrap_err();
+        assert!(stopped.contains("`schematic.delete_wire` did not run"), "{stopped}");
+        let inspected = call(&mut harness, &endpoint, "view.fit", json!({"view": 0}), None).unwrap_err();
+        assert!(inspected.contains("did not run"), "window commands are refused too: {inspected}");
+
+        push(&script, Event::TurnEnded { reason: "cancelled".to_owned() });
+        harness.run_steps(2);
+        open_turn(&mut harness);
+        assert!(harness.state().assistant.chat.turn_open());
+        harness.state_mut().assistant.new_chat();
+        let reset = call(&mut harness, &endpoint, pcbcraft_engine::DELETE_WIRE, delete, None).unwrap_err();
+        assert!(reset.contains("did not run"), "{reset}");
+        assert_eq!(harness.state().session.revision(), revision);
+        Ok(())
+    }
+
+    /// A request that reached the endpoint before Stop doesn't run in the next reply, even when
+    /// the person sends a new message before the window serves it: each reply has a generation
+    /// of its own, checked right before a request runs.
+    #[test]
+    fn a_request_from_a_stopped_reply_does_not_run_in_the_next() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, _script, endpoint) = harness_with_agent()?;
+        let revision = harness.state().session.revision();
+        open_turn(&mut harness);
+        harness.state_mut().assistant.chat.stop();
+        let result = thread::scope(|scope| {
+            let request =
+                json!({"command": pcbcraft_engine::DELETE_WIRE, "params": {"wire": "wire-4", "expected_revision": revision}, "inspect": false});
+            let endpoint = &endpoint;
+            let worker = scope.spawn(move || {
+                let mut remote = Remote::from_token_file(endpoint.0, &endpoint.1)?.with_wait(30);
+                remote.call("engine.execute", request)
+            });
+            // Let it reach the endpoint's queue while no frame serves it, then start a new reply.
+            thread::sleep(Duration::from_millis(500));
+            harness.state_mut().assistant.chat.state = State::Ready;
+            assert!(harness.state_mut().assistant.chat.send("Try again"));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !worker.is_finished() && Instant::now() < deadline {
+                harness.run_steps(1);
+                thread::sleep(Duration::from_millis(2));
+            }
+            worker.join().unwrap_or_else(|_| Err("worker panicked".to_owned()))
+        });
+        let error = result.err().ok_or("the stopped reply's edit ran in the next one")?;
+        assert!(error.contains("did not run"), "{error}");
+        assert_eq!(harness.state().session.revision(), revision);
+        Ok(())
+    }
+
+    /// Only this chat's bridge, by its random name, gets the agent's permission questions
+    /// answered for it; a server under the old fixed name is asked about like any other tool.
+    #[test]
+    fn only_this_chats_bridge_is_allowed_without_asking() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, script, _) = harness_with_agent()?;
+        harness.state_mut().assistant.settings.agents.ai_permissions = craft_agents::agents::Mode::Ask;
+        let ask = |key, title: String| Event::Permission {
+            key,
+            title,
+            kind: Some("other".to_owned()),
+            options: vec![option("ok", "allow_once"), option("no", "reject_once")],
+        };
+        push(&script, ask(1, format!("mcp__{}__execute", craft_agents::acp::bridge_name("0123456789ab"))));
+        push(&script, ask(2, "mcp__pcbcraft-app__execute".to_owned()));
+        harness.run();
+        assert_eq!(script.lock().map_err(|_| "poisoned")?.answers, [(1, Some("ok".to_owned()))]);
+        harness.get_by_label("mcp__pcbcraft-app__execute");
         Ok(())
     }
 
@@ -1318,6 +1427,7 @@ mod chat_tests {
     #[test]
     fn the_gate_holds_tool_calls_for_the_person() -> Result<(), Box<dyn std::error::Error>> {
         let (mut harness, _script, endpoint) = harness_with_agent()?;
+        open_turn(&mut harness);
         let revision = harness.state().session.revision();
         let deleted = call(&mut harness, &endpoint, pcbcraft_engine::DELETE_WIRE, json!({"wire": "wire-4", "expected_revision": revision}), None)?;
         assert_eq!(deleted["revision"], revision + 1);
