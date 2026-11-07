@@ -36,7 +36,7 @@ pub(super) fn tab_slot(name: &str) -> usize {
 enum Action {
     Symbol,
     Power,
-    Port,
+    HierarchicalLabel,
     Text,
     NewSheet,
     Subsheet,
@@ -57,10 +57,7 @@ enum Action {
     AutoHeal,
     Sources,
     Updates,
-    Save,
     Variants,
-    Undo,
-    Redo,
 }
 
 /// A single metadata table drives both promoted controls and caption-menu actions.
@@ -82,8 +79,8 @@ const fn tool(action: Action, label: &'static str, icon: Icon, hint: &'static st
     ToolSpec { action, label, icon, hint, key }
 }
 const SHEETS: &[ToolSpec] = &[
-    tool(Action::NewSheet, "New sheet", Icon::Sheet, "Create an independent sheet", ""),
     tool(Action::Subsheet, "Subsheet", Icon::Subsheet, "Place hierarchical sheet (S)", "S"),
+    tool(Action::HierarchicalLabel, "Hierarchical label", Icon::HierarchicalLabel, "Place hierarchical label (H)", "H"),
 ];
 const CAPTURE: &[Group] = &[
     Group {
@@ -91,7 +88,6 @@ const CAPTURE: &[Group] = &[
         tools: &[
             tool(Action::Symbol, "Symbol", Icon::Symbol, "Add symbol (A)", "A"),
             tool(Action::Power, "Power", Icon::Power, "Power symbols are not available yet.", ""),
-            tool(Action::Port, "Port", Icon::HierarchicalLabel, "Place hierarchical label (H)", "H"),
             tool(Action::Text, "Text", Icon::Text, "Text placement is not available yet.", "T"),
         ],
         extras: &[],
@@ -102,14 +98,14 @@ const CAPTURE: &[Group] = &[
         tools: &[
             tool(Action::Wire, "Wire", Icon::Wire, "Draw wire (W)", "W"),
             tool(Action::Bus, "Bus", Icon::Bus, "Buses are not available yet.", ""),
-            tool(Action::Label, "Label", Icon::NetLabel, "Local and global net labels are not available yet.", "L"),
+            tool(Action::Label, "Net label", Icon::NetLabel, "Local and global net labels are not available yet.", "L"),
         ],
         extras: &[],
     },
     Group {
         title: "Modify",
         tools: &[
-            tool(Action::Move, "Move", Icon::Move, "Select and move items", "V"),
+            tool(Action::Move, "Move", Icon::Move, "Move selected symbol (M)", "M"),
             tool(Action::Rotate, "Rotate", Icon::Rotate, "Rotate selected symbol", "R"),
             tool(Action::Mirror, "Mirror", Icon::Mirror, "Mirroring is not available yet.", ""),
         ],
@@ -119,21 +115,6 @@ const CAPTURE: &[Group] = &[
             tool(Action::Heal, "Heal", Icon::Heal, "Heal selected wires", ""),
             tool(Action::AutoHeal, "Auto-heal wires", Icon::Heal, "Auto-heal wires", ""),
         ],
-    },
-    Group {
-        title: "Inspect",
-        tools: &[
-            tool(Action::Rules, "Rules", Icon::Rules, "Electrical rules are not available yet.", ""),
-            tool(Action::Erc, "ERC", Icon::Erc, "Electrical rule checking is not available yet.", ""),
-            tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
-            tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", ""),
-        ],
-        extras: &[],
-    },
-    Group {
-        title: "Design",
-        tools: &[tool(Action::Sync, "Sync", Icon::Sync, "Schematic-to-board synchronization is not available yet.", "")],
-        extras: &[],
     },
 ];
 const ANALYZE: &[Group] = &[
@@ -148,29 +129,21 @@ const ANALYZE: &[Group] = &[
     Group { title: "Reports", tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", "")], extras: &[] },
 ];
 const LIBRARIES: &[Group] = &[Group {
-    title: "Components",
+    title: "Library sources",
     tools: &[
-        tool(Action::Symbol, "Parts", Icon::Symbol, "Add symbol (A)", "A"),
         tool(Action::Sources, "Sources", Icon::Browser, "External library sources are not available yet.", ""),
         tool(Action::Updates, "Updates", Icon::Sync, "Library update review is not available yet.", ""),
     ],
     extras: &[],
 }];
 const MANAGE: &[Group] = &[
-    Group { title: "Sheets", tools: SHEETS, extras: &[] },
+    Group { title: "Sheets", tools: &[tool(Action::NewSheet, "New sheet", Icon::Sheet, "Create an independent sheet", "")], extras: &[] },
     Group {
         title: "Project",
         tools: &[
-            tool(Action::Save, "Save", Icon::Save, "Save project", "Ctrl+S"),
+            tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
             tool(Action::Variants, "Variants", Icon::Bom, "Assembly variants are not available yet.", ""),
-        ],
-        extras: &[],
-    },
-    Group {
-        title: "History",
-        tools: &[
-            tool(Action::Undo, "Undo", Icon::Undo, "Undo project edit", "Ctrl+Z"),
-            tool(Action::Redo, "Redo", Icon::Redo, "Redo project edit", "Ctrl+Y"),
+            tool(Action::Sync, "Update PCB", Icon::Sync, "Schematic-to-board synchronization is not available yet.", ""),
         ],
         extras: &[],
     },
@@ -182,7 +155,7 @@ impl Action {
         matches!(
             self,
             Self::Symbol
-                | Self::Port
+                | Self::HierarchicalLabel
                 | Self::NewSheet
                 | Self::Subsheet
                 | Self::Wire
@@ -192,9 +165,6 @@ impl Action {
                 | Self::Slice
                 | Self::Heal
                 | Self::AutoHeal
-                | Self::Save
-                | Self::Undo
-                | Self::Redo
         )
     }
 
@@ -207,10 +177,9 @@ impl Action {
         let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
         match self {
             Self::NewSheet => app.session.available(pcbcraft_engine::sheets::CREATE_SHEET),
-            Self::Save => app.can_save_project(),
-            Self::Undo => app.session.available("edit.undo"),
-            Self::Redo => app.session.available("edit.redo"),
-            Self::Rotate => schematic && app.views.active.schematic.tool.is_none() && app.views.active.schematic.selection.single_symbol().is_some(),
+            Self::Move | Self::Rotate => {
+                schematic && app.views.active.schematic.tool.is_none() && app.views.active.schematic.selection.single_symbol().is_some()
+            }
             Self::Delete => {
                 schematic && (!app.views.active.schematic.selection.is_empty() || app.views.active.schematic.selected_sheet_symbol.is_some())
             }
@@ -226,7 +195,7 @@ impl Action {
     fn active(self, app: &PcbApp) -> bool {
         match self {
             Self::Symbol => matches!(app.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
-            Self::Port => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, .. })),
+            Self::HierarchicalLabel => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, .. })),
             Self::Subsheet => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Sheet, .. })),
             Self::Wire => matches!(app.views.active.schematic.tool, Some(Tool::Wire { .. })),
             Self::AutoHeal => app.preferences.auto_heal_wires,
@@ -279,7 +248,7 @@ impl PcbApp {
         }
         match action {
             Action::Symbol => self.parts.focus_search(),
-            Action::Port => self.begin_hierarchy(crate::hierarchy::Kind::Label),
+            Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),
             Action::NewSheet => {
                 self.begin_sheet_edit(self.views.active.id(), pcbcraft_engine::sheets::CREATE_SHEET, None);
@@ -288,7 +257,7 @@ impl PcbApp {
                 }
             }
             Action::Wire => self.begin_wire(),
-            Action::Move => self.views.active.cancel_gesture(),
+            Action::Move => self.edit_selected(SymbolAction::DisconnectMove),
             Action::Rotate => self.edit_selected(SymbolAction::Rotate),
             Action::Delete => {
                 if let Some(id) = self.views.active.schematic.selected_sheet_symbol {
@@ -314,10 +283,24 @@ impl PcbApp {
                 }
             }
             Action::AutoHeal => self.preferences.auto_heal_wires = !self.preferences.auto_heal_wires,
-            Action::Save => self.primary_save(ctx),
-            Action::Undo => self.run("edit.undo", &serde_json::Value::Null),
-            Action::Redo => self.run("edit.redo", &serde_json::Value::Null),
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Editing and project actions have one tab owner, even when planned controls are disabled.
+    #[test]
+    fn actions_are_not_repeated_across_tabs() {
+        let mut owners = Vec::new();
+        for (tab, groups) in [("Capture", CAPTURE), ("Analyze", ANALYZE), ("Libraries", LIBRARIES), ("Manage", MANAGE)] {
+            for tool in groups.iter().flat_map(|group| group.tools.iter().chain(group.extras)) {
+                assert!(!owners.iter().any(|(action, _)| *action == tool.action), "{:?} repeated on {tab}: {owners:?}", tool.action);
+                owners.push((tool.action, tab));
+            }
         }
     }
 }

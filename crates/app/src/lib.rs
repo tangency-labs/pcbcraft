@@ -1406,9 +1406,6 @@ impl PcbApp {
             } else if pressed(&FINER_GRID) {
                 self.cycle_grid(true);
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::V)) {
-                self.views.active.cancel_gesture();
-            }
             if pressed(&ADD_SYMBOL) && self.session.available(PLACE_SYMBOL) {
                 self.parts.focus_search();
             }
@@ -1866,7 +1863,6 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
-    list.push(("Schematic", "Select and move items", "V".to_owned()));
     list.push(("Schematic", "Drag wire segment", "G".to_owned()));
     list.push(("Schematic", "Rotate the selected symbol", key(&ROTATE)));
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));

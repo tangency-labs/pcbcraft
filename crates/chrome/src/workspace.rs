@@ -36,9 +36,6 @@ const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 /// The glyphs used by the schematic ribbon actions and Browser rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
-    Save,
-    Undo,
-    Redo,
     Subsheet,
     Power,
     Text,
@@ -986,19 +983,6 @@ fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, s
 /// strongest icon blue, both faded when the action is unavailable. Registered SVG masters use
 /// the embedded loader; other chrome glyphs retain their native painter and menu artwork.
 fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tokens, enabled: bool) {
-    if let Some(icon) = match icon {
-        ToolIcon::Save => Some(crate::menu::MenuIcon::Save),
-        ToolIcon::Undo => Some(crate::menu::MenuIcon::Undo),
-        ToolIcon::Redo => Some(crate::menu::MenuIcon::Redo),
-        _ => None,
-    } {
-        let mut painter = p.clone();
-        if !enabled {
-            painter.set_opacity(0.35);
-        }
-        icon.paint_sized(&painter, center, size, t, true);
-        return;
-    }
     if crate::ribbon_icons::paint(p, icon, center, size, t, enabled) {
         return;
     }
@@ -1008,7 +992,6 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
     let stroke = |width: f32, color| Stroke::new(width * size / 64.0, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
-        ToolIcon::Save | ToolIcon::Undo | ToolIcon::Redo => {}
         ToolIcon::Subsheet
         | ToolIcon::Power
         | ToolIcon::Text

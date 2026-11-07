@@ -140,7 +140,7 @@ fn hierarchy_edits_stay_bound_to_their_split_pane() {
     assert_eq!(h.state().views.view(second).unwrap().target(), Some(DocumentTarget::Sheet(child)));
 }
 
-/// Hovered hierarchy edits take precedence over a component selected earlier, so E/Delete
+/// Hovered hierarchy edits take precedence over a component selected earlier, so M/E/Delete
 /// cannot silently edit or remove that unrelated symbol.
 #[test]
 fn hierarchy_shortcuts_do_not_edit_an_old_component_selection() {
@@ -154,6 +154,15 @@ fn hierarchy_shortcuts_do_not_edit_an_old_component_selection() {
     h.run();
     let rect = h.get_by_label("Schematic canvas").rect();
     let pointer = h.state().views.active.camera.screen(Point { x_nm: -2 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 }, rect);
+    h.hover_at(pointer);
+    h.run();
+    let before_move = h.state().session.inspect();
+    h.key_press(Key::M);
+    h.run();
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, .. })));
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(h.state().session.inspect(), before_move);
     h.hover_at(pointer);
     h.run();
     h.key_press(Key::E);

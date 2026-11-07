@@ -482,8 +482,7 @@ and `c553365a2197a689e749389a6fbf707a38df9b61` (`move.svg`, `mirror.svg`,
 `list.svg`, `configuration_table.svg`), MIT OR Apache-2.0, copyright 2026 SolidCraft
 contributors. Both projects' license texts and SolidCraft's NOTICE are retained
 beside the assets, included in About's Toolbar licenses, and copied into the web
-build's `ribbon-notices/` directory. Save, Undo and Redo reuse upstream's existing
-menu glyphs. This is a bounded UI/artwork adaptation; the chrome module remains
+build's `ribbon-notices/` directory. Save, Undo and Redo remain in upstream's app bar with their existing menu glyphs. This is a bounded UI/artwork adaptation; the chrome module remains
 replaceable by the shared Craft UI layer.
 
 SVG rendering adds `egui_extras` 0.36.2 with only its `svg` feature, using
@@ -491,3 +490,15 @@ SVG rendering adds `egui_extras` 0.36.2 with only its `svg` feature, using
 in `Cargo.lock` and checked by cargo-deny. These packages and their added
 transitive dependencies use MIT, Apache-2.0, BSD-2-Clause or BSD-3-Clause licenses;
 no GPL-family, file-fetching or HTTP dependency is introduced by this feature.
+
+
+The subsequent toolbar cleanup gives each schematic action one tab owner:
+Capture contains drawing/editing and hierarchical interfaces; Analyze contains
+checks/reports; Libraries contains source management; Manage contains independent
+sheet creation and project operations; View retains panels and layout. The
+hierarchical-label command is named **Hierarchical label**, replacing the
+prototype's broader **Port** label. The imported SVG master retains its original
+`port.svg` filename and recorded hash. Move now dispatches upstream's existing
+M/Disconnect and Move handler, and redundant Save/Undo/Redo ribbon actions were
+removed in favor of the existing app bar. These layout/label changes are
+original upstream adaptation code and do not import further prototype sources.

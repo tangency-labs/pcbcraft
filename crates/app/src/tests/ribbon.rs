@@ -4,7 +4,7 @@ use super::*;
 /// Both promoted buttons and caption menus reach the same sheet/label tools without
 /// editing the document until the existing placement form is committed.
 #[test]
-fn ported_ribbon_reaches_sheet_and_port_workflows_at_both_widths() {
+fn ribbon_reaches_sheet_and_hierarchical_label_workflows_at_both_widths() {
     for width in [1400., 400.] {
         let mut h = harness();
         h.set_size(egui::vec2(width, 800.));
@@ -30,16 +30,15 @@ fn ported_ribbon_reaches_sheet_and_port_workflows_at_both_widths() {
         h.run();
         click(&mut h, "Place hierarchical sheet (S)");
         assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Sheet, .. })));
-        h.get_by_label("Select and move items").scroll_to_me();
+        h.key_press(Key::Escape);
         h.run();
-        click(&mut h, "Select and move items");
         assert!(h.state().views.active.schematic.tool.is_none());
-        h.get_by_label("Place menu").scroll_to_me();
+        h.get_by_label("Sheets menu").scroll_to_me();
         h.run();
-        click(&mut h, "Place menu");
-        click(&mut h, "Port");
+        click(&mut h, "Sheets menu");
+        click(&mut h, "Hierarchical label");
         assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, .. })));
-        h.key_press(Key::V);
+        h.key_press(Key::Escape);
         h.run();
         assert!(h.state().views.active.schematic.tool.is_none());
         assert_eq!(h.state().session.inspect(), original);
@@ -53,9 +52,9 @@ fn ported_ribbon_reaches_sheet_and_port_workflows_at_both_widths() {
         h.run();
         click(&mut h, "OK");
         assert_eq!(h.state().session.project().unwrap().sheets().count(), 2);
-        click(&mut h, "Undo project edit");
+        click(&mut h, "Undo");
         assert_eq!(h.state().session.project().unwrap().sheets().count(), 1);
-        click(&mut h, "Redo project edit");
+        click(&mut h, "Redo");
         assert_eq!(h.state().session.project().unwrap().sheets().count(), 2);
     }
 }
@@ -75,4 +74,21 @@ fn all_five_tabs_fit_the_compact_header() {
         }
         click(&mut h, "Capture");
     }
+}
+
+/// Move picks up the selected symbol like M and remains cancelable without editing the session.
+#[test]
+fn move_button_uses_the_symbol_move_workflow() {
+    let mut h = harness();
+    wiring_project(&mut h);
+    let symbol = h.state().session.project().unwrap().symbols()[0].id();
+    h.state_mut().select(Selection::one_symbol(symbol.clone()));
+    h.run();
+    let before = h.state().session.inspect();
+    click(&mut h, "Move selected symbol (M)");
+    assert!(matches!(&h.state().views.active.schematic.tool, Some(Tool::Move { symbol: moved, disconnect:true, .. }) if moved.id()==symbol));
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.state().views.active.schematic.tool.is_none());
+    assert_eq!(h.state().session.inspect(), before);
 }

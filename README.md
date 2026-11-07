@@ -51,8 +51,10 @@ open with its history while Home is shown. See [VISION.md](VISION.md) for the
 project's direction.
 
 The schematic ribbon follows PCBcraft Next: **Capture**, **Analyze**, **Libraries**,
-**Manage** and **View**. Capture groups placement, sheet creation, wiring,
-modification, inspection and design actions. Unavailable tools are disabled;
+**Manage** and **View**. Capture holds drawing and editing tools, including subsheets and hierarchical
+labels. Analyze holds checks and reports, Libraries holds source management,
+Manage holds independent sheet creation and project operations, and View holds
+panels and editor layout. Unavailable tools are disabled;
 compact windows keep them in the group caption menus. **Fit** and **Net Inspector**
 are also available beside the tabs; View contains their full controls.
 
@@ -205,7 +207,7 @@ Inspector panels, and fits the view. Each ribbon group's caption, such as
 **Place ⌄**, opens a menu of the same actions.
 
 A project supports up to 64 sheets, either at the project root or nested under a parent. Right-click **Sheets** or a sheet row
-to create a sheet, or use **Capture → Sheets → New sheet**; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
+to create a sheet, or use **Manage → Sheets → New sheet**; a sheet row also offers **Rename Sheet…** and **Delete Sheet…**.
 Deleting a sheet removes its symbols, wires and associated board footprints in
 one undo step, and the project always retains at least one sheet. Each pane keeps
 its sheet target, camera and selection independently.
@@ -215,7 +217,7 @@ then choose a new child or an existing unparented sheet. Double-click inside the
 symbol to enter its child; **Alt+Backspace** returns to the parent. The sheet name
 sits above the outline; drag either to move it, or select it and drag a corner
 handle to resize. Attached wires follow, and each gesture is one undo step. **H** or
-**Capture → Place → Port** places a hierarchical label inside a child. Its matching pin
+**Capture → Sheets → Hierarchical label** places a hierarchical label inside a child. Its matching pin
 appears on the parent symbol automatically, with the same name and direction;
 **W** connects wires to either end. The Browser nests child sheets beneath their
 parent. Each child has one parent, and repeated names on different sheets do not

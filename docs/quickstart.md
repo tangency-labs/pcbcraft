@@ -143,7 +143,8 @@ Browser or a workspace changes what the focused pane shows, without adding tabs,
 switching arrangements or moving views elsewhere. A single view has no lower tab
 strip; split panes each show one document header whose **×** closes the pane.
 The engine supports up to 64 sheets and one legacy board. Right-click
-**Sheets** in the Browser and choose **New Sheet…**; sheet rows also offer
+**Sheets** in the Browser and choose **New Sheet…**, or use
+**Manage → Sheets → New sheet**; sheet rows also offer
 **Rename Sheet…** and **Delete Sheet…**. Creating a sheet opens it in that pane.
 The breadcrumb uses the actual sheet name and its position in the sheet count.
 Deletion asks for confirmation and removes its symbols, wires and associated
@@ -155,7 +156,7 @@ or choose an existing unparented sheet in **Child sheet**. Double-click inside
 the placed rectangle to enter it; **Alt+Backspace** returns to its parent.
 The name appears above the outline. Drag the body/name to move the sheet, or
 select it and drag a corner handle to resize; **Esc** cancels an active gesture.
-Place a hierarchical label with **H** or **Capture → Place → Port**, enter its name and direction, then
+Place a hierarchical label with **H** or **Capture → Sheets → Hierarchical label**, enter its name and direction, then
 connect its pointed anchor with **W**. A matching sheet pin appears automatically
 on the parent symbol. Names and directions stay synchronized when you edit the
 label with **E** or its context menu. The Browser shows the same nesting in

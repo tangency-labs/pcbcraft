@@ -10,7 +10,7 @@ Double-click inside the sheet symbol to enter its child. **Alt+Backspace** retur
 to the parent in the same pane. Browser navigation works in both schematic and
 PCB workspaces, and other panes/windows keep their own document and camera.
 
-Inside the child, use **H** or **Place → Port**, click an anchor position
+Inside the child, use **H** or **Capture → Sheets → Hierarchical label**, click an anchor position
 and enter a name and direction. The label exposes a matching pin on the parent's
 sheet symbol automatically. Draw a wire to the pointed label anchor or parent
 pin with **W**; an ordinary click also starts a wire at an unconnected anchor.
