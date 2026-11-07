@@ -182,12 +182,15 @@ Scroll to zoom or drag with the middle mouse button to pan. Use **Fit** to bring
 the circuit into view and **Nets** to open the Net Inspector.
 
 The **Browser** floats over the left of the canvas and shows the project as
-**Project → Sheets → Main → Symbols / Nets**. With one view open, the sheet path
-and count sit directly on the canvas beside the Browser, without a tab strip.
+**Sheets → Main → Symbols / Nets** and **Boards → Board → Footprints** under the
+project, using the same tree in schematic and PCB workspaces. Click a sheet or
+board to open it in the focused pane; its arrow unfolds it without navigating.
+Unfold **Symbols**, **Nets** or **Footprints** to list a document's objects, and
+click an object to open its document, select it and center the view on it. A net
+row selects one of its wires. With one view open, the document path and count
+sit directly on the canvas beside the Browser, without a tab strip.
 Split views have one closable header above each canvas showing its document path, such as
-**Power controller › Main**. Arrows fold rows; unfold **Symbols** or **Nets** to list the sheet's
-items, and click one to select it and center the view on it. A net row selects
-one of its wires. Click the Browser's title to fold it. Browsing never changes the
+**Power controller › Main**. Click the Browser's title to fold it. Browsing never changes the
 project, and the canvas keeps its full size; **Fit** keeps the drawing clear of
 the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
 Inspector panels, and fits the view. Each ribbon group's caption, such as

@@ -49,6 +49,7 @@ pub enum ToolIcon {
 pub enum TreeIcon {
     Folder,
     Sheet,
+    Board,
     Tool(ToolIcon),
 }
 
@@ -60,8 +61,10 @@ pub struct TreeRow<'a> {
     /// `Some(open)` for a row that folds, drawn with a disclosure arrow.
     pub fold: Option<bool>,
     pub icon: Option<TreeIcon>,
-    /// The row's name, also its accessible label.
+    /// The visible name; also the accessible label unless overridden below.
     pub label: &'a str,
+    /// Optional semantic name distinguishes matching symbol/footprint labels for assistive technology.
+    pub accessibility_label: Option<&'a str>,
     /// Hover text with more about the row. Empty for none.
     pub tip: &'a str,
     /// Drawn with the selection fill and a semibold label.
@@ -482,7 +485,7 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
     let fold_rect = Rect::from_min_max(pos2(left, rect.top()), pos2(left + TREE_FOLD_WIDTH, rect.bottom()));
     let body = Rect::from_min_max(pos2(fold_rect.right(), rect.top()), rect.max);
     let response = ui.interact(body, id, Sense::click());
-    response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, row.selected, row.label));
+    response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, row.selected, row.accessibility_label.unwrap_or(row.label)));
     let fold = row.fold.map(|open| {
         let fold = ui.interact(fold_rect, id.with("fold"), Sense::click());
         let action = if open { "Collapse" } else { "Expand" };
@@ -532,9 +535,10 @@ fn elided(p: &egui::Painter, text: &str, font: FontId, color: Color32, width: f3
     p.layout_job(job)
 }
 
-/// Draw a Browser row glyph in the theme's icon roles, from PCBcraft Next's icon art.
+/// Draw Browser glyphs using shared workspace icons and the existing qualified tree artwork.
 fn paint_tree_icon(p: &egui::Painter, icon: TreeIcon, center: Pos2, size: f32, t: Tokens) {
     match icon {
+        TreeIcon::Board => paint_workspace_glyph(p, WorkspaceIcon::Layout, center, size, t, true),
         TreeIcon::Folder => paint_folder(p, center, size, t.icon_line),
         TreeIcon::Sheet => {
             let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * (size / 64.0);

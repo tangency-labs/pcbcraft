@@ -817,8 +817,10 @@ impl PcbApp {
                     if matches!(self.dialog, Dialog::None) {
                         self.views.reveal_for(id, &self.session, self.preferences.selection_follow);
                     }
-                    if let Some((source, pick)) = pick.take() {
-                        self.show_pick(source, pick);
+                    if let Some((source, pick)) = pick.take()
+                        && self.views.active.accepts(source, &self.session)
+                    {
+                        self.queue_view_action(ui.ctx(), source.view(), crate::editor_windows::ViewAction::Browse(pick));
                     }
                     self.canvas(ui);
                 } else {
@@ -898,12 +900,16 @@ impl PcbApp {
 
     /// Draw shared floating panels inside the host's header-free area. Return a Browser pick
     /// with its originating view address so centering can use that pane's actual uncovered canvas.
-    fn editor_panels(&mut self, ui: &mut Ui, area: Rect) -> Option<(crate::ViewInput, crate::project_browser::Pick)> {
+    fn editor_panels(&mut self, ui: &mut Ui, area: Rect) -> Option<(crate::ViewInput, crate::project_browser::Action)> {
         let source = self.views.active.input(&self.session)?;
-        let pick = self.browser.show(ui, self.parts.browser_area(area).intersect(area), &self.session, &self.views.active.schematic.selection);
-        if let Some(target) = self.browser.take_sheet_request() {
-            self.queue_view_action(ui.ctx(), source.view(), crate::editor_windows::ViewAction::OpenDocument(DocumentTarget::Sheet(target)));
-        }
+        let pick = self.browser.show(
+            ui,
+            self.parts.browser_area(area).intersect(area),
+            &self.session,
+            self.views.active.target()?,
+            &self.views.active.schematic.selection,
+            &self.views.active.board.selection,
+        );
         let placing = match &self.views.active.schematic.tool {
             Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
             _ => None,

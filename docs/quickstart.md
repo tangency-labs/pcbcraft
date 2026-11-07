@@ -180,7 +180,11 @@ that view and leaves the other views in place. Select a symbol or a footprint ma
 check the counterpart's amber highlight. Each view keeps its own edit selection,
 zoom and position, with optional panning under **View → Settings**.
 
-In the board workspace, Browser picks select and center a footprint. Properties
+Both workspaces use the same **Browser**, with **Sheets** and **Boards** under the
+project. Click **Main** or **Board** to navigate within the focused pane, or unfold
+either document's arrow to browse its objects without switching. Picking a symbol,
+net or footprint opens its document and selects and centers the object.
+In the board workspace, Properties
 shows its stored reference, value, definition and unit-aware coordinate readouts;
 Layers groups copper in physical stack order and retains visibility by layer ID.
 **Layout → Fit** fits the placements, and **Layout → Reveal** brings the current

@@ -1,36 +1,66 @@
-//! The Browser: a card floating over the left of the canvas with the project's tree, Project › Sheets ›
-//! sheet › Symbols / Nets. Folding and picking rows never edit the project; a pick selects the
-//! symbol or wire on the canvas and centers the view on it. Follows PCBcraft Next's Browser.
+//! One project navigator for schematic and board workspaces. Shared tree rows keep Sheets,
+//! Boards and their object lists consistent; navigation and selection never edit the project.
 
-use std::{cmp::Ordering, collections::BTreeSet, sync::Arc};
-
-use egui::{Id, Rect, Ui};
-use pcbcraft_chrome::{
-    shell::dim,
-    workspace::{self, ToolIcon, TreeIcon, TreeRow},
+use std::{
+    cmp::Ordering,
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
 };
+
+use egui::{Rect, Ui};
+use pcbcraft_chrome::workspace::{self, ToolIcon, TreeIcon, TreeRow};
 use pcbcraft_engine::{
     Project, Session,
     schematic::{Point, Terminal},
 };
 
-/// The sheet every project has today. It becomes a sheet ID once projects hold several sheets.
+use crate::editor_view::DocumentTarget;
+use pcbcraft_engine::{SheetTarget, board::view::BoardTarget, selection::Selection};
+
+/// Existing single-sheet display label, matching the view breadcrumb. Identity uses SheetTarget.
 const MAIN_SHEET: &str = "Main";
 
-/// A row that folds. Each starts open or closed as [`Node::open_by_default`] says.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Folding uses document addresses, so names and row positions are never identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Node {
     Project,
     Sheets,
-    Sheet,
-    Symbols,
-    Nets,
+    Sheet(SheetTarget),
+    Symbols(SheetTarget),
+    Nets(SheetTarget),
+    Boards,
+    Board(BoardTarget),
+    Footprints(BoardTarget),
 }
 
 impl Node {
-    /// The project, its sheets and the open sheet start open; the item lists start folded.
-    fn open_by_default(self) -> bool {
-        matches!(self, Self::Project | Self::Sheets | Self::Sheet)
+    /// Keep project/documents and footprint lists open initially; schematic lists start folded.
+    fn open_by_default(self, active: DocumentTarget) -> bool {
+        match self {
+            Self::Sheet(sheet) => active == DocumentTarget::Sheet(sheet),
+            Self::Board(board) => active == DocumentTarget::Board(board),
+            Self::Symbols(_) | Self::Nets(_) => false,
+            _ => true,
+        }
+    }
+}
+
+/// Revision-bound presentation intent; the host applies it after rendering and modal checks.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Action {
+    OpenDocument(DocumentTarget),
+    Schematic { sheet: SheetTarget, pick: Pick },
+    Footprint { board: BoardTarget, id: String, at: Point },
+}
+
+impl Action {
+    /// The persistent document to reveal before selecting an object, independent of its label.
+    pub(super) fn target(&self) -> DocumentTarget {
+        match self {
+            Self::OpenDocument(target) => *target,
+            Self::Schematic { sheet, .. } => DocumentTarget::Sheet(*sheet),
+            Self::Footprint { board, .. } => DocumentTarget::Board(*board),
+        }
     }
 }
 
@@ -48,19 +78,28 @@ pub(crate) struct Pick {
 #[derive(Debug)]
 struct Item {
     label: String,
-    /// Hover text: a symbol's part name, or a net's pins.
+    /// Hover text: a symbol's part name, a footprint definition or a net's pins.
     tip: String,
     /// The symbol or wire the row selects, with where it is. `None` for a row that can't be
     /// shown on the canvas, such as a net of free wires.
     target: Option<(String, Point)>,
 }
 
-/// The sheet-local lists, rebuilt when the project snapshot changes.
+/// Project and document lists, rebuilt when the immutable project snapshot changes.
 #[derive(Debug)]
 struct Lists {
     project: Arc<Project>,
     symbols: Vec<Item>,
     nets: Vec<Item>,
+    boards: Vec<BoardItems>,
+}
+
+/// A resolved board's labels and object targets, cached with the immutable project snapshot.
+#[derive(Debug)]
+struct BoardItems {
+    target: BoardTarget,
+    name: String,
+    footprints: Vec<Item>,
 }
 
 impl Lists {
@@ -108,7 +147,26 @@ impl Lists {
                 target,
             })
             .collect();
-        Self { project, symbols, nets }
+        let boards = project
+            .boards()
+            .map(|board| {
+                let mut footprints = board
+                    .footprints()
+                    .map(|footprint| {
+                        let reference = footprint.reference.to_owned();
+                        let item = Item {
+                            label: if footprint.value.is_empty() { reference.clone() } else { format!("{reference}  {}", footprint.value) },
+                            tip: footprint.definition.to_owned(),
+                            target: Some((footprint.id, footprint.position)),
+                        };
+                        (reference, item)
+                    })
+                    .collect::<Vec<_>>();
+                footprints.sort_by(|a, b| natural(&a.0, &b.0));
+                BoardItems { target: board.target, name: board.name().to_owned(), footprints: footprints.into_iter().map(|(_, item)| item).collect() }
+            })
+            .collect();
+        Self { project, symbols, nets, boards }
     }
 }
 
@@ -139,27 +197,21 @@ fn natural(a: &str, b: &str) -> Ordering {
 pub(crate) struct ProjectBrowser {
     pub(crate) open: bool,
     /// Rows folded or unfolded away from their default.
-    toggled: BTreeSet<Node>,
+    toggled: HashMap<Node, bool>,
     lists: Option<Lists>,
     /// Whether the card is folded to its header.
     collapsed: bool,
     rect: Rect,
-    requested_sheet: Option<pcbcraft_engine::SheetTarget>,
 }
 
 impl Default for ProjectBrowser {
     /// The Browser starts open, as KiCad's hierarchy navigator and PCBcraft Next's Browser do.
     fn default() -> Self {
-        Self { open: true, toggled: BTreeSet::new(), lists: None, collapsed: false, rect: Rect::NOTHING, requested_sheet: None }
+        Self { open: true, toggled: HashMap::new(), lists: None, collapsed: false, rect: Rect::NOTHING }
     }
 }
 
 impl ProjectBrowser {
-    /// Consume sheet-navigation intent; the host validates and applies it to the focused pane.
-    pub(super) fn take_sheet_request(&mut self) -> Option<pcbcraft_engine::SheetTarget> {
-        self.requested_sheet.take()
-    }
-
     /// Remember visibility and header collapse without cached project objects or selection.
     pub(super) fn saved_state(&self) -> [bool; 2] {
         [self.open, self.collapsed]
@@ -170,110 +222,197 @@ impl ProjectBrowser {
         Self { open, collapsed, ..Self::default() }
     }
 
-    /// Whether a folding row is open now.
-    fn is_open(&self, node: Node) -> bool {
-        node.open_by_default() != self.toggled.contains(&node)
-    }
-
-    /// Fold or unfold a row.
-    fn toggle(&mut self, node: Node) {
-        if !self.toggled.remove(&node) {
-            self.toggled.insert(node);
-        }
-    }
-
     /// The actual visible card, including its collapsed header, or no rectangle while hidden.
     pub(crate) fn rect(&self) -> Rect {
         if self.open { self.rect } else { Rect::NOTHING }
     }
 
-    /// Float the Browser over the top-left of `canvas` while a project is open, leaving the
-    /// canvas its full size. Selected symbol and wire rows are highlighted. Returns the row picked this frame. The
-    /// header folds the card to itself; View › Browser hides it.
-    pub(crate) fn show(&mut self, ui: &Ui, canvas: Rect, session: &Session, selected: &pcbcraft_engine::selection::Selection) -> Option<Pick> {
+    /// Float the common project tree over the schematic canvas without changing its geometry.
+    /// Board hosts use the same contents in their bounded Browser area above Layers.
+    pub(crate) fn show(
+        &mut self,
+        ui: &Ui,
+        canvas: Rect,
+        session: &Session,
+        active: DocumentTarget,
+        selected: &Selection,
+        footprints: &BTreeSet<String>,
+    ) -> Option<Action> {
         self.rect = Rect::NOTHING;
-        self.requested_sheet = None;
         if !self.open {
             return None;
         }
         let snapshot = session.snapshot()?;
-        if !self.lists.as_ref().is_some_and(|lists| Arc::ptr_eq(&lists.project, &snapshot)) {
-            self.lists = Some(Lists::read(snapshot));
-        }
-        let mut pick = None;
-        let mut fold = None;
-        let mut sheet = None;
+        let mut action = None;
         let (card, toggle) = workspace::floating_card(ui, "project_browser", "Browser", canvas, self.collapsed, |ui| {
-            let Some(lists) = &self.lists else { return };
-            let mut folding = |ui: &mut Ui, node: Node, depth, icon, label: &str, selected| {
-                let row = TreeRow { depth, fold: Some(self.is_open(node)), icon: Some(icon), label, tip: "", selected };
-                let response = workspace::tree_row(ui, Id::new(("project_browser", node)), &row);
-                if response.fold || (response.clicked && !matches!(node, Node::Sheet)) {
-                    fold = Some(node);
-                }
-                if response.clicked && matches!(node, Node::Sheet) {
-                    sheet = Some(lists.project.sheet_target());
-                }
-            };
-            folding(ui, Node::Project, 0, TreeIcon::Folder, &lists.project.name, false);
-            if !self.is_open(Node::Project) {
-                return;
-            }
-            folding(ui, Node::Sheets, 1, TreeIcon::Folder, "Sheets", false);
-            if !self.is_open(Node::Sheets) {
-                return;
-            }
-            // The only sheet is always the one shown, so it is highlighted as the active sheet.
-            folding(ui, Node::Sheet, 2, TreeIcon::Sheet, MAIN_SHEET, true);
-            if !self.is_open(Node::Sheet) {
-                return;
-            }
-            for (node, icon, title, items, current) in [
-                (Node::Symbols, ToolIcon::Symbol, "Symbols", &lists.symbols, &selected.symbols),
-                (Node::Nets, ToolIcon::Wire, "Nets", &lists.nets, &selected.wires),
-            ] {
-                folding(ui, node, 3, TreeIcon::Tool(icon), title, false);
-                if !self.is_open(node) {
-                    continue;
-                }
-                if items.is_empty() {
-                    ui.horizontal(|ui| {
-                        ui.add_space(4.0 * 16.0 + 18.0);
-                        ui.label(dim(if node == Node::Symbols { "No symbols placed" } else { "No connected nets" }));
-                    });
-                }
-                for (index, item) in items.iter().enumerate() {
-                    let id = item.target.as_ref().map(|(id, _)| id.as_str());
-                    let row = TreeRow {
-                        depth: 4,
-                        fold: None,
-                        icon: Some(TreeIcon::Tool(icon)),
-                        label: &item.label,
-                        tip: &item.tip,
-                        selected: id.is_some_and(|id| current.contains(id)),
-                    };
-                    if workspace::tree_row(ui, Id::new(("project_browser", node, index)), &row).clicked
-                        && let Some((id, at)) = &item.target
-                    {
-                        pick = Some(Pick { id: id.clone(), wire: node == Node::Nets, at: *at });
-                    }
-                }
-            }
+            action = self.tree(ui, snapshot, active, selected, footprints);
         });
-        if let Some(node) = fold {
-            self.toggle(node);
-        }
         if toggle {
             self.collapsed = !self.collapsed;
         }
         self.rect = card;
-        self.requested_sheet = sheet;
-        pick
+        action
     }
+
+    /// Render identical project/document rows in either workspace. Cached labels rebuild after
+    /// edits; a different project resets folding. Item selection belongs only to the active
+    /// document, while an inactive item's click explicitly navigates to its document first.
+    pub(super) fn tree(
+        &mut self,
+        ui: &mut Ui,
+        snapshot: Arc<Project>,
+        active: DocumentTarget,
+        selected: &Selection,
+        footprints: &BTreeSet<String>,
+    ) -> Option<Action> {
+        if !self.lists.as_ref().is_some_and(|lists| Arc::ptr_eq(&lists.project, &snapshot)) {
+            if self.lists.as_ref().is_some_and(|lists| lists.project.sheet_target() != snapshot.sheet_target()) {
+                self.toggled.clear();
+            }
+            self.lists = Some(Lists::read(snapshot));
+        }
+        let lists = self.lists.as_ref()?;
+        let sheet = lists.project.sheet_target();
+        let mut tree = Tree { toggled: &self.toggled, active, folded: None, reset: None, picked: None };
+        if tree.branch(ui, Node::Project, 0, TreeIcon::Folder, &lists.project.name, false, None) {
+            if tree.branch(ui, Node::Sheets, 1, TreeIcon::Folder, "Sheets", false, None)
+                && tree.branch(
+                    ui,
+                    Node::Sheet(sheet),
+                    2,
+                    TreeIcon::Sheet,
+                    MAIN_SHEET,
+                    active == DocumentTarget::Sheet(sheet),
+                    Some(Action::OpenDocument(DocumentTarget::Sheet(sheet))),
+                )
+            {
+                for (node, icon, title, items, current) in [
+                    (Node::Symbols(sheet), ToolIcon::Symbol, "Symbols", &lists.symbols, &selected.symbols),
+                    (Node::Nets(sheet), ToolIcon::Wire, "Nets", &lists.nets, &selected.wires),
+                ] {
+                    if !tree.branch(ui, node, 3, TreeIcon::Tool(icon), title, false, None) {
+                        continue;
+                    }
+                    if items.is_empty() {
+                        empty_row(ui, 4, if matches!(node, Node::Symbols(_)) { "No symbols placed" } else { "No connected nets" });
+                    }
+                    for (index, item) in items.iter().enumerate() {
+                        let id = item.target.as_ref().map(|(id, _)| id.as_str());
+                        let row = TreeRow {
+                            depth: 4,
+                            fold: None,
+                            icon: Some(TreeIcon::Tool(icon)),
+                            label: &item.label,
+                            accessibility_label: None,
+                            tip: &item.tip,
+                            selected: active == DocumentTarget::Sheet(sheet) && id.is_some_and(|id| current.contains(id)),
+                        };
+                        let widget = id.map_or_else(|| ui.make_persistent_id((node, index)), |id| ui.make_persistent_id((node, id)));
+                        if workspace::tree_row(ui, widget, &row).clicked
+                            && let Some((id, at)) = &item.target
+                        {
+                            tree.picked =
+                                Some(Action::Schematic { sheet, pick: Pick { id: id.clone(), wire: matches!(node, Node::Nets(_)), at: *at } });
+                        }
+                    }
+                }
+            }
+            if tree.branch(ui, Node::Boards, 1, TreeIcon::Folder, "Boards", false, None) {
+                for board in &lists.boards {
+                    if !tree.branch(
+                        ui,
+                        Node::Board(board.target),
+                        2,
+                        TreeIcon::Board,
+                        &board.name,
+                        active == DocumentTarget::Board(board.target),
+                        Some(Action::OpenDocument(DocumentTarget::Board(board.target))),
+                    ) {
+                        continue;
+                    }
+                    let node = Node::Footprints(board.target);
+                    if !tree.branch(ui, node, 3, TreeIcon::Board, "Footprints", false, None) {
+                        continue;
+                    }
+                    if board.footprints.is_empty() {
+                        empty_row(ui, 4, "No footprints placed");
+                    }
+                    for item in &board.footprints {
+                        let Some((id, at)) = &item.target else {
+                            continue;
+                        };
+                        let access = format!("Footprint {}", item.label);
+                        let row = TreeRow {
+                            depth: 4,
+                            fold: None,
+                            icon: Some(TreeIcon::Board),
+                            label: &item.label,
+                            accessibility_label: Some(&access),
+                            tip: &item.tip,
+                            selected: active == DocumentTarget::Board(board.target) && footprints.contains(id),
+                        };
+                        if workspace::tree_row(ui, ui.make_persistent_id((node, id)), &row).clicked {
+                            tree.picked = Some(Action::Footprint { board: board.target, id: id.clone(), at: *at });
+                        }
+                    }
+                }
+            }
+        }
+        let Tree { picked, folded, reset, .. } = tree;
+        if let Some((node, open)) = folded {
+            self.toggled.insert(node, open);
+        }
+        if let Some(node) = reset {
+            self.toggled.remove(&node);
+        }
+        picked
+    }
+}
+
+/// Only transient fold and click intents are collected while snapshot data is borrowed.
+struct Tree<'a> {
+    toggled: &'a HashMap<Node, bool>,
+    active: DocumentTarget,
+    folded: Option<(Node, bool)>,
+    reset: Option<Node>,
+    picked: Option<Action>,
+}
+
+impl Tree<'_> {
+    /// Body clicks navigate documents or fold containers; the disclosure arrow only folds.
+    #[allow(clippy::too_many_arguments)]
+    fn branch(&mut self, ui: &mut Ui, node: Node, depth: usize, icon: TreeIcon, label: &str, selected: bool, pick: Option<Action>) -> bool {
+        let open = self.toggled.get(&node).copied().unwrap_or_else(|| node.open_by_default(self.active));
+        let access = matches!(node, Node::Board(_)).then(|| format!("Open board {label}"));
+        let row = TreeRow { depth, fold: Some(open), icon: Some(icon), label, accessibility_label: access.as_deref(), tip: "", selected };
+        let response = workspace::tree_row(ui, ui.make_persistent_id(("project_browser", node)), &row);
+        if response.fold {
+            self.folded = Some((node, !open));
+        }
+        if response.clicked {
+            if let Some(pick) = pick {
+                self.reset = Some(node);
+                self.picked = Some(pick);
+            } else {
+                self.folded = Some((node, !open));
+            }
+        }
+        open
+    }
+}
+
+/// Empty lists use the shared row metrics, aligned with their future item labels.
+fn empty_row(ui: &mut Ui, depth: usize, label: &str) {
+    workspace::tree_row(
+        ui,
+        ui.make_persistent_id(("browser_empty", label, depth)),
+        &TreeRow { depth, fold: None, icon: None, label, accessibility_label: None, tip: "", selected: false },
+    );
 }
 
 #[cfg(test)]
 mod tests {
+    mod navigation;
     use std::cmp::Ordering;
 
     use egui_kittest::{Harness, kittest::Queryable};
