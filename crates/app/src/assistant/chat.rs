@@ -394,6 +394,10 @@ impl Chat {
         }
         let events = self.backend.as_mut().map(|backend| backend.poll()).unwrap_or_default();
         for event in events {
+            // Events after the backend ended (a failed setup, an exit) belong to no session.
+            if self.backend.is_none() {
+                break;
+            }
             self.event(event, mode);
         }
     }
@@ -451,7 +455,11 @@ impl Chat {
                     self.state = State::Ready;
                 }
             }
-            Event::SetupFailed(reason) => self.state = State::Failed(format!("The agent could not start a session: {reason}")),
+            Event::SetupFailed(reason) => {
+                // The agent may keep running; end it so the panel offers Retry, as on exit.
+                self.disconnect();
+                self.state = State::Failed(format!("The agent could not start a session: {reason}"));
+            }
             Event::Error(error) => self.push(Item::Notice(error)),
             Event::Exited { tail } => {
                 let reason = tail.last().cloned().unwrap_or_else(|| "The agent stopped.".to_owned());

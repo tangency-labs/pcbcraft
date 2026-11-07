@@ -1073,6 +1073,7 @@ mod chat_tests {
         events: VecDeque<Event>,
         prompts: Vec<String>,
         answers: Vec<(u64, Option<String>)>,
+        shut_down: bool,
     }
 
     /// A backend that reports scripted events and records what the chat sends it.
@@ -1095,7 +1096,11 @@ mod chat_tests {
             }
         }
         fn authenticate(&mut self, _method: &str) {}
-        fn shutdown(&mut self, _wait: bool) {}
+        fn shutdown(&mut self, _wait: bool) {
+            if let Ok(mut script) = self.0.lock() {
+                script.shut_down = true;
+            }
+        }
     }
 
     fn entry() -> Entry {
@@ -1227,6 +1232,24 @@ mod chat_tests {
         push(&script, Event::TurnEnded { reason: "end_turn".to_owned() });
         harness.run();
         assert_eq!(harness.state().assistant.chat.state, State::Ready);
+        Ok(())
+    }
+
+    /// An agent that refuses the session but keeps running is ended, so the panel offers Retry
+    /// with the reason instead of Disconnect.
+    #[test]
+    fn a_refused_session_offers_retry_while_the_agent_still_runs() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut harness, script, _) = harness_with_agent()?;
+        harness.state_mut().assistant.chat.state = State::Connecting;
+        push(&script, Event::SetupFailed("no workspace".to_owned()));
+        push(&script, Event::Text { thought: false, text: "late".to_owned() });
+        harness.run();
+        assert!(script.lock().map_err(|_| "poisoned")?.shut_down, "the agent is ended");
+        assert!(!harness.state().assistant.chat.connected());
+        assert_eq!(harness.state().assistant.chat.state, State::Failed("The agent could not start a session: no workspace".to_owned()));
+        harness.get_by_label("Retry");
+        assert!(harness.query_by_label("Disconnect").is_none());
+        assert!(harness.query_by_label("late").is_none(), "nothing from the ended agent is shown");
         Ok(())
     }
 

@@ -214,6 +214,9 @@ struct Closers {
     paren: Vec<usize>,
     /// The start of every maximal run of backticks, by run length.
     ticks: std::collections::HashMap<usize, Vec<usize>>,
+    /// How many backticks run from each position, so an unclosed run isn't recounted at each
+    /// of its characters.
+    tick_len: Vec<usize>,
 }
 
 impl Closers {
@@ -222,10 +225,14 @@ impl Closers {
         let italic = |d: char| {
             next_where(c, |j| c[j] == d && j > 0 && !c[j - 1].is_whitespace() && (d == '*' || c.get(j + 1).is_none_or(|n| !n.is_alphanumeric())))
         };
+        let mut tick_len = vec![0; c.len() + 1];
+        for j in (0..c.len()).rev() {
+            tick_len[j] = if c[j] == '`' { tick_len[j + 1] + 1 } else { 0 };
+        }
         let mut ticks: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
         let mut j = 0;
         while j < c.len() {
-            let run = c[j..].iter().take_while(|x| **x == '`').count();
+            let run = tick_len[j];
             if run > 0 {
                 ticks.entry(run).or_default().push(j);
             }
@@ -237,6 +244,7 @@ impl Closers {
             bracket: next_where(c, |j| c[j] == ']'),
             paren: next_where(c, |j| c[j] == ')'),
             ticks,
+            tick_len,
         }
     }
 
@@ -272,7 +280,7 @@ pub fn spans(s: &str) -> Vec<Span> {
         let rest = &c[i..];
         // Inline code.
         if c[i] == '`' {
-            let n = rest.iter().take_while(|x| **x == '`').count();
+            let n = closers.tick_len[i];
             if let Some(end) = closers.run(i + n, n) {
                 flush(&mut out, &mut text);
                 out.push(Span::Code(c[i + n..end].iter().collect::<String>().trim().to_string()));
@@ -441,6 +449,8 @@ mod tests {
         }
         let decreasing: String = (1..=600).rev().map(|n| "`".repeat(n) + "a").collect();
         let _ = spans(&decreasing);
+        let unclosed_run = format!("a{}", "`".repeat(200_000));
+        assert_eq!(plain(&spans(&unclosed_run)), unclosed_run, "a run with no partner stays text");
         assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
     }
 
