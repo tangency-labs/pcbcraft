@@ -1121,7 +1121,9 @@ impl PcbApp {
     }
 
     /// Draw the schematic and send completed edits through the shared command catalog using each
-    /// gesture's starting revision to reject stale actions. Cancel only clears the local preview.
+    /// gesture's starting revision to reject stale actions. M picks up the selected symbol or,
+    /// without a selection, the hovered symbol for disconnected movement. Cancel clears only
+    /// the local preview, and another active tool cannot be replaced by a queued shortcut.
     fn canvas(&mut self, ui: &mut Ui) {
         let snapshot = self.views.active.snapshot(&self.session);
         let label = if self.views.is_split() { format!("Schematic canvas {}", self.views.active.id().0 + 1) } else { "Schematic canvas".to_owned() };
@@ -1142,8 +1144,11 @@ impl PcbApp {
                     {
                         self.pointer_next = Some(point);
                     }
-                    if std::mem::take(&mut self.views.active.schematic.rotate_requested)
+                    let moving = std::mem::take(&mut self.views.active.schematic.move_requested);
+                    let rotating = std::mem::take(&mut self.views.active.schematic.rotate_requested);
+                    if (moving || rotating)
                         && input_enabled
+                        && self.views.active.schematic.tool.is_none()
                         && self.views.active.schematic.selection.len() <= 1
                     {
                         let rect = ui.available_rect_before_wrap();
@@ -1154,9 +1159,11 @@ impl PcbApp {
                                 .flatten()
                                 .map(|(symbol, _)| symbol.id())
                         });
-                        if let Some(symbol) = hovered.or_else(|| self.views.active.schematic.selection.single_symbol().map(str::to_owned)) {
+                        let selected = self.views.active.schematic.selection.single_symbol().map(str::to_owned);
+                        let target = if moving { selected.or(hovered) } else { hovered.or(selected) };
+                        if let Some(symbol) = target {
                             self.select(Selection::one_symbol(symbol));
-                            self.edit_selected(SymbolAction::Rotate);
+                            self.edit_selected(if moving { SymbolAction::DisconnectMove } else { SymbolAction::Rotate });
                         }
                     }
                     if let Some(project) = snapshot.as_deref() {
@@ -1332,6 +1339,7 @@ impl PcbApp {
             return;
         }
         self.views.active.schematic.rotate_requested = false;
+        self.views.active.schematic.move_requested = false;
         if !self.home
             && self.views.active.workspace == Workspace::Schematic
             && !assistant_keys
@@ -1386,6 +1394,9 @@ impl PcbApp {
                 && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace))
             {
                 self.delete_selection();
+            }
+            if self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M)) {
+                self.views.active.schematic.move_requested = true;
             }
             if pressed(&ROTATE) {
                 if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.schematic.tool {
@@ -1856,6 +1867,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
+    list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
     list.push(("Schematic", "Drag wire segment", "G".to_owned()));
     list.push(("Schematic", "Rotate the selected symbol", key(&ROTATE)));
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));

@@ -121,6 +121,7 @@ pub(super) struct SchematicState {
     pub(super) tool: Option<Tool>,
     pub(super) wire_draft: Draft,
     pub(super) rotate_requested: bool,
+    pub(super) move_requested: bool,
 }
 
 /// Board inspection state. Layer visibility and selection are local, never authored edits.
@@ -386,6 +387,7 @@ impl EditorView {
         self.schematic.tool = None;
         self.schematic.wire_draft = Draft::default();
         self.schematic.rotate_requested = false;
+        self.schematic.move_requested = false;
     }
 
     /// Invalidate captured input on focus or host transitions, retaining both cameras.

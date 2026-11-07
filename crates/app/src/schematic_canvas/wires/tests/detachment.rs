@@ -338,3 +338,123 @@ fn break_on_two_attached_sides_releases_both_pins() {
     click(&mut h, "Undo");
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// M starts the existing disconnect preview without a menu. Placement leaves the old wire
+/// paths in place, and one Undo restores both position and terminal attachments.
+#[test]
+fn symbol_move_hotkey_previews_and_commits_one_disconnected_move() {
+    let mut h = symbol_harness();
+    let before = h.state().session.snapshot().unwrap();
+    let paths = routes(&h);
+    let origin = screen(&h, grid(0, 0));
+    h.hover_at(origin);
+    h.run();
+    h.key_press(egui::Key::M);
+    h.run();
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Move { disconnect: true, .. })));
+    let end = screen(&h, grid(0, 12));
+    h.hover_at(end);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    click_at(&mut h, grid(0, 12));
+    assert_eq!(h.state().message, None);
+    let after = h.state().session.snapshot().unwrap();
+    assert_eq!(after.symbols()[0].position, grid(0, 12));
+    assert_eq!(routes(&h), paths);
+    assert!(after.wires().iter().all(|wire| wire.terminals().is_empty()));
+    click(&mut h, "Undo");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    click(&mut h, "Redo");
+    assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+}
+
+/// With a selected symbol M uses it even while hovering another symbol; a multi-item selection
+/// is retained instead of being silently narrowed to one symbol.
+#[test]
+fn symbol_move_hotkey_respects_explicit_selection() {
+    let mut h = symbol_harness();
+    let first = h.state().session.project().unwrap().symbols()[0].id();
+    let revision = h.state().session.revision();
+    h.state_mut().run(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":grid(16,12).x_nm,"y_nm":grid(16,12).y_nm,"expected_revision":revision}));
+    h.run();
+    click_at(&mut h, grid(0, 0));
+    let hover = screen(&h, grid(16, 12));
+    h.hover_at(hover);
+    h.run();
+    h.key_press(egui::Key::M);
+    h.run();
+    assert!(matches!(&h.state().views.active.schematic.tool,Some(Tool::Move { symbol,disconnect:true,.. }) if symbol.id()==first));
+    h.key_press(egui::Key::Escape);
+    h.run();
+    let items = pcbcraft_engine::selection::Selection {
+        symbols: h.state().session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect(),
+        wires: Default::default(),
+    };
+    h.state_mut().select(items.clone());
+    h.key_press(egui::Key::M);
+    h.run();
+    assert!(h.state().views.active.schematic.tool.is_none());
+    assert_eq!(h.state().views.active.schematic.selection, items);
+}
+
+/// Escape, secondary click, focus loss and view/project changes cancel a keyboard pickup;
+/// a field dialog owns M and does not grant delayed movement authority on dismissal.
+#[test]
+fn symbol_move_hotkey_cancels_without_mutating_current_project() {
+    #[derive(Clone, Copy, Debug)]
+    enum Cancel {
+        Escape,
+        Secondary,
+        Focus,
+        Revision,
+        Reopen,
+        Workspace,
+        Fields,
+    }
+    for mode in [Cancel::Escape, Cancel::Secondary, Cancel::Focus, Cancel::Revision, Cancel::Reopen, Cancel::Workspace, Cancel::Fields] {
+        let mut h = symbol_harness();
+        let origin = screen(&h, grid(0, 0));
+        h.hover_at(origin);
+        h.run();
+        h.key_press(egui::Key::M);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Move { disconnect: true, .. })));
+        let destination = screen(&h, grid(0, 12));
+        h.hover_at(destination);
+        h.run();
+        match mode {
+            Cancel::Escape => h.key_press(egui::Key::Escape),
+            Cancel::Secondary => right_click(&mut h, grid(0, 12), egui::Vec2::ZERO),
+            Cancel::Focus => h.input_mut().focused = false,
+            Cancel::Revision => {
+                h.state_mut().run("project.rename", &json!({"name":"Concurrent edit"}));
+            }
+            Cancel::Reopen => {
+                let snapshot = h.state().session.snapshot().unwrap();
+                h.state_mut().session.open_snapshot(snapshot);
+            }
+            Cancel::Workspace => {
+                let app = h.state_mut();
+                let id = app.views.active.id();
+                app.views.switch_workspace(id, crate::editor_view::Workspace::Board, &app.session);
+            }
+            Cancel::Fields => h.state_mut().open_preferences(),
+        }
+        let before = h.state().session.snapshot().unwrap();
+        h.run();
+        assert!(h.state().views.active.schematic.tool.is_none(), "{mode:?}");
+        h.key_press(egui::Key::M);
+        h.run();
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+    let mut h = symbol_harness();
+    click_at(&mut h, grid(0, 0));
+    h.key_press(egui::Key::E);
+    h.run();
+    h.key_press(egui::Key::M);
+    h.run();
+    assert!(h.state().views.active.schematic.tool.is_none());
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(h.state().views.active.schematic.tool.is_none());
+}
