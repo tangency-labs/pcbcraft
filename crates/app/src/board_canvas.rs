@@ -261,6 +261,7 @@ pub(super) fn show(
     {
         let window = egui::Rect::from_two_pos(drag.start, pointer);
         let crossing = pointer.x < drag.start.x;
+        debug_assert_eq!(hit_bounds.len(), project.footprints().count());
         let hits: BTreeSet<_> = footprints_for_box(project, &hit_bounds, window, crossing, filters.footprints);
         pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len());
         if ui.input(|i| i.pointer.button_released(drag.button)) {
@@ -290,6 +291,7 @@ pub(super) fn show(
 
 /// Select only visible footprint bounds, sharing the exact geometry used for click picking.
 /// A window requires full containment; crossing requires overlap. Empty hidden bounds never hit.
+/// `bounds` must contain one entry per `project.footprints()` item in the same iteration order.
 fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egui::Rect, crossing: bool, enabled: bool) -> BTreeSet<String> {
     project
         .footprints()

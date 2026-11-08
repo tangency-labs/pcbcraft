@@ -155,7 +155,7 @@ mod live {
         },
         /// A schematic point in nanometres within the coordinate bounds.
         Point,
-        /// Symbol and wire ID lists, as the project's group commands take.
+        /// Symbol, wire and optional named-net anchor ID lists, as the project's group commands take.
         Selection,
         /// A list of distinct footprint IDs.
         Footprints,
@@ -186,7 +186,9 @@ mod live {
                     json!({"type": "object", "properties": {"x_nm": coordinate, "y_nm": coordinate}, "required": ["x_nm", "y_nm"], "additionalProperties": false})
                 }
                 Self::Selection => {
-                    json!({"type": "object", "properties": {"symbols": ids, "wires": ids, "net_labels": ids}, "required": ["symbols", "wires"], "additionalProperties": false})
+                    let mut labels = ids.clone();
+                    labels["maxItems"] = json!(pcbcraft_engine::net_labels::MAX_LABELS);
+                    json!({"type": "object", "properties": {"symbols": ids, "wires": ids, "net_labels": labels}, "required": ["symbols", "wires"], "additionalProperties": false})
                 }
                 Self::Footprints => ids,
             }
@@ -1346,6 +1348,23 @@ mod live {
             assert!(center.check(&json!({"view": 0, "at": {"x_nm": 0}})).is_err());
             assert!(center.check(&json!({"view": -1, "at": {"x_nm": 0, "y_nm": 0}})).is_err());
             assert!(center.check(&json!({"at": {"x_nm": 0, "y_nm": 0}})).is_err());
+        }
+
+        /// The live selection schema advertises the same named-anchor limit its validator
+        /// enforces, while legacy symbol/wire requests continue to work without the optional list.
+        #[test]
+        fn selection_schema_and_validation_agree_on_named_anchor_limit() {
+            let schema = Kind::Selection.schema();
+            let limit = pcbcraft_engine::net_labels::MAX_LABELS;
+            assert_eq!(schema["properties"]["net_labels"]["maxItems"], json!(limit));
+            assert!(schema["properties"]["symbols"].get("maxItems").is_none());
+            assert!(schema["properties"]["wires"].get("maxItems").is_none());
+            let select = CATALOG.iter().find(|command| command.id == "view.select").unwrap();
+            assert!(select.check(&json!({"view":0,"items":{"symbols":[],"wires":[]}})).is_ok());
+            let mut labels: Vec<_> = (1..=limit).map(|id| format!("net-label-{id}")).collect();
+            assert!(select.check(&json!({"view":0,"items":{"symbols":[],"wires":[],"net_labels":labels}})).is_ok());
+            labels.push(format!("net-label-{}", limit + 1));
+            assert!(select.check(&json!({"view":0,"items":{"symbols":[],"wires":[],"net_labels":labels}})).is_err());
         }
 
         /// Invalid library identifiers must direct recovery to library inspection, with the
