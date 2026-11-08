@@ -104,6 +104,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
 | `pcb.set_footprint_transform` | Set a footprint center and whole-degree orientation through the same atomic command used by the PCB canvas |
+| `pcb.delete_footprints` | Delete the addressed board placements atomically; retain schematic components and pinned physical assignments for re-placement |
 | `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing; click and box selection in a schematic; footprint and Browser selection in a PCB view |
 | `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state; selection commands refuse disabled object categories |
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |

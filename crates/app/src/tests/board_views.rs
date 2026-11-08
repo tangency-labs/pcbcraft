@@ -85,7 +85,12 @@ fn mixed_panes_highlight_both_ways_without_granting_schematic_edit_authority() {
     assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="R1" && schematic_rect.contains(text.pos) && text.fallback_color==Tokens::get().schematic_highlight)));
     h.key_press(Key::Delete);
     h.run();
-    assert_eq!(h.state().session.inspect(), before);
+    let deleted = h.state().session.inspect();
+    assert_eq!(deleted["project"]["schematic"], before["project"]["schematic"]);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(h.state().session.inspect()["project"], before["project"]);
     let snapshot = h.state().session.snapshot().unwrap();
     h.state_mut().session.open_snapshot(snapshot);
     h.run();
@@ -897,6 +902,147 @@ fn silkscreen_editor_preserves_unedited_precision_in_both_units() {
             assert_eq!(style["stroke_width_nm"], 180_000);
             assert_eq!(style["text_height_nm"], 1_000_000 + extra);
             assert_eq!(style["pad_clearance_nm"], 250_000 + extra);
+        }
+    }
+}
+
+/// Ribbon and Delete act on an explicit board selection, never just a hovered footprint.
+/// Movement previews and Board setup own keyboard input, and undo restores the exact placement.
+#[test]
+fn footprint_deletion_uses_selected_placements_and_shared_undo() {
+    for ribbon in [false, true] {
+        let mut h = editable_board();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let schematic = h.state().session.inspect()["project"]["schematic"].clone();
+        let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+        h.hover_at(origin);
+        h.run();
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        click_canvas_at(&mut h, origin);
+        h.key_press(Key::M);
+        h.run();
+        assert!(h.state().views.active.board.draft.is_some());
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().views.active.board.draft.is_none());
+        click(&mut h, "Board setup");
+        h.key_press(Key::Delete);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        click(&mut h, "Cancel");
+        let revision = h.state().session.revision();
+        if ribbon {
+            click(&mut h, "Placement menu");
+            click(&mut h, "Delete");
+        } else {
+            h.key_press(Key::Delete);
+            h.run();
+        }
+        assert_eq!(h.state().session.revision(), revision + 1);
+        assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+        assert_eq!(h.state().session.inspect()["project"]["schematic"], schematic);
+        assert!(h.state().views.active.board.selection.is_empty());
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+        h.run();
+        assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    }
+}
+
+/// Live clients use the same deletion command and stale gate, and can undo from the GUI.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn live_footprint_deletion_shares_history_and_rejects_stale_requests() {
+    let mut h = editable_board();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let board = h.state().session.project().unwrap().board_target().board;
+    let footprint = h.state().session.inspect()["project"]["board"]["footprints"][0]["id"].clone();
+    let ctx = h.ctx.clone();
+    let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::DELETE_FOOTPRINTS,"params":{"board":board,"footprints":[footprint],"expected_revision":revision}}});
+    let answer = pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).unwrap();
+    assert_eq!(answer["revision"], revision + 1);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    h.run();
+    assert!(pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).is_err());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// The secondary menu action also accepts real pointer input; Delete has no prominent ribbon
+/// button, matching Capture. Opening the menu must retain the canvas selection.
+#[test]
+fn footprint_delete_menu_accepts_pointer_clicks() {
+    for width in [1400.0, 700.0] {
+        let mut h = editable_board();
+        h.set_size(egui::vec2(width, 700.));
+        h.run();
+        let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+        click_canvas_at(&mut h, origin);
+        assert_eq!(h.state().views.active.board.selection.len(), 1);
+        let revision = h.state().session.revision();
+        assert!(h.query_by_label("Delete selected footprints").is_none());
+        let menu = h.get_by_label("Placement menu").rect();
+        click_canvas_at(&mut h, menu.center());
+        let action = h.get_by_label("Delete").rect();
+        click_canvas_at(&mut h, action.center());
+        assert_eq!(h.state().session.revision(), revision + 1);
+        assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    }
+}
+
+/// Ordinary left-click selection followed immediately by Delete is the primary interaction,
+/// for legacy markers and physical packages with or without a configured stackup.
+#[test]
+fn click_then_delete_removes_footprint_without_using_the_ribbon() {
+    for configured in [false, true] {
+        for definition in ["generic-through-hole-2", "resistor-0402"] {
+            let mut h = harness();
+            h.set_size(egui::vec2(1400., 900.));
+            resistor_at_origin(&mut h);
+            if configured {
+                let revision = h.state().session.revision();
+                h.state_mut().run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
+            }
+            let revision = h.state().session.revision();
+            let symbol = h.state().session.project().unwrap().symbols()[0].id();
+            let mut params = json!({"symbol":symbol,"definition":definition,"x_nm":0,"y_nm":0,"expected_revision":revision});
+            if definition == "generic-through-hole-2" {
+                params["pin_1_pad"] = json!(1);
+            } else {
+                params["mapping"] = json!({"1":"1","2":"2"});
+            }
+            h.state_mut().run(pcbcraft_engine::PLACE_FOOTPRINT, &params);
+            h.run();
+            click(&mut h, "Choose workspace");
+            click(&mut h, "PCB layout");
+            h.state_mut().browser.open = false;
+            h.run();
+            let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+            let revision = h.state().session.revision();
+            let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+            h.event(egui::Event::PointerMoved(origin));
+            h.run();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: origin, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                h.run();
+            }
+            assert_eq!(h.state().views.active.board.selection.len(), 1, "{definition} configured={configured}");
+            h.key_press(Key::Delete);
+            h.run();
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+            h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+            h.run();
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         }
     }
 }

@@ -758,3 +758,37 @@ fn footprint_assignment_is_discoverable_and_separate_from_placement() {
     assert_eq!(stale["isError"], true);
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), body(&placed));
 }
+
+/// Headless clients discover explicit populated-board binding adoption and placement-only
+/// deletion, using the same revision gates and undo history as the graphical controls.
+#[test]
+fn populated_setup_and_footprint_deletion_are_discoverable_shared_commands() {
+    use pcbcraft_engine::{DELETE_FOOTPRINTS, INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT};
+    let mut s = server();
+    let execute = |s: &mut Server, command: &str, params: Value| body(&call(s, "execute", json!({"command":command,"params":params})));
+    execute(&mut s, "project.new", json!({}));
+    let placed_symbol = execute(&mut s, PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0,"expected_revision":1}));
+    let symbol = placed_symbol["project"]["schematic"]["symbols"][0]["id"].clone();
+    let original = execute(
+        &mut s,
+        PLACE_FOOTPRINT,
+        json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"2","2":"1"},"x_nm":0,"y_nm":0,"expected_revision":placed_symbol["revision"]}),
+    );
+    let schema = body(&call(&mut s, "describe_command", json!({"command":INITIALIZE_BOARD_SETUP})));
+    assert_eq!(schema["params"]["properties"]["resolve_existing_footprints"]["type"], "boolean");
+    let board = original["project"]["board"]["id"].clone();
+    let configured = execute(
+        &mut s,
+        INITIALIZE_BOARD_SETUP,
+        json!({"board":board,"copper_layers":4,"resolve_existing_footprints":true,"expected_revision":original["revision"]}),
+    );
+    assert!(configured["project"]["board"]["setup"].is_object());
+    let schema = body(&call(&mut s, "describe_command", json!({"command":DELETE_FOOTPRINTS})));
+    assert_eq!(schema["params"]["properties"]["footprints"]["uniqueItems"], true);
+    let footprint = configured["project"]["board"]["footprints"][0]["id"].clone();
+    let removed = execute(&mut s, DELETE_FOOTPRINTS, json!({"board":board,"footprints":[footprint],"expected_revision":configured["revision"]}));
+    assert_eq!(removed["project"]["board"]["footprints"], json!([]));
+    assert_eq!(removed["project"]["board"]["assignments"][0]["placed"], false);
+    assert_eq!(removed["project"]["schematic"], original["project"]["schematic"]);
+    assert_eq!(execute(&mut s, "edit.undo", json!({}))["project"], configured["project"]);
+}

@@ -113,3 +113,62 @@ fn rotated_board_format_preserves_setup_and_rejects_invalid_orientation() {
         assert!(decode_documents(&old).unwrap_err().contains("format 4"));
     }
 }
+
+/// Batch deletion validates every identity before mutation, retains physical assignments and
+/// schematic data, and restores exact placements/indices through undo and offline codecs.
+#[test]
+fn deleting_placements_is_atomic_and_preserves_components_and_packages() {
+    use crate::{DELETE_FOOTPRINTS, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL};
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    for (i, definition) in ["resistor-0402", "header-1x02-254", "generic-through-hole-2"].into_iter().enumerate() {
+        s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":i as i64*20_000_000,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+        let symbol = s.project().unwrap().symbols().last().unwrap().id();
+        let mut params = json!({"symbol":symbol,"definition":definition,"x_nm":i as i64*20_000_000,"y_nm":0,"expected_revision":s.revision()});
+        if i == 2 {
+            params["pin_1_pad"] = json!(2);
+        } else {
+            params["mapping"] = json!({"1":"2","2":"1"});
+        }
+        s.apply(PLACE_FOOTPRINT, &params).unwrap();
+    }
+    let original = s.inspect();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let footprints = original["project"]["board"]["footprints"].as_array().unwrap();
+    let ids: Vec<_> = footprints.iter().map(|f| f["id"].clone()).collect();
+    let board = s.project().unwrap().board_target().board;
+    let revision = s.revision();
+    for invalid in [json!([]), json!([ids[0], ids[0]]), json!([ids[0], "footprint-999999"]), json!(["footprint-01"]), json!([null])] {
+        assert!(s.apply(DELETE_FOOTPRINTS, &json!({"footprints":invalid,"expected_revision":revision})).is_err());
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+        assert_eq!(s.revision(), revision);
+    }
+    for params in [
+        json!({"board":"00000000-0000-4000-8000-000000000099","footprints":[ids[0]],"expected_revision":revision}),
+        json!({"footprints":[ids[0]],"expected_revision":revision-1}),
+    ] {
+        assert!(s.apply(DELETE_FOOTPRINTS, &params).is_err());
+        assert_eq!(s.inspect(), original);
+    }
+    s.apply(DELETE_FOOTPRINTS, &json!({"board":board,"footprints":[ids[0],ids[2]],"expected_revision":revision})).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    let after = s.inspect();
+    assert_eq!(after["project"]["schematic"], original["project"]["schematic"]);
+    assert_eq!(after["project"]["components"], original["project"]["components"]);
+    assert_eq!(after["project"]["board"]["footprints"], json!([footprints[1]]));
+    assert_eq!(s.project().unwrap().board.by_component.len(), 1);
+    let removed = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&removed).unwrap()).unwrap(), removed);
+    let assignments = s.project().unwrap().footprint_assignments();
+    let retained = assignments.iter().find(|a| a["component"] == footprints[0]["component"]).unwrap();
+    assert_eq!(retained["placed"], false);
+    assert_eq!(retained["mapping"], footprints[0]["mapping"]);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), removed);
+    s.open_snapshot(decode_documents(&removed).unwrap());
+    s.apply(PLACE_ASSIGNED_FOOTPRINT, &json!({"board":board,"component":retained["component"],"x_nm":0,"y_nm":0,"expected_revision":s.revision()}))
+        .unwrap();
+    assert_eq!(s.project().unwrap().board.footprints().len(), 2);
+}

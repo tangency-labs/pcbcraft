@@ -31,6 +31,29 @@ pub fn form(
     active: bool,
     add: impl FnOnce(&mut Ui),
 ) -> FormAction {
+    form_body(ctx, id, title, width, primary, enabled, libraries, active, if libraries { 18. } else { 8. }, add)
+}
+
+/// Settings editors share the catalog header/footer but reserve a taller body for navigation
+/// and physical data; their primary action remains fixed while individual pages scroll.
+pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: bool, add: impl FnOnce(&mut Ui)) -> FormAction {
+    form_body(ctx, "board_setup_form", title, Tokens::get().form_card_width * 4., primary, enabled, false, true, 20., add)
+}
+
+/// Render the common shell with a bounded body, preserving modal input and dismissal behavior.
+#[allow(clippy::too_many_arguments)]
+fn form_body(
+    ctx: &egui::Context,
+    id: &'static str,
+    title: &str,
+    width: f32,
+    primary: &str,
+    enabled: bool,
+    libraries: bool,
+    active: bool,
+    rows: f32,
+    add: impl FnOnce(&mut Ui),
+) -> FormAction {
     let t = Tokens::get();
     let mut action = FormAction::default();
     let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_lg);
@@ -66,7 +89,7 @@ pub fn form(
         }
         action.close = response.clicked();
         rule(ui, header.bottom(), header.x_range());
-        let height = if libraries { 18. * t.control_height } else { 8. * t.control_height };
+        let height = rows * t.control_height;
         let height = height.min((ctx.content_rect().height() - 2. * t.space_24 - header.height() - t.form_footer_height).max(0.));
         let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
         let mut child = ui.new_child(UiBuilder::new().max_rect(body));

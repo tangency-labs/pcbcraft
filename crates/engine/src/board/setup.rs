@@ -231,6 +231,120 @@ impl TryFrom<SetupRecords> for BoardSetup {
 }
 
 impl BoardSetup {
+    /// Build a validated candidate with one fresh technical/documentation layer. Copper must
+    /// be changed with its physical stackup, so this builder refuses copper. The source setup
+    /// is unchanged; callers adopt the candidate through revision-checked `pcb.set_board_setup`.
+    pub fn with_added_technical_layer(&self, name: String, purpose: LayerPurpose, side: Option<Side>) -> Result<Self, CommandError> {
+        if purpose == LayerPurpose::Copper {
+            return Err(CommandError::InvalidParams("copper layers must be defined with the physical stackup".into()));
+        }
+        valid_text("layer name", &name).map_err(CommandError::InvalidParams)?;
+        if self.layers.iter().any(|layer| layer.name.eq_ignore_ascii_case(&name)) {
+            return Err(CommandError::InvalidParams(format!("duplicate layer name: {name}")));
+        }
+        let mut layers = self.layers.clone();
+        layers.push(Layer { id: fresh_id()?, name, purpose, side });
+        Self::try_from(SetupRecords { materials: self.materials.clone(), layers, stackup: self.stackup.clone() }).map_err(CommandError::InvalidParams)
+    }
+
+    /// Resize the physical copper stack while retaining surface IDs, surviving inner-layer IDs,
+    /// finished dimensions and dielectric construction. Removing authored strata is refused;
+    /// callers can clear their metadata deliberately before reduction. Adoption validates drawings.
+    pub fn with_copper_count(&self, count: u64) -> Result<Self, CommandError> {
+        let mut preset = Self::preset(count)?;
+        let old: Vec<_> = self.stackup.strata.iter().step_by(2).cloned().collect();
+        if old.len() == count as usize {
+            return Ok(self.clone());
+        }
+        let retained_inner = (count as usize - 2).min(old.len() - 2);
+        if old.iter().skip(retained_inner+1).take(old.len()-retained_inner-2).any(|s|s.thickness_nm().is_some())
+            || self.stackup.strata.iter().skip(count as usize * 2 - 1).any(|s| matches!(s,Stratum::Dielectric{material,construction,thickness_nm,thickness_tolerance_nm,..} if material.is_some()||construction.is_some()||thickness_nm.is_some()||thickness_tolerance_nm.is_some())) {
+            return Err(CommandError::InvalidParams("clear the removed copper/dielectric thickness and construction fields before reducing the layer count".into()));
+        }
+        for index in 0..count as usize {
+            let previous = if index == 0 {
+                old.first()
+            } else if index + 1 == count as usize {
+                old.last()
+            } else if index <= retained_inner {
+                old.get(index)
+            } else {
+                None
+            };
+            if let Some(previous) = previous {
+                preset.stackup.strata[index * 2] = previous.clone();
+            }
+            if index * 2 + 1 < preset.stackup.strata.len()
+                && let Some(gap) = self.stackup.strata.get(index * 2 + 1)
+            {
+                preset.stackup.strata[index * 2 + 1] = gap.clone();
+            }
+        }
+        let ids: BTreeSet<_> =
+            preset.stackup.strata.iter().filter_map(|s| if let Stratum::Copper { layer, .. } = s { Some(*layer) } else { None }).collect();
+        let mut layers: Vec<_> = self.layers.iter().filter(|l| l.purpose != LayerPurpose::Copper || ids.contains(&l.id)).cloned().collect();
+        for layer in preset.layers.into_iter().filter(|l| l.purpose == LayerPurpose::Copper) {
+            if ids.contains(&layer.id) && !layers.iter().any(|l| l.id == layer.id) {
+                layers.push(layer);
+            }
+        }
+        Self::try_from(SetupRecords {
+            materials: self.materials.clone(),
+            layers,
+            stackup: Stackup { id: self.stackup.id, strata: preset.stackup.strata },
+        })
+        .map_err(CommandError::InvalidParams)
+    }
+
+    /// Fit finished laminate thickness by dividing the exact residual among unlocked dielectric
+    /// gaps. Copper and locked gaps must have specified thickness. Unknown/non-dielectric lock IDs,
+    /// nonpositive residuals and resulting tolerance violations fail without changing the source.
+    pub fn with_fitted_dielectrics(&self, target_nm: i64, locked: &BTreeSet<Uuid>) -> Result<Self, CommandError> {
+        let invalid = |message: &str| CommandError::InvalidParams(message.into());
+        if !(1..=MAX_THICKNESS_NM).contains(&target_nm) {
+            return Err(invalid("target laminate thickness must be positive and at most 100 mm"));
+        }
+        if locked.iter().any(|id| !self.stackup.strata.iter().any(|s| matches!(s,Stratum::Dielectric{id:gap,..}if gap==id))) {
+            return Err(invalid("thickness locks must identify dielectric gaps in this stackup"));
+        }
+        let mut fixed = 0_i64;
+        let mut adjustable = Vec::new();
+        for (i, stratum) in self.stackup.strata.iter().enumerate() {
+            if matches!(stratum,Stratum::Dielectric{id,..}if !locked.contains(id)) {
+                adjustable.push(i);
+            } else {
+                fixed = fixed
+                    .checked_add(stratum.thickness_nm().ok_or_else(|| invalid("specify copper and locked dielectric thicknesses before fitting"))?)
+                    .ok_or_else(|| invalid("thickness overflow"))?;
+            }
+        }
+        if adjustable.is_empty() {
+            return Err(invalid("unlock at least one dielectric gap"));
+        }
+        let remaining = target_nm.checked_sub(fixed).ok_or_else(|| invalid("target thickness is out of range"))?;
+        if remaining < adjustable.len() as i64 {
+            return Err(invalid("target thickness must exceed the fixed layers"));
+        }
+        let mut stackup = self.stackup.clone();
+        for (n, i) in adjustable.iter().enumerate() {
+            if let Stratum::Dielectric { thickness_nm, .. } = &mut stackup.strata[*i] {
+                *thickness_nm = Some(remaining / adjustable.len() as i64 + i64::from((n as i64) < remaining % adjustable.len() as i64));
+            }
+        }
+        Self::try_from(SetupRecords { materials: self.materials.clone(), layers: self.layers.clone(), stackup }).map_err(CommandError::InvalidParams)
+    }
+
+    /// Explicit pad-resolution consent permits membership changes only when retained layer IDs
+    /// keep their roles/sides and both physical surface IDs survive. Drawing validation separately
+    /// rejects removing occupied graphic layers; footprints retain their immutable definitions.
+    fn compatible_bindings(&self, other: &Self) -> bool {
+        self.layers
+            .iter()
+            .filter(|l| l.purpose == LayerPurpose::Copper && l.side.is_some())
+            .all(|l| other.layers.iter().any(|n| n.id == l.id && n.purpose == l.purpose && n.side == l.side))
+            && self.layers.iter().all(|l| other.layers.iter().find(|n| n.id == l.id).is_none_or(|n| n.purpose == l.purpose && n.side == l.side))
+    }
+
     /// Embedded material revisions in canonical ID/revision order, available without a source library.
     pub fn materials(&self) -> &[Material] {
         &self.materials
@@ -260,11 +374,11 @@ impl BoardSetup {
         self.stackup.strata.iter().map(Stratum::thickness_nm).sum()
     }
 
-    /// Initialize a two- or four-copper-layer topology with no invented material or thickness.
+    /// Initialize any supported even copper-layer count without inventing material or thickness.
     /// Entropy or validation failures return before the session adopts any data.
     pub(crate) fn preset(copper_layers: u64) -> Result<Self, CommandError> {
-        if !matches!(copper_layers, 2 | 4) {
-            return Err(CommandError::InvalidParams("the initial presets support 2 or 4 copper layers".to_owned()));
+        if !(2..=MAX_COPPER as u64).contains(&copper_layers) || !copper_layers.is_multiple_of(2) {
+            return Err(CommandError::InvalidParams("select an even copper-layer count from 2 through 64".to_owned()));
         }
         let mut layers = Vec::new();
         let mut strata = Vec::new();
@@ -345,8 +459,9 @@ impl BoardSetup {
 }
 
 impl Session {
-    /// Create the initial topology once on an empty board. Existing legacy footprints require
-    /// an explicit future layer-binding migration instead of an inferred reassignment.
+    /// Create the initial topology once. Populated boards require explicit opt-in to resolve
+    /// existing ComponentSide/AllCopper bindings through the engine's front/all-copper rules;
+    /// marker-only pads remain markers. Placements, definitions and mappings are unchanged.
     /// Existing technical drawing layers are promoted with their original identities.
     pub(crate) fn initialize_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -354,9 +469,9 @@ impl Session {
         if project.board.setup.is_some() {
             return Err(CommandError::Unavailable("board setup already exists; edit it with pcb.set_board_setup".to_owned()));
         }
-        if !project.board.footprints().is_empty() {
+        if !project.board.footprints().is_empty() && params["resolve_existing_footprints"].as_bool() != Some(true) {
             return Err(CommandError::Unavailable(
-                "initial board setup requires an empty board; migrating existing footprint layer bindings is not supported yet".to_owned(),
+                "initial board setup with existing footprints requires resolve_existing_footprints=true".to_owned(),
             ));
         }
         let mut setup = BoardSetup::preset(params["copper_layers"].as_u64().unwrap_or_default())?;
@@ -378,7 +493,8 @@ impl Session {
     }
 
     /// Validate the entire candidate before one atomic edit. Renames and thickness/material
-    /// edits preserve identity; populated boards reject structural changes until bindings exist.
+    /// edits preserve identity. Populated topology changes require explicit consent and compatible
+    /// surviving layer roles/surface IDs; occupied drawing-layer removals are always rejected.
     /// Catalog reordering alone is a no-op and does not advance revision or clear redo.
     /// Existing pinned material revisions cannot be rewritten; use a new revision and explicit references.
     pub(crate) fn set_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
@@ -396,9 +512,13 @@ impl Session {
                 ));
             }
         }
-        if !project.board.footprints().is_empty() && !before.same_topology(&setup) {
+        if !project.board.footprints().is_empty()
+            && !before.same_topology(&setup)
+            && !(params["resolve_existing_footprints"].as_bool() == Some(true) && before.compatible_bindings(&setup))
+        {
             return Err(CommandError::Unavailable(
-                "changing a populated board's layers requires explicit footprint layer reassignment, which is not supported yet".to_owned(),
+                "populated layer changes require resolve_existing_footprints=true and compatible retained surface identities and layer roles"
+                    .to_owned(),
             ));
         }
         if before != &setup {

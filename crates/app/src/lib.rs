@@ -14,6 +14,7 @@ mod board_appearance;
 mod board_canvas;
 mod board_drawing;
 mod board_panels;
+mod board_setup;
 mod board_workspace;
 mod canvas_camera;
 mod definition_graphics;
@@ -162,6 +163,8 @@ enum Dialog {
     /// Chooses and pins a package independently of board placement.
     Footprint(footprint_assignment::Edit),
     LayerColor(board_appearance::Edit),
+    /// Disposable layer/stackup edits retain their originating board and revision.
+    BoardSetup(Box<board_setup::Edit>),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(properties::Edit),
     /// Closing a definition or quitting protects authoring documents separately from the project.
@@ -1493,8 +1496,12 @@ impl PcbApp {
             {
                 self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);
             }
-            if self.views.active.board.drawing.selected.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
-                self.views.active.board.drawing.delete_requested = true;
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
+                if self.views.active.board.drawing.selected.is_some() {
+                    self.views.active.board.drawing.delete_requested = true;
+                } else {
+                    self.delete_board_footprints(ctx, self.views.active.id());
+                }
             }
             if self.views.active.board.drawing.tool == Some(board_drawing::Tool::Lines) {
                 self.views.active.board.drawing.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
@@ -1692,6 +1699,7 @@ impl PcbApp {
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
+            Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, edit),

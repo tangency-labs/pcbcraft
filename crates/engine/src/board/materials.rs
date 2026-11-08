@@ -93,6 +93,23 @@ pub struct Material {
 }
 
 impl Material {
+    /// Create an uncharacterized project material with a fresh identity. Only its name is
+    /// supplied; no manufacturer, electrical report or qualification is inferred.
+    pub fn new(name: String) -> Result<Self, crate::CommandError> {
+        let material = Self {
+            id: crate::fresh_id()?,
+            revision: 1,
+            name,
+            family: None,
+            manufacturer: None,
+            product: None,
+            source: None,
+            tg: Vec::new(),
+            dielectric: Vec::new(),
+        };
+        validate_catalog(&mut [material.clone()]).map_err(crate::CommandError::InvalidParams)?;
+        Ok(material)
+    }
     /// Address this exact embedded definition without resolving a name or a latest revision.
     pub fn reference(&self) -> MaterialRef {
         MaterialRef { id: self.id, revision: self.revision }
@@ -129,6 +146,13 @@ pub enum Construction {
     Prepreg {
         plies: Vec<PrepregPly>,
     },
+}
+
+impl PrepregPly {
+    /// Stage one unknown prepreg ply with a fresh identity; stock data and material stay absent.
+    pub fn new() -> Result<Self, crate::CommandError> {
+        Ok(Self { id: crate::fresh_id()?, material: None, glass_style: None, resin_content_ppm: None, nominal_thickness_nm: None })
+    }
 }
 
 impl Construction {

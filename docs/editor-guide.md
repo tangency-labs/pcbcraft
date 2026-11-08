@@ -390,6 +390,24 @@ it. In PCB layout, **Place on board** places an assigned component at unit-aware
 X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
 registration, arcs, slots and routing remain planned.
+
+**Layout → Board → Setup** and **Layers → Board setup…** share a revision-bound
+Craft settings form. Board editor layers provides names and optional membership;
+Physical stackup provides every even copper count from 2 through 64, finished
+thicknesses/tolerances, a laminate total and cross-section, locked-gap fitting,
+and core/prepreg construction. Materials provides sourced Tg/Dk/Df specifications
+and explicit pinned revisions. Empty values stay unknown and typed units override
+the display unit. Apply is one undoable transaction; Cancel and invalid/stale drafts
+leave the board unchanged. Existing material pins cannot be rewritten; create a
+new revision and explicitly choose it in construction. Populated copper changes
+retain physical surface identities and resolve existing front/all-copper bindings;
+occupied drawings and authored stratum data are protected against removal.
+
+Left-click footprints to select them, then press **Delete** to remove only their
+board placements. **Layout → Placement menu → Delete** provides the same action. Components, schematic wiring and physical
+package assignments are retained for re-placement, and undo restores the original
+placements. Active drawing tools and movement previews keep keyboard ownership.
+
 The Layout ribbon's **Active layer** selector and status bar identify the drawing
 layer. Click a row in Layers to activate it, with an arrow and color swatch
 beside its name. The eye at the right toggles visibility independently: a pupil

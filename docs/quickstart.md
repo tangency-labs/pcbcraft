@@ -250,6 +250,29 @@ explicitly opens another workspace. The workspace picker remains available.
 In the board workspace, Properties shows its stored reference, value, definition
 and unit-aware coordinate readouts.
 
+Use **Layout → Board → Setup**, or **Board setup…** in Layers, to edit the board.
+Choose any even copper count from 2 through 64; 10- and 12-layer boards are included.
+**Board editor layers** edits names and unused optional layer membership.
+**Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
+construction, with a cross-section and laminate total. **Fit unlocked dielectrics**
+fits a target thickness while retaining copper and locked gaps. Values accept mm
+or mil, and blanks remain unspecified.
+
+**Materials** exposes sourced Tg/Dk/Df characterization and pinned material revisions.
+Add a material or a new revision, enter the report's source/conditions, and save it
+to the draft; then select its exact revision for a dielectric. **Apply board setup**
+commits one undoable edit, while Cancel discards the draft. Existing placements and
+package assignments are retained; populated-board copper changes explicitly update
+through-hole spans while keeping front copper identity. Occupied-layer removal and
+count reductions that would lose authored stratum data are rejected. Routing,
+impedance calculations and manufacturing rules remain future work.
+
+Left-click a footprint to select it, then press **Delete** to remove its board
+placement. Multiple selected footprints are removed together. The **Layout →
+Placement menu → Delete** action does the same thing. Schematic components and physical
+package assignments stay available; **Place on board** can place the assigned
+package again. Undo restores the original placement IDs and geometry.
+
 The Layout ribbon's **Active layer** selector shows the drawing target, also named
 in the status bar. In Layers, click a full row to activate it; the arrow and
 highlight follow that choice. The eyes at the right toggle visibility
@@ -346,8 +369,10 @@ open GUI window or save back to the file.
 
 For the new layer/stackup foundation, use `describe_command` with
 `pcb.initialize_board_setup` and `pcb.set_board_setup`. On a project with no
-footprints, initialize with `copper_layers: 2` (or `4`) and the current
-`expected_revision`. Inspection returns `project.board.setup`; submit an edited
+footprints, initialize with any even `copper_layers` from 2 through 64 and the current
+`expected_revision`. With existing footprints, also pass
+`resolve_existing_footprints: true` to explicitly adopt front/all-copper pad
+resolution. Inspection returns `project.board.setup`; submit an edited
 copy with the current revision to rename layers or specify `thickness_nm`.
 Unspecified thickness stays unknown, and undo restores the previous setup.
 The same command accepts project-local custom material definitions, sourced Tg
@@ -355,9 +380,8 @@ and Dk/Df reports, and core or ordered prepreg construction. Use the discovered
 schema and [material contract](board-materials.md) for the exact fields and units;
 material references pin both ID and revision. Updating a retained material
 definition requires a new revision and explicit reference changes.
-These are headless engine commands for now; there is no board setup dialog or
-live-editor permission for them yet. The [representation plan](pcb-representation.md)
-describes what follows this foundation.
+The Board setup dialog uses these same commands; live and headless MCP share them.
+The [representation plan](pcb-representation.md) describes the remaining work.
 
 For the open desktop window instead, choose **Help → Connect AI assistants… →
 Enable local connection** and copy its configuration into your MCP client. If

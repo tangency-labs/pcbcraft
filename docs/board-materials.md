@@ -3,10 +3,34 @@
 The engine stores project-local material definitions and their use in a uniform
 rigid stackup. `pcb.set_board_setup` validates and adopts the complete candidate
 with the caller's `expected_revision`, so construction, material references and
-dimensions change in one undo step. The command is discoverable through headless
-MCP; a material editor, impedance calculator and live-editor permission are not
-implemented yet. The [representation plan](pcb-representation.md#stackup-and-impedance-ui)
-describes that next workflow.
+dimensions change in one undo step. The command is shared by GUI and MCP.
+**Layout → Board → Setup** or **Layers → Board setup…** opens the Craft settings
+form with Board editor layers, Physical stackup and Materials pages.
+
+Copper count accepts every even number from 2 through 64, including initial setup
+and later count changes. Surface and surviving inner-layer identities remain stable.
+Populated-board changes require explicit front/all-copper binding consent; the GUI
+supplies it when Apply is chosen after showing the changed pad-span behavior.
+Occupied drawing layers cannot be removed. Reductions that would discard authored
+thickness/construction data are refused until those fields are cleared deliberately.
+Unused optional technical layers can be removed or added, while this editor retains
+copper, Board Edge and courtyard layers. Per-view visibility remains separate.
+
+The Physical stackup page shows a cross-section, finished copper/dielectric thicknesses,
+and their laminate total. Blank values stay unknown. **Fit unlocked dielectrics**
+distributes the exact residual thickness after copper and locked dielectric gaps;
+all fixed thicknesses must be specified and the resulting gaps must remain positive.
+Each dielectric supports tolerance, a descriptive label, core or ordered prepreg
+construction, pinned material selection, and ply glass/resin/nominal stock fields.
+Stock ply thickness is never counted again as finished laminate thickness.
+
+Materials supports project-local specifications with sourced Tg and Dk/Df reports,
+including Tg method, basis, frequency, test method and specimen conditions. Existing
+pins are immutable: **New revision** retains the old reports and creates a distinct
+revision; choosing that revision for a dielectric is explicit. Saving a material
+only stages it in the form. Apply commits the entire board draft and Cancel discards it.
+No electrical value, supplier property or manufacturing qualification is inferred.
+Impedance calculations and manufacturing-profile/rule editors remain follow-up work.
 Portable manufacturer/process profiles are a separate planned resource; see
 [project settings and fabrication profiles](pcb-representation.md#project-settings-and-fabrication-profiles)
 for their import, pinning and update contract.
