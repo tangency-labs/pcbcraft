@@ -186,7 +186,7 @@ mod live {
                     json!({"type": "object", "properties": {"x_nm": coordinate, "y_nm": coordinate}, "required": ["x_nm", "y_nm"], "additionalProperties": false})
                 }
                 Self::Selection => {
-                    json!({"type": "object", "properties": {"symbols": ids, "wires": ids}, "required": ["symbols", "wires"], "additionalProperties": false})
+                    json!({"type": "object", "properties": {"symbols": ids, "wires": ids, "net_labels": ids}, "required": ["symbols", "wires"], "additionalProperties": false})
                 }
                 Self::Footprints => ids,
             }
@@ -237,7 +237,7 @@ mod live {
                 Self::Integer { min, max, step: 1 } => format!("must be a whole number from {min} to {max}"),
                 Self::Integer { min, max, step } => format!("must be a multiple of {step} from {min} to {max}"),
                 Self::Point => "must be a point with whole-nanometre x_nm and y_nm within the schematic bounds".to_owned(),
-                Self::Selection => "must contain unique symbol and wire ID lists".to_owned(),
+                Self::Selection => "must contain unique symbol, wire and optional named-net anchor ID lists".to_owned(),
                 Self::Footprints => "must be a list of distinct footprint IDs".to_owned(),
             })
         }
@@ -610,7 +610,7 @@ mod live {
         WindowCommand {
             id: "view.select",
             title: "Select",
-            summary: "Replace a schematic view's selection with these symbols and wires, as clicking or box selection does. Empty lists clear it. Other views highlight it under the Follow selection setting. PCB views take view.select_footprints.",
+            summary: "Replace a schematic view's selection with these symbols, wires and named-net anchors, as clicking or box selection does. Empty lists clear it. Other views highlight it under the Follow selection setting. PCB views take view.select_footprints.",
             params: &[VIEW, Param { name: "items", summary: "IDs from inspect_project", required: true, kind: Kind::Selection }],
         },
         WindowCommand {
@@ -1203,10 +1203,11 @@ mod live {
                     self.apply_view_action(ctx, view, ViewAction::Workspace { workspace, placement });
                 }
                 ("view.select", Some((view, _)), _) => {
-                    let items = Selection::parse(&params["items"]).ok_or("`items` must contain symbol and wire ID lists")?;
+                    let items =
+                        Selection::parse(&params["items"]).ok_or("`items` must contain symbol, wire and optional named-net anchor ID lists")?;
                     let mut filtered = items.clone();
                     if let Some(state) = self.views.view(view) {
-                        state.filters.retain(&mut filtered);
+                        state.filters.retain(&mut filtered, state.snapshot(&self.session).as_deref());
                     }
                     if filtered != items {
                         return Err("Some requested object types are disabled by this view's selection filters".into());

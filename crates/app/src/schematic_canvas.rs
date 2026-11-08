@@ -98,7 +98,6 @@ pub(crate) enum Click {
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
-    NetLabelSelect(u64),
     NetLabelRotate,
     GrabSheetGesture(Box<crate::hierarchy::Drag>),
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
@@ -180,7 +179,8 @@ pub(crate) enum SymbolAction {
 
 /// Draw the schematic and its active preview, and report a requested tool action.
 /// A primary drag reshapes one wire, grabs a symbol or moves an explicitly selected whole-wire/group; empty-space and secondary drags draw
-/// selection boxes. Drag previews end on release, with no edit outside the canvas or after focus loss.
+/// selection boxes over components, wires and named-net anchors, including power/ground.
+/// Drag previews end on release, with no edit outside the canvas or after focus loss.
 /// Junction handles preview explicit pin/junction attachment through the engine before release.
 ///
 /// Disconnect and Move follows the pointer until a primary click commits; Escape, a secondary
@@ -224,7 +224,6 @@ pub(crate) fn show(
     selected_leg: Option<&LegTarget>,
     whole_wire_drag: bool,
     selected_sheet: Option<u64>,
-    selected_net_label: Option<u64>,
     highlighted: &Selection,
     filters: crate::selection_filters::Filters,
     input_enabled: bool,
@@ -372,7 +371,7 @@ pub(crate) fn show(
         }
     }
 
-    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected_net_label);
+    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
@@ -425,7 +424,7 @@ pub(crate) fn show(
     }
 
     if let Some(click) =
-        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected_net_label, label_position, filters)
+        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected, label_position, filters)
     {
         return click;
     }
@@ -440,7 +439,7 @@ pub(crate) fn show(
         }
         let pointer = response.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
         if let Some(pointer) = pointer {
-            let hits = selection::boxed(project, camera, rect, drag.start, pointer, filters);
+            let hits = selection::boxed(ui, project, camera, rect, drag.start, pointer, filters);
             pcbcraft_chrome::selection::marquee(&painter, Rect::from_two_pos(drag.start, pointer), pointer.x < drag.start.x, hits.len());
             if ui.input(|i| i.pointer.button_released(drag.button)) {
                 let valid = input_enabled && response.contains_pointer();
@@ -481,22 +480,23 @@ pub(crate) fn show(
             && !whole_wire_drag
             && !modifiers.shift
             && !modifiers.ctrl
+            && !modifiers.command
             && let Some(wire) = selected.single_wire()
             && let Some(drag) = wires::reshape_at(project, camera, rect, wire, origin, camera.snap(origin, rect))
         {
             return Some(Click::GrabReshape(drag));
         }
-        let hit = selection::at(project, camera, rect, origin, filters);
-        if right || hit.is_empty() || modifiers.shift || modifiers.ctrl {
+        let hit = selection::at(ui, project, camera, rect, origin, filters);
+        if right || hit.is_empty() || modifiers.shift || modifiers.ctrl || modifiers.command {
             return Some(Click::StartBox(BoxDrag {
                 start: origin,
                 base: selected.clone(),
                 add: modifiers.shift,
-                toggle: modifiers.ctrl,
+                toggle: modifiers.ctrl || modifiers.command,
                 button: if right { egui::PointerButton::Secondary } else { egui::PointerButton::Primary },
             }));
         }
-        if hit.symbols.is_subset(&selected.symbols) && hit.wires.is_subset(&selected.wires) && (selected.len() > 1 || whole_wire_drag) {
+        if hit.is_subset(selected) && (selected.len() > 1 || whole_wire_drag) {
             return Some(Click::GrabItems(selected.clone(), camera.snap(origin, rect)));
         }
         if let Some(wire) = hit.single_wire()
@@ -517,8 +517,8 @@ pub(crate) fn show(
         let group = selected.len() > 1
             && (pressed.is_none()
                 || pressed.is_some_and(|p| {
-                    let hit = selection::at(project, camera, rect, p, filters);
-                    !hit.is_empty() && hit.symbols.is_subset(&selected.symbols) && hit.wires.is_subset(&selected.wires)
+                    let hit = selection::at(ui, project, camera, rect, p, filters);
+                    !hit.is_empty() && hit.is_subset(selected)
                 }));
         // A wire's menu keeps the leg it was opened on until it closes.
         let leg_id = response.id.with("wire_menu_leg");
@@ -594,14 +594,14 @@ pub(crate) fn show(
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::G))
         && let Some(pointer) = response.hover_pos()
-        && let Some(wire) = selection::at(project, camera, rect, pointer, filters).single_wire()
+        && let Some(wire) = selection::at(ui, project, camera, rect, pointer, filters).single_wire()
         && let Some(drag) = wires::reshape_at(project, camera, rect, wire, pointer, camera.snap(pointer, rect))
     {
         return Some(Click::GrabReshape(drag));
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
-        let hit = selection::at(project, camera, rect, pointer, filters);
+        let hit = selection::at(ui, project, camera, rect, pointer, filters);
         let modifiers = ui.input(|i| i.modifiers);
         if !modifiers.shift
             && !modifiers.ctrl
@@ -617,7 +617,7 @@ pub(crate) fn show(
         {
             return Some(Click::SelectLeg(leg));
         }
-        return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl)));
+        return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
     }
     match tool? {
         Tool::PlaceSymbol { definition, turns, .. } => {

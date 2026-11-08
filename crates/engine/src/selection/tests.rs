@@ -21,7 +21,7 @@ fn fixture() -> Session {
 /// Select every authored object using identities from inspection, not hand-written project files.
 fn all(s: &Session) -> Selection {
     let p = s.project().unwrap();
-    Selection { symbols: p.symbols().iter().map(|s| s.id()).collect(), wires: p.wires().iter().map(|w| w.id()).collect() }
+    Selection { symbols: p.symbols().iter().map(|s| s.id()).collect(), wires: p.wires().iter().map(|w| w.id()).collect(), ..Selection::default() }
 }
 
 /// Mixed moves preserve topology and relative routes, and both move/delete commit one undo step.
@@ -141,4 +141,58 @@ fn group_move_accepts_a_displacement_across_both_coordinate_limits() {
     s.apply(MOVE_ITEMS, &json!({"items":Selection::one_symbol("symbol-2".to_owned()),"dx_nm":-2*limit,"dy_nm":0,"expected_revision":s.revision()}))
         .unwrap();
     assert_eq!(s.project().unwrap().symbols()[0].position.x_nm, -limit);
+}
+
+/// Named anchors participate in the same atomic moves/deletes as components and wires, including
+/// attached endpoints, cache invalidation, old-client selections and rollback on invalid IDs.
+#[test]
+fn named_anchors_move_delete_and_undo_with_shared_selection() {
+    let mut s = fixture();
+    for (style, x) in [("ground", 30), ("power", 40), ("local", 50), ("global", 60)] {
+        s.apply(crate::net_labels::ADD, &json!({"name":format!("N{x}"),"style":style,"x_nm":x*GRID_NM,"y_nm":0,"expected_revision":s.revision()}))
+            .unwrap();
+    }
+    let labels = s.project().unwrap().net_labels().to_vec();
+    s.apply(
+        DRAW_WIRE,
+        &json!({"from":labels[0].inspect()["endpoint"],"to":{"x_nm":30*GRID_NM,"y_nm":10*GRID_NM},"bends":[],"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let mut items = all(&s);
+    items.net_labels = labels.iter().map(|label| label.object_id()).collect();
+    assert!(s.project().unwrap().healed_wires(&items, s.revision()).is_err());
+    let before = s.snapshot().unwrap();
+    let old_netlist = before.inspect_schematic()["netlist"].clone();
+    let delta = Point { x_nm: GRID_NM, y_nm: 2 * GRID_NM };
+    let preview = items.moved(&before, delta).unwrap();
+    let revision = s.revision();
+    s.apply(MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"auto_heal":false,"expected_revision":revision})).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    let moved = s.snapshot().unwrap();
+    assert_eq!(moved.net_labels(), preview.net_labels());
+    for (old, new) in labels.iter().zip(moved.net_labels()) {
+        assert_eq!(new.at, translated(old.at, delta).unwrap());
+        assert_eq!(new.id, old.id);
+    }
+    assert_eq!(old_netlist, moved.inspect_schematic()["netlist"]);
+    assert_eq!(moved.endpoint_position(WireEndpoint::NetLabel(labels[0].id)), Some(translated(labels[0].at, delta).unwrap()));
+    assert!(s.apply(DELETE_ITEMS, &json!({"items":items,"expected_revision":revision})).is_err());
+    let mut invalid = items.clone();
+    invalid.net_labels.insert("net-label-99999".into());
+    assert!(s.apply(DELETE_ITEMS, &json!({"items":invalid,"expected_revision":s.revision()})).is_err());
+    assert!(Arc::ptr_eq(&moved, &s.snapshot().unwrap()));
+    let labels_only = Selection { net_labels: items.net_labels.clone(), ..Selection::default() };
+    s.apply(DELETE_ITEMS, &json!({"items":labels_only,"expected_revision":s.revision()})).unwrap();
+    let p = s.project().unwrap();
+    assert!(p.net_labels().is_empty());
+    assert_eq!(p.symbols(), moved.symbols());
+    assert_eq!(p.wires().len(), moved.wires().len() - 1);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&moved, &s.snapshot().unwrap()));
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    assert!(Selection::parse(&json!({"symbols":[],"wires":[]})).unwrap().is_empty());
+    for bad in [json!(["net-label-1", "net-label-1"]), json!(["symbol-1"]), json!(null)] {
+        assert!(Selection::parse(&json!({"symbols":[],"wires":[],"net_labels":bad})).is_none());
+    }
 }

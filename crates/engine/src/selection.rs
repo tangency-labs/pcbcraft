@@ -16,6 +16,8 @@ use std::{collections::BTreeSet, sync::Arc};
 pub struct Selection {
     pub symbols: BTreeSet<String>,
     pub wires: BTreeSet<String>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub net_labels: BTreeSet<String>,
 }
 
 impl Selection {
@@ -29,14 +31,29 @@ impl Selection {
         Self { wires: [id].into(), ..Self::default() }
     }
 
-    /// Total number of selected symbols and wires.
+    /// Select exactly one named-net anchor, including power and ground symbols.
+    pub fn one_net_label(id: u64) -> Self {
+        Self { net_labels: [format!("net-label-{id}")].into(), ..Self::default() }
+    }
+
+    /// The sole named-net anchor, only when no other object is selected.
+    pub fn single_net_label(&self) -> Option<u64> {
+        if self.len() == 1 { self.net_labels.first().and_then(|id| parse_id(id, "net-label-")) } else { None }
+    }
+
+    /// Whether every selected identity belongs to another selection.
+    pub fn is_subset(&self, other: &Self) -> bool {
+        self.symbols.is_subset(&other.symbols) && self.wires.is_subset(&other.wires) && self.net_labels.is_subset(&other.net_labels)
+    }
+
+    /// Total number of selected components, wires and named-net anchors.
     pub fn len(&self) -> usize {
-        self.symbols.len() + self.wires.len()
+        self.symbols.len() + self.wires.len() + self.net_labels.len()
     }
 
     /// Whether no item is selected.
     pub fn is_empty(&self) -> bool {
-        self.symbols.is_empty() && self.wires.is_empty()
+        self.len() == 0
     }
 
     /// The sole symbol, only when no other object is selected.
@@ -55,7 +72,7 @@ impl Selection {
             return hits.clone();
         }
         let mut result = self.clone();
-        for (out, incoming) in [(&mut result.symbols, &hits.symbols), (&mut result.wires, &hits.wires)] {
+        for (out, incoming) in [(&mut result.symbols, &hits.symbols), (&mut result.wires, &hits.wires), (&mut result.net_labels, &hits.net_labels)] {
             for id in incoming {
                 if toggle && out.contains(id) {
                     out.remove(id);
@@ -69,15 +86,17 @@ impl Selection {
 
     /// Remove identities absent from the current snapshot, including after undo or deletion.
     pub fn retain(&mut self, project: &Project) {
+        self.net_labels.retain(|id| project.net_labels().iter().any(|label| label.object_id() == *id));
         self.symbols.retain(|id| parse_id(id, "symbol-").and_then(|id| project.symbol_index(id)).is_some());
         self.wires.retain(|id| parse_id(id, "wire-").is_some_and(|id| project.wires.binary_search_by_key(&id, |wire| wire.ordinal).is_ok()));
     }
 
     /// Parse bounded canonical ID lists, rejecting extra fields and duplicate identities.
+    /// The optional `net_labels` list extends the original symbol/wire contract.
     /// Identities are checked for form only; [`Self::retain`] drops those absent from a project.
     pub fn parse(value: &Value) -> Option<Self> {
         let object = value.as_object()?;
-        if object.len() != 2 {
+        if object.keys().any(|key| !matches!(key.as_str(), "symbols" | "wires" | "net_labels")) {
             return None;
         }
         let read = |key: &str, prefix: &str, limit| -> Option<BTreeSet<String>> {
@@ -95,7 +114,15 @@ impl Selection {
             }
             Some(ids)
         };
-        Some(Self { symbols: read("symbols", "symbol-", MAX_SYMBOLS)?, wires: read("wires", "wire-", MAX_WIRES)? })
+        Some(Self {
+            symbols: read("symbols", "symbol-", MAX_SYMBOLS)?,
+            wires: read("wires", "wire-", MAX_WIRES)?,
+            net_labels: if object.contains_key("net_labels") {
+                read("net_labels", "net-label-", crate::net_labels::MAX_LABELS)?
+            } else {
+                BTreeSet::new()
+            },
+        })
     }
 
     /// Reject an empty group or any missing identity before constructing an edit.
@@ -103,14 +130,15 @@ impl Selection {
         let mut found = self.clone();
         found.retain(project);
         if self.is_empty() || &found != self {
-            Err(CommandError::InvalidParams("selection must contain existing symbols or wires".to_owned()))
+            Err(CommandError::InvalidParams("selection must contain existing symbols, wires or named-net anchors".to_owned()))
         } else {
             Ok(())
         }
     }
 
     /// Build the same bounded move for a preview or command without changing the source snapshot.
-    /// Selected wire routes and their junctions move once; unselected component pins stay fixed,
+    /// Named anchors retain their identities and attached endpoints. Selected wire routes and
+    /// their junctions move once; unselected component pins stay fixed,
     /// with orthogonal end legs connecting them to the moved route. Any invalid item rejects all.
     pub fn moved(&self, project: &Project, delta: Point) -> Result<Project, CommandError> {
         self.validate(project)?;
@@ -123,6 +151,12 @@ impl Selection {
                 symbol.position = translated(symbol.position, delta)?;
             }
         }
+        for label in Arc::make_mut(&mut next.sheet_mut().net_labels) {
+            if self.net_labels.contains(&label.object_id()) {
+                label.at = translated(label.at, delta)?;
+            }
+        }
+        next.sheet_mut().connectivity = Arc::default();
         let junctions: BTreeSet<_> = project
             .wires()
             .iter()
@@ -171,13 +205,18 @@ impl Session {
         let project = self.open_project()?;
         let delta = Point { x_nm: params["dx_nm"].as_i64().unwrap_or_default(), y_nm: params["dy_nm"].as_i64().unwrap_or_default() };
         let next = items.moved(project, delta)?.healed(project, self.revision(), crate::wire::auto_heal(params))?;
-        if next.symbols != project.symbols || next.wires != project.wires || next.junctions != project.junctions {
+        if next.symbols != project.symbols
+            || next.wires != project.wires
+            || next.junctions != project.junctions
+            || next.net_labels != project.net_labels
+        {
             self.change(next);
         }
         Ok(())
     }
 
-    /// Remove a validated group, incident wires, orphan junctions and unused components/footprints
+    /// Remove a validated group of components, wires and named anchors, incident wires,
+    /// orphan junctions and unused components/footprints
     /// together. A failure leaves every item and history entry unchanged.
     pub(crate) fn delete_items(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -187,8 +226,15 @@ impl Session {
         let mut next = project.clone();
         let deleted: BTreeSet<_> = project.symbols().iter().filter(|s| items.symbols.contains(&s.id())).map(|s| s.ordinal).collect();
         Arc::make_mut(&mut next.sheet_mut().symbols).retain(|s| !deleted.contains(&s.ordinal));
-        Arc::make_mut(&mut next.sheet_mut().wires)
-            .retain(|wire| !items.wires.contains(&wire.id()) && wire.terminals().iter().all(|pin| !deleted.contains(&pin.symbol)));
+        Arc::make_mut(&mut next.sheet_mut().net_labels).retain(|label| !items.net_labels.contains(&label.object_id()));
+        Arc::make_mut(&mut next.sheet_mut().wires).retain(|wire| {
+            !items.wires.contains(&wire.id())
+                && wire.terminals().iter().all(|pin| !deleted.contains(&pin.symbol))
+                && wire.endpoints().iter().all(|end| match end {
+                    WireEndpoint::NetLabel(id) => !items.net_labels.contains(&format!("net-label-{id}")),
+                    _ => true,
+                })
+        });
         Arc::make_mut(&mut next.units).retain(|_, symbol| !deleted.contains(symbol));
         let used: BTreeSet<_> = next.symbols.iter().map(|s| s.component).collect();
         let removed: BTreeSet<_> =

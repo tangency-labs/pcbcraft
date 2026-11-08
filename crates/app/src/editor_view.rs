@@ -133,7 +133,6 @@ pub(super) struct SchematicState {
     pub(super) properties: crate::properties::State,
     pub(super) selection: Selection,
     pub(super) selected_sheet_symbol: Option<u64>,
-    pub(super) selected_net_label: Option<u64>,
     pub(super) selected_leg: Option<LegTarget>,
     pub(super) whole_wire_drag: bool,
     pub(super) tool: Option<Tool>,
@@ -149,6 +148,7 @@ pub(super) struct BoardState {
     pub(super) drawing: crate::board_drawing::State,
     pub(super) silkscreen_draft: Option<crate::board_panels::SilkscreenDraft>,
     pub(super) draft: Option<crate::board_canvas::Draft>,
+    pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     pub(super) move_requested: bool,
     pub(super) rotate_requested: u16,
     pub(super) selection: std::collections::BTreeSet<String>,
@@ -494,6 +494,7 @@ impl EditorView {
     pub(super) fn cancel_gesture(&mut self) {
         self.board.drawing.cancel();
         self.board.draft = None;
+        self.board.box_drag = None;
         self.board.move_requested = false;
         self.board.rotate_requested = 0;
         self.schematic.tool = None;
@@ -587,6 +588,9 @@ impl EditorView {
             });
             self.snapshot_root = root;
         }
+        if self.board.box_drag.as_ref().is_some_and(|drag| !self.accepts(drag.source, session)) {
+            self.cancel_gesture();
+        }
         if self.board.draft.as_ref().is_some_and(|draft| !self.accepts(draft.source, session)) {
             self.cancel_gesture();
         }
@@ -606,16 +610,11 @@ impl EditorView {
         if let Some(project) = session.project() {
             if let Some(sheet) = &self.sheet_snapshot {
                 self.schematic.selection.retain(sheet);
-                self.schematic.selected_net_label = self
-                    .schematic
-                    .selected_net_label
-                    .filter(|id| sheet.net_labels().iter().any(|l| l.id == *id && self.filters.allows_net_label(l.style)));
                 self.schematic.selected_sheet_symbol =
                     self.schematic.selected_sheet_symbol.filter(|id| sheet.sheet_symbols().iter().any(|s| s.id == *id));
             } else {
                 self.schematic.selection = Selection::default();
                 self.schematic.selected_sheet_symbol = None;
-                self.schematic.selected_net_label = None;
             }
             let placed: std::collections::BTreeSet<_> = self
                 .board

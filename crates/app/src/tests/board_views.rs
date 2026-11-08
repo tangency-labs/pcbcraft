@@ -1046,3 +1046,151 @@ fn click_then_delete_removes_footprint_without_using_the_ribbon() {
         }
     }
 }
+
+/// Carry pointer modifiers through a real board drag, optionally keeping the button held so
+/// the live overlay and cancellation paths can be inspected before release.
+fn board_box(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, button: egui::PointerButton, modifiers: Modifiers, release: bool) {
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button, pressed: true, modifiers });
+    h.run();
+    h.event(egui::Event::PointerMoved(from + (to - from) * 0.5));
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    if release {
+        board_box_release(h, to, button, modifiers);
+    }
+}
+
+/// End the same captured gesture without generating a click.
+fn board_box_release(h: &mut Harness<'_, PcbApp>, to: egui::Pos2, button: egui::PointerButton, modifiers: Modifiers) {
+    h.event(egui::Event::PointerButton { pos: to, button, pressed: false, modifiers });
+    h.run();
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run();
+}
+
+/// Both buttons show directional PCB selection over visible geometry without editing the
+/// project. Modifiers combine hits; selected footprints can be deleted together and undone.
+#[test]
+fn pcb_box_selection_direction_modifiers_and_delete() {
+    use egui::PointerButton::{Primary, Secondary};
+    for button in [Primary, Secondary] {
+        let mut h = editable_board();
+        if button == Secondary {
+            h.state_mut().preferences.theme = crate::preferences::ThemeChoice::Light;
+            h.run();
+        }
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .session
+            .apply(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":20_000_000,"y_nm":0,"expected_revision":revision}))
+            .unwrap();
+        let symbol = h.state().session.project().unwrap().symbols().last().unwrap().id();
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .session
+            .apply(
+                pcbcraft_engine::PLACE_FOOTPRINT,
+                &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":12_000_000,"y_nm":0,"expected_revision":revision}),
+            )
+            .unwrap();
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let from = board_point(&h, Point { x_nm: -5_000_000, y_nm: -5_000_000 });
+        let to = board_point(&h, Point { x_nm: 5_000_000, y_nm: 5_000_000 });
+        let original = h.state().session.inspect();
+        board_box(&mut h, from, to, button, Modifiers::NONE, false);
+        assert!(h.state().views.active.board.box_drag.is_some());
+        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text()=="Window · 1 items" && text.fallback_color==Tokens::get().board_ink)));
+        board_box_release(&mut h, to, button, Modifiers::NONE);
+        assert_eq!(h.state().views.active.board.selection.len(), 1);
+        assert_eq!(h.state().session.inspect(), original);
+        // Only part of the footprint is enclosed; reversing direction changes the result.
+        let partial = board_point(&h, Point { x_nm: 0, y_nm: 5_000_000 });
+        board_box(&mut h, from, partial, button, Modifiers::NONE, true);
+        assert!(h.state().views.active.board.selection.is_empty());
+        board_box(&mut h, partial, from, button, Modifiers::NONE, false);
+        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text()=="Crossing · 1 items")));
+        board_box_release(&mut h, from, button, Modifiers::NONE);
+        assert_eq!(h.state().views.active.board.selection.len(), 1);
+        board_box(&mut h, from, to, button, Modifiers::CTRL, true);
+        assert!(h.state().views.active.board.selection.is_empty());
+        board_box(&mut h, from, to, button, Modifiers::SHIFT, true);
+        assert_eq!(h.state().views.active.board.selection.len(), 1);
+        let second_from = board_point(&h, Point { x_nm: 7_000_000, y_nm: -5_000_000 });
+        let second_to = board_point(&h, Point { x_nm: 17_000_000, y_nm: 5_000_000 });
+        board_box(&mut h, second_from, second_to, button, Modifiers::SHIFT, true);
+        assert_eq!(h.state().views.active.board.selection.len(), 2);
+        h.key_press(Key::Delete);
+        h.run();
+        assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// Escape, focus loss, changed revisions and release over chrome cannot commit a box. Disabled
+/// footprint filters and hidden geometry produce no hits, including fast move/release frames.
+#[test]
+fn pcb_box_selection_cancels_and_respects_filters() {
+    use egui::PointerButton::Primary;
+    let mut h = editable_board();
+    let from = board_point(&h, Point { x_nm: -5_000_000, y_nm: -5_000_000 });
+    let to = board_point(&h, Point { x_nm: 5_000_000, y_nm: 5_000_000 });
+    for cancellation in ["escape", "focus", "revision", "panel"] {
+        board_box(&mut h, from, to, Primary, Modifiers::NONE, false);
+        match cancellation {
+            "escape" => h.key_press(Key::Escape),
+            "focus" => h.event(egui::Event::WindowFocused(false)),
+            "revision" => {
+                let revision = h.state().session.revision();
+                h.state_mut().run(
+                    pcbcraft_engine::SET_SYMBOL_FIELDS,
+                    &json!({"symbol":"symbol-2","reference":"R1","value":"2k","expected_revision":revision}),
+                );
+            }
+            _ => {}
+        }
+        h.run();
+        let end = if cancellation == "panel" { h.get_by_label("Collapse Layers").rect().center() } else { to };
+        board_box_release(&mut h, end, Primary, Modifiers::NONE);
+        assert!(h.state().views.active.board.box_drag.is_none());
+        assert!(h.state().views.active.board.selection.is_empty(), "{cancellation}");
+        h.event(egui::Event::WindowFocused(true));
+        h.run();
+    }
+    let view = h.state().views.active.id();
+    h.state_mut().set_selection_filters(view, &json!({"footprints":false})).unwrap();
+    board_box(&mut h, from, to, Primary, Modifiers::NONE, true);
+    assert!(h.state().views.active.board.selection.is_empty());
+    h.state_mut().set_selection_filters(view, &json!({"footprints":true})).unwrap();
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button: Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    board_box_release(&mut h, to, Primary, Modifiers::NONE);
+    assert!(h.state().views.active.board.box_drag.is_none());
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    let revision = h.state().session.revision();
+    h.state_mut()
+        .run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"resolve_existing_footprints":true,"expected_revision":revision}));
+    h.run();
+    let project = h.state().session.project().unwrap();
+    let target = project.board_target();
+    let layers = project.board_view(target).unwrap().layers().into_iter().map(|layer| layer.id.to_string()).collect::<Vec<_>>();
+    h.state_mut().views.active.board.hidden_layers = layers.into_iter().collect();
+    h.run();
+    board_box(&mut h, from, to, Primary, Modifiers::NONE, false);
+    assert!(h.state().session.project().unwrap().board_view(target).unwrap().setup().is_some(), "setup missing {:?}", h.state().message);
+    assert!(h.state().views.active.board.box_drag.is_some(), "box missing {:?}", h.state().views.active.board);
+    assert!(
+        h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text()=="Window · 0 items")),
+        "wrong hits {:?}",
+        h.state().views.active.board
+    );
+    board_box_release(&mut h, to, Primary, Modifiers::NONE);
+    assert!(h.state().views.active.board.selection.is_empty());
+}

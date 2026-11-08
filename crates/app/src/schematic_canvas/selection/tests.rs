@@ -228,3 +228,71 @@ fn focus_loss_cancels_uncommitted_gestures() {
     release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
     assert_eq!(h.state().session.inspect(), before);
 }
+
+/// Ground/power symbols and text labels use their painted bounds for box selection. Group
+/// dragging and Delete must keep every selected anchor together and share one undo step.
+#[test]
+fn named_anchors_box_select_move_delete_and_filter() {
+    let mut h = harness();
+    for (style, x) in [("ground", -15), ("power", -5), ("local", 5), ("global", 15)] {
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .session
+            .apply(
+                pcbcraft_engine::net_labels::ADD,
+                &json!({"name":"GND","style":style,"x_nm":x*GRID_NM,"y_nm":15*GRID_NM,"expected_revision":revision}),
+            )
+            .unwrap();
+    }
+    h.run();
+    let from = point(&h, -22, 10);
+    let to = point(&h, 22, 24);
+    start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text()=="Window · 4 items")));
+    release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(h.state().views.active.schematic.selection.net_labels.len(), 4);
+    let glyph = point(&h, -15, 17);
+    for (modifiers, count) in [(Modifiers::CTRL, 3), (Modifiers::COMMAND, 4)] {
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.event(egui::Event::PointerMoved(glyph));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: glyph, button: PointerButton::Primary, pressed, modifiers });
+            h.run();
+        }
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run();
+        assert_eq!(h.state().views.active.schematic.selection.net_labels.len(), count);
+    }
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    // Grab the ground glyph rather than its wire-start anchor.
+    let from = point(&h, -15, 17);
+    let to = point(&h, -10, 21);
+    start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::MoveItems { .. })));
+    release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    for (old, new) in before.net_labels().iter().zip(h.state().session.project().unwrap().net_labels()) {
+        assert_eq!(new.at, Point { x_nm: old.at.x_nm + 5 * GRID_NM, y_nm: old.at.y_nm + 4 * GRID_NM });
+    }
+    click(&mut h, "Undo");
+    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    // Delete while hovering a selected ground must delete the entire group.
+    let glyph = point(&h, -15, 17);
+    h.hover_at(glyph);
+    h.run();
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.state().session.project().unwrap().net_labels().is_empty());
+    assert_eq!(h.state().session.project().unwrap().symbols().len(), 2);
+    click(&mut h, "Undo");
+    let view = h.state().views.active.id();
+    h.state_mut().set_selection_filters(view, &json!({"symbols":false})).unwrap();
+    let from = point(&h, -22, 10);
+    let to = point(&h, 22, 24);
+    start(&mut h, from, to, PointerButton::Secondary, Modifiers::NONE);
+    release(&mut h, to, PointerButton::Secondary, Modifiers::NONE);
+    assert_eq!(h.state().views.active.schematic.selection.net_labels.len(), 2);
+    assert!(h.state().views.active.schematic.selection.net_labels.iter().all(|id| before.net_labels().iter().any(|label| label.object_id() == *id
+        && matches!(label.style, pcbcraft_engine::net_labels::Style::Local | pcbcraft_engine::net_labels::Style::Global))));
+}

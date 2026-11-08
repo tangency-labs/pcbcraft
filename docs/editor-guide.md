@@ -258,7 +258,7 @@ project migrates it on the next save. Authored wire routes use format 3. Footpri
 
 With no placement or wiring tool active, **left-drag empty canvas** or **right-drag**
 to select a group. Left-to-right draws a solid **Window** box and selects fully
-enclosed symbol bodies and wire paths; right-to-left draws a dashed **Crossing**
+enclosed symbol bodies, wire paths and named-net anchors (including power and ground); right-to-left draws a dashed **Crossing**
 box and selects touched objects. The box shows the hit count. **Shift** adds to
 selection and **Ctrl** toggles items, with either boxes or individual clicks.
 Drag a selected member to move the group, or press **Delete** to remove it;
@@ -363,6 +363,11 @@ files. Unsaved projects keep arrangements only for the session until their first
 successful save. See the [arrangement persistence details](board-workspace-plan.md#named-arrangements-and-reopening-a-project).
 
 ## PCB layout
+
+Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
+box used in the schematic. Only visible footprint geometry contributes to selection;
+Shift adds and Ctrl/Command toggles. Escape cancels the box, and Delete removes
+the selected footprints in one undo step. Footprint moves and rotation operate on one placement at a time.
 
 Browser builds support panes within one tab; native window actions are desktop
 only. The workspace tile can switch to PCB layout, open it beside
