@@ -147,7 +147,7 @@ fn board_browser_properties_and_layers_share_stable_addresses() {
     let before = h.state().session.inspect();
     h.state_mut().browser.open = true;
     h.run();
-    click(&mut h, "Footprint R1  1k");
+    click(&mut h, "Footprint R1  R");
     h.get_by_label("Reference");
     h.get_by_label("generic-through-hole-2");
     let target = h.state().views.active.board.target.unwrap();

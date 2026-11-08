@@ -1,7 +1,7 @@
 use super::*;
 use crate::persistence::{decode_documents, encode_documents};
 
-const SYMBOL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/symbols/resistor.json"));
+const SYMBOL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/symbols/resistor-v2.json"));
 const FOOTPRINT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/footprints/resistor-0603.json"));
 
 /// Original project-owned definitions with a distinct native library identity and retained license.

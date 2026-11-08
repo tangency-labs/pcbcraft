@@ -55,6 +55,8 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    ComponentMetadata,
+    FieldLayouts,
     NetLabelStyle,
     NetLabelId,
     LibrarySource,
@@ -108,6 +110,8 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::ComponentMetadata => schematic::fields::metadata_schema(),
+            Self::FieldLayouts => schematic::fields::layouts_schema(),
             Self::DefinitionRevision => json!({"type":"integer","minimum":1,"maximum":u32::MAX}),
             Self::LibraryDigest => json!({"type":"string","pattern":"^[0-9a-f]{64}$"}),
             Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -187,6 +191,16 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::ComponentMetadata => serde_json::from_value::<schematic::fields::Metadata>(value.clone())
+                .ok()
+                .filter(|m| m.validate().is_ok())
+                .map(|_| ())
+                .ok_or("must contain valid component fields and attributes"),
+            Self::FieldLayouts => serde_json::from_value::<schematic::fields::Layouts>(value.clone())
+                .ok()
+                .filter(|m| m.len() <= 66)
+                .map(|_| ())
+                .ok_or("must contain a bounded field appearance map"),
             Self::DefinitionRevision if value.as_u64().is_some_and(|n| n > 0 && n <= u32::MAX as u64) => Ok(()),
             Self::DefinitionRevision => Err("must be a positive 32-bit native definition revision"),
             Self::LibraryDigest
@@ -751,11 +765,23 @@ const CATALOG: &[Command] = &[
     Command {
         id: SET_SYMBOL_FIELDS,
         title: "Edit Symbol Fields",
-        summary: "Set reference, value and optional placement together. Attached wires follow position changes. References are unique and have no spaces. Undoable.",
+        summary: "Set reference, value, optional metadata, field appearance and placement together. Attached wires follow center changes. References remain unique. Undoable.",
         params: &[
             SYMBOL,
             Param { required: true, name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
             Param { required: true, name: "value", summary: "Value text, such as 4.7k", kind: ParamKind::Text },
+            Param {
+                required: false,
+                name: "metadata",
+                summary: "Replace component fields and attributes; omission preserves them",
+                kind: ParamKind::ComponentMetadata,
+            },
+            Param {
+                required: false,
+                name: "field_layout",
+                summary: "Replace this unit's field appearance; omission preserves it",
+                kind: ParamKind::FieldLayouts,
+            },
             Param {
                 required: false,
                 name: "rotation",
@@ -1588,6 +1614,7 @@ impl Session {
             reference_number,
             reference: format!("{}{reference_number}", definition.reference_prefix),
             value: definition.default_value().to_owned(),
+            metadata: schematic::fields::Metadata::default(),
         };
         let mut project = project.clone();
         Arc::make_mut(&mut project.components).insert(ordinal, component);
@@ -1598,6 +1625,7 @@ impl Session {
             ordinal,
             component: ordinal,
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
+            field_layout: schematic::fields::Layouts::default(),
             rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
         });
         project.sheet_mut().connectivity = Arc::default();
@@ -1674,8 +1702,11 @@ impl Session {
     /// Set component-owned fields through a placed unit. References must be unique across
     /// components; both fields are bounded single-line text. Optional orientation and center axes
     /// change in the same transaction; omitted placement fields retain their values. Center changes
-    /// share Move Symbol's exact contacts and optional healing, preserving attached wires. Any
-    /// validation/contact failure rejects the entire edit; unchanged edits are no-ops.
+    /// share Move Symbol's exact contacts and optional healing, preserving attached wires.
+    /// Optional metadata replaces component fields/attributes and optional field layout replaces
+    /// only this unit's text appearance. Omission preserves either. Invalid/dangling fields or
+    /// board exclusion of an already placed component reject every accompanying change.
+    /// Validation/contact failures reject the entire edit; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1695,8 +1726,27 @@ impl Session {
             x_nm: params["x_nm"].as_i64().unwrap_or(original_position.x_nm),
             y_nm: params["y_nm"].as_i64().unwrap_or(original_position.y_nm),
         };
+        let metadata = params
+            .get("metadata")
+            .map(|v| serde_json::from_value::<schematic::fields::Metadata>(v.clone()))
+            .transpose()
+            .map_err(|e| CommandError::InvalidParams(e.to_string()))?
+            .unwrap_or_else(|| component.metadata.clone());
+        metadata.validate().map_err(CommandError::InvalidParams)?;
+        if metadata.attributes.exclude_from_board && project.board.footprints().iter().any(|f| f.component == component.ordinal) {
+            return Err(CommandError::InvalidParams("Remove the component's board footprint before excluding it from the board.".into()));
+        }
+        let field_layout = params
+            .get("field_layout")
+            .map(|v| serde_json::from_value::<schematic::fields::Layouts>(v.clone()))
+            .transpose()
+            .map_err(|e| CommandError::InvalidParams(e.to_string()))?
+            .unwrap_or_else(|| project.symbols[index].field_layout.clone());
+        schematic::fields::validate_layouts(&field_layout, &metadata).map_err(CommandError::InvalidParams)?;
         if component.reference == reference
             && component.value == value
+            && component.metadata == metadata
+            && project.symbols[index].field_layout == field_layout
             && project.symbols[index].rotation == rotation
             && position == original_position
         {
@@ -1705,9 +1755,11 @@ impl Session {
         let mut component = component.clone();
         component.reference = reference;
         component.value = value;
+        component.metadata = metadata;
         let mut next = project.clone();
         Arc::make_mut(&mut next.components).insert(component.ordinal, component);
         let symbol = &mut Arc::make_mut(&mut next.sheet_mut().symbols)[index];
+        symbol.field_layout = field_layout;
         symbol.rotation = rotation;
         symbol.position = position;
         if position != original_position {
@@ -1726,6 +1778,9 @@ impl Session {
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
         let component = project.symbols[index].component;
+        if project.components.get(&component).is_some_and(|c| c.metadata.attributes.exclude_from_board) {
+            return Err(CommandError::InvalidParams("This component is excluded from the board.".into()));
+        }
         let symbol = Arc::clone(&project.symbols[index].definition);
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let id = params["definition"].as_str().unwrap_or_default();

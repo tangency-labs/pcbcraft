@@ -61,7 +61,6 @@ use pcbcraft_chrome::{
     shell::{self, dim},
     theme, units, workspace,
 };
-#[cfg(test)]
 use pcbcraft_engine::SET_SYMBOL_FIELDS;
 use pcbcraft_engine::selection::Selection;
 use pcbcraft_engine::{CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, Session, command, schematic::SymbolDefinition};
@@ -166,7 +165,7 @@ enum Dialog {
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     /// Expanded selection properties retain their originating view and revision.
-    EditFields(properties::Edit),
+    EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
     LibraryClose(Option<u64>),
     LibraryProperties(u64, ViewId),
@@ -559,7 +558,7 @@ impl PcbApp {
             }
             SymbolAction::EditFields => {
                 if let Some(edit) = self.read_property_edit() {
-                    self.dialog = Dialog::EditFields(edit);
+                    self.dialog = Dialog::EditFields(Box::new(edit));
                 }
             }
         }
@@ -1103,6 +1102,7 @@ impl PcbApp {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
+                        Tool::Field { .. } => dim("Move symbol field · Esc to cancel"),
                         Tool::SheetGesture { drag, .. } => {
                             dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
                         }
@@ -1263,6 +1263,23 @@ impl PcbApp {
             return;
         }
         match (self.views.active.schematic.tool.clone(), click) {
+            (None, Click::GrabField(drag)) => {
+                self.select(Selection::one_symbol(drag.symbol.clone()));
+                self.views.active.schematic.tool = Some(Tool::Field { drag, revision: source.revision });
+            }
+            (Some(Tool::Field { drag, revision }), Click::FinishField(layouts)) => {
+                self.views.active.schematic.tool = None;
+                if let Some(layouts) = layouts {
+                    let params = self.views.active.snapshot(&self.session).and_then(|p| {
+                        let symbol = p.symbols().iter().find(|s| s.id() == drag.symbol)?;
+                        let c = p.component(symbol)?;
+                        Some(json!({"symbol":drag.symbol,"reference":c.reference(),"value":c.value(),"field_layout":layouts,"expected_revision":revision}))
+                    });
+                    if let Some(params) = params {
+                        self.run(SET_SYMBOL_FIELDS, &params);
+                    }
+                }
+            }
             (Some(Tool::NetLabel { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
             (Some(Tool::NetLabel { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
             (Some(Tool::NetLabel { mut label, revision, drag }), Click::NetLabelRotate) => {
@@ -1690,7 +1707,7 @@ impl PcbApp {
                     self.dialog = Dialog::Name { command: id, text, error, focused };
                 }
             }
-            Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, edit),
+            Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, *edit),
             Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),

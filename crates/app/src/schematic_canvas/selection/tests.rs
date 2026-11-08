@@ -78,7 +78,7 @@ fn both_buttons_draw_boxes_and_respect_direction() {
         assert_eq!(h.state().views.active.schematic.selection.single_symbol(), Some("symbol-2"));
         assert_eq!(h.state().session.inspect(), before);
         click(&mut h, "Expand Symbols");
-        let row = h.get_by_label("R1  1k");
+        let row = h.get_by_label("R1  R");
         assert_eq!(row.accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
     }
 }

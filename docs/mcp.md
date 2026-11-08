@@ -82,7 +82,13 @@ Properties inspector. Omitted placement fields retain their values. Coordinates
 are integer nanometres; GUI unit suffixes are converted before the same command
 validation runs. Position changes retain attached wires and use the ordinary
 exact-contact rules, with optional `auto_heal`. A failed field or contact check
-leaves the whole project and history unchanged.
+leaves the whole project and history unchanged. Optional `metadata` replaces the
+component's standard/custom fields and attributes; optional `field_layout`
+replaces only the addressed unit's text appearance. Omission preserves either
+map. Inspection publishes component metadata and each symbol's field layout;
+positions remain symbol-local nanometres. The strict schemas appear in the shared
+command catalog, and dangling field layouts or invalid values reject the entire
+transaction.
 
 For a project with several sheets, pass its inspected sheet UUID as `sheet` to
 schematic commands and footprint placement. Omission remains compatible with

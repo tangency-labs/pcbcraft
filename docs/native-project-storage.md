@@ -50,8 +50,8 @@ does not confirm a durable write and does not clear the editor's dirty state.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.pc` | `pcbcraft-project/6` | Project UUID, name, ordered sheet list and shared components |
-| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1`, `/2` or `/3` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors |
+| `project.pc` | `pcbcraft-project/6` or `/7` | Project UUID, name, ordered sheet list and shared components; version 7 adds component fields and attributes |
+| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/4` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance |
 | `board.json` | `pcbcraft-board/1` through `/9` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
@@ -74,11 +74,40 @@ sheet belongs to user-local presentation state and is never saved in `project.pc
 Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
 intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
-Current encoding writes version 6, sheet/1 for ordinary sheets, sheet/2 for
+Current encoding writes version 6 without component metadata, or version 7 with it,
+sheet/1 for ordinary sheets, sheet/2 for
 sheets with hierarchy records and sheet/3 for sheets with named anchors, retaining existing board encodings. An unchanged save preserves original version-5 document bytes, and
 editing another document preserves an unaffected entry point. Adding or renaming
 a sheet writes the version-6 entry point. Legacy single-file encoding refuses
-multiple or renamed sheets, hierarchical labels, child symbols and named net anchors rather than discarding them.
+multiple or renamed sheets, hierarchical labels, child symbols, named net anchors,
+component metadata and field appearance rather than discarding them.
+
+### Component fields and text appearance
+
+Project/7 adds an optional non-null `metadata` object to each component. It
+contains `fields`, keyed by stable standard IDs (`datasheet`, `description`,
+`manufacturer`, `manufacturer_part_number`) or non-nil UUIDs for custom fields,
+and `attributes`. Each field has a display `name` and `value`; names are unique
+without case, nonblank and at most 64 characters, and values are single-line
+text of at most 2048 characters. Up to 64 optional fields are allowed. Attributes
+are booleans `do_not_populate`, `exclude_from_bom`, `exclude_from_board`,
+`exclude_from_simulation` and `exclude_from_position_files`. All default false.
+A component excluded from the board cannot own a placed footprint. Package
+assignment can remain pinned for later inclusion. Other flags retain authored
+intent for their respective future output/simulation consumers.
+
+Sheet/4 retains sheet/3's required `net_labels`, `labels` and `subsheets` arrays,
+even when empty. Each placement may add non-null `field_layout`, keyed by
+`reference`, `value` or an existing optional field ID. A layout stores `offset`
+(null for automatic placement, otherwise integer `x_nm`/`y_nm` in unrotated
+symbol space), `visible`, `show_name`, `rotation` (0/90/180/270), `align`
+(`start`/`middle`/`end`) and `height_nm` (0.1–10 mm). Offsets are bounded by
+the schematic center range. Manual offsets turn with the symbol; explicit text
+orientation is independent. Unspecified reference/value layouts retain legacy
+automatic rendering, and optional fields start hidden. Absent metadata/layout
+stays omitted, preserving older canonical document encodings. Older readers
+reject versions 7/4 instead of silently discarding data. Reference/value content
+edits stay in `project.pc`; label placement edits stay in the owning sheet.
 
 ### Named net records
 

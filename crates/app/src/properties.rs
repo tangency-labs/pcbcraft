@@ -11,6 +11,7 @@ use pcbcraft_engine::{
 };
 use serde_json::json;
 use std::sync::Arc;
+mod fields;
 
 #[derive(Debug)]
 pub(super) struct State {
@@ -34,6 +35,10 @@ pub(super) struct Edit {
     definition: Arc<SymbolDefinition>,
     reference: String,
     value: String,
+    metadata: pcbcraft_engine::schematic::fields::Metadata,
+    original_metadata: pcbcraft_engine::schematic::fields::Metadata,
+    original_layout: pcbcraft_engine::schematic::fields::Layouts,
+    appearance: std::collections::BTreeMap<String, fields::Appearance>,
     rotation: u16,
     x: String,
     y: String,
@@ -49,6 +54,9 @@ pub(super) struct Edit {
 enum Tab {
     #[default]
     General,
+    Fields,
+    Appearance,
+    Attributes,
     Terminals,
     Library,
 }
@@ -58,6 +66,8 @@ impl Edit {
     fn changed(&self) -> bool {
         (&self.reference, &self.value, self.rotation) != (&self.original.0, &self.original.1, self.original.2)
             || self.position() != Ok(self.original_position)
+            || self.metadata != self.original_metadata
+            || self.layouts().as_ref() != Ok(&self.original_layout)
     }
 
     /// Parse both axes before submitting any field, naming invalid coordinates in the error.
@@ -77,6 +87,9 @@ impl Edit {
                 if let Ok(nm) = units::parse_length(text, self.units) {
                     *text = units::edit_label(nm, unit);
                 }
+            }
+            for draft in self.appearance.values_mut() {
+                draft.set_units(self.units, unit);
             }
             self.units = unit;
         }
@@ -116,6 +129,10 @@ impl PcbApp {
             component: component.id(),
             definition: symbol.definition.clone(),
             original: (reference.clone(), value.clone(), rotation),
+            metadata: component.metadata.clone(),
+            original_metadata: component.metadata.clone(),
+            original_layout: symbol.field_layout.clone(),
+            appearance: fields::appearances(&component.metadata, &symbol.field_layout, units),
             reference,
             value,
             rotation,
@@ -226,7 +243,7 @@ impl PcbApp {
             }
         }
         if more {
-            self.dialog = Dialog::EditFields(edit.clone());
+            self.dialog = Dialog::EditFields(Box::new(edit.clone()));
         }
         if choose {
             self.begin_footprint_assignment(Some(edit.component.clone()));
@@ -254,7 +271,9 @@ impl PcbApp {
             return Err("Selection changed; reopen properties to continue.".into());
         }
         let position = edit.position()?;
+        let layouts = edit.layouts()?;
         let mut params = json!({"symbol":edit.symbol,"reference":edit.reference,"value":edit.value,"rotation":edit.rotation,
+            "metadata":edit.metadata,"field_layout":layouts,
             "x_nm":position.x_nm,"y_nm":position.y_nm,"auto_heal":self.preferences.auto_heal_wires,"expected_revision":edit.source.revision});
         if let Some(crate::editor_view::DocumentTarget::Sheet(sheet)) = self.views.active.target() {
             params["sheet"] = json!(sheet.id());
@@ -279,7 +298,14 @@ impl PcbApp {
         let closing = shell::scrolling_dialog_width(ctx, "edit_fields", &title, 760.0, |ui| {
             ui.label(shell::dim(&edit.definition.name));
             ui.horizontal_wrapped(|ui| {
-                for (tab, label) in [(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")] {
+                for (tab, label) in [
+                    (Tab::General, "General"),
+                    (Tab::Fields, "Fields"),
+                    (Tab::Appearance, "Text appearance"),
+                    (Tab::Attributes, "Attributes"),
+                    (Tab::Terminals, "Pin functions"),
+                    (Tab::Library, "Library"),
+                ] {
                     ui.selectable_value(&mut edit.tab, tab, label);
                 }
             });
@@ -313,6 +339,9 @@ impl PcbApp {
                     );
                     apply |= position_apply;
                 }
+                Tab::Fields => edit.metadata_fields(ui),
+                Tab::Appearance => edit.field_appearance(ui),
+                Tab::Attributes => edit.attributes(ui),
                 Tab::Terminals => {
                     egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
                         ui.strong("Terminal");
@@ -350,7 +379,7 @@ impl PcbApp {
             }
             if let Err(error) = self.apply_property_edit(&edit) {
                 edit.error = Some(error);
-                self.dialog = Dialog::EditFields(edit);
+                self.dialog = Dialog::EditFields(Box::new(edit));
             }
         } else if choose {
             self.begin_footprint_assignment(Some(edit.component));
@@ -359,13 +388,15 @@ impl PcbApp {
                 view.schematic.properties.draft = None;
             }
         } else {
-            self.dialog = Dialog::EditFields(edit);
+            self.dialog = Dialog::EditFields(Box::new(edit));
         }
     }
 }
 
 #[cfg(test)]
 mod coordinate_tests;
+#[cfg(test)]
+mod field_tests;
 
 #[cfg(test)]
 mod tests {

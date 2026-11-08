@@ -79,7 +79,7 @@ fn invalid_coordinates_reset_and_cancel_leave_the_project_alone() {
         assert_eq!(h.get_by_label("X").value().as_deref(), Some(input));
         click(&mut h, "Reset changes");
         assert_eq!(h.get_by_label("X").value().as_deref(), Some("0 mil"));
-        assert_eq!(h.get_by_label("Value").value().as_deref(), Some("1k"));
+        assert_eq!(h.get_by_label("Value").value().as_deref(), Some("R"));
     }
     type_field(&mut h, "X", "100 mil");
     click(&mut h, "More properties ↗");

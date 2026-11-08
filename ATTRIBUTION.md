@@ -2,6 +2,17 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Component fields and text placement
+
+Component metadata, population/exclusion intent, per-unit field appearance and
+independent canvas text dragging are original PCBcraft work under MIT OR
+Apache-2.0, built on the existing shared property command, Craft controls and
+egui text painting. Travis Lowe's supplied Symbol Properties screenshot and
+reported behavior informed the scope. No KiCad implementation, library data,
+icons or artwork were used. Generic resistor/capacitor revision 3 changes only
+the original starter definitions' default values; revisions 1 and 2 remain
+available for existing projects. No dependency was added.
+
 ## Pane dragging between native windows
 
 The pane-header drag gesture, instance-local drop targets and explicit destination

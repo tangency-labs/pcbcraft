@@ -181,7 +181,7 @@ fn detached_browser_navigation_and_selection_stay_in_the_child_host() {
     h.run_steps(3);
     let at = child_rect(&peer, "Open in PCB layout").center();
     child_click_at(&mut h, &peer, at);
-    let at = child_rect(&peer, "Footprint R1  1k").center();
+    let at = child_rect(&peer, "Footprint R1  R").center();
     child_click_at(&mut h, &peer, at);
     let child = h.state().views.hosts[&HostId(1)].focused;
     let app = h.state();
@@ -221,7 +221,7 @@ fn detached_sheet_navigation_and_symbol_rotation_keep_other_sheets_untouched() {
     let at = child_rect(&peer, "Symbols").center();
     child_click_at(&mut h, &peer, at);
     h.run();
-    let at = child_rect(&peer, "R2  1k").center();
+    let at = child_rect(&peer, "R2  R").center();
     child_click_at(&mut h, &peer, at);
     h.run();
     child_key(&mut h, &peer, Key::R, Modifiers::NONE);

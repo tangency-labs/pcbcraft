@@ -81,9 +81,12 @@ impl PcbApp {
             if previous != edit.component {
                 edit.select_component(&project);
             }
+            let excluded = project.components().find(|c| c.id() == edit.component).is_some_and(|c| c.metadata.attributes.exclude_from_board);
             let assigned = project.footprint_assignments().into_iter().find(|a| a["component"] == edit.component);
             let placed = project.board_view(project.board_target()).is_some_and(|board| board.footprints().any(|f| f.component == edit.component));
-            ui.label(if placed {
+            ui.label(if excluded {
+                "Excluded from board"
+            } else if placed {
                 "Placed"
             } else if assigned.is_some() {
                 "Assigned · not placed"
@@ -169,7 +172,7 @@ impl PcbApp {
                             && a["mapping"] == json!(edit.mapping)
                     })
                 });
-                place = ui.add_enabled(unchanged, egui::Button::new("Place on board")).clicked();
+                place = ui.add_enabled(unchanged && !excluded, egui::Button::new("Place on board")).clicked();
             }
         });
         if assign || place {

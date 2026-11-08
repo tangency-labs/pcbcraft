@@ -171,6 +171,9 @@ impl Session {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let component = component_id(params, project)?;
+        if project.components.get(&component).is_some_and(|c| c.metadata.attributes.exclude_from_board) {
+            return Err(CommandError::InvalidParams("This component is excluded from the board.".into()));
+        }
         let assignment = project
             .board
             .assignments
