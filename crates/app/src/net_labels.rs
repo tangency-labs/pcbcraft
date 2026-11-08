@@ -33,11 +33,12 @@ pub(super) struct Edit {
 }
 
 /// Map electrical styles into presentation without making chrome depend on the engine.
-fn visual(style: Style) -> chrome::Style {
+pub(super) fn visual(style: Style) -> chrome::Style {
     match style {
         Style::Local => chrome::Style::Local,
         Style::Global => chrome::Style::Global,
         Style::Power => chrome::Style::Power,
+        Style::PowerBar => chrome::Style::PowerBar,
         Style::Ground => chrome::Style::Ground,
     }
 }
@@ -279,6 +280,17 @@ pub(super) fn input(
 }
 
 impl PcbApp {
+    /// Start a GND placement directly in the active schematic, without a chooser or property
+    /// form. Only the canvas commit edits history; the preview keeps the current repeat mode.
+    pub(super) fn begin_ground(&mut self, ctx: &egui::Context) {
+        let Some(source) = self.views.active.input(&self.session) else { return };
+        self.parts.close(ctx);
+        self.parts.release_focus(ctx);
+        self.select(Default::default());
+        let label = Label { id: 0, name: "GND".into(), style: Style::Ground, at: Point { x_nm: 0, y_nm: 0 }, rotation: 0 };
+        self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None });
+    }
+
     /// Open a captured form. A new marker has ID zero until the engine allocates its identity.
     pub(super) fn begin_net_label(&mut self, style: Style) {
         self.select(Default::default());
@@ -289,7 +301,7 @@ impl PcbApp {
             id: 0,
             name: if style == Style::Ground {
                 "GND"
-            } else if style == Style::Power {
+            } else if matches!(style, Style::Power | Style::PowerBar) {
                 "VCC"
             } else {
                 "SIGNAL"
@@ -337,7 +349,7 @@ impl PcbApp {
     /// Place starts a new marker preview; Apply commits an existing marker edit once.
     /// Cancel/stale forms never publish data, and engine errors stay visible beside the fields.
     pub(super) fn net_label_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
-        let power = matches!(edit.label.style, Style::Power | Style::Ground);
+        let power = matches!(edit.label.style, Style::Power | Style::PowerBar | Style::Ground);
         let title = if power {
             "Power symbol properties".to_owned()
         } else if edit.label.id == 0 {

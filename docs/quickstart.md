@@ -56,8 +56,9 @@ first **Save** asks for a project folder, and the project takes that folder's na
 
 ## Name nets and place power symbols
 
-Press **P** (or **Capture → Power**) to open the **Parts Catalog** at its Power
-collection. Choose GND, VCC or another drawing, edit its net name in the preview
+Choose **Capture → Ground** to start placing GND directly. Press **P** to open
+the **Parts Catalog** at its Power collection. Choose GND, VCC, **VCC (bar)** or
+another drawing, edit its net name in the preview
 if needed, then choose **Place** and click a pin, wire or grid point for its
 anchor. **L** opens a local label form; **Ctrl+L** opens a global label form,
 where **Scope** selects either scope. **R** rotates a placement preview and
@@ -65,6 +66,9 @@ where **Scope** selects either scope. **R** rotates a placement preview and
 power rails join matching names across sheets. Hover a label and press **E** to
 edit, **M** to move, or **Delete** to remove it; Undo reverses each completed edit.
 See [named nets](net-labels.md) for contact rules and current limits.
+
+**VCC (bar)** uses the flat-bar drawing; **VCC** keeps the arrow. Both default to
+the same `VCC` net name, which can be changed before placement.
 
 ## Make an edit and keep it
 

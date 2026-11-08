@@ -27,25 +27,55 @@ enum Key {
     Symbol(String, String, u32),
     Power(&'static str),
 }
+
+/// A built-in marker's stable catalog identity and display name are independent of its default
+/// electrical net name. Different glyph choices can therefore join the same supply net.
+#[derive(Debug)]
+struct PowerPreset {
+    id: &'static str,
+    name: &'static str,
+    net_name: &'static str,
+    style: Style,
+}
+
+static POWER_PRESETS: [PowerPreset; 9] = [
+    PowerPreset { id: "gnd", name: "GND", net_name: "GND", style: Style::Ground },
+    PowerPreset { id: "vcc", name: "VCC", net_name: "VCC", style: Style::Power },
+    PowerPreset { id: "vcc-bar", name: "VCC (bar)", net_name: "VCC", style: Style::PowerBar },
+    PowerPreset { id: "3v3", name: "+3V3", net_name: "+3V3", style: Style::Power },
+    PowerPreset { id: "5v", name: "+5V", net_name: "+5V", style: Style::Power },
+    PowerPreset { id: "12v", name: "+12V", net_name: "+12V", style: Style::Power },
+    PowerPreset { id: "vdd", name: "VDD", net_name: "VDD", style: Style::Power },
+    PowerPreset { id: "vss", name: "VSS", net_name: "VSS", style: Style::Power },
+    PowerPreset { id: "gnda", name: "GNDA", net_name: "GNDA", style: Style::Ground },
+];
+
 /// Display entries retain qualified symbol definitions; built-in power markers use their own commands.
 #[derive(Clone, Debug)]
 enum Entry {
     Symbol(Arc<SymbolDefinition>),
-    Power(&'static str, Style),
+    Power(&'static PowerPreset),
 }
 impl Entry {
     /// A catalog row's identity remains independent of its visible name.
     fn key(&self) -> Key {
         match self {
             Self::Symbol(s) => Key::Symbol(s.library.clone(), s.id.clone(), s.revision()),
-            Self::Power(name, _) => Key::Power(name),
+            Self::Power(preset) => Key::Power(preset.id),
         }
     }
     /// Search/display text comes from the source definition or the original power preset.
     fn name(&self) -> &str {
         match self {
             Self::Symbol(s) => &s.name,
-            Self::Power(name, _) => name,
+            Self::Power(preset) => preset.name,
+        }
+    }
+    /// A glyph's descriptive catalog name never becomes its electrical name by accident.
+    fn default_net_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Power(preset) => Some(preset.net_name),
+            Self::Symbol(_) => None,
         }
     }
     /// Keep power markers separate from component symbol libraries and footprint mappings.
@@ -313,7 +343,7 @@ impl PartsBrowser {
         let entries: Vec<_> = entries(&query, libraries).into_iter().filter(|e| e.in_collection(&self.collection)).collect();
         if self.selected.is_none() {
             self.selected = entries.first().map(Entry::key);
-            self.power_name = entries.first().filter(|e| matches!(e, Entry::Power(..))).map_or(String::new(), |e| e.name().into());
+            self.power_name = entries.first().and_then(Entry::default_net_name).unwrap_or_default().into();
         }
         self.focus_ids.clear();
         let enabled = entries.iter().any(|e| Some(e.key()) == self.selected) && valid_power_name(&self.power_name, self.selected.as_ref());
@@ -404,8 +434,8 @@ impl PartsBrowser {
             }
             let picked = entries.iter().find(|e| Some(e.key()) == self.selected).map(|entry| match entry {
                 Entry::Symbol(symbol) => Pick::Symbol(symbol.clone()),
-                Entry::Power(_, style) => {
-                    Pick::Power(Label { id: 0, name: self.power_name.clone(), style: *style, at: Point { x_nm: 0, y_nm: 0 }, rotation: 0 })
+                Entry::Power(preset) => {
+                    Pick::Power(Label { id: 0, name: self.power_name.clone(), style: preset.style, at: Point { x_nm: 0, y_nm: 0 }, rotation: 0 })
                 }
             });
             if expanded {
@@ -489,7 +519,7 @@ impl PartsBrowser {
             };
             let value = match entry {
                 Entry::Symbol(s) => s.default_value(),
-                Entry::Power(_, Style::Ground) => "Ground",
+                Entry::Power(preset) if preset.style == Style::Ground => "Ground",
                 Entry::Power(..) => "Power",
             };
             let response = catalog::tile(
@@ -505,7 +535,7 @@ impl PartsBrowser {
             }
             if response.clicked() {
                 if self.selected != Some(entry.key()) {
-                    self.power_name = entry.name().into();
+                    self.power_name = entry.default_net_name().unwrap_or_default().into();
                 }
                 self.selected = Some(entry.key());
             }
@@ -570,9 +600,9 @@ impl PartsBrowser {
 fn paint_entry(p: &egui::Painter, r: Rect, entry: &Entry, ink: egui::Color32) {
     match entry {
         Entry::Symbol(s) => paint_preview(p, s, r, ink),
-        Entry::Power(_, style) => {
-            let ground = *style == Style::Ground;
-            let glyph = if ground { pcbcraft_chrome::net_label::Style::Ground } else { pcbcraft_chrome::net_label::Style::Power };
+        Entry::Power(preset) => {
+            let ground = preset.style == Style::Ground;
+            let glyph = crate::net_labels::visual(preset.style);
             let step = (r.height() / 4.).clamp(6., 22.);
             let offset = if ground { -11. } else { 10. } * step / 10.;
             pcbcraft_chrome::net_label::paint(p, r.center() + egui::vec2(0., offset), "", glyph, 0, step, ink, false);
@@ -597,19 +627,11 @@ fn valid_power_name(name: &str, key: Option<&Key>) -> bool {
 /// Combine current unambiguous native revisions with the original built-in power collection.
 fn entries(query: &str, catalog: &library::sources::Catalog) -> Vec<Entry> {
     let mut entries: Vec<_> = matches_sources(query, catalog).into_iter().map(Entry::Symbol).collect();
-    for (name, style) in [
-        ("GND", Style::Ground),
-        ("VCC", Style::Power),
-        ("+3V3", Style::Power),
-        ("+5V", Style::Power),
-        ("+12V", Style::Power),
-        ("VDD", Style::Power),
-        ("VSS", Style::Power),
-        ("GNDA", Style::Ground),
-    ] {
-        let text = format!("{name} {}", if style == Style::Ground { "ground" } else { "power supply" }).to_lowercase();
+    for preset in &POWER_PRESETS {
+        let text =
+            format!("{} {} {}", preset.name, preset.net_name, if preset.style == Style::Ground { "ground" } else { "power supply" }).to_lowercase();
         if text.contains(query) {
-            entries.push(Entry::Power(name, style));
+            entries.push(Entry::Power(preset));
         }
     }
     entries

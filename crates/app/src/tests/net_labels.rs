@@ -75,6 +75,53 @@ fn power_placement_edit_move_delete_and_undo() {
     assert_eq!(h.state().session.project().unwrap().net_labels()[0], moved);
 }
 
+/// Ground starts immediately from both ribbon layouts, with no catalog/form or history edit.
+/// Rotation and cancellation are previews; placing and undoing use the shared named-net command.
+#[test]
+fn ground_ribbon_places_directly_and_cancels_without_edits() {
+    for width in [1400., 420.] {
+        let mut h = editor(width);
+        let original = h.state().session.inspect();
+        let revision = h.state().session.revision();
+        h.key_press(Key::P);
+        h.run();
+        click(&mut h, "Dock Parts Catalog");
+        assert!(h.state().parts.open);
+        for cancel in [true, false] {
+            if width < 1000. {
+                click(&mut h, "Place menu");
+                click(&mut h, "Ground");
+            } else {
+                click(&mut h, "Place ground");
+            }
+            assert!(!h.state().parts.open);
+            assert!(matches!(h.state().dialog, Dialog::None));
+            assert!(
+                matches!(&h.state().views.active.schematic.tool,Some(Tool::NetLabel {label,..}) if label.style==Style::Ground && label.name=="GND" && label.rotation==0)
+            );
+            assert_eq!(h.state().session.inspect(), original);
+            h.key_press(Key::R);
+            h.run();
+            if cancel {
+                h.key_press(Key::Escape);
+                h.run();
+                assert!(h.state().views.active.schematic.tool.is_none());
+                assert_eq!(h.state().session.inspect(), original);
+            } else {
+                let point = canvas_center(&h);
+                click_canvas_at(&mut h, point);
+                assert_eq!(h.state().session.revision(), revision + 1);
+                let label = &h.state().session.project().unwrap().net_labels()[0];
+                assert_eq!((&*label.name, label.style, label.rotation), ("GND", Style::Ground, 90));
+                click(&mut h, "Undo");
+                assert!(h.state().session.project().unwrap().net_labels().is_empty());
+                click(&mut h, "Redo");
+                assert_eq!(h.state().session.project().unwrap().net_labels()[0].style, Style::Ground);
+            }
+        }
+    }
+}
+
 /// Local/global shortcuts and compact caption-menu controls reach the same form. Cancelled
 /// properties and cancelled placement leave both encoded bytes and undo history unchanged.
 #[test]
@@ -99,9 +146,13 @@ fn label_tools_and_cancel_at_both_widths() {
         h.get_by_label("Place menu").scroll_to_me();
         h.run();
         click(&mut h, "Place menu");
-        click(&mut h, "Power");
-        assert!(h.state().parts.open);
-        click(&mut h, "Cancel");
+        click(&mut h, "Ground");
+        assert!(!h.state().parts.open);
+        assert!(
+            matches!(h.state().views.active.schematic.tool,Some(Tool::NetLabel {ref label,..}) if label.style==Style::Ground && label.name=="GND")
+        );
+        h.key_press(Key::Escape);
+        h.run();
         assert_eq!(h.state().session.revision(), revision);
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), original);
     }
@@ -118,7 +169,7 @@ fn live_commands_inspection_names_and_stale_form() {
     let revision = h.state().session.revision();
     let result = call_editor(
         &mut LiveEditor { app: h.state_mut(), ctx: &ctx },
-        &json!({"method":"engine.execute","params":{"command":engine::ADD,"params":{"name":"+3V3","style":"power","x_nm":0,"y_nm":0,"expected_revision":revision}}}),
+        &json!({"method":"engine.execute","params":{"command":engine::ADD,"params":{"name":"+3V3","style":"power_bar","x_nm":0,"y_nm":0,"expected_revision":revision}}}),
     );
     assert!(result.is_ok(), "{result:?}");
     h.run();

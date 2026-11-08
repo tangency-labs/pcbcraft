@@ -316,7 +316,7 @@ fn filter_checkboxes_support_keyboard_activation() {
 #[test]
 fn named_labels_and_power_symbols_follow_their_selection_categories() {
     use pcbcraft_engine::net_labels::{self as engine, Style};
-    for style in [Style::Local, Style::Global, Style::Power, Style::Ground] {
+    for style in [Style::Local, Style::Global, Style::Power, Style::PowerBar, Style::Ground] {
         let mut h = fixture();
         let id = h.state().views.active.id();
         let revision = h.state().session.revision();
@@ -325,7 +325,7 @@ fn named_labels_and_power_symbols_follow_their_selection_categories() {
         assert!(h.state().message.is_none(), "{:?}", h.state().message);
         let label = h.state().session.project().unwrap().net_labels()[0].clone();
         let before = document(&h);
-        let symbols = matches!(style, Style::Power | Style::Ground);
+        let symbols = matches!(style, Style::Power | Style::PowerBar | Style::Ground);
         let category = if symbols { "symbols" } else { "labels" };
         let other = if symbols { "labels" } else { "symbols" };
         h.state_mut().select(pcbcraft_engine::selection::Selection::one_net_label(label.id));

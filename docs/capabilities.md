@@ -34,6 +34,10 @@ because the browser cannot confirm a durable write, so the page's leave warning
 stays on until the project is replaced. The desktop Assistant and
 local MCP listener are not available in the browser build.
 
+The schematic ribbon's **Ground** action starts a GND placement directly. **P**
+opens the built-in Power collection, which includes both arrow-shaped **VCC** and
+flat-bar **VCC (bar)** choices with the same editable default net name.
+
 The board walkthrough, polished demo and fresh-user onboarding acceptance in [#90](https://github.com/tangency-labs/pcbcraft/issues/90)
 remain pending their dependencies. Documentation command checks and automated UI
 tests do not substitute for a new person's end-to-end acceptance run.

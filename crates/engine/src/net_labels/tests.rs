@@ -55,6 +55,32 @@ fn scope_power_and_case_are_resolved_before_sheet_projection() {
     assert_eq!(s.project().unwrap().for_sheet(child).unwrap().net_labels()[0].name, "gnd");
 }
 
+/// A flat-bar marker joins the same global VCC net as an existing arrow in another sheet.
+/// The codec retains both distinct drawings and byte-stable documents, with shared undo/redo.
+#[test]
+fn power_bar_keeps_its_drawing_and_global_name() {
+    let mut s = session();
+    let main = s.project().unwrap().sheet_target();
+    apply(&mut s, sheets::CREATE_SHEET, json!({"name":"Supply"}));
+    let other = s.project().unwrap().sheets().nth(1).unwrap().target;
+    let a = resistor(&mut s, main, 0);
+    let b = resistor(&mut s, other, 0);
+    label(&mut s, main, a, "VCC", "power");
+    let before = s.snapshot().unwrap();
+    label(&mut s, other, b, "VCC", "power_bar");
+    assert_eq!(s.project().unwrap().electrical_connectivity().net_for(a).unwrap(), &[a, b]);
+    let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let reopened = persistence::decode_documents(&documents).unwrap();
+    assert_eq!(reopened.for_sheet(main).unwrap().net_labels()[0].style, Style::Power);
+    assert_eq!(reopened.for_sheet(other).unwrap().net_labels()[0].style, Style::PowerBar);
+    assert_eq!(persistence::encode_documents(reopened).unwrap(), documents);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), documents);
+    assert!(crate::command(ADD).unwrap().to_json()["params"]["properties"]["style"]["enum"].as_array().unwrap().contains(&json!("power_bar")));
+}
+
 /// A label at a wire interior names that explicit route; ordinary geometric crossings remain
 /// separate until a label is deliberately placed there. Geometry edits invalidate contact caches.
 #[test]

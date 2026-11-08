@@ -84,11 +84,15 @@ multiple or renamed sheets, hierarchical labels, child symbols and named net anc
 
 Sheet/3 extends sheet/2 with a required, non-null `net_labels` array, one record
 per line in stable object-ID order. Each record contains a project-unique `id`,
-case-sensitive `name`, `style` (`local`, `global`, `power` or `ground`), `at`
+case-sensitive `name`, `style` (`local`, `global`, `power`, `power_bar` or `ground`), `at`
 point in integer nanometers and `rotation` (0, 90, 180 or 270 counterclockwise).
 Names contain 1–200 characters without surrounding whitespace or controls; each
 sheet permits at most 256 named anchors. Ground/power markers are electrical
 annotations without component IDs, references or footprint assignments.
+`power` retains the arrow drawing; `power_bar` selects a flat horizontal bar with
+the same global-name semantics. The style persists independently of its editable
+net name. Builds predating `power_bar` reject that unknown style; existing styles
+and their encodings remain unchanged.
 
 An explicit wire endpoint `{"net_label":<id>}` refers only to an anchor owned by
 that sheet. A named anchor also contacts exact coincident pins and points on

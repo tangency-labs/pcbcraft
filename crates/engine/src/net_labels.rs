@@ -19,6 +19,8 @@ pub enum Style {
     Local,
     Global,
     Power,
+    /// A flat-bar supply marker, electrically equivalent to the arrow-shaped power marker.
+    PowerBar,
     Ground,
 }
 impl Style {

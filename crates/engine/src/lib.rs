@@ -43,7 +43,7 @@ const NET_STYLE: Param = Param {
     name: "style",
     kind: ParamKind::NetLabelStyle,
     required: true,
-    summary: "Local sheet label, global label, power arrow or ground symbol; power and ground have global scope.",
+    summary: "Local sheet label, global label, power arrow, power bar or ground symbol; power and ground have global scope.",
 };
 const NET_OBJECT: Param = Param { name: "id", kind: ParamKind::NetLabelId, required: true, summary: "Stable label ID from inspection." };
 const NET_ROTATION: Param =
@@ -138,7 +138,7 @@ impl ParamKind {
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()},
                 "net_labels": {"type":"array", "maxItems":net_labels::MAX_LABELS, "uniqueItems":true, "items":Self::NetLabelId.schema()}
             }, "required":["symbols","wires"], "additionalProperties":false}),
-            Self::NetLabelStyle => json!({"type":"string","enum":["local","global","power","ground"]}),
+            Self::NetLabelStyle => json!({"type":"string","enum":["local","global","power","power_bar","ground"]}),
             Self::NetLabelId => json!({"type":"string","pattern":"^net-label-[1-9][0-9]*$"}),
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
@@ -287,7 +287,7 @@ impl ParamKind {
             Self::FootprintIds => Err("must contain unique placed footprint IDs within the symbol limit"),
             Self::ResolveExistingFootprints => Err("must be a boolean"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
-            Self::NetLabelStyle => Err("must be local, global, power or ground"),
+            Self::NetLabelStyle => Err("must be local, global, power, power_bar or ground"),
             Self::NetLabelId => Err("must identify a named net label"),
             Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),

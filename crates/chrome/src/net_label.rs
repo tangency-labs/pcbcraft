@@ -8,6 +8,8 @@ pub enum Style {
     Local,
     Global,
     Power,
+    /// Flat-bar supply glyph sharing the power arrow's anchor and upright net-name placement.
+    PowerBar,
     Ground,
 }
 
@@ -61,6 +63,11 @@ fn draw(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, st
             line(Vec2::ZERO, vec2(0., -20.));
             line(vec2(-7., -13.), vec2(0., -20.));
             line(vec2(0., -20.), vec2(7., -13.));
+            vec2(0., -30.)
+        }
+        Style::PowerBar => {
+            line(Vec2::ZERO, vec2(0., -20.));
+            line(vec2(-10., -20.), vec2(10., -20.));
             vec2(0., -30.)
         }
         Style::Ground => {

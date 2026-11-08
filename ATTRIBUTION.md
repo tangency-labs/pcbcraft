@@ -101,6 +101,11 @@ L/Ctrl+L/P controls were checked against the published
 No KiCad implementation, symbol library data, icons or artwork was read or copied.
 This slice adds no third-party dependencies or bundled assets.
 
+The additional flat-bar power drawing, its catalog preset and the direct Ground
+ribbon action/glyph are original PCBcraft work using the same named-net model
+and Craft painters. The existing qualified Power ribbon icon informed the requested
+flat-bar treatment; no external source, artwork or dependency was added.
+
 ## Adapted from SolidCraft
 
 [SolidCraft](https://github.com/tangency-labs/solidcraft), revision `a43cd99e554de879e2abd548f67ca963919823b0`. Copyright (c) 2026 SolidCraft contributors. MIT OR Apache-2.0, the same texts as [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).

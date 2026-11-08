@@ -1,10 +1,16 @@
 # Named nets and power symbols
 
 Use **L** for a local label or **Ctrl+L** (⌘L on macOS) for a global label.
-Their form has a net name, scope and rotation. **P** or **Capture → Power** opens
+Their form has a net name, scope and rotation. **Capture → Ground** starts placing
+GND directly, with no catalog or property form. **P** opens
 the **Parts Catalog** with the Power collection selected. Choose a drawing such
-as GND, VCC, +3V3, +5V, +12V, VDD, VSS or GNDA; its preview has an editable net
+as GND, VCC, VCC (bar), +3V3, +5V, +12V, VDD, VSS or GNDA; its preview has an editable net
 name, so supplies do not depend on a fixed list of rail names.
+
+**VCC** keeps the arrow-shaped supply drawing, while **VCC (bar)** uses a flat
+horizontal bar. Both default to the electrical name `VCC`; the descriptive
+catalog name does not create a separate net. Each drawing retains its style when
+its net name is edited.
 
 Choose **Place**, then click to place the anchor. **R** turns its preview
 counterclockwise in quarter turns, and **Esc** or right-click cancels. Hover a
@@ -46,8 +52,8 @@ work. Unnamed groups keep their existing view-local numbering.
 ## Shared commands
 
 `schematic.place_net_label` takes `name`, `style`, `x_nm`, `y_nm`, optional
-`rotation` and `expected_revision`. `style` is `local`, `global`, `power` or
-`ground`; rotation defaults to zero and accepts 0, 90, 180 or 270 degrees.
+`rotation` and `expected_revision`. `style` is `local`, `global`, `power`,
+`power_bar` or `ground`; rotation defaults to zero and accepts 0, 90, 180 or 270 degrees.
 `schematic.set_net_label` takes the same properties plus the stable `id` from
 inspection. `schematic.delete_net_label` takes `id` and `expected_revision`.
 Supply the `sheet` UUID when more than one sheet exists. The live editor and

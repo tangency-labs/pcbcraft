@@ -22,8 +22,10 @@ so recent projects are desktop-only. Home does not automatically reopen a projec
 
 ## Net labels and power symbols
 
-**Capture → Power** or **P** opens the **Parts Catalog** at its Power collection,
-with GND, VCC, +3V3, +5V and other starter drawings. Select one to preview it and
+**Capture → Ground** starts a GND placement preview directly. **P** opens the
+**Parts Catalog** at its Power collection, with GND, VCC, VCC (bar), +3V3, +5V and
+other starter drawings. The two VCC choices have distinct drawings and default
+to the same electrical net name. Select one to preview it and
 edit its net name, then choose **Place**. **Capture → Net label** or **L** opens
 a local label form; **Ctrl+L** opens a global label form. The label form has
 aligned fields for net name, scope and rotation. Click the anchor position to
