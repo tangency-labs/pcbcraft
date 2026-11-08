@@ -220,6 +220,26 @@ local cleanup does not route around obstacles or resolve conflicting net names
 
 ## Symbol properties and selection
 
+The **Selection filters** card sits below Properties in schematic and PCB views.
+Its checkboxes control symbols (including power/ground), wires, local/global and hierarchical labels, and sheets in the
+schematic, and footprints and board graphics in PCB layout. **All items** toggles
+the supported categories together; **Reset** enables them all. Categories without
+individual selection support are disabled. Filtering does not hide geometry or
+change connectivity. Turning a category off clears its edit selection and cancels
+unfinished gestures; explicit placement and drawing tools remain available.
+Each view retains its filters through workspace changes, splitting and detach/dock,
+and saved arrangements keep them in local application settings. The card's
+chevron collapses it to its header; **View → Selection filters** hides or shows the
+card while retaining its settings.
+
+Selection filters, Layers and Properties have draggable titles and a **…** position
+menu with **Float**, **Dock left** and **Dock right**. Drag a title away from its
+edge to float the card, or release near either edge to dock it; **Esc** restores
+the position from before the drag. Cards docked on the same edge stack beneath
+one another, with Browser above left-docked cards. Positions belong to the view,
+survive split and detached layouts, and are kept in local project arrangements.
+The Symbol and Footprint editors use the same docking controls for Properties.
+
 The schematic **Properties** card shows the focused selection's reference,
 value, orientation and footprint. **Apply changes** commits a draft in one undo
 step. **More properties** or **E** opens the expanded General, Pin functions and

@@ -367,9 +367,9 @@ impl Document {
         }
     }
     /// Compose cards and canvas from shared chrome while retaining a document-local camera.
-    fn show(&mut self, ui: &mut Ui, navigation: Navigation, active: bool) -> bool {
+    fn show(&mut self, ui: &mut Ui, navigation: Navigation, active: bool, panel: &mut pcbcraft_chrome::workspace::panels::Panel) -> bool {
         let mut expanded = false;
-        self.collapsed = authoring::workspace(ui, self.collapsed, |ui, region| match region {
+        self.collapsed = authoring::workspace(ui, self.collapsed, panel, |ui, region| match region {
             authoring::Region::Browser => self.browser(ui),
             authoring::Region::Properties => {
                 self.properties(ui, false);

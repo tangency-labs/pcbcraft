@@ -412,7 +412,8 @@ impl EditorViews {
     }
 
     /// Set a schematic selection, then broadcast correspondence without editing recipients.
-    fn select(&mut self, selection: Selection, session: &Session, policy: SelectionFollow) {
+    fn select(&mut self, mut selection: Selection, session: &Session, policy: SelectionFollow) {
+        self.active.filters.retain(&mut selection);
         if self.active.workspace != Workspace::Schematic {
             return;
         }
@@ -431,7 +432,7 @@ impl EditorViews {
             self.active.board.drawing.cancel();
             self.active.board.drawing.selected = None;
         }
-        self.active.board.selection = selection;
+        self.active.board.selection = if self.active.filters.footprints { selection } else { Default::default() };
         self.selection_changed(session, policy);
     }
 
@@ -701,7 +702,9 @@ impl PcbApp {
     /// Select one revision-bound segment while projecting its wire identity to other views.
     pub(super) fn select_leg(&mut self, leg: schematic_canvas::LegTarget) {
         self.select(Selection::one_wire(leg.wire.clone()));
-        self.views.active.schematic.selected_leg = Some(leg);
+        if self.views.active.filters.wires {
+            self.views.active.schematic.selected_leg = Some(leg);
+        }
     }
 
     /// Change one view's snap spacing and remember it for the next start. This is presentation
@@ -800,6 +803,20 @@ impl PcbApp {
         let area = editor::panel_area(area, &panel_rects, headers, ui.spacing().item_spacing.y);
         let board_panel = board.then(|| self.board_panels(ui, area));
         let mut pick = if board || !project_focus { None } else { self.editor_panels(ui, area) };
+        let mut slot_panels = self.views.active.panels.clone();
+        if self.net_inspector.open {
+            slot_panels[crate::workspace_panels::PROPERTIES] =
+                pcbcraft_chrome::workspace::panels::Panel::new(pcbcraft_chrome::workspace::panels::Position::Right);
+        }
+        let slots = crate::workspace_panels::areas(
+            area,
+            self.browser.rect(),
+            &slot_panels,
+            [false, self.properties_open || self.net_inspector.open, self.views.active.filters_open],
+            true,
+        );
+        let properties_area = slots[crate::workspace_panels::PROPERTIES];
+        let filters_area = board_panel.as_ref().map_or(slots[crate::workspace_panels::FILTERS], |(_, slot)| *slot);
         #[cfg(not(target_arch = "wasm32"))]
         let assistant = if self.views.host != self.views.main { Rect::NOTHING } else { self.assistant.covered_rect(workspace) };
         #[cfg(target_arch = "wasm32")]
@@ -809,17 +826,20 @@ impl PcbApp {
         };
         let mut covered = board_panel.map_or_else(
             || if project_focus { vec![self.browser.rect(), self.parts.rect()] } else { vec![Rect::NOTHING; 2] },
-            |panels| panels.to_vec(),
+            |(panels, _)| panels.to_vec(),
         );
         covered.push(assistant);
         if project_focus && !board {
-            let inspector_area = pcbcraft_chrome::properties::inspector_area(area, self.browser.rect());
+            let inspector_area = properties_area;
             self.net_inspector.show(ui, self.views.active.snapshot(&self.session), inspector_area);
             if self.net_inspector.open {
                 covered.push(self.net_inspector.rect);
             } else {
-                covered.push(self.selection_properties(ui, area));
+                covered.push(self.selection_properties(ui, area, properties_area));
             }
+        }
+        if project_focus && self.views.active.filters_open {
+            covered.push(self.selection_filters(ui, area, filters_area));
         }
         for (id, rect) in panes {
             let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();
@@ -917,6 +937,7 @@ impl PcbApp {
                                     view.schematic.selected_sheet_symbol,
                                     view.schematic.selected_net_label,
                                     &highlight,
+                                    view.filters,
                                     false,
                                     self.preferences.navigation,
                                     self.preferences.grid_opacity_percent,

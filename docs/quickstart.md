@@ -270,6 +270,13 @@ separate from its geometry, saved engineering files and document undo.
 counterpart highlight into view without changing zoom. Switching back restores
 the schematic camera. These actions do not modify project data or undo history.
 
+The **Selection filters** card below Properties limits which supported object
+types can be selected. **All items** toggles them together and **Reset** enables
+them all. Filters are independent for each view, are retained in local saved
+arrangements, and leave the project unchanged; unavailable object types are disabled.
+Drag the title of Selection filters, Layers or Properties to float or dock the
+card, or use its **…** menu for **Float**, **Dock left** and **Dock right**.
+
 To edit an existing footprint, hover it and press **M**, move the pointer, then
 click to place it, or drag the footprint with the left mouse button. **R** rotates
 90° counterclockwise and **Shift+R** clockwise, including during a move; **Esc**
@@ -309,8 +316,8 @@ Saving retains drawing and layer identities without moving footprints or creatin
 a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.
 
-Arcs, slots, routing, individual pad selection, selection
-filters and Flip view still need implementation. Removing the last schematic
+Arcs, slots, routing, individual pad selection and Flip view still need
+implementation. Removing the last schematic
 unit currently removes its footprint too; reviewed board updates are tracked
 separately in #55.
 

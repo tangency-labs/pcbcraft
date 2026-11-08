@@ -82,12 +82,26 @@ pub(super) struct ViewState {
     layers_collapsed: bool,
     browser_collapsed: bool,
     properties_collapsed: bool,
+    #[serde(default)]
+    filters: crate::selection_filters::Filters,
+    #[serde(default)]
+    filters_collapsed: bool,
+    #[serde(default = "filters_open_default")]
+    filters_open: bool,
+    #[serde(default = "crate::workspace_panels::saved_defaults")]
+    panels: crate::workspace_panels::SavedPanels,
+}
+
+/// Existing arrangements predate the card and should show it when first upgraded.
+fn filters_open_default() -> bool {
+    true
 }
 
 impl ViewState {
     /// Bound layer data and validate transforms before replacing live views.
     pub(super) fn valid(&self) -> bool {
         self.title.len() <= 1024
+            && self.panels.valid()
             && self.camera.valid()
             && self.parked_camera.valid()
             && self.hidden_layers.len() <= 128
@@ -181,6 +195,10 @@ pub(super) struct EditorView {
     binding: Option<Binding>,
     input_epoch: u64,
     pub(super) workspace: Workspace,
+    pub(super) filters: crate::selection_filters::Filters,
+    pub(super) filters_collapsed: bool,
+    pub(super) filters_open: bool,
+    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; 3],
     /// Runtime definition document, independent of the parked project workspace/target.
     pub(super) definition: Option<u64>,
     pub(super) camera: Camera,
@@ -206,15 +224,19 @@ impl EditorView {
         if self.definition.is_some() { None } else { self.binding.map(|binding| binding.target) }
     }
 
-    /// Start a successfully opened project's default document in this workspace. Runtime identity
-    /// and snap spacing survive, while old document addresses, navigation and edit authority expire.
+    /// Start a successfully opened project's default document in this workspace. Runtime identity,
+    /// snap spacing and selection-filter choices survive, while old document addresses, navigation and edit authority expire.
     /// Saved arrangements are restored separately afterward and still validate explicit targets.
     /// Definition panes retain their document while refreshing the parked project presentation.
     pub(super) fn bind_opened_project(&mut self, session: &Session) {
         let definition = self.definition.take();
         let workspace = self.workspace;
         let snap_nm = self.camera.snap_nm();
+        let filters = (self.filters, self.filters_collapsed, self.filters_open);
+        let panels = self.panels.clone();
         *self = Self::new(self.id);
+        (self.filters, self.filters_collapsed, self.filters_open) = filters;
+        self.panels = panels;
         self.workspace = workspace;
         self.camera.set_snap_nm(snap_nm);
         self.sync(session);
@@ -281,11 +303,16 @@ impl EditorView {
             layers_collapsed: self.board.layers_collapsed,
             browser_collapsed: self.board.browser_collapsed,
             properties_collapsed: self.board.properties_collapsed,
+            filters: self.filters,
+            filters_collapsed: self.filters_collapsed,
+            filters_open: self.filters_open,
+            panels: crate::workspace_panels::SavedPanels::capture(&self.panels),
         }
     }
 
     /// Resolve a saved target with a fresh runtime identity and no selection or gesture.
     /// Missing targets retain their snapshot and cannot authorize editing another document.
+    /// Filter and card choices restore independently of selection, which always starts empty.
     pub(super) fn from_state(id: ViewId, state: &ViewState, session: &Session) -> Self {
         let mut view = Self::new(id);
         view.workspace = match state.target {
@@ -310,6 +337,10 @@ impl EditorView {
         view.board.layers_collapsed = state.layers_collapsed;
         view.board.browser_collapsed = state.browser_collapsed;
         view.board.properties_collapsed = state.properties_collapsed;
+        view.filters = state.filters;
+        view.filters_collapsed = state.filters_collapsed;
+        view.filters_open = state.filters_open;
+        view.panels = state.panels.restore();
         view
     }
 
@@ -325,6 +356,10 @@ impl EditorView {
             binding: None,
             input_epoch: 0,
             workspace: Workspace::Schematic,
+            filters: crate::selection_filters::Filters::default(),
+            filters_collapsed: false,
+            filters_open: true,
+            panels: crate::workspace_panels::defaults(),
             definition: None,
             camera: Camera::default(),
             parked_camera: Camera::default(),
@@ -346,6 +381,10 @@ impl EditorView {
             snapshot_root: self.snapshot_root.clone(),
             sheet_snapshot: self.sheet_snapshot.clone(),
             workspace: self.workspace,
+            filters: self.filters,
+            filters_collapsed: self.filters_collapsed,
+            filters_open: self.filters_open,
+            panels: self.panels.clone(),
             definition: self.definition,
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
@@ -371,7 +410,11 @@ impl EditorView {
             self.release_input();
         }
         if self.unavailable.is_some() {
+            let filters = (self.filters, self.filters_collapsed, self.filters_open);
+            let panels = self.panels.clone();
             *self = Self::new(self.id);
+            (self.filters, self.filters_collapsed, self.filters_open) = filters;
+            self.panels = panels;
             self.sync(session);
         }
         if self.workspace == workspace || session.project().is_none() {
@@ -462,10 +505,13 @@ impl EditorView {
     /// Invalidate captured input on focus or host transitions, retaining both cameras.
     pub(super) fn release_input(&mut self) {
         self.cancel_gesture();
+        for panel in &mut self.panels {
+            panel.cancel_drag();
+        }
         self.input_epoch += 1;
     }
 
-    /// Reopening resets local state while retaining workspace choice and grid. Ordinary edits
+    /// Reopening resets local state while retaining workspace choice, grid and filters. Ordinary edits
     /// prune removed selections/layers. A stale segment clears its whole selection so Delete
     /// cannot widen into a wire deletion; synchronization never mutates the session. Explicit
     /// sheet/board targets that no longer resolve become unavailable, closeable placeholders;
@@ -521,7 +567,11 @@ impl EditorView {
             let snap_nm = self.camera.snap_nm();
             let workspace = self.workspace;
             let sheet = self.sheet;
+            let filters = (self.filters, self.filters_collapsed, self.filters_open);
+            let panels = self.panels.clone();
             *self = Self::new(self.id);
+            (self.filters, self.filters_collapsed, self.filters_open) = filters;
+            self.panels = panels;
             self.sheet = sheet;
             self.workspace = workspace;
             self.camera.set_snap_nm(snap_nm);
@@ -556,7 +606,10 @@ impl EditorView {
         if let Some(project) = session.project() {
             if let Some(sheet) = &self.sheet_snapshot {
                 self.schematic.selection.retain(sheet);
-                self.schematic.selected_net_label = self.schematic.selected_net_label.filter(|id| sheet.net_labels().iter().any(|l| l.id == *id));
+                self.schematic.selected_net_label = self
+                    .schematic
+                    .selected_net_label
+                    .filter(|id| sheet.net_labels().iter().any(|l| l.id == *id && self.filters.allows_net_label(l.style)));
                 self.schematic.selected_sheet_symbol =
                     self.schematic.selected_sheet_symbol.filter(|id| sheet.sheet_symbols().iter().any(|s| s.id == *id));
             } else {

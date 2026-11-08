@@ -2,6 +2,25 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Selection filters
+
+The right-hand Selection filters card follows Travis Lowe's original FigCraft
+exports `01-schematic-overview.png` (SHA-256
+`ae02dbd7b0d9f60c535a4755f7930ef318b4deead1e6c30f463a86dee18ec4ba`)
+and `03-layout-top.png` (SHA-256
+`e86739bdbffbbff0ea5bd47995642fb4febc750e84fe7841615968f8221663a7`)
+in `designs/exports/workspaces-2026-10-30/`, reviewed November 7, 2026.
+The implementation is original MIT OR Apache-2.0 work using existing Craft
+cards, theme roles and egui input/accessibility primitives. No design files or external assets are
+imported. Unsupported selection categories remain disabled; the live controls
+and local arrangement state are independent of electrical documents.
+
+The contextual-card docking primitive is original MIT OR Apache-2.0 work,
+following the existing Parts library's qualified drag-to-float, edge snapping
+and position-menu interaction. It reuses the Craft frame, palette, typography
+and popup controls. Panel positions are presentation data; no project format,
+external dependency or artwork is added.
+
 ## Board Edge drawings
 
 The layer-addressed drawing model, commands, native board version 9 codec, canvas

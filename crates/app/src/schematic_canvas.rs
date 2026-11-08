@@ -212,6 +212,7 @@ pub(crate) enum SymbolAction {
 /// `label` distinguishes simultaneously visible canvases in accessibility output.
 /// `highlighted` marks counterparts selected in another view. It affects paint only; hit
 /// testing, group moves and deletion use `selected`, which takes visual precedence on overlap.
+/// `filters` restricts item picking, boxes and context menus without disabling explicit drawing tools.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
@@ -225,6 +226,7 @@ pub(crate) fn show(
     selected_sheet: Option<u64>,
     selected_net_label: Option<u64>,
     highlighted: &Selection,
+    filters: crate::selection_filters::Filters,
     input_enabled: bool,
     navigation: Navigation,
     grid_opacity: u8,
@@ -371,7 +373,7 @@ pub(crate) fn show(
     }
 
     crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected_net_label);
-    crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos(), selected_sheet);
+    crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
         && matches!(tool, None | Some(Tool::Reshape { .. }))
@@ -423,11 +425,11 @@ pub(crate) fn show(
     }
 
     if let Some(click) =
-        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected_net_label, label_position)
+        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected_net_label, label_position, filters)
     {
         return click;
     }
-    if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled, selected_sheet) {
+    if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled, selected_sheet, filters) {
         return click;
     }
     // Handle active rectangles before context menus: a secondary drag consumes its release.
@@ -438,7 +440,7 @@ pub(crate) fn show(
         }
         let pointer = response.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.interact_pos()));
         if let Some(pointer) = pointer {
-            let hits = selection::boxed(project, camera, rect, drag.start, pointer);
+            let hits = selection::boxed(project, camera, rect, drag.start, pointer, filters);
             pcbcraft_chrome::selection::marquee(&painter, Rect::from_two_pos(drag.start, pointer), pointer.x < drag.start.x, hits.len());
             if ui.input(|i| i.pointer.button_released(drag.button)) {
                 let valid = input_enabled && response.contains_pointer();
@@ -484,7 +486,7 @@ pub(crate) fn show(
         {
             return Some(Click::GrabReshape(drag));
         }
-        let hit = selection::at(project, camera, rect, origin);
+        let hit = selection::at(project, camera, rect, origin, filters);
         if right || hit.is_empty() || modifiers.shift || modifiers.ctrl {
             return Some(Click::StartBox(BoxDrag {
                 start: origin,
@@ -509,19 +511,19 @@ pub(crate) fn show(
         // A right-click names its symbol this frame; afterwards the menu follows the selection.
         let pressed = response.secondary_clicked().then(|| response.interact_pointer_pos()).flatten();
         let target = match pressed {
-            Some(pointer) => symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id()),
-            None => selected.single_symbol().map(str::to_owned),
+            Some(pointer) => filters.symbols.then(|| symbol_at(project, camera, rect, pointer)).flatten().map(|(symbol, _)| symbol.id()),
+            None => selected.single_symbol().filter(|_| filters.symbols).map(str::to_owned),
         };
         let group = selected.len() > 1
             && (pressed.is_none()
                 || pressed.is_some_and(|p| {
-                    let hit = selection::at(project, camera, rect, p);
+                    let hit = selection::at(project, camera, rect, p, filters);
                     !hit.is_empty() && hit.symbols.is_subset(&selected.symbols) && hit.wires.is_subset(&selected.wires)
                 }));
         // A wire's menu keeps the leg it was opened on until it closes.
         let leg_id = response.id.with("wire_menu_leg");
         if let Some(pointer) = pressed {
-            let leg = (target.is_none() && !group).then(|| wires::leg_at(project, camera, rect, pointer, revision)).flatten();
+            let leg = (filters.wires && target.is_none() && !group).then(|| wires::leg_at(project, camera, rect, pointer, revision)).flatten();
             ui.data_mut(|data| match leg {
                 Some(leg) => {
                     data.insert_temp(leg_id, leg);
@@ -529,7 +531,7 @@ pub(crate) fn show(
                 None => data.remove::<wires::LegTarget>(leg_id),
             });
         }
-        let leg = ui.data(|data| data.get_temp::<wires::LegTarget>(leg_id)).filter(|_| target.is_none() && !group);
+        let leg = ui.data(|data| data.get_temp::<wires::LegTarget>(leg_id)).filter(|_| filters.wires && target.is_none() && !group);
         let picked = menu::context(&response, |ui| {
             if group {
                 return MenuItem::new("Delete selected items").shortcut("Del").show(ui).then_some(Click::DeleteItems);
@@ -592,14 +594,14 @@ pub(crate) fn show(
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::G))
         && let Some(pointer) = response.hover_pos()
-        && let Some(wire) = selection::at(project, camera, rect, pointer).single_wire()
+        && let Some(wire) = selection::at(project, camera, rect, pointer, filters).single_wire()
         && let Some(drag) = wires::reshape_at(project, camera, rect, wire, pointer, camera.snap(pointer, rect))
     {
         return Some(Click::GrabReshape(drag));
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
-        let hit = selection::at(project, camera, rect, pointer);
+        let hit = selection::at(project, camera, rect, pointer, filters);
         let modifiers = ui.input(|i| i.modifiers);
         if !modifiers.shift
             && !modifiers.ctrl

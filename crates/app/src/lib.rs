@@ -40,9 +40,11 @@ mod properties;
 mod recent_projects;
 mod ribbon;
 mod schematic_canvas;
+mod selection_filters;
 mod sheet_editing;
 mod unsaved;
 mod window_commands;
+mod workspace_panels;
 
 use editor_view::{EditorView, ViewId, ViewInput, Workspace};
 use editor_windows::EditorWindows;
@@ -893,12 +895,22 @@ impl PcbApp {
                 active: self.properties_open,
                 toggle: true,
             },
+            RibbonTool {
+                icon: ToolIcon::Select,
+                label: "Selection filters",
+                description: "Toggle Selection filters",
+                shortcut: "",
+                enabled: has_project,
+                active: self.views.active.filters_open,
+                toggle: true,
+            },
         ];
         let toggled = match workspace::ribbon_group(ui, "Panels", &panels) {
             Some(0) => Some(Panel::Browser),
             Some(1) => Some(Panel::Parts),
             Some(2) => Some(Panel::Nets),
             Some(3) => Some(Panel::Properties),
+            Some(4) => Some(Panel::Filters),
             _ => None,
         };
         if let Some(panel) = toggled {
@@ -1172,6 +1184,7 @@ impl PcbApp {
                     if (moving || rotating)
                         && input_enabled
                         && self.views.active.schematic.tool.is_none()
+                        && self.views.active.filters.symbols
                         && self.views.active.schematic.selection.len() <= 1
                     {
                         let rect = ui.available_rect_before_wrap();
@@ -1203,6 +1216,7 @@ impl PcbApp {
                             self.views.active.schematic.selected_sheet_symbol,
                             self.views.active.schematic.selected_net_label,
                             &highlight,
+                            self.views.active.filters,
                             input_enabled,
                             self.preferences.navigation,
                             self.preferences.grid_opacity_percent,
@@ -1421,6 +1435,9 @@ impl PcbApp {
         self.views.active.schematic.move_requested = false;
         self.views.active.board.move_requested = false;
         self.views.active.board.rotate_requested = 0;
+        if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.take_panel_escape(ctx) {
+            return;
+        }
         if !self.home
             && self.views.active.workspace == Workspace::Schematic
             && !assistant_keys
@@ -1526,8 +1543,8 @@ impl PcbApp {
                 && self.views.active.snapshot(&self.session).is_some_and(|project| {
                     selected_net_label
                         || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| {
-                            hierarchy::hovered(&project, &self.views.active.camera, pointer)
-                                || net_labels::hovered(&project, &self.views.active.camera, ctx, pointer)
+                            hierarchy::hovered(&project, &self.views.active.camera, pointer, self.views.active.filters)
+                                || net_labels::hovered(&project, &self.views.active.camera, ctx, pointer, self.views.active.filters)
                         })
                 });
             // Ctrl temporarily bypasses the wire grid without disabling tool controls.

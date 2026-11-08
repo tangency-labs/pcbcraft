@@ -19,6 +19,54 @@ fn hierarchy_harness(width: f32) -> Harness<'static, PcbApp> {
     h
 }
 
+/// Filtered hierarchy objects cannot capture body/corner drags or hover editing shortcuts.
+#[test]
+fn selection_filters_block_hierarchy_picks_and_hover_edits() {
+    let mut h = hierarchy_harness(1400.);
+    let revision = h.state().session.revision();
+    h.state_mut().run(engine::CREATE_CHILD, &json!({"name":"Child","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    h.run();
+    let id = h.state().views.active.id();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().set_selection_filters(id, &json!({"sheets":false})).unwrap();
+    let canvas = h.get_by_label("Schematic canvas").rect();
+    let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+    point_click(&mut h, origin);
+    h.hover_at(origin);
+    h.key_press(Key::E);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(h.state().views.active.schematic.selected_sheet_symbol.is_none());
+    h.drag_at(origin);
+    h.run();
+    h.hover_at(origin + egui::vec2(30., 30.));
+    h.run();
+    h.drop_at(origin + egui::vec2(30., 30.));
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        engine::ADD_LABEL,
+        &json!({"name":"DATA","direction":"input","x_nm":-30*pcbcraft_engine::schematic::GRID_NM,"y_nm":0,"expected_revision":revision}),
+    );
+    h.run();
+    h.state_mut().set_selection_filters(id, &json!({"labels":false})).unwrap();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let rect = h.get_by_label("Schematic canvas").rect();
+    let label = h.state().views.active.camera.screen(Point { x_nm: -32 * pcbcraft_engine::schematic::GRID_NM, y_nm: 0 }, rect);
+    h.hover_at(label);
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    h.key_press(Key::E);
+    h.run();
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(h.state().views.active.schematic.tool.is_none());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Replace the focused form field and commit using its real button.
 fn name(h: &mut Harness<'_, PcbApp>, value: &str) {
     h.get_by_label("Name").click();
@@ -219,6 +267,7 @@ fn movable_sheet(width: f32) -> Harness<'static, PcbApp> {
     let revision = h.state().session.revision();
     h.state_mut().run(engine::CREATE_CHILD, &json!({"name":"Power","x_nm":0,"y_nm":0,"expected_revision":revision}));
     h.state_mut().browser.open = false;
+    h.state_mut().views.active.filters_open = false;
     h.run();
     h
 }

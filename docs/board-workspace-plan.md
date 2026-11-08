@@ -146,8 +146,12 @@ placement. Desktop bounds are recorded separately from cameras. Runtime view
 and host IDs are freshly allocated on activation. Gestures, selections,
 highlights, pending probe requests, modal dialogs and electrical history are
 excluded, so restoration cannot grant a delayed edit authority or roll back
-project data. Tree-row expansion, provider payloads, view orientation and filters
-are not yet persisted. The internal `tabs` record retains its original serialized
+project data. Tree-row expansion, provider payloads and view orientation
+are not yet persisted. Per-view selection filters and their collapsed card state
+are retained in local arrangements, with enabled defaults for older records.
+Layers, Properties and Selection filters also retain per-view edge/floating positions;
+edge slots stack visible cards and clamp floating cards inside the current host.
+The internal `tabs` record retains its original serialized
 name for compatibility; it now stores a pane's document navigation cache and does
 not introduce a tab strip in the interface.
 
@@ -309,7 +313,9 @@ revision-checked commands as live/headless MCP, with shared undo and board-local
 folder/archive persistence. Fit and per-view visibility include these drawings,
 and technical edge layers work independently of copper setup. This slice does
 not validate closure across paths, edge clearance or manufacturing validity.
-Selection filters, Flip view and the broader layout ribbon remain future work.
+Selection filters now occupy the lower-right card, with supported footprint and
+board-graphic categories and shared GUI/live-MCP handlers. Flip view and the
+broader layout ribbon remain future work.
 
 A bounded transform slice now moves and rotates existing legacy and physical SMD
 placements through `pcb.set_footprint_transform`, with GUI drag/M/R/Shift+R,

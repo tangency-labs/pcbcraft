@@ -226,6 +226,7 @@ impl PcbApp {
                         &mut view.board,
                         source,
                         &highlighted,
+                        view.filters,
                         &self.board_appearance,
                         enabled,
                         self.preferences.navigation,

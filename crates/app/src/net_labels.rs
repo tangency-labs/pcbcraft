@@ -92,12 +92,12 @@ pub(super) fn attached(project: &Project) -> BTreeSet<u64> {
 }
 
 /// Whether the hovered ink belongs to a named anchor; shared shortcut routing uses this before
-/// component hotkeys so editing a label cannot also edit a component beneath it.
-pub(super) fn hovered(project: &Project, camera: &Camera, ctx: &egui::Context, at: Pos2) -> bool {
+/// component hotkeys so editing an enabled label cannot also edit a component beneath it.
+pub(super) fn hovered(project: &Project, camera: &Camera, ctx: &egui::Context, at: Pos2, filters: crate::selection_filters::Filters) -> bool {
     let Some(rect) = camera.schematic_rect() else {
         return false;
     };
-    project.net_labels().iter().any(|label| {
+    project.net_labels().iter().filter(|label| filters.allows_net_label(label.style)).any(|label| {
         chrome::bounds(&ctx.debug_painter(), camera.screen(label.at, rect), &label.name, visual(label.style), label.rotation, camera.unit_step())
             .contains(at)
     })
@@ -141,6 +141,7 @@ pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, project: &Project, too
 
 /// Resolve property/move/rotate/delete actions on actual label ink. Active placement consumes
 /// pointer input until completion or cancellation; no project state changes during a preview.
+/// Filters restrict existing ink while explicit placement remains available.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn input(
     ui: &mut Ui,
@@ -152,6 +153,7 @@ pub(super) fn input(
     enabled: bool,
     selected: Option<u64>,
     placement: Option<Point>,
+    filters: crate::selection_filters::Filters,
 ) -> Option<Option<Click>> {
     if let Some(Tool::NetLabel { label, drag, .. }) = tool {
         if !enabled || ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))) {
@@ -193,14 +195,17 @@ pub(super) fn input(
         && response.drag_started_by(egui::PointerButton::Primary)
         && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
-        && let Some(label) = project.net_labels().iter().rev().find(|label| bounds(ui, camera, rect, label).contains(origin))
+        && let Some(label) =
+            project.net_labels().iter().rev().find(|label| filters.allows_net_label(label.style) && bounds(ui, camera, rect, label).contains(origin))
     {
         return Some(Some(Click::NetLabelDrag(label.clone(), camera.screen(label.at, rect) - origin)));
     }
     let hit = response
         .hover_pos()
         .or_else(|| response.interact_pointer_pos())
-        .and_then(|p| project.net_labels().iter().rev().find(|label| bounds(ui, camera, rect, label).contains(p)))
+        .and_then(|p| {
+            project.net_labels().iter().rev().find(|label| filters.allows_net_label(label.style) && bounds(ui, camera, rect, label).contains(p))
+        })
         .cloned();
     let menu_id = response.id.with("named_anchor_context");
     if response.secondary_clicked() {
@@ -212,7 +217,7 @@ pub(super) fn input(
         });
     }
     if let Some(id) = ui.data(|data| data.get_temp::<u64>(menu_id))
-        && let Some(label) = project.net_labels().iter().find(|label| label.id == id)
+        && let Some(label) = project.net_labels().iter().find(|label| label.id == id && filters.allows_net_label(label.style))
         && let Some(menu) = pcbcraft_chrome::menu::context(response, |ui| {
             for (name, action) in
                 [("Properties…", Action::Properties), ("Move", Action::Move), ("Rotate", Action::Rotate), ("Delete Net Label", Action::Delete)]
@@ -230,7 +235,8 @@ pub(super) fn input(
         return None;
     }
     let hovered = hit.is_some();
-    let label = hit.or_else(|| selected.and_then(|id| project.net_labels().iter().find(|l| l.id == id).cloned()))?;
+    let label =
+        hit.or_else(|| selected.and_then(|id| project.net_labels().iter().find(|l| l.id == id && filters.allows_net_label(l.style)).cloned()))?;
     for (key, action) in [
         (Key::E, Action::Properties),
         (Key::M, Action::Move),

@@ -243,9 +243,9 @@ pub(super) fn paint_label(painter: &Painter, pos: Pos2, name: &str, direction: D
 }
 
 /// Hit label text before block interiors; pin anchors retain wire-target priority on plain clicks.
-fn hit(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<(Kind, u64, Point)> {
+fn hit(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, filters: crate::selection_filters::Filters) -> Option<(Kind, u64, Point)> {
     let t = Tokens::get();
-    for label in project.hierarchical_labels().iter().rev() {
+    for label in project.hierarchical_labels().iter().rev().filter(|_| filters.labels) {
         let pos = camera.screen(label.at, rect);
         let width = (label.name.chars().count() as f32 * t.font_button).max(t.space_24);
         let offset = if label.direction.right() { 0. } else { -width };
@@ -253,7 +253,7 @@ fn hit(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<
             return Some((Kind::Label, label.id, label.at));
         }
     }
-    for block in project.sheet_symbols().iter().rev() {
+    for block in project.sheet_symbols().iter().rev().filter(|_| filters.sheets) {
         if body_rect(block_rect(project, block, camera, rect)).contains(pointer) {
             return Some((Kind::Sheet, block.id, block.at));
         }
@@ -263,8 +263,8 @@ fn hit(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<
 
 /// Let a hovered hierarchy object handle its edit/delete shortcuts before an older component
 /// selection. The canvas repeats the hit test against current layout before issuing an action.
-pub(super) fn hovered(project: &Project, camera: &Camera, pointer: Pos2) -> bool {
-    camera.schematic_rect().is_some_and(|rect| rect.contains(pointer) && hit(project, camera, rect, pointer).is_some())
+pub(super) fn hovered(project: &Project, camera: &Camera, pointer: Pos2, filters: crate::selection_filters::Filters) -> bool {
+    camera.schematic_rect().is_some_and(|rect| rect.contains(pointer) && hit(project, camera, rect, pointer, filters).is_some())
 }
 
 /// Consume hierarchy placement, body/corner drags, shortcuts and menus before component selection.
@@ -279,6 +279,7 @@ pub(super) fn input(
     tool: Option<&Tool>,
     enabled: bool,
     selected: Option<u64>,
+    filters: crate::selection_filters::Filters,
 ) -> Option<Option<Click>> {
     if let Some(Tool::SheetGesture { drag, .. }) = tool {
         let lost = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
@@ -315,6 +316,7 @@ pub(super) fn input(
         return None;
     }
     if enabled
+        && filters.sheets
         && response.drag_started_by(egui::PointerButton::Primary)
         && let Some(origin) = ui.input(|i| i.pointer.press_origin())
     {
@@ -342,7 +344,7 @@ pub(super) fn input(
     }
     let menu_id = response.id.with("hierarchy_target");
     if response.secondary_clicked() {
-        let target = response.interact_pointer_pos().and_then(|p| hit(project, camera, rect, p));
+        let target = response.interact_pointer_pos().and_then(|p| hit(project, camera, rect, p, filters));
         ui.data_mut(|data| match target {
             Some(value) => {
                 data.insert_temp(menu_id, value);
@@ -352,6 +354,7 @@ pub(super) fn input(
     }
     if (enabled || response.context_menu_opened())
         && let Some((kind, id, _)) = ui.data(|data| data.get_temp::<(Kind, u64, Point)>(menu_id))
+        && (if kind == Kind::Sheet { filters.sheets } else { filters.labels })
         && let Some(menu) = pcbcraft_chrome::menu::context(response, |ui| {
             let rows = if kind == Kind::Sheet {
                 vec![
@@ -372,7 +375,7 @@ pub(super) fn input(
     if !enabled || ui.ctx().egui_wants_keyboard_input() {
         return None;
     }
-    if let Some(pointer) = response.hover_pos() {
+    if let Some(pointer) = response.hover_pos().filter(|_| filters.sheets) {
         let corner = project
             .sheet_symbols()
             .iter()
@@ -383,9 +386,10 @@ pub(super) fn input(
             ui.ctx().set_cursor_icon(if corner.left == corner.top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
         }
     }
-    let hovered = response.hover_pos().and_then(|p| hit(project, camera, rect, p));
-    let (kind, id, _) =
-        hovered.or_else(|| selected.and_then(|id| project.sheet_symbols().iter().find(|s| s.id == id).map(|s| (Kind::Sheet, id, s.at))))?;
+    let hovered = response.hover_pos().and_then(|p| hit(project, camera, rect, p, filters));
+    let (kind, id, _) = hovered.or_else(|| {
+        selected.filter(|_| filters.sheets).and_then(|id| project.sheet_symbols().iter().find(|s| s.id == id).map(|s| (Kind::Sheet, id, s.at)))
+    })?;
     let action = if hovered.is_some() && kind == Kind::Sheet && response.double_clicked() {
         Some(Action::Enter)
     } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::E)) {

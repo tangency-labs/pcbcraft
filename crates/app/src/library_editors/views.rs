@@ -264,9 +264,13 @@ impl PcbApp {
     /// Render any definition pane in its scoped rectangle, including mixed project/library splits.
     pub(crate) fn library_pane(&mut self, ui: &mut Ui, view: ViewId) {
         let Some(id) = self.bind_library_view(view) else { return };
+        if self.views.active.id() == view && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ui.ctx()) {
+            self.take_panel_escape(ui.ctx());
+        }
         let Some(doc) = self.library_editors.documents.get_mut(&id) else { return };
-        let expanded =
-            ui.push_id(("library_document", view, id), |ui| doc.show(ui, self.preferences.navigation, self.views.active.id() == view)).inner;
+        let active = self.views.active.id() == view;
+        let Some(panel) = self.views.view_mut(view).map(|view| &mut view.panels[crate::workspace_panels::PROPERTIES]) else { return };
+        let expanded = ui.push_id(("library_document", view, id), |ui| doc.show(ui, self.preferences.navigation, active, panel)).inner;
         let array = std::mem::take(&mut doc.array_requested).then(|| editing::ArrayDraft::new(id, view, doc));
         if let Some(array) = array {
             self.dialog = Dialog::LibraryArray(Box::new(array));

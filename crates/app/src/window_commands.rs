@@ -16,6 +16,7 @@ pub(super) enum Panel {
     Parts,
     Nets,
     Properties,
+    Filters,
 }
 
 impl PcbApp {
@@ -31,7 +32,18 @@ impl PcbApp {
             }
             Panel::Parts => self.parts.close(ctx),
             Panel::Nets => self.net_inspector.open = open,
-            Panel::Properties => self.properties_open = open,
+            Panel::Properties => {
+                if !open {
+                    self.views.active.panels[crate::workspace_panels::PROPERTIES].cancel_drag();
+                }
+                self.properties_open = open;
+            }
+            Panel::Filters => {
+                if !open {
+                    self.views.active.panels[crate::workspace_panels::FILTERS].cancel_drag();
+                }
+                self.views.active.filters_open = open;
+            }
         }
     }
 
@@ -42,6 +54,7 @@ impl PcbApp {
             Panel::Parts => self.parts.open,
             Panel::Nets => self.net_inspector.open,
             Panel::Properties => self.properties_open,
+            Panel::Filters => self.views.active.filters_open,
         }
     }
 
@@ -310,7 +323,7 @@ mod live {
     const FOLLOW: &[&str] = &["off", "both", "secondary_follows_primary", "primary_follows_secondary"];
     const SCROLL: &[&str] = &["zoom", "pan"];
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
-    const PANELS: &[&str] = &["browser", "parts", "nets", "properties"];
+    const PANELS: &[&str] = &["browser", "parts", "nets", "properties", "selection_filters"];
     const CATALOG_MODES: &[&str] = &["expanded", "compact"];
     const TABS: &[&str] = &["capture", "layout", "analyze", "libraries", "manage", "view"];
     const WORKSPACES: &[&str] = &["schematic", "board"];
@@ -557,6 +570,39 @@ mod live {
             ],
         },
         WindowCommand {
+            id: "view.set_panel_position",
+            title: "Panel Position",
+            summary: "Float or dock Layers, Properties or Selection filters in this view, without editing the project.",
+            params: &[
+                VIEW,
+                Param {
+                    name: "panel",
+                    summary: "Which contextual card",
+                    required: true,
+                    kind: Kind::Choice(&["layers", "properties", "selection_filters"]),
+                },
+                Param { name: "position", summary: "Edge anchor or floating", required: true, kind: Kind::Choice(&["left", "right", "floating"]) },
+                setting("x", "Floating offset from the canvas left, in logical points", Kind::Integer { min: -100000, max: 100000, step: 1 }),
+                setting("y", "Floating offset from the canvas top, in logical points", Kind::Integer { min: -100000, max: 100000, step: 1 }),
+            ],
+        },
+        WindowCommand {
+            id: "view.set_selection_filters",
+            title: "Selection Filters",
+            summary: "Change a project view's selection filters or collapse its filter card. Unsupported workspace categories are refused; document data and history stay unchanged.",
+            params: &[
+                VIEW,
+                setting("symbols", "Select schematic symbols", Kind::Bool),
+                setting("wires", "Select schematic wires", Kind::Bool),
+                setting("sheets", "Select hierarchical sheet symbols", Kind::Bool),
+                setting("labels", "Select hierarchical labels", Kind::Bool),
+                setting("footprints", "Select board footprints", Kind::Bool),
+                setting("graphics", "Select board graphics", Kind::Bool),
+                setting("collapsed", "Collapse the filter card", Kind::Bool),
+                setting("open", "Show the filter card", Kind::Bool),
+            ],
+        },
+        WindowCommand {
             id: "view.select",
             title: "Select",
             summary: "Replace a schematic view's selection with these symbols and wires, as clicking or box selection does. Empty lists clear it. Other views highlight it under the Follow selection setting. PCB views take view.select_footprints.",
@@ -589,7 +635,7 @@ mod live {
         WindowCommand {
             id: "window.set_panel",
             title: "Show Panel",
-            summary: "Show or hide one of the window's panels: the Browser, the Parts Catalog, the Net Inspector or the selection Properties inspector.",
+            summary: "Show or hide the Browser, Parts Catalog, Net Inspector, Properties or the focused view’s Selection filters card.",
             params: &[
                 WINDOW,
                 Param { name: "panel", summary: "Which panel", required: true, kind: Kind::Choice(PANELS) },
@@ -801,7 +847,8 @@ mod live {
                     "views": host.layout.views().iter().map(|view| view.0).collect::<Vec<_>>(),
                     "focused_view": host.focused.0,
                     "split": host.split(),
-                    "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties},
+                    "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties,
+                        "selection_filters": app.views.view(host.focused).is_some_and(|view| view.filters_open)},
                     "catalog_mode": panels.catalog_mode,
                     "repeat_placement": panels.repeat_placement,
                     "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
@@ -830,6 +877,10 @@ mod live {
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
                     "grid_spacing_nm": view.camera.snap_nm(),
+                    "selection_filters": view.filters.inspect(view.workspace),
+                    "selection_filters_collapsed": view.filters_collapsed,
+                    "selection_filters_open": view.filters_open,
+                    "panel_positions": crate::workspace_panels::inspect(&view.panels),
                     "zoom_percent": (view.camera.zoom() * 100.0).round(),
                     "center": view.camera.center(),
                     "selection": view.schematic.selection,
@@ -970,6 +1021,7 @@ mod live {
                             | "view.dock"
                             | "view.close"
                             | "view.fit"
+                            | "view.set_panel_position"
                     )))
                 && self.session.project().is_none()
             {
@@ -1004,6 +1056,7 @@ mod live {
                             | "view.dock"
                             | "view.close"
                             | "view.fit"
+                            | "view.set_panel_position"
                             | "view.set_workspace"
                     )
                 {
@@ -1093,6 +1146,8 @@ mod live {
                         params["visible"].as_bool(),
                     );
                 }
+                ("view.set_panel_position", Some((view, _)), _) => self.set_panel_position(view, params)?,
+                ("view.set_selection_filters", Some((view, _)), _) => self.set_selection_filters(view, params)?,
                 ("view.set_grid", Some((view, _)), _) => self.set_view_grid(view, params["spacing_nm"].as_i64().unwrap_or_default()),
                 ("view.select" | "view.select_footprints", Some((view, _)), _)
                     if self.views.view(view).map(|view| view.workspace)
@@ -1119,6 +1174,9 @@ mod live {
                     if !wanted.is_subset(&placed) {
                         return Err("Some of those footprints aren't on this view's board. Inspect the project for current IDs.".to_owned());
                     }
+                    if !wanted.is_empty() && self.views.view(view).is_some_and(|v| !v.filters.footprints) {
+                        return Err("Footprint selection is disabled in this view".into());
+                    }
                     let previous = self.views.active.id();
                     self.views.bind(view);
                     self.views.active.cancel_gesture();
@@ -1141,6 +1199,13 @@ mod live {
                 }
                 ("view.select", Some((view, _)), _) => {
                     let items = Selection::parse(&params["items"]).ok_or("`items` must contain symbol and wire ID lists")?;
+                    let mut filtered = items.clone();
+                    if let Some(state) = self.views.view(view) {
+                        state.filters.retain(&mut filtered);
+                    }
+                    if filtered != items {
+                        return Err("Some requested object types are disabled by this view's selection filters".into());
+                    }
                     let mut present = items.clone();
                     if let Some(project) = self.views.view(view).and_then(|view| view.snapshot(&self.session)) {
                         present.retain(&project);
@@ -1163,6 +1228,7 @@ mod live {
                         Some("browser") => Panel::Browser,
                         Some("parts") => Panel::Parts,
                         Some("properties") => Panel::Properties,
+                        Some("selection_filters") => Panel::Filters,
                         _ => Panel::Nets,
                     };
                     let open = params["open"].as_bool() == Some(true);
