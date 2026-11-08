@@ -247,17 +247,26 @@ value, orientation, X/Y position and footprint. Coordinates accept mm, mil or
 inch suffixes; bare numbers use the current display unit. Changing display units
 reformats valid drafts without applying or rounding away their stored coordinates.
 **Apply changes** commits all fields in one undo
-step. **More properties** or **E** opens the expanded form. **General** combines
+step. **More properties**, **E**, or a double-click on the symbol body or its visible
+text opens the expanded form. **General** combines
 reference, value, field visibility, datasheet, description, manufacturer,
 manufacturer part number and named custom fields;
 these belong to the selected component without changing its library definition.
+HTTP(S) values have an open-link control beside the input, including custom fields.
+**D** opens the saved datasheet for the hovered component (including its text),
+or the single selected component when the pointer is elsewhere. Opening a link
+changes neither the project nor undo history; text entry, dialogs and active tools
+retain their keyboard input. Local document paths remain plain field values.
 
 The **Text appearance** disclosure selects a field and controls its name display,
 size, alignment, rotation and local offsets. Drag the reference, value or another visible
 field on the canvas to move only its text. Its outline appears on hover; the
 preview commits on release, while Escape, focus loss or release outside the
 canvas cancels. Moving the body carries its text, and rotating the body rotates
-manual offsets while retaining the chosen text orientation. **Reset appearance**
+manual offsets while retaining the chosen text orientation. Hover visible field text and
+press **R** to rotate that field about its anchor. **R** also rotates a field while
+dragging; release commits its position and angle together, and Escape discards both.
+**Reset appearance**
 restores automatic placement and default appearance for that field.
 
 The attributes beside placement record population and output/simulation exclusions.
@@ -271,8 +280,16 @@ expanded draft. Attached wires follow coordinate changes through the same contac
 and healing rules as symbol movement. Invalid input or ambiguous contacts reject
 the entire draft. **View → Properties**
 shows or hides the inspector for that window. Footprint choice opens a responsive
-package browser with a physical preview, explicit terminal mapping and expandable
-source/license details. Library-definition authoring remains separate from changing
+package browser focused on that component. From PCB layout, a searchable,
+scrolling component list lets you work through the project. The browser includes
+a library list, token-based name/package search, pin-count
+and mounting filters, and a larger physical 2D preview. Drag the preview to pan,
+use the wheel or +/− to zoom, and **Fit** to restore its framing. On narrow windows
+the library, results and preview stack in the scrolling body while **Assign** and
+**Close** remain visible. Browsing does not change the component; choose each
+terminal-to-pad connection or use **Match numbers** when their identifiers agree,
+then **Assign**. Source/license details remain available beneath the preview.
+Library-definition authoring remains separate from changing
 an instance's properties.
 
 Power and ground markers also appear in the selection Properties card. Edit their

@@ -2,7 +2,10 @@
 use super::*;
 use crate::tests::{harness, resistor_at_origin};
 use egui::{Key, Modifiers, Pos2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use pcbcraft_engine::{
     persistence::{decode_documents, encode_documents},
     selection::Selection,
@@ -284,4 +287,227 @@ fn symbol_text_scales_with_the_canvas_instead_of_staying_at_screen_size() {
         sizes.push(size);
     }
     assert!((sizes[2] / sizes[1] - 4.).abs() < 0.01);
+}
+
+/// Send two complete primary clicks within the platform double-click interval.
+fn double_click(h: &mut Harness<'_, PcbApp>, point: Pos2, modifiers: Modifiers) {
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    h.hover_at(point);
+    h.run();
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.input_mut().time = Some(h.ctx.input(|i| i.time) + 0.03);
+            h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed, modifiers });
+            h.run_steps(1);
+        }
+    }
+    h.input_mut().time = None;
+    h.run();
+}
+
+/// Bodies and visible fields open the same revision-bound properties form without editing the
+/// document. Nearby pin hit radii must not turn a small capacitor's first body click into a wire.
+#[test]
+fn double_clicking_symbols_and_fields_opens_properties_without_editing() {
+    for (definition, turns, zoom) in [("resistor", 0, 1.), ("capacitor", 0, 0.5), ("capacitor", 90, 0.5), ("led", 90, 1.), ("npn", 0, 1.)] {
+        let mut h = fixture();
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::DELETE_SYMBOL, &json!({"symbol":"symbol-2","expected_revision":revision}));
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .run(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":definition,"rotation":turns,"x_nm":0,"y_nm":0,"expected_revision":revision}));
+        h.state_mut().views.active.camera.set_zoom(zoom);
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let point = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, h.get_by_label("Schematic canvas").rect());
+        double_click(&mut h, point, Modifiers::NONE);
+        assert!(matches!(&h.state().dialog,Dialog::EditFields(edit) if edit.definition.id==definition), "{definition} {turns} {zoom}");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        click(&mut h, "Cancel");
+    }
+    let mut h = fixture();
+    let point = text_center(&h, "R1");
+    let before = h.state().session.snapshot().unwrap();
+    double_click(&mut h, point, Modifiers::NONE);
+    assert!(matches!(h.state().dialog, Dialog::EditFields(_)));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Modified clicks and disabled symbol picking retain selection semantics rather than opening
+/// properties, and explicit wire tools keep their own double-click gesture.
+#[test]
+fn double_click_properties_respects_filters_modifiers_and_active_tools() {
+    for mode in ["filter", "shift", "wire"] {
+        let mut h = fixture();
+        let point = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, h.get_by_label("Schematic canvas").rect());
+        if mode == "filter" {
+            h.state_mut().views.active.filters.symbols = false;
+            h.run();
+        }
+        if mode == "wire" {
+            h.key_press(Key::W);
+            h.run();
+        }
+        double_click(&mut h, point, if mode == "shift" { Modifiers::SHIFT } else { Modifiers::NONE });
+        assert!(matches!(h.state().dialog, Dialog::None), "{mode}");
+    }
+}
+
+/// Rotating hovered text updates only its physical appearance, including a custom visible field.
+/// Existing pins/wires, automatic anchors and undo remain independent of the symbol's rotation.
+#[test]
+fn visible_field_rotation_keeps_symbol_geometry_wiring_and_other_text() {
+    let mut h = fixture();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":25_400_000,"y_nm":0,"expected_revision":revision}));
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::CONNECT_PINS,
+        &json!({"from":{"symbol":"symbol-2","terminal":"2"},"to":{"symbol":"symbol-3","terminal":"1"},"expected_revision":revision}),
+    );
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_SYMBOL_FIELDS, &json!({"symbol":"symbol-2","reference":"R1","value":"R",
+        "metadata":{"fields":{"00000000-0000-4000-8000-000000000001":{"name":"Note","value":"Visible note"}},"attributes":pcbcraft_engine::schematic::fields::Attributes::default()},
+        "field_layout":{"00000000-0000-4000-8000-000000000001":{"offset":{"x_nm":0,"y_nm":6_350_000},"visible":true,"show_name":false,"rotation":0,"align":"middle","height_nm":1_270_000}},
+        "expected_revision":revision}));
+    h.run();
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    for (text, field) in [("R1", "reference"), ("R", "value"), ("Visible note", "00000000-0000-4000-8000-000000000001")] {
+        let before = h.state().session.snapshot().unwrap();
+        let start = text_center(&h, text);
+        h.hover_at(start);
+        h.run();
+        h.key_press(Key::R);
+        h.run();
+        let after = h.state().session.snapshot().unwrap();
+        let original = &before.symbols()[0];
+        let symbol = &after.symbols()[0];
+        assert_eq!(symbol.field_layout[field].rotation, 90);
+        assert_eq!(symbol.field_layout[field].offset, original.field_layout.get(field).and_then(|l| l.offset));
+        assert_eq!(symbol.position, original.position);
+        assert_eq!(symbol.pins(), original.pins());
+        assert_eq!(symbol.turns(), original.turns());
+        assert!(before.same_connectivity(&after));
+        assert_eq!(
+            before.wires().iter().map(|w| before.wire_path(w)).collect::<Vec<_>>(),
+            after.wires().iter().map(|w| after.wire_path(w)).collect::<Vec<_>>()
+        );
+        let mut expected = original.field_layout.clone();
+        expected.entry(field.into()).or_default().rotation = 90;
+        assert_eq!(symbol.field_layout, expected);
+        let docs = encode_documents(after.clone()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+        click(&mut h, "Undo");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// R while dragging rotates the preview; drop publishes position and angle in one undo step,
+/// while Escape discards both and leaves connectivity untouched.
+#[test]
+fn dragging_text_can_rotate_without_committing_until_drop() {
+    for cancel in [true, false] {
+        let mut h = fixture();
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        let start = text_center(&h, "R1");
+        let end = start + egui::vec2(50., 50.);
+        h.drag_at(start);
+        h.run();
+        h.hover_at(end);
+        h.run();
+        h.key_press(Key::R);
+        h.run();
+        assert_eq!(h.state().session.revision(), revision);
+        assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text=="R1" && (text.angle + std::f32::consts::FRAC_PI_2).abs()<0.001)));
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+        }
+        h.drop_at(end);
+        h.run();
+        if cancel {
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        } else {
+            let after = h.state().session.snapshot().unwrap();
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert_eq!(after.symbols()[0].field_layout["reference"].rotation, 90);
+            assert!(after.symbols()[0].field_layout["reference"].offset.is_some());
+            assert_eq!(after.symbols()[0].pins(), before.symbols()[0].pins());
+            click(&mut h, "Undo");
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}
+
+/// Inspect host output on the key-down frame before the release frame replaces it.
+fn datasheet_urls(h: &mut Harness<'_, PcbApp>) -> Vec<String> {
+    h.event(egui::Event::Key { key: Key::D, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.step();
+    let urls = h
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            egui::OutputCommand::OpenUrl(url) => Some(url.url.clone()),
+            _ => None,
+        })
+        .collect();
+    h.event(egui::Event::Key { key: Key::D, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.run();
+    urls
+}
+
+/// Opening URL fields is a host action and does not apply drafts. D uses the saved datasheet
+/// for a hovered/selected component and is suppressed while a form or active tool owns input.
+#[test]
+fn field_links_and_datasheet_shortcut_open_without_editing_the_project() {
+    let mut h = fixture();
+    h.state_mut().select(Selection::one_symbol("symbol-2".into()));
+    h.key_press(Key::E);
+    h.run();
+    type_field(&mut h, "Datasheet", "https://example.com/data.pdf");
+    let before = h.state().session.snapshot().unwrap();
+    h.get_by_label("Open Datasheet link").scroll_to_me();
+    h.run();
+    h.get_by_label("Open Datasheet link").click();
+    h.step();
+    assert!(
+        h.output().platform_output.commands.iter().any(|c| matches!(c,egui::OutputCommand::OpenUrl(url) if url.url=="https://example.com/data.pdf"))
+    );
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    click(&mut h, "Add field");
+    type_field(&mut h, "Field name", "Documentation");
+    type_field(&mut h, "Field value", "https://example.com/guide");
+    h.get_by_label("Open Field value link").click();
+    h.step();
+    assert!(
+        h.output().platform_output.commands.iter().any(|c| matches!(c,egui::OutputCommand::OpenUrl(url) if url.url=="https://example.com/guide"))
+    );
+    click(&mut h, "OK");
+    let saved = h.state().session.snapshot().unwrap();
+    for hovered in [true, false] {
+        let pointer = if hovered { text_center(&h, "R1") } else { h.get_by_label("Schematic canvas").rect().left_bottom() - egui::vec2(-30., 30.) };
+        h.hover_at(pointer);
+        h.run();
+        assert_eq!(datasheet_urls(&mut h), ["https://example.com/data.pdf"]);
+        assert!(Arc::ptr_eq(&saved, &h.state().session.snapshot().unwrap()));
+    }
+    h.key_press(Key::W);
+    h.run();
+    assert!(datasheet_urls(&mut h).is_empty());
+    h.key_press(Key::Escape);
+    h.run();
+    h.state_mut().views.active.filters.symbols = false;
+    assert!(datasheet_urls(&mut h).is_empty());
+    h.state_mut().views.active.filters.symbols = true;
+    h.key_press(Key::E);
+    h.run();
+    type_field(&mut h, "Datasheet", "javascript:alert(1)");
+    assert!(h.get_by_label("Open Datasheet link").accesskit_node().is_disabled());
+    assert!(datasheet_urls(&mut h).is_empty());
+    click(&mut h, "OK");
+    assert!(datasheet_urls(&mut h).is_empty());
+    assert!(h.state().message.as_ref().is_some_and(|m| m.contains("datasheet link")));
 }

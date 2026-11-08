@@ -101,6 +101,7 @@ impl Tool {
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
     GrabField(fields::Drag),
+    RotateField(fields::Drag),
     FinishField(Option<pcbcraft_engine::schematic::fields::Layouts>),
     NetLabelCommit(pcbcraft_engine::net_labels::Label),
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
@@ -206,7 +207,8 @@ pub(crate) enum SymbolAction {
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
 ///
-/// With no tool, a primary click selects one wire leg or an item, or clears
+/// With no tool, a primary double click on a symbol body or visible field opens its properties.
+/// A primary click selects one wire leg or an item, or clears
 /// selection on empty canvas. Shift/Ctrl combine those hits with the previous selection. A secondary click selects the symbol under it and opens its menu; a row
 /// picked there returns `Click::Edit`. A secondary click on a wire selects it and opens Slice, Break, Delete Segment and Delete Wire for the leg under the click, returning `Click::WireEdit`
 /// bound to `revision`. `selected_leg` limits blue ink and Delete to one leg; `whole_wire_drag`
@@ -628,6 +630,9 @@ pub(crate) fn show(
         && (!filters.symbols || fields::at(ui, project, camera, rect, pointer).is_none())
         && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
         && let Some(point) = anchor.position(project)
+        && (!filters.symbols
+            || symbol_at(project, camera, rect, pointer).is_none()
+            || camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_PIN_RADIUS.min(camera.unit_step() / 2.))
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         pcbcraft_chrome::cursor::wire(&painter, screen(point), true);
@@ -641,6 +646,19 @@ pub(crate) fn show(
         && let Some(drag) = wires::reshape_at(project, camera, rect, wire, pointer, camera.snap(pointer, rect))
     {
         return Some(Click::GrabReshape(drag));
+    }
+    // Properties takes precedence over click-to-wire and selection only for an enabled symbol
+    // body or its visible fields. Explicit placement/wiring tools retain their own double click.
+    if tool.is_none()
+        && response.double_clicked_by(egui::PointerButton::Primary)
+        && filters.symbols
+        && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
+        && let Some(pointer) = response.interact_pointer_pos()
+        && let Some(symbol) = fields::at(ui, project, camera, rect, pointer)
+            .map(|field| field.symbol)
+            .or_else(|| symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id()))
+    {
+        return Some(Click::Edit(SymbolAction::EditFields, symbol));
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
@@ -660,6 +678,10 @@ pub(crate) fn show(
             && !modifiers.ctrl
             && !modifiers.command
             && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
+            && (hit.single_symbol().is_none()
+                || anchor
+                    .position(project)
+                    .is_some_and(|at| camera.screen(at, rect).distance(pointer) <= theme::SCHEMATIC_PIN_RADIUS.min(camera.unit_step() / 2.)))
         {
             return Some(Click::StartWire(anchor));
         }

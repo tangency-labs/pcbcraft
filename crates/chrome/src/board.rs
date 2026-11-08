@@ -333,9 +333,14 @@ pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], he
 /// Its toggle semantics remain available to keyboard and assistive-technology users.
 /// Returns a click intent; the caller changes visibility through its shared state handler.
 pub fn layer_visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::Response {
+    visibility(ui, &format!("Show layer {name}"), visible)
+}
+
+/// Shared eye toggle for authored field visibility and canvas layers, with explicit accessibility.
+pub fn visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::Response {
     let t = Tokens::get();
     let (rect, response) = ui.allocate_exact_size(vec2(t.space_24, t.space_24), egui::Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, format!("Show layer {name}")));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, name));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if response.hovered() || response.has_focus() {

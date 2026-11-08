@@ -8,6 +8,8 @@ pub(crate) struct Drag {
     pub symbol: String,
     pub field: String,
     pub offset: Vec2,
+    /// Additional preview rotation accumulated while dragging; committed with its final position.
+    pub rotation: u16,
 }
 
 /// A drawn field owns its exact glyph bounds; hidden/empty text cannot steal body or wire input.
@@ -135,17 +137,18 @@ pub(super) fn paint(
 }
 
 /// Text is picked before bodies, but only in the symbol selection category.
-pub(super) fn at(ui: &Ui, project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Drag> {
+pub(crate) fn at(ui: &Ui, project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Drag> {
     project.symbols().iter().rev().find_map(|symbol| {
         instance_ink(ui, project, symbol, camera, rect, Tokens::get().text)
             .into_iter()
             .rev()
             .find(|field| field.bounds.contains(pointer))
-            .map(|field| Drag { symbol: symbol.id(), field: field.id, offset: field.anchor - pointer })
+            .map(|field| Drag { symbol: symbol.id(), field: field.id, offset: field.anchor - pointer, rotation: 0 })
     })
 }
 
-/// Snap the field anchor, convert into local coordinates, and preserve all other field appearances.
+/// Snap the field anchor, convert into local coordinates and apply its pending rotation.
+/// Other field appearances remain unchanged until the revision-checked drag commit.
 pub(super) fn destination(project: &Project, camera: &Camera, rect: Rect, drag: &Drag, pointer: Pos2) -> Option<Layouts> {
     let symbol = project.symbols().iter().find(|symbol| symbol.id() == drag.symbol)?;
     let point = camera.snap(pointer + drag.offset, rect);
@@ -158,7 +161,9 @@ pub(super) fn destination(project: &Project, camera: &Camera, rect: Rect, drag: 
         _ => (dy, -dx),
     };
     let mut layouts = symbol.field_layout.clone();
-    layouts.entry(drag.field.clone()).or_default().offset = Some(Point { x_nm, y_nm });
+    let layout = layouts.entry(drag.field.clone()).or_default();
+    layout.offset = Some(Point { x_nm, y_nm });
+    layout.rotation = (layout.rotation + drag.rotation) % 360;
     pcbcraft_engine::schematic::fields::validate_layouts(&layouts, &project.component(symbol)?.metadata).ok()?;
     Some(layouts)
 }
@@ -166,4 +171,15 @@ pub(super) fn destination(project: &Project, camera: &Camera, rect: Rect, drag: 
 /// Preview edits only the temporary sheet snapshot; commit uses the revision-checked command.
 pub(super) fn preview(project: &Project, symbol: &str, layouts: Layouts) -> Option<Project> {
     project.with_field_layout(symbol, layouts).ok()
+}
+
+/// Rotate one visible field about its existing anchor without changing offsets or other fields.
+/// Keeping automatic placement implicit prevents a rotation from creating a position override.
+pub(crate) fn rotated(project: &Project, drag: &Drag) -> Option<Layouts> {
+    let symbol = project.symbols().iter().find(|symbol| symbol.id() == drag.symbol)?;
+    let mut layouts = symbol.field_layout.clone();
+    let layout = layouts.entry(drag.field.clone()).or_default();
+    layout.rotation = (layout.rotation + 90) % 360;
+    pcbcraft_engine::schematic::fields::validate_layouts(&layouts, &project.component(symbol)?.metadata).ok()?;
+    Some(layouts)
 }

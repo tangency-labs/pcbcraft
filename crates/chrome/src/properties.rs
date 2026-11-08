@@ -143,8 +143,157 @@ pub fn preview(ui: &mut Ui, paint: impl FnOnce(&egui::Painter, egui::Rect)) {
     paint(&ui.painter().with_clip_rect(rect), rect.shrink(t.space_16));
 }
 
+/// Allocate a large footprint canvas with shared sizing, palette and clipping in either host.
+/// The response covers the complete canvas; the returned rectangle reserves its inner margin.
+pub fn footprint_preview(ui: &mut Ui, label: &str) -> (egui::Rect, egui::Response) {
+    let t = Tokens::get();
+    let height = if ui.available_width() > 360. { 320. } else { 240. };
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
+    ui.painter_at(rect).rect_filled(rect, t.radius_md, t.board_canvas);
+    (rect.shrink(t.space_12), response)
+}
+
 /// Keep a compact inspector's footprint stable across selection changes so a new selection
 /// cannot move the canvas's navigation target. The body scrolls in short windows.
 pub fn inspector_body(ui: &mut Ui) {
     ui.set_min_height(300.0_f32.min(ui.available_height()));
+}
+
+/// A raised property group establishes hierarchy without adding a separate page or dialog.
+pub fn card<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get();
+    egui::Frame::new()
+        .fill(t.panel_header)
+        .stroke(egui::Stroke::new(1., t.dialog_rule))
+        .corner_radius(t.radius_md)
+        .inner_margin(t.space_12)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(title).font(fonts::interface_heading(ui, t.font_heading)));
+            ui.add_space(t.space_8);
+            add(ui)
+        })
+        .inner
+}
+
+/// Column labels keep the visibility eye understandable without repeating a caption on every row.
+pub fn field_header(ui: &mut Ui) {
+    let t = Tokens::get();
+    let width = ui.available_width();
+    let label_width = field_label_width(width);
+    ui.horizontal(|ui| {
+        field_name(ui, "Field", label_width, true);
+        field_name(ui, "Content", (width - label_width - 3. * t.space_8 - 2. * t.space_24).max(40.), true);
+        field_name(ui, "Link", t.space_24, true);
+        ui.label(RichText::new("Visible").small().color(t.text_dim));
+    });
+}
+
+/// Allocate a left-aligned label column without the centered layout imposed by `add_sized`.
+fn field_name(ui: &mut Ui, name: &str, width: f32, header: bool) -> egui::Response {
+    let t = Tokens::get();
+    ui.allocate_ui_with_layout(vec2(width, t.control_height), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_width(width);
+        let text = if header { RichText::new(name).small().color(t.text_dim) } else { RichText::new(name) };
+        ui.add(egui::Label::new(text).halign(Align::Min).wrap())
+    })
+    .inner
+}
+
+/// Editable field rows use a fixed left-aligned name column and the same eye toggle as layers.
+/// The accessible input/toggle names do not depend on the displayed icon or column headings.
+/// Web values expose an open-link action; `link` also reserves a disabled action for empty URLs.
+pub fn field_row(ui: &mut Ui, name: &str, value: &mut String, visible: Option<&mut bool>, link: bool) -> egui::Response {
+    let t = Tokens::get();
+    let width = ui.available_width();
+    let label_width = field_label_width(width);
+    ui.horizontal(|ui| {
+        let label = field_name(ui, name, label_width, false);
+        let response = ui.add(input(value).desired_width((width - label_width - 3. * t.space_8 - 2. * t.space_24).max(40.))).labelled_by(label.id);
+        let url = web_link(value);
+        if url.is_some() || link {
+            let label = format!("Open {name} link");
+            if crate::menu::quick_action(ui, crate::menu::MenuIcon::ExternalLink, &label, "", url.is_some()).clicked()
+                && let Some(url) = url
+            {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            }
+        } else {
+            ui.allocate_space(vec2(t.space_24, t.space_24));
+        }
+        if let Some(visible) = visible {
+            if crate::board::visibility(ui, &format!("Show {name}"), *visible).clicked() {
+                *visible = !*visible;
+            }
+        } else {
+            ui.add_enabled_ui(false, |ui| crate::board::visibility(ui, &format!("Show {name}"), false));
+        }
+        response
+    })
+    .inner
+}
+
+/// Long metadata names wrap within the compact column instead of pushing inputs off-screen.
+fn field_label_width(width: f32) -> f32 {
+    if width >= 600. { 160. } else { 96. }
+}
+
+/// Property navigation uses a quiet underline instead of another row of filled buttons.
+pub fn tabs<T: Copy + PartialEq>(ui: &mut Ui, current: &mut T, options: &[(T, &str)]) {
+    let t = Tokens::get();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = t.space_16;
+        for (value, label) in options {
+            let selected = *current == *value;
+            let response =
+                ui.add(egui::Button::selectable(selected, RichText::new(*label).color(if selected { t.text } else { t.text_dim })).frame(false));
+            if selected {
+                ui.painter().hline(response.rect.x_range(), response.rect.bottom() + t.space_4, egui::Stroke::new(2., t.accent));
+            }
+            if response.clicked() {
+                *current = *value;
+            }
+        }
+    });
+    ui.add_space(t.space_8);
+}
+
+/// Recognize absolute HTTP(S) field links with a nonempty authority. Whitespace, control
+/// characters and backslashes are rejected; opening stays a host action, separate from editing.
+pub fn web_link(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let (scheme, rest) = value.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    ((scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http"))
+        && !authority.is_empty()
+        && !authority.starts_with(':')
+        && !value.chars().any(|c| c.is_whitespace() || c.is_control() || c == '\\'))
+    .then_some(value)
+}
+
+#[cfg(test)]
+mod link_tests {
+    /// Ordinary URL fields open on either host, while non-web values remain plain metadata.
+    #[test]
+    fn only_absolute_web_links_are_openable() {
+        for value in ["https://example.com/data.pdf", "http://localhost:8080/a?b=c#d", "HTTPS://example.com"] {
+            assert_eq!(super::web_link(value), Some(value));
+        }
+        assert_eq!(super::web_link(" https://example.com "), Some("https://example.com"));
+        for value in [
+            "",
+            "~",
+            "manual.pdf",
+            "file:///tmp/manual.pdf",
+            "javascript:alert(1)",
+            "https:///file",
+            "https://:80/file",
+            "https://exa mple.com",
+            "https://example.com\nfile",
+            "https://example.com\\file",
+        ] {
+            assert!(super::web_link(value).is_none(), "{value:?}");
+        }
+    }
 }

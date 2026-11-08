@@ -129,16 +129,17 @@ impl Edit {
 
     /// Standard optional fields remain absent until authored; custom fields have independent IDs.
     pub(super) fn metadata_fields(&mut self, ui: &mut Ui) -> bool {
-        let reference = row(ui, "Reference", &mut self.reference, self.appearance.get_mut("reference"));
+        chrome::field_header(ui);
+        let reference = row(ui, "Reference", &mut self.reference, self.appearance.get_mut("reference"), false);
         if !self.focused {
             reference.request_focus();
             self.focused = true;
         }
-        let value = row(ui, "Value", &mut self.value, self.appearance.get_mut("value"));
+        let value = row(ui, "Value", &mut self.value, self.appearance.get_mut("value"), false);
         let enter = (reference.lost_focus() || value.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
         for (id, name) in fields::STANDARD {
             let mut value = self.metadata.fields.get(id).map(|f| f.value.clone()).unwrap_or_default();
-            if row(ui, name, &mut value, self.appearance.get_mut(id)).changed() {
+            if row(ui, name, &mut value, self.appearance.get_mut(id), id == "datasheet").changed() {
                 if value.is_empty() {
                     self.metadata.fields.remove(id);
                     self.appearance.remove(id);
@@ -161,7 +162,7 @@ impl Edit {
             ui.push_id(id, |ui| {
                 ui.separator();
                 chrome::text(ui, "Field name", &mut field.name);
-                row(ui, "Field value", &mut field.value, self.appearance.get_mut(id));
+                row(ui, "Field value", &mut field.value, self.appearance.get_mut(id), false);
                 if ui.button("Remove field").clicked() {
                     remove = Some(id.clone());
                 }
@@ -229,18 +230,6 @@ impl Edit {
 }
 
 /// Field content and visibility share a row so routine editing does not require another page.
-fn row(ui: &mut Ui, name: &str, value: &mut String, appearance: Option<&mut Appearance>) -> egui::Response {
-    ui.horizontal(|ui| {
-        let available = ui.available_width();
-        let label_width = if available > 600. { 155. } else { 85. };
-        let label = ui.add_sized(egui::vec2(label_width, 0.), egui::Label::new(name).wrap());
-        let response = ui.add(chrome::input(value).desired_width((available - label_width - 70.).max(40.))).labelled_by(label.id);
-        if let Some(appearance) = appearance {
-            ui.label("Show");
-            ui.add(egui::Checkbox::without_text(&mut appearance.layout.visible))
-                .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, appearance.layout.visible, format!("Show {name}")));
-        }
-        response
-    })
-    .inner
+fn row(ui: &mut Ui, name: &str, value: &mut String, appearance: Option<&mut Appearance>, link: bool) -> egui::Response {
+    chrome::field_row(ui, name, value, appearance.map(|appearance| &mut appearance.layout.visible), link)
 }

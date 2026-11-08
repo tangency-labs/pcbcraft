@@ -748,3 +748,17 @@ consulted 7-Nov-2026. Only user-facing behavior informed this adaptation; no ven
 implementation, screenshots, icons, source-derived examples or library data were
 used. The preview reuses PCBcraft's already qualified Technical stroke-font data
 and its existing OFL notices. No dependency or external asset was added.
+
+The symbol-property presentation, independent field rotation, HTTP(S) field links,
+double-click input routing and footprint browser are original PCBcraft code built on the existing Craft chrome and native footprint
+painter. Library browsing, pin-count/text filtering and footprint-preview behavior
+were compared with the published [KiCad 10 Schematic Editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
+consulted 8-Nov-2026. Only documented user-facing behavior informed this work;
+no KiCad implementation, icons, artwork, library data or source-derived fixtures
+were used. The chooser uses existing qualified starter and project-pinned native
+definitions; no dependency or external asset was added.
+
+Independent field rotation and the D datasheet action follow the user's requested
+interaction, implemented through the existing native field-layout command and
+eframe/egui host URL output respectively. No external shortcut implementation or
+source-derived behavior was used.

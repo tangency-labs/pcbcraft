@@ -306,33 +306,30 @@ impl PcbApp {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui::Frame::new().inner_margin(pcbcraft_chrome::Tokens::get().space_16).show(ui, |ui| {
                     ui.label(shell::dim(&edit.definition.name));
-                    ui.horizontal_wrapped(|ui| {
-                        for (tab, label) in [(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")] {
-                            ui.selectable_value(&mut edit.tab, tab, label);
-                        }
-                    });
-                    ui.separator();
+                    chrome::tabs(ui, &mut edit.tab, &[(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")]);
+                    ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
                     match edit.tab {
                         Tab::General => {
-                            chrome::section(ui, "Fields");
-                            apply |= edit.metadata_fields(ui);
-                            chrome::field(ui, "Footprint", |ui| {
-                                choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).clicked();
+                            chrome::card(ui, "Component fields", |ui| {
+                                apply |= edit.metadata_fields(ui);
+                                chrome::field(ui, "Footprint", |ui| {
+                                    choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).clicked();
+                                });
+                                egui::CollapsingHeader::new("Text appearance").show(ui, |ui| edit.field_appearance(ui));
                             });
-                            egui::CollapsingHeader::new("Text appearance").show(ui, |ui| edit.field_appearance(ui));
-                            ui.separator();
+                            ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
                             let mut position_apply = false;
                             chrome::split(ui, |ui, column| {
                                 if column == 0 {
-                                    chrome::section(ui, "Placement");
-                                    chrome::field(ui, "Unit", |ui| {
-                                        ui.label(edit.definition.unit_id());
+                                    chrome::card(ui, "Placement", |ui| {
+                                        chrome::field(ui, "Unit", |ui| {
+                                            ui.label(edit.definition.unit_id());
+                                        });
+                                        chrome::rotation(ui, &mut edit.rotation);
+                                        position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
                                     });
-                                    chrome::rotation(ui, &mut edit.rotation);
-                                    position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
                                 } else {
-                                    chrome::section(ui, "Attributes");
-                                    edit.attributes(ui);
+                                    chrome::card(ui, "Attributes", |ui| edit.attributes(ui));
                                 }
                             });
                             apply |= position_apply;
@@ -414,6 +411,8 @@ mod tests {
         h.run();
         click(&mut h, "More properties ↗");
         assert_eq!(h.get_by_label("Value").value().as_deref(), Some("4.7k"));
+        h.get_by_label("Rotation").scroll_to_me();
+        h.run();
         click(&mut h, "Rotation");
         click(&mut h, "90°");
         let revision = h.state().session.revision();
