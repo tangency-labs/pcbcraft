@@ -1445,6 +1445,8 @@ fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod live_mcp {
+    mod coordinate_properties;
+
     use std::{
         thread,
         time::{Duration, Instant},

@@ -397,7 +397,7 @@ pub const MOVE_SYMBOL: &str = "schematic.move_symbol";
 pub const ROTATE_SYMBOL: &str = "schematic.rotate_symbol";
 /// Remove a symbol and the wires attached to it.
 pub const DELETE_SYMBOL: &str = "schematic.delete_symbol";
-/// Set a symbol's reference and value text.
+/// Set component fields and optional placed-symbol coordinates/orientation in one undo step.
 pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
@@ -751,7 +751,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: SET_SYMBOL_FIELDS,
         title: "Edit Symbol Fields",
-        summary: "Set reference, value and optional orientation together. References are unique and have no spaces. Undoable.",
+        summary: "Set reference, value and optional placement together. Attached wires follow position changes. References are unique and have no spaces. Undoable.",
         params: &[
             SYMBOL,
             Param { required: true, name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
@@ -762,7 +762,10 @@ const CATALOG: &[Command] = &[
                 summary: "Counterclockwise degrees; omission preserves orientation",
                 kind: ParamKind::Rotation,
             },
+            Param { required: false, ..SYMBOL_X },
+            Param { required: false, ..SYMBOL_Y },
             EXPECTED_REVISION,
+            AUTO_HEAL,
         ],
     },
     Command {
@@ -1669,8 +1672,10 @@ impl Session {
     }
 
     /// Set component-owned fields through a placed unit. References must be unique across
-    /// components; both fields are bounded single-line text. Optional orientation changes in the
-    /// same transaction, preserving attached endpoints. Omission retains it; unchanged edits are no-ops.
+    /// components; both fields are bounded single-line text. Optional orientation and center axes
+    /// change in the same transaction; omitted placement fields retain their values. Center changes
+    /// share Move Symbol's exact contacts and optional healing, preserving attached wires. Any
+    /// validation/contact failure rejects the entire edit; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1685,16 +1690,30 @@ impl Session {
             return Err(CommandError::InvalidParams(format!("another component is already {reference}")));
         }
         let rotation = params["rotation"].as_u64().map_or(project.symbols[index].rotation, |degrees| (degrees / 90) as u8);
-        if component.reference == reference && component.value == value && project.symbols[index].rotation == rotation {
+        let original_position = project.symbols[index].position;
+        let position = Point {
+            x_nm: params["x_nm"].as_i64().unwrap_or(original_position.x_nm),
+            y_nm: params["y_nm"].as_i64().unwrap_or(original_position.y_nm),
+        };
+        if component.reference == reference
+            && component.value == value
+            && project.symbols[index].rotation == rotation
+            && position == original_position
+        {
             return Ok(());
         }
         let mut component = component.clone();
         component.reference = reference;
         component.value = value;
-        let mut project = project.clone();
-        Arc::make_mut(&mut project.components).insert(component.ordinal, component);
-        Arc::make_mut(&mut project.sheet_mut().symbols)[index].rotation = rotation;
-        self.change(project);
+        let mut next = project.clone();
+        Arc::make_mut(&mut next.components).insert(component.ordinal, component);
+        let symbol = &mut Arc::make_mut(&mut next.sheet_mut().symbols)[index];
+        symbol.rotation = rotation;
+        symbol.position = position;
+        if position != original_position {
+            next = next.healed(project, self.revision(), wire::auto_heal(params))?;
+        }
+        self.change(next);
         Ok(())
     }
 
@@ -1934,6 +1953,82 @@ mod tests {
         assert!(Arc::ptr_eq(&changed, &s.snapshot().unwrap()));
         s.apply("edit.undo", &Value::Null).unwrap();
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+
+    /// Property position edits use the same wire contacts/healing as movement while committing
+    /// fields and rotation once. Invalid coordinates and stale revisions preserve all history.
+    #[test]
+    fn property_position_edits_are_atomic_and_preserve_wires() {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({})).unwrap();
+        for x_nm in [0, 25_400_000] {
+            s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":x_nm,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+        }
+        s.apply(
+            CONNECT_PINS,
+            &json!({"from":{"symbol":"symbol-2","terminal":"2"},"to":{"symbol":"symbol-3","terminal":"1"},"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        let before = s.snapshot().unwrap();
+        let revision = s.revision();
+        let mut params = json!({"symbol":"symbol-2","reference":"R7","value":"4.7k","rotation":90,
+            "x_nm":2_540_001,"y_nm":-1_270_001,"expected_revision":revision});
+        s.apply(SET_SYMBOL_FIELDS, &params).unwrap();
+        assert_eq!(s.revision(), revision + 1);
+        let changed = s.snapshot().unwrap();
+        assert_eq!(changed.symbols()[0].position, Point { x_nm: 2_540_001, y_nm: -1_270_001 });
+        assert_eq!(changed.symbols()[0].turns(), 1);
+        assert_eq!(changed.reference(&changed.symbols()[0]), "R7");
+        assert!(before.same_connectivity(&changed));
+        let documents = persistence::encode_documents(changed.clone()).unwrap();
+        assert_eq!(persistence::encode_documents(persistence::decode_documents(&documents).unwrap()).unwrap(), documents);
+        let inspected = s.inspect();
+        for (key, value) in [("x_nm", json!(MAX_CENTER_NM + 1)), ("y_nm", json!("1 mm")), ("x_nm", Value::Null)] {
+            let mut invalid = params.clone();
+            invalid["expected_revision"] = json!(s.revision());
+            invalid["value"] = json!("must not apply");
+            invalid[key] = value;
+            assert!(s.apply(SET_SYMBOL_FIELDS, &invalid).is_err());
+            assert_eq!(s.inspect(), inspected);
+        }
+        assert!(s.apply(SET_SYMBOL_FIELDS, &params).is_err(), "stale revision");
+        params["expected_revision"] = json!(s.revision());
+        params.as_object_mut().unwrap().remove("y_nm");
+        s.apply(SET_SYMBOL_FIELDS, &params).unwrap();
+        assert_eq!(s.inspect(), inspected, "omitted axes retain exact positions and an unchanged edit is a no-op");
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        s.apply("edit.redo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&changed, &s.snapshot().unwrap()));
+    }
+
+    /// A coordinate edit that would drop a pin on an ambiguous wire crossing rejects its field
+    /// changes too, whether automatic wire cleanup is enabled or disabled.
+    #[test]
+    fn ambiguous_property_moves_reject_the_whole_draft() {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({})).unwrap();
+        let g = schematic::GRID_NM;
+        for (from, to) in [
+            (Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 20 * g, y_nm: 0 }),
+            (Point { x_nm: 10 * g, y_nm: -10 * g }, Point { x_nm: 10 * g, y_nm: 10 * g }),
+        ] {
+            s.apply(DRAW_WIRE, &json!({"from":from,"to":to,"bends":[],"expected_revision":s.revision()})).unwrap();
+        }
+        s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":40*g,"y_nm":40*g,"expected_revision":s.revision()})).unwrap();
+        let before = s.inspect();
+        let symbol = s.project().unwrap().symbols()[0].id();
+        for auto_heal in [true, false] {
+            assert!(
+                s.apply(
+                    SET_SYMBOL_FIELDS,
+                    &json!({"symbol":symbol,"reference":"R7","value":"not applied",
+                "x_nm":14*g,"y_nm":0,"auto_heal":auto_heal,"expected_revision":s.revision()})
+                )
+                .is_err()
+            );
+            assert_eq!(s.inspect(), before);
+        }
     }
 
     /// Rotating turns the pins and the wire follows; deleting removes the symbol with its wires
