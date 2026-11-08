@@ -85,6 +85,10 @@ See [named nets](net-labels.md) for contact rules and current limits.
    platform. Try the original [Workshop source example](native-library-sources.md),
    then select Workshop in the catalog. Placed symbols keep their pinned
    definition and license attribution after the source is removed.
+   **Dock** switches the large form to a compact catalog beneath Browser; its
+   header's **Expand** control returns to the large form with the same library,
+   search and selection. The compact catalog stays open during placement and can
+   be floated or docked at either edge from its **…** menu.
 3. Click an unconnected pin or free wire end to start directly, or hover a pin,
    wire or grid point and press **W** to start there immediately. Connected nodes
    use W or **Capture → Wire**, which waits for a first click. The green wire cursor
@@ -132,7 +136,7 @@ The status bar shows the grid point under the pointer; click its unit, or press
 and a middle-button drag pans by default. Preferences can change
 wheel behavior, zoom direction/speed, theme and UI scale. Browser and Net Inspector
 use collapsible cards over the canvas; **View** restores a hidden card and opens
-the Parts Catalog. **Help → Keyboard Shortcuts**
+the Parts Catalog in its last presentation. **Help → Keyboard Shortcuts**
 shows the current bindings. Keyboard editing shortcuts apply to the canvas when
 a text field or dialog is not using the keys.
 
@@ -383,8 +387,11 @@ current `expected_revision`. Each inspected sheet includes its own schematic;
 omitting `sheet` is accepted only when one sheet exists. `view.open_sheet` takes
 `view` and `sheet` to navigate a live editor pane without editing the project.
 
-The live editor also offers window commands. Call `inspect_editor` for its view
-IDs, then split the window and switch to the light theme:
+The live editor also offers window commands, including
+`window.set_catalog_mode` with a window ID and `mode` of `expanded` or `compact`.
+It uses the same Dock/Expand handler as the catalog and leaves the project unchanged.
+Call `inspect_editor` for its window/view IDs, then split the window and switch
+to the light theme:
 
 ```json
 {"command": "view.split", "params": {"view": 0, "split": true}}

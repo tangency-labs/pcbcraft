@@ -1,9 +1,9 @@
-//! Library-aware part selection in the shared Craft catalog form. Browsing is transient;
-//! placement retains the originating view/revision and uses the shared engine commands.
+//! Library-aware selection shared by the large Craft chooser and compact dock. Browsing
+//! leaves the project untouched; placement uses captured view input and shared engine commands.
 use crate::{editor_view::ViewInput, schematic_canvas::paint_preview};
 use egui::{Rect, Ui};
 use pcbcraft_chrome::{
-    catalog as chrome, properties, shell,
+    catalog as chrome, properties,
     workspace::catalog::{self, View},
 };
 use pcbcraft_engine::{
@@ -58,12 +58,28 @@ impl Entry {
         }
     }
 }
-/// The host performs the selected action only after the catalog has closed.
+/// The host owns the placement tool or source manager; compact catalogs can remain visible.
 pub(crate) enum Pick {
     Symbol(Arc<SymbolDefinition>),
     Power(Label),
     Libraries,
     Stale,
+}
+
+/// The full chooser is the normal entry point; the compact catalog retains its own dock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum Mode {
+    #[default]
+    Expanded,
+    Compact,
+}
+
+/// Result widgets report input ownership as well as explicit placement and drag gestures.
+#[derive(Default)]
+struct Choices {
+    confirm: bool,
+    dragging: bool,
+    focused: bool,
 }
 
 #[derive(Debug)]
@@ -76,8 +92,11 @@ pub(crate) struct PartsBrowser {
     power_name: String,
     source: Option<ViewInput>,
     focus: bool,
-    /// Old panel placement remains readable in saved arrangements, without restoring a dock.
-    legacy_panel: catalog::PanelState,
+    focus_ids: Vec<egui::Id>,
+    reveal_selection: bool,
+    mode: Mode,
+    panel: catalog::Panel,
+    rect: Rect,
 }
 impl Default for PartsBrowser {
     /// Catalogs open explicitly and start with readable list rows and a separate large preview.
@@ -91,17 +110,29 @@ impl Default for PartsBrowser {
             power_name: String::new(),
             source: None,
             focus: false,
-            legacy_panel: Default::default(),
+            focus_ids: Vec::new(),
+            reveal_selection: false,
+            mode: Mode::Expanded,
+            panel: catalog::Panel::at_position(catalog::Position::Left),
+            rect: Rect::NOTHING,
         }
     }
 }
-/// Retain the old arrangement vocabulary without persisting an open modal or pointer gesture.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+/// Save compact presentation while keeping open modal forms and pointer gestures transient.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PartsState {
     open: bool,
     view: View,
     panel: catalog::PanelState,
+    #[serde(default)]
+    mode: Mode,
+}
+impl Default for PartsState {
+    /// New compact catalogs start docked beneath Browser; the full chooser starts closed.
+    fn default() -> Self {
+        PartsBrowser::default().saved_state()
+    }
 }
 impl PartsState {
     /// Previously saved dock coordinates remain validated compatibility data.
@@ -110,13 +141,19 @@ impl PartsState {
     }
 }
 impl PartsBrowser {
-    /// Save presentation; an open chooser is transient and does not reopen on project restore.
+    /// Persist the compact dock's placement and visibility, never an open modal or live input.
     pub(super) fn saved_state(&self) -> PartsState {
-        PartsState { open: false, view: self.view, panel: self.legacy_panel.clone() }
+        PartsState { open: self.open && self.mode == Mode::Compact, view: self.view, panel: self.panel.saved_state(), mode: self.mode }
     }
-    /// Restore display density and compatible legacy data, keeping the modal initially closed.
+    /// Restore a compact dock and density; older states have no mode and keep the chooser closed.
     pub(super) fn from_state(state: &PartsState) -> Self {
-        Self { view: state.view, legacy_panel: state.panel.clone(), ..Default::default() }
+        Self {
+            open: state.open && state.mode == Mode::Compact,
+            mode: state.mode,
+            view: state.view,
+            panel: catalog::Panel::from_state(&state.panel),
+            ..Default::default()
+        }
     }
     /// Release only this catalog's keyboard ownership when another native host takes focus.
     pub(super) fn release_focus(&mut self, ctx: &egui::Context) {
@@ -136,6 +173,7 @@ impl PartsBrowser {
             self.selected = None;
         }
         self.open = true;
+        self.panel.expand();
         self.focus = true;
         self.source = None;
     }
@@ -144,7 +182,9 @@ impl PartsBrowser {
         self.collection = Collection::Power;
         self.query.clear();
         self.selected = None;
+        self.reveal_selection = true;
         self.open = true;
+        self.panel.expand();
         self.focus = true;
         self.source = None;
     }
@@ -153,167 +193,168 @@ impl PartsBrowser {
         self.open = false;
         self.source = None;
         self.focus = false;
+        self.rect = Rect::NOTHING;
         egui::DragAndDrop::clear_payload(ctx);
         ctx.request_repaint();
     }
-    /// Escape dismisses the complete form before any canvas tool can consume the key.
+    /// Escape first cancels a panel drag. Modal Escape closes the chooser; compact search
+    /// yields keyboard focus before the canvas can cancel its active placement tool.
     pub(crate) fn take_escape(&mut self, ctx: &egui::Context) -> bool {
-        if self.open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        if !self.open {
+            return false;
+        }
+        let pressed = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if self.mode == Mode::Compact {
+            if pressed && self.panel.cancel_drag() {
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                return true;
+            }
+            if pressed && self.focused(ctx) {
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                self.release_focus(ctx);
+                return true;
+            }
+            return false;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.close(ctx);
             true
         } else {
             false
         }
     }
-    /// Catalog forms do not consume canvas geometry or participate in camera fitting.
+    /// Only an open compact catalog covers the canvas and participates in camera fitting.
     pub(crate) fn rect(&self) -> Rect {
-        Rect::NOTHING
+        if self.open && self.mode == Mode::Compact { self.rect } else { Rect::NOTHING }
     }
-    /// Browser layout remains independent of an open modal catalog.
+    /// Keep a left-docked compact catalog beneath Browser without resizing the canvas.
     pub(crate) fn browser_area(&self, canvas: Rect) -> Rect {
-        canvas
+        if self.open && self.mode == Mode::Compact { self.panel.browser_area(canvas) } else { canvas }
     }
 
-    /// Present libraries, filtered results and selected geometry using the merged source-manager
-    /// form rhythm. Confirm/double-click/Enter starts placement; a stale view refuses the choice.
-    pub(crate) fn show(&mut self, ui: &Ui, source: ViewInput, libraries: &library::sources::Catalog) -> Option<Pick> {
+    /// The expanded catalog owns modal input; compact catalogs leave ordinary canvas tools usable.
+    pub(crate) fn is_modal(&self) -> bool {
+        self.open && self.mode == Mode::Expanded
+    }
+
+    /// Name the window's current catalog presentation for editor inspection.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn presentation(&self) -> &'static str {
+        if self.mode == Mode::Compact { "compact" } else { "expanded" }
+    }
+
+    /// GUI and live window commands switch the same catalog state and keep it visible.
+    pub(super) fn set_compact(&mut self, ctx: &egui::Context, compact: bool) {
+        self.open = true;
+        self.set_mode(if compact { Mode::Compact } else { Mode::Expanded }, ctx);
+    }
+
+    /// Only fields belonging to this catalog may consume compact-mode Enter or Escape.
+    fn focused(&self, ctx: &egui::Context) -> bool {
+        ctx.memory(|m| m.focused().is_some_and(|id| self.focus_ids.contains(&id)))
+    }
+
+    /// Change presentation without losing browsing state. A new presentation captures fresh
+    /// view authority; unfinished panel drags and drag payloads cannot cross that boundary.
+    fn set_mode(&mut self, mode: Mode, ctx: &egui::Context) {
+        self.panel.cancel_drag();
+        self.panel.expand();
+        self.mode = mode;
+        self.source = None;
+        self.rect = Rect::NOTHING;
+        self.focus_ids.clear();
+        self.focus = true;
+        self.reveal_selection = true;
+        egui::DragAndDrop::clear_payload(ctx);
+        ctx.request_repaint();
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
+    }
+
+    /// Share catalog state across the expanded chooser and compact dock. Modal choices retain
+    /// their opening view/revision; nonmodal placement gestures capture the current view.
+    pub(crate) fn show(&mut self, ui: &Ui, canvas: Rect, browser: Rect, source: ViewInput, libraries: &library::sources::Catalog) -> Option<Pick> {
         if !self.open {
             return None;
         }
-        let owner = *self.source.get_or_insert(source);
+        let expanded = self.mode == Mode::Expanded;
+        let owner = if expanded { *self.source.get_or_insert(source) } else { source };
         let all = entries("", libraries);
-        let all_libraries = libraries.inspect();
+        let sources = libraries.inspect();
         let query = self.query.trim().to_lowercase();
         let entries: Vec<_> = entries(&query, libraries).into_iter().filter(|e| e.in_collection(&self.collection)).collect();
         if self.selected.is_none() {
             self.selected = entries.first().map(Entry::key);
             self.power_name = entries.first().filter(|e| matches!(e, Entry::Power(..))).map_or(String::new(), |e| e.name().into());
         }
-        let mut confirm = false;
-        let mut dragging = false;
+        self.focus_ids.clear();
         let enabled = entries.iter().any(|e| Some(e.key()) == self.selected) && valid_power_name(&self.power_name, self.selected.as_ref());
-        let action = chrome::form(ui.ctx(), "parts_catalog", "Parts Catalog", 1108., "Place", enabled, true, |ui| {
-            chrome::toolbar(ui, if ui.available_width() < 900. { 2 } else { 1 }, |ui| {
-                let search = ui
-                    .add_sized(
-                        [ui.available_width(), pcbcraft_chrome::Tokens::get().control_height],
-                        egui::TextEdit::singleline(&mut self.query).hint_text("Search parts"),
-                    )
-                    .on_hover_text("Search parts");
-                search.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search parts"));
-                if search.changed() {
-                    self.selected = None;
-                }
-                if std::mem::take(&mut self.focus) {
-                    search.request_focus();
-                }
-                if ui.available_width() < 900. {
-                    let mut choices: Vec<_> =
-                        [(Collection::All, "All libraries".to_owned()), (Collection::Power, "Power".to_owned())]
-                            .into_iter()
-                            .chain(all_libraries.as_array().into_iter().flatten().filter_map(|source| {
-                                Some((Collection::Library(source["library"].as_str()?.into()), source["name"].as_str()?.into()))
-                            }))
-                            .collect();
-                    if let Collection::Library(id) = &self.collection
-                        && !choices.iter().any(|(collection, _)| collection == &self.collection)
-                    {
-                        choices.push((self.collection.clone(), format!("{id} (unavailable)")));
+        let mut choices = Choices::default();
+        let mut action = if expanded {
+            chrome::form(ui.ctx(), "parts_catalog", "Parts Catalog", 1108., "Place", enabled, true, ui.is_enabled(), |ui| {
+                chrome::toolbar(ui, if ui.available_width() < 900. { 2 } else { 1 }, |ui| {
+                    self.search(ui);
+                    if ui.available_width() < 900. {
+                        self.library_selector(ui, &sources);
                     }
-                    let keys: Vec<_> = choices
-                        .iter()
-                        .map(|(choice, _)| match choice {
-                            Collection::All => "all".to_owned(),
-                            Collection::Power => "power".to_owned(),
-                            Collection::Library(id) => format!("library:{id}"),
-                        })
-                        .collect();
-                    let mut value =
-                        choices.iter().position(|(choice, _)| *choice == self.collection).map(|i| keys[i].clone()).unwrap_or_else(|| "all".into());
-                    let options: Vec<_> = keys.iter().zip(&choices).map(|(key, (_, name))| (key.as_str(), name.clone())).collect();
-                    properties::choice(ui, "Library", ui.id().with("catalog_library"), &mut value, &options);
-                    if let Some(index) = keys.iter().position(|key| *key == value)
-                        && self.collection != choices[index].0
-                    {
-                        self.collection = choices[index].0.clone();
-                        self.selected = None;
+                });
+                chrome::panes(ui, |ui, region| match region {
+                    chrome::Region::Libraries => {
+                        pcbcraft_chrome::library_sources::heading(ui, "Libraries", sources.as_array().map_or(1, |s| s.len() + 1));
+                        pcbcraft_chrome::library_sources::list(ui, "catalog_libraries", |ui| self.library_rows(ui, &all, &sources));
                     }
-                }
-            });
-            chrome::panes(ui, |ui, region| match region {
-                chrome::Region::Libraries => {
-                    pcbcraft_chrome::library_sources::heading(ui, "Libraries", all_libraries.as_array().map_or(1, |s| s.len() + 1));
-                    pcbcraft_chrome::library_sources::list(ui, "catalog_libraries", |ui| self.library_rows(ui, &all, &all_libraries));
-                }
-                chrome::Region::Results => {
-                    pcbcraft_chrome::library_sources::heading(ui, "Parts", entries.len());
-                    let view = catalog::view_picker(ui, &mut self.view, false);
-                    if entries.is_empty() {
-                        ui.label(shell::dim("No matching parts"));
+                    chrome::Region::Results => {
+                        pcbcraft_chrome::library_sources::heading(ui, "Parts", entries.len());
+                        choices = self.results(ui, &entries, owner, false);
                     }
-                    catalog::grid(ui, view, &entries, |ui, entry, width| {
-                        let identity = match entry {
-                            Entry::Symbol(s) if s.library != "starter" => Some(format!("{}/{} r{}", s.library, s.id, s.revision())),
-                            _ => None,
-                        };
-                        let value = match entry {
-                            Entry::Symbol(s) => s.default_value(),
-                            Entry::Power(_, Style::Ground) => "Ground",
-                            Entry::Power(..) => "Power",
-                        };
-                        let response = catalog::tile(
-                            ui,
-                            view,
-                            width,
-                            catalog::Item { name: entry.name(), value, identity: identity.as_deref(), selected: self.selected == Some(entry.key()) },
-                            |p, r, ink| paint_entry(p, r, entry, ink),
-                        );
-                        if let Entry::Symbol(definition) = entry {
-                            response.dnd_set_drag_payload(crate::schematic_canvas::PartDrag { definition: definition.clone(), source: owner });
-                            dragging |= response.drag_started();
-                        }
-                        if response.clicked() {
-                            if self.selected != Some(entry.key()) {
-                                self.power_name = entry.name().into();
-                            }
-                            self.selected = Some(entry.key());
-                        }
-                        confirm |= response.double_clicked();
+                    chrome::Region::Preview => self.preview(ui, &entries, &sources),
+                });
+                choices.confirm |= ui.is_enabled() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !egui::Popup::is_any_open(ui.ctx());
+            })
+        } else {
+            let mut action = chrome::FormAction::default();
+            let mut panel = std::mem::take(&mut self.panel);
+            let (rect, header) = panel.show(ui, canvas, browser, |ui, short| {
+                self.search(ui);
+                self.library_selector(ui, &sources);
+                if matches!(self.selected, Some(Key::Power(_))) {
+                    let field = properties::text(ui, "Net name", &mut self.power_name);
+                    self.focus_ids.push(field.id);
+                }
+                choices = self.results(ui, &entries, owner, short);
+                choices.confirm |= ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && (choices.focused || self.focused(ui.ctx()))
+                    && !egui::Popup::is_any_open(ui.ctx());
+                ui.horizontal(|ui| {
+                    let response = ui.button("Libraries…");
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Manage libraries…"));
+                    action.libraries = response.clicked();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        action.primary = ui.add_enabled(enabled, egui::Button::new("Place")).clicked();
                     });
-                }
-                chrome::Region::Preview => {
-                    if let Some(entry) = entries.iter().find(|e| Some(e.key()) == self.selected) {
-                        chrome::title(ui, entry.name());
-                        chrome::preview(ui, |p, r| paint_entry(p, r, entry, pcbcraft_chrome::Tokens::get().canvas_ink));
-                        match entry {
-                            Entry::Symbol(s) => {
-                                properties::section(ui, "Symbol");
-                                properties::field(ui, "Value", |ui| {
-                                    ui.label(s.default_value());
-                                });
-                                properties::field(ui, "Pins", |ui| {
-                                    ui.label(s.pins().len().to_string());
-                                });
-                                properties::section(ui, "Source");
-                                ui.label(format!("{} · r{}", collection_name(&Collection::Library(s.library.clone()), &all_libraries), s.revision()));
-                            }
-                            Entry::Power(..) => {
-                                properties::section(ui, "Power symbol");
-                                properties::text(ui, "Net name", &mut self.power_name);
-                                properties::field(ui, "Scope", |ui| {
-                                    ui.label("Global");
-                                });
-                            }
-                        }
-                    }
-                }
+                });
             });
-            confirm |= ui.input(|i| i.key_pressed(egui::Key::Enter)) && !egui::Popup::is_any_open(ui.ctx());
-        });
-        if dragging {
-            self.open = false;
-            self.source = None;
-            self.focus = false;
+            self.panel = panel;
+            self.rect = rect;
+            if header.expand {
+                self.set_compact(ui.ctx(), false);
+                return None;
+            }
+            action.close = header.close;
+            action
+        };
+        if !ui.is_enabled() {
+            return None;
+        }
+        if action.compact {
+            self.set_compact(ui.ctx(), true);
+            return None;
+        }
+        if choices.dragging {
+            if expanded {
+                self.open = false;
+                self.source = None;
+            }
+            self.release_focus(ui.ctx());
             return None;
         }
         if action.close {
@@ -324,7 +365,8 @@ impl PartsBrowser {
             self.close(ui.ctx());
             return Some(Pick::Libraries);
         }
-        if (action.primary || confirm) && enabled && valid_power_name(&self.power_name, self.selected.as_ref()) {
+        action.primary |= choices.confirm;
+        if action.primary && enabled && valid_power_name(&self.power_name, self.selected.as_ref()) {
             if owner != source {
                 self.close(ui.ctx());
                 return Some(Pick::Stale);
@@ -335,10 +377,142 @@ impl PartsBrowser {
                     Pick::Power(Label { id: 0, name: self.power_name.clone(), style: *style, at: Point { x_nm: 0, y_nm: 0 }, rotation: 0 })
                 }
             });
-            self.close(ui.ctx());
+            if expanded {
+                self.close(ui.ctx());
+            } else {
+                self.release_focus(ui.ctx());
+            }
             return picked;
         }
         None
+    }
+
+    /// Both catalog presentations edit the same query and explicitly own their search focus.
+    fn search(&mut self, ui: &mut Ui) {
+        let response = ui.add_sized(
+            [ui.available_width(), pcbcraft_chrome::Tokens::get().control_height],
+            egui::TextEdit::singleline(&mut self.query).hint_text("Search parts"),
+        );
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), "Search parts"));
+        self.focus_ids.push(response.id);
+        if response.changed() {
+            self.selected = None;
+            self.reveal_selection = true;
+        }
+        if std::mem::take(&mut self.focus) {
+            response.request_focus();
+        }
+    }
+
+    /// Library filters use stable source IDs and retain unavailable selections until an explicit
+    /// choice, so removing a source cannot silently substitute a remaining part.
+    fn library_selector(&mut self, ui: &mut Ui, sources: &serde_json::Value) {
+        let mut choices: Vec<_> = [(Collection::All, "All libraries".to_owned()), (Collection::Power, "Power".to_owned())]
+            .into_iter()
+            .chain(
+                sources
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|s| Some((Collection::Library(s["library"].as_str()?.into()), s["name"].as_str()?.into()))),
+            )
+            .collect();
+        if let Collection::Library(id) = &self.collection
+            && !choices.iter().any(|(collection, _)| collection == &self.collection)
+        {
+            choices.push((self.collection.clone(), format!("{id} (unavailable)")));
+        }
+        let keys: Vec<_> = choices
+            .iter()
+            .map(|(choice, _)| match choice {
+                Collection::All => "all".to_owned(),
+                Collection::Power => "power".to_owned(),
+                Collection::Library(id) => format!("library:{id}"),
+            })
+            .collect();
+        let mut value = choices.iter().position(|(choice, _)| *choice == self.collection).map(|i| keys[i].clone()).unwrap_or_else(|| "all".into());
+        let options: Vec<_> = keys.iter().zip(&choices).map(|(key, (_, name))| (key.as_str(), name.clone())).collect();
+        properties::choice(ui, "Library", ui.id().with("catalog_library"), &mut value, &options);
+        if let Some(index) = keys.iter().position(|key| *key == value)
+            && self.collection != choices[index].0
+        {
+            self.collection = choices[index].0.clone();
+            self.selected = None;
+            self.reveal_selection = true;
+        }
+    }
+
+    /// Render identical selected identities and drag payloads in either presentation. Compact
+    /// rows keep selection separate from placement; double-click and focused Enter can confirm.
+    fn results(&mut self, ui: &mut Ui, entries: &[Entry], owner: ViewInput, short: bool) -> Choices {
+        let mut choices = Choices::default();
+        let view = catalog::view_picker(ui, &mut self.view, short);
+        let reveal = self.reveal_selection.then(|| entries.iter().position(|entry| Some(entry.key()) == self.selected)).flatten();
+        if reveal.is_some() {
+            self.reveal_selection = false;
+        }
+        catalog::grid(ui, view, entries, reveal, |ui, entry, width| {
+            let identity = match entry {
+                Entry::Symbol(s) if s.library != "starter" => Some(format!("{}/{} r{}", s.library, s.id, s.revision())),
+                _ => None,
+            };
+            let value = match entry {
+                Entry::Symbol(s) => s.default_value(),
+                Entry::Power(_, Style::Ground) => "Ground",
+                Entry::Power(..) => "Power",
+            };
+            let response = catalog::tile(
+                ui,
+                view,
+                width,
+                catalog::Item { name: entry.name(), value, identity: identity.as_deref(), selected: self.selected == Some(entry.key()) },
+                |p, r, ink| paint_entry(p, r, entry, ink),
+            );
+            if let Entry::Symbol(definition) = entry {
+                response.dnd_set_drag_payload(crate::schematic_canvas::PartDrag { definition: definition.clone(), source: owner });
+                choices.dragging |= response.drag_started();
+            }
+            if response.clicked() {
+                if self.selected != Some(entry.key()) {
+                    self.power_name = entry.name().into();
+                }
+                self.selected = Some(entry.key());
+            }
+            choices.confirm |= response.double_clicked();
+            choices.focused |= response.has_focus();
+        });
+        choices
+    }
+
+    /// Keep definition metadata and custom rail names in the full preview pane; compact mode
+    /// uses the same tile painter and name field without duplicating this large preview.
+    fn preview(&mut self, ui: &mut Ui, entries: &[Entry], sources: &serde_json::Value) {
+        let Some(entry) = entries.iter().find(|e| Some(e.key()) == self.selected) else {
+            return;
+        };
+        chrome::title(ui, entry.name());
+        chrome::preview(ui, |p, r| paint_entry(p, r, entry, pcbcraft_chrome::Tokens::get().canvas_ink));
+        match entry {
+            Entry::Symbol(s) => {
+                properties::section(ui, "Symbol");
+                properties::field(ui, "Value", |ui| {
+                    ui.label(s.default_value());
+                });
+                properties::field(ui, "Pins", |ui| {
+                    ui.label(s.pins().len().to_string());
+                });
+                properties::section(ui, "Source");
+                ui.label(format!("{} · r{}", collection_name(&Collection::Library(s.library.clone()), sources), s.revision()));
+            }
+            Entry::Power(..) => {
+                properties::section(ui, "Power symbol");
+                let field = properties::text(ui, "Net name", &mut self.power_name);
+                self.focus_ids.push(field.id);
+                properties::field(ui, "Scope", |ui| {
+                    ui.label("Global");
+                });
+            }
+        }
     }
     /// Render actual loaded library identities independently of search terms and display names.
     fn library_rows(&mut self, ui: &mut Ui, entries: &[Entry], sources: &serde_json::Value) {
@@ -356,6 +530,7 @@ impl PartsBrowser {
             if response.clicked() {
                 self.collection = collection;
                 self.selected = None;
+                self.reveal_selection = true;
             }
         }
     }

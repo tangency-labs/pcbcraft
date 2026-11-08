@@ -1732,3 +1732,56 @@ fn arrangement_dialog_stays_in_its_host_when_main_enters_a_library_workspace() {
     assert!(h.query_by_label("Arrangement name").is_none());
     assert!(peer.borrow().nodes.values().any(|n| n.role() == egui::accesskit::Role::TextInput));
 }
+
+/// A detached host switches only its own catalog, preserving its query and the shared
+/// document while the main host retains its independent catalog presentation.
+#[test]
+fn detached_catalog_switches_forms_without_moving_state_to_the_main_host() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let before = h.state().session.snapshot().unwrap();
+    child_key(&mut h, &peer, Key::A, Modifiers::NONE);
+    peer.borrow_mut().events.push(Event::Text("cap".into()));
+    h.run();
+    let dock = child_rect(&peer, "Dock Parts Catalog").center();
+    child_click_at(&mut h, &peer, dock);
+    assert_eq!(h.state().host_panels(HostId(1)).catalog_mode, "compact");
+    assert!(!h.state().parts.open);
+    let expand = child_rect(&peer, "Expand Parts Catalog").center();
+    child_click_at(&mut h, &peer, expand);
+    assert_eq!(h.state().host_panels(HostId(1)).catalog_mode, "expanded");
+    assert!(peer.borrow().nodes.values().any(|node| node.value() == Some("cap")));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// A root dialog blocks an already-open child catalog in either presentation, including
+/// placement, Enter and mode controls; closing the dialog returns the same catalog state.
+#[test]
+fn root_dialog_blocks_both_child_catalog_presentations() {
+    for compact in [false, true] {
+        let (mut h, peer) = multi_window();
+        detach(&mut h);
+        child_key(&mut h, &peer, Key::A, Modifiers::NONE);
+        if compact {
+            let dock = child_rect(&peer, "Dock Parts Catalog").center();
+            child_click_at(&mut h, &peer, dock);
+        }
+        let child = h.state().views.hosts[&HostId(1)].focused;
+        focus(&mut h, &peer, false);
+        click(&mut h, "Preferences");
+        let before = h.state().session.inspect();
+        let mode = h.state().host_panels(HostId(1)).catalog_mode;
+        let place = child_rect(&peer, "Place").center();
+        child_click_at(&mut h, &peer, place);
+        child_key(&mut h, &peer, Key::Enter, Modifiers::NONE);
+        let switch = child_rect(&peer, if compact { "Expand Parts Catalog" } else { "Dock Parts Catalog" }).center();
+        child_click_at(&mut h, &peer, switch);
+        assert!(h.state().views.view(child).unwrap().schematic.tool.is_none());
+        assert_eq!(h.state().host_panels(HostId(1)).catalog_mode, mode);
+        assert!(h.state().host_panels(HostId(1)).parts);
+        assert_eq!(h.state().session.inspect(), before);
+        focus(&mut h, &peer, false);
+        click(&mut h, "Cancel");
+        assert_eq!(h.state().host_panels(HostId(1)).catalog_mode, mode);
+    }
+}

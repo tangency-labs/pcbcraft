@@ -648,3 +648,12 @@ properties reuse the shared aligned fields. The published [KiCad 10 Schematic Ed
 informed the library-selection, preview and confirmation workflow;
 no KiCad implementation source, artwork, library data or fixtures were used.
 No dependency or third-party asset was added for this UI revision.
+
+
+The optional compact Parts Catalog restores the already qualified floating-card,
+edge docking and collapse implementation in `crates/chrome/src/workspace/catalog.rs`.
+Its new Expand glyph, large-form Dock control and shared presentation state are
+original upstream code. Both forms use the same native source catalog and typed
+placement paths, with original regression fixtures and no new dependencies or
+external assets. Compact layout persistence is user-local presentation data;
+project document encodings are unchanged by this UI revision.

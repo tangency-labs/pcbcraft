@@ -92,13 +92,27 @@ additional libraries. **Power** contains the built-in power and ground drawings.
 [symbol library format](symbol-library.md) for native definitions.
 
 Click a result to inspect its drawing, value and source, then choose **Place**.
-Double-clicking a result or pressing **Enter** also starts placement. The catalog
-closes, leaving a preview on the full canvas; click to place it, **R** to rotate,
-or **Esc** to cancel. A result can also be dragged directly onto the sheet.
-**Cancel**, **Esc** or the header's **×** closes the catalog without changing the
-project. Reopening retains its search and result density. On narrower windows,
-a Library selector replaces the navigation pane; the smallest forms have Parts
-and Preview tabs. The catalog does not dock or reserve canvas space.
+Double-clicking a result or pressing **Enter** also starts placement. In the large
+form, the catalog closes and leaves a preview on the canvas; click to place it,
+**R** to rotate or **Esc** to cancel. A result can also be dragged directly onto
+the sheet. **Cancel**, **Esc** or the header's **×** closes the large form without
+changing the project. On narrower hosts, a Library selector replaces its
+navigation pane; the smallest forms have Parts and Preview tabs.
+
+**Dock** in the large form switches to a compact catalog, initially docked
+beneath Browser. Its header's **Expand** control returns to the large form.
+Both presentations keep the same library, query, selection, result density and
+custom power name, and reopening uses the last presentation. The compact catalog
+stays open after Place or a drag onto the sheet. **A** focuses its search; **Esc**
+releases search focus before another Escape cancels a canvas tool.
+
+Drag the compact header to float the catalog or release it near an edge to dock.
+Its **…** menu also offers **Float**, **Dock left** and **Dock right**. The chevron
+collapses it to its header, and **×** closes it. Returning from the large form
+preserves the compact catalog's position. Docking overlays the canvas without
+resizing it; **Fit** keeps the drawing clear of the visible cards. Compact mode
+and its placement/visibility are retained in saved arrangements; an open large
+form and unfinished input gestures are not restored.
 
 New resistors, capacitors, LEDs and two-pin connectors use shorter leads from
 revision 2 of the starter symbols; saved revision 1 parts retain their original
@@ -275,8 +289,9 @@ and deletion behavior.
 Each pane keeps its camera, grid and edit selection while sharing the project's
 commands, undo history and saving. Click a pane or its header to activate it;
 the header underline marks that window's focused view. Browser and Net Inspector
-stay in place and target that view. Opening the Parts Catalog captures that view
-for placement; a stale choice cannot edit a different view or newer project state. Selecting a sheet in Browser or
+stay in place and target that view. The large Parts Catalog captures its opening
+view/revision; compact placement captures the current view when the gesture starts.
+A stale drag or modal choice cannot edit a different view or newer project state. Selecting a sheet in Browser or
 switching workspace changes that pane without adding document tabs.
 
 On the desktop, **View → New window** opens another view without moving an

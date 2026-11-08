@@ -1157,7 +1157,7 @@ impl PcbApp {
             && !self.home
             && !self.project_action_pending()
             && matches!(self.dialog, Dialog::None)
-            && !self.parts.open
+            && !self.parts.is_modal()
             && !egui::Popup::is_any_open(ui.ctx());
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
@@ -1400,7 +1400,8 @@ impl PcbApp {
     /// Route shortcuts only from the addressed view, outside text fields and dialogs. A different
     /// view leaves the keys unconsumed. Assistant focus suppresses canvas tools.
     /// On Home, Escape returns to the workspace and the canvas keys do nothing. In the workspace,
-    /// Escape dismisses the Parts Catalog before cancelling a tool, after popups have priority.
+    /// Escape closes the expanded catalog or releases compact search focus before cancelling
+    /// a canvas tool, after popups have priority.
     fn shortcuts(&mut self, ctx: &egui::Context, assistant_keys: bool, view: ViewId) {
         if view != self.views.active.id() || !ctx.input(|input| input.focused) || self.project_action_pending() {
             return;
@@ -1445,7 +1446,7 @@ impl PcbApp {
                 let _ = self.navigate_board_layer(view, direction);
             }
         }
-        if self.parts.open || ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
+        if self.parts.is_modal() || ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
             return;
         }
         let pressed = |shortcut: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(shortcut));

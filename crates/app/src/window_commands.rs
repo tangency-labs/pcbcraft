@@ -311,6 +311,7 @@ mod live {
     const SCROLL: &[&str] = &["zoom", "pan"];
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
     const PANELS: &[&str] = &["browser", "parts", "nets", "properties"];
+    const CATALOG_MODES: &[&str] = &["expanded", "compact"];
     const TABS: &[&str] = &["capture", "layout", "analyze", "libraries", "manage", "view"];
     const WORKSPACES: &[&str] = &["schematic", "board"];
     const PLACEMENTS: &[&str] = &["here", "beside", "window"];
@@ -596,6 +597,12 @@ mod live {
             ],
         },
         WindowCommand {
+            id: "window.set_catalog_mode",
+            title: "Catalog Presentation",
+            summary: "Show the Parts Catalog as the expanded chooser or its compact dock, retaining its library, query and selection.",
+            params: &[WINDOW, Param { name: "mode", summary: "Catalog presentation", required: true, kind: Kind::Choice(CATALOG_MODES) }],
+        },
+        WindowCommand {
             id: "window.set_ribbon_tab",
             title: "Ribbon Tab",
             summary: "Show a schematic ribbon tab (Capture, Analyze, Libraries, Manage, View) or a PCB ribbon tab (Layout, Libraries, View).",
@@ -791,6 +798,7 @@ mod live {
                     "focused_view": host.focused.0,
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties},
+                    "catalog_mode": panels.catalog_mode,
                     "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
                         0 if app.views.view(host.focused).is_some_and(|view| view.workspace == Workspace::Board) => "layout",
                         0 => "capture",
@@ -945,6 +953,7 @@ mod live {
             }
             if (id.starts_with("arrangement.")
                 || id == "window.set_panel"
+                || id == "window.set_catalog_mode"
                 || (id.starts_with("view.")
                     && !matches!(
                         id,
@@ -1153,6 +1162,18 @@ mod live {
                     };
                     let open = params["open"].as_bool() == Some(true);
                     self.in_window(host, |app| app.set_panel(ctx, panel, open));
+                }
+                ("window.set_catalog_mode", _, Some(host)) => {
+                    if !self
+                        .views
+                        .hosts
+                        .get(&host)
+                        .and_then(|host| self.views.view(host.focused))
+                        .is_some_and(|view| view.definition.is_none() && view.workspace == Workspace::Schematic)
+                    {
+                        return Err("The Parts Catalog is available in a schematic view.".into());
+                    }
+                    self.in_window(host, |app| app.parts.set_compact(ctx, params["mode"] == "compact"));
                 }
                 ("window.set_ribbon_tab", _, Some(host)) => {
                     if self.views.hosts.get(&host).and_then(|host| self.views.view(host.focused)).is_some_and(|view| view.definition.is_some()) {

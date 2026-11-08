@@ -1644,6 +1644,20 @@ mod live_mcp {
         assert_eq!(shown["windows"][0]["panels"]["browser"], true);
         harness.get_by_label("Collapse Browser");
 
+        // Catalog mode uses the same handler as Dock/Expand, including while its modal is open.
+        let compact = window(&mut harness, connection, "window.set_catalog_mode", json!({"window":0,"mode":"compact"}));
+        harness.run();
+        assert_eq!(compact["windows"][0]["catalog_mode"], "compact");
+        harness.get_by_label("Expand Parts Catalog");
+        let expanded = window(&mut harness, connection, "window.set_catalog_mode", json!({"window":0,"mode":"expanded"}));
+        harness.run();
+        assert_eq!(expanded["windows"][0]["catalog_mode"], "expanded");
+        harness.get_by_label("Dock Parts Catalog");
+        let compact = window(&mut harness, connection, "window.set_catalog_mode", json!({"window":0,"mode":"compact"}));
+        harness.run();
+        assert_eq!(compact["windows"][0]["catalog_mode"], "compact");
+        click(&mut harness, "Close Parts Catalog");
+
         // Selection, centering and grid are view state.
         let symbol = untouched.0["project"]["schematic"]["symbols"][0]["id"].clone();
         let selected = window(&mut harness, connection, "view.select", json!({"view": second, "items": {"symbols": [symbol], "wires": []}}));

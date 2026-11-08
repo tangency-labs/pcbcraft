@@ -238,12 +238,17 @@ impl Editor for LiveEditor<'_> {
         &mut self.app.session
     }
 
-    /// Hold every command while a dialog, file operation or project close owns the editor, as
-    /// the GUI disables its controls. New Project waits for unsaved changes to be saved or
+    /// Hold commands while a dialog, file operation or project close owns the editor, as the
+    /// GUI disables its controls. Catalog mode can use its own modal Dock/Expand controls.
+    /// New Project waits for unsaved changes to be saved or
     /// discarded in the editor, which is where the GUI asks.
     fn refusal(&self, command: &str) -> Option<String> {
         let app = &*self.app;
-        if !matches!(app.dialog, Dialog::None) || app.parts.open || app.files.busy() || app.project_action_pending() {
+        if !matches!(app.dialog, Dialog::None)
+            || (app.parts.is_modal() && command != "window.set_catalog_mode")
+            || app.files.busy()
+            || app.project_action_pending()
+        {
             return Some(format!("Finish the current dialog or file operation in the editor before running `{command}`"));
         }
         if command == "project.new" && app.files.dirty(&app.session) {

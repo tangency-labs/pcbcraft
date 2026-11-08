@@ -8,10 +8,12 @@ pub struct FormAction {
     pub close: bool,
     pub primary: bool,
     pub libraries: bool,
+    pub compact: bool,
 }
 
 /// A wide catalog or bounded properties form with a fixed action footer and clipped body.
 /// The supplied primary label distinguishes Place from Apply; only catalogs expose library management.
+/// `active` inherits input blocking from the owning editor, including another native host's dialog.
 #[allow(clippy::too_many_arguments)]
 pub fn form(
     ctx: &egui::Context,
@@ -21,12 +23,16 @@ pub fn form(
     primary: &str,
     enabled: bool,
     libraries: bool,
+    active: bool,
     add: impl FnOnce(&mut Ui),
 ) -> FormAction {
     let t = Tokens::get();
     let mut action = FormAction::default();
     let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_lg);
     let modal = egui::Modal::new(id.into()).frame(frame).show(ctx, |ui| {
+        if !active {
+            ui.disable();
+        }
         let width = width.min((ctx.content_rect().width() - 2. * t.space_16).max(0.));
         ui.set_width(width);
         ui.spacing_mut().item_spacing = vec2(0., 0.);
@@ -47,6 +53,12 @@ pub fn form(
             ui.painter().rect_filled(close, t.radius_sm, t.hover);
         }
         MenuIcon::Close.paint_sized(ui.painter(), close.center(), t.space_16, t, true);
+        if libraries {
+            let dock = Rect::from_min_max(close.left_top() - vec2(56., 0.), close.left_bottom() - vec2(t.space_8, 0.));
+            let response = ui.put(dock, egui::Button::new("Dock").small()).on_hover_text("Show compact catalog");
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Dock Parts Catalog"));
+            action.compact = response.clicked();
+        }
         action.close = response.clicked();
         rule(ui, header.bottom(), header.x_range());
         let height = if libraries { 18. * t.control_height } else { 8. * t.control_height };
@@ -70,8 +82,8 @@ pub fn form(
             }
         });
     });
-    action.close |= modal.should_close();
-    action
+    action.close |= active && modal.should_close();
+    if active { action } else { FormAction::default() }
 }
 
 /// Consistent action surfaces match the library source manager and Preferences.

@@ -758,7 +758,7 @@ impl PcbApp {
     /// Resolve a new pointer press before consuming keyboard input. A held drag crossing the
     /// divider keeps its original owner; popups and modals do not transfer editor focus.
     pub(super) fn editor_pointer_focus(&mut self, ctx: &egui::Context) {
-        if self.parts.open || !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
+        if self.parts.is_modal() || !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
             return;
         }
         let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
@@ -984,7 +984,7 @@ impl PcbApp {
             &self.views.active.schematic.selection,
             &self.views.active.board.selection,
         );
-        if let Some(pick) = self.parts.show(ui, source, self.session.libraries()) {
+        if let Some(pick) = self.parts.show(ui, area, self.browser.rect(), source, self.session.libraries()) {
             match pick {
                 crate::parts_browser::Pick::Symbol(definition) => self.begin_placement(definition),
                 crate::parts_browser::Pick::Power(label) => {

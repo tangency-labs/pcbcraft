@@ -245,6 +245,7 @@ impl PcbApp {
             if edit.label.id == 0 { "Place" } else { "Apply" },
             true,
             false,
+            true,
             |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     egui::Frame::new().inner_margin(Tokens::get().space_16).show(ui, |ui| {
