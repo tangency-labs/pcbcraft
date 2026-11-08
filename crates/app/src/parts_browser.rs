@@ -434,9 +434,14 @@ impl PartsBrowser {
             }
             let picked = entries.iter().find(|e| Some(e.key()) == self.selected).map(|entry| match entry {
                 Entry::Symbol(symbol) => Pick::Symbol(symbol.clone()),
-                Entry::Power(preset) => {
-                    Pick::Power(Label { id: 0, name: self.power_name.clone(), style: preset.style, at: Point { x_nm: 0, y_nm: 0 }, rotation: 0 })
-                }
+                Entry::Power(preset) => Pick::Power(Label {
+                    id: 0,
+                    name: self.power_name.clone(),
+                    style: preset.style,
+                    at: Point { x_nm: 0, y_nm: 0 },
+                    rotation: 0,
+                    text: None,
+                }),
             });
             if expanded {
                 self.close(ui.ctx());

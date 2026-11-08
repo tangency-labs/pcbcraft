@@ -1,12 +1,20 @@
 //! Real controls and pointer gestures cover instance properties without moving electrical geometry.
 use super::*;
-use crate::tests::{click, harness, resistor_at_origin};
+use crate::tests::{harness, resistor_at_origin};
 use egui::{Key, Modifiers, Pos2};
 use egui_kittest::{Harness, kittest::Queryable};
 use pcbcraft_engine::{
     persistence::{decode_documents, encode_documents},
     selection::Selection,
 };
+
+/// Scroll controls into the shared form body before clicking, leaving the fixed footer visible.
+fn click(h: &mut Harness<'_, PcbApp>, label: &str) {
+    h.get_by_label(label).scroll_to_me();
+    h.run();
+    h.get_by_label(label).click();
+    h.run();
+}
 
 /// Keep field drags away from panels while testing the real schematic canvas.
 fn fixture() -> Harness<'static, PcbApp> {
@@ -126,14 +134,12 @@ fn component_fields_and_attributes_edit_through_the_expanded_form() {
     h.state_mut().select(Selection::one_symbol("symbol-2".into()));
     h.key_press(Key::E);
     h.run();
-    click(&mut h, "Fields");
     type_field(&mut h, "Manufacturer", "Example");
     type_field(&mut h, "Manufacturer part number", "ABC-123");
     type_field(&mut h, "Datasheet", "https://example.com/part.pdf");
     click(&mut h, "Add field");
     type_field(&mut h, "Field name", "Supplier code");
     type_field(&mut h, "Field value", "XYZ-789");
-    click(&mut h, "Attributes");
     click(&mut h, "Do not populate");
     click(&mut h, "Exclude from bill of materials");
     let revision = h.state().session.revision();
@@ -153,13 +159,11 @@ fn component_fields_and_attributes_edit_through_the_expanded_form() {
     click(&mut h, "Redo");
     h.key_press(Key::E);
     h.run();
-    click(&mut h, "Fields");
     type_field(&mut h, "Manufacturer", "discarded");
     click(&mut h, "Cancel");
     assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
     h.key_press(Key::E);
     h.run();
-    click(&mut h, "Fields");
     type_field(&mut h, "Field name", "Reference");
     click(&mut h, "OK");
     assert!(matches!(h.state().dialog, Dialog::EditFields(_)));
@@ -174,8 +178,9 @@ fn field_appearance_controls_preserve_physical_positions_and_reset_to_auto() {
     h.state_mut().select(Selection::one_symbol("symbol-2".into()));
     h.key_press(Key::E);
     h.run();
-    click(&mut h, "Text appearance");
-    click(&mut h, "Reference");
+    if h.query_by_label("Text height").is_none() {
+        click(&mut h, "Text appearance");
+    }
     click(&mut h, "Automatic position");
     type_field(&mut h, "Text X", "5.08 mm");
     type_field(&mut h, "Text Y", "-100 mil");
@@ -190,9 +195,11 @@ fn field_appearance_controls_preserve_physical_positions_and_reset_to_auto() {
     text_center(&h, "Reference: R1");
     h.key_press(Key::E);
     h.run();
-    click(&mut h, "Text appearance");
+    if h.query_by_label("Text height").is_none() {
+        click(&mut h, "Text appearance");
+    }
     click(&mut h, "Reset appearance");
-    click(&mut h, "Show");
+    click(&mut h, "Show Reference");
     click(&mut h, "OK");
     assert!(!h.state().session.project().unwrap().symbols()[0].field_layout["reference"].visible);
     assert!(h.output().shapes.iter().all(|s| !matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="R1")));
@@ -253,4 +260,28 @@ fn overlapping_field_drags_belong_to_the_focused_split_pane() {
     h.drop_at(start + egui::vec2(40., 35.));
     h.run();
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Default and explicitly positioned labels keep a fixed physical ratio to the symbol at zoom.
+#[test]
+fn symbol_text_scales_with_the_canvas_instead_of_staying_at_screen_size() {
+    let mut h = fixture();
+    let mut sizes = Vec::new();
+    for zoom in [0.75, 1., 4.] {
+        h.state_mut().views.active.camera.set_zoom(zoom);
+        h.run();
+        let step = h.state().views.active.camera.unit_step();
+        let size = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "R1" => Some(text.galley.job.sections[0].format.font_id.size),
+                _ => None,
+            })
+            .unwrap();
+        assert!((size / step - 1.).abs() < 0.01, "{zoom}: {size}/{step}");
+        sizes.push(size);
+    }
+    assert!((sizes[2] / sizes[1] - 4.).abs() < 0.01);
 }

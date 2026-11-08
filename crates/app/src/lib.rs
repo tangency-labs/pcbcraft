@@ -158,7 +158,7 @@ enum Dialog {
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
     Hierarchy(hierarchy::Edit),
-    NetLabel(net_labels::Edit),
+    NetLabel(Box<net_labels::Edit>),
     /// Chooses and pins a package independently of board placement.
     Footprint(footprint_assignment::Edit),
     LayerColor(board_appearance::Edit),
@@ -1716,7 +1716,7 @@ impl PcbApp {
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
-            Dialog::NetLabel(edit) => self.net_label_dialog(ctx, edit),
+            Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;

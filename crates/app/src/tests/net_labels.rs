@@ -28,6 +28,98 @@ fn at(h: &Harness<'_, PcbApp>, p: Point) -> egui::Pos2 {
     h.state().views.active.camera.screen(p, h.get_by_label("Schematic canvas").rect())
 }
 
+/// Selecting ground/power ink exposes the same captured properties in the inspector and form,
+/// including an editable drawing style and physical net-name appearance.
+#[test]
+fn power_properties_are_editable_from_the_selection_inspector() {
+    for style in ["ground", "power", "power_bar"] {
+        let mut h = editor(1200.);
+        let revision = h.state().session.revision();
+        h.state_mut().run(engine::ADD, &json!({"name":"GND","style":style,"x_nm":0,"y_nm":0,"expected_revision":revision}));
+        h.state_mut().properties_open = true;
+        h.run();
+        let point = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "GND" => Some(text.visual_bounding_rect().center()),
+                _ => None,
+            })
+            .unwrap();
+        click_canvas_at(&mut h, point);
+        assert!(h.state().views.active.schematic.selection.single_net_label().is_some());
+        name(&mut h, "GNDA");
+        click(&mut h, "Symbol");
+        click(&mut h, "Power bar");
+        click(&mut h, "More properties ↗");
+        assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("GNDA"));
+        click(&mut h, "Text appearance");
+        click(&mut h, "Automatic position");
+        for (label, value) in [("Text X", "100 mil"), ("Text Y", "150 mil"), ("Text height", "1.5 mm")] {
+            h.get_by_label(label).scroll_to_me();
+            h.run();
+            h.get_by_label(label).click();
+            h.run();
+            h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+            h.get_by_label(label).type_text(value);
+            h.run();
+        }
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        click(&mut h, "Apply");
+        assert_eq!(h.state().session.revision(), revision + 1);
+        let project = h.state().session.snapshot().unwrap();
+        let label = &project.net_labels()[0];
+        assert_eq!(label.name, "GNDA");
+        assert_eq!(label.style, Style::PowerBar);
+        assert_eq!(label.at, Point { x_nm: 0, y_nm: 0 });
+        assert_eq!(label.text.as_ref().unwrap().height_nm, 1_500_000);
+        assert_eq!(label.text.as_ref().unwrap().offset, Some(Point { x_nm: 2_540_000, y_nm: 3_810_000 }));
+        let docs = encode_documents(project.clone()).unwrap();
+        let reopened = pcbcraft_engine::persistence::decode_documents(&docs).unwrap();
+        assert_eq!(encode_documents(reopened).unwrap(), docs);
+        click(&mut h, "Undo");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        click(&mut h, "Redo");
+        assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
+        name(&mut h, "discarded");
+        click(&mut h, "More properties ↗");
+        click(&mut h, "Cancel");
+        assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("GNDA"));
+        assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// Opening a power form from the second pane retains that pane as its command source even
+/// when the shared project dialog is painted by the main host.
+#[test]
+fn power_properties_keep_their_originating_split_view() {
+    let mut h = editor(1400.);
+    let revision = h.state().session.revision();
+    h.state_mut().run(engine::ADD, &json!({"name":"VCC","style":"power_bar","x_nm":0,"y_nm":0,"expected_revision":revision}));
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    let canvas = h.get_by_label("Schematic canvas 2").rect();
+    let point = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == "VCC" && canvas.contains(t.pos) => Some(t.visual_bounding_rect().center()),
+            _ => None,
+        })
+        .unwrap();
+    click_canvas_at(&mut h, point);
+    h.key_press(Key::E);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
+    name(&mut h, "+3V3");
+    click(&mut h, "Apply");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.project().unwrap().net_labels()[0].name, "+3V3");
+}
+
 /// Power placement accepts a preset, previews rotation without editing, and commits once.
 /// Hover hotkeys edit/move/delete the label instead of any component underneath its ink.
 #[test]

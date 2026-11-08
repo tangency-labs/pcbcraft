@@ -247,19 +247,21 @@ value, orientation, X/Y position and footprint. Coordinates accept mm, mil or
 inch suffixes; bare numbers use the current display unit. Changing display units
 reformats valid drafts without applying or rounding away their stored coordinates.
 **Apply changes** commits all fields in one undo
-step. **More properties** or **E** opens the expanded form. **Fields** edits datasheet,
-description, manufacturer, manufacturer part number and named custom fields;
+step. **More properties** or **E** opens the expanded form. **General** combines
+reference, value, field visibility, datasheet, description, manufacturer,
+manufacturer part number and named custom fields;
 these belong to the selected component without changing its library definition.
 
-**Text appearance** controls visibility, name display, size, alignment, rotation
-and local offsets for each field. Drag the reference, value or another visible
+The **Text appearance** disclosure selects a field and controls its name display,
+size, alignment, rotation and local offsets. Drag the reference, value or another visible
 field on the canvas to move only its text. Its outline appears on hover; the
 preview commits on release, while Escape, focus loss or release outside the
 canvas cancels. Moving the body carries its text, and rotating the body rotates
 manual offsets while retaining the chosen text orientation. **Reset appearance**
 restores automatic placement and default appearance for that field.
 
-**Attributes** records population and output/simulation exclusions. Board
+The attributes beside placement record population and output/simulation exclusions.
+Board
 exclusion prevents placement; remove an existing footprint before excluding
 its component. BOM, position-file and simulation flags are retained intent for
 those not-yet-implemented consumers, rather than generated results.
@@ -273,6 +275,13 @@ package browser with a physical preview, explicit terminal mapping and expandabl
 source/license details. Library-definition authoring remains separate from changing
 an instance's properties.
 
+Power and ground markers also appear in the selection Properties card. Edit their
+net name, choose Ground, Power arrow or Power bar, and change position/rotation
+there or through **More properties**, **E**, double-click or **Properties…** in the
+context menu. Their text appearance controls size, visibility and a separate
+local offset while preserving the electrical anchor. Changing the net name changes
+the connected global net; changing only its text appearance leaves the wiring in place.
+
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
 **E** opens its expanded properties and **Delete** removes it with its wires.
 Right-click a symbol for the same actions, and press **Esc** to clear the selection.
@@ -281,7 +290,7 @@ Set their actual ratings in Properties; existing projects and pinned library
 revisions keep their original values.
 
 Reference and value belong to the component; position, rotation and field appearance belong to
-its placed unit. Native formats 2 and 3 record these separately, and opening a format 1
+its placed unit. Text sizes scale with the drawing when zooming. Native formats 2 and 3 record these separately, and opening a format 1
 project migrates it on the next save. Authored wire routes use format 3. Footprints link to the component.
 
 With no placement or wiring tool active, **left-drag empty canvas** or **right-drag**

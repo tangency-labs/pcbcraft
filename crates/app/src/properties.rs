@@ -11,18 +11,19 @@ use pcbcraft_engine::{
 };
 use serde_json::json;
 use std::sync::Arc;
-mod fields;
+pub(crate) mod fields;
 
 #[derive(Debug)]
 pub(super) struct State {
     draft: Option<Edit>,
-    collapsed: bool,
+    pub(super) collapsed: bool,
+    pub(super) net_draft: Option<crate::net_labels::Edit>,
     pub(super) rect: Rect,
 }
 
 impl Default for State {
     fn default() -> Self {
-        Self { draft: None, collapsed: false, rect: Rect::NOTHING }
+        Self { draft: None, collapsed: false, net_draft: None, rect: Rect::NOTHING }
     }
 }
 
@@ -39,6 +40,7 @@ pub(super) struct Edit {
     original_metadata: pcbcraft_engine::schematic::fields::Metadata,
     original_layout: pcbcraft_engine::schematic::fields::Layouts,
     appearance: std::collections::BTreeMap<String, fields::Appearance>,
+    appearance_field: String,
     rotation: u16,
     x: String,
     y: String,
@@ -54,9 +56,6 @@ pub(super) struct Edit {
 enum Tab {
     #[default]
     General,
-    Fields,
-    Appearance,
-    Attributes,
     Terminals,
     Library,
 }
@@ -141,6 +140,7 @@ impl PcbApp {
             units,
             original_position: symbol.position,
             tab: Tab::General,
+            appearance_field: "reference".into(),
             error: None,
             focused: false,
         })
@@ -152,6 +152,14 @@ impl PcbApp {
         if !self.properties_open || (area.width() < 600.0 && self.parts.open) {
             self.views.active.schematic.properties.rect = Rect::NOTHING;
             return Rect::NOTHING;
+        }
+        if self.views.active.schematic.selection.single_net_label().is_some() {
+            self.views.active.schematic.properties.draft = None;
+            if let Some(rect) = self.net_label_inspector(ui, canvas, area) {
+                return rect;
+            }
+        } else {
+            self.views.active.schematic.properties.net_draft = None;
         }
         let width = pcbcraft_chrome::workspace::panels::card_width(canvas, true);
         let Some(current) = self.read_property_edit() else {
@@ -290,88 +298,73 @@ impl PcbApp {
     pub(super) fn symbol_properties_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
         edit.set_units(self.preferences.units);
         let mut apply = false;
-        let mut cancel = false;
         let mut choose = false;
         let can_choose = !edit.changed();
         let title = format!("{} · Symbol properties", edit.original.0);
         let footprint = self.package_label(&edit.component);
-        let closing = shell::scrolling_dialog_width(ctx, "edit_fields", &title, 760.0, |ui| {
-            ui.label(shell::dim(&edit.definition.name));
-            ui.horizontal_wrapped(|ui| {
-                for (tab, label) in [
-                    (Tab::General, "General"),
-                    (Tab::Fields, "Fields"),
-                    (Tab::Appearance, "Text appearance"),
-                    (Tab::Attributes, "Attributes"),
-                    (Tab::Terminals, "Pin functions"),
-                    (Tab::Library, "Library"),
-                ] {
-                    ui.selectable_value(&mut edit.tab, tab, label);
-                }
-            });
-            ui.separator();
-            match edit.tab {
-                Tab::General => {
-                    let mut position_apply = false;
-                    chrome::columns(
-                        ui,
-                        |ui| {
-                            chrome::section(ui, "Component");
-                            let field = chrome::text(ui, "Reference", &mut edit.reference);
-                            if !edit.focused {
-                                field.request_focus();
-                                edit.focused = true;
-                            }
-                            let value = chrome::text(ui, "Value", &mut edit.value);
-                            apply |= (field.lost_focus() || value.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let action = pcbcraft_chrome::catalog::property_form(ctx, "edit_fields", &title, 760.0, "OK", |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Frame::new().inner_margin(pcbcraft_chrome::Tokens::get().space_16).show(ui, |ui| {
+                    ui.label(shell::dim(&edit.definition.name));
+                    ui.horizontal_wrapped(|ui| {
+                        for (tab, label) in [(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")] {
+                            ui.selectable_value(&mut edit.tab, tab, label);
+                        }
+                    });
+                    ui.separator();
+                    match edit.tab {
+                        Tab::General => {
+                            chrome::section(ui, "Fields");
+                            apply |= edit.metadata_fields(ui);
                             chrome::field(ui, "Footprint", |ui| {
                                 choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).clicked();
                             });
-                        },
-                        |ui| {
-                            chrome::section(ui, "Placement");
-                            chrome::field(ui, "Unit", |ui| {
-                                ui.label(edit.definition.unit_id());
+                            egui::CollapsingHeader::new("Text appearance").show(ui, |ui| edit.field_appearance(ui));
+                            ui.separator();
+                            let mut position_apply = false;
+                            chrome::split(ui, |ui, column| {
+                                if column == 0 {
+                                    chrome::section(ui, "Placement");
+                                    chrome::field(ui, "Unit", |ui| {
+                                        ui.label(edit.definition.unit_id());
+                                    });
+                                    chrome::rotation(ui, &mut edit.rotation);
+                                    position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
+                                } else {
+                                    chrome::section(ui, "Attributes");
+                                    edit.attributes(ui);
+                                }
                             });
-                            chrome::rotation(ui, &mut edit.rotation);
-                            position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
-                        },
-                    );
-                    apply |= position_apply;
-                }
-                Tab::Fields => edit.metadata_fields(ui),
-                Tab::Appearance => edit.field_appearance(ui),
-                Tab::Attributes => edit.attributes(ui),
-                Tab::Terminals => {
-                    egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
-                        ui.strong("Terminal");
-                        ui.strong("Name");
-                        ui.strong("Electrical type");
-                        ui.end_row();
-                        for pin in edit.definition.pins() {
-                            ui.label(&pin.number);
-                            ui.label(pin.name.as_deref().unwrap_or("—"));
-                            ui.label(format!("{:?}", pin.electrical_type));
-                            ui.end_row();
+                            apply |= position_apply;
                         }
-                    });
-                }
-                Tab::Library => {
-                    chrome::section(ui, "Pinned symbol");
-                    ui.label(format!("{} / {}", edit.definition.library, edit.definition.id));
-                    ui.label(format!("Revision {}", edit.definition.revision()));
-                    ui.label("Project copy");
-                }
-            }
-            if let Some(error) = &edit.error {
-                ui.label(shell::error(error));
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                apply |= ui.button("OK").clicked();
-                cancel = ui.button("Cancel").clicked();
+                        Tab::Terminals => {
+                            egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
+                                ui.strong("Terminal");
+                                ui.strong("Name");
+                                ui.strong("Electrical type");
+                                ui.end_row();
+                                for pin in edit.definition.pins() {
+                                    ui.label(&pin.number);
+                                    ui.label(pin.name.as_deref().unwrap_or("—"));
+                                    ui.label(format!("{:?}", pin.electrical_type));
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                        Tab::Library => {
+                            chrome::section(ui, "Pinned symbol");
+                            ui.label(format!("{} / {}", edit.definition.library, edit.definition.id));
+                            ui.label(format!("Revision {}", edit.definition.revision()));
+                            ui.label("Project copy");
+                        }
+                    }
+                    if let Some(error) = &edit.error {
+                        ui.label(shell::error(error));
+                    }
+                });
             });
         });
+        apply |= action.primary;
         if apply {
             if !self.views.active.accepts(edit.source, &self.session) {
                 self.message = Some("View or project changed; reopen the symbol fields to continue editing.".into());
@@ -383,7 +376,7 @@ impl PcbApp {
             }
         } else if choose {
             self.begin_footprint_assignment(Some(edit.component));
-        } else if closing || cancel {
+        } else if action.close {
             if let Some(view) = self.views.view_mut(edit.source.view()) {
                 view.schematic.properties.draft = None;
             }

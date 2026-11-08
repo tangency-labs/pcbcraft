@@ -39,6 +39,12 @@ pub struct Label {
     pub style: Style,
     pub at: Point,
     pub rotation: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "text_layout")]
+    pub text: Option<schematic::fields::Layout>,
+}
+/// Omission preserves legacy text; explicit null cannot erase an authored appearance.
+fn text_layout<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<schematic::fields::Layout>, D::Error> {
+    schematic::fields::Layout::deserialize(d).map(Some)
 }
 impl Label {
     /// Stable command identity independent of the displayed name.
@@ -47,7 +53,11 @@ impl Label {
     }
     /// Editable properties and the endpoint accepted by draw-wire commands.
     pub fn inspect(&self) -> Value {
-        json!({"id":self.object_id(),"name":self.name,"style":self.style,"at":self.at,"rotation":self.rotation,"endpoint":WireEndpoint::NetLabel(self.id).inspect()})
+        let mut value = json!({"id":self.object_id(),"name":self.name,"style":self.style,"at":self.at,"rotation":self.rotation,"endpoint":WireEndpoint::NetLabel(self.id).inspect()});
+        if let Some(text) = &self.text {
+            value["text"] = json!(text);
+        }
+        value
     }
 }
 impl Project {
@@ -91,6 +101,9 @@ impl Project {
                     || label.name.chars().any(char::is_control)
                 {
                     return Err("net name must contain 1–200 characters without surrounding whitespace or control characters".into());
+                }
+                if let Some(text) = &label.text {
+                    schematic::fields::validate_layouts(&BTreeMap::from([("value".into(), text.clone())]), &schematic::fields::Metadata::default())?;
                 }
                 if !wire::valid_point(&label.at) || !matches!(label.rotation, 0 | 90 | 180 | 270) {
                     return Err("invalid named-label position or quarter-turn rotation".into());
@@ -220,6 +233,12 @@ impl Session {
                 style: serde_json::from_value(params["style"].clone()).map_err(|_| CommandError::InvalidParams("unknown label style".into()))?,
                 at: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
                 rotation: params["rotation"].as_u64().unwrap_or(0) as u16,
+                text: params
+                    .get("text")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()
+                    .map_err(|e| CommandError::InvalidParams(format!("invalid text appearance: {e}")))?
+                    .or_else(|| index.and_then(|i| project.net_labels[i].text.clone())),
             };
             match index {
                 Some(index) if project.net_labels[index] == label => return Ok(()),

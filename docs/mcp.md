@@ -86,7 +86,9 @@ leaves the whole project and history unchanged. Optional `metadata` replaces the
 component's standard/custom fields and attributes; optional `field_layout`
 replaces only the addressed unit's text appearance. Omission preserves either
 map. Inspection publishes component metadata and each symbol's field layout;
-positions remain symbol-local nanometres. The strict schemas appear in the shared
+positions remain symbol-local nanometres. `schematic.place_net_label` and
+`schematic.set_net_label` accept optional `text` with the same appearance schema;
+omission preserves a marker's existing appearance. The strict schemas appear in the shared
 command catalog, and dangling field layouts or invalid values reject the entire
 transaction.
 

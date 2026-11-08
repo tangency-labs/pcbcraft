@@ -51,7 +51,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 | File | Format | Contents |
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6` or `/7` | Project UUID, name, ordered sheet list and shared components; version 7 adds component fields and attributes |
-| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/4` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance |
+| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
 | `board.json` | `pcbcraft-board/1` through `/9` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
@@ -108,6 +108,13 @@ automatic rendering, and optional fields start hidden. Absent metadata/layout
 stays omitted, preserving older canonical document encodings. Older readers
 reject versions 7/4 instead of silently discarding data. Reference/value content
 edits stay in `project.pc`; label placement edits stay in the owning sheet.
+
+Sheet/5 extends sheet/4 with optional non-null `text` on each named anchor. It uses
+the same field-layout vocabulary and bounds. Offsets are relative to the electrical
+anchor in its unrotated space; the text angle is explicit and its height scales
+with zoom. Missing `text` preserves the automatic layout and old sheet encoding.
+Only sheets with authored net-name appearance use version 5; older readers reject
+that version. Appearance edits do not move contacts or alter net names.
 
 ### Named net records
 

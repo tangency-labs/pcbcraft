@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 /// Text drafts preserve invalid physical input until corrected or cancelled.
 #[derive(Clone, Debug)]
-pub(super) struct Appearance {
+pub(crate) struct Appearance {
     layout: Layout,
     automatic: bool,
     x: String,
@@ -19,7 +19,7 @@ pub(super) struct Appearance {
 
 impl Appearance {
     /// Capture an explicit layout or the field's automatic default in the active display unit.
-    fn new(layout: Layout, unit: Unit) -> Self {
+    pub(crate) fn new(layout: Layout, unit: Unit) -> Self {
         let point = layout.offset.unwrap_or(Point { x_nm: 0, y_nm: 0 });
         Self {
             automatic: layout.offset.is_none(),
@@ -32,7 +32,7 @@ impl Appearance {
     }
 
     /// Parse complete physical values before changing any component field or placement.
-    fn read(&self, unit: Unit) -> Result<Layout, String> {
+    pub(crate) fn read(&self, unit: Unit) -> Result<Layout, String> {
         let mut layout = self.layout.clone();
         layout.offset = if self.automatic {
             None
@@ -47,12 +47,53 @@ impl Appearance {
     }
 
     /// Reformat valid drafts without applying them or overwriting invalid input.
-    pub(super) fn set_units(&mut self, from: Unit, to: Unit) {
+    pub(crate) fn set_units(&mut self, from: Unit, to: Unit) {
         for value in [&mut self.x, &mut self.y, &mut self.height] {
             if let Ok(nm) = units::parse_length(value, from) {
                 *value = units::edit_label(nm, to);
             }
         }
+    }
+    /// Show the shared physical text controls; the caller owns default/reset policy.
+    pub(crate) fn controls(&mut self, ui: &mut Ui, visibility: bool) -> bool {
+        if visibility {
+            ui.checkbox(&mut self.layout.visible, "Show net name");
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.layout.show_name, "Show name");
+            ui.checkbox(&mut self.automatic, "Automatic position");
+        });
+        if !self.automatic {
+            chrome::text(ui, "Text X", &mut self.x);
+            chrome::text(ui, "Text Y", &mut self.y);
+        }
+        chrome::text(ui, "Text height", &mut self.height);
+        chrome::field(ui, "Text rotation", |ui| {
+            egui::ComboBox::from_id_salt("field_rotation").selected_text(format!("{}°", self.layout.rotation)).show_ui(ui, |ui| {
+                for rotation in [0, 90, 180, 270] {
+                    ui.selectable_value(&mut self.layout.rotation, rotation, format!("{rotation}°"));
+                }
+            });
+        });
+        chrome::field(ui, "Align", |ui| {
+            egui::ComboBox::from_id_salt("text_align")
+                .selected_text(match self.layout.align {
+                    TextAlign::Start => "Left",
+                    TextAlign::Middle => "Center",
+                    TextAlign::End => "Right",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.layout.align, TextAlign::Start, "Left");
+                    ui.selectable_value(&mut self.layout.align, TextAlign::Middle, "Center");
+                    ui.selectable_value(&mut self.layout.align, TextAlign::End, "Right");
+                });
+        });
+        ui.button("Reset appearance").clicked()
+    }
+
+    /// Comparing parsed physical drafts keeps implicit automatic appearance absent until changed.
+    pub(crate) fn changed(&self, unit: Unit) -> bool {
+        self.read(unit).as_ref() != Ok(&self.original)
     }
 }
 
@@ -87,12 +128,17 @@ impl Edit {
     }
 
     /// Standard optional fields remain absent until authored; custom fields have independent IDs.
-    pub(super) fn metadata_fields(&mut self, ui: &mut Ui) {
-        chrome::text(ui, "Reference", &mut self.reference);
-        chrome::text(ui, "Value", &mut self.value);
+    pub(super) fn metadata_fields(&mut self, ui: &mut Ui) -> bool {
+        let reference = row(ui, "Reference", &mut self.reference, self.appearance.get_mut("reference"));
+        if !self.focused {
+            reference.request_focus();
+            self.focused = true;
+        }
+        let value = row(ui, "Value", &mut self.value, self.appearance.get_mut("value"));
+        let enter = (reference.lost_focus() || value.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
         for (id, name) in fields::STANDARD {
             let mut value = self.metadata.fields.get(id).map(|f| f.value.clone()).unwrap_or_default();
-            if chrome::text(ui, name, &mut value).changed() {
+            if row(ui, name, &mut value, self.appearance.get_mut(id)).changed() {
                 if value.is_empty() {
                     self.metadata.fields.remove(id);
                     self.appearance.remove(id);
@@ -115,7 +161,7 @@ impl Edit {
             ui.push_id(id, |ui| {
                 ui.separator();
                 chrome::text(ui, "Field name", &mut field.name);
-                chrome::text(ui, "Field value", &mut field.value);
+                row(ui, "Field value", &mut field.value, self.appearance.get_mut(id));
                 if ui.button("Remove field").clicked() {
                     remove = Some(id.clone());
                 }
@@ -130,7 +176,7 @@ impl Edit {
                 Ok(id) => id,
                 Err(error) => {
                     self.error = Some(error);
-                    return;
+                    return false;
                 }
             };
             let name =
@@ -138,6 +184,7 @@ impl Edit {
             self.metadata.fields.insert(id.clone(), Field { name, value: String::new() });
             self.appearance.insert(id, Appearance::new(Layout { visible: false, ..Layout::default() }, self.units));
         }
+        enter
     }
 
     /// Each field's controls edit the same draft as canvas movement, with offsets in symbol space.
@@ -146,44 +193,27 @@ impl Edit {
             .into_iter()
             .chain(self.metadata.fields.iter().map(|(id, f)| (id.clone(), f.name.clone())))
             .collect();
-        for (id, name) in names {
-            let Some(draft) = self.appearance.get_mut(&id) else {
-                continue;
-            };
-            ui.push_id(&id, |ui| {
-                egui::CollapsingHeader::new(&name).id_salt("field_appearance").show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.checkbox(&mut draft.layout.visible, "Show");
-                        ui.checkbox(&mut draft.layout.show_name, "Show name");
-                        ui.checkbox(&mut draft.automatic, "Automatic position");
-                    });
-                    if !draft.automatic {
-                        chrome::text(ui, "Text X", &mut draft.x);
-                        chrome::text(ui, "Text Y", &mut draft.y);
-                    }
-                    chrome::text(ui, "Text height", &mut draft.height);
-                    chrome::rotation(ui, &mut draft.layout.rotation);
-                    chrome::field(ui, "Align", |ui| {
-                        egui::ComboBox::from_id_salt("text_align")
-                            .selected_text(match draft.layout.align {
-                                TextAlign::Start => "Left",
-                                TextAlign::Middle => "Center",
-                                TextAlign::End => "Right",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut draft.layout.align, TextAlign::Start, "Left");
-                                ui.selectable_value(&mut draft.layout.align, TextAlign::Middle, "Center");
-                                ui.selectable_value(&mut draft.layout.align, TextAlign::End, "Right");
-                            });
-                    });
-                    if ui.button("Reset appearance").clicked() {
-                        *draft = Appearance::new(Layout { visible: matches!(id.as_str(), "reference" | "value"), ..Layout::default() }, self.units);
-                        // Keep reset distinguishable from the original explicit appearance.
-                        draft.original = self.original_layout.get(&id).cloned().unwrap_or_else(|| draft.original.clone());
-                    }
-                });
-            });
+        if !names.iter().any(|(id, _)| id == &self.appearance_field) {
+            self.appearance_field = "reference".into();
         }
+        chrome::field(ui, "Field", |ui| {
+            let current = names.iter().find(|(id, _)| id == &self.appearance_field).map(|(_, name)| name.as_str()).unwrap_or("Reference");
+            egui::ComboBox::from_id_salt("appearance_field").selected_text(current).show_ui(ui, |ui| {
+                for (id, name) in &names {
+                    ui.selectable_value(&mut self.appearance_field, id.clone(), name);
+                }
+            });
+        });
+        let Some(draft) = self.appearance.get_mut(&self.appearance_field) else { return };
+        ui.push_id(&self.appearance_field, |ui| {
+            if draft.controls(ui, false) {
+                *draft = Appearance::new(
+                    Layout { visible: matches!(self.appearance_field.as_str(), "reference" | "value"), ..Layout::default() },
+                    self.units,
+                );
+                draft.original = self.original_layout.get(&self.appearance_field).cloned().unwrap_or_else(|| draft.original.clone());
+            }
+        });
     }
 
     /// Attributes store component intent independently of displayed text; consumers inspect the
@@ -196,4 +226,21 @@ impl Edit {
         ui.checkbox(&mut a.exclude_from_simulation, "Exclude from simulation");
         ui.checkbox(&mut a.exclude_from_position_files, "Exclude from position files");
     }
+}
+
+/// Field content and visibility share a row so routine editing does not require another page.
+fn row(ui: &mut Ui, name: &str, value: &mut String, appearance: Option<&mut Appearance>) -> egui::Response {
+    ui.horizontal(|ui| {
+        let available = ui.available_width();
+        let label_width = if available > 600. { 155. } else { 85. };
+        let label = ui.add_sized(egui::vec2(label_width, 0.), egui::Label::new(name).wrap());
+        let response = ui.add(chrome::input(value).desired_width((available - label_width - 70.).max(40.))).labelled_by(label.id);
+        if let Some(appearance) = appearance {
+            ui.label("Show");
+            ui.add(egui::Checkbox::without_text(&mut appearance.layout.visible))
+                .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, appearance.layout.visible, format!("Show {name}")));
+        }
+        response
+    })
+    .inner
 }

@@ -13,23 +13,67 @@ pub enum Style {
     Ground,
 }
 
+/// Optional net-name appearance uses physical screen offsets supplied by the editor.
+#[derive(Clone, Copy)]
+pub struct Text {
+    pub offset: Option<Vec2>,
+    pub height: f32,
+    pub rotation: u16,
+    pub align: egui::Align,
+    pub visible: bool,
+    pub show_name: bool,
+}
+
 /// Paint an upright name and quarter-turned anchor glyph. Return the complete ink/anchor
 /// bounds so pointer hit testing follows the actual text at every interface scale and zoom.
 /// Connected anchors omit their open-pin ring; callers resolve actual local contact.
 #[allow(clippy::too_many_arguments)]
 pub fn paint(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, color: Color32, connected: bool) -> Rect {
-    draw(painter, at, name, style, rotation, step, color, true, connected)
+    draw(painter, at, name, style, rotation, step, color, true, connected, None)
 }
 
 /// Measure the same glyph and text without adding shapes to the scene.
 pub fn bounds(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32) -> Rect {
-    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false)
+    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false, None)
+}
+
+/// Paint an anchor and its independently configured name without changing contact geometry.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_with_text(
+    painter: &Painter,
+    at: Pos2,
+    name: &str,
+    style: Style,
+    rotation: u16,
+    step: f32,
+    color: Color32,
+    connected: bool,
+    text: Option<&Text>,
+) -> Rect {
+    draw(painter, at, name, style, rotation, step, color, true, connected, text)
+}
+
+/// Measure exactly the text/glyph ink painted by `paint_with_text` for picking and selection.
+#[allow(clippy::too_many_arguments)]
+pub fn bounds_with_text(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, text: Option<&Text>) -> Rect {
+    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false, text)
 }
 
 /// Keep text measurement and painted geometry aligned for hit testing.
 #[allow(clippy::too_many_arguments)]
-fn draw(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, color: Color32, paint: bool, connected: bool) -> Rect {
-    let scale = (step / 10.0).clamp(0.4, 3.0);
+fn draw(
+    painter: &Painter,
+    at: Pos2,
+    name: &str,
+    style: Style,
+    rotation: u16,
+    step: f32,
+    color: Color32,
+    paint: bool,
+    connected: bool,
+    text: Option<&Text>,
+) -> Rect {
+    let scale = (step / 10.0).max(0.4);
     let transform = |v: Vec2| {
         let v = match rotation {
             90 => vec2(v.y, -v.x),
@@ -78,18 +122,32 @@ fn draw(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, st
             vec2(0., 32.)
         }
     };
-    let label_at = transform(offset);
-    let align =
-        if matches!(style, Style::Local) { if rotation == 180 { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER } } else { Align2::CENTER_CENTER };
-    let galley = painter.layout_no_wrap(name.into(), FontId::proportional(Tokens::get().font_label * scale), color);
-    let text_bounds = align.anchor_size(label_at, galley.size());
-    let mut text = egui::epaint::TextShape::new(text_bounds.min, galley, color);
-    if matches!(style, Style::Global) {
-        text = text.with_angle_and_anchor(-(f32::from(rotation)).to_radians(), Align2::CENTER_CENTER);
-    }
-    bounds = bounds.union(text.visual_bounding_rect());
-    if paint {
-        painter.add(text);
+    if text.is_none_or(|text| text.visible) {
+        let label_at = text.and_then(|t| t.offset).map_or_else(|| transform(offset), |offset| at + offset);
+        let align = text.map_or_else(
+            || {
+                if matches!(style, Style::Local) {
+                    if rotation == 180 { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER }
+                } else {
+                    Align2::CENTER_CENTER
+                }
+            },
+            |t| Align2([t.align, egui::Align::Center]),
+        );
+        let size = text.map_or(step, |t| t.height);
+        let name = if text.is_some_and(|t| t.show_name) { format!("Net name: {name}") } else { name.to_owned() };
+        let galley = painter.layout_no_wrap(name, FontId::proportional(size.max(1.)), color);
+        let text_bounds = align.anchor_size(label_at, galley.size());
+        let mut shape = egui::epaint::TextShape::new(text_bounds.min, galley, color);
+        if let Some(text) = text {
+            shape = shape.with_angle_and_anchor(-(text.rotation as f32).to_radians(), align);
+        } else if matches!(style, Style::Global) {
+            shape = shape.with_angle_and_anchor(-(rotation as f32).to_radians(), Align2::CENTER_CENTER);
+        }
+        bounds = bounds.union(shape.visual_bounding_rect());
+        if paint {
+            painter.add(shape);
+        }
     }
     // A small anchor marks the exact electrical contact, independent of glyph orientation.
     if paint && !connected {

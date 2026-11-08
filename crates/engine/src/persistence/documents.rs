@@ -11,6 +11,7 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/7";
+const POWER_TEXT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
 const PROJECT_FORMAT: &str = "pcbcraft-project/6";
 const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
@@ -138,11 +139,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (SHEET_FORMAT, false, false, false)
             | (HIERARCHY_FORMAT, true, true, false)
             | (NAMED_FORMAT, true, true, true)
-            | (FIELDS_SHEET_FORMAT, true, true, true) => {}
+            | (FIELDS_SHEET_FORMAT, true, true, true)
+            | (POWER_TEXT_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
-        if sheet.format != FIELDS_SHEET_FORMAT && sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
+        if !matches!(sheet.format.as_str(), FIELDS_SHEET_FORMAT | POWER_TEXT_FORMAT) && sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
             return Err(format!("{}: field appearance requires sheet format 4", reference.file));
+        }
+        if sheet.format != POWER_TEXT_FORMAT && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some())) {
+            return Err(format!("{}: net-name appearance requires sheet format 5", reference.file));
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
         let mut named = sheet.net_labels.take().unwrap_or_default();
@@ -195,7 +200,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT | FIELDS_SHEET_FORMAT) || sheet.id != reference.id {
+        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT | FIELDS_SHEET_FORMAT | POWER_TEXT_FORMAT)
+            || sheet.id != reference.id
+        {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
         }
         let symbols: BTreeSet<_> = sheet.symbols.iter().map(|s| s.id).collect();
@@ -812,7 +819,10 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
     let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
-    let format = if fields {
+    let text = sheet.net_labels.iter().any(|l| l.text.is_some());
+    let format = if text {
+        POWER_TEXT_FORMAT
+    } else if fields {
         FIELDS_SHEET_FORMAT
     } else if !sheet.net_labels.is_empty() {
         NAMED_FORMAT
@@ -822,7 +832,7 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
         SHEET_FORMAT
     };
     write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
-    if fields || !sheet.net_labels.is_empty() {
+    if text || fields || !sheet.net_labels.is_empty() {
         bytes.extend_from_slice(b"  \"net_labels\": [\n");
         Ok(12)
     } else if hierarchy {

@@ -91,8 +91,7 @@ fn ink(painter: &Painter, symbol: &SymbolPlacement, content: Content<'_>, center
                 Align2([horizontal, egui::Align::Center])
             };
             let text = if layout.show_name { format!("{name}: {value}") } else { value.to_owned() };
-            let height =
-                if symbol.field_layout.contains_key(id) { (step * layout.height_nm as f32 / GRID_NM as f32).clamp(2., 256.) } else { t.font_button };
+            let height = (step * layout.height_nm as f32 / GRID_NM as f32).max(1.);
             let galley = painter.layout_no_wrap(text, FontId::proportional(height), color);
             let pos = align.anchor_size(anchor, galley.size()).min;
             let shape = egui::epaint::TextShape::new(pos, galley, color).with_angle_and_anchor(-(layout.rotation as f32).to_radians(), align);

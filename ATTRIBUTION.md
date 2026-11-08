@@ -11,7 +11,11 @@ egui text painting. Travis Lowe's supplied Symbol Properties screenshot and
 reported behavior informed the scope. No KiCad implementation, library data,
 icons or artwork were used. Generic resistor/capacitor revision 3 changes only
 the original starter definitions' default values; revisions 1 and 2 remain
-available for existing projects. No dependency was added.
+available for existing projects. No dependency was added. The consolidated General form, shared fixed action footer,
+power-marker inspector and per-marker net-name appearance are original extensions
+of the same code, informed by Travis's usability feedback and supplied screenshots.
+Physical text sizing uses the existing camera and nanometre model; no external
+implementation or artwork was consulted for these fixes.
 
 ## Pane dragging between native windows
 

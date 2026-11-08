@@ -34,6 +34,11 @@ pub fn form(
     form_body(ctx, id, title, width, primary, enabled, libraries, active, if libraries { 18. } else { 8. }, add)
 }
 
+/// A consolidated property form keeps Apply/Cancel visible while its fields scroll.
+pub fn property_form(ctx: &egui::Context, id: &'static str, title: &str, width: f32, primary: &str, add: impl FnOnce(&mut Ui)) -> FormAction {
+    form_body(ctx, id, title, width, primary, true, false, true, 24., add)
+}
+
 /// Settings editors share the catalog header/footer but reserve a taller body for navigation
 /// and physical data; their primary action remains fixed while individual pages scroll.
 pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: bool, add: impl FnOnce(&mut Ui)) -> FormAction {

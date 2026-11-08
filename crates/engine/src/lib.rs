@@ -57,6 +57,7 @@ pub const UNTITLED: &str = "Untitled";
 enum ParamKind {
     ComponentMetadata,
     FieldLayouts,
+    TextLayout,
     NetLabelStyle,
     NetLabelId,
     LibrarySource,
@@ -112,6 +113,7 @@ impl ParamKind {
         match self {
             Self::ComponentMetadata => schematic::fields::metadata_schema(),
             Self::FieldLayouts => schematic::fields::layouts_schema(),
+            Self::TextLayout => schematic::fields::layouts_schema()["additionalProperties"].clone(),
             Self::DefinitionRevision => json!({"type":"integer","minimum":1,"maximum":u32::MAX}),
             Self::LibraryDigest => json!({"type":"string","pattern":"^[0-9a-f]{64}$"}),
             Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -191,6 +193,17 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::TextLayout => serde_json::from_value::<schematic::fields::Layout>(value.clone())
+                .ok()
+                .filter(|layout| {
+                    schematic::fields::validate_layouts(
+                        &std::collections::BTreeMap::from([("value".into(), layout.clone())]),
+                        &schematic::fields::Metadata::default(),
+                    )
+                    .is_ok()
+                })
+                .map(|_| ())
+                .ok_or("must contain a valid text appearance"),
             Self::ComponentMetadata => serde_json::from_value::<schematic::fields::Metadata>(value.clone())
                 .ok()
                 .filter(|m| m.validate().is_ok())
@@ -507,13 +520,40 @@ const CATALOG: &[Command] = &[
         id: net_labels::ADD,
         title: "Place Net Label",
         summary: "Place a local/global label or power/ground anchor. Matching names connect by scope; a label on a pin or wire connects at its anchor. Undoable.",
-        params: &[NET_NAME, NET_STYLE, ANCHOR_X, ANCHOR_Y, NET_ROTATION, EXPECTED_REVISION],
+        params: &[
+            NET_NAME,
+            NET_STYLE,
+            ANCHOR_X,
+            ANCHOR_Y,
+            NET_ROTATION,
+            Param {
+                name: "text",
+                required: false,
+                kind: ParamKind::TextLayout,
+                summary: "Optional net-name appearance; omission preserves existing text",
+            },
+            EXPECTED_REVISION,
+        ],
     },
     Command {
         id: net_labels::SET,
         title: "Edit Net Label",
         summary: "Rename, move, rotate or change the scope/style of an existing named anchor. Undoable.",
-        params: &[NET_OBJECT, NET_NAME, NET_STYLE, ANCHOR_X, ANCHOR_Y, NET_ROTATION, EXPECTED_REVISION],
+        params: &[
+            NET_OBJECT,
+            NET_NAME,
+            NET_STYLE,
+            ANCHOR_X,
+            ANCHOR_Y,
+            NET_ROTATION,
+            Param {
+                name: "text",
+                required: false,
+                kind: ParamKind::TextLayout,
+                summary: "Optional net-name appearance; omission preserves existing text",
+            },
+            EXPECTED_REVISION,
+        ],
     },
     Command {
         id: net_labels::DELETE,
