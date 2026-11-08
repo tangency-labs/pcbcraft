@@ -380,6 +380,10 @@ uses an existing readable lock in shared mode, or reads without a lock if none
 exists. Both fallbacks require no recovery journal before and after reading;
 saves and recovery always require the writer lock. This permits opening a
 read-only project and using Save As to place edits in a writable location.
+The lock file, `.<name>.pcbcraft-lock` beside the folder or archive, stays after
+the project closes. Its leading dot hides it on Linux and macOS; on Windows it is
+created with the hidden attribute instead. A lock file created before that keeps
+its attributes and still works.
 
 A save stages only changed or removed documents. It writes their new bytes and
 old backups into a temporary directory, flushes them, and writes a journal with

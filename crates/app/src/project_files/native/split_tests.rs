@@ -7,7 +7,10 @@ use pcbcraft_engine::{
     persistence::{decode, encode_documents},
 };
 use serde_json::json;
-use std::sync::{Barrier, mpsc};
+use std::{
+    fs::OpenOptions,
+    sync::{Barrier, mpsc},
+};
 
 /// Start from the checked-in migration fixture so comparisons retain stable UUIDs.
 fn session() -> Session {
