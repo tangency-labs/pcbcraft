@@ -468,6 +468,15 @@ mod live {
             params: &[VIEW, Param { name: "split", summary: "Whether the window shows several panes", required: true, kind: Kind::Bool }],
         },
         WindowCommand {
+            id: "view.reorder",
+            title: "Move Pane",
+            summary: "Move a pane into another pane's position in the same window, shifting intervening panes and retaining dividers and cameras.",
+            params: &[
+                VIEW,
+                Param { name: "target", summary: "View ID of the destination pane in the same window", required: true, kind: Kind::View },
+            ],
+        },
+        WindowCommand {
             id: "view.open_beside",
             title: "Open Beside",
             summary: "Open another view of the same sheet beside this one.",
@@ -489,8 +498,11 @@ mod live {
         WindowCommand {
             id: "view.dock",
             title: "Dock View",
-            summary: "Move a view from another window beside the main window's focused pane.",
-            params: &[VIEW],
+            summary: "Move a pane and its cached documents beside a pane in another window of this instance. Defaults to the main window's focused pane.",
+            params: &[
+                VIEW,
+                Param { name: "beside", summary: "Destination view ID in another window of this instance", required: false, kind: Kind::View },
+            ],
         },
         WindowCommand {
             id: "view.fit",
@@ -1022,6 +1034,7 @@ mod live {
                         id,
                         "view.focus"
                             | "view.split"
+                            | "view.reorder"
                             | "view.open_beside"
                             | "view.open_window"
                             | "view.detach"
@@ -1057,6 +1070,7 @@ mod live {
                         id,
                         "view.focus"
                             | "view.split"
+                            | "view.reorder"
                             | "view.open_beside"
                             | "view.open_window"
                             | "view.detach"
@@ -1079,8 +1093,28 @@ mod live {
                         app.split_editors(ctx, split);
                     });
                 }
+                ("view.reorder", Some((view, host)), _) => {
+                    let target = ViewId(params["target"].as_u64().unwrap_or_default());
+                    if self.view_window(target)? != host
+                        || self.views.hosts.get(&host).and_then(|host| host.layout.group(view)).is_some_and(|group| group.views().contains(&target))
+                    {
+                        return Err("Choose another pane in the same window.".into());
+                    }
+                    let target =
+                        self.views.view(target).and_then(|view| view.control_input(&self.session)).ok_or("The destination pane is unavailable.")?;
+                    self.apply_view_action(ctx, view, ViewAction::Reorder(target));
+                }
                 ("view.close", Some((view, host)), _) if host == self.views.main && !self.views.hosts.get(&host).is_some_and(|host| host.split()) => {
                     return Err(format!("View {} is the main window's only view, which stays open. Close another view or window instead.", view.0));
+                }
+                ("view.dock", Some((view, host)), _) if params.get("beside").is_some() => {
+                    let target = ViewId(params["beside"].as_u64().unwrap_or_default());
+                    if self.view_window(target)? == host {
+                        return Err("Docking requires a destination pane in another window of this instance.".into());
+                    }
+                    let target =
+                        self.views.view(target).and_then(|view| view.control_input(&self.session)).ok_or("The destination pane is unavailable.")?;
+                    self.apply_view_action(ctx, view, ViewAction::MoveBeside(target));
                 }
                 ("view.dock", Some((view, host)), _) if host == self.views.main => {
                     return Err(format!("View {} is already in the main window.", view.0));

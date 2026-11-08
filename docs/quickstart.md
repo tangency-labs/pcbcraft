@@ -157,6 +157,22 @@ Right-click a sheet tab to open beside it or close that pane. Closing a detached
 window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
+Drag a split pane's document header over another pane in the same window to
+move it into that position. Two panes exchange places; with more panes, the
+intervening panes shift while the existing dividers and cameras stay intact.
+The destination highlights **Move pane here** before release. Moving outside the
+client highlights **Open in new window**; release there or over that row to detach.
+The native window is created on release, without an outside-client preview.
+To return, click **Dock** at the left
+of the detached pane's header. During a drag, **Dock in main window** and other
+window targets appear beside the header where you grabbed it, so a window
+extending beyond the monitor does not hide them at its far edge. The selected
+row and destination split region highlight before release. Where window positions
+are available, dropping directly over an exposed pane in another window also
+docks beside it. **Esc** cancels a drag; right-clicking the header also offers
+**Dock in main window**. All targets belong to the same running instance;
+separately launched copies keep their own project sessions.
+
 On Linux, drag the logo, project title or empty space in the top bar to move a
 window; double-click those areas to maximize or restore it. Drag an edge or
 corner to resize. These controls also work while a project dialog is open,

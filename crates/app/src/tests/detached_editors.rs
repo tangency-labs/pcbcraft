@@ -13,8 +13,11 @@ use pcbcraft_engine::{persistence::encode, schematic::Point};
 use super::*;
 use crate::editor_layout::HostId;
 
+mod pane_drag;
+
 #[derive(Default)]
 struct Peer {
+    origin: Option<Pos2>,
     focused: bool,
     close: bool,
     events: Vec<Event>,
@@ -77,6 +80,7 @@ fn many_windows() -> (Harness<'static, PcbApp>, Peers) {
             input.focused = peer.focused;
             input.events = std::mem::take(&mut peer.events);
             let mut info = egui::ViewportInfo { parent: Some(ViewportId::ROOT), focused: Some(peer.focused), ..Default::default() };
+            info.inner_rect = peer.origin.map(|origin| Rect::from_min_size(origin, vec2(1100.0, 760.0)));
             if std::mem::take(&mut peer.close) {
                 info.events.push(egui::ViewportEvent::Close);
             }
