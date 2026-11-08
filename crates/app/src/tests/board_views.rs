@@ -304,7 +304,7 @@ fn mixed_pane_close_buttons_preserve_the_surviving_view() {
                 let before = h.state().session.inspect();
                 let path = h.state().views.view(closed).unwrap().sheet_path(&h.state().session).unwrap();
                 click(&mut h, &format!("Close view {path}"));
-                assert!(h.state().views.view(closed).is_none());
+                assert!(h.state().views.view(closed).is_none(), "size={size:?} focused={focused:?} closed={closed:?}");
                 assert_eq!(h.state().views.active.id(), remaining);
                 assert!(!h.state().views.is_split());
                 assert_eq!(h.state().views.active.camera.screen(origin, egui::Rect::ZERO), camera);
@@ -838,21 +838,34 @@ fn physical_demo_labels_drills_and_detail_visibility() {
     assert_eq!(restored.board.hidden_layers, h.state().views.active.board.hidden_layers);
 }
 
+/// Open board-wide print settings through the shared setup navigation at either host width.
+pub(super) fn open_silkscreen(h: &mut Harness<'_, PcbApp>) {
+    click(h, "Board setup…");
+    if h.query_by_label("Board setup page").is_some() {
+        click(h, "Board setup page");
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Silkscreen").click();
+    h.run();
+}
+
 /// Board settings edit physical geometry together and share undo with other workspaces.
 #[test]
 fn silkscreen_settings_apply_cancel_and_undo() {
     use egui::accesskit::Role;
     let mut h = editable_board();
-    click(&mut h, "Silkscreen");
+    let revision = h.state().session.revision();
+    h.state_mut()
+        .run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"resolve_existing_footprints":true,"expected_revision":revision}));
+    h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-    click(&mut h, "Edit silkscreen settings");
+    open_silkscreen(&mut h);
     let input = h.get_by_role_and_label(Role::TextInput, "Text height");
     input.click();
     input.type_text("2 mm");
     h.run();
-    click(&mut h, "Cancel silkscreen changes");
+    click(&mut h, "Cancel");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
-    click(&mut h, "Edit silkscreen settings");
+    open_silkscreen(&mut h);
     let input = h.get_by_role_and_label(Role::TextInput, "Text height");
     input.click();
     h.run();
@@ -860,7 +873,7 @@ fn silkscreen_settings_apply_cancel_and_undo() {
     h.run();
     h.get_by_role_and_label(Role::TextInput, "Text height").type_text("1.2 mm");
     h.run();
-    click(&mut h, "Apply silkscreen settings");
+    click(&mut h, "Apply board setup");
     assert_eq!(h.state().session.inspect()["project"]["board"]["silkscreen"]["text_height_nm"], 1_200_000);
     let after = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     assert_ne!(after, before);
@@ -879,25 +892,30 @@ fn silkscreen_editor_preserves_unedited_precision_in_both_units() {
     for unit in [pcbcraft_chrome::units::Unit::Mil, pcbcraft_chrome::units::Unit::Mm] {
         for extra in [0, 1] {
             let mut h = editable_board();
+            let revision = h.state().session.revision();
+            h.state_mut().run(
+                pcbcraft_engine::INITIALIZE_BOARD_SETUP,
+                &json!({"copper_layers":2,"resolve_existing_footprints":true,"expected_revision":revision}),
+            );
+            h.run();
             h.state_mut().preferences.units = unit;
             let revision = h.state().session.revision();
             h.state_mut().run(pcbcraft_engine::SET_SILKSCREEN,&json!({"settings":{"text_height_nm":1_000_000+extra,"stroke_width_nm":150_000+extra,"pad_clearance_nm":250_000+extra},"expected_revision":revision}));
             h.run();
             let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
             let revision = h.state().session.revision();
-            click(&mut h, "Silkscreen");
-            click(&mut h, "Edit silkscreen settings");
-            click(&mut h, "Apply silkscreen settings");
+            open_silkscreen(&mut h);
+            click(&mut h, "Apply board setup");
             assert_eq!(h.state().session.revision(), revision);
             assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
-            click(&mut h, "Edit silkscreen settings");
+            open_silkscreen(&mut h);
             h.get_by_role_and_label(Role::TextInput, "Stroke width").click();
             h.run();
             h.key_press_modifiers(Modifiers::COMMAND, Key::A);
             h.run();
             h.get_by_role_and_label(Role::TextInput, "Stroke width").type_text("0.18 mm");
             h.run();
-            click(&mut h, "Apply silkscreen settings");
+            click(&mut h, "Apply board setup");
             let style = h.state().session.inspect()["project"]["board"]["silkscreen"].clone();
             assert_eq!(style["stroke_width_nm"], 180_000);
             assert_eq!(style["text_height_nm"], 1_000_000 + extra);

@@ -12,6 +12,10 @@ use crate::{CommandError, Session, fresh_id};
 #[cfg(test)]
 mod tests;
 
+mod presets;
+pub mod profile;
+pub use presets::StackupPreset;
+
 /// Resource limits for the first format, not identities or fixed layer-number assignments.
 const MAX_LAYERS: usize = 128;
 const MAX_COPPER: usize = 64;
@@ -374,6 +378,21 @@ impl BoardSetup {
         self.stackup.strata.iter().map(Stratum::thickness_nm).sum()
     }
 
+    /// Build an unapplied initial setup, retaining existing technical-layer identities so old
+    /// Board Edge drawings stay attached. The board and its history remain unchanged.
+    pub(super) fn initial(board: &super::Board, copper_layers: u64) -> Result<Self, CommandError> {
+        let mut setup = Self::preset(copper_layers)?;
+        if let Some(data) = &board.drawings
+            && !data.layers.is_empty()
+        {
+            setup.layers.retain(|layer| layer.purpose != LayerPurpose::Outline);
+            setup.layers.extend(data.layers.iter().cloned());
+            setup = Self::try_from(SetupRecords { materials: setup.materials, layers: setup.layers, stackup: setup.stackup })
+                .map_err(CommandError::InvalidParams)?;
+        }
+        Ok(setup)
+    }
+
     /// Initialize any supported even copper-layer count without inventing material or thickness.
     /// Entropy or validation failures return before the session adopts any data.
     pub(crate) fn preset(copper_layers: u64) -> Result<Self, CommandError> {
@@ -462,7 +481,9 @@ impl Session {
     /// Create the initial topology once. Populated boards require explicit opt-in to resolve
     /// existing ComponentSide/AllCopper bindings through the engine's front/all-copper rules;
     /// marker-only pads remain markers. Placements, definitions and mappings are unchanged.
-    /// Existing technical drawing layers are promoted with their original identities.
+    /// Existing technical drawing layers are promoted with their original identities. Optional
+    /// silkscreen settings and a supplied complete setup draft are validated before publication;
+    /// occupied drawing layers must remain valid in the adopted catalog.
     pub(crate) fn initialize_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -474,19 +495,30 @@ impl Session {
                 "initial board setup with existing footprints requires resolve_existing_footprints=true".to_owned(),
             ));
         }
-        let mut setup = BoardSetup::preset(params["copper_layers"].as_u64().unwrap_or_default())?;
-        if let Some(data) = &project.board.drawings
-            && !data.layers.is_empty()
-        {
-            setup.layers.retain(|layer| layer.purpose != LayerPurpose::Outline);
-            setup.layers.extend(data.layers.iter().cloned());
-            setup = BoardSetup::try_from(SetupRecords { materials: setup.materials, layers: setup.layers, stackup: setup.stackup })
-                .map_err(CommandError::InvalidParams)?;
-        }
+        let count = params["copper_layers"].as_u64().unwrap_or_default();
+        let setup = if let Some(value) = params.get("setup") {
+            let setup: BoardSetup = serde_json::from_value(value.clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
+            if setup.stackup.strata.len().div_ceil(2) as u64 != count {
+                return Err(CommandError::InvalidParams("setup must match the requested copper-layer count".into()));
+            }
+            setup
+        } else {
+            BoardSetup::initial(&project.board, count)?
+        };
         let mut project = project.clone();
-        std::sync::Arc::make_mut(&mut project.board).setup = Some(setup);
+        let board = std::sync::Arc::make_mut(&mut project.board);
+        board.setup = Some(setup);
+        if let Some(settings) = params.get("silkscreen") {
+            let settings = serde_json::from_value(settings.clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
+            if board.silkscreen.unwrap_or_default() != settings {
+                board.silkscreen = Some(settings);
+            }
+        }
         if let Some(data) = &mut std::sync::Arc::make_mut(&mut project.board).drawings {
             data.layers.clear();
+        }
+        if let Some(mut data) = project.board.drawings.clone() {
+            data.validate(&project).map_err(CommandError::InvalidParams)?;
         }
         self.change(project);
         Ok(())
@@ -497,6 +529,7 @@ impl Session {
     /// surviving layer roles/surface IDs; occupied drawing-layer removals are always rejected.
     /// Catalog reordering alone is a no-op and does not advance revision or clear redo.
     /// Existing pinned material revisions cannot be rewritten; use a new revision and explicit references.
+    /// Optional silkscreen settings join the same validated edit, retaining no-op history semantics.
     pub(crate) fn set_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let setup: BoardSetup = serde_json::from_value(params["setup"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
@@ -521,9 +554,18 @@ impl Session {
                     .to_owned(),
             ));
         }
-        if before != &setup {
+        let silkscreen = params
+            .get("silkscreen")
+            .map(|settings| serde_json::from_value(settings.clone()).map_err(|e| CommandError::InvalidParams(e.to_string())))
+            .transpose()?;
+        let silk_changed = silkscreen.is_some_and(|settings| project.board.silkscreen.unwrap_or_default() != settings);
+        if before != &setup || silk_changed {
             let mut project = project.clone();
-            std::sync::Arc::make_mut(&mut project.board).setup = Some(setup);
+            let board = std::sync::Arc::make_mut(&mut project.board);
+            board.setup = Some(setup);
+            if silk_changed {
+                board.silkscreen = silkscreen;
+            }
             if let Some(mut data) = project.board.drawings.clone() {
                 data.validate(&project).map_err(CommandError::InvalidParams)?;
             }

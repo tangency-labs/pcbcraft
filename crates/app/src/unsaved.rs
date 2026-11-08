@@ -1,5 +1,5 @@
 //! The unsaved-changes question asked before closing the window, starting a new project or
-//! opening another: **Save**, **Don't Save** or **Cancel**, worded and ordered as in SolidCraft.
+//! opening another: **Save**, **Don't Save** or **Cancel**, with shared Craft dialog styling.
 //!
 //! Native window Close dismisses just that window while another editor survives. The last
 //! editor and explicit File → Quit / Ctrl+Q use one project-close decision. The browser keeps
@@ -137,17 +137,15 @@ impl PcbApp {
     /// browser offers no Save here, since a download doesn't confirm the project was kept.
     pub(crate) fn save_changes_dialog(&mut self, ctx: &egui::Context, then: Then) {
         let name = self.session.project().map_or_else(|| "The project".to_owned(), |project| shown_name(&project.name));
-        let (mut save, mut discard, mut cancel) = (false, false, false);
-        let closing = shell::dialog(ctx, "save_changes", &format!("Save changes to {name}?"), |ui| {
-            ui.label(format!("{name} has unsaved changes. If you don't save, they are lost."));
-            ui.horizontal(|ui| {
-                if !IN_BROWSER {
-                    save = ui.add_enabled(!self.files.busy(), egui::Button::new("Save")).clicked();
-                }
-                discard = ui.button("Don't Save").clicked();
-                cancel = ui.button("Cancel").clicked();
-            });
-        });
+        let decision = shell::save_changes(
+            ctx,
+            &format!("Save changes to {name}?"),
+            &format!("{name} has unsaved changes. If you don't save, they are lost."),
+            !IN_BROWSER,
+            !self.files.busy(),
+        );
+        let save = decision == Some(shell::SaveDecision::Save);
+        let discard = decision == Some(shell::SaveDecision::Discard);
         if save {
             self.save_project_file(None, ctx);
             if self.message.is_none() {
@@ -158,7 +156,7 @@ impl PcbApp {
             self.file_notice = Some("Continuing when the file operation finishes".to_owned());
         } else if discard {
             self.carry_on(then, ctx);
-        } else if !(cancel || closing) {
+        } else if decision.is_none() {
             self.dialog = Dialog::SaveChanges(then);
         }
     }

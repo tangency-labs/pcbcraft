@@ -20,12 +20,21 @@ pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     .inner
 }
 
+/// Shared single-line input padding and height keep table cells and labelled forms aligned.
+pub fn input(value: &mut String) -> egui::TextEdit<'_> {
+    let t = Tokens::get();
+    egui::TextEdit::singleline(value)
+        .margin(egui::Margin::symmetric(t.space_8 as i8, t.space_4 as i8))
+        .min_size(vec2(0., t.control_height))
+        .vertical_align(Align::Center)
+}
+
 /// A single-line editable field with a stable accessible name, independent of label placement.
 pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     let t = Tokens::get();
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
-        ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width())).labelled_by(label.id)
+        ui.add(input(value).desired_width(ui.available_width())).labelled_by(label.id)
     })
     .inner
 }

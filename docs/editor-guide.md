@@ -385,9 +385,10 @@ preview rotations form one undo step. A conflicting edit, focus/workspace change
 or project reopen cancels the draft. The [starter footprints](footprint-library.md) include 0402/0603
 resistors and capacitors, 0402 LEDs, SOT-23 and a two-pin plated header, pinned
 into projects with explicit terminal mappings. New views hide fabrication and
-courtyard graphics by default; Layers can show them. **Properties → Silkscreen**
-edits physical text height, stroke width and pad clearance in one undoable board
-change. Defaults are 1 mm, 0.15 mm and 0.25 mm respectively; lengths accept mil/mm
+courtyard graphics by default; Layers can show them. **Board setup → Silkscreen**
+stages physical text height, stroke width and pad clearance alongside the layer
+and stackup settings. Apply commits them in one undoable board change; Cancel
+discards the draft. Defaults are 1 mm, 0.15 mm and 0.25 mm respectively; lengths accept mil/mm
 input and save with the project. **Assign Footprint…** in a schematic symbol's
 context menu, or **Footprints** in the PCB Layout ribbon, opens package selection
 and explicit terminal-to-pad mapping. Assigning pins the package without placing
@@ -397,11 +398,16 @@ Changing an already placed package awaits reviewed board updates. Native-folder
 registration, arcs, slots and routing remain planned.
 
 **Layout → Board → Setup** and **Layers → Board setup…** share a revision-bound
-Craft settings form. Board editor layers provides names and optional membership;
+Craft settings form, including on a board with no saved stackup. The first opening
+shows a complete editable two-layer 1.6 mm FR-4/1 oz draft; nothing changes until Apply.
+Existing setups retain their own dimensions and materials. Board editor layers provides names and optional membership;
 Physical stackup provides every even copper count from 2 through 64, finished
 thicknesses/tolerances, a laminate total and cross-section, locked-gap fitting,
-and core/prepreg construction. Materials provides sourced Tg/Dk/Df specifications
-and explicit pinned revisions. Empty values stay unknown and typed units override
+and core/prepreg construction. Materials offers generic family presets and custom definitions, with sourced Tg/Dk/Df
+specifications and explicit pinned revisions behind technical details. The laminate
+preview uses copper and dielectric appearances independently of canvas layer colors.
+Profiles imports/exports a self-contained `.pcsetup.json` snapshot of stackup,
+materials and silkscreen; imported settings remain staged until Apply. Empty values stay unknown and typed units override
 the display unit. Apply is one undoable transaction; Cancel and invalid/stale drafts
 leave the board unchanged. Existing material pins cannot be rewritten; create a
 new revision and explicitly choose it in construction. Populated copper changes

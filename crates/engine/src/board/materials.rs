@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 use uuid::Uuid;
 
 mod electrical;
+mod starters;
+pub use starters::StarterMaterial;
 pub(crate) mod schema;
 pub use electrical::{DielectricReport, DielectricValueKind, MeasurementAxis};
 #[cfg(test)]

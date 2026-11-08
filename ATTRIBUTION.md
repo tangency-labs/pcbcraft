@@ -698,3 +698,19 @@ Named-net anchor group selection and PCB footprint marquees extend the existing 
 selection model, engine transactions and qualified chrome painter with original PCBcraft code.
 The regression fixtures are created through native commands. No external implementation,
 library data, artwork or dependency was added for this fix.
+
+The subsequent Board setup polish, generic material-family templates and portable
+setup-profile implementation are original upstream code. Warm copper and textured
+dielectric preview bands are original painter geometry, independent of canvas layer
+colors. The chosen 1.6 mm starting laminate and generic material families contain no
+supplier qualification or measured Tg/Dk/Df data. Nominal 1 oz/35 µm copper follows
+the convention in [Rogers RO4003C material information](https://www.rogerscorp.com/advanced-electronics-solutions/ro4000-series-laminates/ro4003c-laminates),
+consulted 7-Nov-2026; no manufacturer document or asset is bundled.
+
+Silkscreen page organization was compared with the published [KiCad 10 PCB Editor manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#configuring_text_and_graphics)
+and Altium's [silkscreen preparation](https://www.altium.com/documentation/altium-designer/pcb/preparing-silkscreen)
+and [manufacturing-rule documentation](https://www.altium.com/documentation/altium-designer/pcb/design-rule-types/manufacturing),
+consulted 7-Nov-2026. Only user-facing behavior informed this adaptation; no vendor
+implementation, screenshots, icons, source-derived examples or library data were
+used. The preview reuses PCBcraft's already qualified Technical stroke-font data
+and its existing OFL notices. No dependency or external asset was added.

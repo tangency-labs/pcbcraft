@@ -227,6 +227,51 @@ pub fn dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add:
         .should_close()
 }
 
+/// A save prompt returns a choice without owning the application's save or close lifecycle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SaveDecision {
+    Save,
+    Discard,
+    Cancel,
+}
+
+/// Present the unsaved-work decision with the Craft dialog surface and fixed action footer.
+/// Browser callers omit Save because downloading cannot confirm that a project was kept.
+/// Escape and outside clicks cancel; a disabled Save still leaves Discard and Cancel available.
+pub fn save_changes(ctx: &egui::Context, title: &str, message: &str, offer_save: bool, save_enabled: bool) -> Option<SaveDecision> {
+    let t = Tokens::get();
+    let mut decision = None;
+    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1., t.border)).corner_radius(t.radius_lg);
+    let modal = egui::Modal::new(egui::Id::new("save_changes")).frame(frame).show(ctx, |ui| {
+        let width = (t.form_card_width * 1.75).min((ctx.content_rect().width() - 2. * t.space_16).max(0.));
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing = vec2(0., 0.);
+        Frame::new().inner_margin(t.space_24 as i8).show(ui, |ui| {
+            ui.set_width((width - 2. * t.space_24).max(0.));
+            ui.spacing_mut().item_spacing.y = t.space_12;
+            ui.label(RichText::new(title).font(fonts::interface_heading(ui, t.font_heading)));
+            ui.add(Label::new(message).wrap());
+        });
+        let (footer, _) = ui.allocate_exact_size(vec2(width, t.form_footer_height), Sense::hover());
+        ui.painter().rect_filled(footer, egui::CornerRadius { nw: 0, ne: 0, sw: t.radius_lg, se: t.radius_lg }, t.dialog_footer);
+        ui.painter().hline(footer.x_range(), footer.top(), Stroke::new(1., t.dialog_rule));
+        let inner = footer.shrink2(vec2(t.space_16, t.space_8));
+        ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)), |ui| {
+            ui.spacing_mut().item_spacing.x = t.space_8;
+            if offer_save && ui.add_enabled(save_enabled, crate::catalog::button("Save", true)).clicked() {
+                decision = Some(SaveDecision::Save);
+            }
+            if ui.add(crate::catalog::button("Cancel", false)).clicked() {
+                decision = Some(SaveDecision::Cancel);
+            }
+            if ui.add(crate::catalog::button("Don't Save", false)).clicked() {
+                decision = Some(SaveDecision::Discard);
+            }
+        });
+    });
+    if modal.should_close() { Some(SaveDecision::Cancel) } else { decision }
+}
+
 /// Small dim text, as in a status bar.
 pub fn dim(text: impl Into<String>) -> RichText {
     let t = Tokens::get();
