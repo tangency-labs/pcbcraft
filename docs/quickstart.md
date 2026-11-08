@@ -157,9 +157,9 @@ Right-click a sheet tab to open beside it or close that pane. Closing a detached
 window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
-Drag a split pane's document header over another pane in the same window to
-move it into that position. Two panes exchange places; with more panes, the
-intervening panes shift while the existing dividers and cameras stay intact.
+On desktop, drag a split pane's document header over another pane in the same
+window to move it into that position. Two panes exchange places; with more panes,
+the intervening panes shift while the existing dividers and cameras stay intact.
 The destination highlights **Move pane here** before release. Moving outside the
 client highlights **Open in new window**; release there or over that row to detach.
 The native window is created on release, without an outside-client preview.

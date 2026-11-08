@@ -431,6 +431,7 @@ fn pane_drag_return_target_stays_at_the_visible_header_of_a_partly_offscreen_hos
 
 /// A drop over the other pane exchanges the two positions, retaining their cameras and the
 /// divider. The preview names a move and must never imply or create a native tear-off.
+/// Both setup and result require a split with the specified divider ratio.
 #[test]
 fn pane_drag_to_the_left_exchanges_two_existing_panes() {
     for size in [vec2(1400.0, 900.0), vec2(760.0, 650.0)] {
@@ -438,9 +439,10 @@ fn pane_drag_to_the_left_exchanges_two_existing_panes() {
         h.set_size(size);
         let ctx = h.ctx.clone();
         h.state_mut().split_editors(&ctx, true);
-        if let crate::editor_layout::Layout::Split { ratio, .. } = &mut h.state_mut().views.hosts.get_mut(&HostId::ROOT).unwrap().layout {
-            *ratio = 0.4;
-        }
+        let crate::editor_layout::Layout::Split { ratio, .. } = &mut h.state_mut().views.hosts.get_mut(&HostId::ROOT).unwrap().layout else {
+            panic!("two-pane setup must have a split layout");
+        };
+        *ratio = 0.4;
         h.run();
         let original = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
         let source = root_drag(&mut h, 1);
@@ -456,9 +458,10 @@ fn pane_drag_to_the_left_exchanges_two_existing_panes() {
         h.run();
         assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.visible_views(), vec![source, original[0]]);
         assert_eq!(h.state().views.hosts.len(), 1);
-        if let crate::editor_layout::Layout::Split { ratio, .. } = h.state().views.hosts[&HostId::ROOT].layout {
-            assert_eq!(ratio, 0.4);
-        }
+        let crate::editor_layout::Layout::Split { ratio, .. } = h.state().views.hosts[&HostId::ROOT].layout else {
+            panic!("two-pane layout must remain split after the exchange");
+        };
+        assert_eq!(ratio, 0.4);
         for (id, camera) in original.iter().zip(cameras) {
             assert_eq!(h.state().views.view(*id).unwrap().camera.saved_state(), camera);
         }
