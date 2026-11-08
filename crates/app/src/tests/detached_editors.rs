@@ -305,6 +305,139 @@ fn window_click(h: &mut Harness<'_, PcbApp>, peer: Option<&Rc<RefCell<Peer>>>, p
     }
 }
 
+/// Native move/resize must be requested on the initial press, while the OS still owns its
+/// pointer serial. Both hosts use the same chrome, including when project controls are blocked.
+#[test]
+fn native_window_gestures_start_on_press_in_each_host() {
+    use egui::ResizeDirection::*;
+    for child in [false, true] {
+        for modal in [false, true] {
+            let (mut h, peer) = multi_window();
+            h.state_mut().integrated_titlebar = true;
+            detach(&mut h);
+            h.run_steps(3);
+            let host = if child { HostId(1) } else { HostId::ROOT };
+            let target = child.then_some(&peer);
+            let width = if child { 1100.0 } else { 1400.0 };
+            let height = if child { 760.0 } else { 900.0 };
+            let preferences = if child { child_rect(&peer, "Preferences") } else { h.get_by_label("Preferences").rect() };
+            let create = if child { child_rect(&peer, "New arrangement") } else { h.get_by_label("New arrangement").rect() };
+            let t = pcbcraft_chrome::Tokens::get();
+            let brand = pos2(t.space_8 + (t.space_16 + t.space_4) / 2.0, preferences.center().y);
+            let title = if child {
+                None
+            } else {
+                Some(h.query_all_by_label("Untitled").find(|node| node.rect().bottom() <= preferences.bottom()).unwrap().rect())
+            };
+            let drag = pos2((create.right() + preferences.left()) / 2.0, preferences.center().y);
+            if modal {
+                h.state_mut().dialog = Dialog::About;
+            }
+            h.input_mut().focused = !child;
+            peer.borrow_mut().focused = child;
+            h.run_steps(3);
+            let before = h.state().session.inspect();
+            let mut cases = vec![
+                (pos2(width / 2.0, 2.0), ViewportCommand::BeginResize(North)),
+                (pos2(width / 2.0, height - 2.0), ViewportCommand::BeginResize(South)),
+                (pos2(2.0, height / 2.0), ViewportCommand::BeginResize(West)),
+                (pos2(width - 2.0, height / 2.0), ViewportCommand::BeginResize(East)),
+                (pos2(2.0, 2.0), ViewportCommand::BeginResize(NorthWest)),
+                (pos2(width - 2.0, 2.0), ViewportCommand::BeginResize(NorthEast)),
+                (pos2(2.0, height - 2.0), ViewportCommand::BeginResize(SouthWest)),
+                (pos2(width - 2.0, height - 2.0), ViewportCommand::BeginResize(SouthEast)),
+                (drag, ViewportCommand::StartDrag),
+                (brand, ViewportCommand::StartDrag),
+            ];
+            if let Some(title) = title {
+                cases.push((title.center(), ViewportCommand::StartDrag));
+            }
+            for (pos, command) in cases {
+                for event in [
+                    Event::PointerMoved(pos),
+                    Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+                ] {
+                    if let Some(peer) = target {
+                        peer.borrow_mut().events.push(event);
+                    } else {
+                        h.event(event);
+                    }
+                    h.step();
+                }
+                assert!(
+                    h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command),
+                    "{host:?}, modal={modal}: {command:?} at {pos:?}"
+                );
+                let other = if child { HostId::ROOT } else { HostId(1) };
+                assert!(!h.output().viewport_output[&editor_windows::viewport(other)].commands.contains(&command));
+                h.step();
+                assert!(
+                    !h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command),
+                    "holding must not restart {command:?}"
+                );
+                let release = Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE };
+                if let Some(peer) = target {
+                    peer.borrow_mut().events.push(release);
+                } else {
+                    h.event(release);
+                }
+                h.step();
+                assert_eq!(h.state().session.inspect(), before);
+                assert_eq!(matches!(h.state().dialog, Dialog::About), modal);
+            }
+        }
+    }
+}
+
+/// Wayland can return the pointer after a native grab without a button release. The previous
+/// window gesture must not suppress resize cursors or keep ownership of the next edge press.
+#[test]
+fn native_resize_recovers_after_the_compositor_consumes_release() {
+    for child in [false, true] {
+        for start_move in [false, true] {
+            let (mut h, peer) = multi_window();
+            h.state_mut().integrated_titlebar = true;
+            detach(&mut h);
+            h.input_mut().focused = !child;
+            peer.borrow_mut().focused = child;
+            h.run_steps(3);
+            let before = h.state().session.inspect();
+            let host = if child { HostId(1) } else { HostId::ROOT };
+            let (width, height) = if child { (1100.0, 760.0) } else { (1400.0, 900.0) };
+            let send = |h: &mut Harness<'_, PcbApp>, event| {
+                if child {
+                    peer.borrow_mut().events.push(event);
+                } else {
+                    h.event(event);
+                }
+                h.step();
+            };
+            let start = if start_move { pos2(18.0, 24.0) } else { pos2(width - 2.0, height - 2.0) };
+            send(&mut h, Event::PointerMoved(start));
+            send(&mut h, Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            let command = if start_move { ViewportCommand::StartDrag } else { ViewportCommand::BeginResize(egui::ResizeDirection::SouthEast) };
+            assert!(h.output().viewport_output[&editor_windows::viewport(host)].commands.contains(&command));
+            // The compositor owns this gesture and consumes its release outside the client.
+            send(&mut h, Event::PointerGone);
+            let edge = pos2(width - 2.0, height / 2.0);
+            send(&mut h, Event::PointerMoved(edge));
+            let cursor = if child { peer.borrow().output.platform_output.cursor_icon } else { h.output().platform_output.cursor_icon };
+            assert_eq!(cursor, egui::CursorIcon::ResizeHorizontal, "{host:?}, move={start_move}: returning to an edge");
+            send(&mut h, Event::PointerButton { pos: edge, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            assert!(
+                h.output().viewport_output[&editor_windows::viewport(host)]
+                    .commands
+                    .contains(&ViewportCommand::BeginResize(egui::ResizeDirection::East))
+            );
+            send(&mut h, Event::PointerButton { pos: edge, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            let preferences = if child { child_rect(&peer, "Preferences") } else { h.get_by_label("Preferences").rect() };
+            window_click(&mut h, child.then_some(&peer), preferences.center());
+            assert!(matches!(h.state().dialog, Dialog::Preferences(_)), "ordinary controls work after native grabs");
+            assert_eq!(h.state().session.inspect(), before);
+        }
+    }
+}
+
 /// Home, a dialog in the main host and a queued project replacement block child editing and
 /// project actions, but its integrated titlebar must still control that native window.
 #[test]

@@ -137,6 +137,11 @@ Right-click a sheet tab to open beside it or close that pane. Closing a detached
 window leaves the other windows' layouts and cameras intact. Edits and undo from
 any window use the same project history.
 
+On Linux, drag the logo, project title or empty space in the top bar to move a
+window; double-click those areas to maximize or restore it. Drag an edge or
+corner to resize. These controls also work while a project dialog is open,
+without enabling the editing controls behind it.
+
 The project name stays separate from the top **Views** arrangement tab. Its tooltip
 explains the arrangement and its right-click actions. Use the
 **+** beside it to name a setup, starting with the current views and windows or a
