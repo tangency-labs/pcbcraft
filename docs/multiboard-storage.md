@@ -110,13 +110,22 @@ reserves the owned areas but does not require creating empty directories, a
 stackup or any physical board state. Saving/packing a schematic-only project is
 a complete operation, not a partial PCB export or a missing-document condition.
 
-When assigning a closed group to a board, move its existing use, occurrence and
-component records from `schematic_instances` to the board instance document in
-one revision-checked transaction and journaled save. Keep shared definitions in
-place, preserve IDs/overrides/model links, and update affected scope-qualified
-net/rule references explicitly. Other project-level instances remain untouched.
-Detaching an eligible unplaced group reverses that storage move without changing
-identity. No object is inferred from a folder or duplicated at both homes.
+When assigning complete circuit uses to a board, move their existing use,
+occurrence and component records from `schematic_instances` to the board instance
+document in one revision-checked transaction and journaled save. Preserve those
+IDs/overrides/model links and update affected scope-qualified net/rule references.
+If a closed group includes only part of a use, first apply the
+[partial-use extraction contract](circuit-instances.md#assignment-of-a-partial-circuit-use):
+allocate the new definition/containing use and rebind the selected occurrences
+and components while retaining their IDs. Move that new use, leaving unselected
+roots and the original use in their existing home. Preserve nested reusable
+definitions and use IDs; do not split one use between instance documents.
+
+Detaching an eligible unplaced group uses the same complete/partial-use rules in
+reverse. Whole-use moves preserve the use ID; partial-use restructuring allocates
+a new one in either direction. Other instances and shared definitions remain
+untouched except for the explicitly previewed extraction/fork. No object is
+inferred from a folder or duplicated at both homes.
 
 Simulation model references/defaults are shared logical definition data;
 compatible overrides live with their instance. Project-level analysis settings

@@ -178,6 +178,34 @@ circuit. Extraction and placement can be one previewed, atomic undoable command;
 cancel leaves both boards unchanged. Reusing Power from a migrated legacy circuit
 therefore includes this extraction step, even if the UI presents one action.
 
+### Assignment of a partial circuit use
+
+Each circuit use has exactly one schematic or board ownership home. Component
+closure alone does not make a selection a complete use: two independent flat
+roots can still belong to the same use. Before an ownership change, classify the
+selection as complete uses or partial uses, including the required nested-use
+closure. Never move a use while leaving any of its ordinary occurrences or
+component mappings behind in another ownership scope.
+
+For a complete use, move its records and preserve its use ID. For a partial use,
+first apply the extraction contract above within the source owner, allocating a
+new circuit definition and containing use for the selected closed group. Preserve
+the selected occurrence/component IDs, overrides and model links; rebind their
+use/definition mappings explicitly. The unselected roots retain the original use
+ID and owner. If the source definition is shared, Make independent for the
+affected source use before changing its membership; other uses remain unchanged.
+Preserve nested reusable definitions and selected nested-use IDs as extraction
+requires. An electrical child must also satisfy the explicit detach/port rules.
+
+Then transfer only the extracted use and its required nested uses. Update current
+use-qualified references, pending intent and scoped net bindings in the same
+revision-checked transaction; historical references keep their captured source.
+Preview restructuring and reference collisions, and publish extraction plus
+assignment as one undoable operation. Cancel, failure and Undo restore both
+owners and all prior mappings. Until this restructuring is implemented, refuse
+partial-use assignments rather than moving unselected roots or creating foreign
+use references; it is not a prerequisite for the initial single-board slice.
+
 ### References and resolved properties
 
 Both reference fields use an explicit owner scope. Preserve `reference_number`

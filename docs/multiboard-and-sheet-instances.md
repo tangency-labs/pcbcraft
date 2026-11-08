@@ -98,13 +98,17 @@ hierarchy. These presentation choices do not create sheet symbols or electrical
 links. Reusing Power on both boards creates distinct occurrences referencing the
 same definition, with or without a parent.
 
-Moving a closed set of flat sheets to a new board rehomes their component
-definitions into that board's circuit scope when necessary, retaining existing
-physical component IDs through an explicit mapping. A closed set includes all
-units of its components. This record-level organization does not add a parent
-sheet to the canvas. If the source circuit already has several uses, changing
-only one use's membership first requires Make independent; it cannot edit the
-shared group behind the other board's back.
+Moving a closed set of flat sheets to a new board transfers complete circuit
+uses. A closed set includes all units of its components but may still be only
+part of a use. In that case, apply the
+[partial-use extraction contract](circuit-instances.md#assignment-of-a-partial-circuit-use)
+first: allocate a new definition/containing use, preserve selected occurrence and
+component IDs, and leave unselected roots under the original use and owner.
+This record-level organization does not add a parent sheet to the canvas. If the
+source circuit already has several uses, changing only one use's membership
+first requires Make independent; it cannot edit the shared group behind the
+other board's back. Refuse the partial assignment until that restructuring path
+is available.
 
 Board association belongs to circuit uses, occurrences and component
 instances, not to a reusable sheet definition. The shared Power definition must
@@ -196,8 +200,10 @@ schematic/board and circuit-use context. Create board within the form and create
 the sheet atomically; Cancel leaves no unintended board or sheet.
 
 Assigning a closed schematic-only group to a new empty board moves its existing
-instance records, preserving component, occurrence and use IDs, references,
-overrides and model links. Preview collisions for an existing destination board.
+instance records, preserving component/occurrence IDs, references, overrides and
+model links. Preserve use IDs for complete-use moves; partial-use selections
+require extraction into a new containing use under the contract above. Preview
+that restructuring and collisions for an existing destination board.
 Also preview connectivity-scope changes: globals that previously joined other
 schematic-only roots must not become silently disconnected or turn into implicit
 cross-board links. For affected name-only joins, require an explicit choice to separate their scopes,
@@ -209,14 +215,16 @@ Modeling or simulation of an unresolved boundary cannot silently claim the old
 connectivity is still present. This is a deliberate partition operation.
 
 Keep schematic only detaches an eligible unplaced group from its board and moves
-its records back to project scope without creating new IDs. Existing placements,
+its records back to project scope, preserving component/occurrence IDs and applying
+the same complete/partial-use ID rules. Existing placements,
 copper or accepted objects must be explicitly reconciled first under the same
 physical-transfer restrictions and reference/connectivity-scope preview. A detach
 must not silently merge its globals with other schematic-only circuits. It does
 not delete a board
 or its documents/exports implicitly.
 
-Assign to board moves an existing use; it does not duplicate physical components.
+Assign to board moves complete uses, extracting partial selections first; it does
+not duplicate physical components.
 Use on another board is a separate action that invokes closed-circuit extraction
 when necessary and creates a new use with new instance identities. The form
 distinguishes that reuse from moving the original circuit. Both workflows use the
@@ -596,3 +604,8 @@ These scenarios should guide the tests and review for the relevant slices:
 - After a net gains C/D terminals, deleting fallback B and then disconnecting
   primary A retains the unique connected C/D remainder's ID with a new anchor,
   even though no historical fallback survives.
+- Two flat roots share a schematic-only circuit use. Assigning just one closed
+  root to Board extracts a new use, preserving its occurrence/component IDs;
+  the other root retains the original use and schematic home. Test the reverse
+  move, a shared source definition, nested reusable circuits, typed references,
+  cancel, undo/redo and reopen. Unsupported partial assignments change nothing.
