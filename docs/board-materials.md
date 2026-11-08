@@ -25,7 +25,8 @@ this preset is original PCBcraft configuration, without a supplier qualification
 The two-layer chooser also offers 2 oz/70 µm FR-4 and a generic high-Tg FR-4 family.
 Changing copper count retains existing dimensions; newly added gaps remain unknown.
 
-The Physical stackup page shows an illustrative laminate cross-section, finished copper/dielectric thicknesses,
+The Physical stackup page shows an illustrative laminate cross-section aligned with
+the table rows, finished copper/dielectric thicknesses,
 and their laminate total. Blank values stay unknown. **Fit unlocked dielectrics**
 distributes the exact residual thickness after copper and locked dielectric gaps;
 all fixed thicknesses must be specified and the resulting gaps must remain positive.

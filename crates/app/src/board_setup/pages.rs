@@ -264,17 +264,7 @@ impl Edit {
                 (name, candidate.thickness[i].value(self.unit).ok().flatten(), matches!(s, Stratum::Copper { .. }))
             })
             .collect();
-        if ui.available_width() > 700. {
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| form::cross_section(ui, &bands));
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    Self::stack_table(ui, candidate, &bands, &mut self.locked, &mut self.selected_stratum, self.unit);
-                });
-            });
-        } else {
-            Self::stack_table(ui, candidate, &bands, &mut self.locked, &mut self.selected_stratum, self.unit);
-        }
+        Self::stack_table(ui, candidate, &bands, &mut self.locked, &mut self.selected_stratum, self.unit);
         if let Some(error) = Self::stratum_details(ui, candidate, self.selected_stratum, self.unit) {
             self.error = Some(error);
         }
@@ -287,7 +277,8 @@ impl Edit {
         });
     }
 
-    /// Show every copper/dielectric thickness together, with a selected gap's detail card below.
+    /// Show each stratum and its illustration cell in one grid, so row geometry and scrolling
+    /// remain aligned at any layer count. The selected gap's details follow the complete table.
     fn stack_table(
         ui: &mut Ui,
         candidate: &mut Candidate,
@@ -297,9 +288,15 @@ impl Edit {
         unit: units::Unit,
     ) {
         let t = pcbcraft_chrome::Tokens::get();
-        let width = (ui.available_width() - ui.spacing().item_spacing.x * 3.).max(0.);
+        let preview_width = form::cross_section_column(ui);
+        let columns = if preview_width.is_some() { 5 } else { 4 };
+        let width = (ui.available_width() - preview_width.unwrap_or(0.) - ui.spacing().item_spacing.x * (columns - 1) as f32).max(0.);
         let widths = [width * 0.35, width * 0.27, width * 0.25, width * 0.13];
-        egui::Grid::new("physical_stack").num_columns(4).show(ui, |ui| {
+        let mut preview_rows = Vec::new();
+        egui::Grid::new("physical_stack").num_columns(columns).show(ui, |ui| {
+            if let Some(width) = preview_width {
+                form::cross_section_heading(ui, width);
+            }
             for (label, width) in
                 ["Layer".to_owned(), format!("Thickness ({})", unit.symbol()), "Construction".to_owned(), "Lock".to_owned()].into_iter().zip(widths)
             {
@@ -311,6 +308,10 @@ impl Edit {
             }
             ui.end_row();
             for (i, (name, _, copper)) in bands.iter().enumerate() {
+                if let Some(width) = preview_width {
+                    let (row, _) = ui.allocate_exact_size(egui::vec2(width, t.control_height), egui::Sense::hover());
+                    preview_rows.push(row);
+                }
                 if form::stratum_row(ui, name, widths[0], *selected == i).clicked() {
                     *selected = i;
                 }
@@ -356,6 +357,9 @@ impl Edit {
                 ui.end_row();
             }
         });
+        if preview_width.is_some() {
+            form::cross_section(ui, bands, &preview_rows);
+        }
     }
 
     /// The selected dielectric exposes construction, pinned materials and tolerance without

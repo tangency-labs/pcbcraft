@@ -62,6 +62,7 @@ impl Files {
         self.pending = Some((ticket, receive));
         Ok(ticket)
     }
+    /// Replace the file slot with a controlled completion channel for lifecycle regressions.
     #[cfg(test)]
     pub(super) fn stand_in(&mut self) -> (u64, mpsc::SyncSender<Result<Outcome, String>>) {
         let (send, receive) = mpsc::sync_channel(1);

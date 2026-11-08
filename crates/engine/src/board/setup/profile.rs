@@ -129,6 +129,7 @@ mod tests {
     use crate::board::setup::StackupPreset;
     use crate::{ADD_DRAWING, INITIALIZE_BOARD_SETUP, SET_BOARD_SETUP, Session};
     use serde_json::json;
+    /// Create an original two-layer board through production commands for profile tests.
     fn session() -> Session {
         let mut s = Session::default();
         s.apply("project.new", &json!({})).unwrap();

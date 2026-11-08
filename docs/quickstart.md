@@ -256,7 +256,7 @@ Use **Layout → Board → Setup**, or **Board setup…** in Layers, to edit the
 Choose any even copper count from 2 through 64; 10- and 12-layer boards are included.
 **Board editor layers** edits names and unused optional layer membership.
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
-construction, with a cross-section and laminate total. **Fit unlocked dielectrics**
+construction, with a laminate total and a cross-section aligned to the table rows. **Fit unlocked dielectrics**
 fits a target thickness while retaining copper and locked gaps. Values accept mm
 or mil, and blanks remain unspecified.
 

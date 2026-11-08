@@ -256,20 +256,39 @@ pub fn thickness_lock(ui: &mut Ui, width: f32, value: &mut bool, label: &str) ->
     response
 }
 
-/// Joined, illustrative laminate bands distinguish copper foil from dielectric without borrowing
-/// canvas layer colors or implying measured proportions. Hovers retain the exact authored lengths.
-pub fn cross_section(ui: &mut Ui, bands: &[(String, Option<i64>, bool)]) {
+/// Reserve a diagram column only when the stack table retains usable field widths.
+pub fn cross_section_column(ui: &Ui) -> Option<f32> {
+    (ui.available_width() > 700.).then_some(Tokens::get().form_card_width * 0.5)
+}
+
+/// Keep the scale note in the diagram's header cell without displacing the first material row.
+pub fn cross_section_heading(ui: &mut Ui, width: f32) {
     let t = Tokens::get();
-    let width = t.form_card_width * 0.5;
-    let height = (bands.len() as f32 * t.control_height).min(t.control_height * 14.);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height + t.space_16), Sense::hover());
-    let face = Rect::from_min_max(rect.min + vec2(t.space_4, t.space_16), rect.max - vec2(t.space_16, 0.));
+    ui.allocate_ui_with_layout(vec2(width, t.control_height), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_width(width);
+        ui.add_space(t.space_4);
+        ui.label(RichText::new("Not to scale").size(t.font_small).color(t.text_dim));
+    });
+}
+
+/// Paint joined laminate bands from the grid's actual row rectangles, without allocating
+/// independent height. Copper centers on its row; dielectric fills the gap between copper faces.
+/// The diagram scrolls with the table and culls off-screen bands while retaining exact hovers.
+pub fn cross_section(ui: &mut Ui, bands: &[(String, Option<i64>, bool)], rows: &[Rect]) {
+    let t = Tokens::get();
     let depth = vec2(t.space_12, -t.space_8);
-    let weight: f32 = bands.iter().map(|(_, _, copper)| if *copper { 0.6 } else { 1.8 }).sum();
-    let mut y = face.top();
-    for (i, (name, thickness, copper)) in bands.iter().enumerate() {
-        let h = face.height() * if *copper { 0.6 } else { 1.8 } / weight.max(1.);
-        let band = Rect::from_min_size(pos2(face.left(), y), vec2(face.width(), h));
+    for (i, ((name, thickness, copper), row)) in bands.iter().zip(rows).enumerate() {
+        let (top, bottom) = if *copper {
+            (row.center().y - row.height() * 0.25, row.center().y + row.height() * 0.25)
+        } else {
+            let top = i.checked_sub(1).and_then(|index| rows.get(index)).map_or(row.top(), |previous| previous.center().y + previous.height() * 0.25);
+            let bottom = rows.get(i + 1).map_or(row.bottom(), |next| next.center().y - next.height() * 0.25);
+            (top, bottom)
+        };
+        let band = Rect::from_min_max(pos2(row.left() + t.space_4, top), pos2(row.right() - t.space_16, bottom));
+        if !band.expand(t.space_16).intersects(ui.clip_rect()) {
+            continue;
+        }
         let fill = if *copper { t.stack_copper } else { t.stack_dielectric };
         if i == 0 {
             ui.painter().add(egui::Shape::convex_polygon(
@@ -314,7 +333,5 @@ pub fn cross_section(ui: &mut Ui, bands: &[(String, Option<i64>, bool)]) {
             "{name}: {}",
             thickness.map(|n| crate::units::label(n, crate::units::Unit::Mm)).unwrap_or_else(|| "Unspecified".into())
         ));
-        y += h;
     }
-    ui.label(RichText::new("Not to scale").size(t.font_small).color(t.text_dim));
 }
