@@ -313,6 +313,7 @@ impl EditorViews {
     /// placements before removing anything; the sole main pane leaves a replacement behind.
     /// Runtime IDs, cameras (including deferred navigation), document state and the remaining
     /// split trees are retained. The replacement inherits no pending navigation from the moved view.
+    /// Keep that replacement in the remembered split too, so reopening preserves focus and saving.
     pub(super) fn move_beside(&mut self, id: ViewId, target: ViewId) -> bool {
         let (Some(source), Some(destination)) = (self.owner(id), self.owner(target)) else { return false };
         if source == destination {
@@ -323,6 +324,9 @@ impl EditorViews {
             let Some(replacement) = self.duplicate(id, true) else { return false };
             if let Some(host) = self.hosts.get_mut(&source) {
                 host.layout.insert(id, replacement);
+                if let Some(collapsed) = &mut host.collapsed {
+                    collapsed.insert(id, replacement);
+                }
             }
         }
         let focused = group.visible_views().first().copied().unwrap_or(id);

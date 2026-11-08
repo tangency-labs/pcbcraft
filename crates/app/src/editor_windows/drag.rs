@@ -16,6 +16,7 @@ pub(super) struct PaneDrag {
     header_anchor: Pos2,
     desktop: Option<Pos2>,
     receiver: HostId,
+    /// Explicit window-target row under the pointer; takes priority over geometric destinations.
     fallback: Option<DropDestination>,
     released: bool,
 }

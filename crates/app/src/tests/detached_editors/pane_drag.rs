@@ -244,6 +244,50 @@ fn moving_the_sole_main_pane_preserves_pending_navigation_in_cached_documents() 
     }
 }
 
+/// Docking from a collapsed main host retains its replacement in the remembered split, so
+/// reopening cannot orphan the focused pane and arrangements remain saveable and restorable.
+#[test]
+fn docking_from_a_collapsed_main_host_keeps_its_replacement_in_saved_splits() {
+    for parked_count in [1, 2] {
+        let (mut h, _) = many_windows();
+        let ctx = h.ctx.clone();
+        let source = h.state().views.active.id();
+        let destination = h.state_mut().views.open_window(source).unwrap();
+        let target = h.state().views.hosts[&destination].focused;
+        let mut parked = Vec::new();
+        let mut beside = source;
+        for _ in 0..parked_count {
+            beside = h.state_mut().views.open_beside(beside).unwrap();
+            parked.push(beside);
+        }
+        h.run();
+        h.state_mut().run_window_command(&ctx, "view.split", &json!({"view":source.0,"split":false})).unwrap();
+        h.run();
+        assert_eq!(h.state().views.hosts[&HostId::ROOT].parked, parked);
+        let project = h.state().session.snapshot().unwrap();
+        h.state_mut().run_window_command(&ctx, "view.dock", &json!({"view":source.0,"beside":target.0})).unwrap();
+        h.run();
+        let replacement = h.state().views.hosts[&HostId::ROOT].focused;
+        assert_ne!(replacement, source);
+        assert!(h.state().arrangement_snapshot().expect("docking must leave a saveable collapsed arrangement").valid());
+        h.state_mut().run_window_command(&ctx, "view.split", &json!({"view":replacement.0,"split":true})).unwrap();
+        h.run();
+        let expected: Vec<_> = std::iter::once(replacement).chain(parked).collect();
+        assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.visible_views(), expected);
+        assert_eq!(h.state().views.owner(replacement), Some(HostId::ROOT));
+        assert_eq!(h.state().views.hosts[&HostId::ROOT].focused, replacement);
+        assert_eq!(h.state().views.owner(source), Some(destination));
+        let saved = h.state().arrangement_snapshot().expect("reopening must leave a saveable arrangement");
+        assert!(saved.valid());
+        assert!(saved.hosts[0].layout.visible(saved.hosts[0].focused));
+        let mut restored = crate::editor_workspace::EditorViews::default();
+        restored.restore_state(&saved, &h.state().session).unwrap();
+        assert_eq!(restored.hosts[&HostId::ROOT].layout.visible_views().len(), expected.len());
+        assert_eq!(restored.owner(restored.hosts[&HostId::ROOT].focused), Some(HostId::ROOT));
+        assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
+    }
+}
+
 /// A held drag shows stationary destinations before any layout change. Captured motion
 /// outside the client highlights the new-window action that release will perform.
 #[test]
