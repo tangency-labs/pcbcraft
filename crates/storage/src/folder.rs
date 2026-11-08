@@ -591,22 +591,36 @@ mod tests {
             assert!(error.starts_with("library/symbols/workshop/con.r"), "{error}");
             assert_eq!(tree(parent.path()), before);
             assert_eq!(load(&root).unwrap(), ordinary);
-            // The archive the message suggests holds the same documents as ZIP entries.
-            let project = pinned_project("workshop", "con");
-            let archive = base.join("board.pc.zip");
-            fs::write(&archive, pcbcraft_engine::persistence::encode_packed(project.clone()).unwrap()).unwrap();
-            assert_eq!(encode_documents(crate::open(&archive).unwrap()).unwrap(), encode_documents(project).unwrap());
         }
     }
 
-    /// Elsewhere these are ordinary names, so such a project saves and reopens as before.
+    /// Elsewhere these are ordinary names: folders save and reopen with the same documents, and
+    /// a repeated save leaves every directory, file byte, lock and journal state unchanged.
     #[cfg(not(windows))]
     #[test]
     fn other_platforms_save_device_names_as_ordinary_files() {
-        let parent = tempfile::tempdir().unwrap();
-        let root = parent.path().join("board");
-        let documents = pinning("con", "aux");
-        save(&root, None, &documents, &mut |_| Ok(())).unwrap();
-        assert_eq!(load(&root).unwrap(), documents);
+        for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor"), ("con", "aux")] {
+            let parent = tempfile::tempdir().unwrap();
+            let root = parent.path().join("board");
+            let documents = pinning(library, symbol);
+            save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+            assert_eq!(load(&root).unwrap(), documents);
+            let before = tree(parent.path());
+            save(&root, Some(&documents), &documents, &mut |_| Ok(())).unwrap();
+            assert_eq!(tree(parent.path()), before);
+        }
+    }
+
+    /// Archives retain device-named library and symbol IDs on every platform because document
+    /// paths are ZIP entries, so the alternative suggested by the Windows refusal reopens intact.
+    #[test]
+    fn archives_preserve_device_named_documents() {
+        for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor"), ("con", "aux")] {
+            let parent = tempfile::tempdir().unwrap();
+            let project = pinned_project(library, symbol);
+            let archive = parent.path().join("board.pc.zip");
+            fs::write(&archive, pcbcraft_engine::persistence::encode_packed(project.clone()).unwrap()).unwrap();
+            assert_eq!(encode_documents(crate::open(&archive).unwrap()).unwrap(), encode_documents(project).unwrap());
+        }
     }
 }
