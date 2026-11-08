@@ -8,6 +8,7 @@ use egui::{
 use crate::{Tokens, fonts};
 
 pub mod catalog;
+pub mod panels;
 
 /// The card is tall enough for the tabs, the groups and PCBcraft Next's 5 point gutter under them.
 const RIBBON_HEIGHT: f32 = 121.0;
@@ -1009,6 +1010,15 @@ pub fn floating_card_width(
                 .inner
         });
     (shown.response.rect, shown.inner)
+}
+
+/// The shared six-dot grip marks the title region that can move a floating or docked card.
+pub(super) fn drag_grip(painter: &egui::Painter, header: Rect) {
+    for x in [4.0, 8.0] {
+        for y in [-4.0, 0.0, 4.0] {
+            painter.circle_filled(header.left_center() + vec2(x, y), 1.0, Tokens::get().text_dim);
+        }
+    }
 }
 
 /// A floating card's header: its title on the left and a chevron on the right, one button that

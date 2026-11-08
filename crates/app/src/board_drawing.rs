@@ -130,6 +130,7 @@ fn command(source: ViewInput, id: &'static str, mut params: Value) -> Command {
 
 /// Route canvas-only drawing/selection/vertex and whole-graphic movement. Release over chrome,
 /// right-click, stale input or a hidden/changed layer cannot commit an unfinished edit.
+/// `selectable` gates existing graphics; explicitly chosen creation tools remain available.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn interact(
     ui: &mut Ui,
@@ -142,6 +143,7 @@ pub(super) fn interact(
     source: Option<ViewInput>,
     enabled: bool,
     move_requested: bool,
+    selectable: bool,
 ) -> Interaction {
     let mut out = Interaction::default();
     let rect = response.rect;
@@ -223,6 +225,9 @@ pub(super) fn interact(
                 state.draft = Some(Draft { source, layer: active.unwrap_or_default().to_owned(), points: vec![at] });
             }
         }
+        return out;
+    }
+    if !selectable {
         return out;
     }
     if state.edit.is_none() && (response.drag_started_by(PointerButton::Primary) || (move_requested && selected.is_some())) {

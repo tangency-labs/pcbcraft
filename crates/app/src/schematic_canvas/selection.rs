@@ -13,11 +13,11 @@ pub(crate) struct BoxDrag {
     pub button: PointerButton,
 }
 
-/// Pick one symbol body or closest wire, with the same precedence as a plain canvas click.
-pub(super) fn at(project: &Project, camera: &Camera, canvas: Rect, point: Pos2) -> Selection {
-    if let Some((symbol, _)) = super::symbol_at(project, camera, canvas, point) {
+/// Pick an enabled symbol body or closest enabled wire, ignoring disabled types before precedence.
+pub(super) fn at(project: &Project, camera: &Camera, canvas: Rect, point: Pos2, filters: crate::selection_filters::Filters) -> Selection {
+    if let Some((symbol, _)) = filters.symbols.then(|| super::symbol_at(project, camera, canvas, point)).flatten() {
         Selection::one_symbol(symbol.id())
-    } else if let Some(wire) = super::wires::at(project, camera, canvas, point) {
+    } else if let Some(wire) = filters.wires.then(|| super::wires::at(project, camera, canvas, point)).flatten() {
         Selection::one_wire(wire)
     } else {
         Selection::default()
@@ -26,11 +26,19 @@ pub(super) fn at(project: &Project, camera: &Camera, canvas: Rect, point: Pos2) 
 
 /// Window selection contains whole symbol bodies and complete wire paths; crossing selection
 /// touches bodies or actual orthogonal segments, never merely a wire's overall bounding box.
-pub(super) fn boxed(project: &Project, camera: &Camera, canvas: Rect, start: Pos2, end: Pos2) -> Selection {
+/// Disabled categories are excluded from both containment and crossing selection.
+pub(super) fn boxed(
+    project: &Project,
+    camera: &Camera,
+    canvas: Rect,
+    start: Pos2,
+    end: Pos2,
+    filters: crate::selection_filters::Filters,
+) -> Selection {
     let window = Rect::from_two_pos(start, end);
     let crossing = end.x < start.x;
     let mut hits = Selection::default();
-    for symbol in project.symbols() {
+    for symbol in project.symbols().iter().filter(|_| filters.symbols) {
         let body = super::body(&symbol.definition, symbol.turns());
         let center = camera.screen(symbol.position, canvas);
         let body = Rect::from_min_max(center + body.min.to_vec2() * camera.unit_step(), center + body.max.to_vec2() * camera.unit_step());
@@ -38,7 +46,7 @@ pub(super) fn boxed(project: &Project, camera: &Camera, canvas: Rect, start: Pos
             hits.symbols.insert(symbol.id());
         }
     }
-    for wire in project.wires() {
+    for wire in project.wires().iter().filter(|_| filters.wires) {
         let path: Vec<_> = project.wire_path(wire).into_iter().map(|point| camera.screen(point, canvas)).collect();
         let hit = if crossing {
             path.windows(2).any(|pair| window.intersects(Rect::from_two_pos(pair[0], pair[1])))

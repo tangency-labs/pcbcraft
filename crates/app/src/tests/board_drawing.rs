@@ -22,6 +22,35 @@ fn at(h: &Harness<'_, PcbApp>, x: i64, y: i64) -> egui::Pos2 {
     h.state().views.active.camera.screen(Point { x_nm: x, y_nm: y }, h.get_by_label("PCB canvas").rect())
 }
 
+/// Disabling graphic selection cancels edge moves and blocks later picks without hiding edges
+/// or preventing an explicitly chosen drawing tool from creating new geometry.
+#[test]
+fn selection_filters_cancel_graphic_edits_and_leave_creation_tools_available() {
+    let mut h = overlapping_footprint();
+    let edge = at(&h, 15_240_000, 0);
+    click_canvas_at(&mut h, edge);
+    assert!(h.state().views.active.board.drawing.selected.is_some());
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let id = h.state().views.active.id();
+    h.state_mut().set_selection_filters(id, &json!({"graphics":false})).unwrap();
+    assert!(h.state().views.active.board.drawing.selected.is_none());
+    let edge = at(&h, 15_240_000, 0);
+    click_canvas_at(&mut h, edge);
+    h.key_press(Key::M);
+    h.run();
+    assert!(h.state().views.active.board.drawing.source().is_none());
+    h.key_press(Key::Delete);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    let count = drawings(&h).len();
+    click(&mut h, "Draw rectangle on Board Edge");
+    let first = at(&h, -10_160_000, 10_160_000);
+    click_canvas_at(&mut h, first);
+    let second = at(&h, 10_160_000, 20_320_000);
+    click_canvas_at(&mut h, second);
+    assert_eq!(drawings(&h).len(), count + 1);
+}
+
 /// Original physical pads overlap an edge, exercising input ownership rather than distant hits.
 fn overlapping_footprint<'a>() -> Harness<'a, PcbApp> {
     let mut h = board();

@@ -11,8 +11,9 @@ pub enum Region {
 }
 
 /// Lay out a dedicated authoring workspace without owning a library document or project session.
-/// Compact hosts retain a full canvas and collapsible, scrollable cards.
-pub fn workspace(ui: &mut Ui, collapsed: [bool; 2], mut draw: impl FnMut(&mut Ui, Region)) -> [bool; 2] {
+/// Compact hosts retain a full canvas and collapsible, scrollable cards. The caller owns
+/// Properties placement so moving it between panes never transfers document ownership.
+pub fn workspace(ui: &mut Ui, collapsed: [bool; 2], panel: &mut workspace::panels::Panel, mut draw: impl FnMut(&mut Ui, Region)) -> [bool; 2] {
     let area = ui.available_rect_before_wrap();
     let (browser, b) = workspace::floating_card_aligned(
         ui,
@@ -23,10 +24,13 @@ pub fn workspace(ui: &mut Ui, collapsed: [bool; 2], mut draw: impl FnMut(&mut Ui
         false,
         |ui| draw(ui, Region::Browser),
     );
+    let mut dock = crate::properties::inspector_area(area, browser);
+    if panel.position() == workspace::panels::Position::Left && browser.is_positive() {
+        dock.min.y = browser.bottom();
+    }
+    let width = if area.width() < 600.0 { area.width() } else { 260.0 };
     let (properties, p) =
-        crate::properties::inspector(ui, ui.id().with("library_properties"), crate::properties::inspector_area(area, browser), collapsed[1], |ui| {
-            draw(ui, Region::Properties)
-        });
+        panel.show(ui, ui.id().with("library_properties"), "Properties", area, dock, collapsed[1], width, |ui| draw(ui, Region::Properties));
     draw(ui, Region::Canvas { area, covered: [browser, properties] });
     [collapsed[0] ^ b, collapsed[1] ^ p]
 }

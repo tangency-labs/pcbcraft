@@ -26,6 +26,9 @@ fn grid(x: i64, y: i64) -> Point {
 /// A project with one bent free wire, (-8, 0) → (8, 0) → (8, 6), drawn through the shared command.
 fn harness() -> Harness<'static, PcbApp> {
     let mut app = PcbApp::default();
+    for view in app.views.all_mut() {
+        view.filters_open = false;
+    }
     app.session.apply("project.new", &json!({"name":"Cuts"})).unwrap();
     app.session
         .apply(DRAW_WIRE, &json!({"from":grid(-8, 0),"to":grid(8, 6),"bends":[grid(8, 0)],"expected_revision":app.session.revision()}))
@@ -142,6 +145,8 @@ fn split_harness(narrow: bool) -> Harness<'static, PcbApp> {
         h.set_size(vec2(640.0, 800.0));
     }
     click(&mut h, "View");
+    h.get_by_label("Split editor views").scroll_to_me();
+    h.run();
     click(&mut h, "Split editor views");
     h
 }

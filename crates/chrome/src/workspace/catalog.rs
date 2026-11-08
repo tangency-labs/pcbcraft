@@ -214,11 +214,7 @@ impl Panel {
                             let (header, response) =
                                 ui.allocate_exact_size(vec2((ui.available_width() - controls_width).max(1.0), HEADER_HEIGHT), Sense::drag());
                             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Move Parts Catalog"));
-                            for x in [4.0, 8.0] {
-                                for y in [-4.0, 0.0, 4.0] {
-                                    ui.painter().circle_filled(header.left_center() + vec2(x, y), 1.0, t.text_dim);
-                                }
-                            }
+                            super::drag_grip(ui.painter(), header);
                             ui.painter().text(
                                 header.left_center() + vec2(18.0, 0.0),
                                 Align2::LEFT_CENTER,

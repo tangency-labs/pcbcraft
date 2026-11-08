@@ -7,15 +7,16 @@ use pcbcraft_engine::board::setup::{Layer, LayerPurpose, Stratum};
 impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
     /// Browsing explicitly selects and centers a placement; layer and collapse changes are local.
-    pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> [Rect; 3] {
+    /// Dock slots keep Layers, Properties and Selection filters separate on either edge.
+    pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> ([Rect; 3], Rect) {
         let settings_enabled = matches!(self.dialog, crate::Dialog::None) && !self.project_action_pending() && !self.files.busy();
         let Some(project) = self.session.snapshot() else {
-            return [Rect::NOTHING; 3];
+            return ([Rect::NOTHING; 3], Rect::NOTHING);
         };
         let view_id = self.views.active.id();
         let state = &mut self.views.active.board;
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
-            return [Rect::NOTHING; 3];
+            return ([Rect::NOTHING; 3], Rect::NOTHING);
         };
         let host = Id::new(("board_panels", self.views.host));
         let mut browser_area = area;
@@ -39,18 +40,31 @@ impl PcbApp {
         if collapse {
             state.browser_collapsed = !state.browser_collapsed;
         }
-        let mut layers_area = area;
-        if browser.is_finite() {
-            layers_area.min.y = browser.max.y;
-        }
-        let (layers, collapse) = workspace::floating_card_with_id(ui, host.with("layers"), "Layers", layers_area, state.layers_collapsed, |ui| {
-            layer_groups(ui, target, state, Id::new((view_id, target.target)), &self.board_appearance, &mut color_pick);
-        });
+        let slots = crate::workspace_panels::areas(area, browser, &self.views.active.panels, [true, true, self.views.active.filters_open], false);
+        let (layers, collapse) = self.views.active.panels[crate::workspace_panels::LAYERS].show(
+            ui,
+            host.with("layers"),
+            "Layers",
+            area,
+            slots[crate::workspace_panels::LAYERS],
+            state.layers_collapsed,
+            workspace::panels::card_width(area, false),
+            |ui| {
+                layer_groups(ui, target, state, Id::new((view_id, target.target)), &self.board_appearance, &mut color_pick);
+            },
+        );
         if collapse {
             state.layers_collapsed = !state.layers_collapsed;
         }
-        let (properties, collapse) =
-            workspace::floating_card_aligned(ui, host.with("properties"), "Properties", area, state.properties_collapsed, true, |ui| {
+        let (properties, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
+            ui,
+            host.with("properties"),
+            "Properties",
+            area,
+            slots[crate::workspace_panels::PROPERTIES],
+            state.properties_collapsed,
+            workspace::panels::card_width(area, false),
+            |ui| {
                 let selected: Vec<_> = target.footprints().filter(|footprint| state.selection.contains(&footprint.id)).collect();
                 egui::Grid::new("board_properties").num_columns(2).show(ui, |ui| match selected.as_slice() {
                     [footprint] => {
@@ -83,7 +97,8 @@ impl PcbApp {
                 ui.add_enabled_ui(settings_enabled, |ui| {
                     silk_apply = silkscreen_settings(ui, state, target, self.session.revision(), self.preferences.units);
                 });
-            });
+            },
+        );
         if collapse {
             state.properties_collapsed = !state.properties_collapsed;
         }
@@ -101,7 +116,7 @@ impl PcbApp {
             self.begin_layer_color(view_id, layer);
             self.repaint_editors(ui.ctx());
         }
-        [browser, layers, properties]
+        ([browser, layers, properties], slots[crate::workspace_panels::FILTERS])
     }
 }
 

@@ -25,6 +25,7 @@ pub mod preview;
 pub mod properties;
 mod ribbon_icons;
 pub mod selection;
+pub mod selection_filters;
 pub mod settings;
 pub mod shell;
 pub mod theme;

@@ -42,6 +42,7 @@ pub(super) struct Interaction {
 /// an explicit drawing tool or an existing drawing edit already owns the gesture.
 /// Physical pad color/visibility follow engine-resolved copper membership; the active copper
 /// layer changes display priority for spanning lands without rebinding any geometry.
+/// Selection filters suppress picking and transform shortcuts, without hiding rendered geometry.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -50,6 +51,7 @@ pub(super) fn show(
     state: &mut BoardState,
     source: Option<ViewInput>,
     highlighted: &BTreeSet<String>,
+    filters: crate::selection_filters::Filters,
     appearance: &crate::board_appearance::Appearance,
     enabled: bool,
     navigation: Navigation,
@@ -82,8 +84,9 @@ pub(super) fn show(
             }
         })
         .collect();
-    let hit =
-        |pointer: egui::Pos2| footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| bounds.contains(pointer).then_some(footprint));
+    let hit = |pointer: egui::Pos2| {
+        footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| (filters.footprints && bounds.contains(pointer)).then_some(footprint))
+    };
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
     let drag_start = response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
@@ -105,6 +108,7 @@ pub(super) fn show(
         source,
         enabled && state.draft.is_none() && !footprint_drag,
         state.move_requested,
+        filters.graphics,
     );
     let enabled = enabled && !edge.consumed;
     let mut out = Interaction { drawing_edit: edge.command, ..Interaction::default() };
@@ -124,6 +128,7 @@ pub(super) fn show(
     if enabled && !cancelled {
         if state.draft.is_none()
             && visible
+            && filters.footprints
             && let Some(source) = source
         {
             let picked = if drag_start {

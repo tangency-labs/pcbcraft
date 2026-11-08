@@ -85,22 +85,25 @@ impl PcbApp {
 
     /// Keep the inspector's geometry stable across selection changes. A modal replaces its
     /// controls with a read-only summary, preserving clearance without competing field editors.
-    pub(super) fn selection_properties(&mut self, ui: &mut Ui, area: Rect) -> Rect {
+    pub(super) fn selection_properties(&mut self, ui: &mut Ui, canvas: Rect, area: Rect) -> Rect {
         if !self.properties_open || (area.width() < 600.0 && self.parts.open) {
             self.views.active.schematic.properties.rect = Rect::NOTHING;
             return Rect::NOTHING;
         }
-        let area = chrome::inspector_area(area, self.browser.rect());
+        let width = pcbcraft_chrome::workspace::panels::card_width(canvas, true);
         let Some(current) = self.read_property_edit() else {
             if self.views.active.schematic.properties.draft.take().is_some_and(|edit| edit.changed()) {
                 self.message = Some("Selection changed; unapplied property edits were discarded.".into());
             }
             let count = self.views.active.schematic.selection.len();
-            let (rect, collapse) = chrome::inspector(
+            let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
                 ui,
                 egui::Id::new(("selection_properties", self.views.host)),
+                "Properties",
+                canvas,
                 area,
                 self.views.active.schematic.properties.collapsed,
+                width,
                 |ui| {
                     chrome::inspector_body(ui);
                     ui.label(if count == 0 { "Nothing selected".to_owned() } else { format!("{count} items selected") });
@@ -129,26 +132,35 @@ impl PcbApp {
         let mut more = false;
         let mut choose = false;
         let can_choose = !edit.changed();
-        let (rect, collapse) = chrome::inspector(ui, egui::Id::new(("selection_properties", self.views.host)), area, state.collapsed, |ui| {
-            chrome::inspector_body(ui);
-            chrome::identity(ui, &edit.reference, &edit.value);
-            if !enabled {
-                return;
-            }
-            edit.fields(ui);
-            chrome::field(ui, "Footprint", |ui| {
-                choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).on_hover_text("Choose footprint").clicked();
-            });
-            if let Some(error) = &edit.error {
-                ui.label(shell::error(error));
-            }
-            if edit.changed() {
-                apply = ui.button("Apply changes").clicked();
-            }
-            ui.separator();
-            ui.label(shell::dim(format!("{} pins", edit.definition.pins().len())));
-            more = ui.button("More properties ↗").clicked();
-        });
+        let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
+            ui,
+            egui::Id::new(("selection_properties", self.views.host)),
+            "Properties",
+            canvas,
+            area,
+            state.collapsed,
+            width,
+            |ui| {
+                chrome::inspector_body(ui);
+                chrome::identity(ui, &edit.reference, &edit.value);
+                if !enabled {
+                    return;
+                }
+                edit.fields(ui);
+                chrome::field(ui, "Footprint", |ui| {
+                    choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).on_hover_text("Choose footprint").clicked();
+                });
+                if let Some(error) = &edit.error {
+                    ui.label(shell::error(error));
+                }
+                if edit.changed() {
+                    apply = ui.button("Apply changes").clicked();
+                }
+                ui.separator();
+                ui.label(shell::dim(format!("{} pins", edit.definition.pins().len())));
+                more = ui.button("More properties ↗").clicked();
+            },
+        );
         if collapse {
             self.views.active.schematic.properties.collapsed = !self.views.active.schematic.properties.collapsed;
         }

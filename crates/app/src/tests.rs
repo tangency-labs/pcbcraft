@@ -22,15 +22,22 @@ mod grid_spacing;
 mod hierarchy;
 mod multiple_sheets;
 mod net_labels;
+mod panel_docking;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod ribbon;
 mod save_changes;
+mod selection_filters;
 mod split_editors;
 
-/// Start directly in the workspace for editor-control tests; startup tests use the real constructor.
+/// Start editor-control tests without the filter overlay over their coordinate fixtures.
+/// Filter tests opt in explicitly; startup tests exercise the real constructor and visible defaults.
 pub(super) fn harness<'a>() -> Harness<'a, PcbApp> {
-    let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), PcbApp::default());
+    let mut app = PcbApp::default();
+    for view in app.views.all_mut() {
+        view.filters_open = false;
+    }
+    let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
     harness.run();
     harness
 }
