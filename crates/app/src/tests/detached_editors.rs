@@ -166,7 +166,16 @@ fn detached_browser_navigation_and_selection_stay_in_the_child_host() {
     for label in ["Sheets", "Main", "Boards"] {
         child_rect(&peer, label);
     }
-    let at = child_rect(&peer, "Open board Board").center();
+    let at = child_rect(&peer, "Board Board").center();
+    child_click_at(&mut h, &peer, at);
+    let child = h.state().views.hosts[&HostId(1)].focused;
+    assert_eq!(h.state().views.view(child).unwrap().workspace, crate::editor_view::Workspace::Schematic);
+    for pressed in [true, false] {
+        peer.borrow_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    h.run_steps(3);
+    let at = child_rect(&peer, "Open in PCB layout").center();
     child_click_at(&mut h, &peer, at);
     let at = child_rect(&peer, "Footprint R1  1k").center();
     child_click_at(&mut h, &peer, at);

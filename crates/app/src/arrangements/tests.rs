@@ -261,7 +261,7 @@ fn browser_sheet_switches_the_pane_without_adding_tabs_or_changing_arrangements(
     let board = h.state().views.active.id();
     assert_ne!(board, original);
     assert_ne!(board, companion);
-    click(&mut h, "Main");
+    crate::tests::open_browser_row(&mut h, "Main", "Open in Schematic");
     assert_eq!(h.state().views.active.id(), original);
     assert_eq!(h.state().arrangements.active(), arrangement);
     let group = h.state().views.hosts[&h.state().views.main].layout.group(original).unwrap().views();
@@ -277,7 +277,7 @@ fn browser_sheet_switches_the_pane_without_adding_tabs_or_changing_arrangements(
     assert_eq!(h.state().views.active.id(), board);
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     assert_eq!(h.query_all_by_label("Close view Arrangement test › Board").count(), 2);
-    click(&mut h, "Main");
+    crate::tests::open_browser_row(&mut h, "Main", "Open in Schematic");
     assert_eq!(h.state().views.hosts[&h.state().views.main].layout.group(original).unwrap().views(), group);
 }
 
@@ -295,7 +295,7 @@ fn workspace_switches_keep_single_views_clear_and_split_actions_address_whole_pa
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     assert!(h.query_by_label("Close view Arrangement test › Board").is_none());
     assert_eq!(h.get_by_label("PCB canvas").rect().top(), canvas_top);
-    click(&mut h, "Main");
+    crate::tests::open_browser_row(&mut h, "Main", "Open in Schematic");
     assert_eq!(h.get_by_label("Schematic canvas").rect().top(), canvas_top);
     assert!(h.query_by_label("Close view Arrangement test › Main").is_none());
     click(&mut h, "Choose workspace");

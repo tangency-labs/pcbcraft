@@ -53,6 +53,33 @@ pub(super) enum Tool {
         revision: u64,
     },
 }
+/// Use the existing drawing-tool glyphs in Browser rows, without deriving identity from labels.
+pub(super) fn browser_icon(primitive: &Primitive) -> pcbcraft_chrome::workspace::ToolIcon {
+    use pcbcraft_chrome::workspace::ToolIcon;
+    match primitive {
+        Primitive::Pin { .. } => ToolIcon::Pin,
+        Primitive::Pad { .. } => ToolIcon::Pad,
+        Primitive::Rectangle { .. } | Primitive::Outline { .. } => ToolIcon::Rectangle,
+        Primitive::Circle { .. } => ToolIcon::Circle,
+        Primitive::Text { .. } | Primitive::Silkscreen { .. } => ToolIcon::Text,
+        Primitive::Line { .. } | Primitive::Polyline { .. } => ToolIcon::Line,
+        Primitive::Graphic { graphic } => graphic_icon(graphic),
+        Primitive::Artwork { artwork } => graphic_icon(&artwork.graphic),
+    }
+}
+
+/// Geometry uses the same glyph across schematic and layer-qualified definition artwork.
+fn graphic_icon(graphic: &pcbcraft_engine::library_graphics::Graphic) -> pcbcraft_chrome::workspace::ToolIcon {
+    use pcbcraft_chrome::workspace::ToolIcon;
+    use pcbcraft_engine::library_graphics::Geometry;
+    match graphic.geometry {
+        Geometry::Line { .. } | Geometry::Polyline { .. } => ToolIcon::Line,
+        Geometry::Rectangle { .. } => ToolIcon::Rectangle,
+        Geometry::Circle { .. } | Geometry::Arc { .. } => ToolIcon::Circle,
+        Geometry::Text { .. } => ToolIcon::Text,
+    }
+}
+
 /// Human-readable browser labels keep electrical numbers visible beside stable primitive IDs.
 pub(super) fn name(primitive: &Primitive) -> String {
     match primitive {

@@ -17,8 +17,21 @@ fn project_harness(width: f32) -> Harness<'static, PcbApp> {
     h
 }
 
+/// Repeated row clicks inspect a board's tree without replacing the current editor.
+#[test]
+fn repeated_browser_clicks_do_not_switch_workspaces() {
+    let mut h = project_harness(1400.0);
+    let before = h.state().session.snapshot().unwrap();
+    for _ in 0..3 {
+        h.get_by_label("Board Board").click();
+        h.step();
+        assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+    }
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
 /// Sheets and Boards have the same row metrics and navigation from both workspaces. Picking
-/// an inactive document's object explicitly opens that document and selects only its object.
+/// an inactive document's object requires explicit opening before selecting its object.
 #[test]
 fn common_browser_navigates_both_workspaces_without_document_edits() {
     for width in [1400.0, 700.0] {
@@ -26,10 +39,16 @@ fn common_browser_navigates_both_workspaces_without_document_edits() {
         let before = h.state().session.inspect();
         let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         let sheet_height = h.get_by_label("Main").rect().height();
-        assert_eq!(h.get_by_label("Open board Board").rect().height(), sheet_height);
+        assert_eq!(h.get_by_label("Board Board").rect().height(), sheet_height);
         h.get_by_label("Sheets");
         h.get_by_label("Boards");
-        click(&mut h, "Open board Board");
+        let camera = h.state().views.active.camera.saved_state();
+        click(&mut h, "Board Board");
+        assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+        assert_eq!(h.state().views.active.camera.saved_state(), camera);
+        click(&mut h, "Footprint R1  1k");
+        assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+        crate::tests::open_browser_row(&mut h, "Board Board", "Open in PCB layout");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         h.get_by_label("Sheets");
         h.get_by_label("Main");
@@ -44,12 +63,16 @@ fn common_browser_navigates_both_workspaces_without_document_edits() {
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         click(&mut h, "Expand Symbols");
         click(&mut h, "R2  1k");
+        assert_eq!(h.state().views.active.workspace, Workspace::Board);
+        crate::tests::open_browser_row(&mut h, "R2  1k", "Show in Schematic");
         assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
         assert_eq!(h.state().views.active.schematic.selection.single_symbol(), Some("symbol-3"));
         assert_eq!(h.get_by_label("R1  1k").rect().height(), sheet_height);
-        // A footprint row can likewise navigate from the schematic to its own board.
+        // A footprint row opens another workspace only through an explicit action.
         click(&mut h, "Expand Board");
         click(&mut h, "Footprint R1  1k");
+        assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+        crate::tests::open_browser_row(&mut h, "Footprint R1  1k", "Show in PCB layout");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         assert_eq!(h.state().views.active.board.selection, board_selection);
         assert_eq!(h.state().session.inspect(), before);
@@ -62,7 +85,7 @@ fn common_browser_navigates_both_workspaces_without_document_edits() {
 #[test]
 fn browser_folding_and_visibility_are_consistent_on_the_board() {
     let mut h = project_harness(1400.0);
-    click(&mut h, "Open board Board");
+    crate::tests::open_browser_row(&mut h, "Board Board", "Open in PCB layout");
     let before = h.state().session.inspect();
     click(&mut h, "Collapse Footprints");
     assert!(h.query_by_label("Footprint R1  1k").is_none());
@@ -124,6 +147,8 @@ fn first_footprint_pick_centers_in_the_destination_uncovered_canvas() {
         let mut h = project_harness(width);
         click(&mut h, "Expand Board");
         click(&mut h, "Footprint R1  1k");
+        assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
+        crate::tests::open_browser_row(&mut h, "Footprint R1  1k", "Show in PCB layout");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         let center = h.state().views.active.camera.center();
         assert!((center.x_nm - 127_000_000).abs() < 100);
@@ -183,6 +208,8 @@ fn browser_navigation_stays_in_the_focused_split_pane() {
     let origin = pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 };
     let at = h.state().views.view(first).unwrap().camera.screen(origin, rect);
     click(&mut h, "Main");
+    assert_eq!(h.state().views.active.workspace, Workspace::Board);
+    crate::tests::open_browser_row(&mut h, "Main", "Open in Schematic");
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
     assert_ne!(h.state().views.active.id(), first);
     assert_eq!(h.state().views.view(first).unwrap().target(), target);
