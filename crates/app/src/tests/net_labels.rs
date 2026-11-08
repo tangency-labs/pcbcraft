@@ -36,9 +36,9 @@ fn power_placement_edit_move_delete_and_undo() {
     let revision = h.state().session.revision();
     h.key_press(Key::P);
     h.run();
-    assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
+    assert!(h.state().parts.open);
     assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("GND"));
-    click(&mut h, "OK");
+    click(&mut h, "Place");
     assert_eq!(h.state().session.revision(), revision);
     h.key_press(Key::R);
     h.run();
@@ -55,7 +55,7 @@ fn power_placement_edit_move_delete_and_undo() {
     h.run();
     assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
     name(&mut h, "GNDA");
-    click(&mut h, "OK");
+    click(&mut h, "Apply");
     assert_eq!(h.state().session.project().unwrap().net_labels()[0].name, "GNDA");
     h.hover_at(hover);
     h.run();
@@ -86,13 +86,13 @@ fn label_tools_and_cancel_at_both_widths() {
         h.key_press(Key::L);
         h.run();
         name(&mut h, "RESET");
-        click(&mut h, "OK");
+        click(&mut h, "Place");
         assert!(matches!(h.state().views.active.schematic.tool,Some(Tool::NetLabel {ref label,..}) if label.style==Style::Local));
         h.key_press(Key::Escape);
         h.run();
         h.key_press_modifiers(Modifiers::COMMAND, Key::L);
         h.run();
-        click(&mut h, "OK");
+        click(&mut h, "Place");
         assert!(matches!(h.state().views.active.schematic.tool,Some(Tool::NetLabel {ref label,..}) if label.style==Style::Global));
         h.key_press(Key::Escape);
         h.run();
@@ -100,7 +100,7 @@ fn label_tools_and_cancel_at_both_widths() {
         h.run();
         click(&mut h, "Place menu");
         click(&mut h, "Power");
-        assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
+        assert!(h.state().parts.open);
         click(&mut h, "Cancel");
         assert_eq!(h.state().session.revision(), revision);
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), original);
@@ -132,7 +132,7 @@ fn live_commands_inspection_names_and_stale_form() {
     h.run();
     h.state_mut().session.apply("project.rename", &json!({"name":"Concurrent"})).unwrap();
     name(&mut h, "+5V");
-    click(&mut h, "OK");
+    click(&mut h, "Apply");
     assert_eq!(h.state().session.project().unwrap().net_labels()[0].name, "+3V3");
     assert!(h.state().message.as_deref().unwrap_or_default().contains("changed"));
 }
@@ -186,7 +186,7 @@ fn power_placement_reaches_pins_between_grid_points() {
     assert_ne!(h.state().views.active.camera.snap(screen, h.get_by_label("Schematic canvas").rect()), point);
     h.key_press(Key::P);
     h.run();
-    click(&mut h, "OK");
+    click(&mut h, "Place");
     click_canvas_at(&mut h, screen);
     let project = h.state().session.project().unwrap();
     assert_eq!(project.net_labels()[0].at, point);

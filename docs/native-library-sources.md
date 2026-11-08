@@ -1,7 +1,7 @@
 # Native library sources
 
 This slice of #92 loads native symbols and footprints from personal sources.
-Symbols can be searched and placed through Parts. Footprints can be searched and
+Symbols can be searched and placed through the Parts Catalog. Footprints can be searched and
 inspected in Library sources; connecting external footprints to the assignment
 chooser remains separate work. Registering, refreshing or removing a source
 does not change the project, its revision, dirty state or undo history.

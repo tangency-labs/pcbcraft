@@ -1,34 +1,101 @@
-//! The parts browser: a movable card floating over the canvas that lists embedded and loaded native
-//! symbols as searchable thumbnails. Click a part to place it, or
-//! drag parts onto the sheet one after another. Browsing never edits the project; placing goes through the same
-//! `schematic.place_symbol` command as before. Adapted from PCBcraft Next's parts browser.
-
+//! Library-aware part selection in the shared Craft catalog form. Browsing is transient;
+//! placement retains the originating view/revision and uses the shared engine commands.
+use crate::{editor_view::ViewInput, schematic_canvas::paint_preview};
+use egui::{Rect, Ui};
+use pcbcraft_chrome::{
+    catalog as chrome, properties, shell,
+    workspace::catalog::{self, View},
+};
+use pcbcraft_engine::{
+    library,
+    net_labels::{Label, Style},
+    schematic::{Point, SymbolDefinition},
+};
 use std::sync::Arc;
 
-use egui::{Rect, Ui};
-use pcbcraft_chrome::workspace::catalog::{self, View};
-use pcbcraft_engine::{library, schematic::SymbolDefinition};
+/// Collections are presentation filters, not electrical identities or source registrations.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum Collection {
+    #[default]
+    All,
+    Library(String),
+    Power,
+}
+/// Exact item keys prevent display-name collisions and stale source revisions from aliasing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Key {
+    Symbol(String, String, u32),
+    Power(&'static str),
+}
+/// Display entries retain qualified symbol definitions; built-in power markers use their own commands.
+#[derive(Clone, Debug)]
+enum Entry {
+    Symbol(Arc<SymbolDefinition>),
+    Power(&'static str, Style),
+}
+impl Entry {
+    /// A catalog row's identity remains independent of its visible name.
+    fn key(&self) -> Key {
+        match self {
+            Self::Symbol(s) => Key::Symbol(s.library.clone(), s.id.clone(), s.revision()),
+            Self::Power(name, _) => Key::Power(name),
+        }
+    }
+    /// Search/display text comes from the source definition or the original power preset.
+    fn name(&self) -> &str {
+        match self {
+            Self::Symbol(s) => &s.name,
+            Self::Power(name, _) => name,
+        }
+    }
+    /// Keep power markers separate from component symbol libraries and footprint mappings.
+    fn in_collection(&self, collection: &Collection) -> bool {
+        match (collection, self) {
+            (Collection::All, _) => true,
+            (Collection::Power, Self::Power(..)) => true,
+            (Collection::Library(id), Self::Symbol(s)) => *id == s.library,
+            _ => false,
+        }
+    }
+}
+/// The host performs the selected action only after the catalog has closed.
+pub(crate) enum Pick {
+    Symbol(Arc<SymbolDefinition>),
+    Power(Label),
+    Libraries,
+    Stale,
+}
 
-use crate::{
-    editor_view::ViewInput,
-    schematic_canvas::{PartDrag, paint_preview},
-};
-
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PartsBrowser {
     pub(crate) open: bool,
     query: String,
     view: View,
-    panel: catalog::Panel,
-    rect: Option<Rect>,
-    /// Focus the search field on the next frame, as after pressing A.
+    collection: Collection,
+    selected: Option<Key>,
+    power_name: String,
+    source: Option<ViewInput>,
     focus: bool,
-    /// Whether the search field had focus at the end of the last frame. egui drops focus on
-    /// Escape before the frame's code runs, so this is how Escape knows it was meant here.
-    search_focused: bool,
+    /// Old panel placement remains readable in saved arrangements, without restoring a dock.
+    legacy_panel: catalog::PanelState,
 }
-
-/// Remember catalog visibility and presentation, without search focus or drag payloads.
+impl Default for PartsBrowser {
+    /// Catalogs open explicitly and start with readable list rows and a separate large preview.
+    fn default() -> Self {
+        Self {
+            open: false,
+            query: String::new(),
+            view: View::List,
+            collection: Collection::All,
+            selected: None,
+            power_name: String::new(),
+            source: None,
+            focus: false,
+            legacy_panel: Default::default(),
+        }
+    }
+}
+/// Retain the old arrangement vocabulary without persisting an open modal or pointer gesture.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PartsState {
@@ -36,175 +103,319 @@ pub(super) struct PartsState {
     view: View,
     panel: catalog::PanelState,
 }
-
 impl PartsState {
-    /// Validate saved placement before it reaches the chrome layout.
+    /// Previously saved dock coordinates remain validated compatibility data.
     pub(super) fn valid(&self) -> bool {
         self.panel.valid()
     }
 }
-
 impl PartsBrowser {
-    /// Capture layout without retaining search text or an unfinished placement.
+    /// Save presentation; an open chooser is transient and does not reopen on project restore.
     pub(super) fn saved_state(&self) -> PartsState {
-        PartsState { open: self.open, view: self.view, panel: self.panel.saved_state() }
+        PartsState { open: false, view: self.view, panel: self.legacy_panel.clone() }
     }
-
-    /// Recreate presentation with fresh interaction ownership.
+    /// Restore display density and compatible legacy data, keeping the modal initially closed.
     pub(super) fn from_state(state: &PartsState) -> Self {
-        Self { open: state.open, view: state.view, panel: catalog::Panel::from_state(&state.panel), ..Self::default() }
+        Self { view: state.view, legacy_panel: state.panel.clone(), ..Default::default() }
     }
-
-    /// Release the shared search field when another editor takes input ownership. The query,
-    /// view mode and panel position remain available to the newly focused pane.
+    /// Release only this catalog's keyboard ownership when another native host takes focus.
     pub(super) fn release_focus(&mut self, ctx: &egui::Context) {
         self.focus = false;
-        self.search_focused = false;
-        ctx.memory_mut(|memory| {
-            if let Some(id) = memory.focused() {
-                memory.surrender_focus(id);
+        ctx.memory_mut(|m| {
+            if let Some(id) = m.focused() {
+                m.surrender_focus(id);
             }
         });
     }
-    /// Open and focus the retained search, as Capture › Symbol and A do. A collapsed card expands first.
+    /// A reopens the current library, retaining ordinary search text between placements.
+    /// After power placement it returns to all libraries and clears the power search.
     pub(crate) fn focus_search(&mut self) {
+        if self.collection == Collection::Power {
+            self.query.clear();
+            self.collection = Collection::All;
+            self.selected = None;
+        }
         self.open = true;
-        self.panel.expand();
         self.focus = true;
+        self.source = None;
     }
-
-    /// Hide the card without changing its search, view, position or the active placement tool.
+    /// P opens the same catalog with the power collection selected, without a property form.
+    pub(crate) fn focus_power(&mut self) {
+        self.collection = Collection::Power;
+        self.query.clear();
+        self.selected = None;
+        self.open = true;
+        self.focus = true;
+        self.source = None;
+    }
+    /// Closing a chooser discards its interaction authority, not its retained browsing choices.
     pub(crate) fn close(&mut self, ctx: &egui::Context) {
         self.open = false;
+        self.source = None;
         self.focus = false;
-        self.search_focused = false;
-        self.panel.cancel_drag();
         egui::DragAndDrop::clear_payload(ctx);
         ctx.request_repaint();
     }
-
-    /// Escape first cancels a panel drag or leaves search focus, keeping the library visible.
-    /// Call after giving dialogs, popups and the assistant priority, but before tool cancellation.
-    /// Outside a drag/search, Escape remains available to the canvas.
+    /// Escape dismisses the complete form before any canvas tool can consume the key.
     pub(crate) fn take_escape(&mut self, ctx: &egui::Context) -> bool {
-        if self.open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && (self.panel.cancel_drag() || self.search_focused) {
-            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-            self.search_focused = false;
-            ctx.request_repaint();
-            return true;
+        if self.open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.close(ctx);
+            true
+        } else {
+            false
         }
-        false
     }
-
-    /// The starter library's symbols whose name or ID contains the search text, or whose reference
-    /// prefix is it. Matching ignores case; an empty search lists every symbol.
-    #[cfg(test)]
-    fn matches(&self) -> Vec<Arc<SymbolDefinition>> {
-        matches(&self.query)
-    }
-
-    /// The current card rectangle, absent while hidden or before drawing. Used for fitting and pointer exclusion.
+    /// Catalog forms do not consume canvas geometry or participate in camera fitting.
     pub(crate) fn rect(&self) -> Rect {
-        if self.open { self.rect.unwrap_or(Rect::NOTHING) } else { Rect::NOTHING }
+        Rect::NOTHING
     }
-
-    /// Reserve vertical room for a left-anchored library by limiting the Browser's card only.
+    /// Browser layout remains independent of an open modal catalog.
     pub(crate) fn browser_area(&self, canvas: Rect) -> Rect {
-        if self.open { self.panel.browser_area(canvas) } else { canvas }
+        canvas
     }
 
-    /// Draw the floating library when open; clicking a part or pressing Enter releases search
-    /// focus and starts placement while keeping the query and card visible.
-    /// Drag payloads retain the originating view, sheet and revision so intervening edits cancel placement. A short
-    /// dock temporarily uses List while preserving the preferred view for a taller card.
-    pub(crate) fn show(
-        &mut self,
-        ui: &Ui,
-        canvas: Rect,
-        browser: Rect,
-        placing: Option<&Arc<SymbolDefinition>>,
-        source: ViewInput,
-        libraries: &library::sources::Catalog,
-    ) -> Option<Arc<SymbolDefinition>> {
+    /// Present libraries, filtered results and selected geometry using the merged source-manager
+    /// form rhythm. Confirm/double-click/Enter starts placement; a stale view refuses the choice.
+    pub(crate) fn show(&mut self, ui: &Ui, source: ViewInput, libraries: &library::sources::Catalog) -> Option<Pick> {
         if !self.open {
-            self.rect = None;
             return None;
         }
-        let mut picked = None;
-        let count = matches_sources(&self.query, libraries).len();
-        let Self { panel, query, view, focus, search_focused, .. } = self;
-        let (rect, closed) = panel.show(ui, canvas, browser, |ui, compact| {
-            catalog::source(ui, "Symbols", count);
-            let search = catalog::search(ui, query);
-            if std::mem::take(focus) {
-                search.request_focus();
-            }
-            *search_focused = search.has_focus();
-            let enter = search.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let view = catalog::view_picker(ui, view, compact);
-            let parts = matches_sources(query, libraries);
-            if enter {
-                picked = parts.first().cloned();
-            }
-            catalog::grid(ui, view, &parts, |ui, definition, width| {
-                let identity =
-                    (definition.library != "starter").then(|| format!("{}/{} r{}", definition.library, definition.id, definition.revision()));
-                let detail = identity.as_ref().map_or_else(
-                    || definition.default_value().to_owned(),
-                    |_| format!("{} · {} r{}", definition.default_value(), definition.library, definition.revision()),
-                );
-                let item = catalog::Item {
-                    name: &definition.name,
-                    value: &detail,
-                    identity: identity.as_deref(),
-                    selected: placing.is_some_and(|placing| Arc::ptr_eq(placing, definition)),
-                };
-                let response = catalog::tile(ui, view, width, item, |painter, rect, ink| paint_preview(painter, definition, rect, ink));
-                let response = response.on_hover_text(format!(
-                    "{}/{} · revision {}{}",
-                    definition.library,
-                    definition.id,
-                    definition.revision(),
-                    definition.provenance.as_ref().map(|p| format!("\n{}", p.license)).unwrap_or_default()
-                ));
-                response.dnd_set_drag_payload(PartDrag { definition: definition.clone(), source });
-                if response.clicked() {
-                    picked = Some(definition.clone());
+        let owner = *self.source.get_or_insert(source);
+        let all = entries("", libraries);
+        let all_libraries = libraries.inspect();
+        let query = self.query.trim().to_lowercase();
+        let entries: Vec<_> = entries(&query, libraries).into_iter().filter(|e| e.in_collection(&self.collection)).collect();
+        if self.selected.is_none() {
+            self.selected = entries.first().map(Entry::key);
+            self.power_name = entries.first().filter(|e| matches!(e, Entry::Power(..))).map_or(String::new(), |e| e.name().into());
+        }
+        let mut confirm = false;
+        let mut dragging = false;
+        let enabled = entries.iter().any(|e| Some(e.key()) == self.selected) && valid_power_name(&self.power_name, self.selected.as_ref());
+        let action = chrome::form(ui.ctx(), "parts_catalog", "Parts Catalog", 1108., "Place", enabled, true, |ui| {
+            chrome::toolbar(ui, if ui.available_width() < 900. { 2 } else { 1 }, |ui| {
+                let search = ui
+                    .add_sized(
+                        [ui.available_width(), pcbcraft_chrome::Tokens::get().control_height],
+                        egui::TextEdit::singleline(&mut self.query).hint_text("Search parts"),
+                    )
+                    .on_hover_text("Search parts");
+                search.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search parts"));
+                if search.changed() {
+                    self.selected = None;
+                }
+                if std::mem::take(&mut self.focus) {
+                    search.request_focus();
+                }
+                if ui.available_width() < 900. {
+                    let mut choices: Vec<_> =
+                        [(Collection::All, "All libraries".to_owned()), (Collection::Power, "Power".to_owned())]
+                            .into_iter()
+                            .chain(all_libraries.as_array().into_iter().flatten().filter_map(|source| {
+                                Some((Collection::Library(source["library"].as_str()?.into()), source["name"].as_str()?.into()))
+                            }))
+                            .collect();
+                    if let Collection::Library(id) = &self.collection
+                        && !choices.iter().any(|(collection, _)| collection == &self.collection)
+                    {
+                        choices.push((self.collection.clone(), format!("{id} (unavailable)")));
+                    }
+                    let keys: Vec<_> = choices
+                        .iter()
+                        .map(|(choice, _)| match choice {
+                            Collection::All => "all".to_owned(),
+                            Collection::Power => "power".to_owned(),
+                            Collection::Library(id) => format!("library:{id}"),
+                        })
+                        .collect();
+                    let mut value =
+                        choices.iter().position(|(choice, _)| *choice == self.collection).map(|i| keys[i].clone()).unwrap_or_else(|| "all".into());
+                    let options: Vec<_> = keys.iter().zip(&choices).map(|(key, (_, name))| (key.as_str(), name.clone())).collect();
+                    properties::choice(ui, "Library", ui.id().with("catalog_library"), &mut value, &options);
+                    if let Some(index) = keys.iter().position(|key| *key == value)
+                        && self.collection != choices[index].0
+                    {
+                        self.collection = choices[index].0.clone();
+                        self.selected = None;
+                    }
                 }
             });
-            if picked.is_some() {
-                search.surrender_focus();
-                *search_focused = false;
-            }
+            chrome::panes(ui, |ui, region| match region {
+                chrome::Region::Libraries => {
+                    pcbcraft_chrome::library_sources::heading(ui, "Libraries", all_libraries.as_array().map_or(1, |s| s.len() + 1));
+                    pcbcraft_chrome::library_sources::list(ui, "catalog_libraries", |ui| self.library_rows(ui, &all, &all_libraries));
+                }
+                chrome::Region::Results => {
+                    pcbcraft_chrome::library_sources::heading(ui, "Parts", entries.len());
+                    let view = catalog::view_picker(ui, &mut self.view, false);
+                    if entries.is_empty() {
+                        ui.label(shell::dim("No matching parts"));
+                    }
+                    catalog::grid(ui, view, &entries, |ui, entry, width| {
+                        let identity = match entry {
+                            Entry::Symbol(s) if s.library != "starter" => Some(format!("{}/{} r{}", s.library, s.id, s.revision())),
+                            _ => None,
+                        };
+                        let value = match entry {
+                            Entry::Symbol(s) => s.default_value(),
+                            Entry::Power(_, Style::Ground) => "Ground",
+                            Entry::Power(..) => "Power",
+                        };
+                        let response = catalog::tile(
+                            ui,
+                            view,
+                            width,
+                            catalog::Item { name: entry.name(), value, identity: identity.as_deref(), selected: self.selected == Some(entry.key()) },
+                            |p, r, ink| paint_entry(p, r, entry, ink),
+                        );
+                        if let Entry::Symbol(definition) = entry {
+                            response.dnd_set_drag_payload(crate::schematic_canvas::PartDrag { definition: definition.clone(), source: owner });
+                            dragging |= response.drag_started();
+                        }
+                        if response.clicked() {
+                            if self.selected != Some(entry.key()) {
+                                self.power_name = entry.name().into();
+                            }
+                            self.selected = Some(entry.key());
+                        }
+                        confirm |= response.double_clicked();
+                    });
+                }
+                chrome::Region::Preview => {
+                    if let Some(entry) = entries.iter().find(|e| Some(e.key()) == self.selected) {
+                        chrome::title(ui, entry.name());
+                        chrome::preview(ui, |p, r| paint_entry(p, r, entry, pcbcraft_chrome::Tokens::get().canvas_ink));
+                        match entry {
+                            Entry::Symbol(s) => {
+                                properties::section(ui, "Symbol");
+                                properties::field(ui, "Value", |ui| {
+                                    ui.label(s.default_value());
+                                });
+                                properties::field(ui, "Pins", |ui| {
+                                    ui.label(s.pins().len().to_string());
+                                });
+                                properties::section(ui, "Source");
+                                ui.label(format!("{} · r{}", collection_name(&Collection::Library(s.library.clone()), &all_libraries), s.revision()));
+                            }
+                            Entry::Power(..) => {
+                                properties::section(ui, "Power symbol");
+                                properties::text(ui, "Net name", &mut self.power_name);
+                                properties::field(ui, "Scope", |ui| {
+                                    ui.label("Global");
+                                });
+                            }
+                        }
+                    }
+                }
+            });
+            confirm |= ui.input(|i| i.key_pressed(egui::Key::Enter)) && !egui::Popup::is_any_open(ui.ctx());
         });
-        if panel.is_collapsed() {
-            *search_focused = false;
+        if dragging {
+            self.open = false;
+            self.source = None;
+            self.focus = false;
+            return None;
         }
-        self.rect = Some(rect);
-        if closed {
+        if action.close {
             self.close(ui.ctx());
+            return None;
         }
-        if picked.is_some() {
-            self.search_focused = false;
-            egui::DragAndDrop::clear_payload(ui.ctx());
-            ui.ctx().request_repaint();
+        if action.libraries {
+            self.close(ui.ctx());
+            return Some(Pick::Libraries);
         }
-        picked
+        if (action.primary || confirm) && enabled && valid_power_name(&self.power_name, self.selected.as_ref()) {
+            if owner != source {
+                self.close(ui.ctx());
+                return Some(Pick::Stale);
+            }
+            let picked = entries.iter().find(|e| Some(e.key()) == self.selected).map(|entry| match entry {
+                Entry::Symbol(symbol) => Pick::Symbol(symbol.clone()),
+                Entry::Power(_, style) => {
+                    Pick::Power(Label { id: 0, name: self.power_name.clone(), style: *style, at: Point { x_nm: 0, y_nm: 0 }, rotation: 0 })
+                }
+            });
+            self.close(ui.ctx());
+            return picked;
+        }
+        None
+    }
+    /// Render actual loaded library identities independently of search terms and display names.
+    fn library_rows(&mut self, ui: &mut Ui, entries: &[Entry], sources: &serde_json::Value) {
+        for (collection, name) in [(Collection::All, "All libraries".to_owned()), (Collection::Power, "Power".to_owned())].into_iter().chain(
+            sources
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| Some((Collection::Library(s["library"].as_str()?.into()), s["name"].as_str()?.into()))),
+        ) {
+            let count = entries.iter().filter(|entry| entry.in_collection(&collection)).count();
+            let response = ui.selectable_label(self.collection == collection, format!("{name}  {count}"));
+            response
+                .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, self.collection == collection, name.as_str()));
+            if response.clicked() {
+                self.collection = collection;
+                self.selected = None;
+            }
+        }
     }
 }
-
-/// Find symbols by name, ID or reference prefix. Familiar starter parts lead in the prototype's
-/// order; any additional definitions retain their library order after them.
+/// Preset drawings are original app markers; source symbols retain their licensed definitions.
+fn paint_entry(p: &egui::Painter, r: Rect, entry: &Entry, ink: egui::Color32) {
+    match entry {
+        Entry::Symbol(s) => paint_preview(p, s, r, ink),
+        Entry::Power(_, style) => {
+            let ground = *style == Style::Ground;
+            let glyph = if ground { pcbcraft_chrome::net_label::Style::Ground } else { pcbcraft_chrome::net_label::Style::Power };
+            let step = (r.height() / 4.).clamp(6., 22.);
+            let offset = if ground { -11. } else { 10. } * step / 10.;
+            pcbcraft_chrome::net_label::paint(p, r.center() + egui::vec2(0., offset), "", glyph, 0, step, ink);
+        }
+    }
+}
+/// Read a library display name while retaining its stable identity as the filter key.
+fn collection_name(collection: &Collection, sources: &serde_json::Value) -> String {
+    match collection {
+        Collection::All => "All libraries".into(),
+        Collection::Power => "Power".into(),
+        Collection::Library(id) => {
+            sources.as_array().into_iter().flatten().find(|s| s["library"].as_str() == Some(id)).and_then(|s| s["name"].as_str()).unwrap_or(id).into()
+        }
+    }
+}
+/// Disable Place for invalid custom power names before a canvas preview is created.
+fn valid_power_name(name: &str, key: Option<&Key>) -> bool {
+    !matches!(key, Some(Key::Power(_)))
+        || (!name.is_empty() && name.trim() == name && name.chars().count() <= 200 && !name.chars().any(char::is_control))
+}
+/// Combine current unambiguous native revisions with the original built-in power collection.
+fn entries(query: &str, catalog: &library::sources::Catalog) -> Vec<Entry> {
+    let mut entries: Vec<_> = matches_sources(query, catalog).into_iter().map(Entry::Symbol).collect();
+    for (name, style) in [
+        ("GND", Style::Ground),
+        ("VCC", Style::Power),
+        ("+3V3", Style::Power),
+        ("+5V", Style::Power),
+        ("+12V", Style::Power),
+        ("VDD", Style::Power),
+        ("VSS", Style::Power),
+        ("GNDA", Style::Ground),
+    ] {
+        let text = format!("{name} {}", if style == Style::Ground { "ground" } else { "power supply" }).to_lowercase();
+        if text.contains(query) {
+            entries.push(Entry::Power(name, style));
+        }
+    }
+    entries
+}
+/// Search definition names, IDs and prefixes without inspecting external implementation sources.
 fn matches(query: &str) -> Vec<Arc<SymbolDefinition>> {
     let query = query.trim().to_lowercase();
     let mut parts: Vec<_> = library::starter()
         .symbols()
         .iter()
-        .filter(|definition| {
-            query.is_empty()
-                || definition.name.to_lowercase().contains(&query)
-                || definition.id.contains(&query)
-                || definition.reference_prefix().eq_ignore_ascii_case(&query)
+        .filter(|d| {
+            query.is_empty() || d.name.to_lowercase().contains(&query) || d.id.contains(&query) || d.reference_prefix().eq_ignore_ascii_case(&query)
         })
         .cloned()
         .collect();
@@ -212,8 +423,7 @@ fn matches(query: &str) -> Vec<Arc<SymbolDefinition>> {
     parts.sort_by_key(|part| order.iter().position(|id| *id == part.id).unwrap_or(order.len()));
     parts
 }
-
-/// Combine embedded symbols with unambiguous current native revisions from the session catalog.
+/// Source search preserves qualified library identity, revision and provenance for placement.
 fn matches_sources(query: &str, catalog: &library::sources::Catalog) -> Vec<Arc<SymbolDefinition>> {
     let mut parts = matches(query);
     parts.extend(catalog.search(query, Some(library::sources::Kind::Symbol)).into_iter().filter_map(|(_, item)| item.symbol()));
@@ -221,338 +431,4 @@ fn matches_sources(query: &str, catalog: &library::sources::Catalog) -> Vec<Arc<
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{PcbApp, tests::click};
-    use egui::{Key, Modifiers, Vec2, pos2, vec2};
-    use egui_kittest::{Harness, kittest::Queryable};
-    use pcbcraft_engine::{PLACE_RESISTOR, schematic::Point};
-    use serde_json::json;
-
-    /// Open a project with two separated symbols, so Fit has real extents to protect.
-    fn harness() -> Harness<'static, PcbApp> {
-        let mut app = PcbApp::default();
-        app.session.execute("project.new", &json!({"name":"Library layout"})).unwrap();
-        for (x, revision) in [(0, 1), (60_960_000, 2)] {
-            app.session.execute(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":revision})).unwrap();
-        }
-        let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_max_steps(20).build_ui_state(|ui, app| app.frame(ui), app);
-        h.run();
-        h
-    }
-
-    /// Use the accessible position menu, allowing geometry to settle after each choice.
-    fn position(h: &mut Harness<'_, PcbApp>, label: &str) {
-        click(h, "Parts library position");
-        click(h, label);
-    }
-
-    /// Both edge anchors and free placement keep the full canvas. Fit and Browser picks target
-    /// clear space, and these UI operations leave the session unchanged.
-    #[test]
-    fn floating_library_preserves_canvas_and_navigation_avoids_both_cards() {
-        let mut h = harness();
-        let canvas = h.get_by_label("Schematic canvas").rect();
-        let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
-        let before = h.state().session.inspect();
-        h.key_press(Key::A);
-        h.run();
-        assert_eq!(h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin, "opening must not pan");
-        for anchor in ["Dock left", "Dock right", "Float"] {
-            position(&mut h, anchor);
-            assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
-            let cards = [h.state().browser.rect(), h.state().parts.rect()];
-            assert!(canvas.contains_rect(cards[1]));
-            assert!(!cards[0].intersects(cards[1]));
-            click(&mut h, "Fit schematic");
-            let clear = catalog::uncovered(canvas, &cards);
-            for symbol in h.state().session.project().unwrap().symbols() {
-                let at = h.state().views.active.camera.screen(symbol.position, canvas);
-                assert!(clear.contains(at), "{anchor}: {at:?} not inside {clear:?}");
-            }
-        }
-        click(&mut h, "Expand Symbols");
-        click(&mut h, "R2  1k");
-        let app = h.state();
-        let clear = catalog::uncovered(canvas, &[app.browser.rect(), app.parts.rect()]);
-        let at = app.views.active.camera.screen(app.session.project().unwrap().symbols()[1].position, canvas);
-        assert!(at.distance(clear.center()) < 0.1, "pick must use this frame's card bounds");
-        assert_eq!(app.session.inspect(), before);
-    }
-
-    /// The Assistant's floating drawer participates in the same Fit target as Browser and Parts.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn fit_also_avoids_the_assistant() {
-        let mut h = harness();
-        h.key_press(Key::A);
-        h.run();
-        click(&mut h, "Assistant");
-        let canvas = h.get_by_label("Schematic canvas").rect();
-        let assistant = h.state().assistant.covered_rect(canvas);
-        assert!(assistant.is_positive());
-        click(&mut h, "Fit schematic");
-        let clear = catalog::uncovered(canvas, &[h.state().browser.rect(), h.state().parts.rect(), assistant]);
-        for symbol in h.state().session.project().unwrap().symbols() {
-            assert!(clear.contains(h.state().views.active.camera.screen(symbol.position, canvas)));
-        }
-    }
-
-    /// A short left dock uses a scrollable list; returning to Float restores the chosen density.
-    /// Narrow windows keep the card's header on the canvas, including after an anchor change.
-    #[test]
-    fn short_dock_uses_list_and_resizing_keeps_controls_reachable() {
-        let mut h = harness();
-        h.key_press(Key::A);
-        h.run();
-        click(&mut h, "Large");
-        h.set_size(vec2(1000.0, 700.0));
-        h.run();
-        position(&mut h, "Dock left");
-        assert!(h.query_by_label("Large").is_none());
-        assert!((h.get_by_label("Resistor").rect().height() - 58.0).abs() < 0.1);
-        h.get_by_label("4-pin header").scroll_to_me();
-        h.run();
-        let last = h.get_by_label("4-pin header").rect();
-        assert!(h.state().parts.rect().contains_rect(last));
-        position(&mut h, "Float");
-        assert_eq!(h.state().parts.view, View::Large);
-        assert!((h.get_by_label("Resistor").rect().height() - 180.0).abs() < 0.1);
-        h.set_size(vec2(420.0, 520.0));
-        h.run();
-        let canvas = h.get_by_label("Schematic canvas").rect();
-        assert!(canvas.contains_rect(h.state().parts.rect()));
-        assert!(canvas.contains_rect(h.get_by_label("Collapse Parts library").rect()));
-        position(&mut h, "Dock right");
-        assert!(canvas.contains_rect(h.state().parts.rect()));
-    }
-
-    /// Collapsing releases canvas space at every anchor without losing the query or view.
-    /// Fit uses the smaller header, and A reveals and focuses the retained search.
-    #[test]
-    fn collapse_preserves_catalog_state_and_a_expands_search() {
-        let mut h = harness();
-        h.key_press(Key::A);
-        h.run();
-        click(&mut h, "Large");
-        h.get_by_role(egui::accesskit::Role::TextInput).click();
-        h.run();
-        h.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
-        h.run();
-        let before = h.state().session.inspect();
-        let canvas = h.get_by_label("Schematic canvas").rect();
-        for anchor in ["Float", "Dock left", "Dock right"] {
-            position(&mut h, anchor);
-            let expanded = h.state().parts.rect();
-            let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
-            click(&mut h, "Collapse Parts library");
-            let collapsed = h.state().parts.rect();
-            h.get_by_label("Move Parts library");
-            assert!(collapsed.height() < 60.0);
-            assert_eq!(collapsed.min, expanded.min);
-            assert_eq!(collapsed.width(), expanded.width());
-            assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
-            assert_eq!(h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
-            assert!(h.query_by_label("Capacitor").is_none());
-            assert!(h.query_by_label("Large").is_none());
-            click(&mut h, "Fit schematic");
-            let clear = catalog::uncovered(canvas, &[h.state().browser.rect(), collapsed]);
-            for symbol in h.state().session.project().unwrap().symbols() {
-                assert!(clear.contains(h.state().views.active.camera.screen(symbol.position, canvas)));
-            }
-            click(&mut h, "Expand Parts library");
-            assert_eq!(h.state().parts.rect(), expanded);
-            h.get_by_label("Capacitor");
-            assert_eq!(h.state().parts.view, View::Large);
-            assert_eq!(h.state().parts.query, "cap");
-            click(&mut h, "Collapse Parts library");
-            h.key_press(Key::A);
-            h.run();
-            assert_eq!(h.state().parts.rect(), expanded);
-            assert!(h.state().parts.search_focused);
-            assert_eq!(h.state().parts.query, "cap");
-        }
-        assert_eq!(h.state().session.inspect(), before);
-    }
-
-    /// Closing hides all coverage while retaining search, density and dock position. A and the
-    /// View toggle reopen the card, and these window actions never change project history.
-    #[test]
-    fn close_and_reopen_preserve_catalog_state() {
-        let mut h = harness();
-        let before = h.state().session.inspect();
-        let canvas = h.get_by_label("Schematic canvas").rect();
-        let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
-        h.key_press(Key::A);
-        h.run();
-        click(&mut h, "Large");
-        h.get_by_role(egui::accesskit::Role::TextInput).click();
-        h.run();
-        h.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
-        h.run();
-        position(&mut h, "Dock right");
-        let card = h.state().parts.rect();
-        click(&mut h, "Close Parts library");
-        assert!(h.query_by_label("Move Parts library").is_none());
-        assert!(!h.state().parts.rect().is_positive());
-        assert_eq!(h.state().parts.browser_area(canvas), canvas);
-        h.key_press(Key::A);
-        h.run();
-        assert_eq!(h.state().parts.rect(), card);
-        assert_eq!(h.state().parts.query, "cap");
-        assert_eq!(h.state().parts.view, View::Large);
-        assert!(h.state().parts.search_focused);
-        click(&mut h, "View");
-        click(&mut h, "Toggle Parts");
-        assert!(h.query_by_label("Move Parts library").is_none());
-        click(&mut h, "Toggle Parts");
-        assert_eq!(h.state().parts.rect(), card);
-        assert_eq!(h.state().parts.query, "cap");
-        assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
-        assert_eq!(h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas), origin);
-        assert_eq!(h.state().session.inspect(), before);
-    }
-
-    /// A collapsed library still moves, snaps and handles its menu/Escape, while wheel input
-    /// over its former body reaches the sheet instead of an invisible catalog.
-    #[test]
-    fn collapsed_card_keeps_controls_and_releases_pointer_input() {
-        let mut h = harness();
-        h.key_press(Key::A);
-        h.run();
-        let body = h.state().parts.rect().center();
-        click(&mut h, "Collapse Parts library");
-        h.hover_at(body);
-        h.run();
-        let zoom = h.state().views.active.camera.zoom();
-        h.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: vec2(0.0, -50.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: Modifiers::NONE,
-        });
-        h.run();
-        assert_ne!(h.state().views.active.camera.zoom(), zoom);
-        let from = h.get_by_label("Move Parts library").rect().center();
-        let canvas = h.get_by_label("Schematic canvas").rect();
-        let to = pos2(canvas.right() - 20.0, canvas.center().y);
-        h.drag_at(from);
-        h.run();
-        h.hover_at(to);
-        h.run();
-        h.drop_at(to);
-        h.run();
-        assert!((canvas.right() - h.state().parts.rect().right() - 12.0).abs() < 0.1);
-        assert!(h.state().parts.rect().height() < 60.0);
-        position(&mut h, "Dock left");
-        assert!(h.state().parts.rect().height() < 60.0);
-        h.set_size(vec2(420.0, 520.0));
-        h.run();
-        assert!(h.get_by_label("Schematic canvas").rect().contains_rect(h.state().parts.rect()));
-        click(&mut h, "Parts library position");
-        h.key_press(Key::Escape);
-        h.run();
-        h.get_by_label("Move Parts library");
-        h.key_press(Key::Escape);
-        h.run();
-        h.get_by_label("Move Parts library");
-        h.key_press(Key::A);
-        h.run();
-        h.get_by_label("Collapse Parts library");
-        assert!(h.state().parts.search_focused);
-    }
-
-    /// A title drag snaps on release; Escape restores its origin while keeping the library visible.
-    #[test]
-    fn header_drags_snap_to_edges_and_escape_restores_the_previous_position() {
-        let mut h = harness();
-        h.key_press(Key::A);
-        h.run();
-        let canvas = h.get_by_label("Schematic canvas").rect();
-        let original = h.state().parts.rect();
-        let from = h.get_by_label("Move Parts library").rect().center();
-        h.drag_at(from);
-        h.run();
-        h.hover_at(from + vec2(100.0, 80.0));
-        h.run();
-        assert_ne!(h.state().parts.rect(), original);
-        h.key_press(Key::Escape);
-        h.run();
-        assert_eq!(h.state().parts.rect(), original);
-        h.drop_at(from + vec2(100.0, 80.0));
-        h.run();
-        h.get_by_label("Move Parts library");
-        for right in [true, false] {
-            let from = h.get_by_label("Move Parts library").rect().center();
-            let to = pos2(if right { canvas.right() - 20.0 } else { canvas.left() + 20.0 }, canvas.center().y);
-            h.drag_at(from);
-            h.run();
-            for i in 1..=4 {
-                h.hover_at(from + (to - from) * (i as f32 / 4.0));
-                h.run();
-            }
-            h.drop_at(to);
-            h.run();
-            let rect = h.state().parts.rect();
-            assert!(canvas.contains_rect(rect));
-            let gap = if right { canvas.right() - rect.right() } else { rect.left() - canvas.left() };
-            assert!((gap - 12.0).abs() < 0.1, "edge anchor: {rect:?}");
-        }
-    }
-
-    /// Library scrolling does not zoom the sheet, part drops over a card do not place, and the
-    /// position popup consumes Escape before the library does.
-    #[test]
-    fn library_takes_pointer_input_and_leaves_escape_to_its_menu() {
-        let mut h = harness();
-        h.key_press(Key::A);
-        h.run();
-        let before = h.state().session.inspect();
-        click(&mut h, "Medium");
-        let from = h.get_by_label("Capacitor").rect().center();
-        h.hover_at(from);
-        h.run();
-        h.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: vec2(0.0, -50.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: Modifiers::NONE,
-        });
-        h.run();
-        assert_eq!(h.state().views.active.camera.zoom(), 1.0);
-        h.get_by_label("Capacitor").scroll_to_me();
-        h.run();
-        let from = h.get_by_label("Capacitor").rect().center();
-        let to = h.state().browser.rect().center();
-        h.drag_at(from);
-        h.run();
-        h.hover_at(from + Vec2::splat(10.0));
-        h.run();
-        h.hover_at(to);
-        h.run();
-        h.drop_at(to);
-        h.run();
-        assert_eq!(h.state().session.inspect(), before);
-        click(&mut h, "Parts library position");
-        h.key_press(Key::Escape);
-        h.run();
-        assert!(h.query_by_label("Dock left").is_none());
-        h.get_by_label("Move Parts library");
-        h.key_press(Key::Escape);
-        h.run();
-        h.get_by_label("Move Parts library");
-    }
-
-    #[test]
-    fn search_matches_names_ids_and_prefixes_ignoring_case() {
-        let mut browser = PartsBrowser::default();
-        let names = |browser: &PartsBrowser| browser.matches().into_iter().map(|definition| definition.name.clone()).collect::<Vec<_>>();
-        assert_eq!(names(&browser).len(), library::starter().symbols().len());
-        browser.query = "CAP".to_owned();
-        assert_eq!(names(&browser), ["Capacitor"]);
-        browser.query = "j".to_owned();
-        assert_eq!(names(&browser), ["2-pin connector", "4-pin header"], "J is the connectors' prefix");
-        browser.query = "zzz".to_owned();
-        assert!(names(&browser).is_empty());
-    }
-}
+mod tests;

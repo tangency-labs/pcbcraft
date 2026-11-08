@@ -46,7 +46,7 @@ fn source_dialog_search_and_parts_placement_share_the_catalog() {
         h.get_by_role(egui::accesskit::Role::TextInput).type_text("Workshop");
         h.run();
         click(&mut h, "Workshop resistor · workshop/resistor r2");
-        click(&mut h, "Close Parts library");
+        click(&mut h, "Place");
         click(&mut h, "Schematic canvas");
         assert_eq!(h.state().session.project().unwrap().symbols().len(), 1, "{:?}", h.state().message);
         assert_eq!(h.state().session.project().unwrap().symbols()[0].definition.library, "workshop");

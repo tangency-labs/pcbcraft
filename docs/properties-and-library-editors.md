@@ -170,7 +170,7 @@ editor primitive IDs. Unknown symbol provenance requires recording its license
 before saving or exporting. Native source registration/search is available through
 **Libraries → Sources**, as described in the [source guide](native-library-sources.md).
 Deliberate application of an authored definition to a project remains follow-up
-work; these editors do not yet add their documents to Parts or the package catalog.
+work; these editors do not yet add their documents to the Parts Catalog or the package catalog.
 
 Live MCP switches the same four workspace types through `app.set_workspace`
 and discovers `app.library_new`, `app.library_fork_selected`,

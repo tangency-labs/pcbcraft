@@ -22,12 +22,14 @@ so recent projects are desktop-only. Home does not automatically reopen a projec
 
 ## Net labels and power symbols
 
-**Capture → Power** or **P** opens the power/ground chooser, with GND, VCC, +3V3,
-+5V and other starter presets. **Capture → Net label** or **L** opens a local
-label; **Ctrl+L** opens a global label. Their properties allow a custom net name
-and a change of type. After OK, click the anchor position to place the marker;
-**R** rotates the preview and **Esc** cancels it. Hover the marker's name or glyph
-for **E**, **M**, **R** and **Delete**, or use its context menu.
+**Capture → Power** or **P** opens the **Parts Catalog** at its Power collection,
+with GND, VCC, +3V3, +5V and other starter drawings. Select one to preview it and
+edit its net name, then choose **Place**. **Capture → Net label** or **L** opens
+a local label form; **Ctrl+L** opens a global label form. The label form has
+aligned fields for net name, scope and rotation. Click the anchor position to
+place the marker; **R** rotates the preview and **Esc** cancels it. Hover the
+marker's name or glyph for **E**, **M**, **R** and **Delete**, or use its context
+menu. **E** opens properties, where **Apply** confirms changes.
 
 Names are case-sensitive. Local labels join matching names on the same sheet;
 global labels and power/ground symbols join project-wide. A marker anchored
@@ -79,28 +81,28 @@ panels and editor layout. Unavailable tools are disabled;
 compact windows keep them in the group caption menus. **Fit** and **Net Inspector**
 are also available beside the tabs; View contains their full controls.
 
-Choose **Capture → Symbol** or press **A** to open the **Parts** browser and focus
-its search. It lists schematic symbols from
-[`libraries/starter`](../libraries/starter): a resistor, LED, capacitor, two-pin
-connector, 4-pin header and NPN transistor. See [docs/symbol-library.md](symbol-library.md) for the file
-format. Type to search, choose Small, Medium, Large or List, and click a part (or
-press **Enter** for the first match) to place it on the grid, or drag parts
-straight onto the sheet. Press **R** to rotate a click-to-place preview before placing it,
-or **Esc** to leave search focus or cancel placing; the browser stays visible.
-New resistors, capacitors, LEDs and two-pin connectors use shorter leads from
-revision 2 of the starter symbols; saved
-revision 1 parts retain their original geometry.
+Choose **Capture → Symbol** or press **A** to open the **Parts Catalog** and
+focus search. The large form has library navigation, searchable results and a
+selected-part preview. **PCBcraft starter** contains the resistor, LED,
+capacitor, two-pin connector, four-pin header and NPN transistor from
+[`libraries/starter`](../libraries/starter); registered sources appear as
+additional libraries. **Power** contains the built-in power and ground drawings.
+**Manage libraries…** opens the existing source manager. See the
+[native source guide](native-library-sources.md) for loading a library and
+[symbol library format](symbol-library.md) for native definitions.
 
-The **Parts library** floats beside the Browser without resizing or panning the
-canvas. Drag its title to move it; releasing near either edge snaps it there.
-The **…** menu also offers **Float**, **Dock left** and **Dock right**. A short
-dock uses a scrollable list, and returning to a taller card restores the chosen
-preview size. **Esc** cancels a panel drag before leaving search or cancelling
-placement. Close the library with its **×** button or **View → Parts**; reopening
-keeps its search, preview size and position. Choosing a part leaves the card open
-for repeated placement. **Fit** and Browser selections keep their targets clear of both floating cards.
-The header chevron collapses Parts to its title bar and expands it again, keeping
-the search, preview size and position. **A** also expands it and focuses search.
+Click a result to inspect its drawing, value and source, then choose **Place**.
+Double-clicking a result or pressing **Enter** also starts placement. The catalog
+closes, leaving a preview on the full canvas; click to place it, **R** to rotate,
+or **Esc** to cancel. A result can also be dragged directly onto the sheet.
+**Cancel**, **Esc** or the header's **×** closes the catalog without changing the
+project. Reopening retains its search and result density. On narrower windows,
+a Library selector replaces the navigation pane; the smallest forms have Parts
+and Preview tabs. The catalog does not dock or reserve canvas space.
+
+New resistors, capacitors, LEDs and two-pin connectors use shorter leads from
+revision 2 of the starter symbols; saved revision 1 parts retain their original
+geometry.
 
 ## Moving symbols
 
@@ -242,8 +244,11 @@ sit directly on the canvas beside the Browser, without a tab strip.
 Split views have one closable header above each canvas showing its document path, such as
 **Power controller › Main**. Click the Browser's title to fold it. Browsing never changes the
 project, and the canvas keeps its full size; **Fit** keeps the drawing clear of
-the Browser. The ribbon's **View** tab shows or hides the Browser, Parts and Net
-Inspector panels, and fits the view. Each ribbon group's caption, such as
+the Browser. The ribbon's **View** tab shows or hides the Browser and Net Inspector,
+opens the Parts Catalog, and fits the view. The Net Inspector uses the same
+collapsible card and tree rows as the Browser, with expandable named nets, their
+individual pins and a separate unconnected-pin section. Search filters nets or
+pins; inspecting them does not change the project. Each ribbon group's caption, such as
 **Place ⌄**, opens a menu of the same actions.
 
 A project supports up to 64 sheets, either at the project root or nested under a parent. Right-click **Sheets** or a sheet row
@@ -269,8 +274,9 @@ and deletion behavior.
 **View → Split** opens another view of the current schematic in that window.
 Each pane keeps its camera, grid and edit selection while sharing the project's
 commands, undo history and saving. Click a pane or its header to activate it;
-the header underline marks that window's focused view. Browser, Parts and Net
-Inspector stay in place and target that view. Selecting a sheet in Browser or
+the header underline marks that window's focused view. Browser and Net Inspector
+stay in place and target that view. Opening the Parts Catalog captures that view
+for placement; a stale choice cannot edit a different view or newer project state. Selecting a sheet in Browser or
 switching workspace changes that pane without adding document tabs.
 
 On the desktop, **View → New window** opens another view without moving an

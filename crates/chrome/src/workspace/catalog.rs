@@ -421,12 +421,6 @@ pub fn grid<T>(ui: &mut Ui, view: View, items: &[T], mut add: impl FnMut(&mut Ui
     } else {
         scroll.show_rows(ui, view.tile_height(), rows, render);
     }
-    let t = Tokens::get();
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
-    ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, t.border));
-    let text =
-        super::elided(ui.painter(), "Click a part, then the sheet. Or drag to place.", FontId::proportional(t.font_small), t.text_dim, rect.width());
-    ui.painter().galley(rect.min + vec2(0.0, 8.0), text, t.text_dim);
 }
 
 /// Labels for a catalog item. The item data and symbol geometry stay in the application.

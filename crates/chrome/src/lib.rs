@@ -11,6 +11,7 @@ pub mod arrangements;
 pub mod assistant;
 pub mod authoring;
 pub mod board;
+pub mod catalog;
 pub mod cursor;
 pub mod editor;
 pub mod fonts;

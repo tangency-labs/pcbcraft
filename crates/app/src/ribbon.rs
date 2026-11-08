@@ -309,7 +309,7 @@ impl PcbApp {
                 self.message = self.fork_library_selection(kind).err();
             }
             Action::Symbol => self.parts.focus_search(),
-            Action::Power => self.begin_net_label(pcbcraft_engine::net_labels::Style::Ground),
+            Action::Power => self.parts.focus_power(),
             Action::Label => self.begin_net_label(pcbcraft_engine::net_labels::Style::Local),
             Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),

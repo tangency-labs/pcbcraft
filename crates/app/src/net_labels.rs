@@ -225,45 +225,63 @@ impl PcbApp {
         self.run(if label.id == 0 { engine::ADD } else { engine::SET }, &params);
         self.views.active.schematic.tool = None;
     }
-    /// New names enter a placement preview after OK; editing an existing object commits once.
+    /// Place starts a new marker preview; Apply commits an existing marker edit once.
     /// Cancel/stale forms never publish data, and engine errors stay visible beside the fields.
     pub(super) fn net_label_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
+        let power = matches!(edit.label.style, Style::Power | Style::Ground);
+        let title = if power {
+            "Power symbol properties".to_owned()
+        } else if edit.label.id == 0 {
+            "Place net label".into()
+        } else {
+            "Net label properties".into()
+        };
         let mut submit = false;
-        let mut cancel = false;
-        let closing = shell::dialog(ctx, "net_label_dialog", "Net Label", |ui| {
-            egui::ComboBox::from_label("Type").selected_text(style_name(edit.label.style)).show_ui(ui, |ui| {
-                for style in [Style::Local, Style::Global, Style::Power, Style::Ground] {
-                    ui.selectable_value(&mut edit.label.style, style, style_name(style));
-                }
-            });
-            if matches!(edit.label.style, Style::Power | Style::Ground) {
-                egui::ComboBox::from_label("Preset").selected_text(&edit.label.name).show_ui(ui, |ui| {
-                    for name in ["GND", "VCC", "+3V3", "+5V", "+12V", "VDD", "VSS", "GNDA"] {
-                        if ui.selectable_label(edit.label.name == name, name).clicked() {
-                            edit.label.name = name.into();
-                            edit.label.style = if name.starts_with("GND") { Style::Ground } else { Style::Power };
+        let action = pcbcraft_chrome::catalog::form(
+            ctx,
+            "net_label_properties",
+            &title,
+            560.,
+            if edit.label.id == 0 { "Place" } else { "Apply" },
+            true,
+            false,
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::Frame::new().inner_margin(Tokens::get().space_16).show(ui, |ui| {
+                        pcbcraft_chrome::properties::section(ui, "Connection");
+                        let field = pcbcraft_chrome::properties::text(ui, "Net name", &mut edit.label.name);
+                        if !edit.focused {
+                            field.request_focus();
+                            edit.focused = true;
                         }
-                    }
+                        submit |= field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        if power {
+                            pcbcraft_chrome::properties::field(ui, "Scope", |ui| {
+                                ui.label("Global");
+                            });
+                        } else {
+                            let mut scope = if edit.label.style == Style::Global { "global" } else { "local" }.to_owned();
+                            pcbcraft_chrome::properties::choice(
+                                ui,
+                                "Scope",
+                                ui.id().with("label_scope"),
+                                &mut scope,
+                                &[("local", "Local".into()), ("global", "Global".into())],
+                            );
+                            edit.label.style = if scope == "global" { Style::Global } else { Style::Local };
+                        }
+                        pcbcraft_chrome::properties::rotation(ui, &mut edit.label.rotation);
+                        if let Some(error) = &edit.error {
+                            ui.label(shell::error(error));
+                        }
+                    });
                 });
-            }
-            let label = ui.label("Net name");
-            let field = ui.text_edit_singleline(&mut edit.label.name).labelled_by(label.id);
-            if !edit.focused {
-                field.request_focus();
-                edit.focused = true;
-            }
-            submit |= field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            if let Some(error) = &edit.error {
-                ui.label(shell::error(error));
-            }
-            ui.horizontal(|ui| {
-                submit |= ui.button("OK").clicked();
-                cancel = ui.button("Cancel").clicked();
-            });
-        });
-        if closing || cancel {
+            },
+        );
+        if action.close {
             return;
         }
+        submit |= action.primary;
         if submit {
             if !self.views.view(edit.source.view()).is_some_and(|v| v.control_input(&self.session) == Some(edit.source)) {
                 self.message = Some("View or project changed; reopen the label action to continue.".into());
@@ -291,14 +309,5 @@ impl PcbApp {
             }
         }
         self.dialog = Dialog::NetLabel(edit);
-    }
-}
-/// User-facing names belong to presentation; serialized styles remain stable lower-case values.
-fn style_name(style: Style) -> &'static str {
-    match style {
-        Style::Local => "Local label",
-        Style::Global => "Global label",
-        Style::Power => "Power",
-        Style::Ground => "Ground",
     }
 }

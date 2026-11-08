@@ -63,13 +63,13 @@ fn choose(harness: &mut Harness<'_, PcbApp>, menu: &str, item: &str) {
     click(harness, item);
 }
 
-/// Choose a tile, then close the floating library to expose the coordinates used by canvas tests.
+/// Select a catalog item and confirm it before using the canvas placement tool.
 fn select_symbol(harness: &mut Harness<'_, PcbApp>, name: &str) {
     harness.get_by_label(name).scroll_to_me();
     harness.run();
     harness.get_by_label(name).click();
     harness.run();
-    click(harness, "Close Parts library");
+    click(harness, "Place");
 }
 
 /// Create an Untitled project through the File menu; it opens without a naming dialog.
@@ -105,7 +105,7 @@ fn startup_opens_home_and_cancelled_dialogs_leave_it_visible() {
     harness.get_by_label("Open Project");
     assert!(harness.state().session().project().is_none());
     assert!(harness.query_by_label("Toggle Net Inspector").is_none());
-    assert!(harness.query_by_label("Move Parts library").is_none());
+    assert!(harness.query_by_label("Close Parts Catalog").is_none());
     assert!(harness.query_by_label("No project open. Choose File, then New Project.").is_none());
     assert!(harness.get_by_label("Save").accesskit_node().is_disabled());
 
@@ -126,10 +126,10 @@ fn startup_new_project_enters_the_workspace() {
     harness.run();
     assert!(matches!(harness.state().dialog, Dialog::None));
     harness.get_by_label("Toggle Net Inspector");
-    assert!(harness.query_by_label("Move Parts library").is_none());
+    assert!(harness.query_by_label("Close Parts Catalog").is_none());
     harness.key_press(Key::A);
     harness.run();
-    harness.get_by_label("Move Parts library");
+    harness.get_by_label("Close Parts Catalog");
     harness.get_by_label("Resistor");
     assert!(harness.query_by_label("Open Project").is_none());
     assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
@@ -145,15 +145,15 @@ fn the_empty_workspace_stays_centered_after_undo_with_the_inspector_open() {
     let original = harness.get_by_label(empty).rect().center();
     harness.get_by_label("Toggle Net Inspector").click();
     harness.run();
-    assert!(harness.query_by_label("Close Net Inspector").is_none());
+    assert!(harness.query_by_label("Collapse Net Inspector").is_none());
 
     new_project(&mut harness);
     harness.get_by_label("Toggle Net Inspector").click();
     harness.run();
-    harness.get_by_label("Close Net Inspector");
+    harness.get_by_label("Collapse Net Inspector");
     click(&mut harness, "Undo");
 
-    assert!(harness.query_by_label("Close Net Inspector").is_none());
+    assert!(harness.query_by_label("Collapse Net Inspector").is_none());
     assert_eq!(harness.get_by_label(empty).rect().center(), original);
 }
 
@@ -164,10 +164,10 @@ fn a_person_makes_a_project_through_the_menu() {
     new_project(&mut harness);
     assert_eq!(harness.state().session().project().unwrap().name, "Untitled");
     assert!(matches!(harness.state().dialog, Dialog::None));
-    assert!(harness.query_by_label("Move Parts library").is_none());
+    assert!(harness.query_by_label("Close Parts Catalog").is_none());
     harness.key_press(Key::A);
     harness.run();
-    harness.get_by_label("Move Parts library");
+    harness.get_by_label("Close Parts Catalog");
 }
 
 /// Save As stays disabled without a project and opens the format chooser once a project exists.
@@ -918,7 +918,7 @@ fn escape_and_opening_a_dialog_cancel_the_placement_preview() {
     harness.get_by_label("LED");
     harness.key_press(Key::Escape);
     harness.run();
-    harness.get_by_label("LED");
+    assert!(!harness.state().parts.open);
     click_canvas(&mut harness);
     assert!(harness.state().session().project().unwrap().symbols().is_empty());
 
@@ -1072,7 +1072,7 @@ fn the_wire_tool_runs_the_shared_command_and_is_undoable() {
 
 /// At a compact width, ribbon actions remain reachable and the right card leaves canvas room.
 #[test]
-fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
+fn compact_ribbon_places_and_wires_symbols_with_a_floating_inspector() {
     let mut harness = harness();
     harness.set_size(egui::vec2(400.0, 600.0));
     harness.run();
@@ -1091,7 +1091,6 @@ fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
         harness.run();
         harness.key_press(Key::Enter);
         harness.run();
-        click(&mut harness, "Close Parts library");
         click_canvas_offset(&mut harness, egui::vec2(x, 0.0));
     }
     harness.get_by_label("Draw wire (W)").click();
@@ -1104,14 +1103,11 @@ fn compact_ribbon_places_and_wires_symbols_with_a_docked_inspector() {
     let full_width = harness.get_by_label("Schematic canvas").rect().width();
     harness.get_by_label("Toggle Net Inspector").click();
     harness.run();
-    harness.get_by_label("R1.2, D1.1");
+    harness.get_by_label("R1.2");
+    harness.get_by_label("D1.1");
     let canvas = harness.get_by_label("Schematic canvas").rect();
-    let close = harness.get_by_label("Close Net Inspector");
-    assert!(canvas.width() >= 0.6 * full_width - 1.0, "canvas: {canvas:?}");
-    assert!(close.rect().left() >= canvas.right());
-    close.click();
-    harness.run();
-    assert!(harness.query_by_label("R1.2, D1.1").is_none());
+    assert_eq!(canvas.width(), full_width, "the inspector floats without resizing the canvas");
+    click(&mut harness, "Toggle Net Inspector");
     assert_eq!(harness.state().session().inspect(), wired);
 }
 
@@ -1131,109 +1127,41 @@ fn wiring_accepts_empty_space_and_escape_discards_the_preview() {
     assert_eq!(harness.state().session().inspect(), before);
 }
 
-/// A opens Parts and Enter places the first match without hiding the card or moving the canvas.
-/// Escape leaves search focus and preserves its query.
+/// A opens the catalog; confirming search closes it and leaves an ordinary placement preview.
 #[test]
 fn the_parts_browser_searches_and_places_parts() {
-    let mut harness = harness();
-    new_project(&mut harness);
-    assert!(harness.query_by_label("Move Parts library").is_none());
-    harness.key_press(Key::A);
-    harness.run();
-    harness.get_by_label("Move Parts library");
-    harness.get_by_label("2-pin connector");
-    harness.get_by_label("Close Parts library");
-    let canvas = harness.get_by_label("Schematic canvas").rect();
-    harness.key_press(Key::A);
-    harness.run();
-    harness.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
-    harness.run();
-    assert!(harness.query_by_label("Resistor").is_none());
-    harness.get_by_label("Capacitor");
-    harness.key_press(Key::Enter);
-    harness.run();
-    harness.get_by_label("Move Parts library");
-    harness.get_by_label("Capacitor");
-    assert_eq!(harness.get_by_label("Schematic canvas").rect(), canvas);
-    harness.get_by_label("Place Capacitor · R rotate · Esc to cancel");
-    click(&mut harness, "Parts library position");
-    click(&mut harness, "Dock left");
-    click_canvas(&mut harness);
-    assert_eq!(first_symbol(&harness, "kind"), "capacitor");
-
-    harness.key_press(Key::A);
-    harness.run();
-    harness.key_press(Key::Escape);
-    harness.run();
-    harness.get_by_label("Move Parts library");
-    assert_eq!(harness.get_by_role(egui::accesskit::Role::TextInput).value().as_deref(), Some("cap"));
-    assert!(harness.state().views.active.schematic.tool.is_none());
-    harness.key_press(Key::W);
-    harness.run();
-    assert!(matches!(harness.state().views.active.schematic.tool, Some(Tool::Wire { .. })), "Escape must release search focus for canvas shortcuts");
+    let mut h = harness();
+    new_project(&mut h);
+    let canvas = h.get_by_label("Schematic canvas").rect();
+    h.key_press(Key::A);
+    h.run();
+    h.get_by_label("Search parts").type_text("cap");
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(!h.state().parts.open);
+    assert_eq!(h.get_by_label("Schematic canvas").rect(), canvas);
+    click_canvas(&mut h);
+    assert_eq!(first_symbol(&h, "kind"), "capacitor");
 }
 
-/// Click selection, search Escape and tool cancellation keep the card and canvas bounds stable.
+/// Cancelling the modal or the resulting placement leaves authored data unchanged.
 #[test]
-fn clicking_parts_and_cancelling_placement_keep_the_browser_visible() {
-    let mut harness = harness();
-    new_project(&mut harness);
-    harness.key_press(Key::A);
-    harness.run();
-    click(&mut harness, "Parts library position");
-    click(&mut harness, "Dock left");
-    let canvas = harness.get_by_label("Schematic canvas").rect();
-    click(&mut harness, "Capacitor");
-    harness.get_by_label("Move Parts library");
-    assert_eq!(harness.get_by_label("Schematic canvas").rect(), canvas);
-    harness.key_press(Key::R);
-    harness.run();
-    assert!(matches!(harness.state().views.active.schematic.tool, Some(Tool::PlaceSymbol { turns: 1, .. })));
-    harness.key_press(Key::A);
-    harness.run();
-    harness.key_press(Key::Escape);
-    harness.run();
-    assert!(harness.state().views.active.schematic.tool.is_some(), "Escape from search releases focus before cancelling placement");
-    harness.key_press(Key::Escape);
-    harness.run();
-    assert!(harness.state().views.active.schematic.tool.is_none());
-    harness.get_by_label("Move Parts library");
-    assert_eq!(harness.get_by_label("Schematic canvas").rect(), canvas);
-    click(&mut harness, "Resistor");
-    click_canvas(&mut harness);
-    assert_eq!(first_symbol(&harness, "kind"), "resistor");
-    harness.get_by_label("Move Parts library");
-    assert_eq!(harness.get_by_label("Schematic canvas").rect(), canvas);
-}
-
-/// Popups, dialogs and Home handle Escape before search; returning from Home restores the card.
-#[test]
-fn the_browser_leaves_escape_to_overlays_and_home() {
-    let mut harness = harness();
-    new_project(&mut harness);
-    harness.key_press(Key::A);
-    harness.run();
-    click(&mut harness, "File");
-    harness.key_press(Key::Escape);
-    harness.run();
-    assert!(harness.query_by_label("New Project…").is_none());
-    harness.get_by_label("Move Parts library");
-
-    click(&mut harness, "Preferences");
-    harness.key_press(Key::Escape);
-    harness.run();
-    assert!(matches!(harness.state().dialog, Dialog::None));
-    harness.get_by_label("Move Parts library");
-
-    click(&mut harness, "Home");
-    assert!(harness.query_by_label("Move Parts library").is_none());
-    harness.key_press(Key::Escape);
-    harness.run();
-    assert!(!harness.state().home);
-    harness.get_by_label("Move Parts library");
-    harness.key_press(Key::Escape);
-    harness.run();
-    harness.get_by_label("Move Parts library");
+fn cancelling_catalog_and_placement_leaves_the_project_unchanged() {
+    let mut h = harness();
+    new_project(&mut h);
+    let before = h.state().session.inspect();
+    h.key_press(Key::A);
+    h.run();
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().session.inspect(), before);
+    h.key_press(Key::A);
+    h.run();
+    select_symbol(&mut h, "Capacitor");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.state().views.active.schematic.tool.is_none());
+    assert_eq!(h.state().session.inspect(), before);
 }
 
 /// Dragging a part previews it on the snapped grid before release, places it through the shared
@@ -1276,7 +1204,7 @@ fn dragging_a_part_onto_the_sheet_places_it() {
     assert_eq!(first_symbol(&harness, "kind"), "capacitor");
     assert_eq!(first_symbol(&harness, "x_nm"), 30 * pcbcraft_engine::schematic::GRID_NM);
     assert_eq!(first_symbol(&harness, "y_nm"), 0);
-    harness.get_by_label("Move Parts library");
+    assert!(!harness.state().parts.open);
 }
 
 /// An edit during a browser drag invalidates that gesture without reverting the intervening edit.

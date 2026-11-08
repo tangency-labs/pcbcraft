@@ -1,17 +1,18 @@
 # Named nets and power symbols
 
-Use **L** for a local label, **Ctrl+L** (⌘L on macOS) for a global label, or **P**
-for power and ground. Capture also has **Net label** and **Power** buttons; the
-Type field selects Local label, Global label, Power or Ground. Power presets
-include GND, VCC, +3V3, +5V, +12V, VDD, VSS and GNDA. The net name remains
-editable, so supplies do not depend on a fixed list of built-in rail names.
+Use **L** for a local label or **Ctrl+L** (⌘L on macOS) for a global label.
+Their form has a net name, scope and rotation. **P** or **Capture → Power** opens
+the **Parts Catalog** with the Power collection selected. Choose a drawing such
+as GND, VCC, +3V3, +5V, +12V, VDD, VSS or GNDA; its preview has an editable net
+name, so supplies do not depend on a fixed list of rail names.
 
-After **OK**, click to place the anchor. **R** turns its preview counterclockwise
-in quarter turns, and **Esc** or right-click cancels. Hover a placed marker and
-use **E** for properties, **M** to pick it up, **R** to rotate or **Delete** to
-remove it. Its context menu offers the same actions. Each completed placement,
-move, property change or deletion is one shared undo step. Cancelled previews
-and forms leave project data unchanged; stale forms cannot replace newer work.
+Choose **Place**, then click to place the anchor. **R** turns its preview
+counterclockwise in quarter turns, and **Esc** or right-click cancels. Hover a
+placed marker and use **E** for properties, **M** to pick it up, **R** to rotate or
+**Delete** to remove it. Its context menu offers the same actions; **Apply**
+confirms property changes. Each completed placement, move, property change or
+deletion is one shared undo step. Cancelled previews and forms leave project data
+unchanged; stale forms cannot replace newer work.
 
 A marker connects where its small anchor meets a pin or wire exactly. It can
 also stand alone and serve as the endpoint of a later wire. Drawing with **W**

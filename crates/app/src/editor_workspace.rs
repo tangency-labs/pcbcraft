@@ -758,7 +758,7 @@ impl PcbApp {
     /// Resolve a new pointer press before consuming keyboard input. A held drag crossing the
     /// divider keeps its original owner; popups and modals do not transfer editor focus.
     pub(super) fn editor_pointer_focus(&mut self, ctx: &egui::Context) {
-        if !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
+        if self.parts.open || !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
             return;
         }
         let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
@@ -787,13 +787,6 @@ impl PcbApp {
         }
         let project_focus = self.views.active.definition.is_none();
         let board = project_focus && self.views.active.workspace == Workspace::Board;
-        if project_focus && !board {
-            #[cfg(not(target_arch = "wasm32"))]
-            let clearance = if self.views.host != self.views.main { 0.0 } else { self.assistant.rail_clearance() };
-            #[cfg(target_arch = "wasm32")]
-            let clearance = 0.0;
-            self.net_inspector.show(ui, self.views.active.snapshot(&self.session), clearance);
-        }
         let area = ui.available_rect_before_wrap();
         let panes = if let Some(host) = self.views.hosts.get_mut(&self.views.host) {
             let panes = host.layout.panes(ui);
@@ -820,7 +813,13 @@ impl PcbApp {
         );
         covered.push(assistant);
         if project_focus && !board {
-            covered.push(self.selection_properties(ui, area));
+            let inspector_area = pcbcraft_chrome::properties::inspector_area(area, self.browser.rect());
+            self.net_inspector.show(ui, self.views.active.snapshot(&self.session), inspector_area);
+            if self.net_inspector.open {
+                covered.push(self.net_inspector.rect);
+            } else {
+                covered.push(self.selection_properties(ui, area));
+            }
         }
         for (id, rect) in panes {
             let tab_ids = self.views.hosts.get(&self.views.host).and_then(|host| host.layout.group(id)).map(Layout::views).unwrap_or_default();
@@ -985,12 +984,15 @@ impl PcbApp {
             &self.views.active.schematic.selection,
             &self.views.active.board.selection,
         );
-        let placing = match &self.views.active.schematic.tool {
-            Some(Tool::PlaceSymbol { definition, .. }) => Some(definition.clone()),
-            _ => None,
-        };
-        if let Some(definition) = self.parts.show(ui, area, self.browser.rect(), placing.as_ref(), source, self.session.libraries()) {
-            self.begin_placement(definition);
+        if let Some(pick) = self.parts.show(ui, source, self.session.libraries()) {
+            match pick {
+                crate::parts_browser::Pick::Symbol(definition) => self.begin_placement(definition),
+                crate::parts_browser::Pick::Power(label) => {
+                    self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision })
+                }
+                crate::parts_browser::Pick::Libraries => self.dialog = Dialog::LibrarySources,
+                crate::parts_browser::Pick::Stale => self.message = Some("View or project changed; reopen the Parts Catalog to continue.".into()),
+            }
         }
         pick.map(|pick| (source, pick))
     }

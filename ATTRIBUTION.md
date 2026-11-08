@@ -633,3 +633,18 @@ behavior comparison recorded in the properties/editor notes; no vendor code,
 icons, library data or fixtures were used. Parameterized text and pin labels reuse
 the existing qualified PCBcraft Technical stroke font, with its existing notices.
 No new dependency or third-party asset was added.
+
+
+## Parts Catalog and net inspection forms
+
+The large Parts Catalog in `crates/app/src/parts_browser.rs` and
+`crates/chrome/src/catalog.rs` is original upstream code using the existing
+Craft source-manager form composition, palette and typography. It replaces the
+floating Parts card described above while retaining the qualified catalog tiles,
+starter ordering and native placement path. Library identity, revision checks,
+source management and custom power names use the upstream session interfaces.
+The Net Inspector now reuses the Browser's card/tree primitives, and net-label
+properties reuse the shared aligned fields. The published [KiCad 10 Schematic Editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html)
+informed the library-selection, preview and confirmation workflow;
+no KiCad implementation source, artwork, library data or fixtures were used.
+No dependency or third-party asset was added for this UI revision.

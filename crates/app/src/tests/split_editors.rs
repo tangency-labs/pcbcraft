@@ -250,7 +250,8 @@ fn single_view_reclaims_the_header_and_panel_clearance() {
         h.set_size(size);
         new_project(&mut h);
         click(&mut h, "View");
-        click(&mut h, "Toggle Parts");
+        click(&mut h, "Open Parts Catalog");
+        click(&mut h, "Cancel");
         let path = h.state().views.active.sheet_path(&h.state().session).unwrap();
         let single = h.get_by_label("Schematic canvas").rect();
         let browser = h.state().browser.rect();
@@ -351,7 +352,7 @@ fn parts_drag_cannot_place_into_an_inactive_pane() {
     h.run();
     assert!(view(&h, 1).schematic.tool.is_none(), "Typing in search must not start a canvas tool");
     click(&mut h, "Capacitor");
-    click(&mut h, "Close Parts library");
+    click(&mut h, "Place");
     click_point(&mut h, 1, Point { x_nm: 12_700_000, y_nm: 0 });
     assert_eq!(h.state().session.project().unwrap().symbols().len(), 2);
     focus_tab(&mut h, 0);
@@ -464,9 +465,10 @@ fn moving_in_the_second_pane_repaints_both_canvases() {
 fn panels_stay_put_and_tabs_name_the_sheet_in_both_views() {
     let mut h = split_harness();
     click(&mut h, "Toggle Browser");
-    click(&mut h, "Toggle Parts");
+    click(&mut h, "Open Parts Catalog");
+    click(&mut h, "Cancel");
     click(&mut h, "Toggle Net Inspector");
-    let panel_rects = (h.state().browser.rect(), h.state().parts.rect(), h.get_by_label("Net Inspector").rect());
+    let panel_rects = (h.state().browser.rect(), h.state().parts.rect(), h.state().net_inspector.rect);
     let canvases = [canvas(&h, 0), canvas(&h, 1)];
     let origin = Point { x_nm: 0, y_nm: 0 };
     let centers = [view(&h, 0).camera.screen(origin, canvases[0]), view(&h, 1).camera.screen(origin, canvases[1])];
@@ -474,7 +476,7 @@ fn panels_stay_put_and_tabs_name_the_sheet_in_both_views() {
     for id in [1, 0, 1] {
         focus_tab(&mut h, id);
         assert_eq!(h.state().views.active.id(), ViewId(id as u64));
-        assert_eq!(panel_rects, (h.state().browser.rect(), h.state().parts.rect(), h.get_by_label("Net Inspector").rect()));
+        assert_eq!(panel_rects, (h.state().browser.rect(), h.state().parts.rect(), h.state().net_inspector.rect));
         for id in [0, 1] {
             assert_eq!(canvas(&h, id), canvases[id as usize]);
             assert_eq!(view(&h, id).camera.screen(origin, canvas(&h, id)), centers[id as usize]);

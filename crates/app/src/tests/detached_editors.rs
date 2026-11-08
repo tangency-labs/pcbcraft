@@ -671,9 +671,10 @@ fn detached_fields_dialog_keeps_its_target_and_blocks_other_input() {
     assert!(matches!(h.state().dialog, Dialog::EditFields(_)));
     let before = h.state().session.inspect();
     child_key(&mut h, &peer, Key::Delete, Modifiers::NONE);
-    let part = child_rect(&peer, "Resistor").center();
-    child_click_at(&mut h, &peer, part);
-    assert!(h.state().views.view(id).unwrap().schematic.tool.is_none(), "a floating card in the child must respect the root modal");
+    child_key(&mut h, &peer, Key::A, Modifiers::NONE);
+    assert!(!peer.borrow().nodes.values().any(|node| node.label() == Some("Close Parts Catalog")));
+    child_click_at(&mut h, &peer, origin);
+    assert!(h.state().views.view(id).unwrap().schematic.tool.is_none(), "the child canvas must respect the root modal");
     assert_eq!(h.state().session.inspect(), before);
     focus(&mut h, &peer, false);
     h.get_by_label("Reference").click();

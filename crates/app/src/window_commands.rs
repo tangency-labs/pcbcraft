@@ -20,7 +20,7 @@ pub(super) enum Panel {
 
 impl PcbApp {
     /// Show or hide one of the bound window's panels, as the View ribbon's toggles do. Opening
-    /// Parts focuses its search, like Capture › Symbol; an already open card is left alone.
+    /// the Parts Catalog focuses search, like Capture › Symbol; an open chooser is left alone.
     pub(super) fn set_panel(&mut self, ctx: &Context, panel: Panel, open: bool) {
         match panel {
             Panel::Browser => self.browser.open = open,
@@ -588,7 +588,7 @@ mod live {
         WindowCommand {
             id: "window.set_panel",
             title: "Show Panel",
-            summary: "Show or hide one of the window's panels: the Browser, the Parts library, the Net Inspector or the selection Properties inspector.",
+            summary: "Show or hide one of the window's panels: the Browser, the Parts Catalog, the Net Inspector or the selection Properties inspector.",
             params: &[
                 WINDOW,
                 Param { name: "panel", summary: "Which panel", required: true, kind: Kind::Choice(PANELS) },

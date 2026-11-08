@@ -1,102 +1,116 @@
-//! Present the same committed connectivity that the engine exposes to agents.
-
-use std::sync::Arc;
-
-use egui::Ui;
-use pcbcraft_chrome::{shell::dim, workspace};
+//! Inspect the engine's resolved nets using the same card and tree primitives as Properties/Browser.
+use egui::{Rect, Ui};
+use pcbcraft_chrome::{properties, shell, workspace};
 use pcbcraft_engine::{Project, schematic::Terminal};
+use std::{collections::BTreeSet, sync::Arc};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct NetInspector {
     pub open: bool,
+    pub(super) rect: Rect,
+    collapsed: bool,
+    query: String,
+    folded: BTreeSet<usize>,
     project: Option<Arc<Project>>,
     snapshot: Option<Snapshot>,
 }
-
+impl Default for NetInspector {
+    /// Match the Properties card's initial state without reserving a sidebar in the workspace.
+    fn default() -> Self {
+        Self { open: false, rect: Rect::NOTHING, collapsed: false, query: String::new(), folded: BTreeSet::new(), project: None, snapshot: None }
+    }
+}
+#[derive(Debug)]
+struct Net {
+    name: String,
+    pins: Vec<String>,
+}
 #[derive(Debug)]
 struct Snapshot {
-    nets: Vec<String>,
-    names: Vec<String>,
-    unconnected: String,
+    nets: Vec<Net>,
+    unconnected: Vec<String>,
 }
-
 impl Snapshot {
-    /// Format the typed groups for display using the project's stable terminal IDs.
+    /// Resolve displayed references from the same typed endpoints used by command inspection.
     fn read(project: &Project) -> Self {
-        let pin_labels = |terminals: &[Terminal]| {
-            terminals
-                .iter()
-                .filter_map(|&pin| {
-                    let reference = project.reference(project.terminal_symbol(pin)?);
-                    Some(format!("{reference}.{}", pin.number()))
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
+        let pins = |pins: &[Terminal]| {
+            pins.iter().filter_map(|&pin| Some(format!("{}.{}", project.reference(project.terminal_symbol(pin)?), pin.number()))).collect::<Vec<_>>()
         };
-        let connectivity = project.connectivity();
+        let graph = project.connectivity();
         Self {
-            nets: connectivity
-                .nets
-                .iter()
-                .enumerate()
-                .map(|(index, net)| {
-                    if net.is_empty() {
-                        if connectivity.net_names(index).is_empty() { "Free wire".into() } else { "No component pins".into() }
-                    } else {
-                        pin_labels(net)
-                    }
-                })
-                .collect(),
-            names: (0..connectivity.nets.len()).map(|i| connectivity.net_name(i)).collect(),
-            unconnected: pin_labels(&connectivity.unconnected),
-        }
-    }
-
-    /// List resolved groups and isolated pins independently. Unnamed net numbers are view-local.
-    fn show(&self, ui: &mut Ui) {
-        ui.strong("Connected nets");
-        if self.nets.is_empty() {
-            ui.label(dim("No connected nets"));
-        }
-        for (index, pins) in self.nets.iter().enumerate() {
-            ui.label(&self.names[index]);
-            ui.label(dim(pins.as_str()));
-        }
-        ui.separator();
-        ui.strong("Unconnected pins");
-        if self.unconnected.is_empty() {
-            ui.label(dim("No unconnected pins"));
-        } else {
-            ui.label(dim(self.unconnected.as_str()));
+            nets: graph.nets.iter().enumerate().map(|(i, net)| Net { name: graph.net_name(i), pins: pins(net) }).collect(),
+            unconnected: pins(&graph.unconnected),
         }
     }
 }
-
+/// Tree rows use the Browser's actual metrics, disclosure control and typography.
+fn row(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, label: &str, depth: usize, open: Option<bool>, tip: &str) -> bool {
+    let response = workspace::tree_row(
+        ui,
+        ui.id().with(key),
+        &workspace::TreeRow { depth, fold: open, icon: None, label, accessibility_label: None, tip, selected: false },
+    );
+    response.fold || response.clicked
+}
 impl NetInspector {
-    /// Dock a read-only view next to the schematic. Rebuild the view when the
-    /// project's connectivity snapshot changes. Moving a symbol reuses the view.
-    pub(super) fn show(&mut self, ui: &mut Ui, project: Option<Arc<Project>>, bottom_clearance: f32) {
+    /// Float a stable Craft card inside its pane, sharing the Properties inspector
+    /// footprint without resizing the canvas or changing document history.
+    pub(super) fn show(&mut self, ui: &Ui, project: Option<Arc<Project>>, area: Rect) {
         if !self.open {
+            self.rect = Rect::NOTHING;
             return;
         }
         if let Some(project) = project {
-            if !self.project.as_ref().is_some_and(|previous| previous.same_connectivity(&project)) {
+            if !self.project.as_ref().is_some_and(|p| p.same_connectivity(&project)) {
                 self.snapshot = Some(Snapshot::read(&project));
                 self.project = Some(project);
+                self.folded.clear();
             }
         } else {
             self.project = None;
             self.snapshot = None;
         }
-
-        let close = workspace::right_card(ui, "net_inspector", "Net Inspector", bottom_clearance, |ui| {
-            if let Some(snapshot) = &self.snapshot {
-                snapshot.show(ui);
-            } else {
-                ui.label(dim("No project open"));
-            }
-        });
-        self.open = !close;
+        let width = if area.width() < 600. { area.width() } else { 260. };
+        let (rect, collapse) =
+            workspace::floating_card_width(ui, ui.id().with("net_inspector"), "Net Inspector", area, self.collapsed, true, width, |ui| {
+                properties::inspector_body(ui);
+                let search = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search nets or pins").desired_width(ui.available_width()));
+                search.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search nets or pins"));
+                let Some(snapshot) = &self.snapshot else {
+                    ui.label(shell::dim("No project open"));
+                    return;
+                };
+                let query = self.query.trim().to_lowercase();
+                pcbcraft_chrome::library_sources::heading(ui, "Connected nets", snapshot.nets.len());
+                if snapshot.nets.is_empty() {
+                    ui.label(shell::dim("No connected nets"));
+                }
+                for (index, net) in snapshot.nets.iter().enumerate().filter(|(_, net)| {
+                    query.is_empty() || net.name.to_lowercase().contains(&query) || net.pins.iter().any(|pin| pin.to_lowercase().contains(&query))
+                }) {
+                    let expanded = !self.folded.contains(&index) || !query.is_empty();
+                    let tip = format!("{} pins", net.pins.len());
+                    if row(ui, ("net", index), &net.name, 0, (!net.pins.is_empty()).then_some(expanded), &tip) && !self.folded.remove(&index) {
+                        self.folded.insert(index);
+                    }
+                    if expanded {
+                        for pin in &net.pins {
+                            row(ui, ("net_pin", index, pin), pin, 1, None, "");
+                        }
+                    }
+                }
+                properties::section(ui, "Unconnected pins");
+                if snapshot.unconnected.is_empty() {
+                    ui.label(shell::dim("No unconnected pins"));
+                }
+                for pin in snapshot.unconnected.iter().filter(|pin| query.is_empty() || pin.to_lowercase().contains(&query)) {
+                    row(ui, ("unconnected", pin), pin, 0, None, "");
+                }
+            });
+        self.rect = rect;
+        if collapse {
+            self.collapsed = !self.collapsed;
+        }
     }
 }
 
@@ -118,9 +132,13 @@ mod tests {
         }
         let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
         harness.run();
+        let canvas = harness.get_by_label("Schematic canvas").rect();
         click(&mut harness, "Toggle Net Inspector");
+        assert_eq!(harness.get_by_label("Schematic canvas").rect(), canvas);
         harness.get_by_label("No connected nets");
-        harness.get_by_label("R1.1, R1.2, R2.1, R2.2");
+        for pin in ["R1.1", "R1.2", "R2.1", "R2.2"] {
+            harness.get_by_label(pin);
+        }
         assert_eq!(harness.state().session.revision(), 3);
 
         harness
@@ -133,17 +151,34 @@ mod tests {
             .unwrap();
         harness.run();
         harness.get_by_label("Net 1");
-        harness.get_by_label("R1.2, R2.1");
-        harness.get_by_label("R1.1, R2.2");
+        harness.get_by_label("R1.2");
+        harness.get_by_label("R2.1");
+        harness.get_by_label("R1.1");
+        harness.get_by_label("R2.2");
 
         click(&mut harness, "Undo");
         harness.get_by_label("No connected nets");
-        harness.get_by_label("R1.1, R1.2, R2.1, R2.2");
+        for pin in ["R1.1", "R1.2", "R2.1", "R2.2"] {
+            harness.get_by_label(pin);
+        }
         click(&mut harness, "Redo");
-        harness.get_by_label("R1.2, R2.1");
+        harness.get_by_label("R1.2");
+        harness.get_by_label("R2.1");
 
+        let revision = harness.state().session.revision();
+        click(&mut harness, "Search nets or pins");
+        harness.get_by_label("Search nets or pins").type_text("R1.2");
+        harness.run();
+        harness.get_by_label("Net 1");
+        harness.get_by_label("R1.2");
+        assert!(harness.query_by_label("R1.1").is_none());
+        assert_eq!(harness.state().session.revision(), revision);
+        click(&mut harness, "Collapse Net Inspector");
+        assert!(harness.query_by_label("R1.2").is_none());
+        click(&mut harness, "Expand Net Inspector");
+        harness.get_by_label("R1.2");
         click(&mut harness, "Toggle Net Inspector");
-        assert!(harness.query_by_label("R1.2, R2.1").is_none());
+        assert!(harness.query_by_label("R1.2").is_none());
         assert_eq!(harness.state().session.revision(), 6);
     }
 }
