@@ -68,13 +68,20 @@ sheet definitions. Board-local `instances.json` records circuit uses, sheet
 occurrences, component instance mappings, references and sparse overrides. Its
 header names the board ID, which must match the registry. Physical `board.json`
 owns layout, setup, the accepted physical baseline and board export configuration.
-System overview occurrences without a board live in the project entry point.
+Schematic-only uses, occurrences, component mappings/overrides and logical net
+registry live once in `project.pc` under `schematic_instances`. The empty board
+registry `boards: []` is valid; do not create a dummy board or an `instances.json`
+file requiring a board ID. System overview/assembly records are separate from
+this ordinary schematic scope.
 
 Electrical components remain part of the shared project model and command
 transactions even though their instance records are serialized with their board.
 Storage location does not create a separate session or duplicate authoritative
-ownership. Every instance document has one registered board owner, and references
-between all documents are validated before adopting the project. The logical net
+ownership. Each instance has exactly one storage home: the project schematic
+records or one registered board instance document. Its PCB binding is derived
+from that home, with no independent nullable board field on every component.
+Validate references and reject duplicate instance IDs across all homes before
+adopting the project. The logical net
 registry persists named nets, authored rules/constraints and explicit stable-ID
 promotions. Accepting a board baseline does not promote all unnamed nets: its
 historical membership and snapshot-qualified net keys stay in `board.json`.
@@ -93,6 +100,29 @@ Resolved defaults and derived pending-update summaries are not copied into all
 instance files. A structural definition edit can legitimately change several
 instance documents when it adds or removes physical instance mappings, but those
 changes publish together through the same transaction and save journal.
+
+### Schematic-only storage and later board creation
+
+New projects may have no boards. Shared sheet definitions and pinned symbol data
+retain their usual paths; live schematic-only instances remain in the project
+entry point. Optional physical folders are absent until used. `layout_root`
+reserves the owned areas but does not require creating empty directories, a
+stackup or any physical board state. Saving/packing a schematic-only project is
+a complete operation, not a partial PCB export or a missing-document condition.
+
+When assigning a closed group to a board, move its existing use, occurrence and
+component records from `schematic_instances` to the board instance document in
+one revision-checked transaction and journaled save. Keep shared definitions in
+place, preserve IDs/overrides/model links, and update affected scope-qualified
+net/rule references explicitly. Other project-level instances remain untouched.
+Detaching an eligible unplaced group reverses that storage move without changing
+identity. No object is inferred from a folder or duplicated at both homes.
+
+Simulation model references/defaults are shared logical definition data;
+compatible overrides live with their instance. Project-level analysis settings
+refer to logical targets, with pinned model assets stored under the existing
+asset/library rules. Their later simulator-specific schema must not require a
+board or put the only copy in physical `board.json`.
 
 ### Portable board folder names
 
@@ -232,7 +262,7 @@ component IDs remain numeric. They are not hand-editable project fixtures.
 
 | Document | Required relationships |
 | --- | --- |
-| `project.pc` | Project identity, numeric ID watermark and layout root; ordered board registry with one folder per board; sheet/circuit definitions; system occurrences, off-board component instances, connections and any system net registry; associated-file, board-variant and system-build registrations |
+| `project.pc` | Project identity, numeric ID watermark and layout root; ordered zero-or-more board registry; project-level schematic instances and net registry; sheet/circuit definitions; system occurrences, off-board component instances, connections and any system net registry; associated-file, board-variant and system-build registrations |
 | `sheets/<id>.json` | Shared geometry, local symbol/unit references to circuit component definitions, local labels and stable child-use or subsheet slots |
 | `<board_root>/instances.json` | Board ID; circuit uses; sheet occurrences with use and optional parent/slot; component instances with references and overrides; logical net registry, anchors, lineage and unresolved logical rule assignments |
 | `<board_root>/board.json` | Same board ID; setup and physical objects; package/terminal-to-pad mappings and accepted update baseline |
@@ -310,15 +340,16 @@ claiming a different use than their slot. A system overview's board-block slot
 is an explicit reference to the board occurrence; it is not a direct electrical
 wire across board ownership.
 
-Unassigned imported content has a separate, explicitly unresolved project scope
-until assigned. It is excluded from board fabrication and reported as incomplete
-in project validation. This temporary state does not grant a system overview
-permission to mix physical ownership.
+Intentionally schematic-only content is valid project-owned data, not an
+unresolved import. A separate pending-board-assignment marker may identify uses
+with incomplete PCB intent; it affects only operations requiring that physical
+assignment. A system overview is another role entirely, with its own electrical
+restrictions. None of these states implies a board based on array position.
 
 ## Migration and implementation order
 
-Start by recording independent board ownership and identities, then introduce
-board registries and folders through a reviewed storage migration. Existing
+Start by recording optional board association and independent board identities,
+then introduce board registries and folders through a reviewed storage migration. Existing
 single-board projects must retain their current compatibility board ID when it
 becomes a persisted record; allocate independent IDs for additional boards.
 Preserve placements, package mappings, layers, stackups, materials, Board Edge
@@ -338,7 +369,8 @@ definitions, without creating unnecessary instance overrides.
 Opening an old project does not rewrite it. Continue preserving its old encoding
 until an explicit format upgrade or an operation requiring the new format; the
 first save after that operation migrates the project atomically. New projects
-use the new board-folder form after the feature ships. Preserve the original
+use the new split-document form with zero boards by default after the feature
+ships; board folders appear only when explicitly created. Preserve the original
 board's compatibility ID and retain its current display name `Board`, without
 renaming it to the project or folder name. Give it a registered portable folder
 using that ID's suffix, such as `board-<id-prefix>`. Derive its path as

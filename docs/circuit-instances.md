@@ -83,7 +83,7 @@ prescribing a Rust type or JSON encoding.
 | Circuit definition | Stable grouping of component definitions and sheet definitions, registered in the project |
 | Circuit use | One stable instantiation of a circuit definition, shared by all ordinary sheet occurrences within that use |
 | Sheet occurrence | Stable project occurrence ID, circuit use, definition reference and optional parent occurrence relationship |
-| Physical component instance | Stable project identity for one physical package; refers to its circuit component definition and occurrence context, with an explicit board owner |
+| Circuit component instance | Stable logical identity for one use of a component definition, with a project schematic home or explicit board association; no physical package is required for schematic-only analysis |
 | Schematic symbol or unit | Definition-local identity resolved in a sheet occurrence; links to the owning component instance |
 | Logical terminal | Stable terminal identity on that component instance, independent of its displayed pin text |
 | Footprint and pad | Board-qualified placement and pad identities linked to the component instance through a validated terminal-to-pad mapping |
@@ -100,8 +100,10 @@ to adopt UUID spelling. Allocation follows the [storage watermark contract](mult
 current reconstruct-from-live-objects allocator cannot provide non-reuse.
 
 Several schematic units can represent one physical package, including units on
-different sheets. They must resolve to one component instance and one board owner,
-with one footprint and one BOM item. Sheet-local symbol identity alone is
+different sheets. They must resolve to one component instance in one schematic
+or board ownership context. When physically implemented they have one package
+and footprint, rather than one per symbol unit. Schematic-only instances need
+neither footprint nor physical BOM item. Sheet-local symbol identity alone is
 therefore insufficient for physical ownership. If a proposed sheet assignment
 would split a multi-unit package across boards, reject it or require an explicit
 change that includes every affected unit and sheet. The instance representation
@@ -119,10 +121,12 @@ circuit retain that use; instantiating a reusable nested circuit creates a
 distinct child use instead.
 
 Persist an explicit mapping from `(circuit_use, component_definition)` to one
-physical component instance. Symbols on different sheets reference the same
-component definition and use context when they are units of one package. Two
-uses of the same circuit therefore resolve to two packages, while two units
-within one use resolve to one package. Require exactly one mapping per pair and
+logical component instance. Board assignment may later give that instance a
+physical package; it does not create a second component identity. Symbols on
+different sheets reference the same component definition and use context when
+they are units of one package. Two uses resolve to distinct component instances;
+when physically implemented they are distinct packages. Two units within one use
+resolve to one component instance. Require exactly one mapping per pair and
 reject foreign or missing component definitions.
 
 Reusable circuit boundaries must include every unit of each component they own.
@@ -167,10 +171,12 @@ therefore includes this extraction step, even if the UI presents one action.
 
 ### References and resolved properties
 
-Both reference fields become board-scoped. Preserve `reference_number` as an
-instance-owned allocation ordinal, with uniqueness on `(board, prefix, number)`
-for PCB parts and `(system, prefix, number)` for off-board parts. Allocation
-computes the next number within the addressed owner/prefix, and skips displayed
+Both reference fields use an explicit owner scope. Preserve `reference_number`
+as an instance-owned ordinal, unique on `(board, prefix, number)` for board parts,
+`(schematic, project, prefix, number)` for schematic-only circuit instances and
+`(system, project, prefix, number)` for off-board assembly parts. Scope kind is
+part of the key, so schematic and system scopes do not alias even though both
+use the project ID. Allocation computes the next number within the addressed owner/prefix, and skips displayed
 references already used in that owner. The new loader must replace both current
 project-wide checks: numeric allocation ordinals and displayed reference strings.
 Changing only the displayed-text check does not enable Controller/U1 plus Display/U1.
@@ -203,7 +209,7 @@ When a circuit definition has one use, ordinary value/part property edits update
 its defaults, preserving existing single-use overrides rather than creating new
 ones. If the selected field is already overridden, edit that explicit override
 and keep Reset available. The UI identifies the field's origin. A deliberate
-Create instance override action remains available, but ordinary single-board
+Create instance override action remains available, but ordinary single-use schematic
 editing must not accumulate stale defaults behind every changed component.
 
 When a definition has several uses, ordinary contextual property edits create
@@ -232,9 +238,27 @@ apparently valid but incompatible part. Existing references and values survive
 single-board migration; board-local uniqueness permits additional boards without
 renumbering the original design.
 
+### Schematic-only instance resolution
+
+The same definition/use/component mapping applies before a board exists. Store
+those instances in the project's `schematic_instances`, with no physical owner,
+and show references qualified as Schematic/R1 only when the UI needs to distinguish
+other owner scopes. Reusing a circuit there creates new component identities and
+references in that schematic scope; it does not create footprints or system BOM
+items. Shared/default/override behavior is unchanged, including compatible model
+parameters for future analysis.
+
+Cross-probing a schematic-only component returns a normal Schematic only/no
+board association state, not a missing footprint error. Analysis-only sources or
+probes have no physical counterpart even if a surrounding circuit later acquires
+a board. Physical conversion must resolve implementation roles and physical parts
+explicitly. Logical analysis targets use stable component/terminal IDs and survive
+movement between project and board instance storage.
+
 ### Package intent and physical acceptance
 
-There is one authoritative desired package choice: resolve the shared default
+A physical package choice is optional for schematic-only work. Where present,
+there is one authoritative desired package choice: resolve the shared default
 and any instance override. It includes a pinned package reference and a validated
 logical-terminal-to-pad mapping proposal. Keep these fields together so they
 cannot resolve from incompatible layers of defaults. `instances.json` stores
@@ -316,3 +340,64 @@ Deleting unit A does not remove a package still represented by unit B; retiring
 the component definition or the whole use produces a pending physical removal.
 Undo restores the same component and occurrence IDs, including their prior
 overrides and accepted physical associations.
+
+## Flight controller and ESC example
+
+A flight controller and an ESC can be separate boards in one project while
+using one shared Power supply circuit. Power can itself contain Input filter
+and Regulator subsheets. Register Flight controller, ESC and Power supply as
+circuit definitions; each board has its own main circuit use and a distinct
+child use of Power. The shared Power definition contains its root/child sheet
+definitions and closed component set once.
+
+The assigned project can have this working layout (`layout_root` is `.` here;
+sheet filenames below stand for UUID-based paths):
+
+```text
+flight-system/
+  project.pc
+  sheets/
+    <fc-main-id>.json
+    <esc-main-id>.json
+    <power-id>.json
+    <input-filter-id>.json
+    <regulator-id>.json
+  boards/
+    flight-controller-a1b2c3d4e5f6/
+      instances.json
+      board.json
+      outputs/
+    esc-0f1e2d3c4b5a/
+      instances.json
+      board.json
+      outputs/
+```
+
+Each board's instance file points to the same Power circuit definition and shared
+sheet files, with distinct use/occurrence/component IDs. For example:
+
+| Board | Power use | Regulator definition | Component instance | Resolved reference |
+| --- | --- | --- | --- | --- |
+| Flight controller | power-FC | 17 | 101 | U3 |
+| ESC | power-ESC | 17 | 202 | U1 |
+
+References are allocated in the owning scope, so the reusable definition does
+not force the regulator to be U1 on both boards. Each Power use expands all its
+subsheets in that use context. A multi-unit part spanning Filter and Regulator
+resolves to one package per Power use, not one package per sheet.
+
+The Browser can show Power supply under each board with Shared 2 uses, while
+the filesystem still contains one copy of each shared sheet. Flat presentation
+can instead list each occurrence with its board label. Different values or
+compatible part choices live in the respective instance overrides; footprints,
+routing and stackups live independently in the two physical board files. Shared
+wiring edits affect both logical uses, and Make independent forks one use when
+its topology must diverge. The equal GND names do not connect the boards by
+themselves; real connector terminals use explicit system mappings.
+
+The same design may begin without either board: both main circuits and Power
+uses live in `project.pc` under `schematic_instances`, and no board folders are
+needed. Later create the boards and assign the closed sheet groups, preserving
+their instance IDs and analysis links while reviewing reference and connectivity
+scope changes. That operation changes physical association and storage home,
+not the identity of the circuit already captured.

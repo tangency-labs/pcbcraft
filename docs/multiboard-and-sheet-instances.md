@@ -7,12 +7,13 @@ A project should hold several physical boards, their schematic hierarchy and
 their associated documents without becoming a collection of loosely connected
 projects. Keep schematic definitions in one shared location and give each board
 a folder for its physical design and associated files. A reusable circuit can
-appear on several boards through distinct sheet instances, each with its own
-physical components and unambiguous cross-probing context.
+appear in distinct sheet instances with separate component identities, before
+or after board assignment, with unambiguous cross-probing context.
 
-The initial multiboard workflow should assign each PCB component-bearing sheet
-instance to one board, whether the schematic is flat or hierarchical. An optional
-system overview can organize several board branches, but a single
+A project may contain zero or more boards. Schematic-only circuit instances are
+valid without a PCB association; when an instance is assigned for PCB work, its
+PCB parts belong to exactly one board, whether the schematic is flat or
+hierarchical. An optional system overview can organize several board branches, but a single
 component-bearing instance should not mix owners. Explicit component
 ownership remains necessary in the model to validate assignments and physical
 correspondence; mixed sheets are deferred as a separate product and validation
@@ -32,10 +33,11 @@ rules remain unchanged.
 | Instance properties | Values and compatible part/package choices may have explicit, visible instance overrides with reset to the shared default |
 | Property editing scope | A single-use circuit edits defaults unless the field is already overridden; a shared circuit edits instance properties by default |
 | Reference annotation | References are unique with existing case-sensitive matching within a board; system views and combined outputs qualify them with the board |
-| Electrical globals | Global, power and ground names connect within a board; inter-board connectivity requires explicit connector mappings |
+| Electrical globals | Global names join within their board or project schematic scope; inter-board connectivity requires explicit connector mappings |
 | Shared edits | One transaction updates all logical schematic uses; physical updates are reviewed independently for each board |
-| Physical identities | Persist occurrence and component mappings; one common circuit-use scope resolves multi-unit packages across sheets |
-| Board instance files | Each board has an `instances.json` for its circuit uses, sheet occurrences, component identities, references and overrides, separate from its physical `board.json` |
+| Instance identities | Persist occurrence and component mappings; one common circuit-use scope resolves multi-unit packages across sheets |
+| Instance storage | Schematic-only instances live once in `project.pc`; board-assigned instances live in that board's `instances.json`, separate from physical `board.json` |
+| Schematic-only projects | Start without a board; normal schematic editing and future simulation require no layout, footprint or stackup |
 | Flat and hierarchical sheets | Board assignment is explicit in both arrangements; a parent sheet or system overview is optional |
 | Net identity | Follow the separate net-identity design, preserving ordinary pin-disconnect continuations and reviewing only genuinely ambiguous assignments |
 | Assembly variants | Board-local population/value/compatible BOM alternatives share one PCB; named system builds explicitly select a variant for each board and population for off-board parts |
@@ -53,7 +55,7 @@ Intended behavior is distinguished from current capabilities below.
 | --- | --- | --- |
 | Boards | One physical board in `board.json`; typed targets expose a stable compatibility board ID | Persist an ordered board registry and independent board records |
 | Sheets | Shared sheet documents with stable IDs; each child has at most one parent; repeated instances and cycles are refused | Distinguish a sheet definition from each occurrence in the hierarchy |
-| Components | Project-owned logical components with one implicit board owner | Explicit physical ownership, including assigned but unplaced components |
+| Components | Project-owned logical components with one implicit board owner | Stable logical instances with optional board association; distinguish schematic-only and assigned/unplaced states |
 | Board setup | One setup on the sole board; the dialog already captures a board target | Independent layers, stackup, materials and output settings for each board |
 | Named connections | Global, power and ground names resolve across the current project | Resolve globals within the board; resolve ordinary local names within the sheet occurrence |
 | Cross-probing | Identity-based correspondence with board addresses; reveal across sheets is still planned | Include sheet occurrence and circuit-use context and navigate to the exact physical instance |
@@ -77,8 +79,11 @@ must not be used as the current implementation baseline.
 
 ## Board assignment and sheet hierarchy
 
-Flat, hierarchical and combined schematic organization are supported. Every
-PCB component-bearing occurrence belongs to exactly one board. A board can have
+Flat, hierarchical and combined schematic organization are supported. A normal
+schematic occurrence may be schematic-only or explicitly assigned to one board.
+Unassigned PCB intent is a separate incomplete state, not a synonym for having
+no board. Schematic-only occurrences can contain the same ordinary components,
+wires and hierarchy without acquiring a physical owner. A board can have
 several root occurrences with `parent: null`; no parent sheet, sheet symbol or
 system overview is needed to associate them with that board. In a hierarchical
 board branch, descendants use the same owner. A system overview without a board
@@ -101,11 +106,12 @@ sheet to the canvas. If the source circuit already has several uses, changing
 only one use's membership first requires Make independent; it cannot edit the
 shared group behind the other board's back.
 
-Board association belongs to circuit uses, occurrences and physical component
+Board association belongs to circuit uses, occurrences and component
 instances, not to a reusable sheet definition. The shared Power definition must
 not contain a hard-coded Controller board ID. A board branch explicitly names
-its board, and each circuit use and component instance has that board through its
-registered instance document.
+its board, and every assigned use/component has that board through its registered
+instance document. Schematic-only uses/components instead live in the project's
+`schematic_instances` records and have no board binding.
 All descendants in the branch must resolve consistently. This redundancy is a
 validated ownership relationship, not independent editable defaults. Creating
 components uses the captured context; changing a parent cannot recompute and
@@ -134,22 +140,25 @@ Resolve affected system connector endpoints in the same transaction or refuse
 the transfer. A transfer that removes routing and creates destination placements
 is a separate later workflow.
 
-Assigned but unplaced components are valid. Unassigned imported or incomplete
-components must remain visible as an unresolved state; they cannot silently
-default to the first board or disappear from completeness reports. The importer
+Assigned but unplaced components are valid, as are intentionally schematic-only
+components. An importer or explicit PCB-assignment operation may separately mark
+PCB intent as incomplete; report that state without relabeling every boardless
+circuit as an error. Never default incomplete content to the first board or drop
+it from the relevant completeness report. The importer
 must diagnose mixed-owner sheets that the initial editor cannot represent and
 offer an explicit restructuring path rather than silently changing ownership.
 
 ### Starting from the schematic and assigning boards
 
-A new design starts with one explicitly identified board named Board, even when
-the user begins in the schematic editor. Its physical layout may be empty and
-its setup unspecified. New root sheets and components use that sole board by
-default; no PCB drawing or stackup configuration is required to begin capturing
-the circuit. The board can later be renamed without changing its identity.
+A new project starts schematic-only, with an empty board registry. Capture flat
+or hierarchical sheets and instantiate components without creating a Board,
+physical folder, footprint assignment, outline or stackup. Create board is an
+explicit action from the Browser or empty PCB workspace; merely opening that
+workspace does not create a document. New circuit instances retain stable IDs
+and a valid schematic owner while no board exists.
 
-To divide the design, select one or more sheet occurrences in the Browser and
-choose Assign to board. The form offers existing boards and Create board with
+To create the first PCB or divide the design, select sheet occurrences in the
+Browser and choose Assign to board. The form offers existing boards and Create board with
 a display name. It previews the selected sheets, descendants, affected component
 instances, numeric/display-reference collisions and any physical-content blocker.
 Apply uses the existing closed-component and unplaced-transfer rules. Flat roots
@@ -157,13 +166,34 @@ need no synthetic parent, and units of one package cannot be split across boards
 Cancel changes nothing; creation of a new board together with assignment is one
 revision-checked undoable transaction.
 
-With several boards, New sheet takes its proposed board from the focused schematic
-occurrence or explicitly selected board navigation context and shows that choice
-in the creation form. A filter alone is not creation authority. If there is no
-unambiguous board context, require an explicit choice rather than selecting the
-first board. Create board within that form and create the sheet atomically; a
-cancelled sheet operation must not leave an unintended empty board. Hierarchical
-children inherit their parent's board and circuit-use context.
+New sheet shows Schematic only or the board inherited from the focused schematic
+occurrence or explicitly selected board navigation context. A filter alone is
+not creation authority. With no explicit context, default to Schematic only even
+if the project already contains boards; never bind a simulation sheet to the sole
+board merely because it exists. Hierarchical children inherit their parent's
+schematic/board and circuit-use context. Create board within the form and create
+the sheet atomically; Cancel leaves no unintended board or sheet.
+
+Assigning a closed schematic-only group to a new empty board moves its existing
+instance records, preserving component, occurrence and use IDs, references,
+overrides and model links. Preview collisions for an existing destination board.
+Also preview connectivity-scope changes: globals that previously joined other
+schematic-only roots must not become silently disconnected or turn into implicit
+cross-board links. For affected name-only joins, require an explicit choice to separate their scopes,
+preserve continuity through real connector mappings, or leave a visible pending
+boundary-resolution state. Explicit wired/port connections need a reviewed
+connection/removal plan rather than merely dropping them. Downstream checks cannot
+claim a complete design while required boundary intent remains unresolved.
+Modeling or simulation of an unresolved boundary cannot silently claim the old
+connectivity is still present. This is a deliberate partition operation.
+
+Keep schematic only detaches an eligible unplaced group from its board and moves
+its records back to project scope without creating new IDs. Existing placements,
+copper or accepted objects must be explicitly reconciled first under the same
+physical-transfer restrictions and reference/connectivity-scope preview. A detach
+must not silently merge its globals with other schematic-only circuits. It does
+not delete a board
+or its documents/exports implicitly.
 
 Assign to board moves an existing use; it does not duplicate physical components.
 Use on another board is a separate action that invokes closed-circuit extraction
@@ -171,6 +201,30 @@ when necessary and creates a new use with new instance identities. The form
 distinguishes that reuse from moving the original circuit. Both workflows use the
 same validated commands from GUI and MCP; neither asks the user to edit project
 files or infer ownership from a folder.
+
+### Schematic-only analysis and simulation
+
+A schematic-only sheet is an ordinary electrical schematic, not a system overview.
+It supports wires, labels, power/ground and hierarchy in the project schematic
+scope. Global names join within that scope, without joining board-bound or
+system-diagram scopes by name. Analysis targets name circuit uses, occurrences
+and logical terminal IDs; simulation never requires a fake BoardTarget.
+
+Model references/defaults belong to shared circuit/component definitions, with
+compatible instance overrides following the same property-scope rules. Analysis
+configurations and stimuli/probes belong to project schematic context, not to a
+board's physical file. Large model assets use the existing pinned/source rules.
+Assigning an instance to a board preserves those links. Simulator-specific model
+formats, solvers and run schemas need their own implementation slice; this design
+establishes ownership, not an already implemented simulator.
+
+Simulation-only sources, probes or ideal elements do not acquire invented
+footprints or BOM entries. A board-associated use can contain such elements;
+its logical owner context does not assert that each element has a physical part.
+A later PCB conversion must explicitly distinguish
+physical parts from analysis-only content and report missing physical mappings
+only for the requested PCB operation. A valid schematic-only save, ERC request
+or analysis setup is not invalid merely because footprints and stackup are absent.
 
 ### Browser and editor context
 
@@ -180,7 +234,10 @@ group. These groups are not authored parent sheets. Schematic organization keeps
 the flat or hierarchical sheet structure and shows a compact Board column or
 badge on root occurrences, with descendants inheriting the visible branch
 context. A board filter narrows either view without changing document ownership.
-Single-board projects retain their straightforward existing navigation.
+With zero boards, default to Schematic organization. Show Schematic only as a
+scope label when it distinguishes mixed project content, rather than repeating
+it on every row of an entirely boardless project. Single-board projects retain
+straightforward navigation.
 
 A sheet's tab or breadcrumb includes the board context, such as
 `Display > Power`. A shared circuit use has a compact `Shared · 2 uses` indicator
@@ -190,7 +247,9 @@ both rows reference the same definition. Opening a row targets that occurrence
 and resolves its board-specific properties. An independently opened definition
 is labeled `Power · Definition` and exposes the use selector for physical reveal.
 
-Unassigned imported sheets have an explicit Unassigned group/state. System
+Boardless ordinary sheets appear under Schematic only, with normal editing
+and no assignment warning. PCB-intended incomplete/imported sheets use a distinct
+Needs board assignment state. System
 overviews and shared definitions have distinct navigation entries rather than
 being shown as ambiguously unassigned board sheets. Keep context visible through
 pane/window changes, and preserve the addressed board of other open PCB views.
@@ -301,6 +360,10 @@ With several boards, require an explicit target rather than selecting the first.
 Implement in bounded slices, recording the migration and acceptance cases for
 each. Later changes need a compatibility plan for saved projects.
 
+Board commands report no available board when the registry is empty, rather
+than manufacturing an implicit legacy board. A single-board compatibility
+default applies only when exactly one board actually exists.
+
 Complete the versioned codecs, command schemas, compatibility UUID test vectors,
 net-anchor/property inheritance tables and source-digest/publication test vectors
 for the slice being implemented. The behavior and initial defaults are specified here; these engineering details
@@ -308,8 +371,8 @@ remain work to perform. Do not silently
 change ownership or electrical semantics to avoid an implementation difficulty.
 
 Keep the existing project-wide symbol, component, wire and geometry budgets after
-expanding instances, not just when counting definition files. The initial limits are 64 boards, 64 sheet definitions and 64 expanded sheet
-occurrences, with hierarchy depth no greater than the occurrence limit. Existing
+expanding instances, not just when counting definition files. The initial limits allow zero through 64 boards, 64 sheet definitions and 64 expanded
+sheet occurrences, with hierarchy depth no greater than the occurrence limit. Existing
 document and archive byte/count limits also apply. Validate counts before
 expansion and check arithmetic without partial allocation. Larger projects can
 be considered through a separate performance and format review.
@@ -418,3 +481,11 @@ These scenarios should guide the tests and review for the relevant slices:
   reconciliation exists; disjoint existing-record edits still undergo validation.
 - Anchor codec vectors use fixed-width numeric encodings, including 9 before 10,
   and verify kind, scope, occurrence and opaque terminal-token framing.
+- A new schematic-only project saves/reopens with zero boards and no PCB folders;
+  wires, labels, hierarchy and circuit instances remain fully addressable.
+- Creating a board and assigning a closed group preserves instance/model IDs;
+  another boardless group stays schematic-only and is not reported as incomplete.
+- Ordinary boardless schematics allow electrical wires and power markers while
+  system overviews retain their distinct connection-tool restrictions.
+- Boardless references/globals use schematic scope, isolated from board and system
+  scopes. Assignment previews any affected boundary/annotation resolution.

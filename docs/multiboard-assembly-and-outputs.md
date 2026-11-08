@@ -19,14 +19,20 @@ The chosen name scopes are:
 | --- | --- |
 | Ordinary local label | One sheet occurrence, including matching interfaces on that sheet |
 | Hierarchical port | The explicit child occurrence and its parent-side interface in the same use context |
-| Global, power or ground label | The addressed physical board, across its sheet occurrences and circuit uses |
+| Global, power or ground label with a board | That board, across its sheet occurrences and circuit uses |
+| Global, power or ground label in schematic-only work | The project schematic scope, across its boardless circuit uses; not board or system scopes |
 | System connection | Explicit connector-terminal mapping between addressed boards |
 
 Names retain existing case-sensitive matching. A repeated circuit's local labels
 are isolated, but its board-global `GND` connects to the other intended `GND`
 labels on that same board. Use local labels and explicit ports when two uses on
 one board need separate rails. The definition can use the same global names on
-Controller and Display without joining those boards. A system overview cannot
+Controller and Display without joining those boards. A schematic-only ordinary sheet
+still permits wires, power and ground: lack of a board does not turn it into a
+system overview. Assigning part of the project schematic scope to a board must
+preview affected name-based connections, migrate applicable rule references and
+resolve or explicitly record boundary intent. It cannot silently preserve a
+project-global short across boards or silently claim a separated link still exists. A system overview cannot
 create a board connection through a global label or an ordinary cross-board
 hierarchical wire; it uses system connections instead.
 
@@ -59,8 +65,10 @@ Board blocks expose selected real connector terminals through stable addressed
 interfaces. Their layout is presentation; moving a block does not move a board
 or alter its electrical relationships.
 
-Ordinary schematic wires, global labels and power markers have no valid board
-scope in this role and are refused before mutation. Drawing an ordinary wire
+Ordinary schematic wires, global labels and power markers are not objects of
+the `system_diagram` role and are refused before mutation. Ordinary schematic-only
+sheets are a different role with valid project schematic scope; they are not
+subject to that refusal merely because they have no board. Drawing an ordinary wire
 between two blocks must not create a hidden global connection or silently invent
 a cable. Use the explicit System connection tool instead: choose actual endpoints
 and review the terminal-pair mapping, then create the typed system connection
@@ -108,8 +116,9 @@ overview drawing is removed.
 The separate [net-identity design](net-identity.md) covers ordinary single-board
 continuations as well as multiboard nets, anchors, splits, merges and rule
 reconciliation. Each board's logical registry lives in its `instances.json`;
-accepted physical net state lives in `board.json`. Any system-scoped registry
-lives in `project.pc`. These storage owners include lineage and unresolved
+accepted physical net state lives in `board.json`. The boardless schematic
+registry lives in `project.pc` under `schematic_instances.net_registry`; any
+system registry is a separate project-level record. These storage owners include lineage and unresolved
 assignments, not just the current IDs.
 
 A bare isolated pin is an unconnected terminal, so disconnecting it does not
@@ -126,6 +135,14 @@ Drawings, notes and other imported documents are associated files. CAM, drill,
 placement, BOM, schematic PDF and report files are export results tied to a
 particular design state and configuration. Neither normal saving nor an unrelated
 board edit should overwrite or delete associated files or old export runs.
+
+A schematic-only project can generate schematic/analysis reports and packed
+editable designs without a board. Model/run inputs use logical instance and
+terminal addresses; they do not require Board setup or PCB output configuration.
+Board fabrication jobs require an actual board. Assembly releases count only
+explicitly physical board/system parts, not boardless simulation instances or
+analysis-only sources/probes. A schematic parts report can include those logical
+elements with its scope clearly identified, without inventing physical packages.
 
 Board outputs belong under that board's folder. Project-level schematic exports,
 combined BOMs and system reports belong under `join(layout_root, "outputs")`;

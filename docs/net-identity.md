@@ -4,7 +4,7 @@ Design recorded November 8, 2026; related work:
 [#77](https://github.com/tangency-labs/pcbcraft/issues/77),
 [#42](https://github.com/tangency-labs/pcbcraft/issues/42) and
 [#122](https://github.com/tangency-labs/pcbcraft/issues/122).
-This policy applies to single-board editing as well as multiboard projects.
+This policy applies to schematic-only, single-board and multiboard projects.
 It does not claim that persistent net identity is already implemented.
 
 The current electrical graph is derived and does not have persistent net IDs.
@@ -18,8 +18,9 @@ Each board's `instances.json` owns its logical `net_registry`, including stable
 net IDs, primary and fallback anchors, lineage, explicit net/class bindings and
 unresolved reconciliation records. Its physical `board.json` owns that board's
 accepted net/terminal baseline and pending physical removal information.
-`project.pc` owns any system-scoped net registry used by the system connection
-graph. System continuity does not merge the separate board copper-net records.
+`project.pc` owns the schematic-only registry under
+`schematic_instances.net_registry`, plus a distinct system registry for system
+connections when required. System continuity does not merge the separate board copper-net records.
 
 The registry is sparse. Persist intentionally named nets, nets with authored
 rules/classes, other authored records that explicitly require a stable current
@@ -43,7 +44,7 @@ canonical endpoint-membership list. Lineage/reconciliation records refer to
 source snapshots, affected stable targets and resulting identities rather than
 serializing another complete current netlist.
 
-A registry address includes project, board or system scope, and net ID. Anchors
+A registry address includes project, schematic/board/system scope and net ID. Anchors
 use stable component terminal, label/port or junction identities, never display
 names or coordinates. The immutable before/after graph provides transient
 membership during an edit. If stored anchors vanish but there is one meaningful
@@ -72,8 +73,10 @@ or permission to retain a relationship constraint.
 Compare keys lexicographically as bytes with this fixed field order: kind tag,
 project UUID, scope tag, scope UUID, occurrence UUID, numeric object ID, terminal
 token length and token bytes. Kind tags are `0x01` label, `0x02` port, `0x03`
-component terminal and `0x04` junction. Scope tags are `0x01` board and `0x02`
-system; a system scope uses the project UUID as its scope UUID.
+component terminal and `0x04` junction. Scope tags are `0x01` board, `0x02`
+system and `0x03` schematic-only. System and schematic-only scopes use the project
+UUID as scope UUID; their different tags prevent aliasing. No fake board UUID is
+allocated for the schematic scope.
 
 Encode tags as one byte, UUIDs as their 16 raw RFC-order bytes, every numeric
 object ID as unsigned 64-bit big-endian, and token length as unsigned 32-bit
@@ -197,3 +200,8 @@ slice; an arbitrary graph traversal cannot supply them. Test the four-anchor cap
 and a laid-out board with unnamed baseline nets: a non-anchor wire edit changes
 its authored sheet without promoting all baseline nets or rewriting a saved
 logical membership list.
+
+A zero-board save/reopen test must retain the schematic registry without a board
+file. Scope-key vectors must distinguish board, schematic and system anchors
+and ensure a later board assignment updates affected typed scope references
+without changing component identities or silently joining global labels.
