@@ -446,3 +446,34 @@ fn repeat_power_uses_fresh_ids_and_stops_after_intervening_edits() {
     assert_eq!(h.state().session.project().unwrap().net_labels().len(), 2);
     assert!(h.state().views.active.schematic.tool.is_none());
 }
+
+/// The same live panel command can close the expanded catalog it opened, while engineering
+/// commands remain refused by name and the shared project data/history remain untouched.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn live_panel_commands_open_and_close_modal_catalog_without_switching_modes() {
+    use crate::live_control::LiveEditor;
+    use pcbcraft_mcp::live::call_editor;
+    let mut h = editor(1400.);
+    click(&mut h, "Cancel");
+    let ctx = h.ctx.clone();
+    let before = h.state().session.inspect();
+    for open in [true, false] {
+        let result = call_editor(
+            &mut LiveEditor { app: h.state_mut(), ctx: &ctx },
+            &json!({"method":"engine.execute","params":{"command":"window.set_panel","params":{"window":0,"panel":"parts","open":open}}}),
+        );
+        assert!(result.is_ok(), "{result:?}");
+        h.run();
+        assert_eq!(h.state().parts.is_modal(), open);
+        if open {
+            let revision = h.state().session.revision();
+            let refused = call_editor(
+                &mut LiveEditor { app: h.state_mut(), ctx: &ctx },
+                &json!({"method":"engine.execute","params":{"command":pcbcraft_engine::PLACE_RESISTOR,"params":{"x_nm":0,"y_nm":0,"expected_revision":revision}}}),
+            );
+            assert!(format!("{refused:?}").contains("Parts Catalog"));
+        }
+        assert_eq!(h.state().session.inspect(), before);
+    }
+}

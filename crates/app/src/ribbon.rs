@@ -102,7 +102,7 @@ const CAPTURE: &[Group] = &[
         tools: &[
             tool(Action::Wire, "Wire", Icon::Wire, "Draw wire (W)", "W"),
             tool(Action::Bus, "Bus", Icon::Bus, "Buses are not available yet.", ""),
-            tool(Action::Label, "Net label", Icon::NetLabel, "Place local label (L); choose Global label in Type for project scope", "L"),
+            tool(Action::Label, "Net label", Icon::NetLabel, "Place local label (L); set Scope to Global or press Ctrl+L", "L"),
         ],
         extras: &[],
     },

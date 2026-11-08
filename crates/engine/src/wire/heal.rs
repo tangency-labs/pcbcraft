@@ -199,23 +199,38 @@ impl Edit {
         Ok(())
     }
 
-    /// Attach exactly coincident free ends to pins, including deliberate manual healing of
-    /// pre-existing contacts. More than one pin at a contact is an error, never an arbitrary pick.
+    /// Resolve one exact contact. A named marker deliberately joins coincident physical pins;
+    /// without that marker, multiple fixed pins remain ambiguous. An existing route target is
+    /// retained when it already belongs to the declared contact rather than rewriting its ID.
+    fn pin_contact(&self, point: Point, preferred: Option<WireEndpoint>) -> Result<Option<WireEndpoint>, CommandError> {
+        let pins: Vec<_> = self
+            .project
+            .symbols
+            .iter()
+            .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins()))
+            .filter(|(_, at)| *at == point)
+            .map(|(pin, _)| WireEndpoint::Terminal(pin))
+            .chain(self.project.hierarchy_endpoints().filter(|(_, at)| *at == point).map(|(end, _)| end))
+            .collect();
+        let named = pins.iter().copied().find(|pin| matches!(pin, WireEndpoint::NetLabel(_)));
+        if named.is_none() && pins.len() > 1 {
+            return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
+        }
+        if let Some(preferred) = preferred
+            && ((named.is_some() && self.project.endpoint_position(preferred) == Some(point)) || pins.contains(&preferred))
+        {
+            return Ok(Some(preferred));
+        }
+        let mut physical = pins.iter().copied().filter(|pin| !matches!(pin, WireEndpoint::NetLabel(_)));
+        let first = physical.next();
+        Ok(if physical.next().is_some() { named } else { first.or(named) })
+    }
+
+    /// Attach exactly coincident free ends to one physical or explicitly named contact,
+    /// including manual healing. Undeclared coincident fixed pins remain rejected.
     fn connect_pins(&mut self, ends: Vec<(u64, Point)>) -> Result<(), CommandError> {
         for (id, point) in ends {
-            let pins: Vec<_> = self
-                .project
-                .symbols
-                .iter()
-                .flat_map(|s| s.terminals().into_iter().zip(s.pins()))
-                .filter(|(_, p)| *p == point)
-                .map(|(pin, _)| WireEndpoint::Terminal(pin))
-                .chain(self.project.hierarchy_endpoints().filter(|(_, p)| *p == point).map(|(end, _)| end))
-                .collect();
-            if pins.len() > 1 {
-                return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
-            }
-            if let Some(&pin) = pins.first() {
+            if let Some(pin) = self.pin_contact(point, None)? {
                 self.merge(WireEndpoint::Junction(id), pin)?;
             }
         }

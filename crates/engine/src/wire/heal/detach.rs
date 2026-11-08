@@ -4,7 +4,8 @@ use super::*;
 impl Edit {
     /// Join only the requested degree-one ends, excluding their moving wires from targets.
     /// Resolve each contact against the current graph so two drops onto one route can split
-    /// it successively. Coordinate coincidence never chooses between distinct identities.
+    /// it successively. A named anchor declares one contact without replacing existing fixed
+    /// endpoint identities; undeclared coincident identities and crossings remain ambiguous.
     pub(super) fn connect_wire_ends(&mut self, ends: &[u64]) -> Result<(), CommandError> {
         let mut excluded = BTreeSet::new();
         for &id in ends {
@@ -18,6 +19,7 @@ impl Edit {
         for &id in ends {
             let source = WireEndpoint::Junction(id);
             let point = self.project.endpoint_position(source).ok_or_else(|| CommandError::InvalidParams("free end no longer exists".into()))?;
+            let named = self.project.net_labels().iter().any(|label| label.at == point);
             let mut found = None;
             for wire in self.project.wires.iter().filter(|wire| !excluded.contains(&wire.ordinal)) {
                 let path = self.project.wire_path(wire);
@@ -32,28 +34,28 @@ impl Edit {
                     Anchor::Split { wire: wire.ordinal, at: point }
                 };
                 if found.is_some_and(|old| old != target) {
-                    return Err(CommandError::InvalidParams("wire drop meets ambiguous wire contacts".into()));
+                    if !named {
+                        return Err(CommandError::InvalidParams("wire drop meets ambiguous wire contacts".into()));
+                    }
+                    if matches!(found, Some(Anchor::Split { .. })) && matches!(target, Anchor::Existing(_)) {
+                        found = Some(target);
+                    }
+                    continue;
                 }
                 found = Some(target);
             }
-            let pins: Vec<_> = self
-                .project
-                .symbols
-                .iter()
-                .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.pins()))
-                .filter(|(_, pin)| *pin == point)
-                .map(|(pin, _)| WireEndpoint::Terminal(pin))
-                .chain(self.project.hierarchy_endpoints().filter(|(_, p)| *p == point).map(|(end, _)| end))
-                .collect();
-            if pins.len() > 1 {
-                return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
-            }
             let mut joined = source;
-            if let Some(target) = found {
+            // An authored marker already bridges interior routes at this point. Attach to its
+            // fixed contact rather than splitting a previously intact target wire unnecessarily.
+            let target = match found {
+                Some(Anchor::Split { .. }) if named => self.pin_contact(point, None)?.map(Anchor::Existing),
+                target => target,
+            };
+            if let Some(target) = target {
                 let target = self.resolve(target)?;
                 joined = self.merge(source, target)?;
             }
-            if let Some(&pin) = pins.first() {
+            if let Some(pin) = self.pin_contact(point, found.map(|_| joined))? {
                 self.merge(joined, pin)?;
             }
         }
