@@ -36,13 +36,12 @@ reopening and no-op saves. It is only the legacy-board identity rule; additional
 boards need independently allocated, persisted IDs. The native format must retain
 this compatibility ID when that board becomes an explicitly stored record.
 
-The proposed next storage change, for public review before adoption, is an
-ordered `boards` list alongside `sheets` in a new project-format version, with
-stable ID, display name and document reference per board. Whether the first board
-retains `board.json` or moves to `boards/<uuid>.json` remains a format decision.
-The migration must preserve every placement, pin mapping, layer, material report
-and stackup, and become byte-stable after the first migrated save. Readers that
-cannot handle multiple boards must refuse them instead of truncating the list.
+The [multiboard design](multiboard-and-sheet-instances.md) calls
+for an ordered board registry, per-board folders, shared definitions and stable
+instance mappings. Its [storage contract](multiboard-storage.md) defines the
+migration direction and preservation rules. Implementation proceeds in bounded
+slices with exact codecs and versioned migration tests. The current single
+`board.json` encoding remains unchanged until that work lands.
 
 Component-to-board assignment must become an explicit project-model choice,
 including assigned but unplaced components. The current legacy model still has
@@ -314,11 +313,12 @@ The net reconciliation design must specify these cases before its schema lands:
 - Undo/redo and reopening restore authored identities and assignments, while a
   new opening invalidates old runtime requests even if saved IDs match.
 
-The choice of anchors, survivor policy and lineage representation is still open.
-Ordinary wire edits should not require a modal question at every split; a
-reviewable unresolved assignment can be represented, but downstream operations
-must not silently treat it as resolved. A separate implementation brief should
-exercise a conflicting power/signal merge and a classified net split.
+The [net-identity design](net-identity.md) applies to single-board and
+multiboard projects. It defines scoped sparse registries, explicit primary-anchor
+selection, continuation for isolated-pin/stub disconnects and type-specific
+constraint reconciliation. Implement the listed acceptance scenarios, including
+relationship checks on the ID-keeping branch. Persistent net identities are not
+yet implemented.
 
 Cross-probing resolves schematic placement to component/terminal, then to the
 assigned footprint/pad, in both directions. A received highlight never becomes
@@ -364,8 +364,18 @@ model and a separately implemented calculation.
 Provide a project settings editor available from schematic and layout, with
 Manufacturing, Stackup & Impedance and Electrical Rules pages. Manufacturing
 settings describe a selected fabrication process; electrical rules describe the
-design's requirements. Both are project data with shared engine validation,
-undo and persistence, rather than application preferences or per-window state.
+design's requirements. Both are authored project data with shared engine
+validation, undo and persistence, rather than application preferences or
+per-window state. This does not make one manufacturing setup global to every
+physical board. The settings UI must show its target board for board-owned pages.
+
+Under the [multiboard design](multiboard-and-sheet-instances.md#independent-board-setup),
+project settings may provide default fabrication/profile choices, while each
+board owns its adopted pinned process/profile, stackup, local refinements and
+output recipes. Changing a project default does not mutate previously adopted
+board setups. Electrical rule defaults use explicit precedence and per-board
+resolution. The exact codec and validation cases for this ownership model belong
+to the corresponding implementation slice.
 
 An editable fabrication profile should cover these initial groups:
 
@@ -393,12 +403,14 @@ publishing examples. Users can author custom profiles; third-party profiles
 require qualified provenance and redistribution terms before bundling.
 
 Import validates the complete profile and presents its constraints before an
-explicit apply. A project retains a pinned copy, selected offered stackup and
+explicit apply to the addressed board. The project retains pinned profile data;
+each board retains its adopted profile revision, selected offered stackup and
 its own explicit refinements, so moving the portable file or going offline does
 not change the design. A source path is a hint, not identity. Re-exporting the
 profile should not include unrelated project circuitry. Taking a newer revision
 is deliberate: compare changed limits, report conflicts with current rules and
-geometry, and apply the accepted update in one undoable transaction. Never
+geometry of the addressed board, and apply the accepted update in one undoable
+transaction without changing another board's adopted setup. Never
 silently mutate the shared profile file when editing a project's settings.
 
 The shared resolver combines process limits with electrical requirements and
@@ -498,8 +510,10 @@ multiple net classes. This is a new proposal over approved upstream code; no
 KiCad implementation, prototype implementation or third-party library assets
 are inputs to this slice.
 
-Before their implementation, settle net split/merge identity, rule precedence
-and exceptions, accepted-board baseline storage, material-property provenance,
+Implement net split/merge identity through the separate
+[net-identity design](net-identity.md).
+Before the remaining implementations, settle rule precedence and exceptions,
+accepted-board baseline storage, material-property provenance,
 core/prepreg construction and ply schema, finished-thickness/tolerance semantics
 and the scope of per-layer pad stacks. These are
 explicit follow-up decisions rather than promises made by the initial format.

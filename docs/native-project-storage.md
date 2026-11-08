@@ -4,6 +4,11 @@ PCBcraft stores a project as independently editable documents. The editor and MC
 still share one project, command set and undo history; storage boundaries do not
 create separate schematic and board sessions.
 
+The [multiboard and sheet instance design](multiboard-and-sheet-instances.md)
+and its [storage contract](multiboard-storage.md) describe board folders,
+instances and associated-file ownership. The current encodings below do not
+accept that new layout until the codec migration lands.
+
 ## File encodings and save behavior
 
 The working form is a project folder with a plain UTF-8 JSON `project.pc` entry
