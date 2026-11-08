@@ -39,13 +39,20 @@ impl Default for RecentProjects {
 impl RecentProjects {
     /// Restore bounded, unique absolute paths without touching the filesystem. Bad settings
     /// fall back to an empty history; missing files remain visible until explicitly removed.
+    /// Windows `\\?\C:\…` paths saved by earlier builds are restored in their plain `C:\…` form.
     pub(super) fn parse(text: &str) -> Self {
         let mut recent = Self::default();
         if text.len() > MAX_SETTINGS_BYTES {
             return recent;
         }
         if let Ok(entries) = serde_json::from_str::<Vec<RecentProject>>(text) {
-            for entry in entries {
+            for mut entry in entries {
+                // The file worker now records plain paths (#154); matching that form here keeps
+                // one project from being listed twice. Only a changed path is copied.
+                let plain = dunce::simplified(&entry.path);
+                if plain != entry.path {
+                    entry.path = plain.to_path_buf();
+                }
                 if entry.path.is_absolute() && !entry.name.trim().is_empty() && !recent.entries.iter().any(|old| old.path == entry.path) {
                     recent.entries.push(entry);
                     if recent.entries.len() == MAX_RECENT {
@@ -175,5 +182,20 @@ mod tests {
         let restored = RecentProjects::parse(&text);
         assert_eq!(restored.entries().len(), 1);
         assert_eq!(restored.entries()[0].name, "First");
+    }
+
+    /// History saved before #154 holds Windows `\\?\C:\…` paths. Restoring shows the plain
+    /// form and merges it with the same project's plain entry instead of listing it twice.
+    #[cfg(windows)]
+    #[test]
+    fn windows_history_from_older_builds_uses_plain_drive_paths() {
+        let plain = PathBuf::from(r"C:\Projects\board.pc.zip");
+        let text = serde_json::to_string(&vec![
+            RecentProject { name: "Older build".to_owned(), path: PathBuf::from(r"\\?\C:\Projects\board.pc.zip") },
+            RecentProject { name: "Current build".to_owned(), path: plain.clone() },
+        ])
+        .unwrap();
+        let restored = RecentProjects::parse(&text);
+        assert_eq!(restored.entries(), [RecentProject { name: "Older build".to_owned(), path: plain }]);
     }
 }
