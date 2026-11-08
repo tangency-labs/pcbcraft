@@ -355,6 +355,67 @@ their existence is not evidence that several independent setups already work.
 Commands may omit a board only when exactly one physical board is available.
 With several boards, require an explicit target rather than selecting the first.
 
+## Project validity and incomplete work
+
+Keep incomplete work structurally valid and editable. A schematic-only circuit,
+unplaced component, unset simulation-model assignment or explicitly pending board
+boundary can be saved, reopened, inspected and undone. Only an operation that
+requires the missing information is unavailable. Do not persist a single editable
+Valid flag: derive structural validity and operation readiness from typed records.
+
+Incomplete state cannot excuse duplicate IDs, a component stored at two homes,
+missing live targets, cycles, split multi-unit ownership or incompatible records
+presented as resolved. A missing optional model assignment is incomplete; a
+declared pinned model file that is absent is an integrity error. Current references
+must resolve. Retired references in baselines, lineage and historical artifacts
+must be explicitly snapshot-qualified and validated as historical data, never
+looked up against an unrelated current object with the same numeric spelling.
+
+Every mutating command builds a candidate against a captured revision, validates
+all affected records and publishes one complete snapshot. The initial feature
+implementation checks whole-project invariants before publication, not just the
+operation's claimed dependency set. Later incremental validation must demonstrate
+equivalence to that check; it cannot trade away reference or ownership validation.
+Failed validation or
+Cancel publishes no partial electrical edit or undo entry. Undo/redo restores the
+same logical identities and dependencies; allocation metadata follows its separate
+monotonic rule. A stale view/request fails before mutation. Stale user-local view
+arrangements may show unavailable-target placeholders; they do not mutate or
+invalidate the saved electrical project.
+
+Shared edits, extraction, assignment and deletion include their dependent
+variants, analysis targets, system links and unresolved records in the impact
+plan. Update/remove those live references in the same transaction or refuse the
+operation. A disabled analysis requiring retargeting may retain typed historical
+context, not a dangling active target. Keep pinned definitions/assets required
+by accepted physical baselines until those references have been reconciled;
+garbage collection cannot consider only today's schematic components.
+
+Load and migration validate the whole candidate document set before adopting it.
+Do not repair failures by dropping records, choosing the first board or ignoring
+an unsupported version. Save/recovery follows the journal's documented commit
+point: before commit the prior complete data remains; after a committed journal,
+recovery completes the recorded successor. It must never expose a mix of two
+cross-document revisions. Preserve the existing platform durability limitations
+rather than claiming that application tests prove every possible power-loss case.
+
+Each implementation slice must exercise the transitions it adds, including the
+failure paths, before the feature is exposed:
+
+| Transition family | Required proof |
+| --- | --- |
+| Create/assign/detach/transfer | Identity and scope validation; reference collisions; cancel/stale rejection; one storage home before and after save/reopen |
+| Reuse/extract/fork/shared edit | Closed component scope; all affected uses validated; overrides, models and baseline assets retained; undo restores the original relationships |
+| Delete/unit removal/variant edits | Live dependencies updated or refused; historical removals remain reviewable; no invalid references hidden behind Pending |
+| Net and boundary changes | Scope intent and typed unresolved state preserved; no unintended global join, silent disconnect or guessed relationship assignment |
+| Save/load/migrate/export | Failure injection at each publication/recovery phase; malformed/unsupported input rejected; prior complete data and unrelated files preserved |
+
+Use the same invariant checker after supported GUI/MCP command sequences, undo,
+redo and encode/decode, including randomized sequences and deliberately corrupted
+fixtures generated from valid command-built projects. Those tests complement
+specific regressions; the scenario list alone is not evidence that the new
+implementation already meets the contract.
+
 ## Implementation readiness
 
 Implement in bounded slices, recording the migration and acceptance cases for

@@ -124,6 +124,34 @@ refer to logical targets, with pinned model assets stored under the existing
 asset/library rules. Their later simulator-specific schema must not require a
 board or put the only copy in physical `board.json`.
 
+### Persisted incomplete intent
+
+`project.pc` owns `pending_pcb_assignments` and `pending_boundary_resolutions`,
+separate from `schematic_instances`. Schematic-only work creates neither merely
+because no board exists. These are authored intent records, not permission to
+adopt malformed project data or an alternative source of connectivity.
+
+Each record has a stable ID, a defined reason/intent kind and the affected live
+use/occurrence/terminal or anchor addresses. A pending PCB assignment may retain
+an import/source board hint as descriptive provenance, but cannot store a bogus
+live BoardTarget for a board that does not exist. A boundary record identifies
+the required connection/separation decision and current affected scopes/anchors.
+Any prior-scope or deleted-source evidence carries its source snapshot identity
+as historical context, distinct from its live target fields.
+
+The scope-change transaction creates or updates these records with the actual
+instance moves. Resolving an intent applies the explicit scope/connector plan
+and removes or resolves its marker atomically. Deleting an affected live target
+must revise/remove the marker in the same impact plan or fail validation; Pending
+does not make dangling references valid. Unknown intent kinds require a compatible
+reader rather than being silently ignored.
+
+Both record families round-trip through save/reopen and undo/redo and appear in
+inspection and the appropriate readiness checks. Unresolved required boundary
+intent prevents a complete connectivity/assembly claim, while unaffected editing
+continues. Before implementing these operations, define the exact record schemas,
+resolution commands and dependency checks; a generic string status is insufficient.
+
 ### Portable board folder names
 
 Generate one board folder segment `<slug>-<id-prefix>` per board. Build the
@@ -262,7 +290,7 @@ component IDs remain numeric. They are not hand-editable project fixtures.
 
 | Document | Required relationships |
 | --- | --- |
-| `project.pc` | Project identity, numeric ID watermark and layout root; ordered zero-or-more board registry; project-level schematic instances and net registry; sheet/circuit definitions; system occurrences, off-board component instances, connections and any system net registry; associated-file, board-variant and system-build registrations |
+| `project.pc` | Project identity, numeric ID watermark and layout root; ordered zero-or-more board registry; schematic instances/net registry; typed pending PCB assignments and boundary resolutions; sheet/circuit definitions; system parts/connections/net registry; associated-file, board-variant and system-build registrations |
 | `sheets/<id>.json` | Shared geometry, local symbol/unit references to circuit component definitions, local labels and stable child-use or subsheet slots |
 | `<board_root>/instances.json` | Board ID; circuit uses; sheet occurrences with use and optional parent/slot; component instances with references and overrides; logical net registry, anchors, lineage and unresolved logical rule assignments |
 | `<board_root>/board.json` | Same board ID; setup and physical objects; package/terminal-to-pad mappings and accepted update baseline |
