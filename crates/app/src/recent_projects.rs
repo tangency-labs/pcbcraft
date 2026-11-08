@@ -12,6 +12,22 @@ const MAX_RECENT: usize = 12;
 /// Bound settings parsing independently of the project loader.
 const MAX_SETTINGS_BYTES: usize = 256 * 1024;
 
+/// Return the plain `C:\…` spelling of a Windows `\\?\C:\…` path when Windows reads that spelling
+/// as the same path, and `path` unchanged otherwise (#154). `std::fs::canonicalize` produces the
+/// `\\?\` form, which people don't recognise. It stays where the plain spelling would name
+/// something else: device names such as `CON.pc.zip`, names ending in a dot or space, and very
+/// long paths. Paths on other platforms never carry the prefix and pass through unchanged.
+pub(crate) fn plain_path_if_equivalent(path: PathBuf) -> PathBuf {
+    let plain = dunce::simplified(&path);
+    // dunce looks only at the text before a name's last dot when it checks device names, so
+    // `CON.pc.zip` passes it. Windows' own parser (GetFullPathNameW, behind `std::path::absolute`)
+    // reads that name as `\\.\CON`, so the plain form is used only if the parser returns it as is.
+    if plain != path && std::path::absolute(plain).is_ok_and(|parsed| parsed == plain) {
+        return plain.to_path_buf();
+    }
+    path
+}
+
 /// Display metadata and the native target from the last successful open or save.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct RecentProject {
@@ -39,13 +55,18 @@ impl Default for RecentProjects {
 impl RecentProjects {
     /// Restore bounded, unique absolute paths without touching the filesystem. Bad settings
     /// fall back to an empty history; missing files remain visible until explicitly removed.
+    /// Windows `\\?\C:\…` paths saved by earlier builds are restored in their plain `C:\…` form
+    /// when that names the same file; see [`plain_path_if_equivalent`].
     pub(super) fn parse(text: &str) -> Self {
         let mut recent = Self::default();
         if text.len() > MAX_SETTINGS_BYTES {
             return recent;
         }
         if let Ok(entries) = serde_json::from_str::<Vec<RecentProject>>(text) {
-            for entry in entries {
+            for mut entry in entries {
+                // The file worker now records plain paths (#154); restoring the same form keeps
+                // one project from being listed twice.
+                entry.path = plain_path_if_equivalent(entry.path);
                 if entry.path.is_absolute() && !entry.name.trim().is_empty() && !recent.entries.iter().any(|old| old.path == entry.path) {
                     recent.entries.push(entry);
                     if recent.entries.len() == MAX_RECENT {
@@ -175,5 +196,30 @@ mod tests {
         let restored = RecentProjects::parse(&text);
         assert_eq!(restored.entries().len(), 1);
         assert_eq!(restored.entries()[0].name, "First");
+    }
+
+    /// History saved before #154 holds Windows `\\?\C:\…` paths. Restoring shows the plain
+    /// form and merges it with the same project's plain entry instead of listing it twice.
+    #[cfg(windows)]
+    #[test]
+    fn windows_history_from_older_builds_uses_plain_drive_paths() {
+        let plain = PathBuf::from(r"C:\Projects\board.pc.zip");
+        let text = serde_json::to_string(&vec![
+            RecentProject { name: "Older build".to_owned(), path: PathBuf::from(r"\\?\C:\Projects\board.pc.zip") },
+            RecentProject { name: "Current build".to_owned(), path: plain.clone() },
+        ])
+        .unwrap();
+        let restored = RecentProjects::parse(&text);
+        assert_eq!(restored.entries(), [RecentProject { name: "Older build".to_owned(), path: plain }]);
+    }
+
+    /// A stored `\\?\` path stays as it is when the plain spelling would open something else.
+    /// Guards the #155 review: Windows reads `C:\Projects\CON.pc.zip` as the console device.
+    #[cfg(windows)]
+    #[test]
+    fn windows_history_keeps_verbatim_paths_whose_plain_form_names_a_device() {
+        let reserved = PathBuf::from(r"\\?\C:\Projects\CON.pc.zip");
+        let text = serde_json::to_string(&vec![RecentProject { name: "Reserved name".to_owned(), path: reserved.clone() }]).unwrap();
+        assert_eq!(RecentProjects::parse(&text).entries()[0].path, reserved);
     }
 }

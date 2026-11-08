@@ -441,3 +441,28 @@ fn failed_zip_opens_preserve_the_active_project_and_dirty_state() {
         assert!(fixture.files.dirty(&fixture.session));
     }
 }
+
+/// Open and save targets keep the drive form people chose. Guards #154: Windows
+/// `canonicalize` returns `\\?\C:\…`, which leaked into Recent projects and saved history.
+#[test]
+fn normalized_targets_keep_the_plain_drive_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = normalize(&dir.path().join("board.pc.zip")).unwrap();
+    assert!(target.is_absolute());
+    assert!(!target.to_string_lossy().starts_with(r"\\?\"), "verbatim target: {}", target.display());
+    assert_eq!(target.file_name(), Some(std::ffi::OsStr::new("board.pc.zip")));
+}
+
+/// The plain spelling is used only when Windows reads it as the same file. Guards the #155
+/// review: `CON.pc.zip` is the console device and a trailing dot is dropped in the plain form,
+/// so those targets keep `\\?\`. Simplifying only the parent folder missed both.
+#[cfg(windows)]
+#[test]
+fn targets_whose_plain_spelling_differs_keep_the_verbatim_form() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["CON.pc.zip", "board.pc.zip."] {
+        let target = normalize(&dir.path().join(name)).unwrap();
+        assert!(target.to_string_lossy().starts_with(r"\\?\"), "{name}: {}", target.display());
+        assert_eq!(target.file_name(), Some(std::ffi::OsStr::new(name)));
+    }
+}
