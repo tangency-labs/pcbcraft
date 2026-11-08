@@ -25,6 +25,22 @@ mod native;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+/// Suggest a file name, without extension, for a project's first desktop save or a browser
+/// download. Characters that can't appear in a file name on common desktops become `-`; a name
+/// with nothing left suggests `project`.
+fn file_name_for(name: &str) -> String {
+    let file: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '-' } else { c }).collect();
+    let file = file.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    if file.is_empty() { "project".to_owned() } else { file.to_owned() }
+}
+
+/// The name a browser download of the project `name` is offered under: the desktop suggestion
+/// from [`file_name_for`] with the archive's `.pc.zip` extension (#164).
+#[cfg(any(target_arch = "wasm32", test))]
+fn download_file_name(name: &str) -> String {
+    format!("{}.pc.zip", file_name_for(name))
+}
+
 /// Turn the browser's leave-page warning on or off.
 #[cfg(target_arch = "wasm32")]
 pub(super) fn warn_before_leaving(unsaved: bool) {
@@ -357,5 +373,19 @@ impl ProjectFiles {
     pub(super) fn end_stand_in(&mut self, error: Option<&str>) {
         let Some(StandInSave { send, .. }) = self.stand_in.as_mut().and_then(|stand_in| stand_in.pending.take()) else { return };
         let _ = send.send(error.map_or(Ok(Outcome::Cancelled), |error| Err(error.to_owned())));
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::download_file_name;
+
+    /// Browser downloads are named after the project, as a desktop first save suggests, instead
+    /// of a fixed `project.pc.zip` (#164).
+    #[test]
+    fn browser_downloads_are_named_after_the_project() {
+        assert_eq!(download_file_name("Dual LED demo"), "Dual LED demo.pc.zip");
+        assert_eq!(download_file_name("Power: 5V/3V3"), "Power- 5V-3V3.pc.zip");
+        assert_eq!(download_file_name(" .. "), "project.pc.zip");
     }
 }

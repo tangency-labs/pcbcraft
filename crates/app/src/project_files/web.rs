@@ -52,11 +52,11 @@ export function setUnsaved(flag) {
     }
 }
 
-export function downloadProject(bytes, archive) {
-    const url = URL.createObjectURL(new Blob([bytes], {type: archive ? 'application/zip' : 'application/json'}));
+export function downloadProject(bytes, name) {
+    const url = URL.createObjectURL(new Blob([bytes], {type: 'application/zip'}));
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'project.pc.zip';
+    link.download = name;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -71,8 +71,9 @@ extern "C" {
     #[wasm_bindgen(js_name = setUnsaved)]
     pub(super) fn set_unsaved(unsaved: bool);
 
+    /// Offer `bytes` to the browser's download UI as a `.pc.zip` archive named `name`.
     #[wasm_bindgen(catch, js_name = downloadProject)]
-    fn download_project(bytes: &[u8], archive: bool) -> Result<(), JsValue>;
+    fn download_project(bytes: &[u8], name: &str) -> Result<(), JsValue>;
 }
 
 /// Open the picker during the triggering interaction to retain browser permission.
@@ -103,6 +104,8 @@ pub(super) async fn open(file: Promise) -> Result<Outcome, String> {
 
 pub(super) struct Download {
     source: DownloadSource,
+    /// The suggested file name, from the project's name when the download was requested.
+    name: String,
     result: Sender<Result<Outcome, String>>,
 }
 
@@ -120,18 +123,20 @@ impl std::fmt::Debug for Download {
 }
 
 impl Download {
-    /// Prepare a download from a retained revision without encoding it in the input handler.
+    /// Prepare a download from a retained revision without encoding it in the input handler. The
+    /// file is named after the project, as a desktop first save suggests (#164).
     pub(super) fn new(
         snapshot: Arc<Project>,
         unchanged: Option<Arc<[u8]>>,
         documents: Option<Arc<Documents>>,
         result: Sender<Result<Outcome, String>>,
     ) -> Result<Self, String> {
+        let name = super::download_file_name(&snapshot.name);
         let source = match unchanged {
             Some(bytes) => DownloadSource::Unchanged(bytes),
             None => documents.map(DownloadSource::Documents).unwrap_or_else(|| DownloadSource::Encode(DocumentsEncoder::new(snapshot))),
         };
-        Ok(Self { source, result })
+        Ok(Self { source, name, result })
     }
 
     /// Encode a bounded batch or download the unchanged bytes. A request cannot confirm a write.
@@ -144,7 +149,7 @@ impl Download {
                 }
                 Err(error) => Err(error),
             },
-            DownloadSource::Unchanged(bytes) => send_download(bytes),
+            DownloadSource::Unchanged(bytes) => send_download(bytes, &self.name),
             DownloadSource::Encode(encoder) => match encoder.step(256) {
                 Ok(Some(documents)) => match PackedEncoder::new(documents) {
                     Ok(archive) => {
@@ -157,7 +162,7 @@ impl Download {
                 Err(error) => Err(error),
             },
             DownloadSource::Archive(encoder) => match encoder.step() {
-                Ok(Some(bytes)) => send_download(&bytes),
+                Ok(Some(bytes)) => send_download(&bytes, &self.name),
                 Ok(None) => return,
                 Err(error) => Err(error),
             },
@@ -166,9 +171,9 @@ impl Download {
     }
 }
 
-/// Hand the completed payload to the browser's download UI.
-fn send_download(bytes: &[u8]) -> Result<Outcome, String> {
-    download_project(bytes, true).map(|()| Outcome::Downloaded).map_err(|error| format!("Could not download project: {}", error_message(&error)))
+/// Hand the completed payload to the browser's download UI under `name`.
+fn send_download(bytes: &[u8], name: &str) -> Result<Outcome, String> {
+    download_project(bytes, name).map(|()| Outcome::Downloaded).map_err(|error| format!("Could not download project: {}", error_message(&error)))
 }
 
 /// Show the browser's error message or string rejection in the status bar.

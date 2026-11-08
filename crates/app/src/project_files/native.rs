@@ -14,7 +14,7 @@ use pcbcraft_engine::{
     },
 };
 
-use super::{Outcome, SaveFormat, Saved};
+use super::{Outcome, SaveFormat, Saved, file_name_for};
 use pcbcraft_storage as folder;
 
 #[derive(Clone, Debug)]
@@ -196,14 +196,6 @@ pub(super) fn save_new(
 /// Strip a project extension from a folder or archive file name.
 fn stem(file: &str) -> &str {
     file.strip_suffix(".pc.zip").or_else(|| file.strip_suffix(".pc")).or_else(|| file.strip_suffix(".zip")).unwrap_or(file)
-}
-
-/// Suggest a destination file name for a project's first save. Characters that can't appear in
-/// a file name on common desktops become `-`; a name with nothing left suggests `project`.
-fn file_name_for(name: &str) -> String {
-    let file: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '-' } else { c }).collect();
-    let file = file.trim_matches(|c: char| c == '.' || c.is_whitespace());
-    if file.is_empty() { "project".to_owned() } else { file.to_owned() }
 }
 
 /// Name an Untitled project after the destination of its first save, as SolidCraft does. A project
