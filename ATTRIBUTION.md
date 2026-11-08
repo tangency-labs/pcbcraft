@@ -2,6 +2,20 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Pane dragging between native windows
+
+The pane-header drag gesture, instance-local drop targets and explicit destination
+docking are original PCBcraft work under MIT OR Apache-2.0, using the existing
+egui input, viewport and Craft chrome APIs. The user's supplied screenshot informed
+which header receives the gesture; no image assets, external implementation or
+dependencies were imported. Project documents and history remain owned by the
+existing application session. The animated docking regions and highlighted
+destination rows are original Craft chrome presentation,
+using the same instance-local gesture and command handlers. The leading header
+Dock button and press-anchored destinations address the user-reported partially
+off-screen host layout; they introduce no external artwork or source. Pane-slot
+reordering and revision-checked `view.reorder` are original presentation code.
+
 ## Selection filters
 
 The right-hand Selection filters card follows Travis Lowe's original FigCraft

@@ -7,9 +7,14 @@ use egui::{Context, ViewportCommand, ViewportId};
 
 use crate::{Dialog, IN_BROWSER, PcbApp, ViewInput, editor_layout::HostId};
 
+mod drag;
+
 /// Window presentation and queued view actions never own project data, files or services.
 #[derive(Debug, Default)]
 pub(super) struct EditorWindows {
+    drag: Option<drag::PaneDrag>,
+    drag_geometry: std::collections::BTreeMap<HostId, drag::HostGeometry>,
+    spawn_positions: std::collections::BTreeMap<HostId, egui::Pos2>,
     pub(super) bounds: std::collections::BTreeMap<HostId, crate::arrangements::WindowBounds>,
     restore_bounds: std::collections::BTreeSet<HostId>,
     focused: Option<ViewportId>,
@@ -29,6 +34,9 @@ pub(super) enum ViewAction {
     Dock,
     OpenBeside,
     Close,
+    MoveBeside(ViewInput),
+    Reorder(ViewInput),
+    DetachAt(Option<egui::Pos2>),
 }
 
 /// Stationary contextual controls belong to one host even as its focused pane changes.
@@ -182,7 +190,11 @@ impl PcbApp {
         if self.home
             || self.project_action_pending()
             || !matches!(self.dialog, Dialog::None)
-            || (IN_BROWSER && matches!(action, ViewAction::OpenWindow | ViewAction::Detach | ViewAction::Dock))
+            || (IN_BROWSER
+                && matches!(
+                    action,
+                    ViewAction::OpenWindow | ViewAction::Detach | ViewAction::Dock | ViewAction::MoveBeside(_) | ViewAction::DetachAt(_)
+                ))
         {
             return;
         }
@@ -249,6 +261,31 @@ impl PcbApp {
                 self.views.open_beside(id);
             }
             ViewAction::Close => self.views.close_view(id),
+            ViewAction::MoveBeside(target) => {
+                if self.views.view(target.view()).is_some_and(|view| view.control_input(&self.session) == Some(target))
+                    && self.views.move_beside(id, target.view())
+                    && let Some(host) = self.views.owner(id)
+                {
+                    ctx.send_viewport_cmd_to(viewport(host), ViewportCommand::Focus);
+                }
+            }
+            ViewAction::Reorder(target) => {
+                if self.views.view(target.view()).is_some_and(|view| view.control_input(&self.session) == Some(target)) {
+                    self.views.reorder_view(id, target.view());
+                }
+            }
+            ViewAction::DetachAt(position) => {
+                let source = self.views.owner(id);
+                if let Some(host) = self.views.detach_view(id) {
+                    if let Some(position) = position {
+                        if source != Some(host) {
+                            self.windows.spawn_positions.insert(host, position);
+                        }
+                        ctx.send_viewport_cmd_to(viewport(host), ViewportCommand::OuterPosition(position));
+                    }
+                    ctx.send_viewport_cmd_to(viewport(host), ViewportCommand::Focus);
+                }
+            }
         }
         self.sync_library_bindings();
         self.parts.release_focus(ctx);
@@ -294,7 +331,7 @@ impl PcbApp {
         }
         let host = ctx.viewport_id();
         if self.windows.focused != Some(host) {
-            if self.windows.focused.is_some() && matches!(self.dialog, Dialog::None) {
+            if self.windows.focused.is_some() && self.windows.drag.is_none() && matches!(self.dialog, Dialog::None) {
                 self.views.suspend();
                 self.cancel_library_gestures();
                 egui::DragAndDrop::clear_payload(ctx);
@@ -380,6 +417,9 @@ impl PcbApp {
                 .with_min_inner_size([480.0, 400.0]);
             if !panels.placed {
                 builder = builder.with_inner_size([1100.0, 760.0]);
+                if let Some(position) = self.windows.spawn_positions.remove(&host) {
+                    builder = builder.with_position(position);
+                }
                 panels.placed = true;
             }
             ctx.show_viewport_immediate(viewport(host), builder, |ui, class| {
@@ -452,6 +492,7 @@ impl PcbApp {
         self.windows.panels.remove(&host);
         self.windows.bounds.remove(&host);
         self.windows.restore_bounds.remove(&host);
+        self.windows.spawn_positions.remove(&host);
         egui::DragAndDrop::clear_payload(ctx);
         ctx.send_viewport_cmd_to(viewport(self.views.main), ViewportCommand::Focus);
         ctx.request_repaint_of(ViewportId::ROOT);

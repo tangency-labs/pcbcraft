@@ -190,10 +190,13 @@ impl EditorViews {
     }
 
     /// Allocate a distinct input identity and copy only the source's target and navigation.
-    fn duplicate(&mut self, source: ViewId) -> Option<ViewId> {
+    /// `replacement` retains the source's pending navigation while seeding a host left behind;
+    /// ordinary copies supersede pending navigation so split views start at the displayed zoom.
+    fn duplicate(&mut self, source: ViewId, replacement: bool) -> Option<ViewId> {
         let id = ViewId(self.next_view);
         let next = self.next_view.checked_add(1)?;
-        let view = self.view_mut(source)?.fork(id);
+        let source = self.view_mut(source)?;
+        let view = if replacement { source.fork_replacement(id) } else { source.fork(id) };
         self.next_view = next;
         self.rest.insert(id, view);
         Some(id)
@@ -202,7 +205,7 @@ impl EditorViews {
     /// Create another view beside the addressed view, preserving the rest of its host layout.
     pub(super) fn open_beside(&mut self, source: ViewId) -> Option<ViewId> {
         let host = self.owner(source)?;
-        let id = self.duplicate(source)?;
+        let id = self.duplicate(source, false)?;
         if let Some(layout) = self.hosts.get_mut(&host) {
             layout.layout.insert(source, id);
             if let Some(collapsed) = &mut layout.collapsed {
@@ -219,7 +222,7 @@ impl EditorViews {
         self.owner(source)?;
         let host = HostId(self.next_host);
         let next = self.next_host.checked_add(1)?;
-        let id = self.duplicate(source)?;
+        let id = self.duplicate(source, false)?;
         self.next_host = next;
         self.hosts.insert(host, ViewHost::new(id));
         self.suspend();
@@ -249,7 +252,9 @@ impl EditorViews {
     }
 
     /// Move a pane and its cached documents to a new native host. A sole primary pane leaves
-    /// a replacement behind; a sole detached pane already has the requested placement.
+    /// a replacement behind without consuming the moved view's pending navigation; a sole
+    /// detached pane already has the requested placement. The pane's visible document retains
+    /// focus even when a cached document ID addresses the move.
     pub(super) fn detach_view(&mut self, id: ViewId) -> Option<HostId> {
         let source = self.owner(id)?;
         let group = self.hosts.get(&source)?.layout.group(id)?.clone();
@@ -264,13 +269,13 @@ impl EditorViews {
             // Leave one view behind without reopening the host's previously collapsed layout.
             let parked = self.hosts.get_mut(&source)?.parked.pop();
             let replacement = if let Some(parked) = parked {
-                let camera = self.view_mut(id)?.camera.fork_navigation();
+                let camera = self.view(id)?.camera.clone().fork_navigation();
                 if self.view(parked)?.workspace == self.view(id)?.workspace {
                     self.view_mut(parked)?.camera = camera;
                 }
                 parked
             } else {
-                self.duplicate(id)?
+                self.duplicate(id, true)?
             };
             if let Some(root) = self.hosts.get_mut(&source) {
                 root.layout = Layout::View(replacement);
@@ -286,7 +291,8 @@ impl EditorViews {
             }
         }
         self.next_host = next;
-        self.hosts.insert(host, ViewHost { layout: group, ..ViewHost::new(id) });
+        let focused = group.visible_views().first().copied().unwrap_or(id);
+        self.hosts.insert(host, ViewHost { layout: group, ..ViewHost::new(focused) });
         self.suspend();
         self.bind_main();
         Some(host)
@@ -295,26 +301,70 @@ impl EditorViews {
     /// Dock a whole native pane, retaining its cached document navigation. Other panes and
     /// windows stay in place; an emptied source host and its parked views are pruned.
     pub(super) fn dock_view(&mut self, id: ViewId) {
-        let Some(source) = self.owner(id).filter(|host| *host != self.main) else {
+        if self.owner(id) == Some(self.main) {
             return;
-        };
-        let Some(group) = self.hosts.get(&source).and_then(|host| host.layout.group(id)).cloned() else {
-            return;
-        };
-        for member in group.views() {
+        }
+        if let Some(target) = self.hosts.get(&self.main).map(|host| host.focused) {
+            self.move_beside(id, target);
+        }
+    }
+
+    /// Move a pane and all cached documents beside a pane in another host. Validate both
+    /// placements before removing anything; the sole main pane leaves a replacement behind.
+    /// Runtime IDs, cameras (including deferred navigation), document state and the remaining
+    /// split trees are retained. The replacement inherits no pending navigation from the moved view.
+    /// Keep that replacement in the remembered split too, so reopening preserves focus and saving.
+    pub(super) fn move_beside(&mut self, id: ViewId, target: ViewId) -> bool {
+        let (Some(source), Some(destination)) = (self.owner(id), self.owner(target)) else { return false };
+        if source == destination {
+            return false;
+        }
+        let Some(group) = self.hosts.get(&source).and_then(|host| host.layout.group(id)).cloned() else { return false };
+        if source == self.main && self.hosts.get(&source).is_some_and(|host| host.layout.visible_views().len() == 1) {
+            let Some(replacement) = self.duplicate(id, true) else { return false };
+            if let Some(host) = self.hosts.get_mut(&source) {
+                host.layout.insert(id, replacement);
+                if let Some(collapsed) = &mut host.collapsed {
+                    collapsed.insert(id, replacement);
+                }
+            }
+        }
+        let focused = group.visible_views().first().copied().unwrap_or(id);
+        let members = group.views();
+        for member in members {
             self.unplace(source, member);
         }
-        if let Some(root) = self.hosts.get_mut(&self.main) {
-            root.layout.insert_group(root.focused, &group);
-            if let Some(collapsed) = &mut root.collapsed {
-                collapsed.insert_group(root.focused, &group);
+        if let Some(host) = self.hosts.get_mut(&destination) {
+            host.layout.insert_group(target, &group);
+            if let Some(collapsed) = &mut host.collapsed {
+                collapsed.insert_group(target, &group);
             }
-            root.focused = id;
-            root.rects.clear();
+            host.focused = focused;
+            host.rects.clear();
         }
         self.suspend();
         self.bind_main();
         self.prune_closed();
+        true
+    }
+
+    /// Reposition a pane within its current host without creating a window or a view. Cached
+    /// documents travel together; layout ratios and independent presentation state stay intact.
+    /// Reject unknown IDs, different hosts and two addresses in the same pane before changing it.
+    pub(super) fn reorder_view(&mut self, id: ViewId, target: ViewId) -> bool {
+        let Some(owner) = self.owner(id).filter(|host| self.owner(target) == Some(*host)) else { return false };
+        let Some(host) = self.hosts.get_mut(&owner) else { return false };
+        if !host.layout.reorder(id, target) {
+            return false;
+        }
+        if let Some(collapsed) = &mut host.collapsed {
+            collapsed.reorder(id, target);
+        }
+        host.focused = host.layout.group(id).and_then(|group| group.visible_views().first().copied()).unwrap_or(id);
+        host.rects.clear();
+        self.suspend();
+        self.bind_main();
+        true
     }
 
     /// Restore the current main host's render slot, including after the original window closes.
@@ -576,7 +626,7 @@ impl EditorViews {
             self.view_mut(source)?.open_document(target, session);
             source
         } else {
-            let id = self.duplicate(source)?;
+            let id = self.duplicate(source, false)?;
             self.view_mut(id)?.open_document(target, session);
             let host = self.hosts.get_mut(&owner)?;
             host.layout.insert_tab(source, id);
@@ -773,8 +823,8 @@ impl PcbApp {
         }
     }
 
-    /// Render split panes with one document header each, or a single canvas with an
-    /// overlaid breadcrumb and no tab clearance. Workspace panels address the focused view;
+    /// Render split and detached panes with one document header each. A single main canvas
+    /// uses an overlaid breadcrumb without tab clearance. Workspace panels address the focused view;
     /// Mixed layouts confine project panels to the focused project pane; each definition pane
     /// owns its Browser and Properties inside its own rectangle.
     pub(super) fn editor_workspace(&mut self, ui: &mut Ui, workspace: Rect) {
@@ -797,7 +847,8 @@ impl PcbApp {
         } else {
             Vec::new()
         };
-        let headers = panes.len() > 1;
+        let headers = panes.len() > 1 || (!crate::IN_BROWSER && self.views.host != self.views.main);
+        self.editor_drag_targets(ui, &panes);
         let panel_rects: Vec<_> = panes.iter().filter(|(id, _)| !has_library || *id == self.views.active.id()).map(|(_, rect)| *rect).collect();
         let area = editor::panel_area(area, &panel_rects, headers, ui.spacing().item_spacing.y);
         let board_panel = board.then(|| self.board_panels(ui, area));
@@ -856,13 +907,19 @@ impl PcbApp {
                         use crate::editor_windows::ViewAction;
                         use editor::PaneAction;
                         let action = match action {
-                            PaneAction::OpenBeside => ViewAction::OpenBeside,
-                            PaneAction::OpenWindow => ViewAction::OpenWindow,
-                            PaneAction::Detach => ViewAction::Detach,
-                            PaneAction::Dock => ViewAction::Dock,
-                            PaneAction::Close => ViewAction::Close,
+                            PaneAction::OpenBeside => Some(ViewAction::OpenBeside),
+                            PaneAction::OpenWindow => Some(ViewAction::OpenWindow),
+                            PaneAction::Detach => Some(ViewAction::Detach),
+                            PaneAction::Dock => Some(ViewAction::Dock),
+                            PaneAction::Close => Some(ViewAction::Close),
+                            PaneAction::Drag => {
+                                self.begin_editor_drag(ui.ctx(), id);
+                                None
+                            }
                         };
-                        self.queue_view_action(ui.ctx(), id, action);
+                        if let Some(action) = action {
+                            self.queue_view_action(ui.ctx(), id, action);
+                        }
                     }
                 }
                 if self.views.view(id).is_some_and(|view| view.definition.is_some()) {

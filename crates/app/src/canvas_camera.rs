@@ -31,8 +31,9 @@ impl CameraState {
 }
 
 /// Viewport and snapping state in egui points. Navigation and the snap grid stay outside the
-/// project and its undo history.
-#[derive(Debug)]
+/// project and its undo history. Clones retain pending navigation and host geometry; independent
+/// views are seeded with `fork_navigation` instead.
+#[derive(Clone, Debug)]
 pub(crate) struct Camera {
     zoom: f32,
     schematic_rect: Option<Rect>,
