@@ -78,7 +78,9 @@ See [named nets](net-labels.md) for contact rules and current limits.
 2. Press **A** to open the **Parts Catalog** and focus search. Select a library,
    search for a capacitor and click the result to inspect its preview. Choose
    **Place**, then click the canvas to place it. **R** rotates the placement
-   preview and **Esc** cancels it. Double-clicking a result or pressing **Enter**
+   preview and **Esc** cancels it. Enable **Repeat placement** in the catalog to
+   place several copies with the same rotation, then press **Esc** to stop.
+   Double-clicking a result or pressing **Enter**
    also starts placement; dragging a result onto the canvas places it directly.
    **Manage libraries…** in the catalog or **Libraries → Sources** adds native
    library folders on desktop or uploads a portable library bundle on either
@@ -388,7 +390,8 @@ omitting `sheet` is accepted only when one sheet exists. `view.open_sheet` takes
 `view` and `sheet` to navigate a live editor pane without editing the project.
 
 The live editor also offers window commands, including
-`window.set_catalog_mode` with a window ID and `mode` of `expanded` or `compact`.
+`window.set_catalog_mode` with a window ID, `mode` of `expanded` or `compact`,
+and an optional boolean `repeat`.
 It uses the same Dock/Expand handler as the catalog and leaves the project unchanged.
 Call `inspect_editor` for its window/view IDs, then split the window and switch
 to the light theme:

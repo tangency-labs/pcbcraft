@@ -30,6 +30,8 @@ pub(crate) enum Tool {
     NetLabel {
         label: pcbcraft_engine::net_labels::Label,
         revision: u64,
+        /// Pointer-to-anchor offset for a held drag; keyboard pickup finishes on a click.
+        drag: Option<Vec2>,
     },
     SheetGesture {
         drag: Box<crate::hierarchy::Drag>,
@@ -94,6 +96,7 @@ impl Tool {
 pub(crate) enum Click {
     NetLabelCommit(pcbcraft_engine::net_labels::Label),
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
+    NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
     NetLabelSelect(u64),
     NetLabelRotate,
@@ -233,8 +236,17 @@ pub(crate) fn show(
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
-    let moving =
-        matches!(tool, Some(Tool::SheetGesture { .. } | Tool::Move { .. } | Tool::MoveItems { .. } | Tool::BoxSelect { .. } | Tool::Reshape { .. }));
+    let moving = matches!(
+        tool,
+        Some(
+            Tool::NetLabel { drag: Some(_), .. }
+                | Tool::SheetGesture { .. }
+                | Tool::Move { .. }
+                | Tool::MoveItems { .. }
+                | Tool::BoxSelect { .. }
+                | Tool::Reshape { .. }
+        )
+    );
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
     let group_delta = match &tool {
@@ -293,13 +305,13 @@ pub(crate) fn show(
     } else {
         None
     };
-    let label_position = if let Some(Tool::NetLabel { label, revision }) = &tool {
-        response.hover_pos().map(|pointer| {
+    let label_position = if let Some(Tool::NetLabel { label, revision, drag }) = &tool {
+        ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p)).map(|pointer| {
             wires::label_position(
                 project,
                 camera,
                 rect,
-                pointer,
+                pointer + drag.unwrap_or(Vec2::ZERO),
                 draft,
                 *revision,
                 (label.id != 0).then_some(pcbcraft_engine::schematic::WireEndpoint::NetLabel(label.id)),

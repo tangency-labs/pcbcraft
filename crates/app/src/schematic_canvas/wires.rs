@@ -248,7 +248,8 @@ pub(super) fn paint(
         }
         match ends.get(&id).copied().unwrap_or_default() {
             2 => {}
-            0 | 1 => paint_dangling(painter, pos, tokens.schematic_wire),
+            0 | 1 if !project.net_labels().iter().any(|label| label.at == point) => paint_dangling(painter, pos, tokens.schematic_wire),
+            0 | 1 => {}
             _ => {
                 painter.circle_filled(pos, theme::SCHEMATIC_JUNCTION_RADIUS, tokens.schematic_wire);
             }

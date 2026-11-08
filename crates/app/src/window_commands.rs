@@ -600,7 +600,11 @@ mod live {
             id: "window.set_catalog_mode",
             title: "Catalog Presentation",
             summary: "Show the Parts Catalog as the expanded chooser or its compact dock, retaining its library, query and selection.",
-            params: &[WINDOW, Param { name: "mode", summary: "Catalog presentation", required: true, kind: Kind::Choice(CATALOG_MODES) }],
+            params: &[
+                WINDOW,
+                Param { name: "mode", summary: "Catalog presentation", required: true, kind: Kind::Choice(CATALOG_MODES) },
+                Param { name: "repeat", summary: "Keep placing the selected part or power symbol until Escape", required: false, kind: Kind::Bool },
+            ],
         },
         WindowCommand {
             id: "window.set_ribbon_tab",
@@ -799,6 +803,7 @@ mod live {
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties},
                     "catalog_mode": panels.catalog_mode,
+                    "repeat_placement": panels.repeat_placement,
                     "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
                         0 if app.views.view(host.focused).is_some_and(|view| view.workspace == Workspace::Board) => "layout",
                         0 => "capture",
@@ -1173,7 +1178,12 @@ mod live {
                     {
                         return Err("The Parts Catalog is available in a schematic view.".into());
                     }
-                    self.in_window(host, |app| app.parts.set_compact(ctx, params["mode"] == "compact"));
+                    self.in_window(host, |app| {
+                        app.parts.set_compact(ctx, params["mode"] == "compact");
+                        if let Some(repeat) = params["repeat"].as_bool() {
+                            app.parts.set_repeat(repeat);
+                        }
+                    });
                 }
                 ("window.set_ribbon_tab", _, Some(host)) => {
                     if self.views.hosts.get(&host).and_then(|host| self.views.view(host.focused)).is_some_and(|view| view.definition.is_some()) {

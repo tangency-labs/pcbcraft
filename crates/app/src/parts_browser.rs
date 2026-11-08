@@ -97,6 +97,7 @@ pub(crate) struct PartsBrowser {
     mode: Mode,
     panel: catalog::Panel,
     rect: Rect,
+    repeat: bool,
 }
 impl Default for PartsBrowser {
     /// Catalogs open explicitly and start with readable list rows and a separate large preview.
@@ -115,6 +116,7 @@ impl Default for PartsBrowser {
             mode: Mode::Expanded,
             panel: catalog::Panel::at_position(catalog::Position::Left),
             rect: Rect::NOTHING,
+            repeat: false,
         }
     }
 }
@@ -127,6 +129,8 @@ pub(super) struct PartsState {
     panel: catalog::PanelState,
     #[serde(default)]
     mode: Mode,
+    #[serde(default)]
+    repeat: bool,
 }
 impl Default for PartsState {
     /// New compact catalogs start docked beneath Browser; the full chooser starts closed.
@@ -143,13 +147,20 @@ impl PartsState {
 impl PartsBrowser {
     /// Persist the compact dock's placement and visibility, never an open modal or live input.
     pub(super) fn saved_state(&self) -> PartsState {
-        PartsState { open: self.open && self.mode == Mode::Compact, view: self.view, panel: self.panel.saved_state(), mode: self.mode }
+        PartsState {
+            open: self.open && self.mode == Mode::Compact,
+            view: self.view,
+            panel: self.panel.saved_state(),
+            mode: self.mode,
+            repeat: self.repeat,
+        }
     }
     /// Restore a compact dock and density; older states have no mode and keep the chooser closed.
     pub(super) fn from_state(state: &PartsState) -> Self {
         Self {
             open: state.open && state.mode == Mode::Compact,
             mode: state.mode,
+            repeat: state.repeat,
             view: state.view,
             panel: catalog::Panel::from_state(&state.panel),
             ..Default::default()
@@ -237,6 +248,24 @@ impl PartsBrowser {
         self.open && self.mode == Mode::Expanded
     }
 
+    /// Repetition is a per-window placement preference shared by parts and named anchors.
+    pub(super) fn repeats(&self) -> bool {
+        self.repeat
+    }
+
+    /// GUI and live controls update the same preference without changing project data.
+    pub(super) fn set_repeat(&mut self, repeat: bool) {
+        self.repeat = repeat;
+    }
+
+    /// Expose the same placement choice in either catalog presentation.
+    fn placement_options(&mut self, ui: &mut Ui) {
+        let mut repeat = self.repeat;
+        if chrome::repeat_placement(ui, &mut repeat).changed() {
+            self.set_repeat(repeat);
+        }
+    }
+
     /// Name the window's current catalog presentation for editor inspection.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn presentation(&self) -> &'static str {
@@ -291,11 +320,12 @@ impl PartsBrowser {
         let mut choices = Choices::default();
         let mut action = if expanded {
             chrome::form(ui.ctx(), "parts_catalog", "Parts Catalog", 1108., "Place", enabled, true, ui.is_enabled(), |ui| {
-                chrome::toolbar(ui, if ui.available_width() < 900. { 2 } else { 1 }, |ui| {
+                chrome::toolbar(ui, if ui.available_width() < 900. { 3 } else { 2 }, |ui| {
                     self.search(ui);
                     if ui.available_width() < 900. {
                         self.library_selector(ui, &sources);
                     }
+                    self.placement_options(ui);
                 });
                 chrome::panes(ui, |ui, region| match region {
                     chrome::Region::Libraries => {
@@ -316,6 +346,7 @@ impl PartsBrowser {
             let (rect, header) = panel.show(ui, canvas, browser, |ui, short| {
                 self.search(ui);
                 self.library_selector(ui, &sources);
+                self.placement_options(ui);
                 if matches!(self.selected, Some(Key::Power(_))) {
                     let field = properties::text(ui, "Net name", &mut self.power_name);
                     self.focus_ids.push(field.id);
@@ -544,7 +575,7 @@ fn paint_entry(p: &egui::Painter, r: Rect, entry: &Entry, ink: egui::Color32) {
             let glyph = if ground { pcbcraft_chrome::net_label::Style::Ground } else { pcbcraft_chrome::net_label::Style::Power };
             let step = (r.height() / 4.).clamp(6., 22.);
             let offset = if ground { -11. } else { 10. } * step / 10.;
-            pcbcraft_chrome::net_label::paint(p, r.center() + egui::vec2(0., offset), "", glyph, 0, step, ink);
+            pcbcraft_chrome::net_label::paint(p, r.center() + egui::vec2(0., offset), "", glyph, 0, step, ink, false);
         }
     }
 }

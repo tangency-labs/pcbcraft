@@ -9,12 +9,19 @@ name, so supplies do not depend on a fixed list of rail names.
 Choose **Place**, then click to place the anchor. **R** turns its preview
 counterclockwise in quarter turns, and **Esc** or right-click cancels. Hover a
 placed marker and use **E** for properties, **M** to pick it up, **R** to rotate or
-**Delete** to remove it. Its context menu offers the same actions; **Apply**
+**Delete** to remove it. Drag its drawing or name to move it directly, releasing
+to finish; Escape or releasing outside the canvas cancels the preview. Its context menu offers the same actions; **Apply**
 confirms property changes. Each completed placement, move, property change or
 deletion is one shared undo step. Cancelled previews and forms leave project data
 unchanged; stale forms cannot replace newer work.
 
-A marker connects where its small anchor meets a pin or wire exactly. It can
+The catalog's **Repeat placement** keeps new markers active after each placement,
+with fresh IDs and the same name/rotation until **Esc**. Moving an existing marker
+remains one edit regardless of that setting.
+
+A marker connects where its small anchor meets a pin or wire exactly. A physically
+connected anchor omits the open-pin ring and a contacted wire end's open square;
+these indicators return when that physical contact is released. It can
 also stand alone and serve as the endpoint of a later wire. Drawing with **W**
 uses that anchor like an ordinary pin. A label placed at a crossing connects the
 routes it contacts; crossing wires elsewhere still remain separate. Moving a

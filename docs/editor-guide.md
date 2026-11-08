@@ -29,7 +29,8 @@ a local label form; **Ctrl+L** opens a global label form. The label form has
 aligned fields for net name, scope and rotation. Click the anchor position to
 place the marker; **R** rotates the preview and **Esc** cancels it. Hover the
 marker's name or glyph for **E**, **M**, **R** and **Delete**, or use its context
-menu. **E** opens properties, where **Apply** confirms changes.
+menu. Drag the drawing or name to move a marker directly; **M** picks it up for
+click-to-place movement. **E** opens properties, where **Apply** confirms changes.
 
 Names are case-sensitive. Local labels join matching names on the same sheet;
 global labels and power/ground symbols join project-wide. A marker anchored
@@ -98,6 +99,11 @@ form, the catalog closes and leaves a preview on the canvas; click to place it,
 the sheet. **Cancel**, **Esc** or the header's **×** closes the large form without
 changing the project. On narrower hosts, a Library selector replaces its
 navigation pane; the smallest forms have Parts and Preview tabs.
+
+**Repeat placement** in either catalog keeps the chosen part or power symbol
+active after each placement, preserving its rotation until **Esc**. With it off,
+one placement finishes the tool. Each instance has its own undo step, and the
+choice is retained when switching catalog presentations or restoring an arrangement.
 
 **Dock** in the large form switches to a compact catalog, initially docked
 beneath Browser. Its header's **Expand** control returns to the large form.

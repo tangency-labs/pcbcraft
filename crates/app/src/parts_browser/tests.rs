@@ -284,8 +284,10 @@ fn compact_state_restores_without_restoring_modal_or_input_authority() {
     assert!(!PartsBrowser::from_state(&expanded).open);
     let mut previous = serde_json::to_value(&expanded).unwrap();
     previous.as_object_mut().unwrap().remove("mode");
+    previous.as_object_mut().unwrap().remove("repeat");
     let previous: PartsState = serde_json::from_value(previous).unwrap();
     assert!(!PartsBrowser::from_state(&previous).open);
+    assert!(!PartsBrowser::from_state(&previous).repeats());
     click(&mut h, "Dock Parts Catalog");
     let saved = h.state().parts.saved_state();
     let restored = PartsBrowser::from_state(&saved);
@@ -369,4 +371,78 @@ fn compact_docks_and_floats_stay_reachable_on_resize() {
     h.run();
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420., 800.));
     assert!(screen.contains_rect(h.get_by_label("Expand Parts Catalog").rect()));
+}
+
+/// The explicit Repeat placement choice is shared across forms and persisted as presentation.
+/// Once clears its tool after one placement; Repeat refreshes revision and preserves rotation.
+#[test]
+fn repeat_choice_is_shared_and_places_distinct_parts_until_escape() {
+    for repeat in [false, true] {
+        let mut h = editor(1400.);
+        if repeat {
+            click(&mut h, "Repeat placement");
+        }
+        click(&mut h, "Dock Parts Catalog");
+        assert_eq!(h.state().parts.repeats(), repeat);
+        let saved = h.state().parts.saved_state();
+        assert_eq!(PartsBrowser::from_state(&saved).repeats(), repeat);
+        click(&mut h, "Expand Parts Catalog");
+        click(&mut h, "Capacitor");
+        click(&mut h, "Place");
+        h.key_press(Key::R);
+        h.run();
+        let rect = h.get_by_label("Schematic canvas").rect();
+        crate::tests::click_canvas_at(&mut h, rect.center());
+        assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
+        if repeat {
+            assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::PlaceSymbol { turns: 1, .. })));
+            crate::tests::click_canvas_at(&mut h, rect.center() + egui::vec2(100., 80.));
+            let project = h.state().session.project().unwrap();
+            assert_eq!(project.symbols().len(), 2);
+            assert_ne!(project.symbols()[0].id(), project.symbols()[1].id());
+            assert_ne!(project.symbols()[0].position, project.symbols()[1].position);
+            assert!(project.symbols().iter().all(|s| s.turns() == 1));
+            h.key_press(Key::Escape);
+            h.run();
+        }
+        assert!(h.state().views.active.schematic.tool.is_none());
+        if repeat {
+            click(&mut h, "Undo");
+            assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
+            click(&mut h, "Redo");
+            assert_eq!(h.state().session.project().unwrap().symbols().len(), 2);
+        }
+        let count = h.state().session.project().unwrap().symbols().len();
+        crate::tests::click_canvas_at(&mut h, rect.center() + egui::vec2(180., 80.));
+        assert_eq!(h.state().session.project().unwrap().symbols().len(), count);
+    }
+}
+
+/// New power anchors repeat with fresh IDs and the chosen name; moving an existing anchor
+/// and stale placement previews cannot create extra instances.
+#[test]
+fn repeat_power_uses_fresh_ids_and_stops_after_intervening_edits() {
+    let mut h = editor(1400.);
+    click(&mut h, "Repeat placement");
+    click(&mut h, "Cancel");
+    h.key_press(Key::P);
+    h.run();
+    click(&mut h, "Place");
+    h.key_press(Key::R);
+    h.run();
+    let center = h.get_by_label("Schematic canvas").rect().center();
+    for offset in [egui::vec2(0., 0.), egui::vec2(100., 60.)] {
+        crate::tests::click_canvas_at(&mut h, center + offset);
+    }
+    let project = h.state().session.project().unwrap();
+    assert_eq!(project.net_labels().len(), 2);
+    assert_ne!(project.net_labels()[0].id, project.net_labels()[1].id);
+    assert!(project.net_labels().iter().all(|l| l.name == "GND" && l.rotation == 90));
+    h.state_mut().run("project.rename", &json!({"name":"Intervening"}));
+    h.run();
+    let revision = h.state().session.revision();
+    crate::tests::click_canvas_at(&mut h, center + egui::vec2(200., 100.));
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(h.state().session.project().unwrap().net_labels().len(), 2);
+    assert!(h.state().views.active.schematic.tool.is_none());
 }

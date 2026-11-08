@@ -988,7 +988,7 @@ impl PcbApp {
             match pick {
                 crate::parts_browser::Pick::Symbol(definition) => self.begin_placement(definition),
                 crate::parts_browser::Pick::Power(label) => {
-                    self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision })
+                    self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None })
                 }
                 crate::parts_browser::Pick::Libraries => self.dialog = Dialog::LibrarySources,
                 crate::parts_browser::Pick::Stale => self.message = Some("View or project changed; reopen the Parts Catalog to continue.".into()),

@@ -11,6 +11,7 @@ use pcbcraft_engine::{
     schematic::Point,
 };
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Canvas and toolbar actions share one typed routing path.
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +47,50 @@ fn bounds(ui: &Ui, camera: &Camera, rect: Rect, label: &Label) -> Rect {
     chrome::bounds(ui.painter(), camera.screen(label.at, rect), &label.name, visual(label.style), label.rotation, camera.unit_step())
 }
 
+/// Resolve exact local physical contacts for painting, independently of matching remote net
+/// names. Prepare each route once and stop checking anchors after their first contact.
+pub(super) fn attached(project: &Project) -> BTreeSet<u64> {
+    let mut remaining = BTreeMap::<(i64, i64), Vec<u64>>::new();
+    for label in project.net_labels() {
+        remaining.entry((label.at.x_nm, label.at.y_nm)).or_default().push(label.id);
+    }
+    let mut attached = BTreeSet::new();
+    if remaining.is_empty() {
+        return attached;
+    }
+    remaining.retain(|_, ids| {
+        if ids.len() > 1 {
+            attached.extend(ids.iter().copied());
+            false
+        } else {
+            true
+        }
+    });
+    // The hierarchy iterator includes named anchors themselves; an anchor is not its own contact.
+    for at in project.symbols().iter().flat_map(|s| s.pins()).chain(
+        project.hierarchy_endpoints().filter(|(end, _)| !matches!(end, pcbcraft_engine::schematic::WireEndpoint::NetLabel(_))).map(|(_, at)| at),
+    ) {
+        if let Some(ids) = remaining.remove(&(at.x_nm, at.y_nm)) {
+            attached.extend(ids);
+        }
+    }
+    for wire in project.wires() {
+        if remaining.is_empty() {
+            break;
+        }
+        let path = project.wire_path(wire);
+        remaining.retain(|&(x_nm, y_nm), ids| {
+            if pcbcraft_engine::wire::path_contains_point(&path, Point { x_nm, y_nm }) {
+                attached.extend(ids.iter().copied());
+                false
+            } else {
+                true
+            }
+        });
+    }
+    attached
+}
+
 /// Whether the hovered ink belongs to a named anchor; shared shortcut routing uses this before
 /// component hotkeys so editing a label cannot also edit a component beneath it.
 pub(super) fn hovered(project: &Project, camera: &Camera, ctx: &egui::Context, at: Pos2) -> bool {
@@ -61,6 +106,7 @@ pub(super) fn hovered(project: &Project, camera: &Camera, ctx: &egui::Context, a
 /// Paint committed labels and the pointer-bound preview. Inputs below use the same ink bounds.
 pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, project: &Project, tool: Option<&Tool>, pointer: Option<Point>, selected: Option<u64>) {
     let painter = ui.painter_at(rect);
+    let attached = attached(project);
     let moving = match tool {
         Some(Tool::NetLabel { label, .. }) => Some(label),
         _ => None,
@@ -74,12 +120,22 @@ pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, project: &Project, too
             label.rotation,
             camera.unit_step(),
             if Some(label.id) == selected { Tokens::get().accent } else { Tokens::get().text },
+            attached.contains(&label.id),
         );
     }
     if let Some(label) = moving
         && let Some(at) = pointer
     {
-        chrome::paint(&painter, camera.screen(at, rect), &label.name, visual(label.style), label.rotation, camera.unit_step(), Tokens::get().accent);
+        chrome::paint(
+            &painter,
+            camera.screen(at, rect),
+            &label.name,
+            visual(label.style),
+            label.rotation,
+            camera.unit_step(),
+            Tokens::get().accent,
+            attached.contains(&label.id),
+        );
     }
 }
 
@@ -97,7 +153,7 @@ pub(super) fn input(
     selected: Option<u64>,
     placement: Option<Point>,
 ) -> Option<Option<Click>> {
-    if let Some(Tool::NetLabel { label, .. }) = tool {
+    if let Some(Tool::NetLabel { label, drag, .. }) = tool {
         if !enabled || ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))) {
             return Some(Some(Click::NetLabelCancel));
         }
@@ -107,7 +163,21 @@ pub(super) fn input(
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
             return Some(Some(Click::NetLabelRotate));
         }
-        if response.clicked()
+        if drag.is_some() && ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+            return Some(Some(if response.contains_pointer() {
+                placement
+                    .map(|at| {
+                        let mut label = label.clone();
+                        label.at = at;
+                        Click::NetLabelCommit(label)
+                    })
+                    .unwrap_or(Click::NetLabelCancel)
+            } else {
+                Click::NetLabelCancel
+            }));
+        }
+        if drag.is_none()
+            && response.clicked()
             && let Some(at) = placement
         {
             let mut label = label.clone();
@@ -118,6 +188,14 @@ pub(super) fn input(
     }
     if tool.is_some() {
         return None;
+    }
+    if enabled
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        && let Some(label) = project.net_labels().iter().rev().find(|label| bounds(ui, camera, rect, label).contains(origin))
+    {
+        return Some(Some(Click::NetLabelDrag(label.clone(), camera.screen(label.at, rect) - origin)));
     }
     let hit = response
         .hover_pos()
@@ -207,7 +285,7 @@ impl PcbApp {
                 self.views.active.schematic.tool = None;
                 self.dialog = Dialog::NetLabel(Edit { source, sheet: project.sheet_target(), label, error: None, focused: false });
             }
-            Action::Move => self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision }),
+            Action::Move => self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None }),
             Action::Rotate => {
                 label.rotation = (label.rotation + 90) % 360;
                 self.commit_net_label(source, label);
@@ -218,12 +296,17 @@ impl PcbApp {
     /// Commit one completed preview through the shared engine, which allocates new identities.
     /// Engine failures remain visible in the app message without publishing partial state.
     pub(super) fn commit_net_label(&mut self, source: ViewInput, label: Label) {
+        let repeat = label.id == 0 && self.parts.repeats();
+        let next = label.clone();
         let mut params = json!({"name":label.name,"style":label.style,"x_nm":label.at.x_nm,"y_nm":label.at.y_nm,"rotation":label.rotation,"expected_revision":source.revision});
         if label.id != 0 {
             params["id"] = json!(label.object_id());
         }
         self.run(if label.id == 0 { engine::ADD } else { engine::SET }, &params);
         self.views.active.schematic.tool = None;
+        if repeat && self.message.is_none() && self.session.revision() > source.revision {
+            self.views.active.schematic.tool = Some(Tool::NetLabel { label: next, revision: self.session.revision(), drag: None });
+        }
     }
     /// Place starts a new marker preview; Apply commits an existing marker edit once.
     /// Cancel/stale forms never publish data, and engine errors stay visible beside the fields.
@@ -295,7 +378,7 @@ impl PcbApp {
             {
                 edit.error = Some("Enter a net name of 1–200 characters without surrounding whitespace or control characters.".into());
             } else if edit.label.id == 0 {
-                self.views.active.schematic.tool = Some(Tool::NetLabel { label: edit.label, revision: edit.source.revision });
+                self.views.active.schematic.tool = Some(Tool::NetLabel { label: edit.label, revision: edit.source.revision, drag: None });
                 return;
             } else {
                 let params = json!({"sheet":edit.sheet.id(),"id":edit.label.object_id(),"name":edit.label.name,"style":edit.label.style,"x_nm":edit.label.at.x_nm,"y_nm":edit.label.at.y_nm,"rotation":edit.label.rotation,"expected_revision":edit.source.revision});

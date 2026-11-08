@@ -193,3 +193,134 @@ fn power_placement_reaches_pins_between_grid_points() {
     let index = project.connectivity().net_index_for(pin).unwrap();
     assert_eq!(project.connectivity().net_name(index), "GND");
 }
+
+/// Direct dragging starts from the original press, keeps the grabbed ink under the pointer,
+/// previews attached routes without edits, and commits the marker and wire as one undo step.
+#[test]
+fn dragging_power_ink_and_anchor_moves_once_and_preserves_attached_wire() {
+    for rotation in [0, 90, 180, 270] {
+        for grab in [egui::vec2(0., 0.), egui::vec2(5., 17.), egui::vec2(0., 32.)] {
+            let mut h = editor(1400.);
+            let rev = h.state().session.revision();
+            h.state_mut().run(engine::ADD, &json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0,"rotation":rotation,"expected_revision":rev}));
+            let label = h.state().session.project().unwrap().net_labels()[0].clone();
+            let rev = h.state().session.revision();
+            h.state_mut().run(
+                pcbcraft_engine::DRAW_WIRE,
+                &json!({"from":{"x_nm":-25_400_000,"y_nm":0},"to":{"net_label":label.object_id()},"bends":[],"expected_revision":rev}),
+            );
+            h.run();
+            h.state_mut().parts.set_repeat(true);
+            let original = h.state().session.inspect();
+            let rev = h.state().session.revision();
+            let delta = egui::vec2(81.28, 60.96);
+            let grab = match rotation {
+                90 => egui::vec2(grab.y, -grab.x),
+                180 => -grab,
+                270 => egui::vec2(-grab.y, grab.x),
+                _ => grab,
+            };
+            let from = at(&h, label.at) + grab * (h.state().views.active.camera.unit_step() / 10.);
+            let to = from + delta;
+            let expected = h.state().views.active.camera.snap(at(&h, label.at) + delta, h.get_by_label("Schematic canvas").rect());
+            h.drag_at(from);
+            h.run();
+            h.hover_at(from + egui::vec2(8., 0.));
+            h.run();
+            assert!(
+                matches!(h.state().views.active.schematic.tool, Some(Tool::NetLabel { drag: Some(_), .. })),
+                "rotation {rotation}, grab {grab:?}"
+            );
+            h.hover_at(to);
+            h.run();
+            assert_eq!(h.state().session.inspect(), original);
+            h.drop_at(to);
+            h.run();
+            assert_eq!(h.state().session.revision(), rev + 1);
+            let project = h.state().session.project().unwrap();
+            assert_eq!(project.net_labels()[0].at, expected);
+            assert_eq!(project.net_labels()[0].rotation, rotation);
+            assert_eq!(project.wire_path(&project.wires()[0]).last(), Some(&expected));
+            assert!(h.state().views.active.schematic.tool.is_none());
+            click(&mut h, "Undo");
+            assert_eq!(h.state().session.project().unwrap().net_labels()[0], label);
+        }
+    }
+}
+
+/// Escape, lost focus, a release outside the canvas and a concurrent edit discard a held drag.
+#[test]
+fn interrupted_power_drags_never_commit_or_repeat() {
+    for interruption in ["escape", "focus", "outside", "stale"] {
+        let mut h = editor(1400.);
+        let rev = h.state().session.revision();
+        h.state_mut().run(engine::ADD, &json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0,"expected_revision":rev}));
+        h.state_mut().parts.set_repeat(true);
+        h.run();
+        let start = at(&h, Point { x_nm: 0, y_nm: 0 }) + egui::vec2(0., 32.);
+        let to = start + egui::vec2(100., 60.);
+        h.drag_at(start);
+        h.run();
+        h.hover_at(to);
+        h.run();
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::NetLabel { drag: Some(_), .. })));
+        let mut release = to;
+        match interruption {
+            "escape" => h.key_press(Key::Escape),
+            "focus" => h.event(egui::Event::WindowFocused(false)),
+            "outside" => release = egui::pos2(3., 3.),
+            _ => h.state_mut().run("project.rename", &json!({"name":"Concurrent"})),
+        }
+        h.run();
+        let before = h.state().session.inspect();
+        h.drop_at(release);
+        h.run();
+        assert_eq!(h.state().session.inspect(), before, "{interruption}");
+        assert_eq!(h.state().session.project().unwrap().net_labels()[0].at, Point { x_nm: 0, y_nm: 0 });
+    }
+}
+
+/// Contact indicators follow exact local geometry: a named anchor on a free wire end removes
+/// both open markers, moving it away restores them, and matching remote names do not hide pins.
+#[test]
+fn power_contacts_hide_open_markers_and_restore_them_when_detached() {
+    let mut h = editor(1400.);
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let rev = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::DRAW_WIRE, &json!({"from":{"x_nm":-25_400_000,"y_nm":0},"to":origin,"bends":[],"expected_revision":rev}));
+    h.hover_at(at(&h, origin) + egui::vec2(150., 100.));
+    h.run();
+    let square = |h: &Harness<'_, PcbApp>, p: Point| {
+        let center = at(h, p);
+        h.output().shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(r) if r.rect.center().distance(center)<0.1 && (r.rect.width()-5.).abs()<0.1 && r.stroke.color==pcbcraft_chrome::Tokens::get().schematic_wire))
+    };
+    let ring = |h: &Harness<'_, PcbApp>, p: Point| {
+        let center = at(h, p);
+        h.output()
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape,egui::Shape::Circle(c) if c.center.distance(center)<0.1 && (c.radius-2.).abs()<0.1))
+    };
+    assert!(square(&h, origin));
+    for x in [0, 12_700_000] {
+        let rev = h.state().session.revision();
+        h.state_mut().run(engine::ADD, &json!({"name":"GND","style":"ground","x_nm":x,"y_nm":0,"expected_revision":rev}));
+    }
+    h.step();
+    h.run();
+    let project = h.state().session.project().unwrap();
+    assert_eq!(crate::net_labels::attached(project), [project.net_labels()[0].id].into_iter().collect());
+    assert!(!square(&h, origin));
+    assert!(!ring(&h, origin));
+    assert!(ring(&h, Point { x_nm: 12_700_000, y_nm: 0 }));
+    let label = h.state().session.project().unwrap().net_labels()[0].clone();
+    let rev = h.state().session.revision();
+    h.state_mut().run(engine::SET, &json!({"id":label.object_id(),"name":"GND","style":"ground","x_nm":0,"y_nm":12_700_000,"expected_revision":rev}));
+    h.step();
+    h.run();
+    assert!(square(&h, origin));
+    assert!(ring(&h, Point { x_nm: 0, y_nm: 12_700_000 }));
+    click(&mut h, "Undo");
+    assert!(!square(&h, origin));
+    assert!(!ring(&h, origin));
+}

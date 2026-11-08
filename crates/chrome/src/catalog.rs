@@ -2,6 +2,11 @@
 use crate::{Tokens, fonts, menu::MenuIcon};
 use egui::{Align, Frame, Layout, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
 
+/// A shared explicit placement choice keeps compact and expanded catalogs in agreement.
+pub fn repeat_placement(ui: &mut Ui, repeat: &mut bool) -> egui::Response {
+    ui.checkbox(repeat, "Repeat placement")
+}
+
 /// Decisions from a form remain presentation events; callers own documents and validation.
 #[derive(Default)]
 pub struct FormAction {

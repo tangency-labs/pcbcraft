@@ -13,19 +13,20 @@ pub enum Style {
 
 /// Paint an upright name and quarter-turned anchor glyph. Return the complete ink/anchor
 /// bounds so pointer hit testing follows the actual text at every interface scale and zoom.
+/// Connected anchors omit their open-pin ring; callers resolve actual local contact.
 #[allow(clippy::too_many_arguments)]
-pub fn paint(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, color: Color32) -> Rect {
-    draw(painter, at, name, style, rotation, step, color, true)
+pub fn paint(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, color: Color32, connected: bool) -> Rect {
+    draw(painter, at, name, style, rotation, step, color, true, connected)
 }
 
 /// Measure the same glyph and text without adding shapes to the scene.
 pub fn bounds(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32) -> Rect {
-    draw(painter, at, name, style, rotation, step, Tokens::get().text, false)
+    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false)
 }
 
 /// Keep text measurement and painted geometry aligned for hit testing.
 #[allow(clippy::too_many_arguments)]
-fn draw(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, color: Color32, paint: bool) -> Rect {
+fn draw(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, color: Color32, paint: bool, connected: bool) -> Rect {
     let scale = (step / 10.0).clamp(0.4, 3.0);
     let transform = |v: Vec2| {
         let v = match rotation {
@@ -84,7 +85,7 @@ fn draw(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, st
         painter.add(text);
     }
     // A small anchor marks the exact electrical contact, independent of glyph orientation.
-    if paint {
+    if paint && !connected {
         painter.circle_stroke(at, 2.0, stroke);
     }
     bounds.expand(3.)

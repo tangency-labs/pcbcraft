@@ -1244,9 +1244,14 @@ impl PcbApp {
         match (self.views.active.schematic.tool.clone(), click) {
             (Some(Tool::NetLabel { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
             (Some(Tool::NetLabel { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
-            (Some(Tool::NetLabel { mut label, revision }), Click::NetLabelRotate) => {
+            (Some(Tool::NetLabel { mut label, revision, drag }), Click::NetLabelRotate) => {
                 label.rotation = (label.rotation + 90) % 360;
-                self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision });
+                self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision, drag });
+            }
+            (None, Click::NetLabelDrag(label, offset)) => {
+                self.select(Selection::default());
+                self.views.active.schematic.selected_net_label = Some(label.id);
+                self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: Some(offset) });
             }
             (None, Click::NetLabelSelect(id)) => {
                 self.select(Selection::default());
@@ -1284,6 +1289,9 @@ impl PcbApp {
                     &definition,
                     json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}),
                 );
+                if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
+                    self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns });
+                }
             }
             (Some(Tool::Wire { revision, start: None }), Click::WirePoint(anchor, _)) => {
                 self.views.active.schematic.tool = Some(Tool::Wire { revision, start: Some(anchor) });
@@ -1372,6 +1380,9 @@ impl PcbApp {
                 let revision = drag_source.revision;
                 self.views.active.schematic.tool = None;
                 self.place_catalog_symbol(&definition, json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
+                if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
+                    self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
+                }
             }
             (None, Click::WireEdit(action, leg)) => self.edit_wire(action, &leg),
             (None, Click::Edit(action, symbol)) => {

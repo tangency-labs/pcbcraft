@@ -657,3 +657,10 @@ original upstream code. Both forms use the same native source catalog and typed
 placement paths, with original regression fixtures and no new dependencies or
 external assets. Compact layout persistence is user-local presentation data;
 project document encodings are unchanged by this UI revision.
+
+
+Direct named-anchor dragging, physical-contact pin feedback and the shared catalog
+Repeat placement control are original upstream code. They reuse existing native
+label/part commands, geometry queries and Craft controls; no outside implementation,
+artwork, fixture or dependency was introduced. Regression circuits are constructed
+through the existing engine commands.

@@ -957,7 +957,7 @@ fn click_canvas(harness: &mut Harness<'_, PcbApp>) {
 }
 
 /// Send a real pointer click to the canvas at a specified logical position.
-fn click_canvas_at(harness: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
+pub(super) fn click_canvas_at(harness: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
     harness.hover_at(point);
     harness.run();
     harness.drag_at(point);
@@ -1439,7 +1439,7 @@ mod live_mcp {
             });
             let deadline = Instant::now() + Duration::from_secs(6);
             while !worker.is_finished() && Instant::now() < deadline {
-                harness.run();
+                harness.step();
                 thread::sleep(Duration::from_millis(2));
             }
             assert!(worker.is_finished(), "MCP call timed out: {name}");
@@ -1645,15 +1645,17 @@ mod live_mcp {
         harness.get_by_label("Collapse Browser");
 
         // Catalog mode uses the same handler as Dock/Expand, including while its modal is open.
-        let compact = window(&mut harness, connection, "window.set_catalog_mode", json!({"window":0,"mode":"compact"}));
+        let compact = window(&mut harness, connection, "window.set_catalog_mode", json!({"window":0,"mode":"compact","repeat":true}));
         harness.run();
         assert_eq!(compact["windows"][0]["catalog_mode"], "compact");
+        assert_eq!(compact["windows"][0]["repeat_placement"], true);
+        assert!(harness.state().parts.repeats());
         harness.get_by_label("Expand Parts Catalog");
         let expanded = window(&mut harness, connection, "window.set_catalog_mode", json!({"window":0,"mode":"expanded"}));
         harness.run();
         assert_eq!(expanded["windows"][0]["catalog_mode"], "expanded");
         harness.get_by_label("Dock Parts Catalog");
-        let compact = window(&mut harness, connection, "window.set_catalog_mode", json!({"window":0,"mode":"compact"}));
+        let compact = window(&mut harness, connection, "window.set_catalog_mode", json!({"window":0,"mode":"compact","repeat":false}));
         harness.run();
         assert_eq!(compact["windows"][0]["catalog_mode"], "compact");
         click(&mut harness, "Close Parts Catalog");
