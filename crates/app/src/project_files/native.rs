@@ -293,13 +293,15 @@ fn save_at(
 }
 
 /// Canonicalize the parent directory so application instances use the same lock for the destination.
-/// The result is also what Recent projects show and store, so on Windows it keeps the plain
-/// `C:\…` form instead of `\\?\C:\…` (#154). The `\\?\` form remains only when the plain spelling
-/// would name a different path, such as a very long path or a reserved name like `CON`.
+/// The result is also what Recent projects show and store, so a Windows target comes back in its
+/// plain `C:\…` spelling, not `\\?\C:\…`, whenever Windows reads that spelling as the same file
+/// (#154). Otherwise, for example `CON.pc.zip` or a name ending in a dot, it keeps `\\?\`.
 fn normalize(path: &Path) -> Result<PathBuf, String> {
     let parent = path.parent().ok_or("Project file has no parent directory")?;
     let name = path.file_name().ok_or("Project file has no name")?;
-    dunce::canonicalize(parent).map(|parent| parent.join(name)).map_err(|error| error.to_string())
+    // Check the whole target, not just the parent: the file name decides whether the plain
+    // spelling is safe.
+    fs::canonicalize(parent).map(|parent| crate::recent_projects::plain_path_if_equivalent(parent.join(name))).map_err(|error| error.to_string())
 }
 
 /// Read only regular files and enforce the size bound even if the file grows after opening.
