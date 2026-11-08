@@ -1678,6 +1678,20 @@ mod live_mcp {
         let gridded = window(&mut harness, connection, "view.set_grid", json!({"view": second, "spacing_nm": 254_000}));
         assert_eq!(gridded["views"][1]["grid_spacing_nm"], 254_000);
         assert_eq!(gridded["views"][0]["grid_spacing_nm"], grid::SCHEMATIC_SPACING_DEFAULT_NM);
+        // Spacing outside the grid range, of the wrong type or missing is refused, and neither
+        // view's grid changes (#73).
+        for params in [
+            json!({"view": second, "spacing_nm": 0}),
+            json!({"view": second, "spacing_nm": *grid::SPACING_RANGE_NM.end() + 1}),
+            json!({"view": second, "spacing_nm": "10 mil"}),
+            json!({"view": second}),
+        ] {
+            let refused = tool(&mut harness, connection, "execute", json!({"command": "view.set_grid", "params": params.clone()}));
+            assert_eq!(refused["isError"], true, "{params}");
+        }
+        let kept = payload(tool(&mut harness, connection, "inspect_editor", json!({})));
+        assert_eq!(kept["views"][1]["grid_spacing_nm"], 254_000);
+        assert_eq!(kept["views"][0]["grid_spacing_nm"], grid::SCHEMATIC_SPACING_DEFAULT_NM);
 
         // Settings change the palette and persist like Preferences.
         assert_eq!(harness.ctx.global_style().visuals.panel_fill, Tokens::dark().panel);
