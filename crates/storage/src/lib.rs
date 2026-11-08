@@ -5,7 +5,7 @@ use pcbcraft_engine::{
     persistence::{ENTRY_POINT, Encoding, decode_documents, decode_file, read_bytes},
 };
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     path::Path,
     sync::Arc,
 };
@@ -13,6 +13,26 @@ use std::{
 mod folder;
 pub mod library;
 pub use folder::{load, save};
+
+/// Windows' `FILE_ATTRIBUTE_HIDDEN`, which Explorer uses to hide a file.
+#[cfg(windows)]
+const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+
+/// Open the sibling save lock at `path` for reading and writing, creating it if it's missing and
+/// never truncating it. It serializes writers of a folder or archive and is kept after they finish.
+/// On Windows a new lock file is created hidden, as its leading dot hides it on Linux and macOS;
+/// Windows applies the attribute only when it creates the file, so an existing lock file opens
+/// with its attributes unchanged. Errors are the operating system's, for the caller to report.
+pub fn open_lock_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.attributes(FILE_ATTRIBUTE_HIDDEN);
+    }
+    options.open(path)
+}
 
 /// Open a folder, its project.pc entry point, a packed archive or a legacy single-file project.
 /// Interrupted folder saves recover under the writer lock before any documents are adopted.
@@ -134,5 +154,30 @@ mod tests {
         assert!(preview(&root.join(ENTRY_POINT)).is_err());
         assert_eq!(tree(dir.path()), before);
         assert_eq!(open(&root).unwrap().name, "Changed");
+    }
+
+    /// On Windows a folder's new save lock is created hidden, as its leading dot hides it on Linux
+    /// and macOS. A visible lock file left by an earlier build keeps its attributes and still
+    /// serializes access: a held lock refuses an open, and the project opens once it's released.
+    #[cfg(windows)]
+    #[test]
+    fn windows_save_locks_are_created_hidden() {
+        use std::os::windows::fs::MetadataExt;
+        let hidden = |path: &Path| fs::metadata(path).unwrap().file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0;
+        let dir = tempfile::tempdir().unwrap();
+        let documents = encode_documents(project()).unwrap();
+        save(&dir.path().join("fresh"), None, &documents, &mut |_| Ok(())).unwrap();
+        assert!(hidden(&dir.path().join(".fresh.pcbcraft-lock")));
+
+        let root = dir.path().join("earlier");
+        let earlier = dir.path().join(".earlier.pcbcraft-lock");
+        fs::write(&earlier, b"").unwrap();
+        save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+        assert!(!hidden(&earlier));
+        let held = open_lock_file(&earlier).unwrap();
+        held.try_lock().unwrap();
+        assert!(open(&root).unwrap_err().contains("Could not lock"));
+        held.unlock().unwrap();
+        assert_eq!(encode_documents(open(&root).unwrap()).unwrap(), documents);
     }
 }

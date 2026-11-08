@@ -361,7 +361,7 @@ fn lock(root: &Path, allow_read_only: bool) -> Result<FolderLock, String> {
     {
         return Err("Save lock is not a regular file.".to_owned());
     }
-    let file = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path) {
+    let file = match crate::open_lock_file(&path) {
         Ok(file) => file,
         Err(e) if allow_read_only && matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem) => {
             require_no_journal(root)?;

@@ -265,6 +265,22 @@ fn edited_save_preserves_project_permissions() {
     }
 }
 
+/// On Windows an archive's save lock is created hidden, like a folder's, through
+/// `pcbcraft_storage::open_lock_file`.
+#[cfg(windows)]
+#[test]
+fn windows_archive_save_lock_is_created_hidden() {
+    use std::os::windows::fs::MetadataExt;
+    // Windows' FILE_ATTRIBUTE_HIDDEN.
+    const HIDDEN: u32 = 0x2;
+    let dir = tempfile::tempdir().unwrap();
+    let archive = dir.path().join("board.pc.zip");
+    publish(&archive, None, &encode_file(decode(TWO_RESISTORS).unwrap(), Encoding::Zip).unwrap(), || Ok(())).unwrap();
+    let attributes = fs::metadata(dir.path().join(".board.pc.zip.pcbcraft-lock")).unwrap().file_attributes();
+    assert_ne!(attributes & HIDDEN, 0, "lock attributes {attributes:#x}");
+    assert!(load(&archive).is_ok());
+}
+
 /// Competing writes from the same baseline leave only the winning session clean.
 #[test]
 fn one_writer_publishes_against_a_shared_baseline() {
