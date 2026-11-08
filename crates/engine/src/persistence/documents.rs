@@ -14,6 +14,7 @@ const PROJECT_FORMAT: &str = "pcbcraft-project/6";
 const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
+const NAMED_FORMAT: &str = "pcbcraft-sheet/3";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
 const MATERIAL_BOARD_FORMAT: &str = "pcbcraft-board/3";
@@ -52,6 +53,8 @@ struct SheetDocument {
     id: Uuid,
     #[serde(default, deserialize_with = "present")]
     labels: Option<Vec<crate::hierarchy::Label>>,
+    #[serde(default, deserialize_with = "present")]
+    net_labels: Option<Vec<crate::net_labels::Label>>,
     #[serde(default, deserialize_with = "present")]
     subsheets: Option<Vec<crate::hierarchy::SheetSymbol>>,
     symbols: Vec<Placement<'static>>,
@@ -126,11 +129,18 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Read all interfaces before resolving parent-side endpoint ownership.
     for reference in &project.sheets {
         let mut sheet: SheetDocument = parse(documents, &reference.file)?;
-        match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some()) {
-            (SHEET_FORMAT, false, false) | (HIERARCHY_FORMAT, true, true) => {}
+        match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some(), sheet.net_labels.is_some()) {
+            (SHEET_FORMAT, false, false, false) | (HIERARCHY_FORMAT, true, true, false) | (NAMED_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
+        let mut named = sheet.net_labels.take().unwrap_or_default();
+        named.sort_by_key(|label| label.id);
+        metadata.net_labels = Arc::new(named);
+        for label in metadata.net_labels.iter() {
+            validate_id(&mut hierarchy_ids, label.id)?;
+            anchors.insert(WireEndpoint::NetLabel(label.id));
+        }
         metadata.labels = Arc::new(sheet.labels.take().unwrap_or_default());
         metadata.subsheets = Arc::new(sheet.subsheets.take().unwrap_or_default());
         for label in metadata.labels.iter() {
@@ -151,9 +161,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         components: Arc::default(),
         units: Arc::default(),
         board: Arc::default(),
+        named_graph: Arc::default(),
         upgraded_from: None,
     };
     metadata.validate_hierarchy()?;
+    metadata.validate_net_labels()?;
     for sheet in metadata.sheets() {
         let projection = metadata.for_sheet(sheet.target).ok_or("missing sheet")?;
         anchors.extend(projection.hierarchy_endpoints().map(|(end, _)| end));
@@ -172,7 +184,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT) || sheet.id != reference.id {
+        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT) || sheet.id != reference.id {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
         }
         let symbols: BTreeSet<_> = sheet.symbols.iter().map(|s| s.id).collect();
@@ -187,6 +199,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 let local = match endpoint {
                     Endpoint::Pin { symbol, .. } => symbols.contains(symbol),
                     Endpoint::Junction { junction } => junctions.contains(junction),
+                    Endpoint::NetLabel { net_label } => interface.contains(&WireEndpoint::NetLabel(*net_label)),
                     Endpoint::Label { label } => interface.contains(&WireEndpoint::Label(*label)),
                     Endpoint::SheetPin { sheet_pin } => interface.contains(&WireEndpoint::SheetPin(*sheet_pin)),
                 };
@@ -319,6 +332,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 symbols: Arc::new(project_data.symbols.iter().filter(|s| symbols.contains(&s.ordinal)).cloned().collect()),
                 wires: Arc::new(project_data.wires.iter().filter(|w| wires.contains(&w.ordinal)).cloned().collect()),
                 junctions: Arc::new(project_data.junctions.iter().filter(|(id, _)| junctions.contains(id)).map(|(&id, &at)| (id, at)).collect()),
+                net_labels: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing named label sheet")?.net_labels.clone(),
                 labels: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.labels.clone(),
                 subsheets: hierarchy_sheets.iter().find(|s| s.sheet_id == reference.id).ok_or("missing hierarchy sheet")?.subsheets.clone(),
                 connectivity: Arc::default(),
@@ -490,6 +504,17 @@ impl DocumentsEncoder {
                         self.finish_document(ENTRY_POINT.to_owned())?;
                         self.next();
                         self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+                    }
+                }
+                12 => {
+                    if let Some(label) = self.project.sheets[self.sheet_cursor].net_labels.get(self.cursor as usize) {
+                        record(&mut self.bytes, &mut self.first, label)?;
+                        self.cursor += 1;
+                    } else {
+                        self.bytes.extend_from_slice(b"  ],\n  \"labels\": [\n");
+                        self.cursor = 0;
+                        self.first = true;
+                        self.phase = 2;
                     }
                 }
                 2 => {
@@ -767,12 +792,22 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
 }
 
 /// Write the bounded sheet header and return its first incremental record phase. Flat
-/// sheets retain version 1 and bypass the version-2 label and child-symbol lists.
+/// sheets retain version 1 and bypass hierarchy lists; named anchors add a bounded phase
+/// before those lists in version 3.
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
-    let format = if hierarchy { HIERARCHY_FORMAT } else { SHEET_FORMAT };
+    let format = if !sheet.net_labels.is_empty() {
+        NAMED_FORMAT
+    } else if hierarchy {
+        HIERARCHY_FORMAT
+    } else {
+        SHEET_FORMAT
+    };
     write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
-    if hierarchy {
+    if !sheet.net_labels.is_empty() {
+        bytes.extend_from_slice(b"  \"net_labels\": [\n");
+        Ok(12)
+    } else if hierarchy {
         bytes.extend_from_slice(b"  \"labels\": [\n");
         Ok(2)
     } else {

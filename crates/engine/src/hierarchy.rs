@@ -202,17 +202,22 @@ impl Project {
         Point { x_nm: authored.x_nm.max(minimum.x_nm), y_nm: authored.y_nm.max(minimum.y_nm) }
     }
 
-    /// Fixed hierarchy anchors participate in wire picking/healing alongside component pins.
+    /// Fixed hierarchy and named-net anchors participate in wire picking/healing beside pins.
     pub fn hierarchy_endpoints(&self) -> impl Iterator<Item = (WireEndpoint, Point)> + '_ {
-        self.labels
-            .iter()
-            .map(|label| (WireEndpoint::Label(label.id), label.at))
-            .chain(self.subsheets.iter().flat_map(|block| self.sheet_pins(block).map(|pin| (WireEndpoint::SheetPin(pin.label.id), pin.at))))
+        self.net_labels.iter().map(|label| (WireEndpoint::NetLabel(label.id), label.at)).chain(
+            self.labels
+                .iter()
+                .map(|label| (WireEndpoint::Label(label.id), label.at))
+                .chain(self.subsheets.iter().flat_map(|block| self.sheet_pins(block).map(|pin| (WireEndpoint::SheetPin(pin.label.id), pin.at)))),
+        )
     }
 
-    /// Resolve the electrical graph across all sheets, joining only explicit parent/child pins.
-    /// Repeated text on different sheets has no effect on this graph.
+    /// Resolve all sheets through explicit parent/child pins and scoped named anchors.
+    /// Hierarchical names alone do not join unrelated sheets; global/power labels do.
     pub fn electrical_connectivity(&self) -> Connectivity {
+        if self.has_named_nets() {
+            return self.named_connectivity(true);
+        }
         let symbols: Vec<_> = self.all_symbols().cloned().collect();
         let wires: Vec<_> = self.sheets.iter().flat_map(|s| s.wires.iter().cloned()).collect();
         let links = self.sheets.iter().flat_map(|s| s.subsheets.iter()).flat_map(|block| {

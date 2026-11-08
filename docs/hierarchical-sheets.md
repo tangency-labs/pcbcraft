@@ -15,9 +15,9 @@ and enter a name and direction. The label exposes a matching pin on the parent's
 sheet symbol automatically. Draw a wire to the pointed label anchor or parent
 pin with **W**; an ordinary click also starts a wire at an unconnected anchor.
 Parent wires and child wires then belong to one project electrical net. Repeated
-names on other sheets do not connect them. The Net Inspector continues to list
-the active sheet's local groups; complete cross-sheet groups are available through
-project inspection. Local/global labels and power symbols remain issue #42.
+names on other sheets do not connect them. The Net Inspector lists the active sheet's endpoints after resolving named connections across the project; complete
+cross-sheet groups are available through project inspection. See
+[named nets and power symbols](net-labels.md) for local/global names and supplies.
 
 Names are case-sensitive and unique within a child. Label properties (**E** while
 hovering, or **Properties…** in its context menu) update the parent pin's name

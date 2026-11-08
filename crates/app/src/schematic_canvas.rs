@@ -27,6 +27,10 @@ use pcbcraft_engine::{
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Debug)]
 pub(crate) enum Tool {
+    NetLabel {
+        label: pcbcraft_engine::net_labels::Label,
+        revision: u64,
+    },
     SheetGesture {
         drag: Box<crate::hierarchy::Drag>,
         revision: u64,
@@ -73,7 +77,8 @@ impl Tool {
     /// Return the revision used to reject stale canvas actions.
     pub(crate) fn revision(&self) -> u64 {
         match self {
-            Self::SheetGesture { revision, .. }
+            Self::NetLabel { revision, .. }
+            | Self::SheetGesture { revision, .. }
             | Self::Hierarchy { revision, .. }
             | Self::PlaceSymbol { revision, .. }
             | Self::Wire { revision, .. }
@@ -87,6 +92,11 @@ impl Tool {
 
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
+    NetLabelCommit(pcbcraft_engine::net_labels::Label),
+    NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
+    NetLabelCancel,
+    NetLabelSelect(u64),
+    NetLabelRotate,
     GrabSheetGesture(Box<crate::hierarchy::Drag>),
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
     SelectSheetSymbol(u64),
@@ -210,6 +220,7 @@ pub(crate) fn show(
     selected_leg: Option<&LegTarget>,
     whole_wire_drag: bool,
     selected_sheet: Option<u64>,
+    selected_net_label: Option<u64>,
     highlighted: &Selection,
     input_enabled: bool,
     navigation: Navigation,
@@ -282,7 +293,27 @@ pub(crate) fn show(
     } else {
         None
     };
-    let project = sheet_preview.as_ref().or(hierarchy_preview.as_ref()).or(group_preview.as_ref()).unwrap_or(project);
+    let label_position = if let Some(Tool::NetLabel { label, revision }) = &tool {
+        response.hover_pos().map(|pointer| {
+            wires::label_position(
+                project,
+                camera,
+                rect,
+                pointer,
+                draft,
+                *revision,
+                (label.id != 0).then_some(pcbcraft_engine::schematic::WireEndpoint::NetLabel(label.id)),
+            )
+        })
+    } else {
+        None
+    };
+    let net_label_preview = if let (Some(Tool::NetLabel { label, .. }), Some(at)) = (&tool, label_position) {
+        project.preview_net_label(label.id, at, label.rotation).ok()
+    } else {
+        None
+    };
+    let project = net_label_preview.as_ref().or(sheet_preview.as_ref()).or(hierarchy_preview.as_ref()).or(group_preview.as_ref()).unwrap_or(project);
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();
     let screen = |point| camera.screen(point, rect);
@@ -327,6 +358,7 @@ pub(crate) fn show(
         }
     }
 
+    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected_net_label);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos(), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
@@ -378,6 +410,11 @@ pub(crate) fn show(
         return (input_enabled && valid_position(point)).then(|| Click::Drop(PartDrag::clone(&drag), point));
     }
 
+    if let Some(click) =
+        crate::net_labels::input(ui, &response, rect, camera, project, tool.as_ref(), input_enabled, selected_net_label, label_position)
+    {
+        return click;
+    }
     if let Some(click) = crate::hierarchy::input(ui, &response, project, camera, rect, tool.as_ref(), input_enabled, selected_sheet) {
         return click;
     }
@@ -574,7 +611,8 @@ pub(crate) fn show(
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
-        Tool::SheetGesture { .. }
+        Tool::NetLabel { .. }
+        | Tool::SheetGesture { .. }
         | Tool::Hierarchy { .. }
         | Tool::Move { .. }
         | Tool::BoxSelect { .. }

@@ -10,6 +10,7 @@ pub mod board;
 pub mod hierarchy;
 pub mod library;
 pub mod library_graphics;
+pub mod net_labels;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;
@@ -36,12 +37,26 @@ const MAX_REFERENCE_NUMBER: usize = 1_000_000;
 const MAX_OBJECT_ID: u64 = i64::MAX as u64;
 /// Longest project name, in characters.
 const MAX_NAME: usize = 200;
+const NET_NAME: Param =
+    Param { name: "name", kind: ParamKind::Text, required: true, summary: "Case-sensitive electrical net name (1–200 characters)." };
+const NET_STYLE: Param = Param {
+    name: "style",
+    kind: ParamKind::NetLabelStyle,
+    required: true,
+    summary: "Local sheet label, global label, power arrow or ground symbol; power and ground have global scope.",
+};
+const NET_OBJECT: Param = Param { name: "id", kind: ParamKind::NetLabelId, required: true, summary: "Stable label ID from inspection." };
+const NET_ROTATION: Param =
+    Param { name: "rotation", kind: ParamKind::Rotation, required: false, summary: "Counterclockwise quarter-turn orientation, default 0." };
+
 /// The name `project.new` gives a project when none is supplied. A desktop project still bearing
 /// it takes its folder or archive name when first saved (see [`Session::adopt_saved_name`]).
 pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    NetLabelStyle,
+    NetLabelId,
     LibrarySource,
     LibraryDocuments,
     LibraryQuery,
@@ -120,6 +135,8 @@ impl ParamKind {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()}
             }, "required":["symbols","wires"], "additionalProperties":false}),
+            Self::NetLabelStyle => json!({"type":"string","enum":["local","global","power","ground"]}),
+            Self::NetLabelId => json!({"type":"string","pattern":"^net-label-[1-9][0-9]*$"}),
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
             Self::FootprintId => json!({"type":"string", "pattern":"^footprint-[1-9][0-9]*$"}),
@@ -139,12 +156,12 @@ impl ParamKind {
             Self::WireAnchor => {
                 json!({"oneOf": [ParamKind::Terminal.schema(), {
                 "type": "object", "properties": {"junction": {"type": "string", "pattern": "^junction-[1-9][0-9]*$"}}, "required": ["junction"], "additionalProperties": false
-            }, point_schema(), {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}, hierarchy_endpoint_schema("label"), hierarchy_endpoint_schema("sheet_pin")]})
+            }, point_schema(), {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}, hierarchy_endpoint_schema("label"), hierarchy_endpoint_schema("sheet_pin"), hierarchy_endpoint_schema("net_label")]})
             }
             Self::WireEndpoint => {
                 json!({"oneOf": [ParamKind::Terminal.schema(), {
                 "type": "object", "properties": {"junction": ParamKind::JunctionId.schema()}, "required": ["junction"], "additionalProperties": false
-            }, {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}, hierarchy_endpoint_schema("label"), hierarchy_endpoint_schema("sheet_pin")]})
+            }, {"type":"object","properties":{"wire":ParamKind::WireId.schema(),"at":point_schema()},"required":["wire","at"],"additionalProperties":false}, hierarchy_endpoint_schema("label"), hierarchy_endpoint_schema("sheet_pin"), hierarchy_endpoint_schema("net_label")]})
             }
             Self::WireBends => json!({"type": "array", "maxItems": wire::MAX_BENDS, "items": point_schema()}),
             Self::Point => point_schema(),
@@ -221,6 +238,8 @@ impl ParamKind {
             Self::BoardRotation if value.as_u64().is_some_and(|degrees| degrees < 360) => Ok(()),
             Self::FootprintId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "footprint-")).is_some() => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
+            Self::NetLabelStyle if serde_json::from_value::<net_labels::Style>(value.clone()).is_ok() => Ok(()),
+            Self::NetLabelId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "net-label-")).is_some() => Ok(()),
             Self::Name | Self::Text if value.is_string() => Ok(()),
             Self::SymbolId if value.as_str().and_then(schematic::parse_symbol_id).is_some() => Ok(()),
             Self::SymbolDefinition if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
@@ -250,6 +269,8 @@ impl ParamKind {
             Self::BoardRotation => Err("must be a whole-degree orientation from 0 through 359"),
             Self::FootprintId => Err("must identify a placed footprint"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
+            Self::NetLabelStyle => Err("must be local, global, power or ground"),
+            Self::NetLabelId => Err("must identify a named net label"),
             Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),
             Self::SymbolDefinition => Err("must identify a native symbol"),
@@ -276,7 +297,8 @@ fn point_schema() -> Value {
 /// Publish a strict fixed interface endpoint alongside ordinary terminals and junctions.
 fn hierarchy_endpoint_schema(kind: &str) -> Value {
     let mut properties = Map::new();
-    properties.insert(kind.into(), json!({"type":"string", "pattern":"^label-[1-9][0-9]*$"}));
+    properties
+        .insert(kind.into(), json!({"type":"string", "pattern":if kind == "net_label" { "^net-label-[1-9][0-9]*$" } else { "^label-[1-9][0-9]*$" }}));
     json!({"type":"object", "properties":properties, "required":[kind], "additionalProperties":false})
 }
 
@@ -446,6 +468,24 @@ const CATALOG: &[Command] = &[
         title: "Remove Sheet Symbol",
         summary: "Detach a child to the project root; remove parent wires attached to its pins. Child contents are retained. Undoable.",
         params: &[HIERARCHY_OBJECT, EXPECTED_REVISION],
+    },
+    Command {
+        id: net_labels::ADD,
+        title: "Place Net Label",
+        summary: "Place a local/global label or power/ground anchor. Matching names connect by scope; a label on a pin or wire connects at its anchor. Undoable.",
+        params: &[NET_NAME, NET_STYLE, ANCHOR_X, ANCHOR_Y, NET_ROTATION, EXPECTED_REVISION],
+    },
+    Command {
+        id: net_labels::SET,
+        title: "Edit Net Label",
+        summary: "Rename, move, rotate or change the scope/style of an existing named anchor. Undoable.",
+        params: &[NET_OBJECT, NET_NAME, NET_STYLE, ANCHOR_X, ANCHOR_Y, NET_ROTATION, EXPECTED_REVISION],
+    },
+    Command {
+        id: net_labels::DELETE,
+        title: "Delete Net Label",
+        summary: "Remove a named anchor and its directly attached wires. Undoable.",
+        params: &[NET_OBJECT, EXPECTED_REVISION],
     },
     Command {
         id: hierarchy::ADD_LABEL,
@@ -927,6 +967,8 @@ pub struct Project {
     /// Derived index of each placed component unit to its symbol ID.
     units: Arc<BTreeMap<(u64, String), u64>>,
     board: Arc<Board>,
+    /// Project-wide name resolution shared by all immutable sheet projections.
+    named_graph: Arc<OnceLock<Connectivity>>,
     /// The older format this snapshot was migrated from when it was opened, if any.
     upgraded_from: Option<u32>,
 }
@@ -998,9 +1040,12 @@ impl Project {
         symbol.pins().get(index).copied()
     }
 
-    /// Return the cached connected groups for this topology. Geometry-only edits share this cache.
+    /// Return the cached sheet projection of connectivity. Named anchors resolve project-wide
+    /// before projection; geometry edits invalidate their contact graph. Unnamed geometry edits
+    /// can continue sharing a topology-only cache.
     pub fn connectivity(&self) -> &Connectivity {
-        self.connectivity.get_or_init(|| Connectivity::build(&self.symbols, &self.wires))
+        self.connectivity
+            .get_or_init(|| if self.has_named_nets() { self.named_connectivity(false) } else { Connectivity::build(&self.symbols, &self.wires) })
     }
 
     /// Inspect the schematic in the shared command format, without including the board.
@@ -1013,6 +1058,7 @@ impl Project {
                 inspected
             }).collect::<Vec<_>>(),
             "junctions": self.junctions().map(|(id, point)| json!({"id": format!("junction-{id}"), "x_nm": point.x_nm, "y_nm": point.y_nm})).collect::<Vec<_>>(),
+            "net_labels": self.net_labels.iter().map(|label| label.inspect()).collect::<Vec<_>>(),
             "netlist": self.connectivity().inspect(),
             "sheet_symbols": self.subsheets.iter().map(|block| json!({"id":format!("sheet-symbol-{}",block.id), "child":block.child,"name":self.child_name(block),"at":block.at,"size":self.sheet_symbol_size(block),"pins":self.sheet_pins(block).map(|pin| json!({"endpoint":WireEndpoint::SheetPin(pin.label.id).inspect(),"name":pin.label.name,"direction":pin.label.direction,"at":pin.at})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "hierarchical_labels":self.labels.iter().map(|label|json!({"id":format!("label-{}",label.id),"name":label.name,"direction":label.direction,"at":label.at,"endpoint":WireEndpoint::Label(label.id).inspect()})).collect::<Vec<_>>(),
@@ -1150,7 +1196,10 @@ impl Session {
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
-            hierarchy::CREATE_CHILD
+            net_labels::ADD
+            | net_labels::SET
+            | net_labels::DELETE
+            | hierarchy::CREATE_CHILD
             | hierarchy::PLACE_SHEET
             | hierarchy::RESIZE_SHEET
             | hierarchy::MOVE_SHEET
@@ -1336,6 +1385,7 @@ impl Session {
                 components: Arc::default(),
                 units: Arc::default(),
                 board: Arc::default(),
+                named_graph: Arc::default(),
                 upgraded_from: None,
             }),
             "project.rename" => {
@@ -1347,6 +1397,7 @@ impl Session {
                 }
             }
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
+            net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD
             | hierarchy::PLACE_SHEET
             | hierarchy::RESIZE_SHEET
@@ -1694,7 +1745,14 @@ impl Session {
 
     /// Commit a snapshot and bound undo history. New edits clear redo; revisions advance
     /// past every ID allocated by a compound wire edit, preventing reuse after undo.
-    fn change(&mut self, project: Project) {
+    fn change(&mut self, mut project: Project) {
+        // Named anchors can attach to moving geometry and join other sheets.
+        if project.has_named_nets() || self.project.as_ref().is_some_and(|p| p.has_named_nets()) {
+            project.named_graph = Arc::default();
+            for sheet in Arc::make_mut(&mut project.sheets) {
+                sheet.connectivity = Arc::default();
+            }
+        }
         let highest = project.highest_id();
         self.undo.push(self.project.replace(Arc::new(project)));
         if self.undo.len() > MAX_HISTORY {

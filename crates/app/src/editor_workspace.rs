@@ -417,6 +417,7 @@ impl EditorViews {
             return;
         }
         self.active.schematic.selected_sheet_symbol = None;
+        self.active.schematic.selected_net_label = None;
         self.active.schematic.selection = selection;
         self.selection_changed(session, policy);
     }
@@ -915,6 +916,7 @@ impl PcbApp {
                                     view.schematic.selected_leg.as_ref(),
                                     view.schematic.whole_wire_drag,
                                     view.schematic.selected_sheet_symbol,
+                                    view.schematic.selected_net_label,
                                     &highlight,
                                     false,
                                     self.preferences.navigation,

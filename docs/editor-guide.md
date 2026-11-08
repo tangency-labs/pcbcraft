@@ -20,6 +20,21 @@ and stays in the list until removed. Empty and unavailable previews have
 placeholders; previews load in the background without opening or changing a project. Browser uploads have no reusable local path,
 so recent projects are desktop-only. Home does not automatically reopen a project.
 
+## Net labels and power symbols
+
+**Capture → Power** or **P** opens the power/ground chooser, with GND, VCC, +3V3,
++5V and other starter presets. **Capture → Net label** or **L** opens a local
+label; **Ctrl+L** opens a global label. Their properties allow a custom net name
+and a change of type. After OK, click the anchor position to place the marker;
+**R** rotates the preview and **Esc** cancels it. Hover the marker's name or glyph
+for **E**, **M**, **R** and **Delete**, or use its context menu.
+
+Names are case-sensitive. Local labels join matching names on the same sheet;
+global labels and power/ground symbols join project-wide. A marker anchored
+exactly on a pin or wire contacts it. The Browser, Net Inspector and PCB pad
+annotations show the resolved name. [Named nets](net-labels.md) explains scope,
+aliases, shared commands and limits.
+
 ## Preferences and grid
 
 The app bar shows the project name and an unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the

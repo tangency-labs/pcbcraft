@@ -17,13 +17,12 @@ fn ribbon_reaches_sheet_and_hierarchical_label_workflows_at_both_widths() {
             assert_eq!(h.state().ribbon_tab, slot);
         }
         if width < 1000. {
-            assert!(h.query_by_label("Power symbols are not available yet.").is_none());
             click(&mut h, "Place menu");
-            assert!(h.get_by_label("Power").accesskit_node().is_disabled());
+            assert!(!h.get_by_label("Power").accesskit_node().is_disabled());
             h.key_press(Key::Escape);
             h.run();
         } else {
-            assert!(h.get_by_label("Power symbols are not available yet.").accesskit_node().is_disabled());
+            assert!(!h.get_by_label("Place power or ground (P)").accesskit_node().is_disabled());
         }
         // The scrolled button and its caption-menu entry must target the same view.
         h.get_by_label("Place hierarchical sheet (S)").scroll_to_me();
@@ -85,7 +84,7 @@ fn move_button_uses_the_symbol_move_workflow() {
     h.state_mut().select(Selection::one_symbol(symbol.clone()));
     h.run();
     let before = h.state().session.inspect();
-    click(&mut h, "Move selected symbol (M)");
+    click(&mut h, "Move selected object (M)");
     assert!(matches!(&h.state().views.active.schematic.tool, Some(Tool::Move { symbol: moved, disconnect:true, .. }) if moved.id()==symbol));
     h.key_press(Key::Escape);
     h.run();

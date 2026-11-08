@@ -366,10 +366,12 @@ impl Camera {
         for point in project.wires().iter().flat_map(|wire| project.wire_path(wire)) {
             bounds = bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN));
         }
-        for point in project.hierarchical_labels().iter().map(|l| l.at).chain(project.sheet_symbols().iter().flat_map(|block| {
-            let size = project.sheet_symbol_size(block);
-            [block.at, Point { x_nm: block.at.x_nm + size.x_nm, y_nm: block.at.y_nm + size.y_nm }]
-        })) {
+        for point in project.net_labels().iter().map(|l| l.at).chain(project.hierarchical_labels().iter().map(|l| l.at)).chain(
+            project.sheet_symbols().iter().flat_map(|block| {
+                let size = project.sheet_symbol_size(block);
+                [block.at, Point { x_nm: block.at.x_nm + size.x_nm, y_nm: block.at.y_nm + size.y_nm }]
+            }),
+        ) {
             bounds = bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN));
         }
         self.fit_bounds(bounds, rect, 1.0);

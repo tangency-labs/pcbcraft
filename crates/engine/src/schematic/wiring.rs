@@ -77,12 +77,14 @@ impl Terminal {
     }
 }
 
-/// An explicit electrical endpoint. Geometry alone never joins distinct endpoints.
+/// An explicit electrical endpoint. Ordinary coincident endpoints remain separate unless
+/// joined by a wire or an authored named contact marker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WireEndpoint {
     Terminal(Terminal),
     Junction(u64),
     Label(u64),
+    NetLabel(u64),
     SheetPin(u64),
 }
 
@@ -91,13 +93,14 @@ impl WireEndpoint {
     pub fn inspect(self) -> Value {
         match self {
             Self::Terminal(terminal) => terminal.inspect(),
+            Self::NetLabel(id) => json!({"net_label":format!("net-label-{id}")}),
             Self::Label(id) => json!({"label":format!("label-{id}")}),
             Self::SheetPin(id) => json!({"sheet_pin":format!("label-{id}")}),
             Self::Junction(id) => json!({"junction": format!("junction-{id}")}),
         }
     }
 
-    /// Parse a terminal, junction, hierarchical label or sheet pin, rejecting extra fields.
+    /// Parse a terminal, junction, named/hierarchical label or sheet pin, rejecting extra fields.
     pub fn parse(value: &Value) -> Option<Self> {
         if let Some(terminal) = Terminal::parse(value) {
             return Some(Self::Terminal(terminal));
@@ -105,6 +108,9 @@ impl WireEndpoint {
         let object = value.as_object()?;
         if object.len() != 1 {
             return None;
+        }
+        if let Some(id) = object.get("net_label").and_then(Value::as_str).and_then(|s| parse_id(s, "net-label-")) {
+            return Some(Self::NetLabel(id));
         }
         if let Some(id) = object.get("label").and_then(Value::as_str).and_then(|s| parse_id(s, "label-")) {
             return Some(Self::Label(id));
@@ -175,9 +181,10 @@ impl Wire {
 }
 
 /// The typed connectivity of a project snapshot, derived from explicit edges and endpoints.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Connectivity {
     pub nets: Vec<Vec<Terminal>>,
+    pub(crate) names: Vec<Vec<String>>,
     pub unconnected: Vec<Terminal>,
     junctions: Vec<Vec<u64>>,
     interfaces: Vec<Vec<WireEndpoint>>,
@@ -196,15 +203,20 @@ impl Connectivity {
         self.by_terminal.get(&terminal).map(|&index| self.nets[index].as_slice())
     }
 
-    /// Report terminal groups with explicit junction and hierarchical interface identities.
+    /// Report terminal groups, junction/interface identities and any resolved authored names.
     pub(crate) fn inspect(&self) -> Value {
         let nets: Vec<_> = self
             .nets
             .iter()
             .zip(&self.junctions)
             .zip(&self.interfaces)
-            .map(|((group, junctions), interfaces)| {
+            .enumerate()
+            .map(|(index, ((group, junctions), interfaces))| {
                 let mut net = json!({"terminals": group.iter().copied().map(Terminal::inspect).collect::<Vec<_>>()});
+                if !self.names[index].is_empty() {
+                    net["name"] = json!(self.names[index][0]);
+                    net["names"] = json!(self.names[index]);
+                }
                 if !junctions.is_empty() {
                     net["junctions"] = json!(junctions.iter().map(|id| format!("junction-{id}")).collect::<Vec<_>>());
                 }
@@ -254,7 +266,7 @@ impl Connectivity {
                         WireEndpoint::Terminal(terminal) => {
                             group.insert(terminal);
                         }
-                        WireEndpoint::Label(_) | WireEndpoint::SheetPin(_) => {
+                        WireEndpoint::NetLabel(_) | WireEndpoint::Label(_) | WireEndpoint::SheetPin(_) => {
                             ports.insert(endpoint);
                         }
                         WireEndpoint::Junction(id) => {
@@ -269,7 +281,8 @@ impl Connectivity {
             junctions.push(points.into_iter().collect());
             interfaces.push(ports.into_iter().collect());
         }
-        Self { nets, junctions, interfaces, unconnected, by_terminal }
+        let names = vec![Vec::new(); nets.len()];
+        Self { nets, names, junctions, interfaces, unconnected, by_terminal }
     }
 }
 
@@ -310,4 +323,57 @@ fn append_point(path: &mut Vec<super::Point>, point: super::Point) {
         }
     }
     path.push(point);
+}
+
+impl Connectivity {
+    /// Preferred authored name, or a view-local number when the group is unnamed.
+    pub fn net_name(&self, index: usize) -> String {
+        self.names.get(index).and_then(|names| names.first()).cloned().unwrap_or_else(|| format!("Net {}", index + 1))
+    }
+    /// All authored names on this group, including aliases introduced by wired connections.
+    pub fn net_names(&self, index: usize) -> &[String] {
+        self.names.get(index).map_or(&[], Vec::as_slice)
+    }
+    /// Find a group from any endpoint, including label-only and free-wire groups.
+    pub fn net_index_for_endpoint(&self, endpoint: WireEndpoint) -> Option<usize> {
+        match endpoint {
+            WireEndpoint::Terminal(pin) => self.net_index_for(pin),
+            WireEndpoint::Junction(id) => self.junctions.iter().position(|group| group.contains(&id)),
+            _ => self.interfaces.iter().position(|group| group.contains(&endpoint)),
+        }
+    }
+    /// Derive deterministic names without storing a second persistent net identity.
+    pub(crate) fn assign_names(&mut self, names: &BTreeMap<WireEndpoint, (u8, String)>) {
+        for (index, ends) in self.interfaces.iter().enumerate() {
+            let sorted: BTreeSet<_> = ends.iter().filter_map(|end| names.get(end)).cloned().collect();
+            let mut seen = BTreeSet::new();
+            self.names[index] = sorted.into_iter().map(|(_, name)| name).filter(|name| seen.insert(name.clone())).collect();
+        }
+    }
+    /// Project the complete graph onto local endpoints, retaining connections made remotely
+    /// without displaying remote terminals as if they belonged to the current sheet.
+    pub(crate) fn retain_endpoints(&mut self, own: &BTreeSet<WireEndpoint>) {
+        let mut nets = Vec::new();
+        let mut names = Vec::new();
+        let mut junctions = Vec::new();
+        let mut interfaces = Vec::new();
+        for index in 0..self.nets.len() {
+            let pins: Vec<_> = self.nets[index].iter().copied().filter(|pin| own.contains(&WireEndpoint::Terminal(*pin))).collect();
+            let points: Vec<_> = self.junctions[index].iter().copied().filter(|id| own.contains(&WireEndpoint::Junction(*id))).collect();
+            let ports: Vec<_> = self.interfaces[index].iter().copied().filter(|end| own.contains(end)).collect();
+            if pins.is_empty() && points.is_empty() && ports.is_empty() {
+                continue;
+            }
+            nets.push(pins);
+            names.push(self.names[index].clone());
+            junctions.push(points);
+            interfaces.push(ports);
+        }
+        self.unconnected.retain(|pin| own.contains(&WireEndpoint::Terminal(*pin)));
+        self.by_terminal = nets.iter().enumerate().flat_map(|(index, pins)| pins.iter().map(move |pin| (*pin, index))).collect();
+        self.nets = nets;
+        self.names = names;
+        self.junctions = junctions;
+        self.interfaces = interfaces;
+    }
 }

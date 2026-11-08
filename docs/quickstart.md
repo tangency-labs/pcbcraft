@@ -54,6 +54,17 @@ with an empty sheet and board. The compact cards wrap as the window narrows.
 On the desktop, the
 first **Save** asks for a project folder, and the project takes that folder's name.
 
+## Name nets and place power symbols
+
+Press **P** (or **Capture → Power**) to choose Ground or Power and a preset such as
+GND, VCC or +3V3. Confirm the name, then click a pin, wire or grid point to place
+its anchor. **L** opens a local label; **Ctrl+L** opens a global label. The Type
+field also selects either scope. **R** rotates a placement preview and **Esc**
+cancels it. Local names join within a sheet, while global labels and power rails
+join matching names across sheets. Hover a label and press **E** to edit, **M** to
+move, or **Delete** to remove it; Undo reverses each completed edit. See
+[named nets](net-labels.md) for contact rules and current limits.
+
 ## Make an edit and keep it
 
 1. Drag a resistor on the canvas; its wire endpoint follows. Use **Undo**, then

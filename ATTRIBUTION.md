@@ -58,6 +58,16 @@ reviewed November 7, 2026. The outline stays visible, a pupil indicates shown an
 a slash indicates hidden. Its original vector geometry is adapted to the app's
 existing theme roles and metrics; the design files remain unchanged.
 
+## Named nets and power markers
+
+The local/global/power/ground model, engine commands, sheet/3 records and chrome
+vector drawings are original PCBcraft work. Scope, value-based supply names and
+L/Ctrl+L/P controls were checked against the published
+[KiCad 10 Schematic Editor user manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html)
+(Labels, Power symbols and Actions reference, consulted November 7, 2026).
+No KiCad implementation, symbol library data, icons or artwork was read or copied.
+This slice adds no third-party dependencies or bundled assets.
+
 ## Adapted from SolidCraft
 
 [SolidCraft](https://github.com/tangency-labs/solidcraft), revision `a43cd99e554de879e2abd548f67ca963919823b0`. Copyright (c) 2026 SolidCraft contributors. MIT OR Apache-2.0, the same texts as [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).

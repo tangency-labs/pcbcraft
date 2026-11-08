@@ -30,6 +30,7 @@ mod library_preview;
 mod live_control;
 mod native_sources;
 mod net_inspector;
+mod net_labels;
 mod parts_browser;
 mod preferences;
 mod project_browser;
@@ -86,6 +87,9 @@ const COMMAND_S: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Ke
 const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::S);
 const COMMAND_N: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const COMMAND_Q: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
+const ADD_NET_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::L);
+const ADD_GLOBAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::L);
+const ADD_POWER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::P);
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
 const ADD_SHEET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::S);
 const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::H);
@@ -152,6 +156,7 @@ enum Dialog {
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
     Hierarchy(hierarchy::Edit),
+    NetLabel(net_labels::Edit),
     /// Chooses and pins a package independently of board placement.
     Footprint(footprint_assignment::Edit),
     LayerColor(board_appearance::Edit),
@@ -1081,6 +1086,7 @@ impl PcbApp {
                         Tool::SheetGesture { drag, .. } => {
                             dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
                         }
+                        Tool::NetLabel { .. } => dim("Place net label · R to rotate · Esc to cancel"),
                         Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
@@ -1194,6 +1200,7 @@ impl PcbApp {
                             self.views.active.schematic.selected_leg.as_ref(),
                             self.views.active.schematic.whole_wire_drag,
                             self.views.active.schematic.selected_sheet_symbol,
+                            self.views.active.schematic.selected_net_label,
                             &highlight,
                             input_enabled,
                             self.preferences.navigation,
@@ -1234,6 +1241,17 @@ impl PcbApp {
             return;
         }
         match (self.views.active.schematic.tool.clone(), click) {
+            (Some(Tool::NetLabel { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
+            (Some(Tool::NetLabel { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
+            (Some(Tool::NetLabel { mut label, revision }), Click::NetLabelRotate) => {
+                label.rotation = (label.rotation + 90) % 360;
+                self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision });
+            }
+            (None, Click::NetLabelSelect(id)) => {
+                self.select(Selection::default());
+                self.views.active.schematic.selected_net_label = Some(id);
+            }
+            (None, Click::NetLabelAction(label, action)) => self.net_label_action(source, label, action),
             (None, Click::SelectSheetSymbol(id)) => {
                 self.select(Selection::default());
                 self.views.active.schematic.selected_sheet_symbol = Some(id);
@@ -1466,15 +1484,38 @@ impl PcbApp {
                 self.leave_sheet();
                 return;
             }
+            if pressed(&ADD_GLOBAL_LABEL) {
+                self.begin_net_label(pcbcraft_engine::net_labels::Style::Global);
+                return;
+            }
+            if pressed(&ADD_NET_LABEL) {
+                self.begin_net_label(pcbcraft_engine::net_labels::Style::Local);
+                return;
+            }
+            if pressed(&ADD_POWER) {
+                self.begin_net_label(pcbcraft_engine::net_labels::Style::Ground);
+                return;
+            }
+            if matches!(self.views.active.schematic.tool, Some(Tool::NetLabel { .. }))
+                && pressed(&ROTATE)
+                && let Some(Tool::NetLabel { label, .. }) = &mut self.views.active.schematic.tool
+            {
+                label.rotation = (label.rotation + 90) % 360;
+            }
             if pressed(&ADD_HIERARCHICAL_LABEL) {
                 self.begin_hierarchy(hierarchy::Kind::Label);
             }
             if pressed(&ADD_SHEET) {
                 self.begin_hierarchy(hierarchy::Kind::Sheet);
             }
+            let selected_net_label = self.views.active.schematic.selected_net_label.is_some();
             let hierarchy_hovered = ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M].into_iter().any(|key| i.key_pressed(key)))
                 && self.views.active.snapshot(&self.session).is_some_and(|project| {
-                    ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| hierarchy::hovered(&project, &self.views.active.camera, pointer))
+                    selected_net_label
+                        || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| {
+                            hierarchy::hovered(&project, &self.views.active.camera, pointer)
+                                || net_labels::hovered(&project, &self.views.active.camera, ctx, pointer)
+                        })
                 });
             // Ctrl temporarily bypasses the wire grid without disabling tool controls.
             let wire_keys = Modifiers {
@@ -1619,6 +1660,7 @@ impl PcbApp {
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
+            Dialog::NetLabel(edit) => self.net_label_dialog(ctx, edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;
@@ -1957,6 +1999,9 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Edit", "Redo", key(&COMMAND_Y)));
     list.push(("Schematic", "Add symbol", key(&ADD_SYMBOL)));
     list.push(("Schematic", "Place hierarchical sheet", key(&ADD_SHEET)));
+    list.push(("Schematic", "Place local label", key(&ADD_NET_LABEL)));
+    list.push(("Schematic", "Place global label", key(&ADD_GLOBAL_LABEL)));
+    list.push(("Schematic", "Place power/ground", key(&ADD_POWER)));
     list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));

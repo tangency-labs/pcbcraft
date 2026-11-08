@@ -16,6 +16,7 @@ pub(super) struct NetInspector {
 #[derive(Debug)]
 struct Snapshot {
     nets: Vec<String>,
+    names: Vec<String>,
     unconnected: String,
 }
 
@@ -34,19 +35,31 @@ impl Snapshot {
         };
         let connectivity = project.connectivity();
         Self {
-            nets: connectivity.nets.iter().map(|net| if net.is_empty() { "Free wire".to_owned() } else { pin_labels(net) }).collect(),
+            nets: connectivity
+                .nets
+                .iter()
+                .enumerate()
+                .map(|(index, net)| {
+                    if net.is_empty() {
+                        if connectivity.net_names(index).is_empty() { "Free wire".into() } else { "No component pins".into() }
+                    } else {
+                        pin_labels(net)
+                    }
+                })
+                .collect(),
+            names: (0..connectivity.nets.len()).map(|i| connectivity.net_name(i)).collect(),
             unconnected: pin_labels(&connectivity.unconnected),
         }
     }
 
-    /// List connected groups and isolated pins independently. Net numbers are local to the view.
+    /// List resolved groups and isolated pins independently. Unnamed net numbers are view-local.
     fn show(&self, ui: &mut Ui) {
         ui.strong("Connected nets");
         if self.nets.is_empty() {
             ui.label(dim("No connected nets"));
         }
         for (index, pins) in self.nets.iter().enumerate() {
-            ui.label(format!("Net {}", index + 1));
+            ui.label(&self.names[index]);
             ui.label(dim(pins.as_str()));
         }
         ui.separator();

@@ -246,9 +246,11 @@ impl<'a> BoardView<'a> {
 /// views must not inherit whichever schematic projection happened to request them.
 fn net_label(project: &Project, terminal: crate::schematic::Terminal) -> Option<String> {
     let sheet = project.sheets.iter().find(|sheet| sheet.symbols.binary_search_by_key(&terminal.symbol, |symbol| symbol.ordinal).is_ok())?;
-    let connectivity = sheet.connectivity.get_or_init(|| crate::schematic::Connectivity::build(&sheet.symbols, &sheet.wires));
+    let projection = project.for_sheet(crate::SheetTarget { project: project.id, sheet: sheet.sheet_id })?;
+    let connectivity = projection.connectivity();
     let index = connectivity.net_index_for(terminal)?;
-    Some(if project.sheets.len() > 1 { format!("{}: Net {}", sheet.sheet_name, index + 1) } else { format!("Net {}", index + 1) })
+    let name = connectivity.net_name(index);
+    Some(if project.sheets.len() > 1 { format!("{}: {name}", sheet.sheet_name) } else { name })
 }
 
 /// Resolve saved technical rectangles and physical silk/reference paths without changing the

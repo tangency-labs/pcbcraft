@@ -124,8 +124,8 @@ struct BoardItems {
 
 impl Lists {
     /// List symbols by reference in natural order (R2 before R10), independent of the value
-    /// displayed beside it. Nets use the Net Inspector's order and numbering; a net row selects
-    /// a wire attached to one of its pins. Each board's footprints also use natural reference
+    /// displayed beside it. Nets use the inspector's resolved names and fallback numbering;
+    /// a net row selects a wire belonging to its endpoint group. Each board's footprints also use natural reference
     /// order, and each footprint row targets its stable ID and board position.
     fn read(project: Arc<Project>) -> Self {
         let mut sheets = Vec::new();
@@ -180,7 +180,7 @@ impl SheetItems {
         let connectivity = project.connectivity();
         let mut wire_for_net: Vec<Option<(String, Point)>> = vec![None; connectivity.nets.len()];
         for wire in project.wires() {
-            let Some(index) = wire.terminals().into_iter().find_map(|pin| net_index(&connectivity.nets, pin)) else { continue };
+            let Some(index) = wire.endpoints().into_iter().find_map(|end| connectivity.net_index_for_endpoint(end)) else { continue };
             if wire_for_net[index].is_none()
                 && let Some(at) = project.endpoint_position(wire.endpoints()[0])
             {
@@ -193,8 +193,12 @@ impl SheetItems {
             .zip(wire_for_net)
             .enumerate()
             .map(|(index, (pins, target))| Item {
-                label: format!("Net {}", index + 1),
-                tip: if pins.is_empty() { "Free wire".to_owned() } else { format!("{} pins · {}", pins.len(), pin_labels(project, pins)) },
+                label: connectivity.net_name(index),
+                tip: if pins.is_empty() {
+                    if connectivity.net_names(index).is_empty() { "Free wire".into() } else { "No component pins".into() }
+                } else {
+                    format!("{} pins · {}", pins.len(), pin_labels(project, pins))
+                },
                 target,
             })
             .collect();
@@ -215,11 +219,6 @@ fn append_sheet_tree(project: &Project, target: SheetTarget, ancestors: &[SheetT
     for child in project.sheets().filter(|s| project.parent_sheet(s.target) == Some(target)) {
         append_sheet_tree(project, child.target, &path, out);
     }
-}
-
-/// Find the net holding a pin by its position in the connectivity's net list.
-fn net_index(nets: &[Vec<Terminal>], pin: Terminal) -> Option<usize> {
-    nets.iter().position(|net| net.contains(&pin))
 }
 
 /// Name a net's pins as REFERENCE.PIN, as the Net Inspector does.

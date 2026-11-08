@@ -18,6 +18,7 @@ pub mod grid;
 pub mod home;
 pub mod library_sources;
 pub mod menu;
+pub mod net_label;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview;
 pub mod properties;

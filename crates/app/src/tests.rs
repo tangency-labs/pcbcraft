@@ -21,6 +21,7 @@ mod footprint_assignment;
 mod grid_spacing;
 mod hierarchy;
 mod multiple_sheets;
+mod net_labels;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
 mod ribbon;
