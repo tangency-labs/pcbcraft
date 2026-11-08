@@ -1223,8 +1223,9 @@ impl Session {
     }
 
     /// Whether the command can run now, for greying out a menu item. Setup initialization
-    /// requires an empty, unconfigured board; setup edits require existing setup. Sheet creation
-    /// stops at the sheet limit and deletion retains one sheet. Unknown IDs are unavailable.
+    /// requires an unconfigured board; populated boards require explicit pad-resolution consent
+    /// at execution. Setup edits require existing setup. Sheet creation stops at the sheet limit
+    /// and deletion retains one sheet. Unknown IDs are unavailable.
     pub fn available(&self, id: &str) -> bool {
         match id {
             library::sources::LOAD | library::sources::REMOVE | library::sources::LIST | library::sources::SEARCH => true,
