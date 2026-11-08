@@ -222,11 +222,13 @@ check the counterpart's amber highlight. Each view keeps its own edit selection,
 zoom and position, with optional panning under **View → Settings**.
 
 Both workspaces use the same **Browser**, with **Sheets** and **Boards** under the
-project. Click **Main** or **Board** to navigate within the focused pane, or unfold
-either document's arrow to browse its objects without switching. Picking a symbol,
-net or footprint opens its document and selects and centers the object.
-In the board workspace, Properties
-shows its stored reference, value, definition and unit-aware coordinate readouts.
+project. Ordinary clicks stay in the current workspace: document rows from the
+other workspace expand or collapse for inspection. To switch from a Browser row,
+right-click and choose **Open in Schematic** or **Open in PCB layout**. Object
+rows select and center within their workspace; their **Show in…** context action
+explicitly opens another workspace. The workspace picker remains available.
+In the board workspace, Properties shows its stored reference, value, definition
+and unit-aware coordinate readouts.
 
 The Layout ribbon's **Active layer** selector shows the drawing target, also named
 in the status bar. In Layers, click a full row to activate it; the arrow and

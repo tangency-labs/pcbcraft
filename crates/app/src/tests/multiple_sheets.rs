@@ -230,7 +230,7 @@ fn reopened_arrangement_keeps_sheet_targets_and_board_return_navigation() {
     let power = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
     click(&mut h, "Power");
     h.state_mut().views.active.camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 10_000_000, y_nm: 20_000_000 });
-    click(&mut h, "Open board Board");
+    crate::tests::open_browser_row(&mut h, "Board Board", "Open in PCB layout");
     let state = h.state().views.saved_state(&h.state().session).unwrap();
     let documents = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let mut app = PcbApp::default();

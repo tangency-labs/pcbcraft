@@ -317,16 +317,47 @@ impl Document {
             self.error = None;
         }
     }
-    /// Browser object rows use stable IDs; electrical numbers are editable labels only.
+    /// Match project Browser row metrics, selection and disclosure behavior. Primitive identities
+    /// stay stable while their electrical numbers change; folding never changes the definition.
     fn browser(&mut self, ui: &mut Ui) {
+        use pcbcraft_chrome::workspace::{TreeIcon, TreeRow, tree_row};
         let item = self.session.snapshot();
-        if ui.selectable_label(self.selected.is_none(), "Definition").clicked() {
+        let id = ui.make_persistent_id("definition_browser");
+        let open = ui.ctx().data(|data| data.get_temp::<bool>(id).unwrap_or(true));
+        let root = tree_row(
+            ui,
+            id,
+            &TreeRow {
+                depth: 0,
+                fold: Some(open),
+                icon: Some(if item.kind == Kind::Symbol { TreeIcon::Sheet } else { TreeIcon::Board }),
+                label: "Definition",
+                accessibility_label: None,
+                tip: "",
+                selected: self.selection.is_empty(),
+            },
+        );
+        if root.fold {
+            ui.ctx().data_mut(|data| data.insert_temp(id, !open));
+        }
+        if root.clicked {
             let _ = self.select(None);
         }
-        properties::section(ui, if item.kind == Kind::Symbol { "Symbol primitives" } else { "Footprint primitives" });
+        if !open {
+            return;
+        }
         for (id, primitive) in &item.objects {
             let label = format!("{} · {}", canvas::name(primitive), id);
-            if ui.selectable_label(self.selection.contains(id), label).clicked() {
+            let row = TreeRow {
+                depth: 1,
+                fold: None,
+                icon: Some(TreeIcon::Tool(canvas::browser_icon(primitive))),
+                label: &label,
+                accessibility_label: None,
+                tip: "",
+                selected: self.selection.contains(id),
+            };
+            if tree_row(ui, ui.make_persistent_id(("definition_primitive", id)), &row).clicked {
                 let mut selection = if ui.input(|i| i.modifiers.shift || i.modifiers.command) { self.selection.clone() } else { Default::default() };
                 if !selection.insert(*id) {
                     selection.remove(id);

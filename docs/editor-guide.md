@@ -216,11 +216,13 @@ the circuit into view and **Nets** to open the Net Inspector.
 
 The **Browser** floats over the left of the canvas and shows the project as
 **Sheets → Main → Symbols / Nets** and **Boards → Board → Footprints** under the
-project, using the same tree in schematic and PCB workspaces. Click a sheet or
-board to open it in the focused pane; its arrow unfolds it without navigating.
-Unfold **Symbols**, **Nets** or **Footprints** to list a document's objects, and
-click an object to open its document, select it and center the view on it. A net
-row selects one of its wires. With one view open, the document path and count
+project, using the same tree in schematic and PCB workspaces. Ordinary clicks
+never change workspaces: document rows navigate within the current workspace,
+or fold a branch belonging to the other workspace. Disclosure arrows only fold.
+Right-click a document for **Open in Schematic** or **Open in PCB layout**.
+Unfold **Symbols**, **Nets** or **Footprints** to inspect objects. An object click
+selects and centers within its workspace; **Show in…** in its context menu opens
+it explicitly in another workspace. A net row selects one of its wires. With one view open, the document path and count
 sit directly on the canvas beside the Browser, without a tab strip.
 Split views have one closable header above each canvas showing its document path, such as
 **Power controller › Main**. Click the Browser's title to fold it. Browsing never changes the

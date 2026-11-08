@@ -47,6 +47,15 @@ pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
     harness.run();
 }
 
+/// Open a Browser row through its explicit context action, retaining ordinary click semantics.
+pub(super) fn open_browser_row(harness: &mut Harness<'_, PcbApp>, label: &str, action: &str) {
+    harness.get_by_label(label).scroll_to_me();
+    harness.run();
+    harness.get_by_label(label).click_secondary();
+    harness.run();
+    click(harness, action);
+}
+
 /// Open the menu before activating its item in a separate frame.
 fn choose(harness: &mut Harness<'_, PcbApp>, menu: &str, item: &str) {
     click(harness, menu);

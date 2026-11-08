@@ -53,6 +53,17 @@ pub(crate) enum Action {
 }
 
 impl Action {
+    /// Explicit navigation stays available in each row's context menu across workspaces.
+    fn open_label(&self) -> Option<&'static str> {
+        match self {
+            Self::OpenDocument(DocumentTarget::Sheet(_)) => Some("Open in Schematic"),
+            Self::OpenDocument(DocumentTarget::Board(_)) => Some("Open in PCB layout"),
+            Self::Schematic { .. } => Some("Show in Schematic"),
+            Self::Footprint { .. } => Some("Show in PCB layout"),
+            Self::ManageSheet { .. } => None,
+        }
+    }
+
     /// The persistent document to reveal before selecting an object, independent of its label.
     pub(super) fn target(&self) -> Option<DocumentTarget> {
         match self {
@@ -292,7 +303,8 @@ impl ProjectBrowser {
 
     /// Render identical project/document rows in either workspace. Cached labels rebuild after
     /// edits; a different project resets folding. Item selection belongs only to the active
-    /// document, while an inactive item's click explicitly navigates to its document first.
+    /// document. Ordinary clicks stay in the current workspace; context
+    /// menu actions explicitly open a document or object in another workspace.
     pub(super) fn tree(
         &mut self,
         ui: &mut Ui,
@@ -358,11 +370,12 @@ impl ProjectBrowser {
                                 selected: active == DocumentTarget::Sheet(sheet) && id.is_some_and(|id| current.contains(id)),
                             };
                             let widget = id.map_or_else(|| ui.make_persistent_id((node, index)), |id| ui.make_persistent_id((node, id)));
-                            if workspace::tree_row(ui, widget, &row).clicked
-                                && let Some((id, at)) = &item.target
-                            {
-                                tree.picked =
-                                    Some(Action::Schematic { sheet, pick: Pick { id: id.clone(), wire: matches!(node, Node::Nets(_)), at: *at } });
+                            let response = workspace::tree_row(ui, widget, &row);
+                            if let Some((id, at)) = &item.target {
+                                tree.item(
+                                    response,
+                                    Action::Schematic { sheet, pick: Pick { id: id.clone(), wire: matches!(node, Node::Nets(_)), at: *at } },
+                                );
                             }
                         }
                     }
@@ -402,9 +415,8 @@ impl ProjectBrowser {
                             tip: &item.tip,
                             selected: active == DocumentTarget::Board(board.target) && footprints.contains(id),
                         };
-                        if workspace::tree_row(ui, ui.make_persistent_id((node, id)), &row).clicked {
-                            tree.picked = Some(Action::Footprint { board: board.target, id: id.clone(), at: *at });
-                        }
+                        let response = workspace::tree_row(ui, ui.make_persistent_id((node, id)), &row);
+                        tree.item(response, Action::Footprint { board: board.target, id: id.clone(), at: *at });
                     }
                 }
             }
@@ -432,6 +444,38 @@ struct Tree<'a> {
 }
 
 impl Tree<'_> {
+    /// A single click may navigate sheets or boards within the current workspace, never across it.
+    fn same_workspace(&self, action: &Action) -> bool {
+        matches!(
+            (self.active, action.target()),
+            (DocumentTarget::Sheet(_), Some(DocumentTarget::Sheet(_))) | (DocumentTarget::Board(_), Some(DocumentTarget::Board(_)))
+        )
+    }
+
+    /// Cross-workspace opening is an explicit menu action, shared by document and object rows.
+    fn open_menu(&mut self, ui: &mut Ui, action: &Action) -> bool {
+        let Some(label) = action.open_label() else {
+            return false;
+        };
+        let clicked = ui.button(label).clicked();
+        if clicked {
+            self.picked = Some(action.clone());
+            ui.close();
+        }
+        clicked
+    }
+
+    /// Select objects on ordinary clicks only in their workspace; explicit opens retain the
+    /// existing revision-checked navigation, selection and centering path.
+    fn item(&mut self, response: workspace::TreeResponse, action: Action) {
+        response.response.context_menu(|ui| {
+            self.open_menu(ui, &action);
+        });
+        if response.clicked && self.same_workspace(&action) {
+            self.picked = Some(action);
+        }
+    }
+
     /// Explicit folds win; otherwise unfold the path to the active child document.
     fn open(&self, node: Node) -> bool {
         self.toggled
@@ -440,17 +484,24 @@ impl Tree<'_> {
             .unwrap_or_else(|| node.open_by_default(self.active) || matches!(node,Node::Sheet(sheet) if self.ancestors.contains(&sheet)))
     }
 
-    /// Body clicks navigate documents or fold containers; the arrow only folds. Sheet context
-    /// menus return lifecycle intents, disabling creation/deletion at the project bounds.
+    /// Body clicks navigate within the current workspace or fold other branches. Context menus
+    /// explicitly cross workspaces; sheet lifecycle actions retain their bounds.
     #[allow(clippy::too_many_arguments)]
     fn branch(&mut self, ui: &mut Ui, node: Node, depth: usize, icon: TreeIcon, label: &str, selected: bool, pick: Option<Action>) -> bool {
         let open = self.open(node);
-        let access = matches!(node, Node::Board(_)).then(|| format!("Open board {label}"));
+        let access = matches!(node, Node::Board(_)).then(|| format!("Board {label}"));
         let row = TreeRow { depth, fold: Some(open), icon: Some(icon), label, accessibility_label: access.as_deref(), tip: "", selected };
         let response = workspace::tree_row(ui, ui.make_persistent_id(("project_browser", node)), &row);
-        if matches!(node, Node::Sheets | Node::Sheet(_)) {
+        if pick.is_some() || matches!(node, Node::Sheets | Node::Sheet(_)) {
             response.response.context_menu(|ui| {
-                if ui.add_enabled(self.sheet_count < pcbcraft_engine::sheets::MAX_SHEETS, egui::Button::new("New Sheet…")).clicked() {
+                if let Some(pick) = &pick
+                    && self.open_menu(ui, pick)
+                {
+                    self.reset = Some(node);
+                }
+                if matches!(node, Node::Sheets | Node::Sheet(_))
+                    && ui.add_enabled(self.sheet_count < pcbcraft_engine::sheets::MAX_SHEETS, egui::Button::new("New Sheet…")).clicked()
+                {
                     self.picked = Some(Action::ManageSheet { command: pcbcraft_engine::sheets::CREATE_SHEET, sheet: None });
                     ui.close();
                 }
@@ -470,7 +521,7 @@ impl Tree<'_> {
             self.folded = Some((node, !open));
         }
         if response.clicked {
-            if let Some(pick) = pick {
+            if let Some(pick) = pick.filter(|pick| self.same_workspace(pick)) {
                 self.reset = Some(node);
                 self.picked = Some(pick);
             } else {

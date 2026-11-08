@@ -21,6 +21,42 @@ fn library_documents_are_independent_and_revision_checked() {
 }
 
 use egui_kittest::{Harness, kittest::Queryable};
+
+/// Project and definition Browsers share row geometry and disclosure controls. Folding a
+/// definition retains its selected primitive and both document histories at normal/compact widths.
+#[test]
+fn definition_browsers_use_shared_tree_rows_and_selection_safe_folding() {
+    for width in [1200.0, 700.0] {
+        let mut h = crate::tests::harness();
+        h.state_mut().run("project.new", &json!({"name":"Browser comparison"}));
+        h.set_size(egui::vec2(width, 900.0));
+        h.run();
+        let project = h.state().session.snapshot().unwrap();
+        let row_height = h.get_by_label("Main").rect().height();
+        let header_height = h.get_by_label("Collapse Browser").rect().height();
+        for (workspace, primitive) in [("Symbol Editor", "Pin 1 · 1"), ("Footprint Editor", "Pad 1 · 1")] {
+            choose_workspace(&mut h, workspace);
+            let id = h.state().library_editors.active.unwrap();
+            let before = h.state().library_editors.documents[&id].session.snapshot();
+            let root = h.get_by_role_and_label(egui::accesskit::Role::Button, "Definition").rect();
+            let row = h.get_by_label(primitive).rect();
+            assert_eq!(root.height(), row_height);
+            assert_eq!(row.height(), row_height);
+            assert!(row.left() > root.left());
+            assert_eq!(h.get_by_label("Collapse Browser").rect().height(), header_height);
+            crate::tests::click(&mut h, primitive);
+            crate::tests::click(&mut h, "Collapse Definition");
+            assert!(h.query_by_label(primitive).is_none());
+            assert_eq!(h.state().library_editors.documents[&id].selected, Some(1));
+            crate::tests::click(&mut h, "Expand Definition");
+            h.get_by_label(primitive);
+            assert_eq!(h.state().library_editors.documents[&id].selected, Some(1));
+            assert!(Arc::ptr_eq(&before, &h.state().library_editors.documents[&id].session.snapshot()));
+            assert!(Arc::ptr_eq(&project, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}
+
 /// The actual compact and expanded forms share one draft; a bad length is retained and cannot
 /// change geometry, undo history or the project. Close and Quit both protect unapplied input.
 #[test]
