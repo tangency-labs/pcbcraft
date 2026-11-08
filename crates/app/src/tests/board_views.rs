@@ -642,11 +642,13 @@ fn opening_another_project_from_pcb_layout_binds_its_board() {
             click(&mut h, "PCB layout");
         }
         let before = h.state().views.active.input(&h.state().session).unwrap();
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(if archive {
-            "../../examples/dual-led.pc.zip"
+        // The folder case opens a private copy; see `dual_led_copy`.
+        let (_copy, path) = if archive {
+            (None, std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led.pc.zip"))
         } else {
-            "../../examples/dual-led/project.pc"
-        });
+            let (copy, path) = dual_led_copy();
+            (Some(copy), path)
+        };
         let revision = h.state().session.revision();
         h.state_mut().files.open_path_for_test(&path, revision);
         h.run();
@@ -752,7 +754,7 @@ fn physical_demo_labels_drills_and_detail_visibility() {
     use pcbcraft_engine::board::setup::{LayerPurpose, Side};
     let mut h = harness();
     h.set_size(egui::vec2(1440., 950.));
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led/project.pc");
+    let (_copy, path) = dual_led_copy();
     let revision = h.state().session.revision();
     h.state_mut().files.open_path_for_test(&path, revision);
     h.run();
