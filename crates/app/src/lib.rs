@@ -1775,7 +1775,7 @@ impl PcbApp {
                 let mut close = false;
                 let closing = shell::dialog(ctx, "about_dialog", "About PCBCraft", |ui| {
                     ui.label(format!("PCBCraft {VERSION}"));
-                    ui.label("Electronics design that feels like KiCad, built for people and agents to work on the same board.");
+                    ui.label("Electronics design for people and AI agents working together on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
                     workspace::ribbon_licenses(ui);
                     ui.hyperlink_to("Report a bug", BUG_REPORT_URL);
