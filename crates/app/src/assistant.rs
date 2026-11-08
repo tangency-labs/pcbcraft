@@ -159,11 +159,6 @@ impl Assistant {
         owns_keys
     }
 
-    /// Reserve rail space only while the restore strip is visible.
-    pub(super) fn rail_clearance(&self) -> f32 {
-        if self.visibility == Visibility::Minimized { chrome::rail_clearance() } else { 0.0 }
-    }
-
     /// The card covering this workspace, excluding a detached window or hidden feature.
     /// Uses current geometry so a resize does not leave Fit targeting last frame's bounds.
     pub(super) fn covered_rect(&self, workspace: Rect) -> Rect {
@@ -968,10 +963,7 @@ fn spans_view(ui: &mut Ui, spans: &[Span]) {
 
 #[cfg(test)]
 mod tests {
-    use egui_kittest::{
-        Harness,
-        kittest::{NodeT, Queryable},
-    };
+    use egui_kittest::{Harness, kittest::Queryable};
 
     use crate::{PcbApp, tests::click};
 
@@ -1055,7 +1047,8 @@ mod tests {
         harness.run();
         harness.key_press(egui::Key::A);
         harness.run();
-        harness.get_by_label("Move Parts library");
+        harness.get_by_label("Close Parts Catalog");
+        click(&mut harness, "Cancel");
         click(&mut harness, "Assistant");
         let point = harness.state().assistant.panel_rect.ok_or("Assistant panel is missing")?.center();
         harness.drag_at(point);
@@ -1065,14 +1058,12 @@ mod tests {
         assert!(harness.state().assistant.keyboard_active);
         harness.key_press(egui::Key::Escape);
         harness.run();
-        harness.get_by_label("Move Parts library");
+        assert!(!harness.state().parts.open);
         harness.key_press(egui::Key::A);
         harness.run();
         assert!(matches!(harness.state().dialog, crate::Dialog::None));
-        assert!(
-            !harness.get_by_role(egui::accesskit::Role::TextInput).accesskit_node().is_focused(),
-            "Assistant focus must not move to parts search"
-        );
+        assert!(!harness.state().parts.open, "Assistant focus must not open the catalog");
+        assert!(harness.query_by_label("Search parts").is_none());
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
         harness.run();
         assert!(matches!(harness.state().dialog, crate::Dialog::Preferences(_)));

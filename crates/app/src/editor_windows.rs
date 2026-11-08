@@ -68,6 +68,8 @@ impl Default for Panels {
 pub(super) struct HostPanels {
     pub(super) browser: bool,
     pub(super) parts: bool,
+    pub(super) catalog_mode: &'static str,
+    pub(super) repeat_placement: bool,
     pub(super) nets: bool,
     pub(super) properties: bool,
     pub(super) ribbon: usize,
@@ -262,6 +264,8 @@ impl PcbApp {
             return HostPanels {
                 browser: self.browser.open,
                 parts: self.parts.open,
+                catalog_mode: self.parts.presentation(),
+                repeat_placement: self.parts.repeats(),
                 nets: self.net_inspector.open,
                 properties: self.properties_open,
                 ribbon: self.ribbon_tab,
@@ -272,6 +276,8 @@ impl PcbApp {
         HostPanels {
             browser: panels.browser.open,
             parts: panels.parts.open,
+            catalog_mode: panels.parts.presentation(),
+            repeat_placement: panels.parts.repeats(),
             nets: panels.nets.open,
             properties: panels.properties,
             ribbon: panels.ribbon,

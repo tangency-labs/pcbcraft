@@ -499,7 +499,7 @@ fn mcp_attaches_junctions_and_rejects_stale_retries() {
     let command = pcbcraft_engine::ATTACH_JUNCTION;
     let description = body(&call(&mut server, "describe_command", json!({"command":command})));
     assert_eq!(description["params"]["required"], json!(["junction", "to", "expected_revision"]));
-    assert_eq!(description["params"]["properties"]["to"]["oneOf"].as_array().unwrap().len(), 5);
+    assert_eq!(description["params"]["properties"]["to"]["oneOf"].as_array().unwrap().len(), 6);
     let mut state = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"name":"Attach"}})));
     let point = |x: i64, y: i64| json!({"x_nm":x * 1_270_000,"y_nm":y * 1_270_000});
     for y in [0, 6] {

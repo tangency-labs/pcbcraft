@@ -46,7 +46,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 | File | Format | Contents |
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6` | Project UUID, name, ordered sheet list and shared components |
-| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` or `/2` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols |
+| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1`, `/2` or `/3` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors |
 | `board.json` | `pcbcraft-board/1` through `/9` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
@@ -69,11 +69,39 @@ sheet belongs to user-local presentation state and is never saved in `project.pc
 Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
 intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
-Current encoding writes version 6, sheet/1 for ordinary sheets and sheet/2 for
-sheets with hierarchy records, retaining existing board encodings. An unchanged save preserves original version-5 document bytes, and
+Current encoding writes version 6, sheet/1 for ordinary sheets, sheet/2 for
+sheets with hierarchy records and sheet/3 for sheets with named anchors, retaining existing board encodings. An unchanged save preserves original version-5 document bytes, and
 editing another document preserves an unaffected entry point. Adding or renaming
 a sheet writes the version-6 entry point. Legacy single-file encoding refuses
-multiple or renamed sheets, hierarchical labels and child symbols rather than discarding them.
+multiple or renamed sheets, hierarchical labels, child symbols and named net anchors rather than discarding them.
+
+### Named net records
+
+Sheet/3 extends sheet/2 with a required, non-null `net_labels` array, one record
+per line in stable object-ID order. Each record contains a project-unique `id`,
+case-sensitive `name`, `style` (`local`, `global`, `power` or `ground`), `at`
+point in integer nanometers and `rotation` (0, 90, 180 or 270 counterclockwise).
+Names contain 1–200 characters without surrounding whitespace or controls; each
+sheet permits at most 256 named anchors. Ground/power markers are electrical
+annotations without component IDs, references or footprint assignments.
+
+An explicit wire endpoint `{"net_label":<id>}` refers only to an anchor owned by
+that sheet. A named anchor also contacts exact coincident pins and points on
+wire segments; it is an authored connection marker, so placing one at a crossing
+joins the contacted routes. Other crossings and coincident distinct endpoints
+retain their existing behavior. Names join within a sheet, including its
+hierarchical interfaces; global/power/ground markers additionally join matching
+global names across sheets. Derived net names and graphs are never persisted as
+a second set of electrical identities. All aliases remain in inspection, with
+global names preferred for display and lexical ordering within each scope.
+
+Sheets with named anchors use version 3; sheets without them retain version 1
+or 2 as appropriate. Earlier versions reject named-label fields, and the legacy
+single-file writer refuses named anchors rather than losing them. No project
+entry-point or board-list migration is introduced. Moving/renaming a label
+changes only its record; an unchanged save retains all document bytes. Folder
+and packed-project validation rejects foreign endpoints, ID collisions, missing
+or null arrays, unknown fields/types and invalid text or geometry before adoption.
 
 ### Hierarchical sheet records
 
@@ -108,8 +136,8 @@ addresses its distinct parent-side pin. Both resolve only within their owning
 sheet. Ordinary terminal/junction ownership checks remain in force. The engine's
 project electrical graph adds an explicit link between each placed child's label
 and corresponding parent pin; coincident coordinates and repeated names on
-unrelated sheets never create cross-sheet links. Per-sheet net inspection remains
-local, while `inspect_project.project.netlist` reports the complete electrical
+unrelated sheets never create cross-sheet links. Per-sheet net inspection shows local endpoints after named connections are resolved
+project-wide, while `inspect_project.project.netlist` reports the complete electrical
 graph, including interface identities. Direction is currently descriptive; ERC is
 separate work.
 

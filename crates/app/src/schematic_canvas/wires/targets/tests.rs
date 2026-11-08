@@ -54,3 +54,26 @@ fn cached_targets_follow_history_reopening_navigation_and_grid_changes() {
         Some(Anchor::Free(camera.snap(pointer, resized)))
     );
 }
+
+/// Coincident pins and named markers form one deliberate target. A label contacting an
+/// occupied route requires W, while the explicit target remains available for wiring.
+#[test]
+fn named_contact_is_unambiguous_and_occupied_routes_keep_selection_priority() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
+    let pin = s.project().unwrap().symbols()[0].terminals()[0];
+    let point = s.project().unwrap().terminal_position(pin).unwrap();
+    run(&mut s, pcbcraft_engine::net_labels::ADD, json!({"name":"GND","style":"ground","x_nm":point.x_nm,"y_nm":point.y_nm}));
+    let end = WireEndpoint::NetLabel(s.project().unwrap().net_labels()[0].id);
+    let camera = Camera::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 700.));
+    let pos = camera.screen(point, rect);
+    let targets = Targets::new(s.project().unwrap(), &camera, rect);
+    assert_eq!(targets.automatic_node(pos), Some(Anchor::Existing(end)));
+    assert_eq!(targets.anchor(&camera, rect, pos, None, true), Some(Anchor::Existing(end)));
+    run(&mut s, DRAW_WIRE, json!({"from":pin.inspect(),"to":{"x_nm":-25_400_000,"y_nm":0},"bends":[]}));
+    let targets = Targets::new(s.project().unwrap(), &camera, rect);
+    assert_eq!(targets.automatic_node(pos), None);
+    assert_eq!(targets.anchor(&camera, rect, pos, None, true), Some(Anchor::Existing(end)));
+}

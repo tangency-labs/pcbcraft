@@ -31,6 +31,7 @@ pub struct SchematicSheet {
     pub(crate) wires: Arc<Vec<Wire>>,
     pub(crate) junctions: Arc<BTreeMap<u64, Point>>,
     pub(crate) labels: Arc<Vec<crate::hierarchy::Label>>,
+    pub(crate) net_labels: Arc<Vec<crate::net_labels::Label>>,
     pub(crate) subsheets: Arc<Vec<crate::hierarchy::SheetSymbol>>,
     pub(crate) connectivity: Arc<OnceLock<Connectivity>>,
 }
@@ -42,6 +43,7 @@ impl SchematicSheet {
             sheet_id,
             sheet_name,
             labels: Arc::default(),
+            net_labels: Arc::default(),
             subsheets: Arc::default(),
             symbols: Arc::default(),
             wires: Arc::default(),
@@ -69,6 +71,13 @@ impl Deref for Project {
 impl Project {
     /// Internal commands clone only the addressed sheet's metadata and touched geometry.
     pub(crate) fn sheet_mut(&mut self) -> &mut SchematicSheet {
+        // Labels can contact geometry and join other sheets, including in pure previews.
+        if self.has_named_nets() {
+            self.named_graph = Arc::default();
+            for sheet in Arc::make_mut(&mut self.sheets) {
+                sheet.connectivity = Arc::default();
+            }
+        }
         &mut Arc::make_mut(&mut self.sheets)[self.sheet_index]
     }
 
@@ -112,14 +121,22 @@ impl Project {
         self.sheets
             .iter()
             .map(|sheet| {
-                sheet.labels.iter().map(|l| l.id).chain(sheet.subsheets.iter().map(|s| s.id)).max().unwrap_or(0).max(
-                    sheet
-                        .symbols
-                        .last()
-                        .map_or(0, |s| s.ordinal)
-                        .max(sheet.wires.last().map_or(0, |w| w.ordinal))
-                        .max(sheet.junctions.last_key_value().map_or(0, |(&id, _)| id)),
-                )
+                sheet
+                    .labels
+                    .iter()
+                    .map(|l| l.id)
+                    .chain(sheet.net_labels.iter().map(|l| l.id))
+                    .chain(sheet.subsheets.iter().map(|s| s.id))
+                    .max()
+                    .unwrap_or(0)
+                    .max(
+                        sheet
+                            .symbols
+                            .last()
+                            .map_or(0, |s| s.ordinal)
+                            .max(sheet.wires.last().map_or(0, |w| w.ordinal))
+                            .max(sheet.junctions.last_key_value().map_or(0, |(&id, _)| id)),
+                    )
             })
             .max()
             .unwrap_or_default()

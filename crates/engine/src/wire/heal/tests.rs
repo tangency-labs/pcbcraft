@@ -3,6 +3,7 @@ use crate::{ATTACH_JUNCTION, DRAW_WIRE, HEAL_WIRES, MOVE_ITEMS, MOVE_SYMBOL, PLA
 use serde_json::{Value, json};
 
 mod detach;
+mod named_contacts;
 mod redraws;
 mod segment_slides;
 

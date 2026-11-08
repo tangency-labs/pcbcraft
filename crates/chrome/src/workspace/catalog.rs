@@ -47,7 +47,20 @@ pub struct Panel {
     collapsed: bool,
 }
 
+/// Header actions switch presentation or close the catalog without changing project data.
+#[derive(Default)]
+pub struct PanelAction {
+    pub close: bool,
+    pub expand: bool,
+}
+
 impl Panel {
+    /// Start a catalog at an explicit edge; subsequent dragging and position menus retain
+    /// the person's chosen placement independently of the expanded chooser.
+    pub fn at_position(position: Position) -> Self {
+        Self { position, ..Self::default() }
+    }
+
     /// Capture presentation without preserving an in-progress drag.
     pub fn saved_state(&self) -> PanelState {
         PanelState { position: self.position, at: self.at.map(|at| [at.x, at.y]), collapsed: self.collapsed }
@@ -168,8 +181,8 @@ impl Panel {
     /// Draw a floating card with drag, collapse, position and close controls. A collapsed card
     /// occupies only its header and does not call `add`; otherwise `add` receives whether the
     /// compact list is needed. Inherits the host's enabled state so a project dialog can also
-    /// disable cards in another window. Returns its actual rectangle and Close.
-    pub fn show(&mut self, ui: &Ui, canvas: Rect, browser: Rect, add: impl FnOnce(&mut Ui, bool)) -> (Rect, bool) {
+    /// disable cards in another window. Returns its actual rectangle and header actions.
+    pub fn show(&mut self, ui: &Ui, canvas: Rect, browser: Rect, add: impl FnOnce(&mut Ui, bool)) -> (Rect, PanelAction) {
         let rect = self.rect(canvas, browser, self.position);
         let t = Tokens::get();
         let shown = egui::Area::new("parts_browser".into())
@@ -195,12 +208,12 @@ impl Panel {
                         for widget in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active] {
                             widget.corner_radius = t.radius_md.into();
                         }
-                        let mut closed = false;
+                        let mut action = PanelAction::default();
                         ui.horizontal(|ui| {
-                            let controls_width = 3.0 * (24.0 + ui.spacing().item_spacing.x);
+                            let controls_width = 4.0 * (24.0 + ui.spacing().item_spacing.x);
                             let (header, response) =
                                 ui.allocate_exact_size(vec2((ui.available_width() - controls_width).max(1.0), HEADER_HEIGHT), Sense::drag());
-                            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Move Parts library"));
+                            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Move Parts Catalog"));
                             for x in [4.0, 8.0] {
                                 for y in [-4.0, 0.0, 4.0] {
                                     ui.painter().circle_filled(header.left_center() + vec2(x, y), 1.0, t.text_dim);
@@ -209,7 +222,7 @@ impl Panel {
                             ui.painter().text(
                                 header.left_center() + vec2(18.0, 0.0),
                                 Align2::LEFT_CENTER,
-                                "Parts library",
+                                "Parts Catalog",
                                 fonts::interface_heading(ui, t.font_body),
                                 t.text,
                             );
@@ -218,13 +231,14 @@ impl Panel {
                                 .on_hover_cursor(egui::CursorIcon::Grab)
                                 .on_hover_text("Drag to float. Release at the left or right edge to dock.");
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                closed = icon_button(ui, "Close Parts library", HeaderIcon::Close).clicked();
-                                let action = if self.collapsed { "Expand Parts library" } else { "Collapse Parts library" };
-                                if icon_button(ui, action, HeaderIcon::Collapse(self.collapsed)).clicked() {
+                                action.close = icon_button(ui, "Close Parts Catalog", HeaderIcon::Close).clicked();
+                                action.expand = icon_button(ui, "Expand Parts Catalog", HeaderIcon::Full).clicked();
+                                let label = if self.collapsed { "Expand catalog panel" } else { "Collapse catalog panel" };
+                                if icon_button(ui, label, HeaderIcon::Collapse(self.collapsed)).clicked() {
                                     self.collapsed = !self.collapsed;
                                     ui.ctx().request_repaint();
                                 }
-                                let more = icon_button(ui, "Parts library position", HeaderIcon::More);
+                                let more = icon_button(ui, "Parts Catalog position", HeaderIcon::More);
                                 egui::Popup::menu(&more).frame(menu::frame()).show(|ui| {
                                     ui.set_width(180.0);
                                     ui.label(crate::shell::dim("PANEL POSITION"));
@@ -246,7 +260,7 @@ impl Panel {
                             ui.separator();
                             add(&mut ui, rect.height() < COMPACT_HEIGHT);
                         }
-                        closed
+                        action
                     })
                     .inner
             });
@@ -270,6 +284,7 @@ enum HeaderIcon {
     Close,
     More,
     Collapse(bool),
+    Full,
 }
 
 /// Quiet 24-point header controls, with explicit accessible names rather than glyph labels.
@@ -281,6 +296,14 @@ fn icon_button(ui: &mut Ui, label: &str, icon: HeaderIcon) -> Response {
         ui.painter().rect_filled(rect, t.radius_md, if response.hovered() || response.has_focus() { t.hover } else { t.panel_header });
     }
     match icon {
+        HeaderIcon::Full => {
+            let c = rect.center();
+            let stroke = Stroke::new(1.1, t.text);
+            for sign in [-1., 1.] {
+                ui.painter().line_segment([c + vec2(-1., 1.) * sign, c + vec2(-5., 5.) * sign], stroke);
+                ui.painter().add(egui::Shape::line(vec![c + vec2(-5., 1.) * sign, c + vec2(-5., 5.) * sign, c + vec2(-1., 5.) * sign], stroke));
+            }
+        }
         HeaderIcon::More => {
             ui.painter().text(rect.center(), Align2::CENTER_CENTER, "…", FontId::proportional(t.font_body), t.text);
         }
@@ -387,15 +410,19 @@ pub fn view_picker(ui: &mut Ui, view: &mut View, compact: bool) -> View {
 }
 
 /// Scroll equal-width rows inside the remaining body and keep a single footer visible.
+/// An explicit reveal scrolls once to that item's row, including in virtualized catalogs.
 /// Small catalogs retain all accessibility targets; large catalogs paint only visible rows.
-pub fn grid<T>(ui: &mut Ui, view: View, items: &[T], mut add: impl FnMut(&mut Ui, &T, f32)) {
+pub fn grid<T>(ui: &mut Ui, view: View, items: &[T], reveal: Option<usize>, mut add: impl FnMut(&mut Ui, &T, f32)) {
     let columns = view.columns();
     ui.add_space(3.0);
-    let scroll = egui::ScrollArea::vertical()
+    let mut scroll = egui::ScrollArea::vertical()
         .id_salt("library_parts")
         .max_height((ui.available_height() - 36.0).max(0.0))
         .min_scrolled_height(0.0)
         .auto_shrink([false, false]);
+    if let Some(index) = reveal.filter(|index| *index < items.len()) {
+        scroll = scroll.vertical_scroll_offset((index / columns) as f32 * (view.tile_height() + ui.spacing().item_spacing.y));
+    }
     let rows = items.len().div_ceil(columns).max(1);
     let mut render = |ui: &mut Ui, rows: std::ops::Range<usize>| {
         if items.is_empty() {
@@ -421,12 +448,6 @@ pub fn grid<T>(ui: &mut Ui, view: View, items: &[T], mut add: impl FnMut(&mut Ui
     } else {
         scroll.show_rows(ui, view.tile_height(), rows, render);
     }
-    let t = Tokens::get();
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
-    ui.painter().hline(rect.x_range(), rect.top(), Stroke::new(1.0, t.border));
-    let text =
-        super::elided(ui.painter(), "Click a part, then the sheet. Or drag to place.", FontId::proportional(t.font_small), t.text_dim, rect.width());
-    ui.painter().galley(rect.min + vec2(0.0, 8.0), text, t.text_dim);
 }
 
 /// Labels for a catalog item. The item data and symbol geometry stay in the application.
@@ -474,7 +495,7 @@ pub fn tile(ui: &mut Ui, view: View, width: f32, item: Item<'_>, paint: impl FnO
     {
         painter.galley(at + vec2(0.0, offset), super::elided(&painter, label, font, ink, max_width.max(0.0)), ink);
     }
-    response.on_hover_text(format!("{} · {}\nClick to place or drag onto the sheet.", item.name, item.value))
+    response.on_hover_text(format!("{} · {}\nDouble-click to place or drag onto the sheet.", item.name, item.value))
 }
 
 /// Find the largest rectangular space clear of every visible card, including cards floating
@@ -519,7 +540,7 @@ mod tests {
         let items: Vec<_> = (0..1000).collect();
         let output =
             ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(300., 500.))), ..Default::default() }, |ui| {
-                grid(ui, View::Large, &items, |ui, _, width| {
+                grid(ui, View::Large, &items, None, |ui, _, width| {
                     count += 1;
                     ui.allocate_exact_size(vec2(width, View::Large.tile_height()), Sense::hover());
                 })

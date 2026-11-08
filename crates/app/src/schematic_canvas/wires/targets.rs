@@ -57,7 +57,8 @@ impl Cache {
 
 impl Targets {
     /// Resolve routes once, retaining screen-space bounds for fast rejection away from a
-    /// wire. Connected pins/junctions remain targets even though automatic starts exclude them.
+    /// wire. Connected pins/junctions and named markers contacting routes remain explicit targets,
+    /// although automatic starts exclude occupied contacts.
     pub(super) fn new(project: &Project, camera: &Camera, rect: Rect) -> Self {
         let mut result = Self { endpoints: endpoints(project, camera, rect), ..Self::default() };
         for wire in project.wires() {
@@ -72,6 +73,13 @@ impl Targets {
                 }
             }
         }
+        for label in project.net_labels() {
+            if result.segments.iter().any(|segment| pcbcraft_engine::wire::path_contains_point(&[segment.from, segment.to], label.at)) {
+                // A marker touching a route is occupied even when that route's endpoint is
+                // a component pin or junction rather than the marker's own identity.
+                result.degree.entry(WireEndpoint::NetLabel(label.id)).or_insert(1);
+            }
+        }
         result
     }
 
@@ -81,7 +89,7 @@ impl Targets {
         let end = nearest_node(&self.endpoints, pointer).ok()??;
         let degree = self.degree.get(&end).copied().unwrap_or(0);
         let allowed = match end {
-            WireEndpoint::Terminal(_) | WireEndpoint::Label(_) | WireEndpoint::SheetPin(_) => degree == 0,
+            WireEndpoint::NetLabel(_) | WireEndpoint::Terminal(_) | WireEndpoint::Label(_) | WireEndpoint::SheetPin(_) => degree == 0,
             WireEndpoint::Junction(_) => degree == 1,
         };
         allowed.then_some(Anchor::Existing(end))

@@ -64,10 +64,10 @@ fn startup_home_enters_the_workspace_only_after_a_successful_open() {
         assert_eq!(harness.state().session().project().is_some(), opened);
     }
     harness.get_by_label("Toggle Net Inspector");
-    assert!(harness.query_by_label("Move Parts library").is_none());
+    assert!(harness.query_by_label("Close Parts Catalog").is_none());
     harness.key_press(egui::Key::A);
     harness.run();
-    harness.get_by_label("Move Parts library");
+    harness.get_by_label("Close Parts Catalog");
     harness.get_by_label("Resistor");
     assert_eq!(encode_documents(harness.state().session().snapshot().unwrap()).unwrap(), documents);
 }

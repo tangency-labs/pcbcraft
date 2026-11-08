@@ -20,7 +20,7 @@ pub(super) enum Panel {
 
 impl PcbApp {
     /// Show or hide one of the bound window's panels, as the View ribbon's toggles do. Opening
-    /// Parts focuses its search, like Capture › Symbol; an already open card is left alone.
+    /// the Parts Catalog focuses search, like Capture › Symbol; an open chooser is left alone.
     pub(super) fn set_panel(&mut self, ctx: &Context, panel: Panel, open: bool) {
         match panel {
             Panel::Browser => self.browser.open = open,
@@ -311,6 +311,7 @@ mod live {
     const SCROLL: &[&str] = &["zoom", "pan"];
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
     const PANELS: &[&str] = &["browser", "parts", "nets", "properties"];
+    const CATALOG_MODES: &[&str] = &["expanded", "compact"];
     const TABS: &[&str] = &["capture", "layout", "analyze", "libraries", "manage", "view"];
     const WORKSPACES: &[&str] = &["schematic", "board"];
     const PLACEMENTS: &[&str] = &["here", "beside", "window"];
@@ -588,11 +589,21 @@ mod live {
         WindowCommand {
             id: "window.set_panel",
             title: "Show Panel",
-            summary: "Show or hide one of the window's panels: the Browser, the Parts library, the Net Inspector or the selection Properties inspector.",
+            summary: "Show or hide one of the window's panels: the Browser, the Parts Catalog, the Net Inspector or the selection Properties inspector.",
             params: &[
                 WINDOW,
                 Param { name: "panel", summary: "Which panel", required: true, kind: Kind::Choice(PANELS) },
                 Param { name: "open", summary: "Whether it shows", required: true, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
+            id: "window.set_catalog_mode",
+            title: "Catalog Presentation",
+            summary: "Show the Parts Catalog as the expanded chooser or its compact dock, retaining its library, query and selection.",
+            params: &[
+                WINDOW,
+                Param { name: "mode", summary: "Catalog presentation", required: true, kind: Kind::Choice(CATALOG_MODES) },
+                Param { name: "repeat", summary: "Keep placing the selected part or power symbol until Escape", required: false, kind: Kind::Bool },
             ],
         },
         WindowCommand {
@@ -763,6 +774,7 @@ mod live {
     /// Name the view's unfinished gesture, if any.
     fn tool_name(tool: &Tool) -> &'static str {
         match tool {
+            Tool::NetLabel { .. } => "net_label",
             Tool::SheetGesture { .. } => "sheet_geometry",
             Tool::Hierarchy { .. } => "hierarchy",
             Tool::PlaceSymbol { .. } => "place_symbol",
@@ -790,6 +802,8 @@ mod live {
                     "focused_view": host.focused.0,
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties},
+                    "catalog_mode": panels.catalog_mode,
+                    "repeat_placement": panels.repeat_placement,
                     "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
                         0 if app.views.view(host.focused).is_some_and(|view| view.workspace == Workspace::Board) => "layout",
                         0 => "capture",
@@ -944,6 +958,7 @@ mod live {
             }
             if (id.starts_with("arrangement.")
                 || id == "window.set_panel"
+                || id == "window.set_catalog_mode"
                 || (id.starts_with("view.")
                     && !matches!(
                         id,
@@ -1152,6 +1167,23 @@ mod live {
                     };
                     let open = params["open"].as_bool() == Some(true);
                     self.in_window(host, |app| app.set_panel(ctx, panel, open));
+                }
+                ("window.set_catalog_mode", _, Some(host)) => {
+                    if !self
+                        .views
+                        .hosts
+                        .get(&host)
+                        .and_then(|host| self.views.view(host.focused))
+                        .is_some_and(|view| view.definition.is_none() && view.workspace == Workspace::Schematic)
+                    {
+                        return Err("The Parts Catalog is available in a schematic view.".into());
+                    }
+                    self.in_window(host, |app| {
+                        app.parts.set_compact(ctx, params["mode"] == "compact");
+                        if let Some(repeat) = params["repeat"].as_bool() {
+                            app.parts.set_repeat(repeat);
+                        }
+                    });
                 }
                 ("window.set_ribbon_tab", _, Some(host)) => {
                     if self.views.hosts.get(&host).and_then(|host| self.views.view(host.focused)).is_some_and(|view| view.definition.is_some()) {

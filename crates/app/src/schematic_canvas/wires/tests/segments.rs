@@ -181,7 +181,7 @@ fn whole_wire_actions_and_keyboard_segment_drag_remain_distinct() {
     h.key_press(Key::G);
     h.run();
     assert!(view(&h, 1).schematic.tool.is_none(), "Typing in Parts must not start a segment drag");
-    click(&mut h, "Close Parts library");
+    click(&mut h, "Cancel");
     h.hover_at(from);
     h.run();
     h.key_press(Key::G);

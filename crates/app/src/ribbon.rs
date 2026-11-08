@@ -92,7 +92,7 @@ const CAPTURE: &[Group] = &[
         title: "Place",
         tools: &[
             tool(Action::Symbol, "Symbol", Icon::Symbol, "Add symbol (A)", "A"),
-            tool(Action::Power, "Power", Icon::Power, "Power symbols are not available yet.", ""),
+            tool(Action::Power, "Power", Icon::Power, "Place power or ground (P)", "P"),
             tool(Action::Text, "Text", Icon::Text, "Text placement is not available yet.", "T"),
         ],
         extras: &[],
@@ -102,7 +102,7 @@ const CAPTURE: &[Group] = &[
         tools: &[
             tool(Action::Wire, "Wire", Icon::Wire, "Draw wire (W)", "W"),
             tool(Action::Bus, "Bus", Icon::Bus, "Buses are not available yet.", ""),
-            tool(Action::Label, "Net label", Icon::NetLabel, "Local and global net labels are not available yet.", "L"),
+            tool(Action::Label, "Net label", Icon::NetLabel, "Place local label (L); set Scope to Global or press Ctrl+L", "L"),
         ],
         extras: &[],
     },
@@ -110,8 +110,8 @@ const CAPTURE: &[Group] = &[
     Group {
         title: "Modify",
         tools: &[
-            tool(Action::Move, "Move", Icon::Move, "Move selected symbol (M)", "M"),
-            tool(Action::Rotate, "Rotate", Icon::Rotate, "Rotate selected symbol", "R"),
+            tool(Action::Move, "Move", Icon::Move, "Move selected object (M)", "M"),
+            tool(Action::Rotate, "Rotate", Icon::Rotate, "Rotate selected object", "R"),
             tool(Action::Mirror, "Mirror", Icon::Mirror, "Mirroring is not available yet.", ""),
         ],
         extras: &[
@@ -174,7 +174,9 @@ impl Action {
     fn implemented(self) -> bool {
         matches!(
             self,
-            Self::Symbol
+            Self::Power
+                | Self::Label
+                | Self::Symbol
                 | Self::Sources
                 | Self::OpenLibraryItem
                 | Self::ResumeLibraryEditors
@@ -222,10 +224,15 @@ impl Action {
             }
             Self::NewSheet => app.session.available(pcbcraft_engine::sheets::CREATE_SHEET),
             Self::Move | Self::Rotate => {
-                schematic && app.views.active.schematic.tool.is_none() && app.views.active.schematic.selection.single_symbol().is_some()
+                schematic
+                    && app.views.active.schematic.tool.is_none()
+                    && (app.views.active.schematic.selection.single_symbol().is_some() || app.views.active.schematic.selected_net_label.is_some())
             }
             Self::Delete => {
-                schematic && (!app.views.active.schematic.selection.is_empty() || app.views.active.schematic.selected_sheet_symbol.is_some())
+                schematic
+                    && (!app.views.active.schematic.selection.is_empty()
+                        || app.views.active.schematic.selected_sheet_symbol.is_some()
+                        || app.views.active.schematic.selected_net_label.is_some())
             }
             Self::Slice => schematic && app.views.active.schematic.selected_leg.as_ref().is_some_and(|leg| leg.split.is_some()),
             Self::Heal => {
@@ -302,6 +309,8 @@ impl PcbApp {
                 self.message = self.fork_library_selection(kind).err();
             }
             Action::Symbol => self.parts.focus_search(),
+            Action::Power => self.parts.focus_power(),
+            Action::Label => self.begin_net_label(pcbcraft_engine::net_labels::Style::Local),
             Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),
             Action::NewSheet => {
@@ -311,10 +320,35 @@ impl PcbApp {
                 }
             }
             Action::Wire => self.begin_wire(),
-            Action::Move => self.edit_selected(SymbolAction::DisconnectMove),
-            Action::Rotate => self.edit_selected(SymbolAction::Rotate),
+            Action::Move | Action::Rotate => {
+                if let Some(label) = self
+                    .views
+                    .active
+                    .snapshot(&self.session)
+                    .and_then(|p| p.net_labels().iter().find(|l| Some(l.id) == self.views.active.schematic.selected_net_label).cloned())
+                {
+                    if let Some(source) = self.views.active.input(&self.session) {
+                        self.net_label_action(
+                            source,
+                            label,
+                            if action == Action::Move { crate::net_labels::Action::Move } else { crate::net_labels::Action::Rotate },
+                        );
+                    }
+                } else {
+                    self.edit_selected(if action == Action::Move { SymbolAction::DisconnectMove } else { SymbolAction::Rotate });
+                }
+            }
             Action::Delete => {
-                if let Some(id) = self.views.active.schematic.selected_sheet_symbol {
+                if let Some(label) = self
+                    .views
+                    .active
+                    .snapshot(&self.session)
+                    .and_then(|p| p.net_labels().iter().find(|l| Some(l.id) == self.views.active.schematic.selected_net_label).cloned())
+                {
+                    if let Some(source) = self.views.active.input(&self.session) {
+                        self.net_label_action(source, label, crate::net_labels::Action::Delete);
+                    }
+                } else if let Some(id) = self.views.active.schematic.selected_sheet_symbol {
                     if let Some(source) = self.views.active.input(&self.session) {
                         self.hierarchy_action(source, crate::hierarchy::Kind::Sheet, id, crate::hierarchy::Action::Delete);
                     }

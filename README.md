@@ -27,7 +27,8 @@ browser, and the PCB workspace supports footprint inspection, placement moves
 and rotation. Routing, full ERC/DRC and fabrication output are still planned.
 
 - **Schematics:** place and edit symbols, draw and reshape orthogonal wires,
-  move groups and organize flat or hierarchical sheets with shared undo/redo.
+  move groups, name nets with local/global labels and power/ground symbols, and
+  organize flat or hierarchical sheets with shared undo/redo.
 - **PCB workspace:** draw and edit Board Edge geometry, inspect physical starter footprints, move and rotate them,
   control layer visibility and highlight corresponding schematic components.
 - **Views:** work with schematic and PCB panes side by side, or use multiple

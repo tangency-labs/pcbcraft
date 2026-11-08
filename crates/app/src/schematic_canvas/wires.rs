@@ -248,7 +248,8 @@ pub(super) fn paint(
         }
         match ends.get(&id).copied().unwrap_or_default() {
             2 => {}
-            0 | 1 => paint_dangling(painter, pos, tokens.schematic_wire),
+            0 | 1 if !project.net_labels().iter().any(|label| label.at == point) => paint_dangling(painter, pos, tokens.schematic_wire),
+            0 | 1 => {}
             _ => {
                 painter.circle_filled(pos, theme::SCHEMATIC_JUNCTION_RADIUS, tokens.schematic_wire);
             }
@@ -436,14 +437,20 @@ pub(super) fn preview(
     target
 }
 
-/// Project visible, explicitly connectable identities to screen space for drawing and dragging.
+/// Project visible targets for drawing/dragging. A named marker takes priority at an exact
+/// coincident contact, because it deliberately joins those identities; unrelated ties remain ambiguous.
 fn endpoints(project: &Project, camera: &Camera, rect: Rect) -> Vec<(WireEndpoint, Pos2)> {
+    let mut named = std::collections::BTreeMap::new();
+    for label in project.net_labels() {
+        named.entry((label.at.x_nm, label.at.y_nm)).or_insert(WireEndpoint::NetLabel(label.id));
+    }
     project
         .symbols()
         .iter()
         .flat_map(|symbol| symbol.terminals().into_iter().map(WireEndpoint::Terminal).zip(symbol.pins()))
         .chain(project.hierarchy_endpoints())
         .chain(project.junctions().map(|(id, point)| (WireEndpoint::Junction(id), point)))
+        .filter(|(end, at)| named.get(&(at.x_nm, at.y_nm)).is_none_or(|preferred| preferred == end))
         .map(|(endpoint, point)| (endpoint, camera.screen(point, rect)))
         .filter(|(_, pos)| rect.contains(*pos))
         .collect()
@@ -466,6 +473,26 @@ fn nearest_node(endpoints: &[(WireEndpoint, Pos2)], at: Pos2) -> Result<Option<W
         }
     }
     if ambiguous { Err(()) } else { Ok(nearest) }
+}
+
+/// Place a named anchor at an existing contact before falling back to the snap grid. This
+/// preserves off-grid pins and wire contacts, reusing the revision-bound target cache.
+pub(super) fn label_position(
+    project: &Project,
+    camera: &Camera,
+    rect: Rect,
+    pointer: Pos2,
+    draft: &Draft,
+    revision: u64,
+    ignore: Option<WireEndpoint>,
+) -> Point {
+    draft
+        .target_cache
+        .borrow_mut()
+        .get(project, revision, camera, rect)
+        .anchor(camera, rect, pointer, ignore, true)
+        .and_then(|anchor| anchor.position(project))
+        .unwrap_or_else(|| camera.snap(pointer, rect))
 }
 
 /// Resolve an unconnected pin or free wire end for automatic starts. Occupied pins and

@@ -362,6 +362,7 @@ enum Endpoint<'a> {
     Pin { symbol: u64, pin: std::borrow::Cow<'a, str> },
     Junction { junction: u64 },
     Label { label: u64 },
+    NetLabel { net_label: u64 },
     SheetPin { sheet_pin: u64 },
 }
 
@@ -379,6 +380,7 @@ impl From<WireEndpoint> for Endpoint<'static> {
         match endpoint {
             WireEndpoint::Terminal(terminal) => Self::Pin { symbol: terminal.symbol, pin: terminal.number().to_owned().into() },
             WireEndpoint::Junction(junction) => Self::Junction { junction },
+            WireEndpoint::NetLabel(net_label) => Self::NetLabel { net_label },
             WireEndpoint::Label(label) => Self::Label { label },
             WireEndpoint::SheetPin(sheet_pin) => Self::SheetPin { sheet_pin },
         }
@@ -423,7 +425,7 @@ impl Encoder {
         if project.sheets.len() != 1 || project.sheet_name() != "Main" {
             return Err("legacy single-file encoding cannot represent multiple or renamed sheets; use split documents or a packed archive".to_owned());
         }
-        if !project.labels.is_empty() || !project.subsheets.is_empty() {
+        if !project.labels.is_empty() || !project.subsheets.is_empty() || !project.net_labels.is_empty() {
             return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
         }
         if !project.board.assignments.is_empty()
@@ -750,6 +752,10 @@ fn validate_with_hierarchy(
         junctions.insert(record.id, point);
     }
     let resolve = |endpoint: Endpoint<'_>| match endpoint {
+        Endpoint::NetLabel { net_label } => anchors
+            .contains(&WireEndpoint::NetLabel(net_label))
+            .then_some(WireEndpoint::NetLabel(net_label))
+            .ok_or_else(|| "wire points to missing named label".to_owned()),
         Endpoint::Label { label } => anchors
             .contains(&WireEndpoint::Label(label))
             .then_some(WireEndpoint::Label(label))
@@ -827,6 +833,7 @@ fn validate_with_hierarchy(
             sheet_id: sheet.id,
             sheet_name: "Main".to_owned(),
             labels: Arc::default(),
+            net_labels: Arc::default(),
             subsheets: Arc::default(),
             symbols: Arc::new(symbols),
             wires: Arc::new(wires),
@@ -838,6 +845,7 @@ fn validate_with_hierarchy(
         components: Arc::new(components),
         units: Arc::new(units),
         board: Arc::new(layout),
+        named_graph: Arc::default(),
         upgraded_from,
     }))
 }

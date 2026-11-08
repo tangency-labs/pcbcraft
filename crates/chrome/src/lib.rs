@@ -11,6 +11,7 @@ pub mod arrangements;
 pub mod assistant;
 pub mod authoring;
 pub mod board;
+pub mod catalog;
 pub mod cursor;
 pub mod editor;
 pub mod fonts;
@@ -18,6 +19,7 @@ pub mod grid;
 pub mod home;
 pub mod library_sources;
 pub mod menu;
+pub mod net_label;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview;
 pub mod properties;

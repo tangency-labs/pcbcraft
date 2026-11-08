@@ -113,11 +113,13 @@ fn different_sheets_in_split_panes_keep_edits_and_net_inspection_local() {
     assert_eq!(h.state().views.view(first).unwrap().camera.saved_state(), before);
     assert!(h.state().views.view(first).unwrap().schematic.selection.is_empty());
     click(&mut h, "Toggle Net Inspector");
-    h.get_by_label("R2.1, R2.2");
-    assert!(h.query_by_label("R1.1, R1.2").is_none());
+    h.get_by_label("R2.1");
+    h.get_by_label("R2.2");
+    assert!(h.query_by_label("R1.1").is_none());
     click(&mut h, &format!("Schematic canvas {}", first.0 + 1));
-    h.get_by_label("R1.1, R1.2");
-    assert!(h.query_by_label("R2.1, R2.2").is_none());
+    h.get_by_label("R1.1");
+    h.get_by_label("R1.2");
+    assert!(h.query_by_label("R2.1").is_none());
 }
 
 /// A stale lifecycle form cannot edit a new revision, and a view whose sheet disappeared

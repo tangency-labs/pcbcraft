@@ -54,6 +54,18 @@ with an empty sheet and board. The compact cards wrap as the window narrows.
 On the desktop, the
 first **Save** asks for a project folder, and the project takes that folder's name.
 
+## Name nets and place power symbols
+
+Press **P** (or **Capture → Power**) to open the **Parts Catalog** at its Power
+collection. Choose GND, VCC or another drawing, edit its net name in the preview
+if needed, then choose **Place** and click a pin, wire or grid point for its
+anchor. **L** opens a local label form; **Ctrl+L** opens a global label form,
+where **Scope** selects either scope. **R** rotates a placement preview and
+**Esc** cancels it. Local names join within a sheet, while global labels and
+power rails join matching names across sheets. Hover a label and press **E** to
+edit, **M** to move, or **Delete** to remove it; Undo reverses each completed edit.
+See [named nets](net-labels.md) for contact rules and current limits.
+
 ## Make an edit and keep it
 
 1. Drag a resistor on the canvas; its wire endpoint follows. Use **Undo**, then
@@ -63,15 +75,22 @@ first **Save** asks for a project folder, and the project takes that folder's na
    it picks the symbol under the pointer. Click to place it elsewhere, or **Esc**
    to cancel. Right-click → **Disconnect and Move** performs the same action. A replacement placed at the old pins reconnects
    to the preserved wire ends.
-2. Press **A** to open Parts and focus search. Search for a capacitor, click the
-   result and click the canvas to place it. **R** rotates a placement preview;
-   **Esc** cancels it. Parts stays open until you close or hide it. Dragging a
-   result directly onto the canvas also places it.
-   **Libraries → Sources** adds native library folders on desktop or uploads a
-   portable library bundle on either platform. Try the original
-   [Workshop source example](native-library-sources.md), then search **Workshop**
-   in Parts. Placed symbols keep their pinned definition and license attribution
-   after the source is removed.
+2. Press **A** to open the **Parts Catalog** and focus search. Select a library,
+   search for a capacitor and click the result to inspect its preview. Choose
+   **Place**, then click the canvas to place it. **R** rotates the placement
+   preview and **Esc** cancels it. Enable **Repeat placement** in the catalog to
+   place several copies with the same rotation, then press **Esc** to stop.
+   Double-clicking a result or pressing **Enter**
+   also starts placement; dragging a result onto the canvas places it directly.
+   **Manage libraries…** in the catalog or **Libraries → Sources** adds native
+   library folders on desktop or uploads a portable library bundle on either
+   platform. Try the original [Workshop source example](native-library-sources.md),
+   then select Workshop in the catalog. Placed symbols keep their pinned
+   definition and license attribution after the source is removed.
+   **Dock** switches the large form to a compact catalog beneath Browser; its
+   header's **Expand** control returns to the large form with the same library,
+   search and selection. The compact catalog stays open during placement and can
+   be floated or docked at either edge from its **…** menu.
 3. Click an unconnected pin or free wire end to start directly, or hover a pin,
    wire or grid point and press **W** to start there immediately. Connected nodes
    use W or **Capture → Wire**, which waits for a first click. The green wire cursor
@@ -117,8 +136,9 @@ first **Save** asks for a project folder, and the project takes that folder's na
 The status bar shows the grid point under the pointer; click its unit, or press
 **Ctrl+U**, to read coordinates and the grid in mm instead of mil. The wheel zooms
 and a middle-button drag pans by default. Preferences can change
-wheel behavior, zoom direction/speed, theme and UI scale. Parts and Browser can
-float or collapse; **View** restores a hidden panel. **Help → Keyboard Shortcuts**
+wheel behavior, zoom direction/speed, theme and UI scale. Browser and Net Inspector
+use collapsible cards over the canvas; **View** restores a hidden card and opens
+the Parts Catalog in its last presentation. **Help → Keyboard Shortcuts**
 shows the current bindings. Keyboard editing shortcuts apply to the canvas when
 a text field or dialog is not using the keys.
 
@@ -369,8 +389,12 @@ current `expected_revision`. Each inspected sheet includes its own schematic;
 omitting `sheet` is accepted only when one sheet exists. `view.open_sheet` takes
 `view` and `sheet` to navigate a live editor pane without editing the project.
 
-The live editor also offers window commands. Call `inspect_editor` for its view
-IDs, then split the window and switch to the light theme:
+The live editor also offers window commands, including
+`window.set_catalog_mode` with a window ID, `mode` of `expanded` or `compact`,
+and an optional boolean `repeat`.
+It uses the same Dock/Expand handler as the catalog and leaves the project unchanged.
+Call `inspect_editor` for its window/view IDs, then split the window and switch
+to the light theme:
 
 ```json
 {"command": "view.split", "params": {"view": 0, "split": true}}

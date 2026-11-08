@@ -58,6 +58,16 @@ reviewed November 7, 2026. The outline stays visible, a pupil indicates shown an
 a slash indicates hidden. Its original vector geometry is adapted to the app's
 existing theme roles and metrics; the design files remain unchanged.
 
+## Named nets and power markers
+
+The local/global/power/ground model, engine commands, sheet/3 records and chrome
+vector drawings are original PCBcraft work. Scope, value-based supply names and
+L/Ctrl+L/P controls were checked against the published
+[KiCad 10 Schematic Editor user manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html)
+(Labels, Power symbols and Actions reference, consulted November 7, 2026).
+No KiCad implementation, symbol library data, icons or artwork was read or copied.
+This slice adds no third-party dependencies or bundled assets.
+
 ## Adapted from SolidCraft
 
 [SolidCraft](https://github.com/tangency-labs/solidcraft), revision `a43cd99e554de879e2abd548f67ca963919823b0`. Copyright (c) 2026 SolidCraft contributors. MIT OR Apache-2.0, the same texts as [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
@@ -623,3 +633,34 @@ behavior comparison recorded in the properties/editor notes; no vendor code,
 icons, library data or fixtures were used. Parameterized text and pin labels reuse
 the existing qualified PCBcraft Technical stroke font, with its existing notices.
 No new dependency or third-party asset was added.
+
+
+## Parts Catalog and net inspection forms
+
+The large Parts Catalog in `crates/app/src/parts_browser.rs` and
+`crates/chrome/src/catalog.rs` is original upstream code using the existing
+Craft source-manager form composition, palette and typography. It replaces the
+floating Parts card described above while retaining the qualified catalog tiles,
+starter ordering and native placement path. Library identity, revision checks,
+source management and custom power names use the upstream session interfaces.
+The Net Inspector now reuses the Browser's card/tree primitives, and net-label
+properties reuse the shared aligned fields. The published [KiCad 10 Schematic Editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html)
+informed the library-selection, preview and confirmation workflow;
+no KiCad implementation source, artwork, library data or fixtures were used.
+No dependency or third-party asset was added for this UI revision.
+
+
+The optional compact Parts Catalog restores the already qualified floating-card,
+edge docking and collapse implementation in `crates/chrome/src/workspace/catalog.rs`.
+Its new Expand glyph, large-form Dock control and shared presentation state are
+original upstream code. Both forms use the same native source catalog and typed
+placement paths, with original regression fixtures and no new dependencies or
+external assets. Compact layout persistence is user-local presentation data;
+project document encodings are unchanged by this UI revision.
+
+
+Direct named-anchor dragging, physical-contact pin feedback and the shared catalog
+Repeat placement control are original upstream code. They reuse existing native
+label/part commands, geometry queries and Craft controls; no outside implementation,
+artwork, fixture or dependency was introduced. Regression circuits are constructed
+through the existing engine commands.

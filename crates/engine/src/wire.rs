@@ -149,6 +149,18 @@ impl Project {
     }
 }
 
+/// Whether an exact point touches an orthogonal path, including a corner or a repeated
+/// traversal. Contact markers need only one contact; unlike splitting a wire, they do not
+/// require a unique route index. Empty paths have no contact.
+pub fn path_contains_point(path: &[Point], at: Point) -> bool {
+    path.first() == Some(&at)
+        || path.windows(2).any(|pair| {
+            let [a, b] = [pair[0], pair[1]];
+            (a.x_nm == b.x_nm && at.x_nm == a.x_nm && (a.y_nm.min(b.y_nm)..=a.y_nm.max(b.y_nm)).contains(&at.y_nm))
+                || (a.y_nm == b.y_nm && at.y_nm == a.y_nm && (a.x_nm.min(b.x_nm)..=a.x_nm.max(b.x_nm)).contains(&at.x_nm))
+        })
+}
+
 /// Where a point lies on a drawn route: on a corner or end (by point index), or strictly inside
 /// one leg (by the index of the leg's first point).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
