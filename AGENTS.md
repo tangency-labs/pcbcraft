@@ -63,6 +63,11 @@ Legacy defaults must be explicit compatibility behavior; reject unknown IDs and
 require a target when future projects contain multiple boards. Discuss the
 persisted board-list migration before changing the native format.
 
+Read [the multiboard and sheet instance design](docs/multiboard-and-sheet-instances.md)
+and its linked instance, storage, assembly/output and net-identity contracts
+before work in those areas. They distinguish intended behavior from current
+capabilities and define the migration and acceptance cases for each slice.
+
 Treat first-class plugins as an architectural requirement (#100). Contributions
 should use explicit host interfaces for commands, tools/panels and providers,
 with capability discovery and compatibility checks when exposed to packages.
