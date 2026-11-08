@@ -2,12 +2,14 @@ use super::*;
 use crate::tests::click;
 
 /// Page navigation uses a rail on wide hosts and the same labelled chooser on compact hosts.
+/// Advance bounded frames because an active file spinner intentionally never becomes idle.
 fn page(h: &mut Harness<'_, PcbApp>, title: &str) {
     if h.query_by_label("Board setup page").is_some() {
-        click(h, "Board setup page");
+        h.get_by_label("Board setup page").click();
+        h.run_steps(2);
     }
     h.get_by_role_and_label(egui::accesskit::Role::Button, title).click();
-    h.run();
+    h.run_steps(2);
 }
 
 /// Copper counts all use the schema's single chooser, including the former starter presets.
@@ -19,7 +21,10 @@ fn count(h: &mut Harness<'_, PcbApp>, count: u64) {
     click(h, &format!("{count} copper layers"));
 }
 
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use pcbcraft_engine::{
     INITIALIZE_BOARD_SETUP, SET_BOARD_SETUP,
     persistence::{decode_documents, encode_documents},
@@ -34,13 +39,14 @@ fn harness(width: f32) -> Harness<'static, PcbApp> {
     h
 }
 
-/// Replace one real field through ordinary editing keys, retaining its accessible name.
+/// Replace or clear one real field through ordinary editing keys, retaining its accessible name.
 fn replace(h: &mut Harness<'_, PcbApp>, label: &str, text: &str) {
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).scroll_to_me();
     h.run();
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).click();
     h.run();
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).type_text(text);
     h.run();
 }
@@ -456,6 +462,115 @@ fn profile_import_is_staged_revision_checked_and_owned_by_its_form() {
     assert!(edit.error.as_ref().unwrap().contains("worker stopped"));
     click(&mut h, "Cancel");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), original);
+}
+
+/// An abandoned picker reserves the one file slot, but only its owning form waits to Apply.
+/// A reopened form can commit initial or existing setup without adopting the old result.
+#[test]
+fn abandoned_profile_job_does_not_block_reopened_setup_apply() {
+    use pcbcraft_engine::board::setup::{StackupPreset, profile::SetupProfile};
+    for width in [1200., 700.] {
+        for initialized in [false, true] {
+            let mut h = harness(width);
+            click(&mut h, "Board setup");
+            if initialized {
+                click(&mut h, "Apply board setup");
+                click(&mut h, "Board setup");
+            }
+            let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+            let source = h
+                .state()
+                .session
+                .project()
+                .unwrap()
+                .boards()
+                .next()
+                .unwrap()
+                .setup_draft(2)
+                .unwrap()
+                .with_starting_stackup(StackupPreset::Fr4TwoOz)
+                .unwrap();
+            let profile = SetupProfile::new("Abandoned import".into(), source, Default::default()).unwrap();
+            let (ticket, send) = h.state_mut().board_profile_files.stand_in();
+            let Dialog::BoardSetup(edit) = &mut h.state_mut().dialog else { panic!("setup") };
+            edit.profile_ticket = Some(ticket);
+            h.run();
+            assert!(h.get_by_label("Apply board setup").accesskit_node().is_disabled());
+            click(&mut h, "Cancel");
+            click(&mut h, "Board setup");
+            assert!(h.state().board_profile_files.busy());
+            assert!(!h.get_by_label("Apply board setup").accesskit_node().is_disabled());
+            page(&mut h, "Profiles");
+            assert!(h.get_by_label("Import profile…").accesskit_node().is_disabled());
+            assert!(h.get_by_label("Export profile…").accesskit_node().is_disabled());
+            page(&mut h, "Board editor layers");
+            replace(&mut h, "Layer name Top", "Signal");
+            click(&mut h, "Apply board setup");
+            assert!(matches!(h.state().dialog, Dialog::None));
+            assert!(h.state().board_profile_files.busy());
+            let setup = h.state().session.project().unwrap().board_setup().unwrap();
+            assert!(setup.layers().iter().any(|layer| layer.name == "Signal"));
+            assert_eq!(setup.stackup().strata[0].thickness_nm(), Some(35_000));
+            let after = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+            send.send(Ok(profile_io::Outcome::Imported(Box::new(profile)))).unwrap();
+            click(&mut h, "Board setup");
+            assert!(!h.state().board_profile_files.busy());
+            let Dialog::BoardSetup(edit) = &h.state().dialog else { panic!("setup") };
+            assert_eq!(edit.profile_name, "Board setup");
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), after);
+            click(&mut h, "Cancel");
+            click(&mut h, "Undo");
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        }
+    }
+}
+
+/// Blank, malformed and out-of-range silkscreen dimensions explain the preview failure before
+/// Apply. Apply/export share that error and cannot change authored bytes or launch a file job.
+#[test]
+fn silkscreen_validation_is_visible_before_apply_and_export() {
+    for width in [1200., 700.] {
+        for initialized in [false, true] {
+            let mut h = harness(width);
+            click(&mut h, "Board setup");
+            if initialized {
+                click(&mut h, "Apply board setup");
+                click(&mut h, "Board setup");
+            }
+            let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+            let revision = h.state().session.revision();
+            page(&mut h, "Silkscreen");
+            for (label, value, error) in [
+                ("Text height", "", "Enter a text height."),
+                ("Stroke width", "", "Enter a stroke width."),
+                ("Pad clearance", "", "Enter a pad clearance."),
+                ("Stroke width", "nope", "Invalid stroke width: Enter a number, such as 20 mil or 0.5 mm"),
+                (
+                    "Stroke width",
+                    "2 mm",
+                    "silkscreen requires positive text height up to 10 mm, stroke width up to half the text height, and clearance from 0 to 10 mm",
+                ),
+            ] {
+                let original = h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).value().unwrap();
+                replace(&mut h, label, value);
+                h.get_by_label(error);
+                assert_eq!(h.state().session.revision(), revision);
+                click(&mut h, "Apply board setup");
+                let Dialog::BoardSetup(edit) = &h.state().dialog else { panic!("setup") };
+                assert_eq!(edit.error.as_deref(), Some(error));
+                assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+                page(&mut h, "Profiles");
+                click(&mut h, "Export profile…");
+                assert!(!h.state().board_profile_files.busy());
+                let Dialog::BoardSetup(edit) = &h.state().dialog else { panic!("setup") };
+                assert_eq!(edit.error.as_deref(), Some(error));
+                page(&mut h, "Silkscreen");
+                replace(&mut h, label, &original);
+            }
+            click(&mut h, "Cancel");
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        }
+    }
 }
 
 /// Family and copper presets stay disposable until Apply, reuse immutable catalog pins, and

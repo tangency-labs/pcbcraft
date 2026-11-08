@@ -36,9 +36,10 @@ Stock ply thickness is never counted again as finished laminate thickness.
 
 Materials supports project-local specifications with sourced Tg and Dk/Df reports,
 including Tg method, basis, frequency, test method and specimen conditions. Existing
-pins are immutable: **New revision** retains the old reports and creates a distinct
-revision; choosing that revision for a dielectric is explicit. Saving a material
-only stages it in the form. Apply commits the entire board draft and Cancel discards it.
+pins are immutable: **Technical details → Add specification…** retains the old reports
+and creates a distinct revision; choosing that revision for a dielectric is explicit.
+Saving a material only stages it in the form. Apply commits the entire board draft
+and Cancel discards it.
 No electrical value, supplier property or manufacturing qualification is inferred.
 Impedance calculations and manufacturing-profile/rule editors remain follow-up work.
 Portable manufacturer/process profiles are a separate planned resource; see

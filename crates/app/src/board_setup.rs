@@ -260,14 +260,15 @@ impl PcbApp {
 
     /// Submit one validated candidate through the shared command path. Failed/stale forms retain
     /// their fields; Cancel has no effect on model, revision, undo or saved bytes. Initial and
-    /// existing setups use the same complete editor and publish only on Apply.
+    /// existing setups use the same complete editor and publish only on Apply. Only this form's
+    /// pending profile job blocks Apply; abandoned jobs still reserve the shared file slot.
     pub(super) fn board_setup_dialog(&mut self, ctx: &Context, mut edit: Box<Edit>) {
         let valid = self.views.view(edit.source.view()).is_some_and(|v| v.accepts(edit.source, &self.session));
         if !valid {
             edit.error = Some("The project or view changed. Close Board setup and reopen it to edit the current board.".into());
         }
         self.poll_setup_profile(&mut edit, valid);
-        let can_apply = valid && !self.board_profile_files.busy();
+        let can_apply = valid && edit.profile_ticket.is_none();
         let profile_busy = self.board_profile_files.busy();
         let mut profile_action = None;
         let apply_label = if edit.material_edit.is_some() { "Save material to draft" } else { "Apply board setup" };
@@ -295,30 +296,20 @@ impl PcbApp {
             self.start_setup_profile(ctx, &mut edit, action);
         }
         let apply = action.primary;
-        if apply && valid {
+        if apply && valid && edit.profile_ticket.is_none() {
             if edit.material_edit.is_some() {
                 edit.error = edit.save_material().err();
                 self.dialog = Dialog::BoardSetup(edit);
                 return;
             }
             let command = if edit.initializing { pcbcraft_engine::INITIALIZE_BOARD_SETUP } else { pcbcraft_engine::SET_BOARD_SETUP };
-            let result = edit
-                .candidate
-                .value(edit.unit)
-                .and_then(|setup| serde_json::to_value(setup).map_err(|e| e.to_string()))
-                .map(|setup| json!({"setup":setup}));
+            let result = edit.candidate.value(edit.unit).and_then(|setup| {
+                let silkscreen = edit.silk_style()?;
+                let setup = serde_json::to_value(setup).map_err(|e| e.to_string())?;
+                Ok(json!({"setup":setup,"silkscreen":silkscreen}))
+            });
             match result {
                 Ok(mut params) => {
-                    let silk = edit.silkscreen.iter().map(|length| length.value(edit.unit)).collect::<Result<Vec<_>, _>>();
-                    let silk = match silk {
-                        Ok(values) => values,
-                        Err(error) => {
-                            edit.error = Some(error);
-                            self.dialog = Dialog::BoardSetup(edit);
-                            return;
-                        }
-                    };
-                    params["silkscreen"] = json!({"text_height_nm": silk[0], "stroke_width_nm": silk[1], "pad_clearance_nm": silk[2]});
                     params["board"] = json!(edit.board.board);
                     params["expected_revision"] = json!(edit.source.revision);
                     params["resolve_existing_footprints"] = json!(edit.populated);

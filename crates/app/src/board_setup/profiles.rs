@@ -9,9 +9,16 @@ pub(super) enum ProfileAction {
     Export,
 }
 impl Edit {
-    /// Parse staged lengths without rounding untouched values, then validate the complete style.
+    /// Require every print dimension, naming blank or malformed fields without rounding untouched
+    /// values. Preview, profile export and Apply share the same complete engine validation.
     pub(super) fn silk_style(&self) -> Result<Settings, String> {
-        let values = self.silkscreen.iter().map(|length| length.value(self.unit)).collect::<Result<Vec<_>, _>>()?;
+        let values = ["text height", "stroke width", "pad clearance"]
+            .into_iter()
+            .zip(&self.silkscreen)
+            .map(|(label, length)| {
+                length.value(self.unit).map_err(|error| format!("Invalid {label}: {error}"))?.ok_or_else(|| format!("Enter a {label}."))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         serde_json::from_value(json!({"text_height_nm":values[0],"stroke_width_nm":values[1],"pad_clearance_nm":values[2]}))
             .map_err(|e| e.to_string())
     }

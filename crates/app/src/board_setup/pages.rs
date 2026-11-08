@@ -38,15 +38,23 @@ fn material_choice(ui: &mut Ui, id: impl egui::AsIdSalt, reference: &mut Option<
 
 impl Edit {
     /// Board-wide print dimensions stay staged with layers and stackup until one atomic Apply.
+    /// Invalid fields and preview failures are visible immediately beside the form controls.
     pub(super) fn silkscreen(&mut self, ui: &mut Ui) {
         form::heading(ui, "Silkscreen");
         properties::split(ui, |ui, section| {
             if section == 0 {
                 let [height, stroke, clearance] = &mut self.silkscreen;
                 form::silkscreen(ui, [&mut height.text, &mut stroke.text, &mut clearance.text]);
-            } else if let Ok(style) = self.silk_style()
-                && let Ok(preview) = pcbcraft_engine::board::silkscreen::preview(style)
-            {
+            } else {
+                let (style, preview) =
+                    match self.silk_style().and_then(|style| pcbcraft_engine::board::silkscreen::preview(style).map(|p| (style, p))) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            properties::section(ui, "Preview");
+                            ui.label(pcbcraft_chrome::shell::error(&error));
+                            return;
+                        }
+                    };
                 let paths = preview
                     .paths
                     .iter()
