@@ -413,6 +413,15 @@ Failed opens leave the active project, revision and dirty state unchanged. Edits
 made during a background save stay unsaved when its earlier snapshot completes.
 Archive publication retains the existing single-file staging and baseline check.
 
+On Windows, a folder save is refused before anything is written when a document
+path needs a name that Windows reads as a device: `con`, `prn`, `aux`, `nul`,
+`com1`–`com9` or `lpt1`–`lpt9` before the first dot, for example a pinned symbol
+with ID `con` (`con.r2.json`) or a library with ID `aux`. Windows can stage such
+a file but not publish it, so without this check the failure would come after the
+journal commit and every later open would fail in recovery. The message names the
+file; saving as a `.pc.zip` archive works, because the archive stores documents as
+ZIP entries. Other platforms save these names as ordinary files.
+
 ## Legacy migration and fixtures
 
 Plain JSON formats 1–4, split format 5 and container v1 remain readable. Formats 1–3 resolve the
