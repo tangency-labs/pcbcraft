@@ -695,9 +695,10 @@ impl Edit {
 
 impl Project {
     /// Heal the explicitly selected wires and exact pin contacts without moving symbols or
-    /// autorouting around obstacles. Missing identities and symbol selections are refused.
+    /// autorouting around obstacles. Missing identities and selections containing components
+    /// or named-net anchors are refused.
     pub fn healed_wires(&self, items: &crate::selection::Selection, revision: u64) -> Result<Project, CommandError> {
-        if !items.symbols.is_empty() || items.wires.is_empty() {
+        if !items.symbols.is_empty() || !items.net_labels.is_empty() || items.wires.is_empty() {
             return Err(CommandError::InvalidParams("select one or more wires to heal".into()));
         }
         let mut edit = Edit::new(self, revision);

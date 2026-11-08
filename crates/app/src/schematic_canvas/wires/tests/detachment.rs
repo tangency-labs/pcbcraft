@@ -389,6 +389,7 @@ fn symbol_move_hotkey_respects_explicit_selection() {
     let items = pcbcraft_engine::selection::Selection {
         symbols: h.state().session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect(),
         wires: Default::default(),
+        ..Default::default()
     };
     h.state_mut().select(items.clone());
     h.key_press(egui::Key::M);

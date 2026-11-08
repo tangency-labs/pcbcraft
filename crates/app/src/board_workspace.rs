@@ -20,6 +20,7 @@ impl PcbApp {
             || self.files.busy()
             || self.project_action_pending()
             || editor.board.draft.is_some()
+            || editor.board.box_drag.is_some()
             || editor.board.drawing.tool.is_some()
             || editor.board.drawing.source().is_some()
             || editor.board.selection.is_empty()

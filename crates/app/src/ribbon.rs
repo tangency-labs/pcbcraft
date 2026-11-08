@@ -226,17 +226,21 @@ impl Action {
             Self::Move | Self::Rotate => {
                 schematic
                     && app.views.active.schematic.tool.is_none()
-                    && (app.views.active.schematic.selection.single_symbol().is_some() || app.views.active.schematic.selected_net_label.is_some())
+                    && (app.views.active.schematic.selection.single_symbol().is_some()
+                        || app.views.active.schematic.selection.single_net_label().is_some())
             }
             Self::Delete => {
                 schematic
                     && (!app.views.active.schematic.selection.is_empty()
                         || app.views.active.schematic.selected_sheet_symbol.is_some()
-                        || app.views.active.schematic.selected_net_label.is_some())
+                        || app.views.active.schematic.selection.single_net_label().is_some())
             }
             Self::Slice => schematic && app.views.active.schematic.selected_leg.as_ref().is_some_and(|leg| leg.split.is_some()),
             Self::Heal => {
-                schematic && !app.views.active.schematic.selection.wires.is_empty() && app.views.active.schematic.selection.symbols.is_empty()
+                schematic
+                    && !app.views.active.schematic.selection.wires.is_empty()
+                    && app.views.active.schematic.selection.symbols.is_empty()
+                    && app.views.active.schematic.selection.net_labels.is_empty()
             }
             _ => project && schematic,
         }
@@ -325,7 +329,7 @@ impl PcbApp {
                     .views
                     .active
                     .snapshot(&self.session)
-                    .and_then(|p| p.net_labels().iter().find(|l| Some(l.id) == self.views.active.schematic.selected_net_label).cloned())
+                    .and_then(|p| p.net_labels().iter().find(|l| Some(l.id) == self.views.active.schematic.selection.single_net_label()).cloned())
                 {
                     if let Some(source) = self.views.active.input(&self.session) {
                         self.net_label_action(
@@ -343,7 +347,7 @@ impl PcbApp {
                     .views
                     .active
                     .snapshot(&self.session)
-                    .and_then(|p| p.net_labels().iter().find(|l| Some(l.id) == self.views.active.schematic.selected_net_label).cloned())
+                    .and_then(|p| p.net_labels().iter().find(|l| Some(l.id) == self.views.active.schematic.selection.single_net_label()).cloned())
                 {
                     if let Some(source) = self.views.active.input(&self.session) {
                         self.net_label_action(source, label, crate::net_labels::Action::Delete);

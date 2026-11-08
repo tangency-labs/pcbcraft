@@ -1221,7 +1221,6 @@ impl PcbApp {
                             self.views.active.schematic.selected_leg.as_ref(),
                             self.views.active.schematic.whole_wire_drag,
                             self.views.active.schematic.selected_sheet_symbol,
-                            self.views.active.schematic.selected_net_label,
                             &highlight,
                             self.views.active.filters,
                             input_enabled,
@@ -1270,13 +1269,8 @@ impl PcbApp {
                 self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision, drag });
             }
             (None, Click::NetLabelDrag(label, offset)) => {
-                self.select(Selection::default());
-                self.views.active.schematic.selected_net_label = Some(label.id);
+                self.select(Selection::one_net_label(label.id));
                 self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: Some(offset) });
-            }
-            (None, Click::NetLabelSelect(id)) => {
-                self.select(Selection::default());
-                self.views.active.schematic.selected_net_label = Some(id);
             }
             (None, Click::NetLabelAction(label, action)) => self.net_label_action(source, label, action),
             (None, Click::SelectSheetSymbol(id)) => {
@@ -1493,6 +1487,7 @@ impl PcbApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
                 && !self.views.active.board.drawing.escape()
                 && self.views.active.board.draft.take().is_none()
+                && self.views.active.board.box_drag.take().is_none()
             {
                 self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);
             }
@@ -1549,8 +1544,9 @@ impl PcbApp {
             if pressed(&ADD_SHEET) {
                 self.begin_hierarchy(hierarchy::Kind::Sheet);
             }
-            let selected_net_label = self.views.active.schematic.selected_net_label.is_some();
-            let hierarchy_hovered = ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M].into_iter().any(|key| i.key_pressed(key)))
+            let selected_net_label = self.views.active.schematic.selection.single_net_label().is_some();
+            let hierarchy_hovered = self.views.active.schematic.selection.len() <= 1
+                && ctx.input(|i| [Key::E, Key::Delete, Key::Backspace, Key::R, Key::M].into_iter().any(|key| i.key_pressed(key)))
                 && self.views.active.snapshot(&self.session).is_some_and(|project| {
                     selected_net_label
                         || ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pointer| {

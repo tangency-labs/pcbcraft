@@ -147,7 +147,7 @@ fn label_selection_routes_toolbar_and_keyboard_without_mutating_data() {
     h.run();
     let point = at(&h, Point { x_nm: 0, y_nm: 0 });
     click_canvas_at(&mut h, point + egui::vec2(25., -10.));
-    assert!(h.state().views.active.schematic.selected_net_label.is_some());
+    assert!(h.state().views.active.schematic.selection.single_net_label().is_some());
     assert!(matches!(h.state().dialog, Dialog::None));
     let revision = h.state().session.revision();
     h.hover_at(point + egui::vec2(200., 100.));
@@ -168,7 +168,7 @@ fn label_selection_routes_toolbar_and_keyboard_without_mutating_data() {
     let point = at(&h, Point { x_nm: 0, y_nm: 0 });
     click_canvas_at(&mut h, point + egui::vec2(25., -10.));
     click_canvas_at(&mut h, point + egui::vec2(200., 100.));
-    assert!(h.state().views.active.schematic.selected_net_label.is_none());
+    assert!(h.state().views.active.schematic.selection.single_net_label().is_none());
 }
 
 /// Marker placement uses magnetic contact coordinates even when the focused view's snap

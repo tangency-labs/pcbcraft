@@ -328,13 +328,13 @@ fn named_labels_and_power_symbols_follow_their_selection_categories() {
         let symbols = matches!(style, Style::Power | Style::Ground);
         let category = if symbols { "symbols" } else { "labels" };
         let other = if symbols { "labels" } else { "symbols" };
-        h.state_mut().views.active.schematic.selected_net_label = Some(label.id);
+        h.state_mut().select(pcbcraft_engine::selection::Selection::one_net_label(label.id));
         h.state_mut().set_selection_filters(id, &json!({other:false})).unwrap();
-        assert_eq!(h.state().views.active.schematic.selected_net_label, Some(label.id));
+        assert_eq!(h.state().views.active.schematic.selection.single_net_label(), Some(label.id));
         let revision = h.state().session.revision();
         h.state_mut().views.active.schematic.tool = Some(Tool::NetLabel { label: label.clone(), revision, drag: None });
         h.state_mut().set_selection_filters(id, &json!({category:false})).unwrap();
-        assert!(h.state().views.active.schematic.selected_net_label.is_none());
+        assert!(h.state().views.active.schematic.selection.single_net_label().is_none());
         assert!(h.state().views.active.schematic.tool.is_none());
         let point = at(&h, 0, -8);
         h.hover_at(point);

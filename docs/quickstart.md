@@ -233,6 +233,8 @@ resistor, a two-pin connector, two connections and two generic footprint
 placements. It is an inspection fixture, not a fabrication-ready board.
 
 Click the workspace tile and choose **PCB layout** to switch the focused pane.
+Drag from empty canvas to enclose footprints in a selection window, or drag
+right-to-left to select footprints the box crosses; Shift adds and Ctrl/Command toggles.
 To keep the schematic visible, click the split icon inside the PCB layout card
 (tooltip: **Open PCB layout beside current view**). On desktop, the adjacent
 window icon opens the board directly in another native window; repeat it to open

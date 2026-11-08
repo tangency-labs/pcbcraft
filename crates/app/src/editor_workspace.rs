@@ -413,12 +413,11 @@ impl EditorViews {
 
     /// Set a schematic selection, then broadcast correspondence without editing recipients.
     fn select(&mut self, mut selection: Selection, session: &Session, policy: SelectionFollow) {
-        self.active.filters.retain(&mut selection);
+        self.active.filters.retain(&mut selection, self.active.snapshot(session).as_deref());
         if self.active.workspace != Workspace::Schematic {
             return;
         }
         self.active.schematic.selected_sheet_symbol = None;
-        self.active.schematic.selected_net_label = None;
         self.active.schematic.selection = selection;
         self.selection_changed(session, policy);
     }
@@ -935,7 +934,6 @@ impl PcbApp {
                                     view.schematic.selected_leg.as_ref(),
                                     view.schematic.whole_wire_drag,
                                     view.schematic.selected_sheet_symbol,
-                                    view.schematic.selected_net_label,
                                     &highlight,
                                     view.filters,
                                     false,

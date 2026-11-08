@@ -135,7 +135,8 @@ impl ParamKind {
             Self::Junctions => json!({"type":"array","maxItems":2,"uniqueItems":true,"items":Self::JunctionId.schema()}),
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
-                "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()}
+                "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()},
+                "net_labels": {"type":"array", "maxItems":net_labels::MAX_LABELS, "uniqueItems":true, "items":Self::NetLabelId.schema()}
             }, "required":["symbols","wires"], "additionalProperties":false}),
             Self::NetLabelStyle => json!({"type":"string","enum":["local","global","power","ground"]}),
             Self::NetLabelId => json!({"type":"string","pattern":"^net-label-[1-9][0-9]*$"}),
@@ -846,7 +847,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_ITEMS,
         title: "Move Selected Items",
-        summary: "Move symbols and wire routes together; retain attached pins, connect exact pin contacts and heal touched routes. One undoable edit.",
+        summary: "Move symbols, named-net anchors and wire routes together; retain attached pins, connect exact pin contacts and heal touched routes. One undoable edit.",
         params: &[
             ITEMS,
             Param { required: true, name: "dx_nm", summary: "Horizontal displacement in nanometers", kind: ParamKind::Displacement },
@@ -858,7 +859,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: DELETE_ITEMS,
         title: "Delete Selected Items",
-        summary: "Remove symbols, selected and incident wires, and unused components/footprints. One undoable edit.",
+        summary: "Remove symbols, named-net anchors, selected and incident wires, and unused components/footprints. One undoable edit.",
         params: &[ITEMS, EXPECTED_REVISION],
     },
     Command {

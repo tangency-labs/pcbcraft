@@ -13,9 +13,24 @@ pub(crate) struct BoxDrag {
     pub button: PointerButton,
 }
 
-/// Pick an enabled symbol body or closest enabled wire, ignoring disabled types before precedence.
-pub(super) fn at(project: &Project, camera: &Camera, canvas: Rect, point: Pos2, filters: crate::selection_filters::Filters) -> Selection {
-    if let Some((symbol, _)) = filters.symbols.then(|| super::symbol_at(project, camera, canvas, point)).flatten() {
+/// Pick enabled named-anchor ink, symbol bodies or the closest wire in that order.
+/// Disabled types are ignored before applying precedence.
+pub(super) fn at(
+    ui: &egui::Ui,
+    project: &Project,
+    camera: &Camera,
+    canvas: Rect,
+    point: Pos2,
+    filters: crate::selection_filters::Filters,
+) -> Selection {
+    if let Some(label) = project
+        .net_labels()
+        .iter()
+        .rev()
+        .find(|label| filters.allows_net_label(label.style) && crate::net_labels::bounds(ui, camera, canvas, label).contains(point))
+    {
+        Selection::one_net_label(label.id)
+    } else if let Some((symbol, _)) = filters.symbols.then(|| super::symbol_at(project, camera, canvas, point)).flatten() {
         Selection::one_symbol(symbol.id())
     } else if let Some(wire) = filters.wires.then(|| super::wires::at(project, camera, canvas, point)).flatten() {
         Selection::one_wire(wire)
@@ -26,8 +41,11 @@ pub(super) fn at(project: &Project, camera: &Camera, canvas: Rect, point: Pos2, 
 
 /// Window selection contains whole symbol bodies and complete wire paths; crossing selection
 /// touches bodies or actual orthogonal segments, never merely a wire's overall bounding box.
+/// Named-net anchors, including power/ground symbols, use their painted glyph/text bounds.
 /// Disabled categories are excluded from both containment and crossing selection.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn boxed(
+    ui: &egui::Ui,
     project: &Project,
     camera: &Camera,
     canvas: Rect,
@@ -44,6 +62,12 @@ pub(super) fn boxed(
         let body = Rect::from_min_max(center + body.min.to_vec2() * camera.unit_step(), center + body.max.to_vec2() * camera.unit_step());
         if if crossing { window.intersects(body) } else { window.contains_rect(body) } {
             hits.symbols.insert(symbol.id());
+        }
+    }
+    for label in project.net_labels().iter().filter(|label| filters.allows_net_label(label.style)) {
+        let bounds = crate::net_labels::bounds(ui, camera, canvas, label);
+        if if crossing { window.intersects(bounds) } else { window.contains_rect(bounds) } {
+            hits.net_labels.insert(label.object_id());
         }
     }
     for wire in project.wires().iter().filter(|_| filters.wires) {

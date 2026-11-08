@@ -692,3 +692,9 @@ were compared with the published [KiCad 10 PCB Editor manual](https://docs.kicad
 No KiCad implementation source, icons or artwork was consulted or incorporated.
 The material UI exposes the existing project-local sourced-report and construction
 contracts; it imports no supplier data and makes no qualification claim.
+
+
+Named-net anchor group selection and PCB footprint marquees extend the existing upstream
+selection model, engine transactions and qualified chrome painter with original PCBcraft code.
+The regression fixtures are created through native commands. No external implementation,
+library data, artwork or dependency was added for this fix.

@@ -43,7 +43,7 @@ fn visual(style: Style) -> chrome::Style {
 }
 
 /// Measure name/glyph bounds without adding any shapes to the scene.
-fn bounds(ui: &Ui, camera: &Camera, rect: Rect, label: &Label) -> Rect {
+pub(super) fn bounds(ui: &Ui, camera: &Camera, rect: Rect, label: &Label) -> Rect {
     chrome::bounds(ui.painter(), camera.screen(label.at, rect), &label.name, visual(label.style), label.rotation, camera.unit_step())
 }
 
@@ -104,7 +104,15 @@ pub(super) fn hovered(project: &Project, camera: &Camera, ctx: &egui::Context, a
 }
 
 /// Paint committed labels and the pointer-bound preview. Inputs below use the same ink bounds.
-pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, project: &Project, tool: Option<&Tool>, pointer: Option<Point>, selected: Option<u64>) {
+pub(super) fn paint(
+    ui: &Ui,
+    rect: Rect,
+    camera: &Camera,
+    project: &Project,
+    tool: Option<&Tool>,
+    pointer: Option<Point>,
+    selected: &pcbcraft_engine::selection::Selection,
+) {
     let painter = ui.painter_at(rect);
     let attached = attached(project);
     let moving = match tool {
@@ -119,7 +127,7 @@ pub(super) fn paint(ui: &Ui, rect: Rect, camera: &Camera, project: &Project, too
             visual(label.style),
             label.rotation,
             camera.unit_step(),
-            if Some(label.id) == selected { Tokens::get().accent } else { Tokens::get().text },
+            if selected.net_labels.contains(&label.object_id()) { Tokens::get().accent } else { Tokens::get().text },
             attached.contains(&label.id),
         );
     }
@@ -151,7 +159,7 @@ pub(super) fn input(
     project: &Project,
     tool: Option<&Tool>,
     enabled: bool,
-    selected: Option<u64>,
+    selection: &pcbcraft_engine::selection::Selection,
     placement: Option<Point>,
     filters: crate::selection_filters::Filters,
 ) -> Option<Option<Click>> {
@@ -198,7 +206,13 @@ pub(super) fn input(
         && let Some(label) =
             project.net_labels().iter().rev().find(|label| filters.allows_net_label(label.style) && bounds(ui, camera, rect, label).contains(origin))
     {
-        return Some(Some(Click::NetLabelDrag(label.clone(), camera.screen(label.at, rect) - origin)));
+        if selection.len() <= 1 || !selection.net_labels.contains(&label.object_id()) {
+            return Some(Some(Click::NetLabelDrag(label.clone(), camera.screen(label.at, rect) - origin)));
+        }
+        return None;
+    }
+    if selection.len() > 1 {
+        return None;
     }
     let hit = response
         .hover_pos()
@@ -235,8 +249,9 @@ pub(super) fn input(
         return None;
     }
     let hovered = hit.is_some();
-    let label =
-        hit.or_else(|| selected.and_then(|id| project.net_labels().iter().find(|l| l.id == id && filters.allows_net_label(l.style)).cloned()))?;
+    let label = hit.or_else(|| {
+        selection.single_net_label().and_then(|id| project.net_labels().iter().find(|l| l.id == id && filters.allows_net_label(l.style)).cloned())
+    })?;
     for (key, action) in [
         (Key::E, Action::Properties),
         (Key::M, Action::Move),
@@ -253,7 +268,12 @@ pub(super) fn input(
     }
     // Keep the anchor available to click-to-wire; clicking ink selects only this marker.
     if hovered && response.clicked() && response.hover_pos().is_some_and(|p| camera.screen(label.at, rect).distance(p) > 6.) {
-        return Some(Some(Click::NetLabelSelect(label.id)));
+        let modifiers = ui.input(|i| i.modifiers);
+        return Some(Some(Click::SelectItems(selection.combine(
+            &pcbcraft_engine::selection::Selection::one_net_label(label.id),
+            modifiers.shift,
+            modifiers.ctrl || modifiers.command,
+        ))));
     }
     None
 }

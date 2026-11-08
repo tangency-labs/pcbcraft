@@ -42,8 +42,12 @@ impl Filters {
         Value::Object(self.rows(workspace).into_iter().filter(|row| row.enabled).map(|row| (row.key.to_owned(), Value::Bool(row.checked))).collect())
     }
 
-    /// Restrict component/wire selection without changing geometry or connectivity.
-    pub(super) fn retain(self, selection: &mut Selection) {
+    /// Restrict components, wires and named anchors without changing geometry or connectivity.
+    /// Named-anchor styles are resolved on the addressed sheet; absent anchors are dropped.
+    pub(super) fn retain(self, selection: &mut Selection, project: Option<&pcbcraft_engine::Project>) {
+        selection
+            .net_labels
+            .retain(|id| project.is_some_and(|p| p.net_labels().iter().any(|label| label.object_id() == *id && self.allows_net_label(label.style))));
         if !self.symbols {
             selection.symbols.clear();
         }
@@ -104,16 +108,12 @@ impl PcbApp {
         }
         let collapsed = params.get("collapsed").map(|v| v.as_bool().ok_or("`collapsed` must be true or false")).transpose()?;
         let open = params.get("open").map(|v| v.as_bool().ok_or("`open` must be true or false")).transpose()?;
-        let selected_net_label = view.schematic.selected_net_label.filter(|id| {
-            view.snapshot(&self.session)
-                .is_some_and(|project| project.net_labels().iter().any(|label| label.id == *id && next.allows_net_label(label.style)))
-        });
+        let project = view.snapshot(&self.session);
         let view = self.views.view_mut(id).ok_or("The addressed view closed")?;
         if next != view.filters {
             view.release_input();
             view.filters = next;
-            next.retain(&mut view.schematic.selection);
-            view.schematic.selected_net_label = selected_net_label;
+            next.retain(&mut view.schematic.selection, project.as_deref());
             if !next.wires {
                 view.schematic.selected_leg = None;
                 view.schematic.whole_wire_drag = false;

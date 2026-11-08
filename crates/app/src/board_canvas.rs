@@ -27,6 +27,17 @@ pub(super) struct Draft {
     drag: bool,
 }
 
+/// A disposable marquee captures its view/revision and starting selection until release.
+#[derive(Clone, Debug)]
+pub(super) struct BoxDrag {
+    pub(super) source: ViewInput,
+    start: egui::Pos2,
+    base: BTreeSet<String>,
+    add: bool,
+    toggle: bool,
+    button: PointerButton,
+}
+
 /// Selection and authored intent are handled after the renderer releases its view/session borrows.
 #[derive(Default)]
 pub(super) struct Interaction {
@@ -35,7 +46,10 @@ pub(super) struct Interaction {
     pub(super) edit: Option<Draft>,
 }
 
-/// Select or preview one footprint at a time. Drags retain their grab offset; M moves the origin
+/// Select footprints by click or directional marquee; preview one footprint transform at a time.
+/// Empty-space primary drags and secondary drags box-select visible footprint bounds; Shift adds
+/// and Ctrl/Command toggles against the captured selection. Invalid release cancels the box.
+/// Transform drags retain their grab offset; M moves the origin
 /// to the pointer. R rotates counterclockwise, including during a move. Only completion on the
 /// canvas emits an edit; secondary click, disabled input or stale authority discards the draft.
 /// Footprint moves retain placement clicks over edges and win overlapping drag starts unless
@@ -87,6 +101,10 @@ pub(super) fn show(
     let hit = |pointer: egui::Pos2| {
         footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| (filters.footprints && bounds.contains(pointer)).then_some(footprint))
     };
+    let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
+    if !enabled || lost_focus || state.box_drag.as_ref().is_some_and(|drag| Some(drag.source) != source) {
+        state.box_drag = None;
+    }
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
     let drag_start = response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
@@ -106,7 +124,7 @@ pub(super) fn show(
         state.active_layer.as_deref(),
         &state.hidden_layers,
         source,
-        enabled && state.draft.is_none() && !footprint_drag,
+        enabled && state.draft.is_none() && state.box_drag.is_none() && !footprint_drag,
         state.move_requested,
         filters.graphics,
     );
@@ -125,7 +143,26 @@ pub(super) fn show(
     if cancelled {
         state.draft = None;
     }
-    if enabled && !cancelled {
+    if enabled
+        && !lost_focus
+        && state.box_drag.is_none()
+        && state.draft.is_none()
+        && state.drawing.tool.is_none()
+        && state.drawing.source().is_none()
+        && let Some(source) = source
+        && let Some(start) = ui.input(|i| i.pointer.press_origin())
+        && (response.drag_started_by(PointerButton::Secondary) || (response.drag_started_by(PointerButton::Primary) && hit(start).is_none()))
+    {
+        state.box_drag = Some(BoxDrag {
+            source,
+            start,
+            base: state.selection.clone(),
+            add: modifiers.shift,
+            toggle: modifiers.ctrl || modifiers.command,
+            button: if response.drag_started_by(PointerButton::Secondary) { PointerButton::Secondary } else { PointerButton::Primary },
+        });
+    }
+    if enabled && !cancelled && !lost_focus && state.box_drag.is_none() {
         if state.draft.is_none()
             && visible
             && filters.footprints
@@ -219,6 +256,30 @@ pub(super) fn show(
             highlighted.contains(&footprint.id),
         );
     }
+    if let Some(drag) = &state.box_drag
+        && let Some(pointer) = ui.input(|i| i.pointer.interact_pos())
+    {
+        let window = egui::Rect::from_two_pos(drag.start, pointer);
+        let crossing = pointer.x < drag.start.x;
+        debug_assert_eq!(hit_bounds.len(), project.footprints().count());
+        let hits: BTreeSet<_> = footprints_for_box(project, &hit_bounds, window, crossing, filters.footprints);
+        pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len());
+        if ui.input(|i| i.pointer.button_released(drag.button)) {
+            if enabled && response.contains_pointer() {
+                let mut selection = if drag.add || drag.toggle { drag.base.clone() } else { BTreeSet::new() };
+                for id in hits {
+                    if !drag.toggle || !selection.remove(&id) {
+                        selection.insert(id);
+                    }
+                }
+                state.drawing.selected = None;
+                out.selection = Some(selection);
+            }
+            state.box_drag = None;
+        } else if !ui.input(|i| i.pointer.button_down(drag.button)) {
+            state.box_drag = None;
+        }
+    }
     if project.footprints().next().is_none() && project.drawings().is_empty() && state.drawing.tool.is_none() {
         board::empty(&p, rect);
     }
@@ -226,6 +287,20 @@ pub(super) fn show(
         response.on_hover_cursor(egui::CursorIcon::Grabbing);
     }
     out
+}
+
+/// Select only visible footprint bounds, sharing the exact geometry used for click picking.
+/// A window requires full containment; crossing requires overlap. Empty hidden bounds never hit.
+/// `bounds` must contain one entry per `project.footprints()` item in the same iteration order.
+fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egui::Rect, crossing: bool, enabled: bool) -> BTreeSet<String> {
+    project
+        .footprints()
+        .zip(bounds)
+        .filter_map(|(footprint, bounds)| {
+            (enabled && bounds.is_positive() && if crossing { window.intersects(*bounds) } else { window.contains_rect(*bounds) })
+                .then_some(footprint.id)
+        })
+        .collect()
 }
 
 /// Transform resolved pad offsets only for painting; pad identities and authored snapshots stay intact.
