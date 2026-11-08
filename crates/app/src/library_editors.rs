@@ -322,11 +322,11 @@ impl Document {
     fn browser(&mut self, ui: &mut Ui) {
         use pcbcraft_chrome::workspace::{TreeIcon, TreeRow, tree_row};
         let item = self.session.snapshot();
-        let id = ui.make_persistent_id("definition_browser");
-        let open = ui.ctx().data(|data| data.get_temp::<bool>(id).unwrap_or(true));
+        let fold_id = ui.make_persistent_id("definition_browser");
+        let open = ui.ctx().data(|data| data.get_temp::<bool>(fold_id).unwrap_or(true));
         let root = tree_row(
             ui,
-            id,
+            fold_id,
             &TreeRow {
                 depth: 0,
                 fold: Some(open),
@@ -338,7 +338,7 @@ impl Document {
             },
         );
         if root.fold {
-            ui.ctx().data_mut(|data| data.insert_temp(id, !open));
+            ui.ctx().data_mut(|data| data.insert_temp(fold_id, !open));
         }
         if root.clicked {
             let _ = self.select(None);
@@ -346,8 +346,8 @@ impl Document {
         if !open {
             return;
         }
-        for (id, primitive) in &item.objects {
-            let label = format!("{} · {}", canvas::name(primitive), id);
+        for (object_id, primitive) in &item.objects {
+            let label = format!("{} · {}", canvas::name(primitive), object_id);
             let row = TreeRow {
                 depth: 1,
                 fold: None,
@@ -355,12 +355,12 @@ impl Document {
                 label: &label,
                 accessibility_label: None,
                 tip: "",
-                selected: self.selection.contains(id),
+                selected: self.selection.contains(object_id),
             };
-            if tree_row(ui, ui.make_persistent_id(("definition_primitive", id)), &row).clicked {
+            if tree_row(ui, ui.make_persistent_id(("definition_primitive", object_id)), &row).clicked {
                 let mut selection = if ui.input(|i| i.modifiers.shift || i.modifiers.command) { self.selection.clone() } else { Default::default() };
-                if !selection.insert(*id) {
-                    selection.remove(id);
+                if !selection.insert(*object_id) {
+                    selection.remove(object_id);
                 }
                 let _ = self.select_many(selection);
             }
