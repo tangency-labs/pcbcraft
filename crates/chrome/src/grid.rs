@@ -184,8 +184,9 @@ pub fn opacity_control(ui: &mut Ui, opacity_percent: &mut u8) -> bool {
 /// applied; invalid text shows why under the field and keeps the current spacing. `every` is
 /// [`shown_every`] for the view; `style` labels sparser visible dots/lines and suppresses that
 /// annotation for a hidden grid. Style is read-only here and configured through Preferences.
-/// The field's text is kept in egui's temporary memory under the button. Every spacing is shown in
-/// `unit`, and a number typed without a unit is read in it. Returns true when the spacing changed.
+/// The field's text is kept in egui's temporary memory under the button. Menu and accessible
+/// labels include `unit`; the status-bar caption shares the adjacent unit switch instead of
+/// repeating its suffix. A number typed without a unit is read in it. Returns true when the spacing changed.
 pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_nm: i64, every: u32, unit: Unit, style: Style) -> bool {
     let t = Tokens::get();
     let before = *spacing_nm;
@@ -196,8 +197,10 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
     } else {
         format!("Grid {current}")
     };
-    let button = egui::Button::new(RichText::new(text).size(t.font_label)).frame(false);
+    let caption = text.replace(&format!(" {}", unit.symbol()), "");
+    let button = egui::Button::new(RichText::new(caption).size(t.font_label)).frame(false);
     let response = ui.add(button).on_hover_text("Grid spacing of the focused view (N, Shift+N)");
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &text));
     let field_id = response.id.with("custom_spacing");
     egui::Popup::menu(&response)
         .frame(menu::frame())

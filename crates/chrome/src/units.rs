@@ -132,6 +132,19 @@ pub fn label(nm: i64, unit: Unit) -> String {
     format!("{text} {}", unit.symbol())
 }
 
+/// Format an editable length with enough precision to round-trip whole nanometres through
+/// [`parse_length`] within [`MAX_LENGTH_NM`]. An explicit suffix keeps a draft's physical meaning
+/// when the display unit changes; unlike [`label`], this must not round stored coordinates away.
+pub fn edit_label(nm: i64, unit: Unit) -> String {
+    let decimals = match unit {
+        Unit::Mil => 5,
+        Unit::Mm => 6,
+    };
+    let text = format!("{:.*}", decimals, nm as f64 / unit.nm() as f64);
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    format!("{text} {}", unit.symbol())
+}
+
 /// A coordinate for a readout, with a fixed number of decimals so the text doesn't jump as the
 /// pointer moves: "1250.00" in mils, "31.7500" in millimetres. The unit is shown separately.
 pub fn readout(nm: i64, unit: Unit) -> String {
@@ -172,6 +185,17 @@ mod tests {
         assert_eq!(label(NM_PER_MIL, Unit::Mm), "0.0254 mm");
         assert_eq!(parse_length("1 in", Unit::Mm), Ok(1000 * NM_PER_MIL));
         assert_eq!(parse_length("0.5\"", Unit::Mm), Ok(500 * NM_PER_MIL));
+    }
+
+    /// Editing an unchanged field must preserve every nanometre, including values that labels
+    /// round to zero and coordinates near the accepted extremes, in either display unit.
+    #[test]
+    fn editable_lengths_round_trip_nanometres() {
+        for unit in [Unit::Mil, Unit::Mm] {
+            for nm in [0, 1, -1, 25_401, -123_456_789, 987_299_999, MAX_LENGTH_NM - 1, -MAX_LENGTH_NM] {
+                assert_eq!(parse_length(&edit_label(nm, unit), unit.toggled()), Ok(nm), "{nm} {unit:?}");
+            }
+        }
     }
 
     /// A bare number takes the display unit; a typed unit wins over it, in any case and spacing.

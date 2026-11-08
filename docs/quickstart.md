@@ -227,10 +227,13 @@ Wayland and X11; Windows and macOS still need platform qualification.
 
 ## Inspect and edit component properties
 
-Select a symbol to use the compact **Properties** card. Edit reference, value or
-rotation and choose **Apply changes**, or open **More properties** for the
+Select a symbol to use the compact **Properties** card. Edit reference, value,
+rotation or its **X/Y** position and choose **Apply changes**, or open **More properties** for the
 expanded form. **E** opens the same form. **OK** applies the supported properties
-as one undo step; **Cancel** leaves the project unchanged. The Pin functions and
+as one undo step, with attached wires following a position change. Coordinates
+accept explicit units such as `100 mil` or `2.54 mm`; a bare number uses the
+display unit. **Reset changes** discards the compact draft, and **Cancel** discards the
+expanded draft without changing the project. The Pin functions and
 Library tabs show the exact definition retained by the project. The **Footprint**
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.

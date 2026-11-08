@@ -1,8 +1,14 @@
 //! Compact selection properties and an expanded form edit the same revision-bound draft.
 use crate::{Dialog, PcbApp, ViewInput};
 use egui::{Rect, Ui};
-use pcbcraft_chrome::{properties as chrome, shell};
-use pcbcraft_engine::{SET_SYMBOL_FIELDS, schematic::SymbolDefinition};
+use pcbcraft_chrome::{
+    properties as chrome, shell,
+    units::{self, Unit},
+};
+use pcbcraft_engine::{
+    SET_SYMBOL_FIELDS,
+    schematic::{Point, SymbolDefinition},
+};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -29,6 +35,10 @@ pub(super) struct Edit {
     reference: String,
     value: String,
     rotation: u16,
+    x: String,
+    y: String,
+    units: Unit,
+    original_position: Point,
     original: (String, String, u16),
     tab: Tab,
     error: Option<String>,
@@ -47,13 +57,44 @@ impl Edit {
     /// Keep pending changes distinguishable from a view-only inspection.
     fn changed(&self) -> bool {
         (&self.reference, &self.value, self.rotation) != (&self.original.0, &self.original.1, self.original.2)
+            || self.position() != Ok(self.original_position)
     }
 
-    /// The compact and expanded forms share reference/value/orientation controls.
-    fn fields(&mut self, ui: &mut Ui) {
+    /// Parse both axes before submitting any field, naming invalid coordinates in the error.
+    /// The command validates the narrower schematic bounds before committing the whole draft.
+    fn position(&self) -> Result<Point, String> {
+        Ok(Point {
+            x_nm: units::parse_length(&self.x, self.units).map_err(|error| format!("X: {error}"))?,
+            y_nm: units::parse_length(&self.y, self.units).map_err(|error| format!("Y: {error}"))?,
+        })
+    }
+
+    /// Reformat valid draft coordinates in the new display unit without applying them. Invalid
+    /// text stays visible for correction, with bare values subsequently read in the new unit.
+    fn set_units(&mut self, unit: Unit) {
+        if self.units != unit {
+            for text in [&mut self.x, &mut self.y] {
+                if let Ok(nm) = units::parse_length(text, self.units) {
+                    *text = units::edit_label(nm, unit);
+                }
+            }
+            self.units = unit;
+        }
+    }
+
+    /// Both forms edit the same placement draft. Enter in a coordinate field requests Apply.
+    fn position_fields(ui: &mut Ui, x: &mut String, y: &mut String) -> bool {
+        let x = chrome::text(ui, "X", x);
+        let y = chrome::text(ui, "Y", y);
+        (x.lost_focus() || y.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    }
+
+    /// The compact and expanded forms share reference/value/orientation and coordinate drafts.
+    fn fields(&mut self, ui: &mut Ui) -> bool {
         chrome::text(ui, "Reference", &mut self.reference);
         chrome::text(ui, "Value", &mut self.value);
         chrome::rotation(ui, &mut self.rotation);
+        Self::position_fields(ui, &mut self.x, &mut self.y)
     }
 }
 
@@ -68,6 +109,7 @@ impl PcbApp {
         let reference = component.reference().to_owned();
         let value = component.value().to_owned();
         let rotation = u16::from(symbol.turns()) * 90;
+        let units = self.preferences.units;
         Some(Edit {
             source,
             symbol: id.to_owned(),
@@ -77,6 +119,10 @@ impl PcbApp {
             reference,
             value,
             rotation,
+            x: units::edit_label(symbol.position.x_nm, units),
+            y: units::edit_label(symbol.position.y_nm, units),
+            units,
+            original_position: symbol.position,
             tab: Tab::General,
             error: None,
             focused: false,
@@ -116,6 +162,7 @@ impl PcbApp {
             return rect;
         };
         let enabled = matches!(self.dialog, Dialog::None);
+        let units = self.preferences.units;
         let footprint = self.package_label(&current.component);
         let state = &mut self.views.active.schematic.properties;
         let mut edit = match state.draft.take() {
@@ -124,14 +171,15 @@ impl PcbApp {
                 if edit.changed() {
                     self.message = Some("Selection or revision changed; unapplied property edits were discarded.".into());
                 }
-                current
+                current.clone()
             }
-            None => current,
+            None => current.clone(),
         };
         let mut apply = false;
         let mut more = false;
         let mut choose = false;
         let can_choose = !edit.changed();
+        edit.set_units(units);
         let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
             egui::Id::new(("selection_properties", self.views.host)),
@@ -146,7 +194,7 @@ impl PcbApp {
                 if !enabled {
                     return;
                 }
-                edit.fields(ui);
+                apply |= edit.fields(ui);
                 chrome::field(ui, "Footprint", |ui| {
                     choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).on_hover_text("Choose footprint").clicked();
                 });
@@ -154,7 +202,10 @@ impl PcbApp {
                     ui.label(shell::error(error));
                 }
                 if edit.changed() {
-                    apply = ui.button("Apply changes").clicked();
+                    apply |= ui.button("Apply changes").clicked();
+                    if ui.button("Reset changes").clicked() {
+                        edit = current.clone();
+                    }
                 }
                 ui.separator();
                 ui.label(shell::dim(format!("{} pins", edit.definition.pins().len())));
@@ -199,7 +250,12 @@ impl PcbApp {
         if !self.views.active.accepts(edit.source, &self.session) {
             return Err("View or project changed; reopen properties to continue.".into());
         }
-        let mut params = json!({"symbol":edit.symbol,"reference":edit.reference,"value":edit.value,"rotation":edit.rotation,"expected_revision":edit.source.revision});
+        if self.views.active.schematic.selection.single_symbol() != Some(edit.symbol.as_str()) {
+            return Err("Selection changed; reopen properties to continue.".into());
+        }
+        let position = edit.position()?;
+        let mut params = json!({"symbol":edit.symbol,"reference":edit.reference,"value":edit.value,"rotation":edit.rotation,
+            "x_nm":position.x_nm,"y_nm":position.y_nm,"auto_heal":self.preferences.auto_heal_wires,"expected_revision":edit.source.revision});
         if let Some(crate::editor_view::DocumentTarget::Sheet(sheet)) = self.views.active.target() {
             params["sheet"] = json!(sheet.id());
         }
@@ -213,6 +269,7 @@ impl PcbApp {
     /// Present the expanded form using Next's component/placement grouping and existing Craft
     /// chrome. Definition authoring and package choice have explicit actions rather than raw fields.
     pub(super) fn symbol_properties_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
+        edit.set_units(self.preferences.units);
         let mut apply = false;
         let mut cancel = false;
         let mut choose = false;
@@ -229,6 +286,7 @@ impl PcbApp {
             ui.separator();
             match edit.tab {
                 Tab::General => {
+                    let mut position_apply = false;
                     chrome::columns(
                         ui,
                         |ui| {
@@ -250,8 +308,10 @@ impl PcbApp {
                                 ui.label(edit.definition.unit_id());
                             });
                             chrome::rotation(ui, &mut edit.rotation);
+                            position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
                         },
                     );
+                    apply |= position_apply;
                 }
                 Tab::Terminals => {
                     egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
@@ -294,11 +354,18 @@ impl PcbApp {
             }
         } else if choose {
             self.begin_footprint_assignment(Some(edit.component));
-        } else if !(closing || cancel) {
+        } else if closing || cancel {
+            if let Some(view) = self.views.view_mut(edit.source.view()) {
+                view.schematic.properties.draft = None;
+            }
+        } else {
             self.dialog = Dialog::EditFields(edit);
         }
     }
 }
+
+#[cfg(test)]
+mod coordinate_tests;
 
 #[cfg(test)]
 mod tests {
@@ -363,7 +430,7 @@ mod tests {
         for width in [1200.0, 420.0] {
             h.set_size(egui::vec2(width, 900.0));
             h.run();
-            for label in ["Reference", "Value"] {
+            for label in ["Reference", "Value", "X", "Y"] {
                 let rect = h.get_by_label(label).rect();
                 assert!(rect.left() >= 0.0 && rect.right() <= width, "{label}: {rect:?}");
             }

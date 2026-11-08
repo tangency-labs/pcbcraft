@@ -76,6 +76,14 @@ with `schematic.move_symbol` and pass the ID as `symbol`, coordinates as integer
 editor, then inspect again to confirm the position. The edit stays unsaved
 until you save the project.
 
+`schematic.set_symbol_fields` applies reference, value and optional `rotation`,
+`x_nm` and `y_nm` together as one revision-checked undo step, matching the schematic
+Properties inspector. Omitted placement fields retain their values. Coordinates
+are integer nanometres; GUI unit suffixes are converted before the same command
+validation runs. Position changes retain attached wires and use the ordinary
+exact-contact rules, with optional `auto_heal`. A failed field or contact check
+leaves the whole project and history unchanged.
+
 For a project with several sheets, pass its inspected sheet UUID as `sheet` to
 schematic commands and footprint placement. Omission remains compatible with
 single-sheet projects; ambiguous and unknown targets are refused. `sheet.create`,

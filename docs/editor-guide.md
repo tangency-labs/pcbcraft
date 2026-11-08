@@ -241,9 +241,15 @@ survive split and detached layouts, and are kept in local project arrangements.
 The Symbol and Footprint editors use the same docking controls for Properties.
 
 The schematic **Properties** card shows the focused selection's reference,
-value, orientation and footprint. **Apply changes** commits a draft in one undo
+value, orientation, X/Y position and footprint. Coordinates accept mm, mil or
+inch suffixes; bare numbers use the current display unit. Changing display units
+reformats valid drafts without applying or rounding away their stored coordinates.
+**Apply changes** commits all fields in one undo
 step. **More properties** or **E** opens the expanded General, Pin functions and
-Library form; **Cancel** leaves the project unchanged. **View → Properties**
+Library form; **Reset changes** discards the compact draft, and **Cancel** discards the
+expanded draft. Attached wires follow coordinate changes through the same contact
+and healing rules as symbol movement. Invalid input or ambiguous contacts reject
+the entire draft. **View → Properties**
 shows or hides the inspector for that window. Footprint choice opens a responsive
 package browser with a physical preview, explicit terminal mapping and expandable
 source/license details. Library-definition authoring remains separate from changing
