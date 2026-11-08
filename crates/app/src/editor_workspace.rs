@@ -190,10 +190,13 @@ impl EditorViews {
     }
 
     /// Allocate a distinct input identity and copy only the source's target and navigation.
-    fn duplicate(&mut self, source: ViewId) -> Option<ViewId> {
+    /// `replacement` retains the source's pending navigation while seeding a host left behind;
+    /// ordinary copies supersede pending navigation so split views start at the displayed zoom.
+    fn duplicate(&mut self, source: ViewId, replacement: bool) -> Option<ViewId> {
         let id = ViewId(self.next_view);
         let next = self.next_view.checked_add(1)?;
-        let view = self.view_mut(source)?.fork(id);
+        let source = self.view_mut(source)?;
+        let view = if replacement { source.fork_replacement(id) } else { source.fork(id) };
         self.next_view = next;
         self.rest.insert(id, view);
         Some(id)
@@ -202,7 +205,7 @@ impl EditorViews {
     /// Create another view beside the addressed view, preserving the rest of its host layout.
     pub(super) fn open_beside(&mut self, source: ViewId) -> Option<ViewId> {
         let host = self.owner(source)?;
-        let id = self.duplicate(source)?;
+        let id = self.duplicate(source, false)?;
         if let Some(layout) = self.hosts.get_mut(&host) {
             layout.layout.insert(source, id);
             if let Some(collapsed) = &mut layout.collapsed {
@@ -219,7 +222,7 @@ impl EditorViews {
         self.owner(source)?;
         let host = HostId(self.next_host);
         let next = self.next_host.checked_add(1)?;
-        let id = self.duplicate(source)?;
+        let id = self.duplicate(source, false)?;
         self.next_host = next;
         self.hosts.insert(host, ViewHost::new(id));
         self.suspend();
@@ -249,7 +252,9 @@ impl EditorViews {
     }
 
     /// Move a pane and its cached documents to a new native host. A sole primary pane leaves
-    /// a replacement behind; a sole detached pane already has the requested placement.
+    /// a replacement behind without consuming the moved view's pending navigation; a sole
+    /// detached pane already has the requested placement. The pane's visible document retains
+    /// focus even when a cached document ID addresses the move.
     pub(super) fn detach_view(&mut self, id: ViewId) -> Option<HostId> {
         let source = self.owner(id)?;
         let group = self.hosts.get(&source)?.layout.group(id)?.clone();
@@ -264,13 +269,13 @@ impl EditorViews {
             // Leave one view behind without reopening the host's previously collapsed layout.
             let parked = self.hosts.get_mut(&source)?.parked.pop();
             let replacement = if let Some(parked) = parked {
-                let camera = self.view_mut(id)?.camera.fork_navigation();
+                let camera = self.view(id)?.camera.clone().fork_navigation();
                 if self.view(parked)?.workspace == self.view(id)?.workspace {
                     self.view_mut(parked)?.camera = camera;
                 }
                 parked
             } else {
-                self.duplicate(id)?
+                self.duplicate(id, true)?
             };
             if let Some(root) = self.hosts.get_mut(&source) {
                 root.layout = Layout::View(replacement);
@@ -286,7 +291,8 @@ impl EditorViews {
             }
         }
         self.next_host = next;
-        self.hosts.insert(host, ViewHost { layout: group, ..ViewHost::new(id) });
+        let focused = group.visible_views().first().copied().unwrap_or(id);
+        self.hosts.insert(host, ViewHost { layout: group, ..ViewHost::new(focused) });
         self.suspend();
         self.bind_main();
         Some(host)
@@ -305,7 +311,8 @@ impl EditorViews {
 
     /// Move a pane and all cached documents beside a pane in another host. Validate both
     /// placements before removing anything; the sole main pane leaves a replacement behind.
-    /// Runtime IDs, cameras, document state and the remaining split trees are retained.
+    /// Runtime IDs, cameras (including deferred navigation), document state and the remaining
+    /// split trees are retained. The replacement inherits no pending navigation from the moved view.
     pub(super) fn move_beside(&mut self, id: ViewId, target: ViewId) -> bool {
         let (Some(source), Some(destination)) = (self.owner(id), self.owner(target)) else { return false };
         if source == destination {
@@ -313,7 +320,7 @@ impl EditorViews {
         }
         let Some(group) = self.hosts.get(&source).and_then(|host| host.layout.group(id)).cloned() else { return false };
         if source == self.main && self.hosts.get(&source).is_some_and(|host| host.layout.visible_views().len() == 1) {
-            let Some(replacement) = self.duplicate(id) else { return false };
+            let Some(replacement) = self.duplicate(id, true) else { return false };
             if let Some(host) = self.hosts.get_mut(&source) {
                 host.layout.insert(id, replacement);
             }
@@ -615,7 +622,7 @@ impl EditorViews {
             self.view_mut(source)?.open_document(target, session);
             source
         } else {
-            let id = self.duplicate(source)?;
+            let id = self.duplicate(source, false)?;
             self.view_mut(id)?.open_document(target, session);
             let host = self.hosts.get_mut(&owner)?;
             host.layout.insert_tab(source, id);

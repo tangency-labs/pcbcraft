@@ -169,6 +169,81 @@ fn docking_commands_keep_cached_documents_and_validate_destinations() {
     assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
 }
 
+/// Moving the sole main pane by a cached document ID retains its unpainted Fit/center request
+/// and its parked workspace's centering. Docking and detaching leave a replacement with only
+/// the displayed transform, whether newly allocated or reused from a collapsed split.
+#[test]
+fn moving_the_sole_main_pane_preserves_pending_navigation_in_cached_documents() {
+    for (operation, fit) in [("dock", true), ("dock", false), ("detach", true), ("detach", false), ("detach_parked", true), ("detach_parked", false)]
+    {
+        let (mut h, _) = many_windows();
+        let ctx = h.ctx.clone();
+        let source = h.state().views.active.id();
+        let destination = h.state_mut().views.open_window(source).unwrap();
+        h.run();
+        let target = h.state().views.hosts[&destination].focused;
+        let revision = h.state().session.revision();
+        h.state_mut().session.apply(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"Power","expected_revision":revision})).unwrap();
+        let power = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+        let app = h.state_mut();
+        let visible = app.views.open_document(source, crate::editor_view::DocumentTarget::Sheet(power), &app.session).unwrap();
+        h.run();
+        if operation == "detach_parked" {
+            h.state_mut().views.open_beside(source).unwrap();
+            h.state_mut().split_editors(&ctx, false);
+            h.run();
+            assert!(!h.state().views.hosts[&HostId::ROOT].parked.is_empty());
+        }
+        let far = Point { x_nm: 200_000_000, y_nm: 100_000_000 };
+        let origin = Point { x_nm: 0, y_nm: 0 };
+        let app = h.state_mut();
+        app.views.switch_workspace(source, crate::editor_view::Workspace::Board, &app.session);
+        let view = app.views.view_mut(source).unwrap();
+        view.camera.center_on(far);
+        view.camera.request_center(origin);
+        app.views.switch_workspace(source, crate::editor_view::Workspace::Schematic, &app.session);
+        let view = app.views.view_mut(source).unwrap();
+        view.camera.set_zoom(0.05);
+        view.camera.center_on(far);
+        if fit {
+            h.state_mut().run_window_command(&ctx, "view.fit", &json!({"view":source.0})).unwrap();
+        } else {
+            h.state_mut().views.view_mut(source).unwrap().camera.request_center(origin);
+        }
+        let camera = h.state().views.view(source).unwrap().camera.saved_state();
+        let snapshot = h.state().session.snapshot().unwrap();
+        if operation == "dock" {
+            h.state_mut().run_window_command(&ctx, "view.dock", &json!({"view":source.0,"beside":target.0})).unwrap();
+        } else {
+            h.state_mut().run_window_command(&ctx, "view.detach", &json!({"view":source.0})).unwrap();
+        }
+        let destination = h.state().views.owner(source).unwrap();
+        let replacement = h.state().views.hosts[&HostId::ROOT].focused;
+        assert_ne!(replacement, source);
+        assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.visible_views(), vec![replacement]);
+        let expected = if operation == "dock" { vec![target, visible] } else { vec![visible] };
+        assert_eq!(h.state().views.hosts[&destination].layout.visible_views(), expected);
+        assert_eq!(h.state().views.hosts[&destination].layout.group(source).unwrap().views(), vec![source, visible]);
+        assert_eq!(h.state().views.hosts[&destination].focused, visible, "{operation}: moving by a cached ID retains visible focus");
+        h.run();
+        assert_eq!(h.state().views.view(source).unwrap().camera.saved_state(), camera, "cached navigation waits for its own paint");
+        assert_eq!(h.state().views.view(replacement).unwrap().camera.zoom(), 0.05, "the replacement must not inherit pending Fit");
+        h.state_mut().run_window_command(&ctx, "view.focus", &json!({"view":source.0})).unwrap();
+        h.run();
+        let camera = &h.state().views.view(source).unwrap().camera;
+        if fit {
+            assert!(camera.zoom() > 0.05, "{operation}: deferred Fit must run when the moved document is painted");
+        } else {
+            assert_eq!(camera.center(), origin);
+        }
+        let app = h.state_mut();
+        app.views.switch_workspace(source, crate::editor_view::Workspace::Board, &app.session);
+        h.run();
+        assert_eq!(h.state().views.view(source).unwrap().camera.center(), origin, "the parked workspace retains pending centering");
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    }
+}
+
 /// A held drag shows stationary destinations before any layout change. Captured motion
 /// outside the client highlights the new-window action that release will perform.
 #[test]
