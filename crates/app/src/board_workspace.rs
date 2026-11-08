@@ -10,6 +10,29 @@ use pcbcraft_chrome::{
 };
 
 impl PcbApp {
+    /// Delete only explicitly selected placements in the addressed focused view. Active tools
+    /// and previews keep ownership of input; schematic components and package choices remain.
+    pub(super) fn delete_board_footprints(&mut self, ctx: &egui::Context, view: ViewId) {
+        let Some(editor) = self.views.view(view).filter(|v| v.workspace == Workspace::Board && v.definition.is_none()) else { return };
+        if self.views.active.id() != view
+            || self.home
+            || !matches!(self.dialog, Dialog::None)
+            || self.files.busy()
+            || self.project_action_pending()
+            || editor.board.draft.is_some()
+            || editor.board.drawing.tool.is_some()
+            || editor.board.drawing.source().is_some()
+            || editor.board.selection.is_empty()
+        {
+            return;
+        }
+        let Some(source) = editor.input(&self.session) else { return };
+        let Some(target) = editor.board.target else { return };
+        let params = serde_json::json!({"board":target.board,"footprints":editor.board.selection,"expected_revision":source.revision});
+        self.run(pcbcraft_engine::DELETE_FOOTPRINTS, &params);
+        self.repaint_editors(ctx);
+    }
+
     /// Present the requested document here, beside it, or directly in a native window. Target
     /// changes cancel old input and retain each workspace's camera without creating document edits.
     pub(super) fn open_workspace(&mut self, workspace: Workspace, placement: Placement, ctx: &egui::Context) {
@@ -58,13 +81,21 @@ impl PcbApp {
         }
     }
 
-    /// Offer single-footprint transforms alongside navigation, keeping board tools separate from
-    /// schematic tools. Completed placements use the same atomic engine command as MCP.
+    /// Offer footprint transforms and placement-only deletion alongside navigation, keeping board
+    /// tools separate from schematic tools. Delete stays in the group menu, as in Capture;
+    /// ordinary canvas selection followed by Delete uses the same command. Completed edits
+    /// use the same atomic commands as MCP.
     /// The active-layer field uses the Layers card's view-local handler, without editing the project.
     /// Components › Footprints opens the package chooser for the selected footprint's component,
     /// or leaves the component unselected when no footprint is selected.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().is_some();
+        let setup =
+            RibbonTool { icon: ToolIcon::Settings, label: "Setup", description: "Board setup", shortcut: "", enabled, active: false, toggle: false };
+        if workspace::ribbon_group(ui, "Board", &[setup]).is_some() {
+            self.begin_board_setup(self.views.active.id());
+        }
+        workspace::ribbon_separator(ui);
         let selected = enabled && self.views.active.board.selection.len() == 1;
         let editing = self.views.active.board.draft.is_some();
         let edit_tools = [
@@ -87,9 +118,23 @@ impl PcbApp {
                 toggle: false,
             },
         ];
-        match workspace::ribbon_group(ui, "Placement", &edit_tools) {
+        let delete = RibbonTool {
+            icon: ToolIcon::Delete,
+            label: "Delete",
+            description: "Delete selected footprints",
+            shortcut: "Delete",
+            enabled: enabled
+                && !self.views.active.board.selection.is_empty()
+                && !editing
+                && self.views.active.board.drawing.tool.is_none()
+                && self.views.active.board.drawing.source().is_none(),
+            active: false,
+            toggle: false,
+        };
+        match workspace::ribbon_group_with_menu(ui, "Placement", &edit_tools, &[delete]) {
             Some(0) => self.views.active.board.move_requested = true,
             Some(1) => self.views.active.board.rotate_requested = 90,
+            Some(2) => self.delete_board_footprints(ui.ctx(), self.views.active.id()),
             _ => {}
         }
         workspace::ribbon_separator(ui);

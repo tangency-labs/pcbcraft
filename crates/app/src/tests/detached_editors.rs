@@ -1477,7 +1477,8 @@ fn window_commands_switch_workspaces_and_select_footprints() {
 }
 
 /// New-window workspace choices use the existing viewport lifecycle without an intermediate
-/// split. Board selection highlights the schematic and closing one child leaves its peers intact.
+/// split. Board selection highlights the schematic; child deletion/undo shares project history,
+/// and closing one child leaves its peers intact.
 #[test]
 fn board_windows_open_directly_and_share_counterpart_highlights() {
     let (mut h, peers) = many_windows();
@@ -1504,13 +1505,16 @@ fn board_windows_open_directly_and_share_counterpart_highlights() {
     child_rect(&peer, "Layout");
     assert_eq!(h.state().views.highlight_for(ViewId(0), &h.state().session).single_symbol(), Some("symbol-2"));
     child_key(&mut h, &peer, Key::Delete, Modifiers::NONE);
-    assert_eq!(h.state().session.inspect(), before);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    assert_eq!(h.state().session.inspect()["project"]["schematic"], before["project"]["schematic"]);
+    child_key(&mut h, &peer, Key::Z, Modifiers::COMMAND);
+    assert_eq!(h.state().session.inspect()["project"], before["project"]);
     peer.borrow_mut().close = true;
     h.run();
     assert_eq!(h.state().views.detached_hosts(), vec![hosts[1]]);
     assert!(!h.state().views.is_split());
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
-    assert_eq!(h.state().session.inspect(), before);
+    assert_eq!(h.state().session.inspect()["project"], before["project"]);
 }
 
 /// Arrangement naming belongs to the initiating host and must neither rehost nor close it.
@@ -1783,5 +1787,42 @@ fn root_dialog_blocks_both_child_catalog_presentations() {
         focus(&mut h, &peer, false);
         click(&mut h, "Cancel");
         assert_eq!(h.state().host_panels(HostId(1)).catalog_mode, mode);
+    }
+}
+
+/// A physical footprint selected by an ordinary native-style left-click can be deleted from
+/// that window's keyboard without any ribbon action or transfer to the main editor.
+#[test]
+fn detached_physical_footprint_click_then_delete_uses_its_own_input() {
+    use pcbcraft_engine::persistence::encode_documents;
+    for configured in [false, true] {
+        let (mut h, peers) = many_windows();
+        if configured {
+            let revision = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":revision}));
+        }
+        let symbol = h.state().session.project().unwrap().symbols()[0].id();
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            &json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":0,"y_nm":0,"expected_revision":revision}),
+        );
+        h.run();
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Open PCB layout in new window");
+        let host = h.state().views.detached_hosts()[0];
+        let peer = peers.borrow()[&editor_windows::viewport(host)].clone();
+        let view = h.state().views.hosts[&host].focused;
+        let canvas = child_rect(&peer, "PCB canvas");
+        let origin = h.state().views.view(view).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, canvas);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        child_click_at(&mut h, &peer, origin);
+        assert_eq!(h.state().views.view(view).unwrap().board.selection.len(), 1);
+        child_key(&mut h, &peer, Key::Delete, Modifiers::NONE);
+        assert_eq!(h.state().session.revision(), revision + 1);
+        assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+        child_key(&mut h, &peer, Key::Z, Modifiers::COMMAND);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     }
 }

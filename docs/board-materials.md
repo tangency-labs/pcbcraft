@@ -3,10 +3,17 @@
 The engine stores project-local material definitions and their use in a uniform
 rigid stackup. `pcb.set_board_setup` validates and adopts the complete candidate
 with the caller's `expected_revision`, so construction, material references and
-dimensions change in one undo step. The command is discoverable through headless
-MCP; a material editor, impedance calculator and live-editor permission are not
-implemented yet. The [representation plan](pcb-representation.md#stackup-and-impedance-ui)
-describes that next workflow.
+dimensions change in one undo step. The command is shared by GUI and MCP. In PCB layout, **Layout → Board → Setup**
+or **Layers → Board setup…** opens the graphical form. It creates an initial
+two- or four-copper-layer setup, edits names and finished thicknesses, and adds
+technical layers before footprints are placed. Initial setup also supports populated
+boards: its explicit `resolve_existing_footprints` command flag resolves component-side
+pads to front copper and all-copper pads across the stack, retaining marker-only pads,
+placements and assignments. Blank thicknesses remain unknown.
+The Stackup page edits descriptive dielectric material labels while retaining
+existing material pins, reports, construction and tolerances. Material/report and
+construction editors, copper-topology migration and impedance calculation remain
+follow-up work in the [representation plan](pcb-representation.md#stackup-and-impedance-ui).
 Portable manufacturer/process profiles are a separate planned resource; see
 [project settings and fabrication profiles](pcb-representation.md#project-settings-and-fabrication-profiles)
 for their import, pinning and update contract.

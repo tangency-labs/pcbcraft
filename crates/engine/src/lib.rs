@@ -74,6 +74,8 @@ enum ParamKind {
     FootprintDefinition,
     FootprintMapping,
     FootprintId,
+    FootprintIds,
+    ResolveExistingFootprints,
     BoardRotation,
     PadNumber,
     Coordinate,
@@ -140,6 +142,8 @@ impl ParamKind {
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
             Self::FootprintId => json!({"type":"string", "pattern":"^footprint-[1-9][0-9]*$"}),
+            Self::FootprintIds => json!({"type":"array","minItems":1,"maxItems":MAX_SYMBOLS,"uniqueItems":true,"items":Self::FootprintId.schema()}),
+            Self::ResolveExistingFootprints => json!({"type":"boolean"}),
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
             Self::FootprintDefinition => {
                 json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::STARTER_IDS).collect::<Vec<_>>()})
@@ -237,6 +241,17 @@ impl ParamKind {
             Self::FootprintMapping if board::parse_mapping(value).is_some() => Ok(()),
             Self::BoardRotation if value.as_u64().is_some_and(|degrees| degrees < 360) => Ok(()),
             Self::FootprintId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "footprint-")).is_some() => Ok(()),
+            Self::FootprintIds
+                if value.as_array().is_some_and(|ids| {
+                    !ids.is_empty()
+                        && ids.len() <= MAX_SYMBOLS
+                        && ids.iter().all(|id| Self::FootprintId.validate(id).is_ok())
+                        && ids.iter().filter_map(Value::as_str).collect::<std::collections::BTreeSet<_>>().len() == ids.len()
+                }) =>
+            {
+                Ok(())
+            }
+            Self::ResolveExistingFootprints if value.is_boolean() => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::NetLabelStyle if serde_json::from_value::<net_labels::Style>(value.clone()).is_ok() => Ok(()),
             Self::NetLabelId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "net-label-")).is_some() => Ok(()),
@@ -268,6 +283,8 @@ impl ParamKind {
             Self::FootprintMapping => Err("must map terminal IDs to pad IDs of 1 to 8 letters, digits, +, - or _"),
             Self::BoardRotation => Err("must be a whole-degree orientation from 0 through 359"),
             Self::FootprintId => Err("must identify a placed footprint"),
+            Self::FootprintIds => Err("must contain unique placed footprint IDs within the symbol limit"),
+            Self::ResolveExistingFootprints => Err("must be a boolean"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
             Self::NetLabelStyle => Err("must be local, global, power or ground"),
             Self::NetLabelId => Err("must identify a named net label"),
@@ -386,7 +403,9 @@ pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT};
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
 pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
-/// Initialize an empty board's stable layers and rigid stackup without specifying materials.
+/// Remove board placements while retaining components and physical package assignments.
+pub const DELETE_FOOTPRINTS: &str = "pcb.delete_footprints";
+/// Initialize stable layers and a rigid stackup, explicitly opting in to existing pad resolution.
 pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
 /// Atomically replace a validated board setup while retaining its profile identity.
 pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
@@ -815,6 +834,16 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: DELETE_FOOTPRINTS,
+        title: "Delete Footprints",
+        summary: "Remove selected board placements in one undo step. Retain schematic components and pinned physical package assignments.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "footprints", summary: "Unique placed footprint IDs from board inspection", kind: ParamKind::FootprintIds },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
         id: MOVE_ITEMS,
         title: "Move Selected Items",
         summary: "Move symbols and wire routes together; retain attached pins, connect exact pin contacts and heal touched routes. One undoable edit.",
@@ -835,10 +864,16 @@ const CATALOG: &[Command] = &[
     Command {
         id: INITIALIZE_BOARD_SETUP,
         title: "Initialize Board Setup",
-        summary: "Create stable layers and a rigid stackup on an empty board. Thickness and materials remain unspecified. Undoable.",
+        summary: "Create stable layers and a rigid stackup. Existing placements require explicit binding resolution; thickness and materials remain unspecified. Undoable.",
         params: &[
             BOARD,
             Param { required: true, name: "copper_layers", summary: "Initial two- or four-layer topology", kind: ParamKind::CopperLayers },
+            Param {
+                required: false,
+                name: "resolve_existing_footprints",
+                summary: "Explicitly resolve existing component-side pads to front copper and all-copper pads across the stack; retain marker-only pads",
+                kind: ParamKind::ResolveExistingFootprints,
+            },
             EXPECTED_REVISION,
         ],
     },
@@ -1220,6 +1255,7 @@ impl Session {
             | ASSIGN_FOOTPRINT
             | PLACE_ASSIGNED_FOOTPRINT
             | SET_FOOTPRINT_TRANSFORM
+            | DELETE_FOOTPRINTS
             | SET_SILKSCREEN
             | ADD_DRAWING
             | SET_DRAWING
@@ -1236,7 +1272,7 @@ impl Session {
             | HEAL_WIRES
             | MOVE_ITEMS
             | DELETE_ITEMS => self.project.is_some(),
-            INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none() && p.board.footprints().is_empty()),
+            INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
             SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
@@ -1328,6 +1364,7 @@ impl Session {
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
+                | DELETE_FOOTPRINTS
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
                 | SET_SILKSCREEN
@@ -1356,6 +1393,7 @@ impl Session {
                 | ASSIGN_FOOTPRINT
                 | PLACE_ASSIGNED_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
+                | DELETE_FOOTPRINTS
                 | SET_SILKSCREEN
                 | DRAW_WIRE
                 | DELETE_WIRE
@@ -1459,6 +1497,7 @@ impl Session {
             PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
             PLACE_FOOTPRINT => self.place_footprint(params)?,
             SET_FOOTPRINT_TRANSFORM => self.set_footprint_transform(params)?,
+            DELETE_FOOTPRINTS => self.delete_footprints(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,

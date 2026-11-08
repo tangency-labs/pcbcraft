@@ -458,10 +458,14 @@ initialization and replacement commands, project inspection, native persistence,
 undo/redo and headless MCP discovery. Presets provide topology without claiming
 material or thickness specifications. The board canvas now renders pinned
 rounded SMD geometry alongside legacy pad-center markers and supports
-single-footprint transforms; the setup dialog remains future work. General
-footprint layer bindings are also absent; setup commands
-conservatively reject topology changes on populated boards rather than infer a
-reassignment from a footprint name.
+single-footprint transforms and selection-based placement deletion, retaining
+schematic components and physical package assignments. The Board setup dialog
+now edits layer names and finished thicknesses and adds technical layers on empty
+boards. Initial setup on a populated board requires explicit
+`resolve_existing_footprints: true`: component-side pads resolve to front copper,
+all-copper pads span the stack, and marker-only pads remain markers. General
+footprint bindings and later topology changes on populated boards remain deferred;
+they are never inferred from footprint names.
 
 The structured material/core/prepreg model and sourced electrical reports are
 now implemented (#76). Follow with shared unit parsing and the stackup UI

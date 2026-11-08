@@ -12,6 +12,34 @@ fn session(copper_layers: u64) -> Session {
     s
 }
 
+/// Technical-layer candidates retain the source, topology and existing identities. Adoption
+/// still uses the command's revision gate; invalid names, sides and copper fail before mutation.
+#[test]
+fn technical_layer_builder_is_disposable_until_shared_command_adoption() {
+    let mut s = session(4);
+    let before = s.snapshot().unwrap();
+    let setup = before.board_setup().unwrap();
+    let candidate = setup.with_added_technical_layer("Assembly notes".into(), LayerPurpose::User, None).unwrap();
+    assert_eq!(s.snapshot().unwrap().board_setup().unwrap(), setup);
+    assert_eq!(candidate.stackup(), setup.stackup());
+    assert_eq!(candidate.layers().len(), setup.layers().len() + 1);
+    for invalid in [
+        ("Top", LayerPurpose::User, None),
+        ("Extra copper", LayerPurpose::Copper, None),
+        ("Unspecified side", LayerPurpose::Silkscreen, None),
+        ("Sided edge", LayerPurpose::Outline, Some(Side::Front)),
+    ] {
+        assert!(setup.with_added_technical_layer(invalid.0.into(), invalid.1, invalid.2).is_err());
+    }
+    let revision = s.revision();
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(s.project().unwrap().board_setup(), Some(&candidate));
+    assert!(s.apply(SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":revision})).is_err());
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.project().unwrap().board_setup(), Some(setup));
+}
+
 /// Supply the current revision as a GUI or headless MCP caller would.
 fn apply(s: &mut Session, command: &str, mut params: Value) {
     params["expected_revision"] = json!(s.revision());
@@ -86,12 +114,11 @@ fn setup_availability_follows_board_state() {
 
     s.apply("project.new", &json!({})).unwrap();
     populate(&mut s);
-    unavailable(
-        &mut s,
-        INITIALIZE_BOARD_SETUP,
-        json!({"copper_layers":2}),
-        "initial board setup requires an empty board; migrating existing footprint layer bindings is not supported yet",
-    );
+    assert!(s.available(INITIALIZE_BOARD_SETUP), "existing placements require explicit binding resolution at execution");
+    let before = s.inspect();
+    let error = s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap_err();
+    assert_eq!(error.to_string(), "initial board setup with existing footprints requires resolve_existing_footprints=true");
+    assert_eq!(s.inspect(), before);
     unavailable(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}), "initialize board setup first");
     s.apply("edit.undo", &json!({})).unwrap();
     assert!(s.available(INITIALIZE_BOARD_SETUP), "undoing the footprint restores initialization availability");
@@ -181,7 +208,7 @@ fn expand_empty_board_without_reidentifying_outer_layers() {
     assert_eq!(setup(&s), expanded);
 }
 
-/// Existing footprints allow metadata edits but no inferred layer reassignment or migration.
+/// Existing footprints allow metadata edits but no implicit initialization or structural changes.
 #[test]
 fn populated_boards_reject_structural_edits() {
     let mut s = session(2);
@@ -304,5 +331,78 @@ fn versioned_storage_round_trips_without_silent_loss() {
         let mut bad = documents.clone();
         bad.insert("board.json".to_owned(), serde_json::to_vec(&board).unwrap());
         assert!(persistence::decode_documents(&bad).unwrap_err().contains("board.json"));
+    }
+}
+
+/// Explicit initialization resolves authored bindings without rewriting any footprint, schematic
+/// or drawing. Undo and offline reopen preserve the original IDs and exact placement bytes.
+#[test]
+fn populated_initialization_explicitly_resolves_existing_copper_bindings() {
+    use crate::board::{definition::CopperBinding, view::CopperLayers};
+    for count in [2, 4] {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({})).unwrap();
+        for (index, definition) in ["resistor-0402", "header-1x02-254", "generic-through-hole-2"].into_iter().enumerate() {
+            s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":index as i64*20_000_000,"y_nm":0,"expected_revision":s.revision()}))
+                .unwrap();
+            let symbol = s.project().unwrap().symbols().last().unwrap().id();
+            let mut params =
+                json!({"symbol":symbol,"definition":definition,"x_nm":index as i64*20_000_000,"y_nm":0,"expected_revision":s.revision()});
+            if index == 2 {
+                params["pin_1_pad"] = json!(2);
+            } else {
+                params["mapping"] = json!({"1":"2","2":"1"});
+            }
+            s.apply(PLACE_FOOTPRINT, &params).unwrap();
+        }
+        let layer = s.project().unwrap().boards().next().unwrap().layers()[0].id;
+        apply(&mut s, crate::ADD_DRAWING, json!({"layer":layer,"points":[{"x_nm":0,"y_nm":0},{"x_nm":30_000_000,"y_nm":0}],"closed":false}));
+        let before = s.inspect();
+        let bytes = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+        let revision = s.revision();
+        for flag in [json!(false), json!("true"), json!(null)] {
+            reject(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":count,"resolve_existing_footprints":flag,"expected_revision":revision}));
+        }
+        reject(
+            &mut s,
+            INITIALIZE_BOARD_SETUP,
+            json!({"board":"00000000-0000-4000-8000-000000000099","copper_layers":count,"resolve_existing_footprints":true,"expected_revision":revision}),
+        );
+        reject(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":count,"resolve_existing_footprints":true,"expected_revision":revision-1}));
+        let board = s.project().unwrap().board_target().board;
+        apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"board":board,"copper_layers":count,"resolve_existing_footprints":true}));
+        assert_eq!(s.revision(), revision + 1);
+        let after = s.inspect();
+        assert_eq!(after["project"]["schematic"], before["project"]["schematic"]);
+        let footprint_records = |bytes: &std::collections::BTreeMap<String, Vec<u8>>| {
+            serde_json::from_slice::<Value>(&bytes["board.json"]).unwrap()["footprints"].clone()
+        };
+        let adopted = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(footprint_records(&adopted), footprint_records(&bytes));
+        let view = s.project().unwrap().boards().next().unwrap();
+        let copper: Vec<_> = view
+            .setup()
+            .unwrap()
+            .stackup()
+            .strata
+            .iter()
+            .filter_map(|s| if let Stratum::Copper { layer, .. } = s { Some(*layer) } else { None })
+            .collect();
+        for (index, footprint) in view.footprints().enumerate() {
+            for pad in footprint.pads {
+                let expected = match index {
+                    0 => Some(CopperLayers::Resolved { binding: CopperBinding::ComponentSide, layers: vec![copper[0]] }),
+                    1 => Some(CopperLayers::Resolved { binding: CopperBinding::AllCopper, layers: copper.clone() }),
+                    _ => None,
+                };
+                assert_eq!(pad.copper_layers, expected);
+            }
+        }
+        assert_eq!(view.drawings().first().unwrap().layer, layer);
+        assert_eq!(persistence::encode_documents(persistence::decode_documents(&adopted).unwrap()).unwrap(), adopted);
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
+        s.apply("edit.redo", &json!({})).unwrap();
+        assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), adopted);
     }
 }

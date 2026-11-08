@@ -231,6 +231,22 @@ impl TryFrom<SetupRecords> for BoardSetup {
 }
 
 impl BoardSetup {
+    /// Build a validated candidate with one fresh technical/documentation layer. Copper must
+    /// be changed with its physical stackup, so this builder refuses copper. The source setup
+    /// is unchanged; callers adopt the candidate through revision-checked `pcb.set_board_setup`.
+    pub fn with_added_technical_layer(&self, name: String, purpose: LayerPurpose, side: Option<Side>) -> Result<Self, CommandError> {
+        if purpose == LayerPurpose::Copper {
+            return Err(CommandError::InvalidParams("copper layers must be defined with the physical stackup".into()));
+        }
+        valid_text("layer name", &name).map_err(CommandError::InvalidParams)?;
+        if self.layers.iter().any(|layer| layer.name.eq_ignore_ascii_case(&name)) {
+            return Err(CommandError::InvalidParams(format!("duplicate layer name: {name}")));
+        }
+        let mut layers = self.layers.clone();
+        layers.push(Layer { id: fresh_id()?, name, purpose, side });
+        Self::try_from(SetupRecords { materials: self.materials.clone(), layers, stackup: self.stackup.clone() }).map_err(CommandError::InvalidParams)
+    }
+
     /// Embedded material revisions in canonical ID/revision order, available without a source library.
     pub fn materials(&self) -> &[Material] {
         &self.materials
@@ -345,8 +361,9 @@ impl BoardSetup {
 }
 
 impl Session {
-    /// Create the initial topology once on an empty board. Existing legacy footprints require
-    /// an explicit future layer-binding migration instead of an inferred reassignment.
+    /// Create the initial topology once. Populated boards require explicit opt-in to resolve
+    /// existing ComponentSide/AllCopper bindings through the engine's front/all-copper rules;
+    /// marker-only pads remain markers. Placements, definitions and mappings are unchanged.
     /// Existing technical drawing layers are promoted with their original identities.
     pub(crate) fn initialize_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -354,9 +371,9 @@ impl Session {
         if project.board.setup.is_some() {
             return Err(CommandError::Unavailable("board setup already exists; edit it with pcb.set_board_setup".to_owned()));
         }
-        if !project.board.footprints().is_empty() {
+        if !project.board.footprints().is_empty() && params["resolve_existing_footprints"].as_bool() != Some(true) {
             return Err(CommandError::Unavailable(
-                "initial board setup requires an empty board; migrating existing footprint layer bindings is not supported yet".to_owned(),
+                "initial board setup with existing footprints requires resolve_existing_footprints=true".to_owned(),
             ));
         }
         let mut setup = BoardSetup::preset(params["copper_layers"].as_u64().unwrap_or_default())?;

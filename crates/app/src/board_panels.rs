@@ -23,6 +23,7 @@ impl PcbApp {
         browser_area.max.y = board::browser_bottom(area);
         let mut silk_apply = None;
         let mut color_pick = None;
+        let mut setup_open = false;
         let mut pick = None;
         let (browser, collapse) = if self.browser.open {
             workspace::floating_card_with_id(ui, host.with("browser"), "Browser", browser_area, state.browser_collapsed, |ui| {
@@ -50,6 +51,7 @@ impl PcbApp {
             state.layers_collapsed,
             workspace::panels::card_width(area, false),
             |ui| {
+                setup_open = ui.add_enabled(settings_enabled, egui::Button::new("Board setup…")).clicked();
                 layer_groups(ui, target, state, Id::new((view_id, target.target)), &self.board_appearance, &mut color_pick);
             },
         );
@@ -116,6 +118,7 @@ impl PcbApp {
             self.begin_layer_color(view_id, layer);
             self.repaint_editors(ui.ctx());
         }
+        if setup_open {self.begin_board_setup(view_id);}
         ([browser, layers, properties], slots[crate::workspace_panels::FILTERS])
     }
 }
@@ -140,12 +143,15 @@ fn group(purpose: LayerPurpose) -> usize {
 
 /// Keep copper in stack order and group technical layers consistently in the picker and card.
 pub(super) fn ordered_layers(board: pcbcraft_engine::board::view::BoardView<'_>) -> Vec<Layer> {
-    let mut layers = board.layers();
+    ordered_catalog(board.layers(), board.setup())
+}
+
+/// Preview catalogs use the same physical copper order and technical groups as the live board.
+pub(super) fn ordered_catalog(mut layers: Vec<Layer>, setup: Option<&pcbcraft_engine::board::setup::BoardSetup>) -> Vec<Layer> {
     layers.sort_by_cached_key(|layer| {
         (
             group(layer.purpose),
-            board
-                .setup()
+            setup
                 .and_then(|setup| setup.stackup().strata.iter().position(|stratum| matches!(stratum,Stratum::Copper{layer:id,..}if *id==layer.id)))
                 .unwrap_or(usize::MAX),
             layer.name.to_lowercase(),
