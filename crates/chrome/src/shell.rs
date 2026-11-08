@@ -9,7 +9,7 @@ pub use crate::titlebar::resize_window_edges;
 /// Lay out the brand, Home button, file and history actions, project title, and right-side utilities.
 /// Pass the project name and whether it has unsaved edits, or `None` for the empty workspace.
 /// `home` draws beside the brand, before the separator, and stays at compact widths.
-/// An integrated title bar adds desktop window controls and lets the free space move the window.
+/// An integrated title bar adds desktop controls; the brand, project title and free space move the window.
 /// `actions_enabled` gates Home, file/history actions and utilities, leaving native controls usable.
 /// Call [`resize_window_edges`] after dialogs to keep native interactions above their backdrop.
 /// The utility callback gets the full bar width to decide which controls fit.
@@ -47,7 +47,10 @@ pub fn app_bar(
                     if compact {
                         ui.spacing_mut().item_spacing.x = 0.0;
                     }
-                    brand(ui, t, !compact);
+                    let brand = brand(ui, t, !compact);
+                    if integrated {
+                        titlebar::drag_area(ui, brand, "brand");
+                    }
                     ui.add_enabled_ui(actions_enabled, home);
                     if !compact {
                         ui.separator();
@@ -76,7 +79,10 @@ pub fn app_bar(
                     let drag_room = if integrated { (room - marker_room).clamp(0.0, t.space_12) } else { 0.0 };
                     let title_room = ((room - drag_room) * 0.3).min(160.0).max(marker_room).min(room - drag_room);
                     if !compact && title_room > t.space_24 {
-                        project_title(ui, name, dirty, project.is_some(), title_room, t);
+                        let title = project_title(ui, name, dirty, project.is_some(), title_room, t);
+                        if integrated {
+                            titlebar::drag_area(ui, title, "project");
+                        }
                         ui.separator();
                     } else if dirty && title_room >= marker_room {
                         let (rect, _) = ui.allocate_exact_size(vec2(title_room.min(t.space_12), t.control_height), Sense::hover());
@@ -91,15 +97,16 @@ pub fn app_bar(
                     if integrated {
                         let mut gap = ui.available_rect_before_wrap();
                         gap.max.x = controls_left;
-                        titlebar::drag_area(ui, gap);
+                        titlebar::drag_area(ui, gap, "gap");
                     }
                 });
         });
 }
 
 /// Draw the prototype's routed P mark and product name using the current theme.
-/// Fall back to the default UI font on the first frame, before egui loads the bundled face.
-fn brand(ui: &mut Ui, t: Tokens, show_name: bool) {
+/// Return its drag rectangle, including the name when visible. Fall back to the default UI
+/// font on the first frame, before egui loads the bundled face.
+fn brand(ui: &mut Ui, t: Tokens, show_name: bool) -> egui::Rect {
     let size = t.space_16 + t.space_4;
     let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
     let at = |x, y| rect.min + vec2(x, y) * (size / 64.0);
@@ -114,16 +121,18 @@ fn brand(ui: &mut Ui, t: Tokens, show_name: bool) {
     ));
     painter.circle_filled(at(20.0, 44.0), 1.3, t.text);
     if !show_name {
-        return;
+        return rect;
     }
     ui.add_space(t.space_3);
     let font = fonts::interface_heading(ui, t.font_button);
-    ui.label(RichText::new("PCBCraft").font(font).color(t.text));
+    let name = ui.label(RichText::new("PCBCraft").font(font).color(t.text)).rect;
     ui.add_space(t.space_4);
+    rect.union(name)
 }
 
 /// Fit the plain project label, reserving space for its unsaved marker when text truncates.
-fn project_title(ui: &mut Ui, title: &str, dirty: bool, has_project: bool, room: f32, t: Tokens) {
+/// Return the full title rectangle for native dragging, including its label and marker.
+fn project_title(ui: &mut Ui, title: &str, dirty: bool, has_project: bool, room: f32, t: Tokens) -> egui::Rect {
     let font = if has_project { fonts::interface_heading(ui, t.font_button) } else { egui::FontId::proportional(t.font_button) };
     let color = if has_project { t.text } else { t.text_dim };
     let text_width = ui.painter().layout_no_wrap(title.to_owned(), font.clone(), color).size().x;
@@ -136,6 +145,7 @@ fn project_title(ui: &mut Ui, title: &str, dirty: bool, has_project: bool, room:
         label_rect.max.x -= t.space_8;
     }
     ui.place(label_rect, Label::new(RichText::new(title).font(font).color(color)).truncate()).on_hover_text(title);
+    rect
 }
 
 /// Draw the unsaved indicator and expose its meaning to pointer and assistive technology users.

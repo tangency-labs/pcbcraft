@@ -9,17 +9,49 @@ pub(crate) fn interaction_layer() -> LayerId {
     LayerId::new(Order::Foreground, Id::new("native-window-interactions"))
 }
 
-/// Let the unused span move the window or toggle maximized state on a double click.
-pub(crate) fn drag_area(ui: &mut Ui, rect: Rect) {
+/// Keep native-grab recovery local to the viewport whose pointer the OS took over.
+fn native_grab_id(ctx: &egui::Context) -> Id {
+    Id::new(("native-window-grab", ctx.viewport_id()))
+}
+
+/// Hand ownership to the OS and remember that its grab may consume the pointer release.
+fn begin_native_grab(ctx: &egui::Context, command: ViewportCommand) {
+    ctx.send_viewport_cmd(command);
+    ctx.stop_dragging();
+    let id = native_grab_id(ctx);
+    ctx.data_mut(|data| data.insert_temp(id, true));
+}
+
+/// Recover only our own native grabs. Wayland may send PointerGone instead of a release;
+/// clearing that departed pointer prevents stale buttons from suppressing the next edge hover.
+/// Ordinary editor drags and normally delivered releases retain their input/click history.
+fn finish_native_grab(ctx: &egui::Context) {
+    let id = native_grab_id(ctx);
+    if !ctx.data(|data| data.get_temp::<bool>(id).unwrap_or(false)) {
+        return;
+    }
+    let (released, departed) = ctx.input(|input| (input.pointer.primary_released(), !input.pointer.has_pointer() || !input.focused));
+    if departed {
+        ctx.input_mut(|input| input.pointer = egui::PointerState::default());
+        ctx.stop_dragging();
+    }
+    if released || departed {
+        ctx.data_mut(|data| data.remove::<bool>(id));
+    }
+}
+
+/// Hand the initial primary press to the OS immediately, before egui's drag threshold.
+/// Waiting for motion can lose the native press serial. Double clicks toggle maximization.
+pub(crate) fn drag_area(ui: &mut Ui, rect: Rect, region: &'static str) {
     if !rect.is_positive() {
         return;
     }
     let native = ui.new_child(egui::UiBuilder::new().layer_id(interaction_layer()).max_rect(rect));
-    let response = native.interact(rect, ui.id().with("window-drag"), Sense::click_and_drag());
+    let response = native.interact(rect, ui.id().with(("window-drag", region)), Sense::click_and_drag());
     if response.double_clicked() {
         ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!is_maximized(ui)));
-    } else if response.drag_started_by(PointerButton::Primary) {
-        ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+    } else if response.is_pointer_button_down_on() && ui.input(|input| input.pointer.button_pressed(PointerButton::Primary)) {
+        begin_native_grab(ui.ctx(), ViewportCommand::StartDrag);
     }
 }
 
@@ -72,10 +104,13 @@ pub(crate) fn window_controls(ui: &mut Ui, t: Tokens, compact: bool) {
 
 /// Restore OS resizing along the four edges and corners of an undecorated window.
 /// Maximized and fullscreen windows have no active resize zones.
+/// Release egui's drag ownership when handing the gesture to the OS: Wayland may consume
+/// the release event, and retaining the drag would block subsequent edge hover and presses.
 /// Call on an enabled UI after drawing dialogs so native controls, dragging and resizing remain
 /// above modal backdrops without enabling any application actions behind those dialogs.
 pub fn resize_window_edges(ui: &mut Ui) {
     let ctx = ui.ctx().clone();
+    finish_native_grab(&ctx);
     ctx.move_to_top(interaction_layer());
     if is_maximized(ui) || ui.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
         return;
@@ -99,7 +134,7 @@ pub fn resize_window_edges(ui: &mut Ui) {
     for (index, (min, max, direction, cursor)) in zones.into_iter().enumerate() {
         let response = resize.interact(Rect::from_min_max(min, max), Id::new(("window-resize", index)), Sense::drag());
         if response.on_hover_cursor(cursor).drag_started_by(PointerButton::Primary) {
-            ctx.send_viewport_cmd(ViewportCommand::BeginResize(direction));
+            begin_native_grab(&ctx, ViewportCommand::BeginResize(direction));
         }
     }
 }
