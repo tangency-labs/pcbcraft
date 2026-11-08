@@ -1594,7 +1594,7 @@ fn project_open_rebinds_detached_pcb_and_main_schematic() {
     click(&mut h, "Open PCB layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
     let stale = h.state().views.view(child).unwrap().input(&h.state().session).unwrap();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led/project.pc");
+    let (_copy, path) = dual_led_copy();
     let revision = h.state().session.revision();
     h.state_mut().files.open_path_for_test(&path, revision);
     h.run();
