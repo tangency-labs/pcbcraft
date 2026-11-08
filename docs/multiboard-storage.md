@@ -203,6 +203,38 @@ Unknown user files require an explicit file-operation plan and are not moved or
 deleted by implication. Abbreviated examples below use readable fixed suffixes;
 IDs, not those folder strings, establish ownership.
 
+## Retired-board preservation
+
+Before removing an active board registration, register a `retired_board_areas`
+entry in `project.pc` with its own stable ID, former board ID/name and the same
+single-segment folder. Its root is derived by the same
+`join(layout_root, "boards", folder)` helper. In the successor snapshot that area
+is owned by the retirement record, not by an active board or the project document
+area. Rebind registered associated-document ownership to this retired-area ID
+while retaining its path under that root's `documents/` area. Existing export
+records keep their original historical board/source identities.
+
+Create the retirement entry, rebind document registrations and remove only the
+eligible engine-owned empty board/instance files in the same validated save.
+The preserved root reserves its path and former board identity; active board
+registrations cannot overlap it. Board commands resolve only active boards.
+Artifact discovery may present matching former-board runs as historical through
+the retirement record, never as a restored live board or current release.
+
+Preserve unknown files without registering or packaging them automatically.
+Retirement is not a backup of the deleted physical design and does not promise
+that every old source snapshot remains available. Normal packages retain
+registered associated files under their valid retired owner; generated history
+still needs explicit inclusion. The retired registry is bounded by the project
+record/byte budgets, and exhaustion fails the deletion before publication.
+
+Prune a retirement entry only after a bounded check finds no registered files,
+output runs or unknown user contents, or after an explicit reviewed relocation
+plan has moved/retagged the retained data to another valid preservation owner.
+Remove only actually empty directories, with failure preserving the entry/data.
+A former-board folder is never silently relabeled as project-owned documents
+while bypassing the normal project document-path rule.
+
 ## Numeric ID allocation
 
 Persist a project-wide `numeric_id_high_water` in `project.pc`, covering every
@@ -263,21 +295,48 @@ both differing and equal branch watermark values.
 
 The watermark guarantees non-reuse within the saved lineage after adoption and
 within the live session, including Undo. It cannot reserve allocations in a file
-that was never saved, and exports must not secretly save a project just to reserve
-IDs. Every exported object address is therefore qualified by the captured source
-snapshot digest, project ID and object/owner IDs. It is a historical snapshot
-address, not a live project/ID lookup. The captured identity manifest contains the
-mapping used to produce the output, including unsaved components.
+that was never saved, and an export must not secretly save the project to reserve
+IDs. Content hashes alone also cannot distinguish separate unsaved allocations
+that later happen to have identical IDs and bytes.
 
-If an unsaved component is exported, discarded and the project reopened, a later
-allocation may have that same numeric spelling in a different snapshot. It is
-not the historical component. Never cross-probe or apply artifact feedback to it
-by numeric ID alone. Resolve historical links against the exact captured snapshot,
-or report that source unavailable; applying them to a different current snapshot
-requires explicit validated identity reconciliation. This rule also protects
-read-only exports and exports from divergent Git branches without requiring a
-writable reservation sidecar. Claims of never reusing numeric IDs must be scoped
-to the saved lineage, not to discarded unsaved histories.
+Every immutable source capture therefore receives a fresh `capture_id` UUID,
+independent of content, path and session revision. Its source identity is
+`(capture_id, content_digest)`. An exported object address includes that pair,
+project ID, owner kind/ID and object ID. The capture identity manifest records
+the same pair and the mappings used to produce the output. Two separate captures
+receive different IDs even when their canonical content digests are equal.
+
+The content digest covers the complete frozen project/source bundle, including
+the dependencies captured for coordinated jobs. Each artifact also records an
+`input_digest` for its relevant projection of that bundle: board, resolved
+schematic, physical state, dependencies and selected configuration. Different
+jobs can have different input digests while sharing one capture identity. These
+projected digests support freshness checks without confusing source identity
+with content equality; they cannot establish correspondence between separately
+allocated objects in different captures.
+
+Several coordinated export tasks from one frozen capture share its capture ID;
+copying or packaging an existing run preserves its source identity. Neither a
+new capture nor an export writes this ID into the live project or changes its
+dirty state. Historical references persisted by baseline acceptance, lineage or
+pending-intent operations use the same SnapshotRef pair for their captured source;
+the authoring operation persists that reference only when it actually commits.
+
+An unsaved component can be exported, discarded and recreated with the same
+numeric ID and identical content. The recreated source capture has a different
+capture ID, so its historical address is distinct even if its hash is identical.
+Never resolve either address against the current project by numeric ID or digest
+alone. Use the exact frozen capture, or report that source unavailable. Applying
+feedback to a different capture requires explicit validated identity reconciliation,
+not an equality assumption based on IDs/content. This also covers divergent Git
+branches and read-only exports without a writable reservation sidecar.
+
+Test export, discard, reopen and byte-identical recreation with equal object IDs:
+assert equal content digests but different capture IDs/addresses and unchanged
+source-project bytes. Also test that CAM/BOM tasks coordinated from one frozen
+capture carry the same capture ID and that copying a run creates no new source.
+The numeric no-reuse claim remains scoped to saved lineage and the live session,
+not to discarded unsaved histories.
 
 ## Record ownership and examples
 
@@ -290,7 +349,7 @@ component IDs remain numeric. They are not hand-editable project fixtures.
 
 | Document | Required relationships |
 | --- | --- |
-| `project.pc` | Project identity, numeric ID watermark and layout root; ordered zero-or-more board registry; schematic instances/net registry; typed pending PCB assignments and boundary resolutions; sheet/circuit definitions; system parts/connections/net registry; associated-file, board-variant and system-build registrations |
+| `project.pc` | Project identity, numeric ID watermark and layout root; ordered zero-or-more board registry; schematic instances/net registry; typed pending PCB assignments and boundary resolutions; sheet/circuit definitions; system parts/connections/net registry; associated-file, retired-board-area, board-variant and system-build registrations |
 | `sheets/<id>.json` | Shared geometry, local symbol/unit references to circuit component definitions, local labels and stable child-use or subsheet slots |
 | `<board_root>/instances.json` | Board ID; circuit uses; sheet occurrences with use and optional parent/slot; component instances with references and overrides; logical net registry, anchors, lineage and unresolved logical rule assignments |
 | `<board_root>/board.json` | Same board ID; setup and physical objects; package/terminal-to-pad mappings and accepted update baseline |

@@ -124,6 +124,17 @@ Within the same board, retain occurrence and component IDs. If reparenting would
 violate the destination branch's board ownership, refuse the simple move and
 offer a separate explicit reassignment operation with an impact preview.
 
+Initially refuse a cross-owner assignment when the selected child would retain
+an ordinary electrical parent on the old board/schematic scope. The supported
+restructuring path is an explicit, previewed Detach to root operation first,
+including removal/remapping of its parent symbol, port wires and affected net
+intent. Preserve the detached occurrence/component IDs and its current owner;
+only then assign that closed root group to the destination. An affected multi-unit
+package must remain closed, and a shared parent definition must be made independent
+before changing only one use's structure. Do not convert an electrical parent to
+a system overview or discard port connections implicitly. A combined shortcut
+must execute the same complete plan atomically or refuse it.
+
 An assignment operation should cover a sheet occurrence and its descendants,
 show affected component instances and validate multi-unit packages. Commit the
 occurrence association, component ownership and reviewed physical consequences
@@ -139,6 +150,16 @@ atomically and require an explicit reference-renumbering plan for collisions.
 Resolve affected system connector endpoints in the same transaction or refuse
 the transfer. A transfer that removes routing and creates destination placements
 is a separate later workflow.
+
+Every owner transfer, including board-to-board moves and Keep schematic only,
+previews both lost and newly joined global-name connections, not just explicit
+system links. Require an explicit connection/separation decision or a typed pending
+boundary plan. The transaction also reconciles both owners' persistent net
+registries, anchors, bindings and scoped references through the
+[net-transfer contract](net-identity.md#ownership-transfer-reconciliation); moving
+component records alone is insufficient. Source anchors must remain valid and
+destination rule conflicts must be resolved or represented explicitly, never
+silently dropped.
 
 Assigned but unplaced components are valid, as are intentionally schematic-only
 components. An importer or explicit PCB-assignment operation may separately mark
@@ -275,6 +296,9 @@ that use's existing physical component and occurrence IDs. Their references,
 placements and overrides remain intact when their logical contracts are
 unchanged. Definition changes after the fork affect only the fork's uses. A
 partial extraction that splits a multi-unit package is refused.
+Fork source-owned definitions only; nested reusable circuit definitions remain
+shared unless separately made independent. Preserve the nested uses and rebind
+their caller slots explicitly, without changing other callers' mappings.
 
 Deleting a shared symbol/unit is a definition edit and affects all its uses.
 Removing one unit of a package leaves the component represented by its other
@@ -296,9 +320,14 @@ fail session/revision validation.
 Initially refuse deletion of a board containing circuit uses, components or
 physical design geometry. After those are explicitly moved or removed and pending
 updates are reconciled, deletion removes only the registered engine-owned empty
-design records. Registered documents and output history remain at their paths;
-retain them under explicit project-level associated-file ownership. Do not
-recursively delete the folder. Remove the directory only if actually empty.
+design records. Before removing the active board registration, create the
+[retired-board preservation record](multiboard-storage.md#retired-board-preservation)
+for its retained folder and rebind registered document ownership to that record.
+Documents/output history remain at their paths under a valid retired-area owner,
+not a project document owner with an out-of-area path. The area is no longer an
+active board and cannot be silently reused by a new one. Do not recursively
+delete its files; pruning a retirement record requires the explicit empty-area
+or reviewed relocation operation defined by the storage contract.
 
 ## Cross-probing and navigation
 
@@ -550,3 +579,20 @@ These scenarios should guide the tests and review for the relevant slices:
   system overviews retain their distinct connection-tool restrictions.
 - Boardless references/globals use schematic scope, isolated from board and system
   scopes. Assignment previews any affected boundary/annotation resolution.
+- Extracting a sheet containing an already shared nested circuit preserves that
+  circuit's definition, use mappings and an unaffected third board's instances.
+- Moving an electrical child to another board is refused until it is explicitly
+  detached to a closed root with reviewed ports/wiring; no old-board parent remains.
+- A transfer previews both lost and joined global-label connections and reconciles
+  source/destination net registries, anchors and rule bindings atomically. Whole-net,
+  split, merge and ID-collision cases leave no dangling current references.
+- Removing an eligible empty board preserves registered documents under a valid
+  retired-area owner through save/reopen/packaging; its folder is not reassigned.
+- Individually valid CAM from an older capture and a BOM from a newer incompatible
+  state cannot form a synchronized release; diagnostic packaging labels the mixture.
+- Byte-identical unsaved recreation can retain a numeric ID and content digest,
+  but receives a different capture ID. Coordinated CAM/BOM share a capture identity
+  while their projected input digests can differ.
+- After a net gains C/D terminals, deleting fallback B and then disconnecting
+  primary A retains the unique connected C/D remainder's ID with a new anchor,
+  even though no historical fallback survives.

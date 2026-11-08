@@ -146,17 +146,26 @@ action places another use of that circuit. If it is only an ordinary sheet in a
 larger circuit, offer Extract reusable circuit first and preview the closure.
 Do not instantiate just that sheet while omitting its component scope.
 
-Extraction starts from selected sheets and descendants and includes every sheet
-needed for all units of their components, repeating until the set is closed.
+Extraction traverses selected source-owned sheets and ordinary descendants,
+including every source-owned sheet needed for all units of their components
+until that set is closed. At a nested reusable-circuit boundary, include the
+nested use in the impact plan but do not absorb its definition or its component
+definitions into the caller's closure. Its own closed component scope remains
+independent, even if this caller currently has only one use.
 Show additional required sheets, component membership and interface changes.
 The user can accept that set or cancel; a component with units outside the set
 cannot be partly extracted. An incompatible external interface requires a
 reviewed boundary edit in the same operation, not a guessed connection.
 
-For a single-use source, move the selected sheet/component definitions into a
-new circuit group, allocate its definition and child-use IDs, and rebind the
-existing occurrence/component mappings while preserving their physical IDs,
-references, board owner, overrides and accepted placements. Preserve authored
+For a single-use source, move only the selected source-owned sheet/component
+definitions into the new circuit group. Allocate the new group and containing
+use IDs, then rebind existing occurrence/component mappings while preserving
+their identities, references, owner context, overrides and accepted placements.
+Keep every nested circuit definition and its definition-local child slots
+unchanged. Rebind the selected nested use's caller/slot mapping explicitly while
+preserving its use, occurrence and component IDs; other callers keep their
+original mappings. A nested circuit shared elsewhere is not implicitly forked,
+moved or rewritten because its caller is extracted. Preserve authored
 flat roots and parent/port connections; prove electrical equivalence before
 adopting an extraction that claims to be organizational only. If only one use of
 an already shared source is changing, Make independent first. No other board's

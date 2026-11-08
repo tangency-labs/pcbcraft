@@ -94,8 +94,12 @@ tokens, all kind/scope tags and component terminals represented on different
 sheets. Identical keys are one anchor, not distinct fallback entries.
 
 If the primary is removed, retain the ID on a unique meaningful continuation and
-record a new primary from surviving fallbacks. If several meaningful branches
-remain without a unique anchored continuation, expose the ambiguity. Any user
+use a surviving fallback in that continuation when available. If none survives,
+choose a new primary from that continuation using the canonical creation rule;
+record it and at most three new fallbacks in the same transaction. Do not require
+a historical fallback to exist before retaining an otherwise unique continuation.
+If several meaningful branches remain without a unique anchored continuation,
+expose the ambiguity. Any user
 resolution becomes stored state rather than being repeated on reopen.
 
 Keeping the net ID does not authorize keeping relationship constraints by
@@ -118,7 +122,8 @@ therefore retains the remaining connected network's ID and class. The pin's
 unconnected state is available to ERC, inspection and any terminal-specific
 constraints, without forcing a net-class decision. If that pin was the primary
 anchor, the sole meaningful remaining network keeps the old identity and adopts
-a surviving fallback anchor in the same recorded transaction.
+a surviving fallback, or a canonically chosen replacement when no fallback
+survives, in the same recorded transaction.
 
 For reconciliation, collapse wire segments, bends and unnamed degree-two
 junctions to endpoint connectivity. A meaningful network has at least two logical
@@ -170,6 +175,40 @@ retained. Many-to-many topology changes use the same anchor and property rules
 on the affected subgraph. IDs retired by an actual merge are never reassigned
 to another net.
 
+## Ownership transfer reconciliation
+
+Assignment/detach operations capture both source and destination derived graphs
+and registries before the move. Preview connection losses and new joins caused
+by global-name scope changes as well as explicit connections. A structural move
+does not waive the split/merge, constraint or historical-reference rules above.
+
+For a net wholly moved to an isolated destination network, move its persistent
+record and requalify its owner/anchor addresses. Retain the net UUID only if its
+destination key is free; an identity collision requires a fresh UUID and explicit
+lineage, never overwriting or merging merely because IDs match. For a net whose
+members split between owners, first reconcile the resulting branches with the
+anchor policy, then transfer the selected branch records. Surviving source
+records cannot retain live anchors in the moved ownership scope.
+
+If transferred content joins an existing destination net by name or wiring,
+apply the normal merge policy and revalidate both sets of bindings. Preserve
+lineage to the source and destination identities. Destination rule definitions
+and required layer/relationship targets must exist with compatible semantics;
+an explicit rebind/import plan or typed unresolved rule record is required when
+they do not. A source-board rule ID is not a valid destination reference merely
+because its text or number matches. Refuse unsupported required transformations
+rather than dropping a constraint.
+
+Update current scoped references in variants, analysis targets, system links and
+pending intent records in the same transaction. Historical baselines/artifacts
+retain their original snapshot-qualified addresses. Validate source, destination
+and project records together before publishing, and journal their changes as one
+save. Cancel or rejection publishes none of the moved graph/registry state.
+
+Test whole-net transfer, a net split across owners, a destination name merge,
+net-ID collision, unavailable destination rule/layer targets and undo/reopen.
+Include the case where every stored source anchor belongs to the moved group.
+
 ## Review and downstream behavior
 
 Collect genuine reconciliation conflicts without a modal prompt for every wire
@@ -205,3 +244,9 @@ A zero-board save/reopen test must retain the schematic registry without a board
 file. Scope-key vectors must distinguish board, schematic and system anchors
 and ensure a later board assignment updates affected typed scope references
 without changing component identities or silently joining global labels.
+
+Test a net created with primary A and fallback B that later gains C and D without
+refreshing its stored anchors. Delete B, then disconnect A so C and D remain the
+unique meaningful continuation. The net keeps its ID and valid class, selects a
+new primary from C/D and persists that replacement across undo/reopen; no live
+net-anchor reference to A/B or an unnecessary new net identity may remain.

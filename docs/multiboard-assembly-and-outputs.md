@@ -153,8 +153,9 @@ project totals should identify each board and its quantity. Build variants can
 filter assembly population, but must not duplicate board identities.
 
 Each export run should include a small record naming its board or project scope,
-source design snapshot, selected variant or configuration, generator version
-and produced files. A source snapshot must cover relevant unsaved design changes;
+source capture ID and content digest, projected input digest, selected variant or
+configuration, generator version and produced files. A source snapshot must cover
+relevant unsaved design changes;
 a Git commit alone is insufficient. Later edits can mark an export outdated
 without rewriting it. Hashes and generation timestamps belong in export records,
 not in otherwise unchanged working design documents. Generated outputs should be
@@ -166,13 +167,33 @@ leaving the previous complete output intact. Deleting a board must separately
 account for associated documents and export history; removing a design object
 does not authorize recursive deletion of arbitrary user files.
 
-Register authored associated files by stable ID, board or project owner, relative
+Register authored associated files by stable ID, tagged board, project or
+[retired-area owner](multiboard-storage.md#retired-board-preservation), relative
 path and media type in `project.pc`. A normal packed design and Save As copy the
 editable design, its referenced pinned libraries/assets and registered associated
 documents. They exclude generated output history by default. A release-package
 operation explicitly selects export runs and documents to accompany the design.
 Save As does not relocate or remove the original files or create new component
 identities; it retains the current project's existing Save As identity behavior.
+
+A synchronized release validates selected artifacts as a set, beyond their
+individual checksums. Capture one immutable source for the coordinated release;
+all selected CAM, drill, placement and assembly BOM runs must identify that same
+capture ID/content digest and the declared system-build/board-variant selection.
+Each run's projected input digest must match its inputs in that frozen capture;
+CAM and BOM projections need not have identical digests.
+For each board, validate the accepted physical baseline, desired/accepted package
+consistency and applicable fabrication configuration together. Variant-independent
+CAM can declare that scope, but still belongs to the release's captured physical
+state; it does not excuse a BOM from incompatible part/footprint intent.
+
+If separately captured or imported runs cannot establish that joint compatibility,
+refuse the synchronized release. An explicitly requested historical/diagnostic
+package may contain them with per-run provenance and a non-synchronized manifest
+status; do not silently downgrade a requested production release or label mixed
+states synchronized. Future reuse of unchanged artifacts needs an explicit
+validated source-identity reconciliation/provenance record, not merely matching
+filenames, board IDs or individually valid content hashes.
 
 Normal saves preserve unknown user files on disk and never adopt them into a
 package automatically. Reserve the derived owner document/output areas as preservation areas
@@ -185,11 +206,14 @@ symlinks and paths outside the project are not silently followed.
 Each export run owns only its declared file list and export record. Enumerating
 output areas produces read-only artifact candidates, not registered project
 objects; it never creates boards, uses or component mappings. Require supported
-format, project/board/build IDs, source snapshot identity and a bounded file list
-with size/digest integrity before offering a candidate for use. Confine declared
+format, project/board/build IDs, source capture ID/content digest, projected input
+digest and a bounded file list with size/digest integrity before offering a
+candidate for use. Confine declared
 paths to the run, reject symlinks/traversal, and do not execute artifact content.
 Unknown or foreign records are ignored with a concise discovery diagnostic;
 invalid records are reported as unusable, without preventing design open/save.
+Records naming a preserved former board can be offered as historical artifacts
+through its retired-area registration, never as exports of an active board.
 
 Deduplicate matching run IDs with identical validated contents. If one run ID
 claims different content at different locations, report a conflict and select
@@ -198,10 +222,12 @@ artifact location, but copying cannot grant it registered status, make it the
 current release or change its recorded provenance. Release packaging explicitly
 selects a validated run; it does not recursively include arbitrary neighbors.
 No run is added to `project.pc` merely by generation or discovery, so those
-operations do not dirty authored project data. Export source identity covers the relevant board's
-resolved schematic, physical state, rules, pinned dependencies and configuration,
-including unsaved edits. An unrelated board's change alone need not make that
-board's output outdated.
+operations do not dirty authored project data. The projected input digest covers
+the relevant board's resolved schematic, physical state, rules, pinned dependencies
+and configuration, including unsaved edits. Within a validated identity lineage,
+an unrelated board's change alone need not make that board's output outdated.
+An equal projected digest cannot by itself reconcile different source captures
+or admit an older run into a synchronized release.
 
 Keep archive path, type, integrity and expansion checks and existing resource
 limits until a separately reviewed change enlarges them. Design and release
