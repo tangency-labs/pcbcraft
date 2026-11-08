@@ -101,6 +101,7 @@ fn form_body(
         rule(ui, footer.top(), footer.x_range());
         let inner = footer.shrink2(vec2(t.space_16, t.space_8));
         ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)), |ui| {
+            ui.spacing_mut().item_spacing.x = t.space_8;
             action.primary = ui.add_enabled(enabled, button(primary, true)).clicked();
             action.close |= ui.add(button("Cancel", false)).clicked();
             if libraries {
@@ -115,7 +116,7 @@ fn form_body(
 }
 
 /// Consistent action surfaces match the library source manager and Preferences.
-fn button(label: &str, primary: bool) -> egui::Button<'_> {
+pub fn button(label: &str, primary: bool) -> egui::Button<'_> {
     let t = Tokens::get();
     egui::Button::new(RichText::new(label).size(t.font_label).color(if primary { t.form_primary } else { t.text }))
         .fill(if primary { t.selected_bg } else { t.dialog_body })

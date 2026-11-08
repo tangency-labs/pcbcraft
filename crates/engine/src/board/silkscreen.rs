@@ -42,6 +42,48 @@ impl TryFrom<RawSettings> for Settings {
         Ok(Self { text_height_nm: raw.text_height_nm, stroke_width_nm: raw.stroke_width_nm, pad_clearance_nm: raw.pad_clearance_nm })
     }
 }
+/// Original sample geometry uses the same physical lettering and pad-clipping path as boards.
+#[derive(Debug)]
+pub struct Preview {
+    pub paths: Vec<Vec<Point>>,
+    pub pads: Vec<super::definition::RectPad>,
+}
+
+/// Validate a staged style before generating a fixed two-pad sample; no project or library
+/// state is changed. Invalid dimensions return the same diagnostic as authored settings.
+pub fn preview(settings: Settings) -> Result<Preview, String> {
+    use super::definition::{CopperBinding, PadShape, RectPad};
+    let settings = Settings::try_from(RawSettings {
+        text_height_nm: settings.text_height_nm,
+        stroke_width_nm: settings.stroke_width_nm,
+        pad_clearance_nm: settings.pad_clearance_nm,
+    })?;
+    let pads = [-1_500_000, 1_500_000]
+        .into_iter()
+        .enumerate()
+        .map(|(i, x)| RectPad {
+            number: (i + 1).to_string(),
+            center: Point { x_nm: x, y_nm: 0 },
+            width_nm: 1_000_000,
+            height_nm: 1_600_000,
+            rotation: 0,
+            shape: PadShape::Rectangle,
+            copper: CopperBinding::ComponentSide,
+            corner_radius_nm: 0,
+            drill_nm: None,
+        })
+        .collect::<Vec<_>>();
+    let mut paths = lettering("R1", -2_000_000, settings);
+    paths.push(vec![
+        Point { x_nm: -1_400_000, y_nm: -800_000 },
+        Point { x_nm: 1_400_000, y_nm: -800_000 },
+        Point { x_nm: 1_400_000, y_nm: 800_000 },
+        Point { x_nm: -1_400_000, y_nm: 800_000 },
+        Point { x_nm: -1_400_000, y_nm: -800_000 },
+    ]);
+    Ok(Preview { paths: clipped(paths, &pads, settings), pads })
+}
+
 impl Session {
     /// Change one addressed board's print style atomically with shared undo; invalid or stale
     /// edits leave both geometry and history intact. Setting the current style is a no-op.

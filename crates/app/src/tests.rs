@@ -963,12 +963,13 @@ fn click_canvas(harness: &mut Harness<'_, PcbApp>) {
     click_canvas_offset(harness, egui::vec2(2.0, 0.0));
 }
 
-/// Send a real pointer click to the canvas at a specified logical position.
+/// Send a real pointer click to the canvas at a specified logical position. Release after one
+/// input frame so panel animations cannot turn a click into a long press.
 pub(super) fn click_canvas_at(harness: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
     harness.hover_at(point);
     harness.run();
     harness.drag_at(point);
-    harness.run();
+    harness.run_steps(1);
     harness.drop_at(point);
     harness.run();
 }

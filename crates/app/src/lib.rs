@@ -210,6 +210,7 @@ pub struct PcbApp {
     file_notice: Option<String>,
     preferences: Preferences,
     board_appearance: board_appearance::Appearance,
+    board_profile_files: board_setup::profile_io::Files,
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
     browser: project_browser::ProjectBrowser,

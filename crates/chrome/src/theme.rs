@@ -76,6 +76,11 @@ pub struct Tokens {
     pub board_canvas: Color32,
     pub board_ink: Color32,
     pub board_silkscreen: Color32,
+    /// Material-role colors for the illustrative stackup, independent of editor layer colors.
+    pub stack_copper: Color32,
+    pub stack_copper_highlight: Color32,
+    pub stack_dielectric: Color32,
+    pub stack_dielectric_weave: Color32,
     pub board_grid: Color32,
     pub board_highlight: Color32,
     /// Copper colors for front, back, plated through-hole and internal board lands.
@@ -208,6 +213,10 @@ impl Tokens {
             board_canvas: Color32::from_rgb(0, 16, 32),
             board_ink: Color32::from_rgb(213, 221, 221),
             board_silkscreen: Color32::from_rgb(245, 235, 145),
+            stack_copper: Color32::from_rgb(177, 104, 54),
+            stack_copper_highlight: Color32::from_rgb(231, 170, 110),
+            stack_dielectric: Color32::from_rgb(177, 202, 192),
+            stack_dielectric_weave: Color32::from_rgb(143, 176, 163),
             board_grid: Color32::from_rgb(29, 39, 43),
             board_highlight: Color32::from_rgb(245, 195, 91),
             board_front: Color32::from_rgb(255, 48, 48),
@@ -314,6 +323,8 @@ impl Tokens {
         t.schematic_wire = Color32::from_rgb(111, 210, 160);
         t.schematic_highlight = Color32::from_rgb(240, 192, 106);
         t.catalog_symbol = Color32::from_rgb(143, 176, 205);
+        t.stack_dielectric = Color32::from_rgb(57, 90, 80);
+        t.stack_dielectric_weave = Color32::from_rgb(78, 113, 99);
         t.icon_ink = Color32::from_rgb(0x1f, 0x20, 0x21);
         t.icon_line = Color32::from_rgb(0xdb, 0xe4, 0xee);
         t.icon_face_1 = Color32::from_rgb(0x8d, 0xa3, 0xc3);
@@ -382,6 +393,7 @@ pub fn is_dark() -> bool {
     DARK.get()
 }
 
+/// Apply shared surfaces and control corners consistently across resting and interactive states.
 fn visuals(t: Tokens, dark: bool) -> egui::Visuals {
     let mut v = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
     v.panel_fill = t.panel;
@@ -404,10 +416,9 @@ fn visuals(t: Tokens, dark: bool) -> egui::Visuals {
     v.widgets.open.weak_bg_fill = t.panel_header;
     v.window_corner_radius = CornerRadius::same(t.radius_md);
     v.menu_corner_radius = CornerRadius::same(t.radius_md);
-    for widget in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.active, &mut v.widgets.open] {
-        widget.corner_radius = CornerRadius::same(t.radius_sm / 2);
+    for widget in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.active, &mut v.widgets.open, &mut v.widgets.hovered] {
+        widget.corner_radius = CornerRadius::same(t.control_radius);
     }
-    v.widgets.hovered.corner_radius = CornerRadius::same(t.radius_sm.saturating_sub(1));
     v
 }
 

@@ -146,7 +146,6 @@ pub(super) struct SchematicState {
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
     pub(super) drawing: crate::board_drawing::State,
-    pub(super) silkscreen_draft: Option<crate::board_panels::SilkscreenDraft>,
     pub(super) draft: Option<crate::board_canvas::Draft>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     pub(super) move_requested: bool,

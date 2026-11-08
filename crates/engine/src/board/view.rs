@@ -157,6 +157,15 @@ impl<'a> BoardView<'a> {
         self.project.board.setup.as_ref()
     }
 
+    /// Clone an existing setup or build a disposable initial draft with the requested copper
+    /// count and retained drawing-layer IDs. New IDs may fail to allocate; no document changes.
+    pub fn setup_draft(self, copper_layers: u64) -> Result<super::setup::BoardSetup, crate::CommandError> {
+        match self.setup() {
+            Some(setup) => Ok(setup.clone()),
+            None => super::setup::BoardSetup::initial(&self.project.board, copper_layers),
+        }
+    }
+
     /// The addressed board's authored physical boundary; absent boards have no inferred edge.
     pub fn outline(self) -> Option<super::outline::Outline> {
         self.project.board.outline

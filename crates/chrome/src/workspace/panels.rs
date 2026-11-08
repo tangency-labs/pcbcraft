@@ -158,6 +158,26 @@ impl Panel {
         width: f32,
         add: impl FnOnce(&mut Ui),
     ) -> (Rect, bool) {
+        self.show_with_toolbar(ui, id, title, canvas, dock, collapsed, width, 0., |_| {}, add)
+    }
+
+    /// Keep a card's actions above its scrolling body so revealing content cannot hide them.
+    /// The toolbar shares collapse, docking and input blocking with the existing card shell.
+    /// Below its declared minimum height, actions join the scrolling content to stay in bounds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_with_toolbar(
+        &mut self,
+        ui: &Ui,
+        id: Id,
+        title: &str,
+        canvas: Rect,
+        dock: Rect,
+        collapsed: bool,
+        width: f32,
+        toolbar_min_height: f32,
+        toolbar: impl FnOnce(&mut Ui),
+        add: impl FnOnce(&mut Ui),
+    ) -> (Rect, bool) {
         if !ui.is_enabled() || ui.ctx().input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))) {
             self.cancel_drag();
         }
@@ -254,7 +274,24 @@ impl Panel {
                         });
                         if !collapsed && body_height > 0.0 {
                             ui.separator();
-                            egui::ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, true]).show(ui, add);
+                            if body_height < toolbar_min_height {
+                                egui::ScrollArea::vertical().max_height(body_height).min_scrolled_height(0.0).auto_shrink([false, true]).show(
+                                    ui,
+                                    |ui| {
+                                        toolbar(ui);
+                                        add(ui);
+                                    },
+                                );
+                            } else {
+                                let start = ui.next_widget_position().y;
+                                toolbar(ui);
+                                let toolbar_height = (ui.next_widget_position().y - start).max(0.0);
+                                egui::ScrollArea::vertical()
+                                    .max_height((body_height - toolbar_height).max(0.0))
+                                    .min_scrolled_height(0.0)
+                                    .auto_shrink([false, true])
+                                    .show(ui, add);
+                            }
                         }
                         collapse
                     })

@@ -5,6 +5,8 @@ use pcbcraft_chrome::board_setup::{self as form, Page};
 use pcbcraft_engine::board::materials::{Construction, Material, MaterialRef, PrepregPly};
 use std::collections::BTreeSet;
 mod materials;
+pub(crate) mod profile_io;
+mod profiles;
 use pcbcraft_chrome::{properties, units};
 use pcbcraft_engine::board::{
     setup::{BoardSetup, LayerPurpose, Side, Stratum},
@@ -178,13 +180,17 @@ pub(super) struct Edit {
     unit: units::Unit,
     populated: bool,
     original_copper: u64,
-    candidate: Option<Candidate>,
-    copper_layers: u64,
+    silkscreen: [Length; 3],
+    candidate: Candidate,
+    initializing: bool,
     page: Page,
     locked: BTreeSet<String>,
     target_thickness: String,
     selected_stratum: usize,
     material_edit: Option<materials::Edit>,
+    profile_name: String,
+    profile_ticket: Option<u64>,
+    profile_notice: Option<String>,
     new_name: String,
     new_purpose: LayerPurpose,
     new_side: Option<Side>,
@@ -218,19 +224,33 @@ impl PcbApp {
         let Some(editor) = self.views.view(view).filter(|v| v.workspace == Workspace::Board && v.definition.is_none()) else { return };
         let Some(source) = editor.input(&self.session) else { return };
         let Some(board) = self.session.project().and_then(|p| editor.board.target.and_then(|t| p.board_view(t))) else { return };
+        let setup = match board.setup_draft(2).and_then(|setup| {
+            if board.setup().is_none() { setup.with_starting_stackup(pcbcraft_engine::board::setup::StackupPreset::Fr4OneOz) } else { Ok(setup) }
+        }) {
+            Ok(setup) => setup,
+            Err(error) => {
+                self.message = Some(error.to_string());
+                return;
+            }
+        };
         self.dialog = Dialog::BoardSetup(Box::new(Edit {
             source,
             board: board.target,
             unit: self.preferences.units,
             populated: board.footprints().next().is_some(),
-            original_copper: board.setup().map_or(0, |s| s.stackup().strata.len().div_ceil(2) as u64),
-            candidate: board.setup().cloned().map(|s| Candidate::new(s, self.preferences.units)),
-            copper_layers: 2,
+            original_copper: setup.stackup().strata.len().div_ceil(2) as u64,
+            candidate: Candidate::new(setup, self.preferences.units),
+            silkscreen: [board.silkscreen().text_height_nm, board.silkscreen().stroke_width_nm, board.silkscreen().pad_clearance_nm]
+                .map(|n| Length::new(Some(n), self.preferences.units)),
+            initializing: board.setup().is_none(),
             page: Page::Layers,
             locked: BTreeSet::new(),
             target_thickness: String::new(),
             selected_stratum: 1,
             material_edit: None,
+            profile_name: "Board setup".into(),
+            profile_ticket: None,
+            profile_notice: None,
             new_name: String::new(),
             new_purpose: LayerPurpose::User,
             new_side: None,
@@ -239,32 +259,32 @@ impl PcbApp {
     }
 
     /// Submit one validated candidate through the shared command path. Failed/stale forms retain
-    /// their fields; Cancel has no effect on model, revision, undo or saved bytes.
+    /// their fields; Cancel has no effect on model, revision, undo or saved bytes. Initial and
+    /// existing setups use the same complete editor and publish only on Apply. Only this form's
+    /// pending profile job blocks Apply; abandoned jobs still reserve the shared file slot.
     pub(super) fn board_setup_dialog(&mut self, ctx: &Context, mut edit: Box<Edit>) {
         let valid = self.views.view(edit.source.view()).is_some_and(|v| v.accepts(edit.source, &self.session));
         if !valid {
             edit.error = Some("The project or view changed. Close Board setup and reopen it to edit the current board.".into());
         }
-        let can_apply = valid;
-        let apply_label = if edit.material_edit.is_some() {
-            "Save material to draft"
-        } else if edit.candidate.is_some() {
-            "Apply board setup"
-        } else {
-            "Create board setup"
-        };
+        self.poll_setup_profile(&mut edit, valid);
+        let can_apply = valid && edit.profile_ticket.is_none();
+        let profile_busy = self.board_profile_files.busy();
+        let mut profile_action = None;
+        let apply_label = if edit.material_edit.is_some() { "Save material to draft" } else { "Apply board setup" };
         let error = edit.error.clone();
         let mut page = edit.page;
         let action = pcbcraft_chrome::catalog::settings_form(ctx, "Board setup", apply_label, can_apply, |ui| {
             form::pages(ui, &mut page, error.as_deref(), |ui, page| {
-                if edit.candidate.is_none() {
-                    edit.initialize(ui);
-                } else {
-                    match page {
-                        Page::Layers => edit.layers(ui),
-                        Page::Stackup => edit.stackup(ui),
-                        Page::Materials => edit.materials(ui),
-                    }
+                if edit.initializing && edit.populated {
+                    ui.label("Applying setup resolves existing surface-mount pads to front copper and through-hole pads across the stack. Placements and package assignments are retained.");
+                }
+                match page {
+                    Page::Layers => edit.layers(ui),
+                    Page::Stackup => edit.stackup(ui),
+                    Page::Materials => edit.materials(ui),
+                    Page::Silkscreen => edit.silkscreen(ui),
+                    Page::Profiles => profile_action = edit.profiles(ui, profile_busy),
                 }
             });
         });
@@ -272,27 +292,29 @@ impl PcbApp {
         if action.close {
             return;
         }
+        if let Some(action) = profile_action {
+            self.start_setup_profile(ctx, &mut edit, action);
+        }
         let apply = action.primary;
-        if apply && valid {
+        if apply && valid && edit.profile_ticket.is_none() {
             if edit.material_edit.is_some() {
                 edit.error = edit.save_material().err();
                 self.dialog = Dialog::BoardSetup(edit);
                 return;
             }
-            let command = if edit.candidate.is_some() { pcbcraft_engine::SET_BOARD_SETUP } else { pcbcraft_engine::INITIALIZE_BOARD_SETUP };
-            let result = match &edit.candidate {
-                Some(candidate) => candidate
-                    .value(edit.unit)
-                    .and_then(|setup| serde_json::to_value(setup).map_err(|e| e.to_string()))
-                    .map(|setup| json!({"setup":setup})),
-                None => Ok(json!({"copper_layers":edit.copper_layers,"resolve_existing_footprints":edit.populated})),
-            };
+            let command = if edit.initializing { pcbcraft_engine::INITIALIZE_BOARD_SETUP } else { pcbcraft_engine::SET_BOARD_SETUP };
+            let result = edit.candidate.value(edit.unit).and_then(|setup| {
+                let silkscreen = edit.silk_style()?;
+                let setup = serde_json::to_value(setup).map_err(|e| e.to_string())?;
+                Ok(json!({"setup":setup,"silkscreen":silkscreen}))
+            });
             match result {
                 Ok(mut params) => {
                     params["board"] = json!(edit.board.board);
                     params["expected_revision"] = json!(edit.source.revision);
-                    if command == pcbcraft_engine::SET_BOARD_SETUP {
-                        params["resolve_existing_footprints"] = json!(edit.populated);
+                    params["resolve_existing_footprints"] = json!(edit.populated);
+                    if edit.initializing {
+                        params["copper_layers"] = json!(edit.candidate.setup.stackup().strata.len().div_ceil(2));
                     }
                     self.run(command, &params);
                     if let Some(error) = self.message.take() {

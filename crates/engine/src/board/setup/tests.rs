@@ -488,3 +488,73 @@ fn fitted_dielectrics_keep_fixed_data_and_reject_invalid_locks() {
     assert!(source.with_fitted_dielectrics(1600000, &BTreeSet::from([copper])).is_err());
     assert_eq!(source.laminate_thickness_nm(), Some(3140000));
 }
+
+/// Optional print settings validate with topology before publication, share one undo step and
+/// retain byte-stable no-op behavior for both initialization and later setup edits.
+#[test]
+fn setup_and_silkscreen_publish_atomically() {
+    for initialize in [true, false] {
+        let mut s = if initialize {
+            let mut s = Session::default();
+            s.apply("project.new", &json!({})).unwrap();
+            s
+        } else {
+            session(2)
+        };
+        let before = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+        let revision = s.revision();
+        let command = if initialize { INITIALIZE_BOARD_SETUP } else { SET_BOARD_SETUP };
+        let mut params = if initialize {
+            json!({"copper_layers":4})
+        } else {
+            let candidate = s.project().unwrap().board_setup().unwrap().with_copper_count(4).unwrap();
+            json!({"setup":candidate})
+        };
+        params["expected_revision"] = json!(revision);
+        params["silkscreen"] = json!({"text_height_nm":1_200_000,"stroke_width_nm":2_000_000,"pad_clearance_nm":250_000});
+        assert!(s.apply(command, &params).is_err());
+        assert_eq!(s.revision(), revision);
+        assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
+        params["silkscreen"]["stroke_width_nm"] = json!(200_000);
+        s.apply(command, &params).unwrap();
+        assert_eq!(s.revision(), revision + 1);
+        let after = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_ne!(after, before);
+        assert!(s.apply(command, &params).is_err(), "stale form must fail");
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
+        s.apply("edit.redo", &json!({})).unwrap();
+        assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), after);
+        let revision = s.revision();
+        let setup = s.project().unwrap().board_setup().unwrap().clone();
+        s.apply(SET_BOARD_SETUP, &json!({"setup":setup,"silkscreen":params["silkscreen"],"expected_revision":revision})).unwrap();
+        assert_eq!(s.revision(), revision);
+        assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), after);
+    }
+}
+
+/// Initial previews preserve legacy graphic layer identities without changing the session.
+/// Complete drafts reject missing occupied layers and contradictory counts before adoption.
+#[test]
+fn complete_initial_setup_drafts_preserve_legacy_drawings() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    let edge = s.project().unwrap().boards().next().unwrap().layers().into_iter().find(|l| l.purpose == LayerPurpose::Outline).unwrap().id;
+    apply(&mut s, crate::ADD_DRAWING, json!({"layer":edge,"points":[{"x_nm":0,"y_nm":0},{"x_nm":1000000,"y_nm":0}],"closed":false}));
+    let before = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let draft = s.project().unwrap().boards().next().unwrap().setup_draft(4).unwrap();
+    assert!(draft.layers().iter().any(|l| l.id == edge));
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    let mut missing = serde_json::to_value(&draft).unwrap();
+    missing["layers"].as_array_mut().unwrap().retain(|l| l["id"] != json!(edge));
+    for (count, value) in [(4, missing), (2, json!(draft))] {
+        assert!(s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":count,"setup":value,"expected_revision":revision})).is_err());
+        assert_eq!(s.revision(), revision);
+        assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    }
+    apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":4,"setup":draft}));
+    assert_eq!(s.project().unwrap().board_setup(), Some(&draft));
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}

@@ -70,7 +70,8 @@ pub enum PaneAction {
 }
 
 /// Show the current document path in a split pane's header. Focus changes its underline,
-/// leaving the workspace stationary. Long paths elide from the left to retain the sheet name;
+/// leaving the workspace stationary. Inset tabs share the rounded Craft control corners.
+/// Long paths elide from the left to retain the sheet name;
 /// accessibility and hover text always contain the complete path. Return a focus click and
 /// an optional view action; the close button dismisses only this pane, and native placement
 /// rows are omitted for browser hosts. The host supplies stable IDs and applies actions after rendering.
@@ -80,7 +81,7 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
     let font = FontId::proportional(t.font_label);
     let measure = |text: &str| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), t.text);
     let close_width = t.space_24;
-    let available = (strip.width() - 2.0 * t.space_12 - close_width).max(0.0);
+    let available = (strip.width() - 2.0 * t.space_4 - 2.0 * t.space_12 - close_width).max(0.0);
     let mut label = path.to_owned();
     if measure(&label).size().x > available {
         for (index, _) in path.char_indices().skip(1) {
@@ -92,14 +93,17 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
     }
     let galley = measure(&label);
     let width = (galley.size().x + 2.0 * t.space_12 + close_width).min(strip.width());
-    let tab = Rect::from_min_size(strip.min, vec2(width, strip.height()));
+    let tab = Rect::from_min_size(
+        strip.min + vec2(t.space_4, t.space_4),
+        vec2(width.min((strip.width() - 2.0 * t.space_4).max(0.0)), strip.height() - t.space_4),
+    );
     let close_rect = Rect::from_min_max(pos2((tab.right() - close_width).max(tab.left()), tab.top()), tab.max);
     let response = ui.interact(Rect::from_min_max(tab.min, close_rect.left_bottom()), ui.id().with("sheet_tab"), Sense::click());
     response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, focused, path));
     ui.painter().rect_filled(strip, 0, t.panel);
     ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, t.border));
     let painter = ui.painter_at(tab);
-    painter.rect_filled(tab, 0, t.canvas);
+    painter.rect_filled(tab, egui::CornerRadius { nw: t.control_radius, ne: t.control_radius, sw: 0, se: 0 }, t.canvas);
     painter.galley(pos2(tab.left() + t.space_12, tab.center().y - galley.size().y / 2.0), galley, t.text);
     painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(2.0, if focused { t.accent } else { t.border }));
     let close = ui.interact(close_rect, ui.id().with("close_pane"), Sense::click());

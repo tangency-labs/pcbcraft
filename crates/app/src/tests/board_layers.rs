@@ -82,8 +82,13 @@ fn compact_layers_reveal_the_active_row_after_resize() {
     h.set_size(egui::vec2(760., 560.));
     h.run();
     let header = h.get_by_label("Collapse Layers").rect();
+    let setup = h.get_by_label("Board setup…").rect();
+    assert!(setup.top() >= header.bottom(), "setup action scrolled beneath the header: {setup:?}");
+    assert!(setup.height() >= pcbcraft_chrome::Tokens::get().control_height);
+    let visibility = h.get_by_label("Show all").rect();
+    assert!(visibility.top() >= setup.bottom());
     let row = h.get_by_label("Activate layer Board Edge").rect();
-    assert!(row.center().y > header.bottom());
+    assert!(row.center().y > visibility.bottom());
     assert!(row.bottom() < 528., "active row is outside the compact card: {row:?}");
     let selector = h.get_by_label("Active layer").rect();
     assert!(egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(760., 175.)).contains_rect(selector));
@@ -168,8 +173,7 @@ fn layer_shortcuts_respect_fields_popups_and_discard_old_layer_gestures() {
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
     h.key_press(Key::Escape);
     h.run();
-    click(&mut h, "Silkscreen");
-    click(&mut h, "Edit silkscreen settings");
+    super::board_views::open_silkscreen(&mut h);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Text height").click();
     h.run();
     h.key_press(Key::Minus);
@@ -177,7 +181,7 @@ fn layer_shortcuts_respect_fields_popups_and_discard_old_layer_gestures() {
     h.key_press(Key::PageDown);
     h.run();
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
-    click(&mut h, "Cancel silkscreen changes");
+    click(&mut h, "Cancel");
     click(&mut h, "Activate layer Board Edge");
     click(&mut h, "Draw rectangle on Board Edge");
     let canvas = h.get_by_label("PCB canvas").rect();

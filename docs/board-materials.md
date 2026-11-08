@@ -5,7 +5,7 @@ rigid stackup. `pcb.set_board_setup` validates and adopts the complete candidate
 with the caller's `expected_revision`, so construction, material references and
 dimensions change in one undo step. The command is shared by GUI and MCP.
 **Layout → Board → Setup** or **Layers → Board setup…** opens the Craft settings
-form with Board editor layers, Physical stackup and Materials pages.
+form with Board editor layers, Physical stackup, Materials, Silkscreen and Profiles pages.
 
 Copper count accepts every even number from 2 through 64, including initial setup
 and later count changes. Surface and surviving inner-layer identities remain stable.
@@ -16,7 +16,17 @@ thickness/construction data are refused until those fields are cleared deliberat
 Unused optional technical layers can be removed or added, while this editor retains
 copper, Board Edge and courtyard layers. Per-view visibility remains separate.
 
-The Physical stackup page shows a cross-section, finished copper/dielectric thicknesses,
+The first setup draft proposes a two-layer, 1.6 mm FR-4 board with nominal
+1 oz (35 µm) copper on both faces and a 1.53 mm dielectric core. These are editable
+starting choices, adopted only on Apply. Existing configured boards retain their own
+values. The nominal 1 oz/35 µm convention is also used in Rogers' published
+[RO4003C material information](https://www.rogerscorp.com/advanced-electronics-solutions/ro4000-series-laminates/ro4003c-laminates);
+this preset is original PCBcraft configuration, without a supplier qualification.
+The two-layer chooser also offers 2 oz/70 µm FR-4 and a generic high-Tg FR-4 family.
+Changing copper count retains existing dimensions; newly added gaps remain unknown.
+
+The Physical stackup page shows an illustrative laminate cross-section aligned with
+the table rows, finished copper/dielectric thicknesses,
 and their laminate total. Blank values stay unknown. **Fit unlocked dielectrics**
 distributes the exact residual thickness after copper and locked dielectric gaps;
 all fixed thicknesses must be specified and the resulting gaps must remain positive.
@@ -26,9 +36,10 @@ Stock ply thickness is never counted again as finished laminate thickness.
 
 Materials supports project-local specifications with sourced Tg and Dk/Df reports,
 including Tg method, basis, frequency, test method and specimen conditions. Existing
-pins are immutable: **New revision** retains the old reports and creates a distinct
-revision; choosing that revision for a dielectric is explicit. Saving a material
-only stages it in the form. Apply commits the entire board draft and Cancel discards it.
+pins are immutable: **Technical details → Add specification…** retains the old reports
+and creates a distinct revision; choosing that revision for a dielectric is explicit.
+Saving a material only stages it in the form. Apply commits the entire board draft
+and Cancel discards it.
 No electrical value, supplier property or manufacturing qualification is inferred.
 Impedance calculations and manufacturing-profile/rule editors remain follow-up work.
 Portable manufacturer/process profiles are a separate planned resource; see
@@ -41,7 +52,12 @@ for their import, pinning and update contract.
 and positive `u32` `revision`. A name is required; family, manufacturer, product
 and source are optional. Family is user text, not an FR-4 enum or an approved
 material list. Custom materials and different materials within one board are
-supported. No product data is bundled, and a family label supplies no physical
+supported. The Materials page offers generic FR-4, high-Tg FR-4, polyimide laminate and PTFE
+laminate templates alongside custom materials. Two-layer choices apply to the core; on multilayer
+boards they add a definition for explicit per-gap selection. These templates
+have stable built-in identities and immutable revisions and no manufacturer, Tg or Dk/Df reports.
+Technical properties and measurement conditions expand separately from basic material
+identity. No supplier product data is bundled, and a family label supplies no physical
 properties or manufacturing qualification. Naming a material metal-core or flex
 does not add the physical constructions those boards need.
 
@@ -139,3 +155,40 @@ Version 3 does not introduce a reusable material library, thermal expansion,
 manufacturing qualification, rule requirements, flex regions or an impedance
 solver. Extending those capabilities will use typed records and explicit format
 versions rather than an unchecked property bag.
+
+## Silkscreen and portable setup profiles
+
+Silkscreen separates text/graphic dimensions from copper-pad clearance and previews
+the actual PCBcraft Technical stroke lettering and conservative pad clipping. The
+three current settings govern board-generated reference text and outlines; they are
+not per-object text defaults or a general DRC rule set. The organization was compared
+with the published [KiCad text/graphics defaults](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#configuring_text_and_graphics)
+and Altium's [silkscreen preparation](https://www.altium.com/documentation/altium-designer/pcb/preparing-silkscreen)
+and [manufacturing rules](https://www.altium.com/documentation/altium-designer/pcb/design-rule-types/manufacturing).
+KiCad distinguishes layer defaults from object properties, and Altium distinguishes
+clearance checks and preparation actions. PCBcraft currently clips against copper-pad
+bounds; mask-opening, silk-to-silk and board-edge DRC remain outside this slice.
+
+Profiles imports/exports a named `.pcsetup.json` file with format
+`pcbcraft-setup-profile/1`, an independent UUID and positive revision, a complete
+validated `setup`, and physical `silkscreen` settings. Lengths are integer nanometers;
+material definitions, reports and references are embedded. The bounded, strict decoder
+rejects unknown fields, unsupported versions, invalid pins and files over 1 MiB.
+These setup snapshots carry no required electrical/fabrication constraints or project
+paths and do not establish a live link to their source file. Every export creates a
+new snapshot identity. Broader fabrication/process profiles remain planned.
+
+Import stages a preview. Layer IDs are rebased to the target's physical stack and
+unambiguous technical roles while extra target layers survive, preserving drawing
+ownership. Existing immutable material pins cannot be replaced by contradictory data.
+Apply publishes stackup/materials/silkscreen through the shared revision-checked command,
+with one Undo; Cancel leaves the project unchanged. Export captures the current draft
+without saving or dirtying the project. Desktop publication uses an atomic new file
+and refuses existing destinations; browser export starts a download.
+
+One application-owned file job remains bounded after a form closes. Tickets and
+captured revision checks prevent its result from reaching another form or a replaced
+project. Picker and filesystem work run away from the editor loop; disconnected
+workers release their slot with an error, and shutdown does not join a stalled worker.
+Atomic publication prevents a partially written visible profile. An export interrupted
+by application exit is not reported as successful.

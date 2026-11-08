@@ -256,13 +256,15 @@ Use **Layout → Board → Setup**, or **Board setup…** in Layers, to edit the
 Choose any even copper count from 2 through 64; 10- and 12-layer boards are included.
 **Board editor layers** edits names and unused optional layer membership.
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
-construction, with a cross-section and laminate total. **Fit unlocked dielectrics**
+construction, with a laminate total and a cross-section aligned to the table rows. **Fit unlocked dielectrics**
 fits a target thickness while retaining copper and locked gaps. Values accept mm
 or mil, and blanks remain unspecified.
 
-**Materials** exposes sourced Tg/Dk/Df characterization and pinned material revisions.
-Add a material or a new revision, enter the report's source/conditions, and save it
-to the draft; then select its exact revision for a dielectric. **Apply board setup**
+**Materials** offers generic family choices and custom materials. **Add material**
+starts with basic identity fields; **Technical properties** expands sourced Tg/Dk/Df
+characterization. For an existing material, **Technical details → Add specification…**
+stages a new immutable revision. Save it to the draft, then select that exact revision
+for a dielectric. **Apply board setup**
 commits one undoable edit, while Cancel discards the draft. Existing placements and
 package assignments are retained; populated-board copper changes explicitly update
 through-hole spans while keeping front copper identity. Occupied-layer removal and
@@ -315,6 +317,13 @@ A concurrent edit or a change of focused view cancels unfinished input.
 The [Dual LED demo](../examples/README.md) contains physical SMD packages with
 rounded rectangular copper pads, body outlines, courtyards and silkscreen. Older generic
 placements retain pad-center markers; opening them does not assign a package.
+Board-wide text height, stroke width and pad clearance are in **Board setup →
+Silkscreen**, where **Apply board setup** applies them together with any staged layer
+or stackup edits. A new setup starts from a two-layer 1.6 mm FR-4 draft with
+1 oz copper. **Physical stackup → Starting stackup** offers other two-layer presets,
+and **Materials** offers generic material families or custom definitions. **Profiles**
+imports or exports a portable `.pcsetup.json`; imported values stay in the draft until
+**Apply board setup**. General copper-clearance and routing rule editors remain planned.
 
 To choose a package for an unplaced component, right-click its schematic symbol
 and choose **Assign Footprint…**. For a starter resistor, choose **Resistor 0402**,

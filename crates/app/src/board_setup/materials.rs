@@ -142,75 +142,76 @@ impl Edit {
         Ok(material)
     }
 
-    /// Material metadata and characterization use ordinary aligned Craft form fields.
+    /// Basic identity remains concise; sourced characterization and test conditions expand only on request.
     fn show(&mut self, ui: &mut Ui) {
-        properties::text(ui, "Material name", &mut self.name);
-        properties::text(ui, "Family", &mut self.family);
-        properties::text(ui, "Manufacturer", &mut self.manufacturer);
-        properties::text(ui, "Product", &mut self.product);
-        properties::section(ui, "Add characterization report");
-        properties::text(ui, "Tg (°C)", &mut self.tg);
-        properties::field(ui, "Tg method", |ui| {
-            egui::ComboBox::from_id_salt("tg_method")
-                .selected_text(match self.tg_method {
-                    Some(TgMethod::Dsc) => "DSC",
-                    Some(TgMethod::Tma) => "TMA",
-                    Some(TgMethod::Dma) => "DMA",
-                    None => "Choose method",
-                })
-                .show_ui(ui, |ui| {
-                    for (value, name) in [(TgMethod::Dsc, "DSC"), (TgMethod::Tma, "TMA"), (TgMethod::Dma, "DMA")] {
-                        ui.selectable_value(&mut self.tg_method, Some(value), name);
-                    }
-                })
-                .response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Tg method"));
-        });
-        properties::text(ui, "Dk", &mut self.dk);
-        properties::text(ui, "Df", &mut self.df);
-        properties::text(ui, "Frequency (Hz)", &mut self.frequency);
-        properties::field(ui, "Basis", |ui| {
-            egui::ComboBox::from_id_salt("report_basis")
-                .selected_text(self.basis.map(|b| format!("{b:?}")).unwrap_or_else(|| "Choose basis".into()))
-                .show_ui(ui, |ui| {
-                    for value in [ReportBasis::Typical, ReportBasis::Minimum, ReportBasis::Maximum, ReportBasis::Measured] {
-                        ui.selectable_value(&mut self.basis, Some(value), format!("{value:?}"));
-                    }
-                })
-                .response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Basis"));
-        });
-        properties::text(ui, "Source document", &mut self.document);
-        properties::text(ui, "Source revision", &mut self.revision);
-        properties::text(ui, "Source locator", &mut self.locator);
-        ui.collapsing("Measurement conditions", |ui| {
-            properties::text(ui, "Test method / standard", &mut self.method);
-            properties::text(ui, "Temperature (°C)", &mut self.temperature);
-            properties::text(ui, "Specimen glass construction", &mut self.specimen_glass);
-            properties::text(ui, "Specimen resin (%)", &mut self.resin);
-            properties::text(ui, "Specimen thickness (mm)", &mut self.specimen_thickness);
-            properties::field(ui, "Dk/Df value", |ui| {
-                egui::ComboBox::from_id_salt("value_kind")
-                    .selected_text(match self.value_kind {
-                        Some(DielectricValueKind::Design) => "Design",
-                        Some(DielectricValueKind::Test) => "Test",
-                        None => "Unspecified",
+        form::text(ui, "Material name", &mut self.name);
+        form::text(ui, "Family", &mut self.family);
+        form::text(ui, "Manufacturer", &mut self.manufacturer);
+        form::text(ui, "Product", &mut self.product);
+        ui.collapsing("Technical properties", |ui| {
+            form::text(ui, "Tg (°C)", &mut self.tg);
+            form::field(ui, "Tg method", |ui| {
+                egui::ComboBox::from_id_salt("tg_method")
+                    .selected_text(match self.tg_method {
+                        Some(TgMethod::Dsc) => "DSC",
+                        Some(TgMethod::Tma) => "TMA",
+                        Some(TgMethod::Dma) => "DMA",
+                        None => "Choose method",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.value_kind, None, "Unspecified");
-                        ui.selectable_value(&mut self.value_kind, Some(DielectricValueKind::Design), "Design");
-                        ui.selectable_value(&mut self.value_kind, Some(DielectricValueKind::Test), "Test");
-                    });
-            });
-            properties::field(ui, "Axis", |ui| {
-                egui::ComboBox::from_id_salt("report_axis")
-                    .selected_text(self.axis.map(|a| format!("{a:?}")).unwrap_or_else(|| "Unspecified".into()))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.axis, None, "Unspecified");
-                        for axis in [MeasurementAxis::X, MeasurementAxis::Y, MeasurementAxis::Z] {
-                            ui.selectable_value(&mut self.axis, Some(axis), format!("{axis:?}"));
+                        for (value, name) in [(TgMethod::Dsc, "DSC"), (TgMethod::Tma, "TMA"), (TgMethod::Dma, "DMA")] {
+                            ui.selectable_value(&mut self.tg_method, Some(value), name);
                         }
-                    });
+                    })
+                    .response
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Tg method"));
+            });
+            form::text(ui, "Dk", &mut self.dk);
+            form::text(ui, "Df", &mut self.df);
+            form::text(ui, "Frequency (Hz)", &mut self.frequency);
+            form::field(ui, "Basis", |ui| {
+                egui::ComboBox::from_id_salt("report_basis")
+                    .selected_text(self.basis.map(|b| format!("{b:?}")).unwrap_or_else(|| "Choose basis".into()))
+                    .show_ui(ui, |ui| {
+                        for value in [ReportBasis::Typical, ReportBasis::Minimum, ReportBasis::Maximum, ReportBasis::Measured] {
+                            ui.selectable_value(&mut self.basis, Some(value), format!("{value:?}"));
+                        }
+                    })
+                    .response
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Basis"));
+            });
+            form::text(ui, "Source document", &mut self.document);
+            form::text(ui, "Source revision", &mut self.revision);
+            form::text(ui, "Source locator", &mut self.locator);
+            ui.collapsing("Measurement conditions", |ui| {
+                form::text(ui, "Test method / standard", &mut self.method);
+                form::text(ui, "Temperature (°C)", &mut self.temperature);
+                form::text(ui, "Specimen glass construction", &mut self.specimen_glass);
+                form::text(ui, "Specimen resin (%)", &mut self.resin);
+                form::text(ui, "Specimen thickness (mm)", &mut self.specimen_thickness);
+                form::field(ui, "Dk/Df value", |ui| {
+                    egui::ComboBox::from_id_salt("value_kind")
+                        .selected_text(match self.value_kind {
+                            Some(DielectricValueKind::Design) => "Design",
+                            Some(DielectricValueKind::Test) => "Test",
+                            None => "Unspecified",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.value_kind, None, "Unspecified");
+                            ui.selectable_value(&mut self.value_kind, Some(DielectricValueKind::Design), "Design");
+                            ui.selectable_value(&mut self.value_kind, Some(DielectricValueKind::Test), "Test");
+                        });
+                });
+                form::field(ui, "Axis", |ui| {
+                    egui::ComboBox::from_id_salt("report_axis")
+                        .selected_text(self.axis.map(|a| format!("{a:?}")).unwrap_or_else(|| "Unspecified".into()))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.axis, None, "Unspecified");
+                            for axis in [MeasurementAxis::X, MeasurementAxis::Y, MeasurementAxis::Z] {
+                                ui.selectable_value(&mut self.axis, Some(axis), format!("{axis:?}"));
+                            }
+                        });
+                });
             });
         });
     }
@@ -220,14 +221,14 @@ impl super::Edit {
     /// Adopt a fully validated material into the disposable board draft, retaining the form on
     /// error. The project/history are unchanged until the later Apply board setup action.
     pub(super) fn save_material(&mut self) -> Result<(), String> {
-        let candidate = self.candidate.as_ref().ok_or("Create the stackup first")?;
+        let candidate = &self.candidate;
         let material = self.material_edit.as_ref().ok_or("No material is being edited")?.value()?;
         let mut value = serde_json::to_value(candidate.value(self.unit)?).map_err(|e| e.to_string())?;
         let mut materials = candidate.materials.clone();
         materials.push(material);
         value["materials"] = json!(materials);
         let setup = serde_json::from_value::<BoardSetup>(value).map_err(|e| e.to_string())?;
-        self.candidate = Some(Candidate::new(setup, self.unit));
+        self.candidate = Candidate::new(setup, self.unit);
         self.material_edit = None;
         Ok(())
     }
@@ -236,7 +237,7 @@ impl super::Edit {
     /// is still the sole model transaction; report validation cannot partially adopt material data.
     pub(super) fn materials(&mut self, ui: &mut Ui) {
         form::heading(ui, "Materials");
-        let Some(candidate) = &mut self.candidate else { return };
+        let candidate = &mut self.candidate;
         if let Some(edit) = &mut self.material_edit {
             form::card(ui, |ui| edit.show(ui));
             if ui.button("Discard material edits").clicked() {
@@ -244,6 +245,26 @@ impl super::Edit {
             }
             return;
         }
+        properties::section(ui, "Material families");
+        let mut starter = None;
+        let can_use = candidate.setup.stackup().strata.len() == 3;
+        ui.columns(2, |columns| {
+            for (i, family) in pcbcraft_engine::board::materials::StarterMaterial::ALL.into_iter().enumerate() {
+                if form::material_choice(&mut columns[i % 2], family.name(), can_use) {
+                    starter = Some(family);
+                }
+            }
+        });
+        if let Some(family) = starter {
+            match candidate.value(self.unit).and_then(|setup| setup.with_starting_material(family).map_err(|e| e.to_string())) {
+                Ok(setup) => {
+                    *candidate = Candidate::new(setup, self.unit);
+                    self.error = None;
+                }
+                Err(error) => self.error = Some(error),
+            }
+        }
+        properties::section(ui, "Board materials");
         if ui.button("Add material").clicked() {
             match Material::new("New material".into()).map_err(|e| e.to_string()).and_then(|m| Edit::new(m, false)) {
                 Ok(edit) => self.material_edit = Some(edit),
@@ -253,46 +274,63 @@ impl super::Edit {
         if candidate.materials.is_empty() {
             ui.label("No material specifications pinned to this board.");
         }
+        let mut use_material = None;
         for material in &candidate.materials {
             ui.push_id((material.id, material.revision), |ui| {
                 form::card(ui, |ui| {
-                    properties::identity(ui, &material.name, &format!("Revision {}", material.revision));
-                    if let Some(family) = &material.family {
-                        ui.label(family);
+                    let used = candidate.constructions.iter().any(|construction| match construction {
+                        Some(Construction::Core { material: Some(reference), .. }) => *reference == material.reference(),
+                        Some(Construction::Prepreg { plies }) => plies.iter().any(|ply| ply.material == Some(material.reference())),
+                        _ => false,
+                    });
+                    form::material_heading(ui, &material.name, material.family.as_deref(), used);
+                    if !used && can_use && ui.button("Use for stackup").clicked() {
+                        use_material = Some(material.reference());
                     }
-                    if let Some(source) = &material.source {
-                        ui.label(&source.document);
-                    }
-                    for report in &material.tg {
-                        ui.label(format!(
-                            "Tg  {} °C · {} · {:?}",
-                            report.temperature_milli_c as f64 / 1000.,
-                            match report.method {
-                                TgMethod::Dsc => "DSC",
-                                TgMethod::Tma => "TMA",
-                                TgMethod::Dma => "DMA",
-                            },
-                            report.basis
-                        ));
-                        ui.label(&report.source.document);
-                    }
-                    for report in &material.dielectric {
-                        ui.label(format!(
-                            "Dk {}  ·  Df {}  ·  {}",
-                            report.dk_millionths.map(|n| (n as f64 / 1_000_000.).to_string()).unwrap_or_else(|| "—".into()),
-                            report.df_millionths.map(|n| (n as f64 / 1_000_000.).to_string()).unwrap_or_else(|| "—".into()),
-                            report.frequency_hz.map(|f| format!("{f} Hz")).unwrap_or_else(|| "Frequency unspecified".into())
-                        ));
-                        ui.label(&report.source.document);
-                    }
-                    if ui.button("New revision").clicked() {
-                        match Edit::new(material.clone(), true) {
-                            Ok(edit) => self.material_edit = Some(edit),
-                            Err(error) => self.error = Some(error),
+                    ui.collapsing("Technical details", |ui| {
+                        if let Some(source) = &material.source {
+                            ui.label(&source.document);
                         }
-                    }
+                        for report in &material.tg {
+                            ui.label(format!(
+                                "Tg  {} °C · {} · {:?}",
+                                report.temperature_milli_c as f64 / 1000.,
+                                match report.method {
+                                    TgMethod::Dsc => "DSC",
+                                    TgMethod::Tma => "TMA",
+                                    TgMethod::Dma => "DMA",
+                                },
+                                report.basis
+                            ));
+                            ui.label(&report.source.document);
+                        }
+                        for report in &material.dielectric {
+                            ui.label(format!(
+                                "Dk {}  ·  Df {}  ·  {}",
+                                report.dk_millionths.map(|n| (n as f64 / 1_000_000.).to_string()).unwrap_or_else(|| "—".into()),
+                                report.df_millionths.map(|n| (n as f64 / 1_000_000.).to_string()).unwrap_or_else(|| "—".into()),
+                                report.frequency_hz.map(|f| format!("{f} Hz")).unwrap_or_else(|| "Frequency unspecified".into())
+                            ));
+                            ui.label(&report.source.document);
+                        }
+                        if ui.button("Add specification…").clicked() {
+                            match Edit::new(material.clone(), true) {
+                                Ok(edit) => self.material_edit = Some(edit),
+                                Err(error) => self.error = Some(error),
+                            }
+                        }
+                    });
                 })
             });
+        }
+        if let Some(reference) = use_material {
+            match candidate.value(self.unit).and_then(|setup| setup.with_core_material(reference).map_err(|e| e.to_string())) {
+                Ok(setup) => {
+                    *candidate = Candidate::new(setup, self.unit);
+                    self.error = None;
+                }
+                Err(error) => self.error = Some(error),
+            }
         }
     }
 }
