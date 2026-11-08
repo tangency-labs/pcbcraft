@@ -15,7 +15,8 @@ use std::{
 const TRANSACTION: &str = ".pcbcraft-save";
 const JOURNAL_LIMIT: usize = 4 * 1024 * 1024;
 /// Names that Windows reads as a device, not a file, when they come before the first dot of a
-/// file or folder name, so `con.r2.json` means the console (#156). Document paths use only
+/// file or folder name in a usual (not `\\?\`) path, so `C:\…\con.r2.json` means the console
+/// (#156). Document paths use only
 /// lowercase ASCII letters, digits and hyphens, so these are the only device names a path can
 /// hold. Checked with `GetFullPathNameW` on Windows 10: `com0`, `lpt0` and `com10` are ordinary
 /// names there.
@@ -106,9 +107,11 @@ pub fn save(
     checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
 ) -> Result<(), String> {
     decode_documents(documents)?;
-    // Windows can stage these files but not publish them, and that failure comes after the
-    // journal is committed, so recovery would fail the same way on every open (#156). Refuse
-    // before the lock, staging folder or journal exist, leaving the destination as it was.
+    // The app saves through canonical `\\?\` paths, where Windows writes these names as ordinary
+    // files, but Git for Windows then can't add them and programs that open them by their usual
+    // path reach the device instead. Through a usual path the publish fails after the journal
+    // commit, so recovery would fail on every open. Refuse before the lock, staging folder or
+    // journal exist, leaving the destination as it was (#156).
     if cfg!(windows) {
         refuse_windows_device_names(documents)?;
     }
@@ -570,25 +573,30 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_folder_saves_refuse_device_names_before_writing() {
-        let parent = tempfile::tempdir().unwrap();
-        let root = parent.path().join("board");
-        for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor")] {
-            let error = save(&root, None, &pinning(library, symbol), &mut |_| Ok(())).unwrap_err();
-            assert!(error.contains("Windows reserves the name") && error.contains(".pc.zip"), "{error}");
-            assert!(tree(parent.path()).is_empty(), "{library}/{symbol} wrote {:?}", tree(parent.path()));
+        // The app's Save passes a canonical `\\?\` root (`project_files::native::normalize`), where
+        // Windows would write the file; other callers may pass a usual root. Both are refused.
+        for canonical in [false, true] {
+            let parent = tempfile::tempdir().unwrap();
+            let base = if canonical { fs::canonicalize(parent.path()).unwrap() } else { parent.path().to_path_buf() };
+            let root = base.join("board");
+            for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor")] {
+                let error = save(&root, None, &pinning(library, symbol), &mut |_| Ok(())).unwrap_err();
+                assert!(error.contains("Windows reserves the name") && error.contains(".pc.zip"), "{error}");
+                assert!(tree(parent.path()).is_empty(), "{library}/{symbol} wrote {:?}", tree(parent.path()));
+            }
+            let ordinary = pinning("workshop", "resistor");
+            save(&root, None, &ordinary, &mut |_| Ok(())).unwrap();
+            let before = tree(parent.path());
+            let error = save(&root, Some(&ordinary), &pinning("workshop", "con"), &mut |_| Ok(())).unwrap_err();
+            assert!(error.starts_with("library/symbols/workshop/con.r"), "{error}");
+            assert_eq!(tree(parent.path()), before);
+            assert_eq!(load(&root).unwrap(), ordinary);
+            // The archive the message suggests holds the same documents as ZIP entries.
+            let project = pinned_project("workshop", "con");
+            let archive = base.join("board.pc.zip");
+            fs::write(&archive, pcbcraft_engine::persistence::encode_packed(project.clone()).unwrap()).unwrap();
+            assert_eq!(encode_documents(crate::open(&archive).unwrap()).unwrap(), encode_documents(project).unwrap());
         }
-        let ordinary = pinning("workshop", "resistor");
-        save(&root, None, &ordinary, &mut |_| Ok(())).unwrap();
-        let before = tree(parent.path());
-        let error = save(&root, Some(&ordinary), &pinning("workshop", "con"), &mut |_| Ok(())).unwrap_err();
-        assert!(error.starts_with("library/symbols/workshop/con.r"), "{error}");
-        assert_eq!(tree(parent.path()), before);
-        assert_eq!(load(&root).unwrap(), ordinary);
-        // The archive the message suggests holds the same documents as ZIP entries.
-        let project = pinned_project("workshop", "con");
-        let archive = parent.path().join("board.pc.zip");
-        fs::write(&archive, pcbcraft_engine::persistence::encode_packed(project.clone()).unwrap()).unwrap();
-        assert_eq!(encode_documents(crate::open(&archive).unwrap()).unwrap(), encode_documents(project).unwrap());
     }
 
     /// Elsewhere these are ordinary names, so such a project saves and reopens as before.
