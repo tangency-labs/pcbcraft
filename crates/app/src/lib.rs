@@ -1910,6 +1910,7 @@ impl PcbApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.detached_editor(&ctx);
+        self.finish_editor_drag(&ctx);
         self.finish_view_actions(&ctx);
         self.finish_arrangement_action(&ctx);
         self.checkpoint_arrangements();
@@ -1928,6 +1929,7 @@ impl PcbApp {
     /// enabled above project dialogs and still route Close through the shared lifecycle policy.
     fn editor_host_frame(&mut self, ui: &mut Ui, integrated_titlebar: bool) {
         let ctx = ui.ctx().clone();
+        self.observe_editor_drag(&ctx);
         self.editor_window_geometry(&ctx);
         let main = self.views.host == self.views.main;
         self.editor_window_focus(&ctx);
@@ -1936,6 +1938,7 @@ impl PcbApp {
         self.sync_library_focus();
         if self.views.active.definition.is_some() && !(main && self.home) {
             self.library_frame(ui, integrated_titlebar);
+            self.editor_drag_cursor(&ctx);
             return;
         }
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
@@ -2007,6 +2010,7 @@ impl PcbApp {
             self.repaint_editors(&ctx);
             ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
+        self.editor_drag_cursor(&ctx);
     }
 }
 

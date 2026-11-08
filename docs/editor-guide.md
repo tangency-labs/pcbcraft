@@ -334,6 +334,24 @@ Right-click a split pane's header for **Open beside**, **Open in new window**, *
 view**, **Dock in main window** or **Close view**, as applicable. These actions
 target that pane, including its remembered document navigation. Dividers resize
 panes, with narrow areas stacking vertically.
+
+On desktop, dragging a header shades its source pane and displays window
+destinations. Drop over another pane in the same window to move into that slot;
+intervening panes shift, so a two-pane layout exchanges its positions. The full
+slot highlights **Move pane here**, retaining divider ratios and cached documents.
+Release outside the window or over **Open in new window** to detach, retaining
+its remembered documents and camera.
+Detached panes retain a draggable header with a leading **Dock** button that
+returns the pane to the main window in one click. Drag destinations stay beside
+the initial header press, rather than at a possibly off-screen far edge. Drag
+onto **Dock in main window** or another window target; its row and destination
+split region highlight before release. Direct drops over exposed panes in another
+window are also available where the compositor exposes window positions. Moving outside the
+client highlights **Open in new window**; the new OS window is created on release.
+There is no window preview outside the client. **Esc** cancels. Every target belongs
+to the same running instance and project session. Live MCP can address the same destination with `view.dock`, passing the
+source `view` and destination `beside` view IDs from `inspect_editor`.
+`view.reorder` takes source `view` and destination `target` IDs for in-window movement.
 Opening another view copies the source camera and grid without copying its edit
 selection. Turning Split off keeps the focused pane; turning it back on restores
 the window's remembered split arrangement, seeding restored cameras from the

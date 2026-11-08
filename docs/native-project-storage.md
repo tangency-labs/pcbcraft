@@ -380,6 +380,10 @@ uses an existing readable lock in shared mode, or reads without a lock if none
 exists. Both fallbacks require no recovery journal before and after reading;
 saves and recovery always require the writer lock. This permits opening a
 read-only project and using Save As to place edits in a writable location.
+The lock file, `.<name>.pcbcraft-lock` beside the folder or archive, stays after
+the project closes. Its leading dot hides it on Linux and macOS; on Windows it is
+created with the hidden attribute instead. A lock file created before that keeps
+its attributes and still works.
 
 A save stages only changed or removed documents. It writes their new bytes and
 old backups into a temporary directory, flushes them, and writes a journal with
@@ -412,6 +416,17 @@ claim. Programs that ignore the advisory lock can still race with publication.
 Failed opens leave the active project, revision and dirty state unchanged. Edits
 made during a background save stay unsaved when its earlier snapshot completes.
 Archive publication retains the existing single-file staging and baseline check.
+
+On Windows, a folder save is refused before anything is written when a document
+path needs a name that Windows reads as a device: `con`, `prn`, `aux`, `nul`,
+`com1`–`com9` or `lpt1`–`lpt9` before the first dot, for example a pinned symbol
+with ID `con` (`con.r2.json`) or a library with ID `aux`. The app reaches folders
+through canonical `\\?\` paths, where Windows would write such a file, but Git for
+Windows can't add it and programs that open it by its usual path reach the device
+instead. Through a usual path the publish itself fails after the journal commit,
+and every later open would fail in recovery. The message names the
+file; saving as a `.pc.zip` archive works, because the archive stores documents as
+ZIP entries. Other platforms save these names as ordinary files.
 
 ## Legacy migration and fixtures
 

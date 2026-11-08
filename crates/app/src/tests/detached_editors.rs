@@ -13,8 +13,11 @@ use pcbcraft_engine::{persistence::encode, schematic::Point};
 use super::*;
 use crate::editor_layout::HostId;
 
+mod pane_drag;
+
 #[derive(Default)]
 struct Peer {
+    origin: Option<Pos2>,
     focused: bool,
     close: bool,
     events: Vec<Event>,
@@ -77,6 +80,7 @@ fn many_windows() -> (Harness<'static, PcbApp>, Peers) {
             input.focused = peer.focused;
             input.events = std::mem::take(&mut peer.events);
             let mut info = egui::ViewportInfo { parent: Some(ViewportId::ROOT), focused: Some(peer.focused), ..Default::default() };
+            info.inner_rect = peer.origin.map(|origin| Rect::from_min_size(origin, vec2(1100.0, 760.0)));
             if std::mem::take(&mut peer.close) {
                 info.events.push(egui::ViewportEvent::Close);
             }
@@ -1590,7 +1594,7 @@ fn project_open_rebinds_detached_pcb_and_main_schematic() {
     click(&mut h, "Open PCB layout in new window");
     let child = h.state().views.hosts[&HostId(1)].focused;
     let stale = h.state().views.view(child).unwrap().input(&h.state().session).unwrap();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led/project.pc");
+    let (_copy, path) = dual_led_copy();
     let revision = h.state().session.revision();
     h.state_mut().files.open_path_for_test(&path, revision);
     h.run();

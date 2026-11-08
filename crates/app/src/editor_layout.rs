@@ -79,6 +79,49 @@ impl Layout {
         }
     }
 
+    /// Move a whole pane to another pane's slot, shifting intervening panes in screen order.
+    /// Split structure/ratios, cached documents and active documents are retained. Unknown IDs
+    /// and two IDs in the same pane do nothing; two visible panes exchange places.
+    pub(super) fn reorder(&mut self, source: ViewId, target: ViewId) -> bool {
+        let mut groups = Vec::new();
+        self.collect_groups(&mut groups);
+        let Some(from) = groups.iter().position(|group| group.views().contains(&source)) else { return false };
+        let Some(to) = groups.iter().position(|group| group.views().contains(&target)) else { return false };
+        if from == to {
+            return false;
+        }
+        let moved = groups.remove(from);
+        groups.insert(to, moved);
+        self.replace_groups(&mut groups.into_iter());
+        true
+    }
+
+    /// Collect pane leaves in the same traversal order used by layout and hit testing.
+    fn collect_groups(&self, groups: &mut Vec<Self>) {
+        match self {
+            Self::Split { first, second, .. } => {
+                first.collect_groups(groups);
+                second.collect_groups(groups);
+            }
+            _ => groups.push(self.clone()),
+        }
+    }
+
+    /// Fill existing leaf slots from an equally sized pane sequence, retaining every divider.
+    fn replace_groups(&mut self, groups: &mut std::vec::IntoIter<Self>) {
+        match self {
+            Self::Split { first, second, .. } => {
+                first.replace_groups(groups);
+                second.replace_groups(groups);
+            }
+            _ => {
+                if let Some(group) = groups.next() {
+                    *self = group;
+                }
+            }
+        }
+    }
+
     /// Activate a document only within its existing pane; unrelated panes retain their tabs.
     pub(super) fn activate(&mut self, id: ViewId) {
         match self {

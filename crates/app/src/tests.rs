@@ -49,6 +49,32 @@ pub(super) fn startup_harness<'a>() -> Harness<'a, PcbApp> {
     harness
 }
 
+/// Copy the `examples/dual-led` folder project into a new temporary directory and return the
+/// directory, which must be kept alive while the copy is in use, and the copy's `project.pc`.
+/// Opening a folder takes its save lock without waiting, so tests that run in parallel must not
+/// open the shared example folder itself: whichever opens second fails to lock it and keeps its
+/// previous project.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn dual_led_copy() -> (tempfile::TempDir, std::path::PathBuf) {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/dual-led");
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("dual-led");
+    let mut pending = vec![(source, root.clone())];
+    while let Some((from, to)) = pending.pop() {
+        std::fs::create_dir(&to).unwrap();
+        for entry in std::fs::read_dir(&from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                pending.push((entry.path(), target));
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    (dir, root.join("project.pc"))
+}
+
 /// Click the named control and run the frame that handles the action.
 pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
     harness.get_by_label(label).click();

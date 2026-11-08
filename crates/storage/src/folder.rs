@@ -14,6 +14,16 @@ use std::{
 
 const TRANSACTION: &str = ".pcbcraft-save";
 const JOURNAL_LIMIT: usize = 4 * 1024 * 1024;
+/// Names that Windows reads as a device, not a file, when they come before the first dot of a
+/// file or folder name in a usual (not `\\?\`) path, so `C:\…\con.r2.json` means the console
+/// (#156). Document paths use only
+/// lowercase ASCII letters, digits and hyphens, so these are the only device names a path can
+/// hold. Checked with `GetFullPathNameW` on Windows 10: `com0`, `lpt0` and `com10` are ordinary
+/// names there.
+const WINDOWS_DEVICE_NAMES: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5",
+    "lpt6", "lpt7", "lpt8", "lpt9",
+];
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -97,6 +107,14 @@ pub fn save(
     checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
 ) -> Result<(), String> {
     decode_documents(documents)?;
+    // The app saves through canonical `\\?\` paths, where Windows writes these names as ordinary
+    // files, but Git for Windows then can't add them and programs that open them by their usual
+    // path reach the device instead. Through a usual path the publish fails after the journal
+    // commit, so recovery would fail on every open. Refuse before the lock, staging folder or
+    // journal exist, leaving the destination as it was (#156).
+    if cfg!(windows) {
+        refuse_windows_device_names(documents)?;
+    }
     let _lock = lock(root, false)?;
     if !root.exists() {
         fs::create_dir(root).map_err(error)?;
@@ -239,6 +257,28 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
     Ok(())
 }
 
+/// Fail with a message naming the first document whose path Windows reads as a device (#156),
+/// suggesting a `.pc.zip` archive, which stores documents as ZIP entries rather than files.
+fn refuse_windows_device_names(documents: &Documents) -> Result<(), String> {
+    match documents.keys().find_map(|path| windows_device_name(path).map(|device| (path, device))) {
+        Some((path, device)) => Err(format!(
+            "{path}: Windows reserves the name \"{device}\" for a device, so this project can't be saved as a folder here. \
+             Save it as a .pc.zip archive, or change that library or item ID."
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Return the first part of a `/`-separated document path, such as `con` in
+/// `library/symbols/workshop/con.r2.json`, whose text before its first dot is one of
+/// [`WINDOWS_DEVICE_NAMES`], ignoring ASCII case. `None` means every part is an ordinary name.
+fn windows_device_name(relative: &str) -> Option<&str> {
+    relative
+        .split('/')
+        .map(|part| part.split_once('.').map_or(part, |(stem, _)| stem))
+        .find(|stem| WINDOWS_DEVICE_NAMES.iter().any(|device| stem.eq_ignore_ascii_case(device)))
+}
+
 /// Read the managed files only. Root-level README/Git files are left alone; files under
 /// sheets, library and assets must belong to the supported schema, apart from regular OS metadata
 /// files. Links and special files are refused even when named like OS metadata.
@@ -321,7 +361,7 @@ fn lock(root: &Path, allow_read_only: bool) -> Result<FolderLock, String> {
     {
         return Err("Save lock is not a regular file.".to_owned());
     }
-    let file = match OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path) {
+    let file = match crate::open_lock_file(&path) {
         Ok(file) => file,
         Err(e) if allow_read_only && matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem) => {
             require_no_journal(root)?;
@@ -442,4 +482,145 @@ fn digest(bytes: &[u8]) -> String {
 /// Preserve filesystem errors for the status bar without discarding the underlying cause.
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pcbcraft_engine::{Session, library::sources, persistence::encode_documents};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    /// Documents for a project that pins one symbol from a loaded native library, placed through
+    /// production commands, so both IDs reach the folder paths.
+    fn pinning(library: &str, symbol: &str) -> Documents {
+        encode_documents(pinned_project(library, symbol)).unwrap()
+    }
+
+    /// The project behind [`pinning`], for checks that need it rather than its folder documents.
+    fn pinned_project(library: &str, symbol: &str) -> std::sync::Arc<pcbcraft_engine::Project> {
+        let mut definition: serde_json::Value =
+            serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../libraries/starter/symbols/resistor.json"))).unwrap();
+        definition["id"] = json!(symbol);
+        let revision = u32::try_from(definition["revision"].as_u64().unwrap()).unwrap();
+        let source = sources::Documents::from([
+            (
+                "library.json".to_owned(),
+                json!({"format":"pcbcraft-library/1","id":library,"name":"Workshop","license":"MIT OR Apache-2.0"}).to_string(),
+            ),
+            // An ordinary file name on purpose: an item's ID comes from its JSON, not its file.
+            ("symbols/part.json".to_owned(), definition.to_string()),
+        ]);
+        let mut session = Session::default();
+        session.apply("project.new", &json!({})).unwrap();
+        session.execute(sources::LOAD, &json!({"source":"workshop","documents":source})).unwrap();
+        let digest = sources::symbol_digest(&session.libraries().symbol(library, symbol, revision).unwrap()).unwrap();
+        let place = json!({"library":library,"definition":symbol,"definition_revision":revision,"definition_digest":digest,"x_nm":0,"y_nm":0,"expected_revision":session.revision()});
+        session.apply(pcbcraft_engine::PLACE_SYMBOL, &place).unwrap();
+        session.snapshot().unwrap()
+    }
+
+    /// Every folder and file below `root`, with file bytes, to show what a save wrote.
+    fn tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+        let mut found = BTreeMap::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(&directory).unwrap() {
+                let path = entry.unwrap().path();
+                let relative = path.strip_prefix(root).unwrap().to_path_buf();
+                if path.is_dir() {
+                    found.insert(relative, None);
+                    pending.push(path);
+                } else {
+                    found.insert(relative, Some(fs::read(&path).unwrap()));
+                }
+            }
+        }
+        found
+    }
+
+    /// Any part of a document path can name a device, judged by its text before the first dot.
+    /// Longer names that only start with a device name stay ordinary (#156).
+    #[test]
+    fn device_names_are_found_in_any_part_of_a_document_path() {
+        for (path, device) in [
+            ("library/symbols/workshop/con.r2.json", "con"),
+            ("library/footprints/aux/sot23.r1.json", "aux"),
+            ("library/symbols/nul/prn.r1.json", "nul"),
+            ("library/symbols/workshop/com1.r3.json", "com1"),
+            ("library/symbols/lpt9/resistor.r2.json", "lpt9"),
+            ("library/symbols/workshop/CON.r2.json", "CON"),
+        ] {
+            assert_eq!(windows_device_name(path), Some(device), "{path}");
+        }
+        for path in [
+            ENTRY_POINT,
+            "board.json",
+            "sheets/d731c904-8549-4214-9fba-9e6487892c7a.json",
+            "library/symbols/workshop/console.r2.json",
+            "library/symbols/con-1/aux-jack.r2.json",
+            "library/symbols/workshop/com10.r1.json",
+            "library/symbols/workshop/com0.r1.json",
+            "library/footprints/workshop/lpt0.r1.json",
+        ] {
+            assert_eq!(windows_device_name(path), None, "{path}");
+        }
+    }
+
+    /// On Windows, a folder save that needs a device-named file or folder fails with a message
+    /// naming it before anything is written. A new destination isn't created, and an existing
+    /// project keeps its files, lock and journal state, and still opens (#156).
+    #[cfg(windows)]
+    #[test]
+    fn windows_folder_saves_refuse_device_names_before_writing() {
+        // The app's Save passes a canonical `\\?\` root (`project_files::native::normalize`), where
+        // Windows would write the file; other callers may pass a usual root. Both are refused.
+        for canonical in [false, true] {
+            let parent = tempfile::tempdir().unwrap();
+            let base = if canonical { fs::canonicalize(parent.path()).unwrap() } else { parent.path().to_path_buf() };
+            let root = base.join("board");
+            for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor")] {
+                let error = save(&root, None, &pinning(library, symbol), &mut |_| Ok(())).unwrap_err();
+                assert!(error.contains("Windows reserves the name") && error.contains(".pc.zip"), "{error}");
+                assert!(tree(parent.path()).is_empty(), "{library}/{symbol} wrote {:?}", tree(parent.path()));
+            }
+            let ordinary = pinning("workshop", "resistor");
+            save(&root, None, &ordinary, &mut |_| Ok(())).unwrap();
+            let before = tree(parent.path());
+            let error = save(&root, Some(&ordinary), &pinning("workshop", "con"), &mut |_| Ok(())).unwrap_err();
+            assert!(error.starts_with("library/symbols/workshop/con.r"), "{error}");
+            assert_eq!(tree(parent.path()), before);
+            assert_eq!(load(&root).unwrap(), ordinary);
+        }
+    }
+
+    /// Elsewhere these are ordinary names: folders save and reopen with the same documents, and
+    /// a repeated save leaves every directory, file byte, lock and journal state unchanged.
+    #[cfg(not(windows))]
+    #[test]
+    fn other_platforms_save_device_names_as_ordinary_files() {
+        for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor"), ("con", "aux")] {
+            let parent = tempfile::tempdir().unwrap();
+            let root = parent.path().join("board");
+            let documents = pinning(library, symbol);
+            save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+            assert_eq!(load(&root).unwrap(), documents);
+            let before = tree(parent.path());
+            save(&root, Some(&documents), &documents, &mut |_| Ok(())).unwrap();
+            assert_eq!(tree(parent.path()), before);
+        }
+    }
+
+    /// Archives retain device-named library and symbol IDs on every platform because document
+    /// paths are ZIP entries, so the alternative suggested by the Windows refusal reopens intact.
+    #[test]
+    fn archives_preserve_device_named_documents() {
+        for (library, symbol) in [("workshop", "con"), ("workshop", "aux"), ("nul", "resistor"), ("con", "aux")] {
+            let parent = tempfile::tempdir().unwrap();
+            let project = pinned_project(library, symbol);
+            let archive = parent.path().join("board.pc.zip");
+            fs::write(&archive, pcbcraft_engine::persistence::encode_packed(project.clone()).unwrap()).unwrap();
+            assert_eq!(encode_documents(crate::open(&archive).unwrap()).unwrap(), encode_documents(project).unwrap());
+        }
+    }
 }

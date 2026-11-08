@@ -265,6 +265,22 @@ fn edited_save_preserves_project_permissions() {
     }
 }
 
+/// On Windows an archive's save lock is created hidden, like a folder's, through
+/// `pcbcraft_storage::open_lock_file`.
+#[cfg(windows)]
+#[test]
+fn windows_archive_save_lock_is_created_hidden() {
+    use std::os::windows::fs::MetadataExt;
+    // Windows' FILE_ATTRIBUTE_HIDDEN.
+    const HIDDEN: u32 = 0x2;
+    let dir = tempfile::tempdir().unwrap();
+    let archive = dir.path().join("board.pc.zip");
+    publish(&archive, None, &encode_file(decode(TWO_RESISTORS).unwrap(), Encoding::Zip).unwrap(), || Ok(())).unwrap();
+    let attributes = fs::metadata(dir.path().join(".board.pc.zip.pcbcraft-lock")).unwrap().file_attributes();
+    assert_ne!(attributes & HIDDEN, 0, "lock attributes {attributes:#x}");
+    assert!(load(&archive).is_ok());
+}
+
 /// Competing writes from the same baseline leave only the winning session clean.
 #[test]
 fn one_writer_publishes_against_a_shared_baseline() {
@@ -439,5 +455,30 @@ fn failed_zip_opens_preserve_the_active_project_and_dirty_state() {
         assert!(Arc::ptr_eq(&before, &fixture.session.snapshot().unwrap()));
         assert_eq!(fixture.session.revision(), revision);
         assert!(fixture.files.dirty(&fixture.session));
+    }
+}
+
+/// Open and save targets keep the drive form people chose. Guards #154: Windows
+/// `canonicalize` returns `\\?\C:\…`, which leaked into Recent projects and saved history.
+#[test]
+fn normalized_targets_keep_the_plain_drive_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = normalize(&dir.path().join("board.pc.zip")).unwrap();
+    assert!(target.is_absolute());
+    assert!(!target.to_string_lossy().starts_with(r"\\?\"), "verbatim target: {}", target.display());
+    assert_eq!(target.file_name(), Some(std::ffi::OsStr::new("board.pc.zip")));
+}
+
+/// The plain spelling is used only when Windows reads it as the same file. Guards the #155
+/// review: `CON.pc.zip` is the console device and a trailing dot is dropped in the plain form,
+/// so those targets keep `\\?\`. Simplifying only the parent folder missed both.
+#[cfg(windows)]
+#[test]
+fn targets_whose_plain_spelling_differs_keep_the_verbatim_form() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["CON.pc.zip", "board.pc.zip."] {
+        let target = normalize(&dir.path().join(name)).unwrap();
+        assert!(target.to_string_lossy().starts_with(r"\\?\"), "{name}: {}", target.display());
+        assert_eq!(target.file_name(), Some(std::ffi::OsStr::new(name)));
     }
 }

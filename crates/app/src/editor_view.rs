@@ -402,6 +402,17 @@ impl EditorView {
         }
     }
 
+    /// Seed a host replacement without consuming this view's deferred navigation. The new
+    /// view receives the displayed transforms, while both original cameras keep pending requests.
+    pub(super) fn fork_replacement(&mut self, id: ViewId) -> Self {
+        let camera = self.camera.clone();
+        let parked_camera = self.parked_camera.clone();
+        let replacement = self.fork(id);
+        self.camera = camera;
+        self.parked_camera = parked_camera;
+        replacement
+    }
+
     /// Switch only this view and restore that workspace's navigation. Old input remains invalid
     /// even when switching back without any document edit.
     pub(super) fn switch(&mut self, workspace: Workspace, session: &Session) {
