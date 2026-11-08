@@ -1,5 +1,24 @@
 use super::*;
 use crate::tests::click;
+
+/// Page navigation uses a rail on wide hosts and the same labelled chooser on compact hosts.
+fn page(h: &mut Harness<'_, PcbApp>, title: &str) {
+    if h.query_by_label("Board setup page").is_some() {
+        click(h, "Board setup page");
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::Button, title).click();
+    h.run();
+}
+
+/// Copper counts all use the schema's single chooser, including the former starter presets.
+fn count(h: &mut Harness<'_, PcbApp>, count: u64) {
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Copper layers").click();
+    h.run();
+    h.get_by_label(&format!("{count} copper layers")).scroll_to_me();
+    h.run();
+    click(h, &format!("{count} copper layers"));
+}
+
 use egui_kittest::{Harness, kittest::Queryable};
 use pcbcraft_engine::{
     INITIALIZE_BOARD_SETUP, SET_BOARD_SETUP,
@@ -17,28 +36,30 @@ fn harness(width: f32) -> Harness<'static, PcbApp> {
 
 /// Replace one real field through ordinary editing keys, retaining its accessible name.
 fn replace(h: &mut Harness<'_, PcbApp>, label: &str, text: &str) {
-    h.get_by_label(label).click();
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).scroll_to_me();
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).click();
     h.run();
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.get_by_label(label).type_text(text);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, label).type_text(text);
     h.run();
 }
 
 /// Setup creation is an explicit undoable edit; opening/cancelling does not dirty the project.
 #[test]
 fn board_setup_creation_cancel_and_undo_use_real_controls() {
-    for (width, count) in [(1200.0, 2), (700.0, 4)] {
+    for (width, copper) in [(1200.0, 2), (700.0, 8)] {
         let mut h = harness(width);
         let before = h.state().session.inspect();
         click(&mut h, "Board setup");
         click(&mut h, "Cancel");
         assert_eq!(h.state().session.inspect(), before);
         click(&mut h, "Board setup…");
-        click(&mut h, &format!("{count} copper layers"));
+        count(&mut h, copper);
         click(&mut h, "Create board setup");
         assert!(matches!(h.state().dialog, Dialog::None));
         let setup = h.state().session.project().unwrap().board_setup().unwrap();
-        assert_eq!(setup.layers().iter().filter(|l| l.purpose == LayerPurpose::Copper).count(), count);
+        assert_eq!(setup.layers().iter().filter(|l| l.purpose == LayerPurpose::Copper).count(), copper as usize);
         assert!(setup.stackup().strata.iter().all(|s| s.thickness_nm().is_none()));
         let expected = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         let roundtrip = decode_documents(&expected).unwrap();
@@ -58,14 +79,14 @@ fn short_board_setup_forms_keep_actions_and_names_reachable() {
     h.set_size(egui::vec2(700.0, 520.0));
     h.run();
     click(&mut h, "Board setup");
-    click(&mut h, "4 copper layers");
+    count(&mut h, 4);
     click(&mut h, "Create board setup");
     click(&mut h, "Board setup");
     let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 520.0));
     assert!(viewport.contains_rect(h.get_by_label("Apply board setup").rect()));
     assert!(viewport.contains_rect(h.get_by_label("Cancel").rect()));
     assert!(h.get_by_label("Layer name Top").rect().width() > 200.0);
-    click(&mut h, "Stackup");
+    page(&mut h, "Physical stackup");
     assert!(h.get_by_label("Top thickness").rect().width() > 100.0);
     assert!(viewport.contains_rect(h.get_by_label("Apply board setup").rect()));
 }
@@ -86,7 +107,7 @@ fn board_setup_names_and_stackup_validate_before_atomic_apply() {
     assert_eq!(h.state().session.revision(), revision);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     replace(&mut h, "Layer name Top", "Signal");
-    click(&mut h, "Stackup");
+    page(&mut h, "Physical stackup");
     replace(&mut h, "Signal thickness", "0");
     click(&mut h, "Apply board setup");
     assert_eq!(h.state().session.revision(), revision);
@@ -126,15 +147,16 @@ fn populated_board_setup_retains_engine_layer_binding_boundaries() {
         h.run();
         let before = h.state().session.inspect();
         click(&mut h, "Board setup");
-        assert!(h.query_by_label("Add layer").is_none());
+        if initialized {
+            assert!(h.query_by_label("Add layer").is_some());
+        }
         if initialized {
             replace(&mut h, "Layer name Top", "Signal");
             click(&mut h, "Apply board setup");
             assert!(matches!(h.state().dialog, Dialog::None));
             assert!(h.state().session.project().unwrap().board_setup().unwrap().layers().iter().any(|l| l.name == "Signal"));
         } else {
-            h.get_by_label("4 copper layers");
-            click(&mut h, "4 copper layers");
+            count(&mut h, 4);
             click(&mut h, "Create board setup");
             assert!(matches!(h.state().dialog, Dialog::None));
             let after = h.state().session.inspect();
@@ -207,4 +229,103 @@ fn rounded_display_does_not_rewrite_exact_setup_dimensions() {
     for unit in [units::Unit::Mm, units::Unit::Mil] {
         assert_eq!(&Candidate::new(setup.clone(), unit).value(unit).unwrap(), setup);
     }
+}
+
+/// Material characterization is staged through real controls and pinned by explicit revision;
+/// changing copper count and adding Tg/Dk/Df never commits until the overall Apply action.
+#[test]
+fn expanded_count_and_sourced_material_reports_use_the_real_form() {
+    let mut h = harness(1200.);
+    click(&mut h, "Board setup");
+    count(&mut h, 6);
+    click(&mut h, "Create board setup");
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    click(&mut h, "Board setup");
+    count(&mut h, 8);
+    page(&mut h, "Materials");
+    click(&mut h, "Add material");
+    for (label, value) in [
+        ("Material name", "Test laminate"),
+        ("Tg (°C)", "180"),
+        ("Dk", "4.2"),
+        ("Df", "0.018"),
+        ("Frequency (Hz)", "1000000000"),
+        ("Source document", "Original test specification"),
+    ] {
+        replace(&mut h, label, value);
+    }
+    for (field, choice) in [("Tg method", "DSC"), ("Basis", "Typical")] {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, field).scroll_to_me();
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, field).click();
+        h.run();
+        click(&mut h, choice);
+    }
+    h.get_by_label("Save material to draft").scroll_to_me();
+    h.run();
+    click(&mut h, "Save material to draft");
+    assert_eq!(h.state().session.revision(), revision);
+    if let Dialog::BoardSetup(edit) = &h.state().dialog {
+        assert!(edit.material_edit.is_none(), "{:?}", edit.error);
+        assert_eq!(edit.candidate.as_ref().unwrap().materials.len(), 1);
+    }
+    page(&mut h, "Physical stackup");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Dielectric 1").click();
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Construction").scroll_to_me();
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Construction").click();
+    h.run();
+    click(&mut h, "Core");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Material specification").scroll_to_me();
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Material specification").click();
+    h.run();
+    click(&mut h, "Test laminate · r1");
+    click(&mut h, "Apply board setup");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    let setup = h.state().session.project().unwrap().board_setup().unwrap();
+    assert_eq!(setup.stackup().strata.len(), 15);
+    let material = &setup.materials()[0];
+    assert_eq!(material.tg[0].temperature_milli_c, 180000);
+    assert_eq!(material.dielectric[0].dk_millionths, Some(4200000));
+    assert_eq!(material.dielectric[0].df_millionths, Some(18000));
+    assert!(
+        matches!(&setup.stackup().strata[1],Stratum::Dielectric{construction:Some(Construction::Core{material:Some(reference),..}),..} if *reference==material.reference())
+    );
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
+    click(&mut h, "Undo");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Thickness fitting preserves locked dielectric dimensions and all copper, distributes the
+/// exact residual nanometers, and rejects impossible targets without partial draft changes.
+#[test]
+fn dielectric_fitting_respects_locks_and_rejects_invalid_targets() {
+    let mut h = harness(1200.);
+    click(&mut h, "Board setup");
+    count(&mut h, 6);
+    click(&mut h, "Create board setup");
+    click(&mut h, "Board setup");
+    let Dialog::BoardSetup(edit) = &mut h.state_mut().dialog else { panic!("setup") };
+    let candidate = edit.candidate.as_mut().unwrap();
+    for i in (0..candidate.thickness.len()).step_by(2) {
+        candidate.thickness[i] = Length::new(Some(35000), edit.unit);
+    }
+    let Stratum::Dielectric { id, .. } = candidate.setup.stackup().strata[1] else { panic!("gap") };
+    candidate.thickness[1] = Length::new(Some(300000), edit.unit);
+    edit.locked.insert(id.to_string());
+    edit.target_thickness = "1.6 mm".into();
+    edit.fit().unwrap();
+    let value = edit.candidate.as_ref().unwrap().value(edit.unit).unwrap();
+    assert_eq!(value.laminate_thickness_nm(), Some(1600000));
+    assert_eq!(value.stackup().strata[1].thickness_nm(), Some(300000));
+    edit.target_thickness = "0.1 mm".into();
+    assert!(edit.fit().is_err());
+    assert_eq!(edit.candidate.as_ref().unwrap().value(edit.unit).unwrap(), value);
+    edit.target_thickness = "-1 mm".into();
+    assert!(edit.fit().is_err());
+    assert_eq!(edit.candidate.as_ref().unwrap().value(edit.unit).unwrap(), value);
 }

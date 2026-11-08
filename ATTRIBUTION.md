@@ -683,3 +683,12 @@ Repeat placement control are original upstream code. They reuse existing native
 label/part commands, geometry queries and Craft controls; no outside implementation,
 artwork, fixture or dependency was introduced. Regression circuits are constructed
 through the existing engine commands.
+
+
+The Board setup editor in `crates/app/src/board_setup/` and shared chrome uses
+PCBcraft's existing Craft settings/catalog form surfaces and original presentation
+code. Layer-count selection, editor-layer membership and dielectric thickness fitting
+were compared with the published [KiCad 10 PCB Editor manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#configuring-board-stackup-and-physical-parameters).
+No KiCad implementation source, icons or artwork was consulted or incorporated.
+The material UI exposes the existing project-local sourced-report and construction
+contracts; it imports no supplier data and makes no qualification claim.

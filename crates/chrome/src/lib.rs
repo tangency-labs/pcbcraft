@@ -35,3 +35,5 @@ pub mod workspace;
 
 pub use menu::MenuItem;
 pub use theme::Tokens;
+
+pub mod board_setup;

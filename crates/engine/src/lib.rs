@@ -129,7 +129,7 @@ impl ParamKind {
                 "pad_clearance_nm":{"type":"integer","minimum":0,"maximum":10_000_000}
             },"required":["text_height_nm","stroke_width_nm","pad_clearance_nm"],"additionalProperties":false}),
             Self::BoardId | Self::SheetId => json!({"type":"string", "format":"uuid"}),
-            Self::CopperLayers => json!({"type":"integer", "enum":[2,4]}),
+            Self::CopperLayers => json!({"type":"integer", "minimum":2,"maximum":64,"multipleOf":2}),
             Self::AutoHeal => json!({"type":"boolean","default":true}),
             Self::Disconnect => json!({"type":"boolean","default":false}),
             Self::Junctions => json!({"type":"array","maxItems":2,"uniqueItems":true,"items":Self::JunctionId.schema()}),
@@ -223,7 +223,7 @@ impl ParamKind {
             Self::Direction if serde_json::from_value::<hierarchy::Direction>(value.clone()).is_ok() => Ok(()),
             Self::BoardId | Self::SheetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup | Self::SilkscreenSettings if value.is_object() => Ok(()),
-            Self::CopperLayers if matches!(value.as_u64(), Some(2 | 4)) => Ok(()),
+            Self::CopperLayers if value.as_u64().is_some_and(|n| (2..=64).contains(&n) && n.is_multiple_of(2)) => Ok(()),
             Self::AutoHeal | Self::Disconnect if value.is_boolean() => Ok(()),
             Self::Junctions
                 if value.as_array().is_some_and(|ends| {
@@ -276,7 +276,7 @@ impl ParamKind {
             Self::SheetId => Err("must identify a sheet by UUID"),
             Self::BoardId => Err("must identify a board by UUID"),
             Self::BoardSetup | Self::SilkscreenSettings => Err("must contain a settings object"),
-            Self::CopperLayers => Err("must select the 2- or 4-copper-layer preset"),
+            Self::CopperLayers => Err("must select an even copper-layer count from 2 through 64"),
             Self::AutoHeal | Self::Disconnect => Err("must be a boolean"),
             Self::Junctions => Err("must contain at most two distinct junction IDs"),
             Self::FootprintDefinition => Err("must identify an available built-in footprint"),
@@ -867,7 +867,7 @@ const CATALOG: &[Command] = &[
         summary: "Create stable layers and a rigid stackup. Existing placements require explicit binding resolution; thickness and materials remain unspecified. Undoable.",
         params: &[
             BOARD,
-            Param { required: true, name: "copper_layers", summary: "Initial two- or four-layer topology", kind: ParamKind::CopperLayers },
+            Param { required: true, name: "copper_layers", summary: "Even copper-layer count from 2 through 64", kind: ParamKind::CopperLayers },
             Param {
                 required: false,
                 name: "resolve_existing_footprints",
@@ -880,7 +880,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: SET_BOARD_SETUP,
         title: "Set Board Setup",
-        summary: "Validate and replace layer names and physical stackup in one undo step. Populated boards reject topology changes.",
+        summary: "Validate and replace layers and physical stackup in one undo step. Populated topology changes require explicit compatible-binding consent.",
         params: &[
             BOARD,
             Param {
@@ -888,6 +888,12 @@ const CATALOG: &[Command] = &[
                 name: "setup",
                 summary: "Complete setup from inspection; lengths are exact integer nanometers",
                 kind: ParamKind::BoardSetup,
+            },
+            Param {
+                required: false,
+                name: "resolve_existing_footprints",
+                summary: "Explicitly adopt changed front/all-copper spans while retaining surviving layer roles and identities",
+                kind: ParamKind::ResolveExistingFootprints,
             },
             EXPECTED_REVISION,
         ],

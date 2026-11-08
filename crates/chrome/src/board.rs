@@ -371,26 +371,6 @@ pub fn browser_bottom(area: Rect) -> f32 {
     area.top() + (area.height() * 0.5).min(320.0).max(crate::workspace::floating_card_min_height()).min(area.height())
 }
 
-/// Keep long layer catalogs scrollable with actions fixed below them. The body returns an
-/// optional validation error, displayed outside the scroll area beside those actions.
-pub fn setup_dialog(ctx: &egui::Context, add: impl FnOnce(&mut egui::Ui) -> Option<String>, actions: impl FnOnce(&mut egui::Ui)) -> bool {
-    let t = crate::Tokens::get();
-    let height = (ctx.content_rect().height() - t.control_height * 4.0 - t.space_16 * 4.0).max(0.0);
-    crate::shell::dialog_width(ctx, "board_setup_form", "Board setup", t.control_height * 26.0, |ui| {
-        let error = ui
-            .scope(|ui| {
-                ui.set_max_height(height);
-                egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).show(ui, add).inner
-            })
-            .inner;
-        if let Some(error) = error {
-            ui.label(crate::shell::error(error));
-        }
-        ui.separator();
-        actions(ui);
-    })
-}
-
 /// Paint the board's own canvas with the preferred grid style, independently of the schematic
 /// and chrome theme. A hidden grid still leaves snapping to the caller's camera.
 pub fn canvas(p: &Painter, rect: Rect, origin: Pos2, step: f32, opacity: u8, style: crate::grid::Style) {

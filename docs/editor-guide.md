@@ -392,14 +392,16 @@ Changing an already placed package awaits reviewed board updates. Native-folder
 registration, arcs, slots and routing remain planned.
 
 **Layout → Board → Setup** and **Layers → Board setup…** share a revision-bound
-layer/stackup form. Create two/four copper layers on an unconfigured board;
-then edit names, add technical layers before placing footprints, or set finished
-copper/dielectric thicknesses in **Stackup**. Blank values are unknown, and typed
-units override the current display unit. Apply is one undoable transaction;
-Cancel and invalid/stale drafts leave the board unchanged. Existing material,
-construction, tolerance and layer identities are retained. Creating setup on a
-populated board explicitly resolves existing surface-mount pads to front copper
-and through-hole pads across copper; legacy markers retain their original behavior.
+Craft settings form. Board editor layers provides names and optional membership;
+Physical stackup provides every even copper count from 2 through 64, finished
+thicknesses/tolerances, a laminate total and cross-section, locked-gap fitting,
+and core/prepreg construction. Materials provides sourced Tg/Dk/Df specifications
+and explicit pinned revisions. Empty values stay unknown and typed units override
+the display unit. Apply is one undoable transaction; Cancel and invalid/stale drafts
+leave the board unchanged. Existing material pins cannot be rewritten; create a
+new revision and explicitly choose it in construction. Populated copper changes
+retain physical surface identities and resolve existing front/all-copper bindings;
+occupied drawings and authored stratum data are protected against removal.
 
 Left-click footprints to select them, then press **Delete** to remove only their
 board placements. **Layout → Placement menu → Delete** provides the same action. Components, schematic wiring and physical

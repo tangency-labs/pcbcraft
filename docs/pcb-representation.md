@@ -460,12 +460,14 @@ material or thickness specifications. The board canvas now renders pinned
 rounded SMD geometry alongside legacy pad-center markers and supports
 single-footprint transforms and selection-based placement deletion, retaining
 schematic components and physical package assignments. The Board setup dialog
-now edits layer names and finished thicknesses and adds technical layers on empty
-boards. Initial setup on a populated board requires explicit
+now exposes layer names/optional membership, every even copper count from 2 through
+64, finished thicknesses/tolerances, locked-gap fitting, core/prepreg construction,
+and sourced Tg/Dk/Df material revisions. Initial setup on a populated board requires explicit
 `resolve_existing_footprints: true`: component-side pads resolve to front copper,
 all-copper pads span the stack, and marker-only pads remain markers. General
-footprint bindings and later topology changes on populated boards remain deferred;
-they are never inferred from footprint names.
+footprint bindings beyond front/all-copper remain deferred. Compatible populated
+count changes require the same explicit consent, retain surface IDs, and reject
+occupied drawing-layer removals; they are never inferred from footprint names.
 
 The structured material/core/prepreg model and sourced electrical reports are
 now implemented (#76). Follow with shared unit parsing and the stackup UI

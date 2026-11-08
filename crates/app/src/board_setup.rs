@@ -1,6 +1,10 @@
 //! Revision-bound board layer/stackup forms over the existing shared engine commands.
 use crate::{Dialog, PcbApp, ViewId, ViewInput, Workspace};
 use egui::{Context, Ui};
+use pcbcraft_chrome::board_setup::{self as form, Page};
+use pcbcraft_engine::board::materials::{Construction, Material, MaterialRef, PrepregPly};
+use std::collections::BTreeSet;
+mod materials;
 use pcbcraft_chrome::{properties, units};
 use pcbcraft_engine::board::{
     setup::{BoardSetup, LayerPurpose, Side, Stratum},
@@ -33,6 +37,22 @@ impl Length {
     }
 }
 
+/// Ply text fields retain partial input and exact unedited dimensions for the lifetime of a draft.
+#[derive(Debug)]
+struct PlyFields {
+    resin: String,
+    nominal: Length,
+}
+impl PlyFields {
+    /// Stock thickness remains independent of finished dielectric thickness.
+    fn new(ply: &PrepregPly, unit: units::Unit) -> Self {
+        Self {
+            resin: ply.resin_content_ppm.map(|n| format!("{:.4}", n as f64 / 10_000.)).unwrap_or_default(),
+            nominal: Length::new(ply.nominal_thickness_nm, unit),
+        }
+    }
+}
+
 /// A draft retains every material/construction field while exposing names and finished thickness.
 #[derive(Debug)]
 struct Candidate {
@@ -40,11 +60,16 @@ struct Candidate {
     names: Vec<String>,
     thickness: Vec<Length>,
     material_labels: Vec<String>,
+    enabled: Vec<bool>,
+    constructions: Vec<Option<Construction>>,
+    tolerance: Vec<Length>,
+    materials: Vec<Material>,
+    plies: std::collections::BTreeMap<String, PlyFields>,
 }
 impl Candidate {
     /// Seed fields in the current display unit without adopting any project changes.
     fn new(setup: BoardSetup, unit: units::Unit) -> Self {
-        let names = setup.layers().iter().map(|l| l.name.clone()).collect();
+        let names: Vec<String> = setup.layers().iter().map(|l| l.name.clone()).collect();
         let thickness = setup.stackup().strata.iter().map(|s| Length::new(s.thickness_nm(), unit)).collect();
         let material_labels = setup
             .stackup()
@@ -55,7 +80,29 @@ impl Candidate {
                 _ => String::new(),
             })
             .collect();
-        Self { setup, names, thickness, material_labels }
+        let enabled = vec![true; names.len()];
+        let constructions = setup
+            .stackup()
+            .strata
+            .iter()
+            .map(|s| if let Stratum::Dielectric { construction, .. } = s { construction.clone() } else { None })
+            .collect();
+        let tolerance = setup
+            .stackup()
+            .strata
+            .iter()
+            .map(|s| Length::new(if let Stratum::Dielectric { thickness_tolerance_nm, .. } = s { *thickness_tolerance_nm } else { None }, unit))
+            .collect();
+        let materials = setup.materials().to_vec();
+        let plies = setup
+            .stackup()
+            .strata
+            .iter()
+            .filter_map(|s| if let Stratum::Dielectric { construction: Some(Construction::Prepreg { plies }), .. } = s { Some(plies) } else { None })
+            .flatten()
+            .map(|ply| (ply.id.to_string(), PlyFields::new(ply, unit)))
+            .collect();
+        Self { setup, names, thickness, material_labels, enabled, constructions, tolerance, materials, plies }
     }
     /// Build and validate the complete candidate, preserving layer identities, pinned materials,
     /// construction, tolerances and fields not edited by this first graphical form.
@@ -64,6 +111,14 @@ impl Candidate {
         for (i, name) in self.names.iter().enumerate() {
             value["layers"][i]["name"] = json!(name);
         }
+        let layers = value["layers"].as_array_mut().ok_or("Invalid layer draft")?;
+        let mut index = 0;
+        layers.retain(|_| {
+            let keep = self.enabled[index];
+            index += 1;
+            keep
+        });
+        value["materials"] = json!(self.materials);
         for (i, length) in self.thickness.iter().enumerate() {
             let entry = value["stackup"]["strata"][i].as_object_mut().ok_or("Invalid stackup draft")?;
             match length.value(unit)? {
@@ -75,6 +130,34 @@ impl Candidate {
                 }
             }
             if matches!(self.setup.stackup().strata[i], Stratum::Dielectric { .. }) {
+                match &self.constructions[i] {
+                    Some(c) => {
+                        let mut c = c.clone();
+                        if let Construction::Prepreg { plies } = &mut c {
+                            for ply in plies {
+                                if let Some(fields) = self.plies.get(&ply.id.to_string()) {
+                                    ply.nominal_thickness_nm = fields.nominal.value(unit)?;
+                                    ply.resin_content_ppm = materials::decimal(&fields.resin, 4)?
+                                        .map(u32::try_from)
+                                        .transpose()
+                                        .map_err(|_| "Resin content is out of range")?;
+                                }
+                            }
+                        }
+                        entry.insert("construction".into(), json!(c));
+                    }
+                    None => {
+                        entry.remove("construction");
+                    }
+                }
+                match self.tolerance[i].value(unit)? {
+                    Some(n) => {
+                        entry.insert("thickness_tolerance_nm".into(), json!(n));
+                    }
+                    None => {
+                        entry.remove("thickness_tolerance_nm");
+                    }
+                }
                 let material = &self.material_labels[i];
                 if material.is_empty() {
                     entry.remove("material");
@@ -94,9 +177,14 @@ pub(super) struct Edit {
     board: BoardTarget,
     unit: units::Unit,
     populated: bool,
+    original_copper: u64,
     candidate: Option<Candidate>,
     copper_layers: u64,
-    stackup_tab: bool,
+    page: Page,
+    locked: BTreeSet<String>,
+    target_thickness: String,
+    selected_stratum: usize,
+    material_edit: Option<materials::Edit>,
     new_name: String,
     new_purpose: LayerPurpose,
     new_side: Option<Side>,
@@ -119,142 +207,7 @@ fn purpose_name(purpose: LayerPurpose) -> &'static str {
     }
 }
 
-impl Edit {
-    /// Edit catalog names and stage technical-layer creation without committing any metadata.
-    fn layers(&mut self, ui: &mut Ui) {
-        let Some(candidate) = &mut self.candidate else { return };
-        let t = pcbcraft_chrome::Tokens::get();
-        let room = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x).max(0.0);
-        let widths = [room * 0.55, room * 0.28, room * 0.17];
-        egui::Grid::new("setup_layers").num_columns(3).striped(true).show(ui, |ui| {
-            for (label, width) in ["Layer", "Purpose", "Side"].into_iter().zip(widths) {
-                ui.add_sized(egui::vec2(width, t.control_height), egui::Label::new(label).halign(egui::Align::Min));
-            }
-            ui.end_row();
-            for layer in crate::board_panels::ordered_catalog(candidate.setup.layers().to_vec(), Some(&candidate.setup)) {
-                let Some(index) = candidate.setup.layers().iter().position(|l| l.id == layer.id) else { continue };
-                let name = &mut candidate.names[index];
-                ui.add_sized(egui::vec2(widths[0], t.control_height), egui::TextEdit::singleline(name).id_salt(layer.id))
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("Layer name {}", layer.name)));
-                ui.add_sized(egui::vec2(widths[1], t.control_height), egui::Label::new(purpose_name(layer.purpose)).halign(egui::Align::Min));
-                let side = match layer.side {
-                    Some(Side::Front) => "Front",
-                    Some(Side::Back) => "Back",
-                    None if layer.purpose == LayerPurpose::Copper => "Internal",
-                    None => "—",
-                };
-                ui.add_sized(egui::vec2(widths[2], t.control_height), egui::Label::new(side).halign(egui::Align::Min));
-                ui.end_row();
-            }
-        });
-        properties::section(ui, "Add technical layer");
-        if self.populated {
-            ui.label("Layer membership can currently be changed only before footprints are placed.");
-            return;
-        }
-        properties::text(ui, "Layer name", &mut self.new_name);
-        properties::field(ui, "Purpose", |ui| {
-            egui::ComboBox::from_id_salt("new_layer_purpose").selected_text(purpose_name(self.new_purpose)).show_ui(ui, |ui| {
-                for purpose in [
-                    LayerPurpose::Mechanical,
-                    LayerPurpose::User,
-                    LayerPurpose::Outline,
-                    LayerPurpose::Silkscreen,
-                    LayerPurpose::Fabrication,
-                    LayerPurpose::Courtyard,
-                    LayerPurpose::Mask,
-                    LayerPurpose::Paste,
-                    LayerPurpose::Adhesive,
-                ] {
-                    if ui.selectable_value(&mut self.new_purpose, purpose, purpose_name(purpose)).changed() {
-                        self.new_side = match purpose {
-                            LayerPurpose::Mechanical | LayerPurpose::User | LayerPurpose::Outline => None,
-                            _ => Some(Side::Front),
-                        };
-                    }
-                }
-            });
-        });
-        if self.new_purpose != LayerPurpose::Outline {
-            properties::field(ui, "Side", |ui| {
-                egui::ComboBox::from_id_salt("new_layer_side")
-                    .selected_text(match self.new_side {
-                        Some(Side::Front) => "Front",
-                        Some(Side::Back) => "Back",
-                        None => "Neither",
-                    })
-                    .show_ui(ui, |ui| {
-                        if matches!(self.new_purpose, LayerPurpose::Mechanical | LayerPurpose::User) {
-                            ui.selectable_value(&mut self.new_side, None, "Neither");
-                        }
-                        ui.selectable_value(&mut self.new_side, Some(Side::Front), "Front");
-                        ui.selectable_value(&mut self.new_side, Some(Side::Back), "Back");
-                    });
-            });
-        }
-        if ui.button("Add layer").clicked() {
-            let result = candidate.value(self.unit).and_then(|setup| {
-                setup.with_added_technical_layer(self.new_name.clone(), self.new_purpose, self.new_side).map_err(|e| e.to_string())
-            });
-            match result {
-                Ok(setup) => {
-                    self.candidate = Some(Candidate::new(setup, self.unit));
-                    self.new_name.clear();
-                    self.error = None;
-                }
-                Err(error) => self.error = Some(error),
-            }
-        }
-    }
-
-    /// Edit finished copper/dielectric thickness in physical order; blank values stay unknown.
-    fn stackup(&mut self, ui: &mut Ui) {
-        let Some(candidate) = &mut self.candidate else { return };
-        ui.label(format!("Front to back · thickness in {}", self.unit.symbol()));
-        let width = ((ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0).max(0.0);
-        let height = pcbcraft_chrome::Tokens::get().control_height;
-        egui::Grid::new("setup_stackup").num_columns(3).striped(true).show(ui, |ui| {
-            for label in ["Layer".to_owned(), format!("Thickness ({})", self.unit.symbol()), "Material label".to_owned()] {
-                ui.add_sized(egui::vec2(width, height), egui::Label::new(label).halign(egui::Align::Min));
-            }
-            ui.end_row();
-            for (i, stratum) in candidate.setup.stackup().strata.iter().enumerate() {
-                let label = match stratum {
-                    Stratum::Copper { layer, .. } => candidate
-                        .setup
-                        .layers()
-                        .iter()
-                        .position(|l| l.id == *layer)
-                        .map(|n| candidate.names[n].clone())
-                        .unwrap_or_else(|| "Copper".into()),
-                    Stratum::Dielectric { .. } => format!("Dielectric {}", i.div_ceil(2)),
-                };
-                ui.add_sized(egui::vec2(width, height), egui::Label::new(&label).truncate().halign(egui::Align::Min));
-                ui.add_sized(
-                    egui::vec2(width, height),
-                    egui::TextEdit::singleline(&mut candidate.thickness[i].text)
-                        .id_salt(("stratum_thickness", i))
-                        .desired_width(width)
-                        .hint_text("Unspecified"),
-                )
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("{label} thickness")));
-                if matches!(stratum, Stratum::Dielectric { .. }) {
-                    ui.add_sized(
-                        egui::vec2(width, height),
-                        egui::TextEdit::singleline(&mut candidate.material_labels[i])
-                            .id_salt(("stratum_material", i))
-                            .desired_width(width)
-                            .hint_text("Unspecified"),
-                    )
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("{label} material label")));
-                } else {
-                    ui.add_sized(egui::vec2(width, height), egui::Label::new("—").halign(egui::Align::Min));
-                }
-                ui.end_row();
-            }
-        });
-    }
-}
+mod pages;
 
 impl PcbApp {
     /// Open an explicitly addressed board's disposable draft, with the same revision used by MCP.
@@ -270,9 +223,14 @@ impl PcbApp {
             board: board.target,
             unit: self.preferences.units,
             populated: board.footprints().next().is_some(),
+            original_copper: board.setup().map_or(0, |s| s.stackup().strata.len().div_ceil(2) as u64),
             candidate: board.setup().cloned().map(|s| Candidate::new(s, self.preferences.units)),
             copper_layers: 2,
-            stackup_tab: false,
+            page: Page::Layers,
+            locked: BTreeSet::new(),
+            target_thickness: String::new(),
+            selected_stratum: 1,
+            material_edit: None,
             new_name: String::new(),
             new_purpose: LayerPurpose::User,
             new_side: None,
@@ -287,46 +245,40 @@ impl PcbApp {
         if !valid {
             edit.error = Some("The project or view changed. Close Board setup and reopen it to edit the current board.".into());
         }
-        let mut apply = false;
-        let mut cancel = false;
         let can_apply = valid;
-        let apply_label = if edit.candidate.is_some() { "Apply board setup" } else { "Create board setup" };
-        let dismissed = pcbcraft_chrome::board::setup_dialog(
-            ctx,
-            |ui| {
-                if edit.candidate.is_some() {
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut edit.stackup_tab, false, "Layers");
-                        ui.selectable_value(&mut edit.stackup_tab, true, "Stackup");
-                    });
-                    if edit.stackup_tab {
-                        edit.stackup(ui);
-                    } else {
-                        edit.layers(ui);
-                    }
+        let apply_label = if edit.material_edit.is_some() {
+            "Save material to draft"
+        } else if edit.candidate.is_some() {
+            "Apply board setup"
+        } else {
+            "Create board setup"
+        };
+        let error = edit.error.clone();
+        let mut page = edit.page;
+        let action = pcbcraft_chrome::catalog::settings_form(ctx, "Board setup", apply_label, can_apply, |ui| {
+            form::pages(ui, &mut page, error.as_deref(), |ui, page| {
+                if edit.candidate.is_none() {
+                    edit.initialize(ui);
                 } else {
-                    ui.label("Create copper and technical layers. Material and thickness values remain unspecified until you enter them.");
-                    if edit.populated {
-                        ui.label("Existing surface-mount pads will use front copper; through-hole pads will span all copper layers. Placements and package assignments are retained, and marker-only pads remain markers.");
+                    match page {
+                        Page::Layers => edit.layers(ui),
+                        Page::Stackup => edit.stackup(ui),
+                        Page::Materials => edit.materials(ui),
                     }
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut edit.copper_layers, 2, "2 copper layers");
-                        ui.radio_value(&mut edit.copper_layers, 4, "4 copper layers");
-                    });
                 }
-                edit.error.clone()
-            },
-            |ui| {
-                ui.horizontal(|ui| {
-                    apply = ui.add_enabled(can_apply, egui::Button::new(apply_label)).clicked();
-                    cancel = ui.button("Cancel").clicked();
-                });
-            },
-        );
-        if cancel || dismissed {
+            });
+        });
+        edit.page = page;
+        if action.close {
             return;
         }
+        let apply = action.primary;
         if apply && valid {
+            if edit.material_edit.is_some() {
+                edit.error = edit.save_material().err();
+                self.dialog = Dialog::BoardSetup(edit);
+                return;
+            }
             let command = if edit.candidate.is_some() { pcbcraft_engine::SET_BOARD_SETUP } else { pcbcraft_engine::INITIALIZE_BOARD_SETUP };
             let result = match &edit.candidate {
                 Some(candidate) => candidate
@@ -339,6 +291,9 @@ impl PcbApp {
                 Ok(mut params) => {
                     params["board"] = json!(edit.board.board);
                     params["expected_revision"] = json!(edit.source.revision);
+                    if command == pcbcraft_engine::SET_BOARD_SETUP {
+                        params["resolve_existing_footprints"] = json!(edit.populated);
+                    }
                     self.run(command, &params);
                     if let Some(error) = self.message.take() {
                         edit.error = Some(error);

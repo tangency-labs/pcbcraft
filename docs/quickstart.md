@@ -250,18 +250,22 @@ explicitly opens another workspace. The workspace picker remains available.
 In the board workspace, Properties shows its stored reference, value, definition
 and unit-aware coordinate readouts.
 
-Use **Layout → Board → Setup**, or **Board setup…** in Layers, to define the
-board's layer catalog and stackup. On a board without a setup, choose two
-or four copper layers and **Create board setup**. Reopen it to rename layers,
-add technical layers, or edit **Stackup** thicknesses and material labels. Values
-accept mm or mil; a blank thickness remains unspecified. **Apply board setup**
-commits one undoable edit, while Cancel discards the draft. Existing layer IDs
-and material/construction records are retained. Initial setup on a populated board
-explicitly resolves surface-mount pads to front copper and through-hole pads across
-the copper stack, while legacy markers remain markers. Adding layer membership
-still requires a board without footprints; populated boards can edit names and
-thicknesses. Copper-count changes,
-material-report/construction editing and impedance calculations remain future work.
+Use **Layout → Board → Setup**, or **Board setup…** in Layers, to edit the board.
+Choose any even copper count from 2 through 64; 10- and 12-layer boards are included.
+**Board editor layers** edits names and unused optional layer membership.
+**Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
+construction, with a cross-section and laminate total. **Fit unlocked dielectrics**
+fits a target thickness while retaining copper and locked gaps. Values accept mm
+or mil, and blanks remain unspecified.
+
+**Materials** exposes sourced Tg/Dk/Df characterization and pinned material revisions.
+Add a material or a new revision, enter the report's source/conditions, and save it
+to the draft; then select its exact revision for a dielectric. **Apply board setup**
+commits one undoable edit, while Cancel discards the draft. Existing placements and
+package assignments are retained; populated-board copper changes explicitly update
+through-hole spans while keeping front copper identity. Occupied-layer removal and
+count reductions that would lose authored stratum data are rejected. Routing,
+impedance calculations and manufacturing rules remain future work.
 
 Left-click a footprint to select it, then press **Delete** to remove its board
 placement. Multiple selected footprints are removed together. The **Layout →
@@ -365,7 +369,7 @@ open GUI window or save back to the file.
 
 For the new layer/stackup foundation, use `describe_command` with
 `pcb.initialize_board_setup` and `pcb.set_board_setup`. On a project with no
-footprints, initialize with `copper_layers: 2` (or `4`) and the current
+footprints, initialize with any even `copper_layers` from 2 through 64 and the current
 `expected_revision`. With existing footprints, also pass
 `resolve_existing_footprints: true` to explicitly adopt front/all-copper pad
 resolution. Inspection returns `project.board.setup`; submit an edited

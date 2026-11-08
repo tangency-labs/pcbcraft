@@ -406,3 +406,85 @@ fn populated_initialization_explicitly_resolves_existing_copper_bindings() {
         assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), adopted);
     }
 }
+
+/// Copper counts use the complete supported range, preserve surface/surviving IDs, and require
+/// explicit pad-resolution consent on populated boards. Invalid or lossy reductions are atomic.
+#[test]
+fn expanded_copper_counts_preserve_identity_and_require_explicit_resolution() {
+    for count in (4..=64).step_by(2) {
+        let mut s = session(2);
+        let before = s.snapshot().unwrap();
+        let setup = before.board_setup().unwrap();
+        let expanded = setup.with_copper_count(count).unwrap();
+        assert_eq!(expanded.stackup().strata.len(), count as usize * 2 - 1);
+        for surface in setup.layers().iter().filter(|l| l.purpose == LayerPurpose::Copper) {
+            assert!(expanded.layers().contains(surface));
+        }
+        assert_eq!(expanded.with_copper_count(2).unwrap(), *setup);
+        populate(&mut s);
+        let unchanged = s.inspect();
+        let revision = s.revision();
+        assert!(s.apply(SET_BOARD_SETUP, &json!({"setup":expanded,"expected_revision":revision})).is_err());
+        assert_eq!(s.inspect(), unchanged);
+        s.apply(SET_BOARD_SETUP, &json!({"setup":expanded,"resolve_existing_footprints":true,"expected_revision":revision})).unwrap();
+        assert_eq!(s.project().unwrap().board_setup(), Some(&expanded));
+        let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(persistence::encode_documents(persistence::decode_documents(&docs).unwrap()).unwrap(), docs);
+        s.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.inspect()["project"], unchanged["project"]);
+    }
+    let mut s = session(4);
+    let mut value = setup(&s);
+    value["stackup"]["strata"][3]["thickness_nm"] = json!(1_000_000);
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":value}));
+    assert!(s.project().unwrap().board_setup().unwrap().with_copper_count(2).is_err());
+    for count in [0, 1, 3, 65, 128] {
+        assert!(s.project().unwrap().board_setup().unwrap().with_copper_count(count).is_err());
+    }
+}
+
+/// Explicit topology consent still cannot remove a graphic's owning layer or swap physical
+/// surface identities. Every rejection keeps model bytes, revision and undo/redo intact.
+#[test]
+fn populated_topology_consent_does_not_discard_drawings_or_rebind_surfaces() {
+    let mut s = session(4);
+    populate(&mut s);
+    let layer = s.project().unwrap().board_setup().unwrap().layers().iter().find(|l| l.purpose == LayerPurpose::Outline).unwrap().id;
+    apply(&mut s, crate::ADD_DRAWING, json!({"layer":layer,"points":[{"x_nm":0,"y_nm":0},{"x_nm":1000000,"y_nm":0}],"closed":false}));
+    let before = s.inspect();
+    let mut value = setup(&s);
+    value["layers"].as_array_mut().unwrap().retain(|l| l["id"] != json!(layer));
+    assert!(s.apply(SET_BOARD_SETUP, &json!({"setup":value,"resolve_existing_footprints":true,"expected_revision":s.revision()})).is_err());
+    assert_eq!(s.inspect(), before);
+    let fresh = BoardSetup::preset(4).unwrap();
+    let mut value = serde_json::to_value(fresh).unwrap();
+    value["stackup"]["id"] = setup(&s)["stackup"]["id"].clone();
+    assert!(s.apply(SET_BOARD_SETUP, &json!({"setup":value,"resolve_existing_footprints":true,"expected_revision":s.revision()})).is_err());
+    assert_eq!(s.inspect(), before);
+}
+
+/// Thickness fitting is a reusable engine candidate operation: fixed gaps/copper retain exact
+/// values, residual nanometers are deterministic, and invalid locks/targets cannot alter source data.
+#[test]
+fn fitted_dielectrics_keep_fixed_data_and_reject_invalid_locks() {
+    let mut s = session(4);
+    let mut value = setup(&s);
+    for (i, stratum) in value["stackup"]["strata"].as_array_mut().unwrap().iter_mut().enumerate() {
+        stratum["thickness_nm"] = json!(if i % 2 == 0 { 35000 } else { 1000000 });
+    }
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":value}));
+    let source = s.project().unwrap().board_setup().unwrap();
+    let Stratum::Dielectric { id, .. } = source.stackup().strata[1] else { panic!("gap") };
+    let locks = BTreeSet::from([id]);
+    let fitted = source.with_fitted_dielectrics(1600001, &locks).unwrap();
+    assert_eq!(fitted.laminate_thickness_nm(), Some(1600001));
+    assert_eq!(fitted.stackup().strata[1].thickness_nm(), Some(1000000));
+    assert_eq!(fitted.stackup().strata[3].thickness_nm(), Some(230001));
+    assert_eq!(fitted.stackup().strata[5].thickness_nm(), Some(230000));
+    for target in [0, -1, 100000, MAX_THICKNESS_NM + 1] {
+        assert!(source.with_fitted_dielectrics(target, &locks).is_err());
+    }
+    let copper = source.layers().iter().find(|l| l.purpose == LayerPurpose::Copper).unwrap().id;
+    assert!(source.with_fitted_dielectrics(1600000, &BTreeSet::from([copper])).is_err());
+    assert_eq!(source.laminate_thickness_nm(), Some(3140000));
+}

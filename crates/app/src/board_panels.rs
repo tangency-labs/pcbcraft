@@ -118,7 +118,9 @@ impl PcbApp {
             self.begin_layer_color(view_id, layer);
             self.repaint_editors(ui.ctx());
         }
-        if setup_open {self.begin_board_setup(view_id);}
+        if setup_open {
+            self.begin_board_setup(view_id);
+        }
         ([browser, layers, properties], slots[crate::workspace_panels::FILTERS])
     }
 }
