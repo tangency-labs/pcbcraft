@@ -22,7 +22,11 @@ pub(super) enum Panel {
 impl PcbApp {
     /// Show or hide one of the bound window's panels, as the View ribbon's toggles do. Opening
     /// the Parts Catalog focuses search, like Capture › Symbol; an open chooser is left alone.
-    pub(super) fn set_panel(&mut self, ctx: &Context, panel: Panel, open: bool) {
+    /// Selection filters require a project view; definition-view requests fail without changing state.
+    pub(super) fn set_panel(&mut self, ctx: &Context, panel: Panel, open: bool) -> Result<(), String> {
+        if panel == Panel::Filters && self.views.active.definition.is_some() {
+            return Err("Selection filters require a project view".into());
+        }
         match panel {
             Panel::Browser => self.browser.open = open,
             Panel::Parts if open => {
@@ -45,16 +49,17 @@ impl PcbApp {
                 self.views.active.filters_open = open;
             }
         }
+        Ok(())
     }
 
-    /// Whether the bound window shows `panel`.
+    /// Whether the bound window shows `panel`; parked filter choices in definition views are hidden.
     pub(super) fn panel_open(&self, panel: Panel) -> bool {
         match panel {
             Panel::Browser => self.browser.open,
             Panel::Parts => self.parts.open,
             Panel::Nets => self.net_inspector.open,
             Panel::Properties => self.properties_open,
-            Panel::Filters => self.views.active.filters_open,
+            Panel::Filters => self.views.active.definition.is_none() && self.views.active.filters_open,
         }
     }
 
@@ -848,7 +853,7 @@ mod live {
                     "focused_view": host.focused.0,
                     "split": host.split(),
                     "panels": {"browser": panels.browser, "parts": panels.parts, "nets": panels.nets, "properties":panels.properties,
-                        "selection_filters": app.views.view(host.focused).is_some_and(|view| view.filters_open)},
+                        "selection_filters": app.views.view(host.focused).is_some_and(|view| view.definition.is_none() && view.filters_open)},
                     "catalog_mode": panels.catalog_mode,
                     "repeat_placement": panels.repeat_placement,
                     "ribbon_tab": app.inspect_library_view(host.focused).map(|v|v["ribbon_tab"].clone()).unwrap_or_else(|| json!(match panels.ribbon {
@@ -879,7 +884,7 @@ mod live {
                     "grid_spacing_nm": view.camera.snap_nm(),
                     "selection_filters": view.filters.inspect(view.workspace),
                     "selection_filters_collapsed": view.filters_collapsed,
-                    "selection_filters_open": view.filters_open,
+                    "selection_filters_open": view.definition.is_none() && view.filters_open,
                     "panel_positions": crate::workspace_panels::inspect(&view.panels),
                     "zoom_percent": (view.camera.zoom() * 100.0).round(),
                     "center": view.camera.center(),
@@ -1232,7 +1237,9 @@ mod live {
                         _ => Panel::Nets,
                     };
                     let open = params["open"].as_bool() == Some(true);
-                    self.in_window(host, |app| app.set_panel(ctx, panel, open));
+                    let mut result = Ok(());
+                    self.in_window(host, |app| result = app.set_panel(ctx, panel, open));
+                    result?;
                 }
                 ("window.set_catalog_mode", _, Some(host)) => {
                     if !self

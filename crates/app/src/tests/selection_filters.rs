@@ -353,3 +353,48 @@ fn named_labels_and_power_symbols_follow_their_selection_categories() {
         assert_eq!(document(&h), before);
     }
 }
+
+/// A mixed host exposes filter visibility only for its focused project pane. Definition-pane
+/// show/hide requests fail atomically and preserve the parked project filter preference.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn definition_views_refuse_filter_panel_actions_and_report_the_card_hidden() {
+    use crate::window_commands::{Panel, inspect_editor};
+    for editor in ["Symbol Editor", "Footprint Editor"] {
+        let mut h = fixture();
+        let ctx = h.ctx.clone();
+        let project_view = h.state().views.active.id().0;
+        let host = h.state().views.host.0;
+        click(&mut h, "Choose workspace");
+        click(&mut h, &format!("Open {editor} beside current view"));
+        let definition_view = h.state().views.active.id().0;
+        assert_ne!(project_view, definition_view);
+        assert!(h.state().views.is_split());
+        assert!(h.state().views.active.definition.is_some());
+        for stored in [true, false] {
+            h.state_mut().views.active.filters_open = stored;
+            h.run();
+            assert!(h.query_by_label("Collapse Selection filters").is_none());
+            assert!(!h.state().panel_open(Panel::Filters));
+            let before = inspect_editor(h.state());
+            let window = before["windows"].as_array().unwrap().iter().find(|window| window["id"] == host).unwrap();
+            assert_eq!(window["panels"]["selection_filters"], false);
+            let view = before["views"].as_array().unwrap().iter().find(|view| view["id"] == definition_view).unwrap();
+            assert_eq!(view["selection_filters_open"], false);
+            for open in [false, true] {
+                let error =
+                    h.state_mut().run_window_command(&ctx, "window.set_panel", &json!({"window":host,"panel":"selection_filters","open":open}));
+                assert_eq!(error.unwrap_err(), "Selection filters require a project view");
+                assert_eq!(h.state().views.active.filters_open, stored);
+                assert_eq!(inspect_editor(h.state()), before);
+            }
+        }
+        h.state_mut().run_window_command(&ctx, "view.focus", &json!({"view":project_view})).unwrap();
+        for open in [false, true] {
+            h.state_mut().run_window_command(&ctx, "window.set_panel", &json!({"window":host,"panel":"selection_filters","open":open})).unwrap();
+            h.run();
+            assert_eq!(h.state().panel_open(Panel::Filters), open);
+            assert_eq!(h.query_by_label("Collapse Selection filters").is_some(), open);
+        }
+    }
+}

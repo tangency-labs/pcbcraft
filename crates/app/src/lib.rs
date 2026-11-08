@@ -840,7 +840,9 @@ impl PcbApp {
         self.ribbon_tab = order[tab];
         if let Some(action) = response.quick {
             if !board && action == 0 {
-                self.set_panel(ui.ctx(), Panel::Nets, !self.net_inspector.open);
+                if let Err(error) = self.set_panel(ui.ctx(), Panel::Nets, !self.net_inspector.open) {
+                    self.message = Some(error);
+                }
             } else {
                 self.fit_view(self.views.active.id());
             }
@@ -913,8 +915,10 @@ impl PcbApp {
             Some(4) => Some(Panel::Filters),
             _ => None,
         };
-        if let Some(panel) = toggled {
-            self.set_panel(ui.ctx(), panel, !self.panel_open(panel));
+        if let Some(panel) = toggled
+            && let Err(error) = self.set_panel(ui.ctx(), panel, !self.panel_open(panel))
+        {
+            self.message = Some(error);
         }
         workspace::ribbon_separator(ui);
         let navigate = [RibbonTool {
