@@ -54,7 +54,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11` or `/12` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, and version 12 combines metadata with explicit board registration |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/10` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines |
+| `board.json` | `pcbcraft-board/1` through `/11` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -105,7 +105,9 @@ without case, nonblank and at most 64 characters, and values are single-line
 text of at most 2048 characters. Up to 64 optional fields are allowed. Attributes
 are booleans `do_not_populate`, `exclude_from_bom`, `exclude_from_board`,
 `exclude_from_simulation` and `exclude_from_position_files`. All default false.
-A component excluded from the board cannot own a placed footprint. Package
+A component excluded from the board cannot receive a new placed footprint. An
+existing placement may remain under an accepted baseline pending reviewed removal;
+legacy boards without a baseline refuse that exclusion. Package
 assignment can remain pinned for later inclusion. Other flags retain authored
 intent for their respective future output/simulation consumers.
 
@@ -268,6 +270,12 @@ retain a footprint after its live component is deleted and preserves assets
 referenced only by accepted history. The [single-board update foundation](single-board-update.md)
 defines the codec and current engine-only limitations; older readers refuse this
 format instead of dropping retained physical state.
+
+Board format 11 retains that baseline while allowing desired assignments to differ
+from accepted placements. It is required exactly when package intent is pending;
+Apply or resetting intent to accepted values removes that difference. Desired
+mappings validate against live logical terminals and pinned package pads, while
+accepted footprint mappings validate independently against historical terminals.
 
 Board format 9 stores `graphics` with `layers` and `items` arrays. Items have
 independent UUIDs, a layer UUID, integer-nanometer `points`, and a `closed` flag.

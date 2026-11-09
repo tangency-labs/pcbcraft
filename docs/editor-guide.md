@@ -280,7 +280,8 @@ restores automatic placement and default appearance for that field.
 
 The attributes beside placement record population and output/simulation exclusions.
 Board
-exclusion prevents placement; remove an existing footprint before excluding
+exclusion prevents new placement. With reviewed board updates enabled, excluding
+an existing placement stages its removal for Apply; otherwise remove its footprint before excluding
 its component. BOM and simulation flags are retained intent for their future consumers.
 **Exclude from pick-and-place files** records omission from assembly position exports
 (reference, coordinates, orientation and board side); PCBcraft retains the flag,

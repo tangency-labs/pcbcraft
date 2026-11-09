@@ -16,6 +16,9 @@ use uuid::Uuid;
 
 /// Explicitly adopt current supported logical inputs before retaining physical removals.
 pub const INITIALIZE_BASELINE: &str = "pcb.initialize_update_baseline";
+mod commands;
+pub(crate) use commands::CachedPlan;
+pub use commands::{APPLY_UPDATE, BoardUpdatePreview, CANCEL_UPDATE, PREVIEW_UPDATE};
 
 /// Persisted accepted-input vocabulary; future shapes require an explicit migration.
 pub const FORMAT: &str = "pcbcraft-board-baseline/1";
@@ -61,7 +64,8 @@ pub struct SourceCapture {
 
 impl SourceCapture {
     /// Check a caller-created capture address. The caller freezes and hashes its
-    /// source bundle without baseline/capture metadata before submitting it here.
+    /// source bundle before attaching this new capture. Prior accepted history
+    /// remains part of that exact immutable input, without self-reference.
     pub fn validate(&self) -> Result<(), String> {
         if self.capture_id.is_nil()
             || self.content_digest.len() != 64
@@ -206,10 +210,18 @@ impl Baseline {
         Ok(baseline)
     }
 
-    /// Capture current component and cross-sheet connectivity inputs. `desired`
-    /// is authoritative package intent; callers can seed it with current choices.
-    /// This does not accept changes, allocate physical objects or alter the project.
+    /// Capture physically eligible component and cross-sheet connectivity inputs.
+    /// `desired` is authoritative package intent; excluded live choices are retained
+    /// elsewhere without becoming physical input. This does not accept changes,
+    /// allocate physical objects or alter the project.
     pub fn proposed(project: &Project, desired: &BTreeMap<u64, Package>, source: SourceCapture) -> Result<Self, String> {
+        Self::capture(project, desired, source, false)
+    }
+
+    /// Capture ordinary physical input, or adopt an existing physical predecessor.
+    /// Adoption also includes excluded parts that are already placed, preserving
+    /// their real packages until the first reviewed update proposes their removal.
+    fn capture(project: &Project, desired: &BTreeMap<u64, Package>, source: SourceCapture, adopt_placed: bool) -> Result<Self, String> {
         source.validate()?;
         let target = project.boards().next().map(|board| board.target).ok_or("no physical board is available")?;
         if desired.keys().any(|id| !project.components.contains_key(id)) {
@@ -218,6 +230,9 @@ impl Baseline {
         let mut components = BTreeMap::new();
         let mut terminal_keys = BTreeMap::new();
         for (&id, component) in project.components.iter() {
+            if !project.component_is_board_eligible(id) && !(adopt_placed && project.board.by_component.contains_key(&id)) {
+                continue;
+            }
             let mut terminals: Vec<_> = component.definition.pins().iter().map(|pin| pin.number.as_str().to_owned()).collect();
             terminals.sort();
             for pin in &terminals {
@@ -452,26 +467,22 @@ impl crate::Session {
     /// baseline. Subsequent deletions retain physical state; repeated calls are
     /// no-ops and never silently accept later schematic connectivity changes.
     pub(crate) fn initialize_update_baseline(&mut self, params: &serde_json::Value) -> Result<(), crate::CommandError> {
-        use sha2::{Digest, Sha256};
         self.check_revision(params)?;
         let project = self.open_project()?;
         if project.board.baseline.is_some() {
             return Ok(());
         }
-        let documents = crate::persistence::encode_documents(Arc::new(project.clone())).map_err(crate::CommandError::InvalidParams)?;
-        let mut digest = Sha256::new();
-        digest.update(b"pcbcraft-board-source-bundle/1\0");
-        for (path, bytes) in &documents {
-            digest.update((path.len() as u64).to_be_bytes());
-            digest.update(path.as_bytes());
-            digest.update((bytes.len() as u64).to_be_bytes());
-            digest.update(bytes);
+        let source = capture_source(project)?;
+        let mut choices = Baseline::current_choices(project);
+        for footprint in project.board.footprints().iter().filter(|footprint| !project.component_is_board_eligible(footprint.component)) {
+            // Adoption describes actual physical state, not an excluded component's
+            // independently retained desired package choice.
+            choices.insert(footprint.component, Package::from_footprint(footprint));
         }
-        let source = SourceCapture { capture_id: crate::fresh_id()?, content_digest: format!("{:x}", digest.finalize()) };
-        let baseline = Baseline::proposed(project, &Baseline::current_choices(project), source).map_err(crate::CommandError::InvalidParams)?;
+        let baseline = Baseline::capture(project, &choices, source, true).map_err(crate::CommandError::InvalidParams)?;
         if baseline.components.values().any(|component| component.package.is_none()) {
             return Err(crate::CommandError::InvalidParams(
-                "Assign a supported footprint to every component before initializing reviewed board updates.".into(),
+                "Assign a supported footprint to every board-eligible component before initializing reviewed board updates.".into(),
             ));
         }
         let mut next = project.clone();
@@ -480,6 +491,23 @@ impl crate::Session {
         self.change(next);
         Ok(())
     }
+}
+
+/// Hash the complete canonical pre-Apply native bundle, including prior accepted
+/// state. A fresh incarnation is attached only after hashing, so repeated previews
+/// of equal input have equal digests without recursively including their new ID.
+fn capture_source(project: &Project) -> Result<SourceCapture, crate::CommandError> {
+    use sha2::{Digest, Sha256};
+    let documents = crate::persistence::encode_documents(Arc::new(project.clone())).map_err(crate::CommandError::InvalidParams)?;
+    let mut digest = Sha256::new();
+    digest.update(b"pcbcraft-board-source-bundle/1\0");
+    for (path, bytes) in &documents {
+        digest.update((path.len() as u64).to_be_bytes());
+        digest.update(path.as_bytes());
+        digest.update((bytes.len() as u64).to_be_bytes());
+        digest.update(bytes);
+    }
+    Ok(SourceCapture { capture_id: crate::fresh_id()?, content_digest: format!("{:x}", digest.finalize()) })
 }
 
 /// A component-level change carries stable identity rather than reference text.
@@ -607,11 +635,15 @@ pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseli
             return Err("replacement footprint is outside supported bounds".into());
         }
     }
-    board.assignments = proposed
-        .components
-        .iter()
-        .filter_map(|(&id, component)| component.package.as_ref().and_then(|package| package.assignment(id)).map(|assignment| (id, assignment)))
-        .collect();
+    // Excluded components keep their authored choices for a later unexclude.
+    // They do not become accepted physical members or force a pending update.
+    board.assignments.retain(|id, _| project.components.contains_key(id) && !project.component_is_board_eligible(*id));
+    board.assignments.extend(
+        proposed
+            .components
+            .iter()
+            .filter_map(|(&id, component)| component.package.as_ref().and_then(|package| package.assignment(id)).map(|assignment| (id, assignment))),
+    );
     let used: BTreeSet<_> =
         board.assignments.values().map(super::assignment::Assignment::key).chain(board.footprints.iter().filter_map(Footprint::key)).collect();
     board.definitions.retain(|key, _| used.contains(key));

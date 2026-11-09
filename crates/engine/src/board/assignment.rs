@@ -46,18 +46,19 @@ impl Assignment {
     /// Resolve the component and its exact definition before accepting an offline record.
     pub(crate) fn valid(&self, project: &Project) -> bool {
         let footprint = self.footprint(1, Point { x_nm: 0, y_nm: 0 });
+        let logical = project.components.get(&self.component).map_or_else(
+            || project.board.baseline.as_ref().is_some_and(|baseline| baseline.validate_assignment(self)),
+            |component| project.board.mapping_valid(&footprint, &component.definition),
+        );
         footprint.valid()
-            && if let Some(baseline) = &project.board.baseline {
-                baseline.validate_assignment(self)
-            } else {
-                project.components.get(&self.component).is_some_and(|component| project.board.mapping_valid(&footprint, &component.definition))
-            }
-            && project
-                .board
-                .by_component
-                .get(&self.component)
-                .and_then(|i| project.board.footprints().get(*i))
-                .is_none_or(|f| f.key() == Some(self.key()) && f.mapping.as_ref() == Some(&self.mapping))
+            && logical
+            && (project.board.baseline.is_some()
+                || project
+                    .board
+                    .by_component
+                    .get(&self.component)
+                    .and_then(|i| project.board.footprints().get(*i))
+                    .is_none_or(|f| f.key() == Some(self.key()) && f.mapping.as_ref() == Some(&self.mapping)))
     }
 
     /// Publish stable identities with explicit placement status for GUI and MCP.
@@ -66,7 +67,12 @@ impl Assignment {
         value["component"] = json!(format!("component-{}", self.component));
         value["board"] = json!(project.board_target().map(|target| target.board));
         value["placed"] = json!(project.board.by_component.contains_key(&self.component));
-        if !project.components.contains_key(&self.component) {
+        if let Some(baseline) = &project.board.baseline {
+            value["pending_update"] = json!(project.component_is_board_eligible(self.component) && !baseline.validate_assignment(self));
+        }
+        if project.board.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&self.component))
+            && !project.component_is_board_eligible(self.component)
+        {
             value["pending_removal"] = json!(true);
         }
         value
@@ -130,8 +136,9 @@ fn component_id(params: &Value, project: &Project) -> Result<u64, CommandError> 
 }
 
 impl Session {
-    /// Validate identity and a complete bijection before pinning anything. Reassigning a placed
-    /// package is refused until the reviewed-update workflow exists; identical choices are no-ops.
+    /// Validate identity and complete mappings before pinning intent. Baseline mode
+    /// stages desired choices independently of accepted geometry; legacy placed
+    /// changes remain refused, and identical choices create no history.
     pub(crate) fn assign_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -144,11 +151,6 @@ impl Session {
             mapping: super::parse_mapping(&params["mapping"]).ok_or_else(|| CommandError::InvalidParams("invalid terminal-to-pad mapping".into()))?,
         };
         let key = assignment.key();
-        if project.board.baseline.as_ref().is_some_and(|baseline| !baseline.validate_assignment(&assignment)) {
-            return Err(CommandError::Unavailable(
-                "New or changed package assignments require reviewed board update support in baseline mode.".into(),
-            ));
-        }
         let definition = project
             .board
             .definitions
@@ -159,25 +161,36 @@ impl Session {
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).definitions.insert(key, definition);
         if !assignment.valid(&next) {
-            let message = if next.board.by_component.contains_key(&component) {
+            let message = if next.board.baseline.is_none() && next.board.by_component.contains_key(&component) {
                 "Changing a placed package or mapping requires a reviewed board update."
             } else {
                 "Map every terminal and pad exactly once."
             };
             return Err(CommandError::InvalidParams(message.into()));
         }
-        if next.board.assignments.get(&component) == Some(&assignment) || next.board.footprints().iter().any(|f| f.component == component) {
+        if next.board.assignments.get(&component) == Some(&assignment)
+            || (!next.board.assignments.contains_key(&component)
+                && next
+                    .board
+                    .footprints()
+                    .iter()
+                    .any(|f| f.component == component && f.key() == Some(assignment.key()) && f.mapping.as_ref() == Some(&assignment.mapping)))
+        {
             return Ok(());
         }
         Arc::make_mut(&mut next.board).assignments.insert(component, assignment);
         let used = next.board.used_package_keys();
         Arc::make_mut(&mut next.board).definitions.retain(|key, _| used.contains(key));
+        if next.board.baseline.is_some() {
+            crate::persistence::encode_documents(Arc::new(next.clone())).map_err(CommandError::InvalidParams)?;
+        }
         self.change(next);
         Ok(())
     }
 
     /// Create one placement from a pinned assignment in one undo step. Source availability is
     /// irrelevant; duplicate placement, stale revisions and out-of-range positions leave it intact.
+    /// Pending desired choices must be accepted before they can create physical geometry.
     pub(crate) fn place_assigned_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -190,6 +203,9 @@ impl Session {
             .assignments
             .get(&component)
             .ok_or_else(|| CommandError::InvalidParams("component has no unplaced footprint assignment".into()))?;
+        if project.board.baseline.as_ref().is_some_and(|baseline| !baseline.validate_assignment(assignment)) {
+            return Err(CommandError::Unavailable("Apply the reviewed package update before placing this component.".into()));
+        }
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let footprint = assignment.footprint(self.next_object_id()?, position);
         let mut next = project.clone();

@@ -437,6 +437,7 @@ pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT};
 pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
+pub use board::update::{APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE};
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
 pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
 /// Remove board placements while retaining components and physical package assignments.
@@ -455,6 +456,12 @@ const BOARD: Param = Param {
 };
 const EXPECTED_REVISION: Param =
     Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
+const UPDATE_PLAN_TOKEN: Param = Param {
+    required: true,
+    name: "plan_token",
+    summary: "Opaque token returned by the current session's board-update preview",
+    kind: ParamKind::Text,
+};
 const AUTO_HEAL: Param = Param {
     required: false,
     name: "auto_heal",
@@ -910,8 +917,26 @@ const CATALOG: &[Command] = &[
     Command {
         id: INITIALIZE_UPDATE_BASELINE,
         title: "Initialize Reviewed Board Updates",
-        summary: "Adopt current assigned packages and connectivity as an accepted board baseline. Later schematic removals retain their physical footprints pending reviewed update support.",
+        summary: "Adopt current assigned packages and connectivity as an accepted board baseline. Later schematic removals and exclusions retain their physical footprints until a reviewed update is applied.",
         params: &[BOARD, EXPECTED_REVISION],
+    },
+    Command {
+        id: PREVIEW_UPDATE,
+        title: "Preview Board Update",
+        summary: "Freeze a complete schematic-to-board change list and issue a session-local Apply token without changing the design or history.",
+        params: &[BOARD, EXPECTED_REVISION],
+    },
+    Command {
+        id: APPLY_UPDATE,
+        title: "Apply Board Update",
+        summary: "Accept one current preview atomically, preserving unchanged footprint placement. Stale, replaced or foreign-session tokens are refused.",
+        params: &[BOARD, EXPECTED_REVISION, UPDATE_PLAN_TOKEN],
+    },
+    Command {
+        id: CANCEL_UPDATE,
+        title: "Cancel Board Update Preview",
+        summary: "Revoke the named runtime preview without changing design state or history.",
+        params: &[UPDATE_PLAN_TOKEN],
     },
     Command {
         id: SET_FOOTPRINT_TRANSFORM,
@@ -1158,6 +1183,13 @@ impl Project {
         self.components.values()
     }
 
+    /// Whether a live component belongs in this project's current physical board
+    /// input. Board exclusion is independent of population, BOM, simulation and
+    /// position-file settings; unknown component identities are not eligible.
+    pub fn component_is_board_eligible(&self, id: u64) -> bool {
+        self.components.get(&id).is_some_and(|component| !component.metadata.attributes.exclude_from_board)
+    }
+
     /// Resolve a placement's owner in this snapshot. Foreign placements may have no component.
     pub fn component(&self, symbol: &SymbolPlacement) -> Option<&Component> {
         self.components.get(&symbol.component)
@@ -1300,6 +1332,8 @@ pub struct Session {
     /// Revision at the latest file adoption. View bindings use it to distinguish reopening the
     /// same persistent project from an edit or undo within the current history.
     history_root_revision: u64,
+    /// One runtime-only review capability; never serialized or counted as an authored edit.
+    update_plan: Option<board::update::CachedPlan>,
 }
 
 impl Session {
@@ -1318,6 +1352,7 @@ impl Session {
     /// A sheet projection is normalized to the first sheet without changing authored documents.
     /// Restoring this live project's older content retains its adopted allocation watermark.
     pub fn open_snapshot(&mut self, project: Arc<Project>) {
+        self.update_plan = None;
         let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
@@ -1354,6 +1389,9 @@ impl Session {
                 Arc::new(Project { name: saved.name.clone(), ..Project::clone(project) })
             };
             renamed = true;
+        }
+        if renamed {
+            self.update_plan = None;
         }
         renamed
     }
@@ -1403,6 +1441,9 @@ impl Session {
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
+            | PREVIEW_UPDATE
+            | APPLY_UPDATE
+            | CANCEL_UPDATE
             | PLACE_ASSIGNED_FOOTPRINT
             | SET_FOOTPRINT_TRANSFORM
             | DELETE_FOOTPRINTS
@@ -1460,7 +1501,7 @@ impl Session {
                 inspected["board"]["outline"] = json!(p.board.outline);
                 if let Some(baseline) = &p.board.baseline {
                     inspected["board"]["accepted_baseline"] = json!({"source":baseline.source,"component_count":baseline.components.len(),"net_count":baseline.nets.len()});
-                    inspected["board"]["pending_removals"] = json!(baseline.components.keys().filter(|id| !p.components.contains_key(id)).map(|id| format!("component-{id}")).collect::<Vec<_>>());
+                    inspected["board"]["pending_removals"] = json!(baseline.components.keys().filter(|id| !p.component_is_board_eligible(**id)).map(|id| format!("component-{id}")).collect::<Vec<_>>());
                 }
                 if !p.board.definitions.is_empty() {
                     inspected["board"]["definitions"] = json!(p.board.definitions.values().map(Arc::as_ref).collect::<Vec<_>>());
@@ -1472,28 +1513,37 @@ impl Session {
             }
             inspected
         });
-        json!({
+        let mut inspection = json!({
             "project": project,
             "footprint_catalog": self.project.as_ref().map(|p| p.inspect_footprint_catalog()),
             "revision": self.revision,
             "can_undo": !self.undo.is_empty(),
             "can_redo": !self.redo.is_empty(),
-        })
+        });
+        if let Some(preview) = self.board_update_summary() {
+            inspection["board_update_preview"] = preview;
+        }
+        inspection
     }
 
-    /// Run a shared command. Document commands answer [`Self::inspect`]; library commands return
-    /// catalog inspection/search and never change the project or its history. Failed commands
-    /// leave the current state intact.
+    /// Run a shared command. Document edits answer [`Self::inspect`]; library
+    /// queries return catalog data and board-update preview returns its bounded
+    /// review report. Queries never change authored project state or history.
+    /// Failed commands leave the project intact.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         if id.starts_with("library.") {
             return self.library_command(id, params);
         }
         self.apply(id, params)?;
+        if id == PREVIEW_UPDATE {
+            return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
+        }
         Ok(self.inspect())
     }
 
     /// Run the shared command without building an inspection snapshot. Returns the current
     /// revision, which remains unchanged on a no-op. Failed commands leave the project intact.
+    /// Preview commands may replace runtime-only cached authority without an authored edit.
     /// Setup handlers retain their revision checks and specific state diagnostics even when
     /// availability disables the command on an open project.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
@@ -1516,6 +1566,8 @@ impl Session {
             id,
             ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
+                | PREVIEW_UPDATE
+                | APPLY_UPDATE
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
@@ -1547,6 +1599,9 @@ impl Session {
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
+                | PREVIEW_UPDATE
+                | APPLY_UPDATE
+                | CANCEL_UPDATE
                 | PLACE_ASSIGNED_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
                 | DELETE_FOOTPRINTS
@@ -1653,6 +1708,9 @@ impl Session {
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
+            PREVIEW_UPDATE => self.preview_board_update(params)?,
+            APPLY_UPDATE => self.apply_board_update(params)?,
+            CANCEL_UPDATE => self.cancel_board_update(params)?,
             PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
             PLACE_FOOTPRINT => self.place_footprint(params)?,
             SET_FOOTPRINT_TRANSFORM => self.set_footprint_transform(params)?,
@@ -1809,7 +1867,8 @@ impl Session {
     /// share Move Symbol's exact contacts and optional healing, preserving attached wires.
     /// Optional metadata replaces component fields/attributes and optional field layout replaces
     /// only this unit's text appearance. Omission preserves either. Invalid/dangling fields or
-    /// board exclusion of an already placed component reject every accompanying change.
+    /// board exclusion of a legacy placed component reject every accompanying change.
+    /// With an accepted baseline, exclusion stages a reviewed physical removal.
     /// Validation/contact failures reject the entire edit; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -1837,7 +1896,10 @@ impl Session {
             .map_err(|e| CommandError::InvalidParams(e.to_string()))?
             .unwrap_or_else(|| component.metadata.clone());
         metadata.validate().map_err(CommandError::InvalidParams)?;
-        if metadata.attributes.exclude_from_board && project.board.footprints().iter().any(|f| f.component == component.ordinal) {
+        if metadata.attributes.exclude_from_board
+            && project.board.baseline.is_none()
+            && project.board.footprints().iter().any(|f| f.component == component.ordinal)
+        {
             return Err(CommandError::InvalidParams("Remove the component's board footprint before excluding it from the board.".into()));
         }
         let field_layout = params
@@ -1992,6 +2054,7 @@ impl Session {
     /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
     /// revisions advance past every live ID allocated by a compound wire edit.
     fn change(&mut self, mut project: Project) {
+        self.update_plan = None;
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
         if self
@@ -2038,6 +2101,7 @@ impl Session {
     fn step(&mut self, forward: bool) {
         let (from, to) = if forward { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
         if let Some(state) = from.pop() {
+            self.update_plan = None;
             to.push(std::mem::replace(&mut self.project, state));
             self.revision += 1;
         }

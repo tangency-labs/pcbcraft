@@ -318,9 +318,17 @@ fn baseline_validation_and_unsupported_assignment_failures_are_atomic() {
     assert!(decode_documents(&invalid).is_err());
     session.apply(crate::PLACE_RESISTOR, &json!({"x_nm":20_000_000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
     let id = session.project().unwrap().symbols.last().unwrap().component;
-    let before = encode_documents(session.snapshot().unwrap()).unwrap();
     let definition = super::super::definition::starter("resistor-0402").unwrap();
-    assert!(session.apply(super::super::assignment::ASSIGN_FOOTPRINT, &json!({"component":format!("component-{id}"),"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"1","2":"2"},"expected_revision":session.revision()})).is_err());
+    session.apply(super::super::assignment::ASSIGN_FOOTPRINT, &json!({"component":format!("component-{id}"),"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"1","2":"2"},"expected_revision":session.revision()})).unwrap();
+    let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert!(
+        session
+            .apply(
+                super::super::assignment::PLACE_ASSIGNED_FOOTPRINT,
+                &json!({"component":format!("component-{id}"),"x_nm":0,"y_nm":0,"expected_revision":session.revision()})
+            )
+            .is_err()
+    );
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
 

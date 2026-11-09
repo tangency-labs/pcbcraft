@@ -31,6 +31,7 @@ const ASSIGNED_BOARD_FORMAT: &str = "pcbcraft-board/7";
 const OUTLINE_BOARD_FORMAT: &str = "pcbcraft-board/8";
 const DRAWING_BOARD_FORMAT: &str = "pcbcraft-board/9";
 const BASELINE_BOARD_FORMAT: &str = "pcbcraft-board/10";
+const INTENT_BOARD_FORMAT: &str = "pcbcraft-board/11";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -279,8 +280,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     };
 
-    if (board.format == BASELINE_BOARD_FORMAT) != board.baseline.is_some() {
-        return Err("board.json: accepted baselines require board format 10".into());
+    if matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
+        return Err("board.json: accepted baselines require board format 10 or 11".into());
     }
     if let Some(baseline) = &board.baseline {
         baseline.validate()?;
@@ -291,6 +292,21 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             return Err("board.json: accepted baseline has a foreign project owner".into());
         }
     }
+    // Apply the same physical-membership rule as the encoder before constructing
+    // Project. Excluded choices remain validated authored intent below, but do not
+    // require the pending-physical-package format guard.
+    let eligible: BTreeSet<_> = project
+        .components
+        .iter()
+        .filter(|component| !component.metadata.as_ref().is_some_and(|metadata| metadata.attributes.exclude_from_board))
+        .map(|component| component.id)
+        .collect();
+    let pending_intent = board.baseline.as_ref().is_some_and(|baseline| {
+        board.assignments.iter().flatten().any(|assignment| eligible.contains(&assignment.component) && !baseline.validate_assignment(assignment))
+    });
+    if (board.format == INTENT_BOARD_FORMAT) != pending_intent {
+        return Err("board.json: pending desired packages require board format 11".into());
+    }
     if board.format != ROTATED_BOARD_FORMAT
         && board.format != PHYSICAL_BOARD_FORMAT
         && board.format != SILKSCREEN_BOARD_FORMAT
@@ -298,6 +314,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         && board.format != OUTLINE_BOARD_FORMAT
         && board.format != DRAWING_BOARD_FORMAT
         && board.format != BASELINE_BOARD_FORMAT
+        && board.format != INTENT_BOARD_FORMAT
         && board.footprints.iter().any(|f| f.rotation != 0)
     {
         return Err("board.json: footprint rotation requires board format 4".to_owned());
@@ -308,29 +325,40 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         && board.format != OUTLINE_BOARD_FORMAT
         && board.format != DRAWING_BOARD_FORMAT
         && board.format != BASELINE_BOARD_FORMAT
+        && board.format != INTENT_BOARD_FORMAT
         && board.footprints.iter().any(|f| f.library.is_some())
     {
         return Err("board.json: pinned physical footprints require board format 5".into());
     }
-    if !matches!(board.format.as_str(), ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT)
-        && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
+    if !matches!(
+        board.format.as_str(),
+        ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT
+    ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
     }
     if (board.format == ASSIGNED_BOARD_FORMAT && board.assignments.is_none())
-        || (!matches!(board.format.as_str(), ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT)
-            && board.assignments.is_some())
+        || (!matches!(
+            board.format.as_str(),
+            ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT
+        ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
         return Err("board.json: nonempty assignments require board format 7".into());
     }
-    if board.format != BASELINE_BOARD_FORMAT && (board.format == OUTLINE_BOARD_FORMAT) != board.outline.is_some() {
+    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT)
+        && (board.format == OUTLINE_BOARD_FORMAT) != board.outline.is_some()
+    {
         return Err("board.json: an outline requires board format 8".into());
     }
-    if board.format != BASELINE_BOARD_FORMAT && (board.format == DRAWING_BOARD_FORMAT) != board.graphics.is_some() {
+    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT)
+        && (board.format == DRAWING_BOARD_FORMAT) != board.graphics.is_some()
+    {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
+        (INTENT_BOARD_FORMAT, None) => None,
+        (INTENT_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (BASELINE_BOARD_FORMAT, None) => None,
         (BASELINE_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (DRAWING_BOARD_FORMAT, None) => None,
@@ -698,7 +726,7 @@ impl DocumentsEncoder {
                             self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
                         } else if self.project.board_target().is_some() {
                             self.next();
-                            board_header(&mut self.bytes, &self.project.board)?;
+                            board_header(&mut self.bytes, &self.project)?;
                         } else {
                             self.phase = 9;
                             self.cursor = 0;
@@ -802,8 +830,10 @@ impl DocumentsEncoder {
 
 /// Keep legacy bytes until newer authored data requires a newer format. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
-/// version 9, and explicitly enabled accepted update baselines version 10.
-fn board_header(bytes: &mut Vec<u8>, board: &Board) -> Result<(), String> {
+/// version 9, explicitly enabled accepted baselines version 10, and pending
+/// desired package choices version 11.
+fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
+    let board = &project.board;
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
     let outline = board.outline.as_ref();
@@ -811,7 +841,9 @@ fn board_header(bytes: &mut Vec<u8>, board: &Board) -> Result<(), String> {
     let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
     if let Some(setup) = setup {
-        let format = if board.baseline.is_some() {
+        let format = if board.has_pending_package_intent(project) {
+            INTENT_BOARD_FORMAT
+        } else if board.baseline.is_some() {
             BASELINE_BOARD_FORMAT
         } else if board.drawings.is_some() {
             DRAWING_BOARD_FORMAT
@@ -851,7 +883,9 @@ fn board_header(bytes: &mut Vec<u8>, board: &Board) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if board.baseline.is_some() {
+        let format = if board.has_pending_package_intent(project) {
+            INTENT_BOARD_FORMAT
+        } else if board.baseline.is_some() {
             BASELINE_BOARD_FORMAT
         } else if board.drawings.is_some() {
             DRAWING_BOARD_FORMAT
