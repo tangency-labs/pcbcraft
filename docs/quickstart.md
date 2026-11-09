@@ -286,7 +286,7 @@ explicitly opens another workspace. The workspace picker remains available.
 In the board workspace, Properties shows its stored reference, value, definition
 and unit-aware coordinate readouts.
 
-Use **Layout → Board → Setup**, or **Board setup…** in Layers, to edit the board.
+Use **Layout → Design → Setup**, or **Board setup…** in Layers, to edit the board.
 Choose any even copper count from 2 through 64; 10- and 12-layer boards are included.
 **Board editor layers** edits names and unused optional layer membership.
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
@@ -327,7 +327,7 @@ The selected ribbon layer and its menu rows show matching color patches.
 without changing visibility. Plated lands take the active visible copper color, while front-only surface
 pads stay on front copper. Colors are shared local settings for this board,
 separate from its geometry, saved engineering files and document undo.
-**Layout → Fit** fits the placements, and **Layout → Reveal** brings the current
+**Fit** in the ribbon header fits the placements, and **Layout → Inspect menu → Reveal** brings the current
 counterpart highlight into view without changing zoom. Switching back restores
 the schematic camera. These actions do not modify project data or undo history.
 
