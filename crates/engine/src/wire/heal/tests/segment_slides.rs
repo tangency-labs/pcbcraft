@@ -35,7 +35,7 @@ fn sliding_a_split_route_removes_the_old_corner_stub() {
     assert_eq!(preview.wires, project.wires);
     assert_eq!(preview.junctions, project.junctions);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
     s.apply("edit.redo", &Value::Null).unwrap();
     let saved = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
@@ -170,7 +170,7 @@ fn folded_corner_cleanup_respects_the_automatic_healing_preference() {
     run(&mut s, HEAL_WIRES, json!({"items":{"symbols":[],"wires":[wire]}}));
     assert_eq!(chain_path(s.project().unwrap(), ends), vec![p(16, 0), p(16, 10), p(12, 10), p(12, 18)]);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&raw, &s.snapshot().unwrap()));
+    crate::assert_same_content(&raw, &s.snapshot().unwrap());
 }
 
 /// An intentionally free endpoint keeps its protection when overlap merging substitutes an

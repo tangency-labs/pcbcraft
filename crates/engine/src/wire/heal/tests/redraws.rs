@@ -29,7 +29,7 @@ fn an_equal_length_redraw_replaces_the_old_alternative() {
     let saved = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
     s.apply("edit.redo", &Value::Null).unwrap();
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }

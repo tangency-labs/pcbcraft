@@ -50,7 +50,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.pc` | `pcbcraft-project/6` or `/7` | Project UUID, name, ordered sheet list and shared components; version 7 adds component fields and attributes |
+| `project.pc` | `pcbcraft-project/6`, `/7` or `/11` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, and version 11 adds component fields and attributes while requiring that watermark |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
 | `board.json` | `pcbcraft-board/1` through `/9` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
@@ -74,7 +74,11 @@ sheet belongs to user-local presentation state and is never saved in `project.pc
 Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
 intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
-Current encoding writes version 6 without component metadata, or version 7 with it,
+Legacy snapshots retain version 6 until numeric allocation or retirement adopts
+the version-7 watermark, or component metadata requires version 11. New projects
+start at version 7; metadata upgrades them to version 11 while retaining the
+watermark. Versions 9 and 10 belong to the separate optional-board work and are
+not accepted by this metadata reader. Sheet encodings remain
 sheet/1 for ordinary sheets, sheet/2 for
 sheets with hierarchy records and sheet/3 for sheets with named anchors, retaining existing board encodings. An unchanged save preserves original version-5 document bytes, and
 editing another document preserves an unaffected entry point. Adding or renaming
@@ -84,7 +88,11 @@ component metadata and field appearance rather than discarding them.
 
 ### Component fields and text appearance
 
-Project/7 adds an optional non-null `metadata` object to each component. It
+Project/11 adds an optional non-null `metadata` object to each component and
+requires the numeric allocation watermark. A metadata edit upgrades a legacy
+project with a watermark covering its retained IDs; Undo may retain that
+allocation metadata while removing the component extension. Project/7 remains
+the allocation-only vocabulary and rejects component metadata. The new object
 contains `fields`, keyed by stable standard IDs (`datasheet`, `description`,
 `manufacturer`, `manufacturer_part_number`) or non-nil UUIDs for custom fields,
 and `attributes`. Each field has a display `name` and `value`; names are unique
@@ -106,7 +114,7 @@ the schematic center range. Manual offsets turn with the symbol; explicit text
 orientation is independent. Unspecified reference/value layouts retain legacy
 automatic rendering, and optional fields start hidden. Absent metadata/layout
 stays omitted, preserving older canonical document encodings. Older readers
-reject versions 7/4 instead of silently discarding data. Reference/value content
+reject versions 11/4 instead of silently discarding data. Reference/value content
 edits stay in `project.pc`; label placement edits stay in the owning sheet.
 
 Sheet/5 extends sheet/4 with optional non-null `text` on each named anchor. It uses
@@ -316,7 +324,24 @@ reject explicit null. Before adoption, validation checks the entire project:
 component ownership and references, unit membership, wire endpoints, junction
 usage, footprint mappings, exact definition revisions and unused copies. Object
 IDs are unique across placements, junctions, wires and footprints; component IDs
-have their own namespace. The session derives its next ID from all object types.
+have their own namespace. Versions 7 and 11 require `numeric_id_high_water`, an integer
+between zero and the maximum supported object ID and no smaller than any live
+numeric identity. Allocation reserves above that value and the runtime revision.
+The watermark includes retired IDs, does not decrease on undo/redo or restoration
+of older content within the current live project, and saves atomically with the
+records that use it. Undo of an allocation can therefore leave a metadata-only
+change to save. Nonallocating edits do not advance it merely because the revision
+changed, and unchanged reopen/save remains stable.
+
+Older snapshots omit the watermark and preserve their encoding through ordinary
+nonallocating edits. Their first numeric allocation or retirement adopts a
+watermark covering both prior and resulting retained IDs. Previously deleted IDs
+absent from legacy data cannot be recovered; non-reuse begins with adoption.
+The retained single-document encoder uses `pcbcraft-project/8` when a watermark
+is present, while unadopted snapshots retain format 4. Formats 7, 8 and 11 require
+the field and older versions reject it, including explicit null values. This is
+not a distributed allocator for concurrent branch additions, nor a reservation
+of IDs from discarded unsaved histories.
 A component without a placed unit is still refused.
 
 ## Git behavior

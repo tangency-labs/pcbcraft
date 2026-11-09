@@ -55,7 +55,7 @@ fn part_drops_connect_endpoints_and_insert_into_straight_wires() {
     let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&documents).unwrap()).unwrap(), documents);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
     s.apply("edit.redo", &Value::Null).unwrap();
     assert_eq!(s.project().unwrap().wires.len(), 2);
 }
@@ -97,7 +97,7 @@ fn drawing_or_dropping_into_a_segment_creates_a_branch() {
         let node = project.junctions().find(|(_, point)| *point == p(10, 0)).unwrap().0;
         assert_eq!(project.wires.iter().filter(|w| w.endpoints.contains(&WireEndpoint::Junction(node))).count(), 3);
         s.apply("edit.undo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        crate::assert_same_content(&before, &s.snapshot().unwrap());
     }
     let mut s = session();
     draw(&mut s, p(0, 0), p(20, 0));
@@ -122,7 +122,7 @@ fn overlaps_and_doubled_back_legs_heal_locally() {
     run(&mut s, HEAL_WIRES, json!({"items":{"symbols":[],"wires":[wire]}}));
     assert_eq!(s.revision(), revision);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
     let mut s = session();
     run(&mut s, DRAW_WIRE, json!({"from":p(0,0),"to":p(5,5),"bends":[p(10,0),p(5,0)]}));
     assert_eq!(s.project().unwrap().wire_path(&s.project().unwrap().wires[0]), vec![p(0, 0), p(5, 0), p(5, 5)]);
@@ -151,7 +151,7 @@ fn drawing_a_return_to_a_connected_run_straightens_the_branch() {
     let saved = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
     s.apply("edit.redo", &Value::Null).unwrap();
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }
@@ -307,7 +307,7 @@ fn shortcuts_back_onto_the_same_wire_obey_optional_healing() {
             assert!(Arc::ptr_eq(&looped, &s.snapshot().unwrap()));
         }
         s.apply("edit.undo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        crate::assert_same_content(&before, &s.snapshot().unwrap());
     }
 }
 

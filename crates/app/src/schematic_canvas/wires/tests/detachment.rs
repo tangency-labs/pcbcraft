@@ -146,7 +146,7 @@ fn symbol_disconnect_and_move_is_one_cancelable_edit() {
             assert_eq!(routes(&h), paths);
             assert!(after.wires().iter().all(|wire| wire.terminals().is_empty()));
             click(&mut h, "Undo");
-            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
             click(&mut h, "Redo");
             assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
         }
@@ -363,7 +363,7 @@ fn symbol_move_hotkey_previews_and_commits_one_disconnected_move() {
     assert_eq!(routes(&h), paths);
     assert!(after.wires().iter().all(|wire| wire.terminals().is_empty()));
     click(&mut h, "Undo");
-    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
     click(&mut h, "Redo");
     assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
 }

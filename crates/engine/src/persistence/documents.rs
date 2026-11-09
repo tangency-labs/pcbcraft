@@ -10,10 +10,11 @@ pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
-const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/7";
+const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const POWER_TEXT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
 const PROJECT_FORMAT: &str = "pcbcraft-project/6";
+const WATERMARK_PROJECT_FORMAT: &str = "pcbcraft-project/7";
 const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
@@ -45,6 +46,8 @@ struct ProjectDocument {
     format: String,
     id: Uuid,
     name: String,
+    #[serde(default, deserialize_with = "present")]
+    numeric_id_high_water: Option<u64>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,
 }
@@ -112,11 +115,14 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    if project.format != PROJECT_FORMAT && project.format != PREVIOUS_PROJECT_FORMAT && project.format != FIELDS_PROJECT_FORMAT {
+    if !matches!(project.format.as_str(), PROJECT_FORMAT | PREVIOUS_PROJECT_FORMAT | WATERMARK_PROJECT_FORMAT | FIELDS_PROJECT_FORMAT) {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if project.format != FIELDS_PROJECT_FORMAT && project.components.iter().any(|c| c.metadata.is_some()) {
-        return Err("component metadata requires project format 7".into());
+        return Err("component metadata requires project format 11".into());
+    }
+    if matches!(project.format.as_str(), WATERMARK_PROJECT_FORMAT | FIELDS_PROJECT_FORMAT) != project.numeric_id_high_water.is_some() {
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7 or 11"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -172,6 +178,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let metadata = Project {
         name: project.name.clone(),
         id: project.id,
+        numeric_id_high_water: None,
         sheets: Arc::new(hierarchy_sheets.clone()),
         sheet_index: 0,
         components: Arc::default(),
@@ -329,10 +336,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err(format!("{path}: unexpected or unused project document"));
     }
     let previous_format = project.format == PREVIOUS_PROJECT_FORMAT;
+    let numeric_id_high_water = project.numeric_id_high_water;
     let document = Document {
         format: super::FORMAT.to_owned(),
         id: project.id,
         name: project.name,
+        numeric_id_high_water: None,
         symbol_definitions: definitions,
         components: project.components,
         sheet: combined,
@@ -341,6 +350,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project = validate_with_hierarchy(document, None, footprint_definitions, &anchors, &hierarchy_ids)
         .map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
     let project_data = Arc::make_mut(&mut project);
+    project_data.numeric_id_high_water = numeric_id_high_water;
     let sheets = layouts
         .into_iter()
         .map(|(reference, symbols, junctions, wires)| {
@@ -371,6 +381,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         graphics.validate(project_data).map_err(|error| format!("board.json: {error}"))?;
         Arc::make_mut(&mut project_data.board).drawings = Some(graphics);
     }
+    validate_watermark(&project)?;
     Ok(project)
 }
 
@@ -480,6 +491,7 @@ impl DocumentsEncoder {
             match self.phase {
                 0 => {
                     let p = &self.project;
+                    let format = if p.numeric_id_high_water.is_some() { WATERMARK_PROJECT_FORMAT } else { PROJECT_FORMAT };
                     let sheets = p
                         .sheets
                         .iter()
@@ -489,15 +501,17 @@ impl DocumentsEncoder {
                             file: format!("sheets/{}.json", sheet.sheet_id),
                         })
                         .collect::<Vec<_>>();
-                    let format = if p.components.values().any(|c| !c.metadata.is_empty()) { FIELDS_PROJECT_FORMAT } else { PROJECT_FORMAT };
-                    write!(
-                        self.bytes,
-                        "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {},\n  \"sheets\": {},\n  \"components\": [\n",
-                        p.id,
-                        json(&p.name)?,
-                        json(&sheets)?
-                    )
-                    .map_err(|e| e.to_string())?;
+                    let has_metadata = p.components.values().any(|c| !c.metadata.is_empty());
+                    let format = if has_metadata { FIELDS_PROJECT_FORMAT } else { format };
+                    if has_metadata && p.numeric_id_high_water.is_none() {
+                        return Err("component metadata requires an adopted numeric ID watermark".into());
+                    }
+                    write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {},\n", p.id, json(&p.name)?,)
+                        .map_err(|e| e.to_string())?;
+                    if let Some(high_water) = p.numeric_id_high_water {
+                        writeln!(self.bytes, "  \"numeric_id_high_water\": {high_water},").map_err(|e| e.to_string())?;
+                    }
+                    write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
                     self.next();
                 }
                 1 => {

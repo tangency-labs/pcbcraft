@@ -119,7 +119,7 @@ fn default_child_sheet_name_skips_existing_names() {
         let child = project.child_sheet(project.sheet_symbols()[0].id).unwrap();
         assert_eq!(project.sheets().find(|sheet| sheet.target == child).unwrap().name, expected);
         h.state_mut().run("edit.undo", &Value::Null);
-        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
     }
 }
 
@@ -191,7 +191,7 @@ fn stale_hierarchy_form_is_inert_and_creation_undoes_as_one_step() {
     assert_eq!(h.state().session.project().unwrap().sheets().len(), 2);
     h.state_mut().run("edit.undo", &Value::Null);
     h.run();
-    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
 }
 
 /// A child label added from another pane updates the parent's pins without changing either

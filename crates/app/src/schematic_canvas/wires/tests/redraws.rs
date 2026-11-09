@@ -47,7 +47,7 @@ fn finishing_a_redraw_keeps_the_path_shown_in_its_preview() {
     assert!(!routes(&h).iter().any(|route| route.contains(&grid(10, 0))));
     let after = h.state().session.snapshot().unwrap();
     crate::tests::click(&mut h, "Undo");
-    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
     crate::tests::click(&mut h, "Redo");
     assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
 }

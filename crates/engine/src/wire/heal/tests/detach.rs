@@ -72,7 +72,7 @@ fn disconnecting_a_symbol_keeps_wiring_for_a_replacement() {
     let saved = persistence::encode_documents(after.clone()).unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
     s.apply("edit.redo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&after, &s.snapshot().unwrap()));
     run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
@@ -191,7 +191,7 @@ fn break_detaches_both_pin_ends_and_can_rejoin_them() {
     s.apply("edit.undo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&broken, &s.snapshot().unwrap()));
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&original, &s.snapshot().unwrap()));
+    crate::assert_same_content(&original, &s.snapshot().unwrap());
 }
 
 /// The selected straight wire separates from shared junctions at both ends without moving
@@ -240,6 +240,6 @@ fn break_releases_one_connected_end_and_preserves_the_free_end() {
         let saved = persistence::encode_documents(after.clone()).unwrap();
         assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
         s.apply("edit.undo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        crate::assert_same_content(&before, &s.snapshot().unwrap());
     }
 }

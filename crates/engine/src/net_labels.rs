@@ -220,12 +220,7 @@ impl Session {
             }
             let id = match index {
                 Some(index) => project.net_labels[index].id,
-                None => project
-                    .highest_id()
-                    .max(self.revision)
-                    .checked_add(1)
-                    .filter(|id| *id <= MAX_OBJECT_ID)
-                    .ok_or_else(|| CommandError::Unavailable("object IDs exhausted".into()))?,
+                None => self.next_object_id()?,
             };
             let label = Label {
                 id,

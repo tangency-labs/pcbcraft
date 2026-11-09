@@ -86,7 +86,7 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
     let bytes = read(&path).map_err(|error| format!("Could not read project: {error}"))?;
     if Encoding::detect(&bytes) == Encoding::Json {
         let header: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-        if matches!(header["format"].as_str(), Some("pcbcraft-project/5" | "pcbcraft-project/6")) {
+        if matches!(header["format"].as_str(), Some("pcbcraft-project/5" | "pcbcraft-project/6" | "pcbcraft-project/7" | "pcbcraft-project/11")) {
             if path.file_name().is_none_or(|name| name != ENTRY_POINT) {
                 return Err("A split project's entry point must be named project.pc.".to_owned());
             }
@@ -293,7 +293,7 @@ fn normalize(path: &Path) -> Result<PathBuf, String> {
     let name = path.file_name().ok_or("Project file has no name")?;
     // Check the whole target, not just the parent: the file name decides whether the plain
     // spelling is safe.
-    fs::canonicalize(parent).map(|parent| crate::recent_projects::plain_path_if_equivalent(parent.join(name))).map_err(|error| error.to_string())
+    fs::canonicalize(parent).map(|parent| pcbcraft_storage::plain_path_if_equivalent(parent.join(name))).map_err(|error| error.to_string())
 }
 
 /// Read only regular files and enforce the size bound even if the file grows after opening.

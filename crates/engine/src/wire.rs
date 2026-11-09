@@ -347,7 +347,7 @@ impl Session {
         if project.wires.len() - 1 + pieces.len() > MAX_WIRES {
             return Err(CommandError::Unavailable("the schematic wire limit has been reached".to_owned()));
         }
-        let mut next = self.next_object_id()?;
+        let mut next = if pieces.is_empty() { 0 } else { self.next_object_id()? };
         // At most two new endpoints per piece, then the new wire IDs, which must be the highest.
         if next > MAX_OBJECT_ID - 3 * pieces.len() as u64 {
             return Err(CommandError::Unavailable("project has exhausted its object IDs".to_owned()));
@@ -486,7 +486,7 @@ mod tests {
             assert!(reopened.revision() > 4);
         }
         session.apply("edit.undo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        crate::assert_same_content(&before, &session.snapshot().unwrap());
         session.apply("edit.redo", &Value::Null).unwrap();
         assert!(Arc::ptr_eq(&project, &session.snapshot().unwrap()));
         session.apply("edit.undo", &Value::Null).unwrap();
@@ -582,7 +582,7 @@ mod tests {
 
         // Slicing at a corner splits there without adding a point to either half.
         session.apply("edit.undo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        crate::assert_same_content(&before, &session.snapshot().unwrap());
         edit(&mut session, SLICE_WIRE, "wire-4", point(8, 0)).unwrap();
         assert_eq!(routes(&session), vec![vec![grid(0, 0), grid(8, 0)], vec![grid(8, 0), grid(8, 6)]]);
         session.apply("edit.undo", &Value::Null).unwrap();
@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(session.inspect(), snapshot);
         let bytes = persistence::encode(session.snapshot().unwrap()).unwrap();
         let stored: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(stored["format"], "pcbcraft-project/4");
+        assert_eq!(stored["format"], "pcbcraft-project/8");
         for (path, value) in [
             ("/format", json!("pcbcraft-project/2")),
             ("/sheet/wires/0/from/junction", json!(99)),

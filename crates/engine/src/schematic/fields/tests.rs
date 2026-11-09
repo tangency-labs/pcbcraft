@@ -117,13 +117,80 @@ fn native_versions_reject_downgraded_fields_and_null_extensions() {
     .unwrap();
     let original = encode_documents(s.snapshot().unwrap()).unwrap();
     let sheet = format!("sheets/{}.json", s.project().unwrap().sheet_target().sheet);
-    for (path, key, value) in [(ENTRY_POINT, "format", json!("pcbcraft-project/6")), (sheet.as_str(), "format", json!("pcbcraft-sheet/3"))] {
+    for (path, key, value) in [
+        (ENTRY_POINT, "format", json!("pcbcraft-project/6")),
+        (ENTRY_POINT, "format", json!("pcbcraft-project/7")),
+        (ENTRY_POINT, "format", json!("pcbcraft-project/9")),
+        (ENTRY_POINT, "format", json!("pcbcraft-project/10")),
+        (sheet.as_str(), "format", json!("pcbcraft-sheet/3")),
+    ] {
         let mut docs = original.clone();
         let mut record: Value = serde_json::from_slice(&docs[path]).unwrap();
         record[key] = value;
         docs.insert(path.into(), serde_json::to_vec(&record).unwrap());
         assert!(decode_documents(&docs).is_err());
     }
+}
+
+/// A legacy metadata edit adopts the allocation watermark, and retired IDs stay reserved
+/// through undo, redo and save/reopen without rewriting symbol or wire identities.
+#[test]
+fn legacy_metadata_upgrade_preserves_allocation_watermark_and_retired_ids() {
+    let legacy = crate::persistence::decode(include_bytes!("../../../../app/tests/fixtures/two-resistors.pc")).unwrap();
+    let mut s = Session::default();
+    s.open_snapshot(legacy.clone());
+    let highest = legacy.highest_id();
+    assert_eq!(legacy.numeric_id_high_water, None);
+    let mut metadata = Metadata::default();
+    metadata.fields.insert("manufacturer".into(), Field { name: "Manufacturer".into(), value: "Example".into() });
+    s.apply(SET_SYMBOL_FIELDS, &json!({"symbol":"symbol-2","reference":"R1","value":"1k","metadata":metadata,"expected_revision":s.revision()}))
+        .unwrap();
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let header: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
+    assert_eq!(header["format"], "pcbcraft-project/11");
+    assert_eq!(header["numeric_id_high_water"], highest);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&legacy, &s.snapshot().unwrap());
+    s.apply("edit.redo", &Value::Null).unwrap();
+    s.apply(crate::DELETE_WIRE, &json!({"wire":format!("wire-{highest}"),"expected_revision":s.revision()})).unwrap();
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let restored = decode_documents(&documents).unwrap();
+    assert_eq!(restored.numeric_id_high_water, Some(highest));
+    assert_eq!(restored.symbols()[0].ordinal, legacy.symbols()[0].ordinal);
+    let mut reopened = Session::default();
+    reopened.open_snapshot(restored);
+    reopened.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":50_800_000,"y_nm":0,"expected_revision":reopened.revision()})).unwrap();
+    assert!(reopened.project().unwrap().symbols().last().unwrap().ordinal > highest);
+    let saved = encode_documents(reopened.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+}
+
+/// Metadata format 11 requires valid allocation metadata; the legacy single-document
+/// reader must still reject component extensions instead of silently adopting them.
+#[test]
+fn metadata_format_requires_valid_watermark_and_refuses_legacy_smuggling() {
+    let mut s = fixture();
+    let mut metadata = Metadata::default();
+    metadata.attributes.exclude_from_bom = true;
+    let original_single = crate::persistence::encode(s.snapshot().unwrap()).unwrap();
+    s.apply(SET_SYMBOL_FIELDS, &json!({"symbol":"symbol-2","reference":"R1","value":"R","metadata":metadata,"expected_revision":s.revision()}))
+        .unwrap();
+    let original = encode_documents(s.snapshot().unwrap()).unwrap();
+    for value in [None, Some(Value::Null), Some(json!(0)), Some(json!(crate::MAX_OBJECT_ID + 1))] {
+        let mut docs = original.clone();
+        let mut header: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+        match value {
+            Some(value) => header["numeric_id_high_water"] = value,
+            None => {
+                header.as_object_mut().unwrap().remove("numeric_id_high_water");
+            }
+        }
+        docs.insert(ENTRY_POINT.into(), serde_json::to_vec(&header).unwrap());
+        assert!(decode_documents(&docs).is_err());
+    }
+    let mut invalid_single: Value = serde_json::from_slice(&original_single).unwrap();
+    invalid_single["components"][0]["metadata"] = json!(metadata);
+    assert!(crate::persistence::decode(&serde_json::to_vec(&invalid_single).unwrap()).is_err());
 }
 
 /// Board exclusion prevents placement, and cannot silently remove an existing board footprint.

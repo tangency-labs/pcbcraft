@@ -241,7 +241,7 @@ impl Edit {
     /// Remember original endpoints and branches so overlap cleanup cannot mistake an
     /// intentionally dangling wire for an obsolete degree-two transit corner.
     pub fn new(project: &Project, revision: u64) -> Self {
-        let highest = project.highest_id().max(revision);
+        let highest = project.allocation_high_water().max(revision);
         let mut degree = BTreeMap::new();
         for end in project.wires.iter().flat_map(|wire| wire.endpoints) {
             *degree.entry(end).or_insert(0) += 1;
@@ -272,6 +272,7 @@ impl Edit {
         }
         let id = self.next;
         self.next += 1;
+        self.project.numeric_id_high_water = Some(id);
         Ok(id)
     }
 

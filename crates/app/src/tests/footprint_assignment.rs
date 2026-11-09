@@ -58,7 +58,7 @@ fn schematic_assignment_then_board_placement_survives_offline_reopen() {
     assert_eq!(inspected["project"]["board"]["footprints"][0]["mapping"], json!({"1":"2","2":"1"}));
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
-    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    crate::tests::assert_same_content(&decode_documents(&saved).unwrap(), &h.state().session.snapshot().unwrap());
 }
 
 /// Invalid maps remain editable, Close is inert, and an external command expires an open form
@@ -149,7 +149,7 @@ fn live_assignment_uses_modal_ownership_and_shared_history() {
     h.run();
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
-    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), assigned);
+    crate::tests::assert_same_content(&decode_documents(&assigned).unwrap(), &h.state().session.snapshot().unwrap());
 }
 
 /// Library, token search and physical filters narrow the list without changing the project.

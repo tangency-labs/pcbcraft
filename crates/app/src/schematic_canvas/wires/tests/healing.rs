@@ -36,7 +36,7 @@ fn new_wire_preview_retracts_self_overlap_before_commit() {
     assert_eq!(routes(&h), vec![expected]);
     let after = h.state().session.snapshot().unwrap();
     click(&mut h, "Undo");
-    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
     click(&mut h, "Redo");
     assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
 }
@@ -112,7 +112,7 @@ fn wire_tool_finishes_on_a_segment() {
     assert_eq!(project.wires().len(), 3);
     assert_eq!(project.connectivity().nets.len(), 1);
     click(&mut h, "Undo");
-    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
 }
 
 /// Reproduce W drawing past a horizontal wire then returning to it: finishing the branch
@@ -144,7 +144,7 @@ fn wire_tool_heals_a_return_to_the_connected_trunk() {
     assert!(h.state().views.active.schematic.tool.is_none());
     assert_eq!(routes(&h), vec![vec![grid(2, 12), grid(6, 12)], vec![grid(6, 12), grid(14, 12)], vec![grid(-10, 0), grid(6, 0), grid(6, 12)]]);
     click(&mut h, "Undo");
-    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
 }
 
 /// The remembered menu toggle affects actual W gestures without adding document history.
@@ -229,7 +229,7 @@ fn modify_menu_wire_edits_preserve_selected_leg_commands() {
         assert_eq!(h.state().message, None);
         assert_eq!(h.state().session.project().unwrap().wires().len(), count);
         click(&mut h, "Undo");
-        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
     }
     // Draw a free endpoint at an already placed pin, explicitly as coordinates to reproduce
     // a pre-existing touching connection. Heal targets exactly the selected wire.

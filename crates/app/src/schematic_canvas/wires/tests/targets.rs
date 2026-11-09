@@ -61,7 +61,7 @@ fn clicking_near_a_pin_or_wire_node_starts_a_wire_directly() {
         assert_eq!(h.state().message, None);
         assert!(h.state().session.project().unwrap().wires().iter().any(|wire| wire.endpoints().contains(&endpoint)));
         crate::tests::click(&mut h, "Undo");
-        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
     }
 }
 
@@ -181,7 +181,7 @@ fn connected_nodes_require_explicit_w_and_start_at_the_pointer() {
             if pin { 2 } else { 3 }
         );
         crate::tests::click(&mut h, "Undo");
-        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
     }
 }
 

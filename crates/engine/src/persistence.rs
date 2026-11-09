@@ -66,7 +66,7 @@ pub fn decode_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
     Ok((project, encoding))
 }
 
-/// Encode a legacy single-document project or container v1, retained for migration fixtures.
+/// Encode a single-document project or container v1, retained for migration fixtures.
 /// Configured boards are refused; normal saves use [`encode_documents`] or [`encode_packed`].
 pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>, String> {
     let bytes = encode(project)?;
@@ -86,6 +86,8 @@ pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>,
 /// Format 4 keeps a full copy of every symbol definition the project uses, with the library it
 /// came from, so a project opens without that library. It keeps format 3's wire geometry.
 const FORMAT: &str = "pcbcraft-project/4";
+/// Single-document watermark encoding; versions 5 through 7 identify split-document forms.
+const WATERMARK_FORMAT: &str = "pcbcraft-project/8";
 /// Format 3 added free wire endpoints, junctions and authored bends; it opens through
 /// [`migrate_to_4`].
 const FORMAT_3: &str = "pcbcraft-project/3";
@@ -102,6 +104,8 @@ struct Document {
     format: String,
     id: Uuid,
     name: String,
+    #[serde(default, deserialize_with = "present")]
+    numeric_id_high_water: Option<u64>,
     /// One saved copy per definition the components use: a symbol file plus its `library`.
     symbol_definitions: Vec<serde_json::Value>,
     components: Vec<ComponentRecord<'static>>,
@@ -344,6 +348,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
         format: FORMAT.to_owned(),
         id: document.id,
         name: document.name,
+        numeric_id_high_water: None,
         symbol_definitions,
         components,
         sheet: document.sheet,
@@ -393,7 +398,8 @@ impl From<WireEndpoint> for Endpoint<'static> {
     }
 }
 
-/// Encode legacy format 4 as deterministic JSON for migration fixtures and diagnostic tools.
+/// Encode deterministic single-document JSON for migration fixtures and diagnostic tools.
+/// Legacy snapshots retain format 4; adopted allocation metadata requires format 8.
 /// Configured boards are refused. Normal saves use [`encode_documents`] or [`encode_packed`].
 pub fn encode(project: Arc<Project>) -> Result<Vec<u8>, String> {
     let mut encoder = Encoder::new(project)?;
@@ -425,9 +431,9 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    /// Begin incremental legacy encoding after rejecting unsupported document features. Metadata,
-    /// text appearance, setup, physical definitions, silkscreen, outlines, layer drawings and
-    /// rotation require split documents or an archive; refuse lossy export.
+    /// Begin incremental single-document encoding after rejecting unsupported document features.
+    /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
+    /// drawings and rotation require split documents or an archive; refuse lossy export.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if project.components.values().any(|c| !c.metadata.is_empty())
             || project.sheets.iter().any(|s| s.symbols.iter().any(|s| !s.field_layout.is_empty()))
@@ -454,8 +460,12 @@ impl Encoder {
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
         let mut bytes = Vec::new();
-        write!(bytes, "{{\n  \"format\": \"{FORMAT}\",\n  \"id\": \"{}\",\n  \"name\": {name},\n  \"symbol_definitions\": [\n", project.id)
-            .map_err(|error| error.to_string())?;
+        let format = if project.numeric_id_high_water.is_some() { WATERMARK_FORMAT } else { FORMAT };
+        write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {name},\n", project.id).map_err(|error| error.to_string())?;
+        if let Some(high_water) = project.numeric_id_high_water {
+            writeln!(bytes, "  \"numeric_id_high_water\": {high_water},").map_err(|error| error.to_string())?;
+        }
+        bytes.extend_from_slice(b"  \"symbol_definitions\": [\n");
         Ok(Self {
             project,
             bytes,
@@ -616,7 +626,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     }
     let header: Header = serde_json::from_slice(bytes).map_err(|error| format!("invalid project JSON: {error}"))?;
     let (document, upgraded_from) = match header.format.as_str() {
-        FORMAT => (serde_json::from_slice::<Document>(bytes).map_err(|error| format!("invalid project JSON: {error}"))?, None),
+        FORMAT | WATERMARK_FORMAT => (serde_json::from_slice::<Document>(bytes).map_err(|error| format!("invalid project JSON: {error}"))?, None),
         FORMAT_2 | FORMAT_3 => {
             let version = if header.format == FORMAT_2 { 2 } else { 3 };
             let document = serde_json::from_slice(bytes).map_err(|error| format!("invalid format {version} project: {error}"))?;
@@ -629,7 +639,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         format => return Err(format!("unsupported project format {format}")),
     };
     if document.components.iter().any(|c| c.metadata.is_some()) || document.sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
-        return Err("component fields and text appearance require split project/sheet formats 7/4".into());
+        return Err("component fields and text appearance require split project/sheet formats 11/4".into());
     }
     if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.rotation != 0 || f.library.is_some())) {
         return Err("physical footprints and rotation require split board format 5 or 4 respectively".to_owned());
@@ -654,9 +664,12 @@ fn validate_with_hierarchy(
     anchors: &BTreeSet<WireEndpoint>,
     hierarchy_ids: &BTreeSet<u64>,
 ) -> Result<Arc<Project>, String> {
-    let Document { format, id, name, symbol_definitions, components: records, sheet, board } = document;
-    if format != FORMAT {
+    let Document { format, id, name, numeric_id_high_water, symbol_definitions, components: records, sheet, board } = document;
+    if format != FORMAT && format != WATERMARK_FORMAT {
         return Err(format!("unsupported project format {format}"));
+    }
+    if (format == WATERMARK_FORMAT) != numeric_id_high_water.is_some() {
+        return Err("numeric ID watermark requires project format 8".into());
     }
     if id.is_nil() || sheet.id.is_nil() || id == sheet.id {
         return Err("invalid project or sheet identity".to_owned());
@@ -853,8 +866,9 @@ fn validate_with_hierarchy(
         }
     }
 
-    Ok(Arc::new(Project {
+    let project = Arc::new(Project {
         id,
+        numeric_id_high_water,
         sheets: Arc::new(vec![crate::sheets::SchematicSheet {
             sheet_id: sheet.id,
             sheet_name: "Main".to_owned(),
@@ -873,7 +887,19 @@ fn validate_with_hierarchy(
         board: Arc::new(layout),
         named_graph: Arc::default(),
         upgraded_from,
-    }))
+    });
+    validate_watermark(&project)?;
+    Ok(project)
+}
+
+/// Validate allocation metadata after all current numeric identities have been resolved.
+fn validate_watermark(project: &Project) -> Result<(), String> {
+    if let Some(high_water) = project.numeric_id_high_water
+        && (high_water > MAX_OBJECT_ID || high_water < project.highest_id())
+    {
+        return Err("numeric ID watermark is out of range or below a retained object ID".into());
+    }
+    Ok(())
 }
 
 /// Require unique positive object IDs with room for subsequent runtime revisions.

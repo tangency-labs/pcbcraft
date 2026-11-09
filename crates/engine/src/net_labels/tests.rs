@@ -75,7 +75,7 @@ fn power_bar_keeps_its_drawing_and_global_name() {
     assert_eq!(reopened.for_sheet(other).unwrap().net_labels()[0].style, Style::PowerBar);
     assert_eq!(persistence::encode_documents(reopened).unwrap(), documents);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
     s.apply("edit.redo", &Value::Null).unwrap();
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), documents);
     assert!(crate::command(ADD).unwrap().to_json()["params"]["properties"]["style"]["enum"].as_array().unwrap().contains(&json!("power_bar")));
@@ -112,8 +112,8 @@ fn wire_contacts_and_moving_pins_rebuild_named_connectivity() {
     assert_eq!(s.project().unwrap().connectivity().nets.len(), n - 1);
 }
 
-/// Format 3 is required only for sheets with named anchors. Old sheets/entry point/board stay
-/// byte-identical, records round-trip in folders/archives, and single-file exports refuse loss.
+/// Format 3 is required only for sheets with named anchors. Allocation changes the entry-point
+/// watermark and the owning sheet; other documents stay identical and archives round-trip.
 #[test]
 fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
     let mut s = session();
@@ -124,7 +124,7 @@ fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
     apply(&mut s, ADD, json!({"sheet":main.id(),"name":"GND","style":"ground","x_nm":0,"y_nm":0,"rotation":90}));
     let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let path = format!("sheets/{}.json", main.id());
-    assert_eq!(docs.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, _)| k).collect::<Vec<_>>(), vec![&path]);
+    assert_eq!(docs.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["project.pc", &path]);
     assert!(String::from_utf8(docs[&path].clone()).unwrap().contains("pcbcraft-sheet/3"));
     let reopened = persistence::decode_documents(&docs).unwrap();
     assert_eq!(persistence::encode_documents(reopened.clone()).unwrap(), docs);
@@ -274,7 +274,7 @@ fn remote_alias_bridge_merges_local_groups_and_preserves_names() {
     let doc = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(persistence::decode_documents(&doc).unwrap().connectivity().net_for(a).unwrap(), &[a, b]);
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&old, &s.snapshot().unwrap()));
+    crate::assert_same_content(&old, &s.snapshot().unwrap());
 }
 
 /// Named labels share hierarchical interfaces by name only within that interface's own sheet.
