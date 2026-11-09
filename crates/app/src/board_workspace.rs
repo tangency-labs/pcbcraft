@@ -295,6 +295,15 @@ impl PcbApp {
                 active: false,
                 toggle: false,
             },
+            RibbonTool {
+                icon: ToolIcon::Mirror,
+                label: "Flip",
+                description: "Flip footprint to the other side",
+                shortcut: "F",
+                enabled: selected || editing,
+                active: false,
+                toggle: false,
+            },
         ];
         let delete = RibbonTool {
             icon: ToolIcon::Delete,
@@ -309,7 +318,8 @@ impl PcbApp {
         {
             Some(0) => self.views.active.board.move_requested = true,
             Some(1) => self.views.active.board.rotate_requested = 90,
-            Some(2) => self.delete_board_items(),
+            Some(2) => self.views.active.board.flip_requested = true,
+            Some(3) => self.delete_board_items(),
             _ => {}
         }
         workspace::ribbon_separator(ui);
@@ -634,7 +644,8 @@ impl PcbApp {
                     &serde_json::json!({
                         "board": target.board, "footprint": draft.footprint,
                         "x_nm": draft.position.x_nm, "y_nm": draft.position.y_nm,
-                        "rotation": draft.rotation, "expected_revision": draft.source.revision,
+                        "rotation": draft.rotation, "side": if draft.bottom { "back" } else { "front" },
+                        "expected_revision": draft.source.revision,
                     }),
                 );
             }

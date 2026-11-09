@@ -38,7 +38,8 @@ impl Session {
         Ok(())
     }
 
-    /// Validate revision, identity and transform before replacing a board snapshot. Mapping,
+    /// Validate revision, identity and transform before replacing a board snapshot. An optional
+    /// `side` (front or back) places the footprint on that side; omitted keeps its side. Mapping,
     /// component identity and schematic geometry are retained; unchanged input creates no history.
     pub(crate) fn set_footprint_transform(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -54,10 +55,16 @@ impl Session {
         footprint.x_nm = params["x_nm"].as_i64().unwrap_or_default();
         footprint.y_nm = params["y_nm"].as_i64().unwrap_or_default();
         footprint.rotation = params["rotation"].as_u64().unwrap_or_default() as u16;
+        match params.get("side").and_then(Value::as_str) {
+            None => {}
+            Some("front") => footprint.bottom = false,
+            Some("back") => footprint.bottom = true,
+            Some(_) => return Err(CommandError::InvalidParams("side must be front or back".to_owned())),
+        }
         if !footprint.valid() {
             return Err(CommandError::InvalidParams("invalid footprint transform".to_owned()));
         }
-        if (current.x_nm, current.y_nm, current.rotation) == (footprint.x_nm, footprint.y_nm, footprint.rotation) {
+        if (current.x_nm, current.y_nm, current.rotation, current.bottom) == (footprint.x_nm, footprint.y_nm, footprint.rotation, footprint.bottom) {
             return Ok(());
         }
         let mut project = project.clone();

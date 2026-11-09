@@ -47,9 +47,10 @@ pub enum CopperLayers {
 }
 
 impl CopperLayers {
-    /// Resolve library copper binding in physical stack order. Component-side lands currently
-    /// use the documented front-side placement compatibility rule; all-copper lands span the stack.
-    pub(crate) fn resolve(setup: Option<&super::setup::BoardSetup>, binding: super::definition::CopperBinding) -> Self {
+    /// Resolve library copper binding in physical stack order. Component-side lands use the
+    /// front copper of a top-side placement and the back copper of a bottom-side one;
+    /// all-copper lands span the stack.
+    pub(crate) fn resolve(setup: Option<&super::setup::BoardSetup>, binding: super::definition::CopperBinding, bottom: bool) -> Self {
         use super::{
             definition::CopperBinding,
             setup::{Side, Stratum},
@@ -61,7 +62,8 @@ impl CopperLayers {
             .iter()
             .filter_map(|stratum| {
                 let Stratum::Copper { layer, .. } = stratum else { return None };
-                (binding == CopperBinding::AllCopper || setup.layers().iter().any(|record| record.id == *layer && record.side == Some(Side::Front)))
+                let side = if bottom { Side::Back } else { Side::Front };
+                (binding == CopperBinding::AllCopper || setup.layers().iter().any(|record| record.id == *layer && record.side == Some(side)))
                     .then_some(*layer)
             })
             .collect();
@@ -91,6 +93,8 @@ pub struct PadView {
 #[derive(Clone, Debug)]
 pub struct GraphicView {
     pub purpose: super::definition::GraphicPurpose,
+    /// The board side whose technical layer holds this graphic: the placement's side.
+    pub side: super::setup::Side,
     pub points: Vec<Point>,
     pub stroke_nm: Option<i64>,
     pub closed: bool,
@@ -113,6 +117,8 @@ pub struct FootprintView<'a> {
     pub physical_reference: bool,
     /// The accepted source was removed from the schematic; physical removal is pending.
     pub pending_removal: bool,
+    /// Placed on the bottom side, mirrored and on the back layers.
+    pub bottom: bool,
 }
 
 impl Project {
@@ -232,7 +238,7 @@ impl<'a> BoardView<'a> {
                             number: pad.as_str().to_owned(),
                             center,
                             copper,
-                            copper_layers: definition.map(|pad| CopperLayers::resolve(self.setup(), pad.copper)),
+                            copper_layers: definition.map(|pad| CopperLayers::resolve(self.setup(), pad.copper, footprint.bottom)),
                             shape: definition.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
                             corner_radius_nm: definition.map_or(0, |p| p.corner_radius_nm),
                             drill_nm: definition.and_then(|p| p.drill_nm),
@@ -244,6 +250,7 @@ impl<'a> BoardView<'a> {
                 graphics: graphics(self.project, footprint, reference),
                 physical_reference: self.project.board.definition_for(footprint).is_some_and(|d| d.reference.is_some()),
                 pending_removal: !self.project.component_is_board_eligible(footprint.component),
+                bottom: footprint.bottom,
             })
         })
     }
@@ -296,11 +303,13 @@ fn net_label(project: &Project, terminal: crate::schematic::Terminal) -> Option<
 fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) -> Vec<GraphicView> {
     let Some(definition) = project.board.definition_for(footprint) else { return Vec::new() };
     let style = project.board.silkscreen.unwrap_or_default();
+    let side = if footprint.bottom { super::setup::Side::Back } else { super::setup::Side::Front };
     let mut result: Vec<_> = definition
         .graphics
         .iter()
         .map(|g| GraphicView {
             purpose: g.purpose,
+            side,
             points: rectangle_points(footprint, g.center, g.width_nm, g.height_nm, g.rotation).to_vec(),
             stroke_nm: None,
             closed: true,
@@ -318,6 +327,7 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
                 let style = super::silkscreen::Settings { stroke_width_nm: artwork.graphic.stroke_nm, ..style };
                 result.extend(super::silkscreen::clipped(vec![points], &definition.pads, style).into_iter().map(|path| GraphicView {
                     purpose: artwork.purpose,
+                    side,
                     points: path.into_iter().map(|p| footprint.point(p)).collect(),
                     stroke_nm: Some(artwork.graphic.stroke_nm),
                     closed: false,
@@ -325,6 +335,7 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
             } else {
                 result.push(GraphicView {
                     purpose: artwork.purpose,
+                    side,
                     points: points.into_iter().map(|p| footprint.point(p)).collect(),
                     stroke_nm: Some(artwork.graphic.stroke_nm),
                     closed: artwork.graphic.closed(),
@@ -361,6 +372,7 @@ fn graphics(project: &Project, footprint: &super::Footprint, reference: &str) ->
     }
     result.extend(super::silkscreen::clipped(paths, &definition.pads, style).into_iter().map(|path| GraphicView {
         purpose: super::definition::GraphicPurpose::Silkscreen,
+        side,
         points: path.into_iter().map(|point| footprint.point(point)).collect(),
         stroke_nm: Some(style.stroke_width_nm),
         closed: false,

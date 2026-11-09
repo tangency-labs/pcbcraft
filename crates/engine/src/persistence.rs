@@ -292,6 +292,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
                 rotation: 0,
                 library: None,
                 mapping: None,
+                bottom: false,
             })
             .collect(),
     });
@@ -464,10 +465,10 @@ impl Encoder {
             || !project.board.vias.is_empty()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
-            || project.board.footprints().iter().any(|f| f.rotation != 0)
+            || project.board.footprints().iter().any(|f| f.rotation != 0 || f.bottom)
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias or footprint rotation; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation or bottom-side footprints; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;

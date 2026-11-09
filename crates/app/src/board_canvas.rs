@@ -22,6 +22,8 @@ pub(super) struct Draft {
     pub(super) footprint: String,
     pub(super) position: Point,
     pub(super) rotation: u16,
+    /// The side the footprint will be on; F flips it.
+    pub(super) bottom: bool,
     origin: Point,
     anchor: Point,
     drag: bool,
@@ -203,6 +205,7 @@ pub(super) fn show(
     let moving = std::mem::take(&mut state.move_requested);
     let rotation = camera.model_rotation(std::mem::take(&mut state.rotate_requested));
     let rotating = rotation != 0;
+    let flipping = std::mem::take(&mut state.flip_requested);
     let cancelled = enabled && ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary));
     if cancelled {
         state.draft = None;
@@ -243,7 +246,7 @@ pub(super) fn show(
         {
             let picked = if drag_start {
                 ui.input(|i| i.pointer.press_origin()).and_then(hit)
-            } else if moving || rotating {
+            } else if moving || rotating || flipping {
                 hovered.or_else(|| (state.selection.len() == 1).then(|| footprints.iter().find(|f| state.selection.contains(&f.id))).flatten())
             } else {
                 None
@@ -263,18 +266,24 @@ pub(super) fn show(
                     origin: footprint.position,
                     anchor,
                     rotation: footprint.rotation,
+                    bottom: footprint.bottom,
                     drag: drag_start,
                 };
                 if moving || drag_start {
                     state.draft = Some(draft);
                 } else if rotating {
                     out.edit = Some(Draft { rotation: (draft.rotation + rotation) % 360, ..draft });
+                } else if flipping {
+                    out.edit = Some(Draft { bottom: !draft.bottom, ..draft });
                 }
             }
         }
         if let Some(draft) = &mut state.draft {
             if rotating {
                 draft.rotation = (draft.rotation + rotation) % 360;
+            }
+            if flipping {
+                draft.bottom = !draft.bottom;
             }
             if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
                 let pointer = camera.unsnapped(pointer, rect);
@@ -294,7 +303,7 @@ pub(super) fn show(
             } else if draft.drag && !ui.input(|i| i.pointer.primary_down()) {
                 state.draft = None;
             }
-        } else if !moving && !rotating && response.clicked() {
+        } else if !moving && !rotating && !flipping && response.clicked() {
             let mut selection = if modifiers.shift || modifiers.ctrl || modifiers.command { state.selection.clone() } else { BTreeSet::new() };
             if let Some(footprint) = hovered {
                 if (modifiers.ctrl || modifiers.command) && selection.contains(&footprint.id) {
@@ -323,7 +332,7 @@ pub(super) fn show(
             let at = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {
                 let point = match draft {
                     Some((draft, footprint)) if endpoint.footprint == footprint.id => {
-                        preview_point(endpoint.position, footprint.position, footprint.rotation, draft)
+                        preview_point(endpoint.position, footprint.position, footprint.rotation, footprint.bottom, draft)
                     }
                     _ => endpoint.position,
                 };
@@ -519,23 +528,35 @@ fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egu
 
 /// Transform resolved pad offsets only for painting; pad identities and authored snapshots stay intact.
 fn preview(footprint: &mut FootprintView<'_>, draft: &Draft) {
-    let transform = |point| preview_point(point, footprint.position, footprint.rotation, draft);
+    let transform = |point| preview_point(point, footprint.position, footprint.rotation, footprint.bottom, draft);
     for pad in &mut footprint.pads {
         pad.center = transform(pad.center);
         pad.copper = pad.copper.map(|points| points.map(transform));
     }
     for graphic in &mut footprint.graphics {
         graphic.points = graphic.points.iter().copied().map(transform).collect();
+        if draft.bottom != footprint.bottom {
+            graphic.side = if draft.bottom { Side::Back } else { Side::Front };
+        }
     }
     footprint.position = draft.position;
     footprint.rotation = draft.rotation;
+    footprint.bottom = draft.bottom;
 }
 
-/// Match the footprint's disposable move/quarter-turn preview without changing pad identity.
-fn preview_point(point: Point, origin: Point, rotation: u16, draft: &Draft) -> Point {
-    let turns = ((draft.rotation + 360 - rotation) % 360 / 90) as u8;
-    let (x, y) = rotate(point.x_nm - origin.x_nm, point.y_nm - origin.y_nm, turns);
+/// Match the footprint's disposable move/quarter-turn/flip preview without changing pad
+/// identity: undo the current rotation, mirror local X when the side changes, then apply the
+/// draft's rotation at its position. Same-side moves reduce to one combined rotation.
+fn preview_point(point: Point, origin: Point, rotation: u16, bottom: bool, draft: &Draft) -> Point {
+    let (x, y) = repose(point.x_nm - origin.x_nm, point.y_nm - origin.y_nm, (rotation, bottom), (draft.rotation, draft.bottom));
     Point { x_nm: draft.position.x_nm.saturating_add(x), y_nm: draft.position.y_nm.saturating_add(y) }
+}
+
+/// Move an offset from one quarter-turn pose (rotation, bottom) to another about the origin.
+fn repose(x: i64, y: i64, from: (u16, bool), to: (u16, bool)) -> (i64, i64) {
+    let (x, y) = rotate(x, y, ((360 - from.0 % 360) % 360 / 90) as u8);
+    let x = if from.1 != to.1 { -x } else { x };
+    rotate(x, y, (to.0 % 360 / 90) as u8)
 }
 
 /// Project physical geometry without deriving dimensions or copper membership from UI state.
@@ -595,14 +616,16 @@ fn drawing(
                 GraphicPurpose::Silkscreen => (LayerPurpose::Silkscreen, board::GraphicStyle::Silkscreen),
                 GraphicPurpose::Courtyard => (LayerPurpose::Courtyard, board::GraphicStyle::Courtyard),
             };
-            appearance.technical(project, purpose, state.active_layer.as_deref(), &state.hidden_layers).map(|color| board::GraphicDrawing {
-                points: graphic.points.iter().map(|p| camera.screen(*p, rect)).collect(),
-                style,
-                color: Some(color),
-                closed: graphic.closed,
-                stroke_width: graphic
-                    .stroke_nm
-                    .map(|width| (camera.screen(Point { x_nm: width, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length()),
+            appearance.technical(project, purpose, graphic.side, state.active_layer.as_deref(), &state.hidden_layers).map(|color| {
+                board::GraphicDrawing {
+                    points: graphic.points.iter().map(|p| camera.screen(*p, rect)).collect(),
+                    style,
+                    color: Some(color),
+                    closed: graphic.closed,
+                    stroke_width: graphic.stroke_nm.map(|width| {
+                        (camera.screen(Point { x_nm: width, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length()
+                    }),
+                }
             })
         })
         .collect();
@@ -751,5 +774,20 @@ mod clipboard_geometry_tests {
         assert!(segment_in_box(a, b, egui::Rect::from_min_max(egui::pos2(4., 4.), egui::pos2(6., 6.))));
         assert!(segment_in_box(a, b, egui::Rect::from_min_max(egui::pos2(10., 10.), egui::pos2(12., 12.))));
         assert!(!segment_in_box(egui::pos2(0., 0.), egui::pos2(0., 10.), egui::Rect::from_min_max(egui::pos2(1., 0.), egui::pos2(2., 10.))));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A side change mirrors local X about the origin; same-side moves match one combined turn.
+    #[test]
+    fn repose_mirrors_on_flip_and_composes_turns() {
+        assert_eq!(repose(3, 1, (0, false), (0, true)), (-3, 1));
+        assert_eq!(repose(3, 1, (0, false), (90, false)), rotate(3, 1, 1));
+        assert_eq!(repose(3, 1, (90, false), (180, false)), rotate(3, 1, 1));
+        let there = repose(3, 1, (90, false), (90, true));
+        assert_eq!(repose(there.0, there.1, (90, true), (90, false)), (3, 1), "flipping back restores the offset");
     }
 }

@@ -120,6 +120,7 @@ enum ParamKind {
     TrackWidth,
     TrackIds,
     LayerChanges,
+    BoardSide,
     RuleLength,
     ViaDiameter,
     ViaDrill,
@@ -170,6 +171,7 @@ impl ParamKind {
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
             Self::LayerChanges => board::track::layer_changes_schema(),
+            Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
             Self::ViaDrill => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM,"maximum":board::track::MAX_VIA_DIAMETER_NM - 1}),
@@ -352,6 +354,8 @@ impl ParamKind {
             }
             Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
+            Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
+            Self::BoardSide => Err("must be front or back"),
             Self::LayerChanges => Err("must contain layer changes with a vertex index and a copper layer UUID"),
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
             Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
@@ -1247,8 +1251,8 @@ const CATALOG: &[Command] = &[
     },
     Command {
         id: SET_FOOTPRINT_TRANSFORM,
-        title: "Move or Rotate Footprint",
-        summary: "Set one footprint's center and counterclockwise orientation without changing its pad mapping. One undoable edit; unchanged values are a no-op.",
+        title: "Move, Rotate or Flip Footprint",
+        summary: "Set one footprint's center, counterclockwise orientation and optionally its board side without changing its pad mapping. One undoable edit; unchanged values are a no-op.",
         params: &[
             BOARD,
             Param { required: true, name: "footprint", summary: "Placed footprint ID from board inspection", kind: ParamKind::FootprintId },
@@ -1259,6 +1263,12 @@ const CATALOG: &[Command] = &[
                 name: "rotation",
                 summary: "Counterclockwise whole degrees from 0 through 359 around the footprint center",
                 kind: ParamKind::BoardRotation,
+            },
+            Param {
+                required: false,
+                name: "side",
+                summary: "front or back; a back footprint is mirrored and uses the back copper and technical layers. Omitted keeps the side",
+                kind: ParamKind::BoardSide,
             },
             EXPECTED_REVISION,
         ],

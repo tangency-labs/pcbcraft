@@ -176,6 +176,8 @@ pub(super) struct BoardState {
     pub(super) move_requested: bool,
     /// Counterclockwise degrees on screen; the board camera converts this intent to model space.
     pub(super) rotate_requested: u16,
+    /// F: flip the hovered or selected footprint, or the footprint being moved, to the other side.
+    pub(super) flip_requested: bool,
     pub(super) selection: std::collections::BTreeSet<String>,
     pub(super) hidden_layers: std::collections::BTreeSet<String>,
     pub(super) layer_defaults_applied: bool,
@@ -582,6 +584,7 @@ impl EditorView {
         self.board.box_drag = None;
         self.board.move_requested = false;
         self.board.rotate_requested = 0;
+        self.board.flip_requested = false;
         self.schematic.tool = None;
         self.schematic.wire_draft = Draft::default();
         self.schematic.rotate_requested = false;
