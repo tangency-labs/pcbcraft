@@ -1276,7 +1276,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: SET_FOOTPRINT_TRANSFORM,
         title: "Move, Rotate or Flip Footprint",
-        summary: "Set one footprint's center, counterclockwise orientation and optionally its board side without changing its pad mapping. One undoable edit; unchanged values are a no-op.",
+        summary: "Set one footprint's center, counterclockwise orientation and optionally its board side without changing its pad mapping. Track ends on its pads follow them; refused if the moved pads or tracks would join two nets. One undoable edit; unchanged values are a no-op.",
         params: &[
             BOARD,
             Param { required: true, name: "footprint", summary: "Placed footprint ID from board inspection", kind: ParamKind::FootprintId },
@@ -1539,7 +1539,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: ALIGN_FOOTPRINTS,
         title: "Align Footprints",
-        summary: "Align two or more footprints by their bounds (left, right, top, bottom, center_x, center_y) or distribute three or more with equal gaps to nanometer precision (distribute_x, distribute_y), in one undo step. Distribution keeps the physical outermost footprints and span fixed; overlapping selections that cannot retain those anchors are refused. Top is the smallest Y.",
+        summary: "Align two or more footprints by their bounds (left, right, top, bottom, center_x, center_y) or distribute three or more with equal gaps to nanometer precision (distribute_x, distribute_y), in one undo step. Distribution keeps the physical outermost footprints and span fixed; overlapping selections that cannot retain those anchors are refused. Track ends follow moving pads. Edits that join two nets are refused. Top is the smallest Y.",
         params: &[
             BOARD,
             EXPECTED_REVISION,

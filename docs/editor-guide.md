@@ -527,7 +527,11 @@ or a right-click cancels a move; releasing a drag over a panel also cancels it.
 The Layout ribbon offers **Move** and **Rotate** for a single selection, and
 Properties shows the saved position, rotation and side as editable fields. Moves snap the footprint origin to the
 view's grid, independently of grid visibility; each completed move and its
-preview rotations form one undo step. A conflicting edit, focus/workspace change
+preview rotations form one undo step. Routed tracks come along: each track end on one of
+the footprint's pads stays on that pad while the rest of the track stretches, in the
+preview and in the same undo step. A flip leaves an end behind when its SMD pad moves to
+the other side, and its airwire returns. A move, rotation, flip or alignment that would put
+a pad or a carried track onto another net's copper is refused, leaving the board unchanged. A conflicting edit, focus/workspace change
 or project reopen cancels the draft. The [starter footprints](footprint-library.md) include 0402/0603
 resistors and capacitors, 0402 LEDs, SOT-23 and a two-pin plated header, pinned
 into projects with explicit terminal mappings. New views hide fabrication and
@@ -642,9 +646,8 @@ archive was published but its directory sync failed.
 Press **Backtick** over a visible pad, track or via to highlight its net. Visible
 pads and tracks assigned to that net, along with its vias, are outlined in the
 highlight color, and the status bar names the net. Each copper island takes the
-net of its first netted pad; floating copper has none. If an island joins pads on
-different nets, including after a footprint
-move, its copper highlights only with that first net, while the pads retain their
+net of its first netted pad; floating copper has none. If an island already joins
+pads on different nets, its copper highlights only with that first net, while the pads retain their
 own nets. Press Backtick over empty space to clear it. Highlighting is per view
 and edits nothing.
 

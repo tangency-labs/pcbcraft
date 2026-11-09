@@ -1219,3 +1219,31 @@ fn d_keeps_t_junctions_attached() {
     assert_eq!(ends(&h, stub), (mm(4, 1), mm(5, 4)), "the stub's end follows the bus it meets");
     assert_eq!(h.state().session.revision(), revision + 2);
 }
+
+/// Moving a footprint with M carries the track on its pad: the placed move commits the footprint
+/// and the stretched track as one undo step, and undo restores both.
+#[test]
+fn footprint_moves_carry_routed_tracks() {
+    let mut h = routable();
+    let line = airwires(&h)[0].clone();
+    let (pad, owner) = (line.from.position, line.from.footprint.clone());
+    let free = Point { x_nm: pad.x_nm, y_nm: pad.y_nm + 2_540_000 };
+    let stub = add_track(&mut h, pad, free);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let position = h.state().session.project().unwrap().boards().next().unwrap().footprints().find(|f| f.id == owner).unwrap().position;
+    h.hover_at(at(&h, position));
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    assert!(h.state().views.active.board.draft.is_some());
+    let destination = at(&h, Point { x_nm: position.x_nm, y_nm: position.y_nm - 2_540_000 });
+    click_canvas_at(&mut h, destination);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1, "the footprint and its track move in one edit");
+    let track = tracks(&h).into_iter().find(|t| t.id == stub).unwrap();
+    assert_eq!((track.start, track.end), (Point { x_nm: pad.x_nm, y_nm: pad.y_nm - 2_540_000 }, free));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}

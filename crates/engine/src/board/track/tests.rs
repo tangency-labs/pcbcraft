@@ -311,8 +311,8 @@ fn a_route_can_end_on_a_via() {
     assert_eq!(view(&s).vias().iter().map(|via| via.at).collect::<Vec<_>>(), vec![end]);
 }
 
-/// A short made by another edit, here moving a footprint onto a track of another net, refuses
-/// only routes that touch that island. Unrelated routes still succeed.
+/// A short already on the board, here a footprint sitting on a track of another net as an older
+/// board could hold, refuses only routes that touch that island. Unrelated routes still succeed.
 #[test]
 fn an_existing_short_blocks_only_routes_into_it() {
     let mut s = routed_fixture();
@@ -324,15 +324,21 @@ fn an_existing_short_blocks_only_routes_into_it() {
     let target = view(&s).footprints().filter(|f| f.id != id).flat_map(|f| f.pads).find(|p| p.net.is_some() && p.net != moved_net).unwrap().center;
     let stub_end = Point { x_nm: target.x_nm, y_nm: target.y_nm + 3_000_000 };
     route(&mut s, front, &[target, stub_end]).unwrap();
-    // Move the first footprint so its first pad lands on the stub's free end.
+    // Put the first footprint's first pad on the stub's free end. Moves now refuse that short,
+    // so the board is edited directly, as an older board could already hold it.
     let offset = (moved.x_nm - position.x_nm, moved.y_nm - position.y_nm);
-    s.apply(
+    let refused = s.apply(
         crate::SET_FOOTPRINT_TRANSFORM,
         &json!({"footprint":id,"x_nm":stub_end.x_nm - offset.0,"y_nm":stub_end.y_nm - offset.1,
             "rotation":rotation,"expected_revision":s.revision()}),
-    )
-    .unwrap();
-    assert!(short(s.project().unwrap(), &view(&s).tracks().iter().map(|t| t.id).collect()).is_some(), "the move created a short");
+    );
+    assert!(refused.unwrap_err().to_string().contains("would connect nets"), "the move itself is refused");
+    let mut next = s.project().unwrap().clone();
+    let number = crate::schematic::wiring::parse_id(&id, "footprint-").unwrap();
+    let footprint = std::sync::Arc::make_mut(&mut next.board).footprints.iter_mut().find(|f| f.id == number).unwrap();
+    (footprint.x_nm, footprint.y_nm) = (stub_end.x_nm - offset.0, stub_end.y_nm - offset.1);
+    s.change(next);
+    assert!(short(s.project().unwrap(), &view(&s).tracks().iter().map(|t| t.id).collect()).is_some(), "the legacy placement creates a short");
     route(&mut s, front, &[Point { x_nm: 0, y_nm: 30_000_000 }, Point { x_nm: 5_000_000, y_nm: 30_000_000 }])
         .expect("an unrelated route is not blamed for an existing short");
     let error = route(&mut s, front, &[stub_end, Point { x_nm: stub_end.x_nm + 2_000_000, y_nm: stub_end.y_nm }]).unwrap_err().to_string();

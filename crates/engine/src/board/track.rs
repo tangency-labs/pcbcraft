@@ -185,6 +185,22 @@ impl<'a> BoardView<'a> {
         islands(&lands(self), self.tracks(), self.vias()).0
     }
 
+    /// Where routed copper would go if footprint `id` took the given pose: the tracks whose ends
+    /// ride on its pads, with those ends moved as `pcb.set_footprint_transform` would move them.
+    /// For previews only; nothing is checked or edited, and an unknown ID carries nothing.
+    pub fn carried_tracks(self, id: &str, position: Point, rotation: u16, bottom: bool) -> Vec<Track> {
+        let Some(number) = crate::schematic::wiring::parse_id(id, "footprint-").filter(|_| !self.tracks().is_empty()) else {
+            return Vec::new();
+        };
+        let mut next = self.project().clone();
+        let board = std::sync::Arc::make_mut(&mut next.board);
+        let Ok(index) = board.footprints.binary_search_by_key(&number, |f| f.id) else { return Vec::new() };
+        let footprint = &mut board.footprints[index];
+        (footprint.x_nm, footprint.y_nm, footprint.rotation, footprint.bottom) = (position.x_nm, position.y_nm, rotation, bottom);
+        let Some(after) = next.board_view(self.target) else { return Vec::new() };
+        carry(self, after, &BTreeSet::from([id.to_owned()]))
+    }
+
     /// The net each track and via carries: the net of the first pad in its copper island. Copper
     /// that reaches no netted pad is absent. Nets are derived, never stored on the copper.
     pub fn copper_nets(self) -> BTreeMap<Uuid, String> {
@@ -341,12 +357,12 @@ pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
 /// tracks or vias, if any. Islands without new copper are ignored, so a short made earlier by
 /// another edit (such as moving a footprint onto a track) does not block unrelated routes.
 fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> {
-    short_for_paste(project, added, &BTreeSet::new())
+    short_for_copper_edit(project, added, &BTreeSet::new())
 }
 
-/// Apply the existing copper-contact approximation to newly pasted tracks/vias and footprint
-/// lands. Unrelated pre-existing islands remain outside this operation's short check.
-pub(crate) fn short_for_paste(project: &Project, added: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> Option<(String, String)> {
+/// Check the islands touching edited tracks, vias or footprint lands for shorts.
+/// Unrelated pre-existing islands remain outside the check.
+pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> Option<(String, String)> {
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
     let (tracks, vias) = (view.tracks(), view.vias());
@@ -365,6 +381,88 @@ pub(crate) fn short_for_paste(project: &Project, added: &BTreeSet<Uuid>, footpri
         let first = nets.next()?;
         nets.find(|net| *net != first).map(|second| (first, second))
     })
+}
+
+/// Whether a track end, `half` its width in radius, overlaps a convex pad land.
+fn end_on_land(end: Point, half: f64, corners: &[Point; 4]) -> bool {
+    inside(end, corners) || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| point_distance(end, *a, *b) <= half)
+}
+
+/// Map `point` from one placement of a pad land to another, keeping its place relative to the
+/// land. The land's first corner and its two edges from there form the frame, so translation,
+/// rotation and mirroring all carry over.
+fn reframe(point: Point, from: &[Point; 4], to: &[Point; 4]) -> Point {
+    let axes = |c: &[Point; 4]| {
+        let o = (c[0].x_nm as f64, c[0].y_nm as f64);
+        (o, (c[1].x_nm as f64 - o.0, c[1].y_nm as f64 - o.1), (c[3].x_nm as f64 - o.0, c[3].y_nm as f64 - o.1))
+    };
+    let ((ox, oy), (ux, uy), (vx, vy)) = axes(from);
+    let det = ux * vy - uy * vx;
+    if det == 0. {
+        return point;
+    }
+    let (dx, dy) = (point.x_nm as f64 - ox, point.y_nm as f64 - oy);
+    let (u, v) = ((dx * vy - dy * vx) / det, (ux * dy - uy * dx) / det);
+    let ((ox, oy), (ux, uy), (vx, vy)) = axes(to);
+    Point { x_nm: (ox + u * ux + v * vx).round() as i64, y_nm: (oy + u * uy + v * vy).round() as i64 }
+}
+
+/// Tracks whose ends ride on pads of the `moved` footprints, by footprint ID, between `before`
+/// and `after` (the same board before and after those footprints moved). Each end that
+/// overlapped one of their pads on the track's layer keeps its place on that pad; the rest of
+/// the track stretches. An end whose pad no longer reaches the track's layer, such as an SMD
+/// pad flipped to the other side, stays where it was. Only tracks that change are returned.
+pub(super) fn carry(before: BoardView<'_>, after: BoardView<'_>, moved: &BTreeSet<String>) -> Vec<Track> {
+    let old: Vec<Land> = lands(before).into_iter().filter(|land| moved.contains(&land.key.0)).collect();
+    if old.is_empty() {
+        return Vec::new();
+    }
+    let new: BTreeMap<(String, String), Land> =
+        lands(after).into_iter().filter(|land| moved.contains(&land.key.0)).map(|land| (land.key.clone(), land)).collect();
+    let follow = |end: Point, track: &Track| {
+        let half = track.width_nm as f64 / 2.;
+        let Some(land) = old.iter().find(|land| land.layers.contains(&track.layer) && end_on_land(end, half, &land.corners)) else {
+            return end;
+        };
+        match new.get(&land.key) {
+            Some(moved) if moved.layers.contains(&track.layer) => reframe(end, &land.corners, &moved.corners),
+            _ => end,
+        }
+    };
+    before
+        .tracks()
+        .iter()
+        .filter_map(|track| {
+            let (start, end) = (follow(track.start, track), follow(track.end, track));
+            ((start, end) != (track.start, track.end)).then(|| Track { start, end, ..track.clone() })
+        })
+        .collect()
+}
+
+/// Bring routed copper along with the `moved` footprints (by footprint ID) of `next`, which
+/// differs from `before` only in their placements; see [`carry`]. Refuses the edit when a
+/// carried track would collapse or leave the coordinate range, or when the moved pads or the
+/// carried tracks would join two nets.
+pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSet<String>) -> Result<(), CommandError> {
+    let Some(target) = before.board_target() else { return Ok(()) };
+    let (Some(old), Some(new)) = (before.board_view(target), next.board_view(target)) else { return Ok(()) };
+    let carried = carry(old, new, moved);
+    for track in &carried {
+        track.validate().map_err(|_| CommandError::InvalidParams("this move would collapse or overextend an attached track".into()))?;
+    }
+    let added: BTreeSet<Uuid> = carried.iter().map(|track| track.id).collect();
+    if !carried.is_empty() {
+        let tracks = &mut std::sync::Arc::make_mut(&mut next.board).tracks;
+        for track in carried {
+            if let Ok(index) = tracks.binary_search_by_key(&track.id, |t| t.id) {
+                tracks[index] = track;
+            }
+        }
+    }
+    if let Some((a, b)) = short_for_copper_edit(next, &added, moved) {
+        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
+    }
+    Ok(())
 }
 
 /// Parse a JSON value into a typed parameter, reporting serde's message as invalid input.
