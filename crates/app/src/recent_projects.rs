@@ -5,28 +5,13 @@ use std::path::PathBuf;
 
 use crate::schematic_canvas::Thumbnail;
 use pcbcraft_chrome::preview::PreviewCache;
+use pcbcraft_storage::plain_path_if_equivalent;
 use serde::{Deserialize, Serialize};
 
 /// Match the family start page's bounded history, newest first.
 const MAX_RECENT: usize = 12;
 /// Bound settings parsing independently of the project loader.
 const MAX_SETTINGS_BYTES: usize = 256 * 1024;
-
-/// Return the plain `C:\…` spelling of a Windows `\\?\C:\…` path when Windows reads that spelling
-/// as the same path, and `path` unchanged otherwise (#154). `std::fs::canonicalize` produces the
-/// `\\?\` form, which people don't recognise. It stays where the plain spelling would name
-/// something else: device names such as `CON.pc.zip`, names ending in a dot or space, and very
-/// long paths. Paths on other platforms never carry the prefix and pass through unchanged.
-pub(crate) fn plain_path_if_equivalent(path: PathBuf) -> PathBuf {
-    let plain = dunce::simplified(&path);
-    // dunce looks only at the text before a name's last dot when it checks device names, so
-    // `CON.pc.zip` passes it. Windows' own parser (GetFullPathNameW, behind `std::path::absolute`)
-    // reads that name as `\\.\CON`, so the plain form is used only if the parser returns it as is.
-    if plain != path && std::path::absolute(plain).is_ok_and(|parsed| parsed == plain) {
-        return plain.to_path_buf();
-    }
-    path
-}
 
 /// Display metadata and the native target from the last successful open or save.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

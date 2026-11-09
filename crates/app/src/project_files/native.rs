@@ -293,7 +293,7 @@ fn normalize(path: &Path) -> Result<PathBuf, String> {
     let name = path.file_name().ok_or("Project file has no name")?;
     // Check the whole target, not just the parent: the file name decides whether the plain
     // spelling is safe.
-    fs::canonicalize(parent).map(|parent| crate::recent_projects::plain_path_if_equivalent(parent.join(name))).map_err(|error| error.to_string())
+    fs::canonicalize(parent).map(|parent| pcbcraft_storage::plain_path_if_equivalent(parent.join(name))).map_err(|error| error.to_string())
 }
 
 /// Read only regular files and enforce the size bound even if the file grows after opening.

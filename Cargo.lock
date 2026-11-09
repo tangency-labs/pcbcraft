@@ -2596,7 +2596,6 @@ version = "0.0.0"
 dependencies = [
  "craft-agents",
  "craft-control",
- "dunce",
  "eframe",
  "egui",
  "egui_kittest",
@@ -2661,6 +2660,7 @@ dependencies = [
 name = "pcbcraft-storage"
 version = "0.0.0"
 dependencies = [
+ "dunce",
  "pcbcraft-engine",
  "serde",
  "serde_json",
