@@ -12,6 +12,7 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 pub const MAX_DOCUMENTS: usize = 4096;
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
+const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
 const POWER_TEXT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
 const PROJECT_FORMAT: &str = "pcbcraft-project/6";
@@ -48,6 +49,8 @@ struct SheetReference {
 #[serde(deny_unknown_fields)]
 struct ProjectDocument {
     format: String,
+    #[serde(default, deserialize_with = "present")]
+    footprint_choices: Option<Vec<crate::board::assignment::Assignment>>,
     #[serde(default, deserialize_with = "present")]
     boards: Option<Vec<crate::board::identity::Registration>>,
     id: Uuid,
@@ -123,8 +126,10 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let registered = matches!(project.format.as_str(), OPTIONAL_BOARD_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT);
-    let fields = matches!(project.format.as_str(), FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT);
+    let registered =
+        matches!(project.format.as_str(), OPTIONAL_BOARD_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT);
+    let fields = matches!(project.format.as_str(), FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT);
+    let schematic_packages = project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT;
     if !matches!(
         project.format.as_str(),
         PROJECT_FORMAT
@@ -133,19 +138,30 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | OPTIONAL_BOARD_PROJECT_FORMAT
             | FIELDS_PROJECT_FORMAT
             | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
+            | SCHEMATIC_PACKAGES_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
+    if schematic_packages != project.footprint_choices.is_some()
+        || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
+        || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
+    {
+        return Err("project footprint choices require format 13, no board and a nonempty bounded list".into());
+    }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11 or 12".into());
+        return Err("component metadata requires project format 11, 12 or 13".into());
     }
     if matches!(
         project.format.as_str(),
-        WATERMARK_PROJECT_FORMAT | OPTIONAL_BOARD_PROJECT_FORMAT | FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
+        WATERMARK_PROJECT_FORMAT
+            | OPTIONAL_BOARD_PROJECT_FORMAT
+            | FIELDS_PROJECT_FORMAT
+            | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
+            | SCHEMATIC_PACKAGES_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11 or 12"));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12 or 13"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -206,6 +222,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         sheet_index: 0,
         components: Arc::default(),
         units: Arc::default(),
+        schematic_packages: Arc::default(),
         board: Arc::default(),
         named_graph: Arc::default(),
         upgraded_from: None,
@@ -402,6 +419,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         .iter()
         .filter_map(Footprint::key)
         .chain(board.assignments.iter().flatten().map(crate::board::assignment::Assignment::key))
+        .chain(project.footprint_choices.iter().flatten().map(crate::board::assignment::Assignment::key))
         .chain(board.baseline.iter().flat_map(crate::board::update::Baseline::package_keys))
     {
         {
@@ -425,6 +443,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let previous_format = project.format == PREVIOUS_PROJECT_FORMAT;
     let numeric_id_high_water = project.numeric_id_high_water;
+    let footprint_choices = project.footprint_choices;
     let document = Document {
         format: if project.boards.is_some() { super::OPTIONAL_BOARD_FORMAT } else { super::FORMAT }.to_owned(),
         boards: project.boards.clone(),
@@ -439,6 +458,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project = validate_with_hierarchy(document, None, footprint_definitions, &anchors, &hierarchy_ids)
         .map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
     let project_data = Arc::make_mut(&mut project);
+    if schematic_packages {
+        Arc::make_mut(&mut project_data.schematic_packages).definitions = std::mem::take(&mut Arc::make_mut(&mut project_data.board).definitions);
+    }
     project_data.numeric_id_high_water = numeric_id_high_water;
     let sheets = layouts
         .into_iter()
@@ -471,6 +493,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             return Err("board.json: duplicate, unresolved or incompatible footprint assignment".into());
         }
         Arc::make_mut(&mut project_data.board).assignments.insert(assignment.component, assignment);
+    }
+    for assignment in footprint_choices.into_iter().flatten() {
+        if !assignment.valid(project_data) || project_data.schematic_packages.assignments.contains_key(&assignment.component) {
+            return Err("project.pc: duplicate, unresolved or incompatible footprint choice".into());
+        }
+        Arc::make_mut(&mut project_data.schematic_packages).assignments.insert(assignment.component, assignment);
     }
     if let Some(mut graphics) = board.graphics {
         graphics.validate(project_data).map_err(|error| format!("board.json: {error}"))?;
@@ -599,11 +627,19 @@ impl DocumentsEncoder {
                         .collect::<Vec<_>>();
                     let registrations = p.board.ownership.records();
                     let has_metadata = p.components.values().any(|component| !component.metadata.is_empty());
-                    let format = match (registrations.is_some(), has_metadata) {
-                        (true, true) => OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT,
-                        (true, false) => OPTIONAL_BOARD_PROJECT_FORMAT,
-                        (false, true) => FIELDS_PROJECT_FORMAT,
-                        (false, false) => format,
+                    let has_packages = !p.schematic_packages.assignments.is_empty();
+                    if has_packages && (p.board_target().is_some() || p.numeric_id_high_water.is_none()) {
+                        return Err("schematic package choices require no board and an allocation watermark".into());
+                    }
+                    let format = if has_packages {
+                        SCHEMATIC_PACKAGES_PROJECT_FORMAT
+                    } else {
+                        match (registrations.is_some(), has_metadata) {
+                            (true, true) => OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT,
+                            (true, false) => OPTIONAL_BOARD_PROJECT_FORMAT,
+                            (false, true) => FIELDS_PROJECT_FORMAT,
+                            (false, false) => format,
+                        }
                     };
                     if has_metadata && p.numeric_id_high_water.is_none() {
                         return Err("component metadata requires an adopted numeric ID watermark".into());
@@ -640,9 +676,28 @@ impl DocumentsEncoder {
                             .insert((c.definition.library.clone(), c.definition.id.clone(), c.definition.revision()), c.definition.clone());
                         self.cursor = id;
                     } else {
-                        self.finish_document(ENTRY_POINT.to_owned())?;
-                        self.next();
-                        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+                        if self.project.schematic_packages.assignments.is_empty() {
+                            self.finish_project_document()?;
+                        } else {
+                            self.bytes.extend_from_slice(b"  ],\n  \"footprint_choices\": [\n");
+                            self.cursor = 0;
+                            self.first = true;
+                            self.phase = 14;
+                        }
+                    }
+                }
+                14 => {
+                    if let Some((&id, assignment)) =
+                        self.project.schematic_packages.assignments.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
+                    {
+                        record(&mut self.bytes, &mut self.first, assignment)?;
+                        let key = assignment.key();
+                        let definition =
+                            self.project.schematic_packages.definitions.get(&key).ok_or("unresolved schematic footprint choice during save")?;
+                        self.footprint_definitions.insert(key, Arc::clone(definition));
+                        self.cursor = id;
+                    } else {
+                        self.finish_project_document()?;
                     }
                 }
                 12 => {
@@ -808,6 +863,14 @@ impl DocumentsEncoder {
             }
         }
         Ok(None)
+    }
+
+    /// Finish the entry point after components and optional package choices, then start sheets.
+    fn finish_project_document(&mut self) -> Result<(), String> {
+        self.finish_document(ENTRY_POINT.to_owned())?;
+        self.next();
+        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        Ok(())
     }
 
     /// Advance to the next list and reset its ordering cursor and separator state.

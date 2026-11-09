@@ -11,7 +11,7 @@ fn new_schematic_has_no_board_or_physical_file() {
     assert_eq!(project.boards().count(), 0);
     assert_eq!(session.inspect()["project"]["boards"], json!([]));
     assert!(session.available(CREATE_BOARD));
-    assert!(!session.available(crate::ASSIGN_FOOTPRINT));
+    assert!(session.available(crate::ASSIGN_FOOTPRINT));
     let before = session.snapshot().unwrap();
     assert!(
         session
