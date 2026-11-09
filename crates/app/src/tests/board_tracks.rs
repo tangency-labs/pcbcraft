@@ -482,8 +482,11 @@ fn drc_lists_findings_focuses_them_and_goes_stale_after_edits() {
     assert!(h.query_by_label_contains("out of date").is_some());
     click(&mut h, "Run again");
     assert!(h.query_by_label_contains("out of date").is_none());
+    let board = h.state().views.active.board.target;
+    assert!(!h.state().views.active.board.drc.markers(board).is_empty(), "open findings mark the canvas");
     click(&mut h, "Close");
     assert!(h.query_by_label_contains("Unrouted connection").is_none());
+    assert!(h.state().views.active.board.drc.markers(board).is_empty(), "closing the card clears its markers");
 }
 /// Vias of different sizes show their sizes as "Mixed" and offer no field that would overwrite
 /// the other dimension; vias of one size stay editable.

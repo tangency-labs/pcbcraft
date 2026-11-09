@@ -568,8 +568,8 @@ exiting, click an edge to select it, drag a vertex to reshape it, drag a segment
 or press M to move the drawing, and Delete to remove it. These edits share project
 Undo; Fit and layer visibility include the edge geometry. A Board Outline layer is
 available independently of copper setup, including on older populated boards.
-Open paths remain valid editing state; no closure, clearance or manufacturing
-validation is implemented yet.
+Open paths remain valid editing state while you draw; **Layout → Inspect → DRC**
+reports a missing closed outline and copper outside it or too close to its edge.
 
 To route copper, select a copper layer such as **Top** and press **X** or use
 **Layout → Route → Track**. Set **Track width** beside it in the display units
@@ -616,8 +616,8 @@ item when you release a drag or press Enter. A move or resize whose copper would
 another net's pad is refused, leaving the board unchanged. The **Tracks** selection
 filter turns track picking off. Tracks stay on their layer, so a back-side track does
 not reach front-only SMD pads, while a via joins copper on every layer. Reshaping a
-route by dragging one segment, blind or buried vias, and clearance or DRC checks are
-not implemented yet. PgUp and PgDn still change layer by cancelling the route.
+route by dragging one segment and blind or buried vias are not implemented yet.
+Routing does not check clearance; run **Inspect → DRC** for that. PgUp and PgDn still change layer by cancelling the route.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

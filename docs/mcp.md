@@ -179,7 +179,7 @@ join pads on two different nets (the error names both). Only copper the new rout
 touches is checked, so a short left by an earlier edit does not block unrelated routes.
 Copper connects where it overlaps on a shared layer, a via joins the copper it overlaps
 on every layer, and the board ratsnest drops airwires between terminals already joined
-by tracks. This is not a clearance or DRC check.
+by tracks. Routing does not check clearance; use `pcb.check_design` for that.
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.

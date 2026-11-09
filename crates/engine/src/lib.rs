@@ -1989,9 +1989,7 @@ impl Session {
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
-            CHECK_DESIGN => {
-                self.check_design(params)?;
-            }
+            CHECK_DESIGN => self.validate_design_check(params)?,
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),

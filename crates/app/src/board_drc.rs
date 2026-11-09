@@ -81,11 +81,12 @@ impl Drc {
         }
     }
 
-    /// Marker positions for this board, with the focused finding flagged.
+    /// Marker positions for this board while the card is open, with the focused finding
+    /// flagged. A closed card draws no markers.
     pub(super) fn markers(&self, board: Option<BoardTarget>) -> Vec<(Point, bool)> {
         self.result
             .as_ref()
-            .filter(|ran| Some(ran.board) == board)
+            .filter(|ran| self.open && Some(ran.board) == board)
             .map(|ran| ran.report.violations.iter().enumerate().map(|(index, violation)| (violation.at, self.focus == Some(index))).collect())
             .unwrap_or_default()
     }

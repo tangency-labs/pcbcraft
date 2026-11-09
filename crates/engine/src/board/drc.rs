@@ -435,10 +435,22 @@ pub(crate) fn rules(params: &Value) -> Result<Rules, CommandError> {
 impl Session {
     /// Validate the board address and rules, then report findings without editing anything.
     pub fn check_design(&self, params: &Value) -> Result<Value, CommandError> {
+        let (view, rules) = self.design_check_inputs(params)?;
+        Ok(json!(view.check_design(rules)))
+    }
+
+    /// Refuse a design check's bad board address or rules without running the check, so the
+    /// shared command path validates once and only the response builds the report.
+    pub(crate) fn validate_design_check(&self, params: &Value) -> Result<(), CommandError> {
+        self.design_check_inputs(params).map(drop)
+    }
+
+    /// The board view and rule overrides a design check reads, with the check's errors.
+    fn design_check_inputs(&self, params: &Value) -> Result<(BoardView<'_>, Rules), CommandError> {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        Ok(json!(view.check_design(rules(params)?)))
+        Ok((view, rules(params)?))
     }
 }
 
