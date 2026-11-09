@@ -389,7 +389,7 @@ you can change any default before assigning. The report includes full mapping an
 Show filters control visibility while totals always count every warning/error.
 Turn off **Place new footprints after updating** to keep the updated report open
 and place later. **Copy report** includes all message categories.
-Cancel leaves an unapplied review unchanged, while board creation/current-state
+**Close** leaves an unapplied review unchanged, while board creation/current-state
 adoption remain separate edits. External changes or another client's preview
 require **Review again**; a reopened/replaced project requires a fresh dialog.
 

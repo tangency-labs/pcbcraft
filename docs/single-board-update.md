@@ -51,8 +51,8 @@ manufacturing check.
 
 External edits or a replaced preview still require **Review again**. Re-review
 stays within the same opening and original document; reopening or replacing the
-source requires a fresh dialog. Cancel cannot revoke another client's newer
-preview. A stale canvas group, focus loss or switching documents cancels the
+source requires a fresh dialog. Closing the dialog cannot revoke another client's
+newer preview. A stale canvas group, focus loss or switching documents cancels the
 disposable placement without changing authored geometry.
 
 `pcb.place_assigned_footprints` exposes the same atomic placement to live/headless
