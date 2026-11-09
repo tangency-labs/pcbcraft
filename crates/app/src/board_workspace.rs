@@ -473,12 +473,20 @@ impl PcbApp {
                 })
             })
             .inner;
-        if (pick.selection.is_some() || pick.edit.is_some() || pick.drawing_edit.is_some() || pick.track_edit.is_some() || pick.placement.is_some())
+        if (pick.selection.is_some()
+            || pick.track_selection.is_some()
+            || pick.edit.is_some()
+            || pick.drawing_edit.is_some()
+            || pick.track_edit.is_some()
+            || pick.placement.is_some())
             && enabled
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some(selection) = pick.selection {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
+            }
+            if let Some(tracks) = pick.track_selection {
+                self.views.active.board.tracks.selected = tracks;
             }
             if let Some(mut edit) = pick.drawing_edit
                 && self.views.active.accepts(edit.source, &self.session)

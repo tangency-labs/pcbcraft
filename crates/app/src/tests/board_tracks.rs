@@ -334,3 +334,122 @@ fn place_via_tool_drops_vias_until_escape() {
     h.run();
     assert_eq!(vias(&h).len(), 1, "undo removes only the last via");
 }
+
+/// Add a straight front track through the shared command and return its ID.
+fn add_track(h: &mut Harness<'_, PcbApp>, from: Point, to: Point) -> uuid::Uuid {
+    let top = layer_named(h, "Top");
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":[from, to],"expected_revision":revision}));
+    h.run();
+    tracks(h).into_iter().find(|track| track.start == from && track.end == to).unwrap().id
+}
+
+/// A left-to-right box selects tracks and vias it fully contains, without footprints outside it.
+#[test]
+fn box_selection_picks_tracks_and_vias() {
+    let mut h = routable();
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":5_080_000,"y_nm":-1_270_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    h.run();
+    let via = vias(&h)[0].id;
+    let (from, to) = (at(&h, Point { x_nm: 1_524_000, y_nm: -2_540_000 }), at(&h, Point { x_nm: 8_636_000, y_nm: 3_810_000 }));
+    h.hover_at(from);
+    h.run();
+    h.drag_at(from);
+    h.run();
+    h.hover_at(to);
+    h.run();
+    h.drop_at(to);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track, via]));
+    assert!(h.state().views.active.board.selection.is_empty(), "footprints outside the box stay unselected");
+}
+
+/// U selects every track joined to the hovered one, and nothing else.
+#[test]
+fn u_selects_connected_copper() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    let path = [Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 5_080_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 5_080_000 }];
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    h.run();
+    let separate = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: -2_540_000 }, Point { x_nm: 7_620_000, y_nm: -2_540_000 });
+    let joined: std::collections::BTreeSet<_> = tracks(&h).into_iter().map(|track| track.id).filter(|id| *id != separate).collect();
+    assert_eq!(joined.len(), 2);
+    h.hover_at(at(&h, Point { x_nm: 3_810_000, y_nm: 2_540_000 }));
+    h.run();
+    h.key_press(Key::U);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, joined);
+}
+
+/// With copper selected and no footprint selected, M then a click moves it by the snapped offset
+/// in one edit; dragging a track moves it too, and Esc cancels a move without editing.
+#[test]
+fn m_and_drag_move_selected_copper() {
+    let mut h = routable();
+    let start = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
+    let track = add_track(&mut h, start, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let middle = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, middle);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]));
+    let revision = h.state().session.revision();
+    h.hover_at(at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 }));
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    h.hover_at(at(&h, Point { x_nm: 5_080_000, y_nm: 3_810_000 }));
+    h.run();
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision, "Esc cancels the move");
+    h.key_press(Key::M);
+    h.run();
+    let target = at(&h, Point { x_nm: 6_350_000, y_nm: 1_270_000 });
+    click_canvas_at(&mut h, target);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1, "one edit per move");
+    let moved = tracks(&h).into_iter().find(|t| t.id == track).unwrap();
+    let after_m = moved.start;
+    assert_ne!(after_m, start, "M moved the track");
+
+    let grab = at(&h, Point { x_nm: (moved.start.x_nm + moved.end.x_nm) / 2, y_nm: moved.start.y_nm });
+    let drop = grab + egui::vec2(0., -60.);
+    h.hover_at(grab);
+    h.run();
+    h.drag_at(grab);
+    h.run();
+    h.hover_at(drop);
+    h.run();
+    h.drop_at(drop);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision + 2, "a drag is one more edit");
+    assert_ne!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().start, after_m, "the drag moved the track");
+}
+
+/// Properties shows a selected track's width in the display units (millimeters here); typing a
+/// new width and pressing Enter sets it through the shared command in one edit.
+#[test]
+fn properties_edit_the_selected_track_width() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let middle = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, middle);
+    assert!(h.query_by_label("Selected tracks").is_some());
+    let revision = h.state().session.revision();
+    h.get_by_label("Selected track width").click();
+    h.run();
+    h.get_by_label("Selected track width").type_text("0.4");
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_eq!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().width_nm, 400_000);
+}

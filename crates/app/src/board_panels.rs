@@ -74,6 +74,8 @@ impl PcbApp {
         if show_all || isolate {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
+        let unit = self.preferences.units;
+        let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
         let (properties, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
             host.with("properties"),
@@ -99,6 +101,9 @@ impl PcbApp {
                             &footprint.pads.len().to_string(),
                         );
                     }
+                    [] if !state.tracks.selected.is_empty() => {
+                        copper_edit = copper_properties(ui, target, &state.tracks.selected, unit);
+                    }
                     [] => {
                         property(ui, "Board", target.name());
                         property(ui, "Footprints", &target.footprints().count().to_string());
@@ -117,6 +122,12 @@ impl PcbApp {
         if collapse {
             state.properties_collapsed = !state.properties_collapsed;
         }
+        if let Some((command, mut params)) = copper_edit {
+            params["board"] = serde_json::json!(target.target.board);
+            params["expected_revision"] = serde_json::json!(self.session.revision());
+            self.run(command, &params);
+            self.repaint_editors(ui.ctx());
+        }
         if let Some(action) = pick {
             self.queue_view_action(ui.ctx(), view_id, crate::editor_windows::ViewAction::Browse(action));
         }
@@ -129,6 +140,85 @@ impl PcbApp {
         }
         ([browser, layers, properties], slots[crate::workspace_panels::FILTERS])
     }
+}
+
+/// Show the selected tracks and vias, with their width and via size editable in the display units.
+/// Returns at most one command, submitted when a field is released or confirmed; the caller adds
+/// the board and revision. Mixed values show the first item's value and apply to all of them.
+fn copper_properties(
+    ui: &mut Ui,
+    target: pcbcraft_engine::board::view::BoardView<'_>,
+    selected: &std::collections::BTreeSet<uuid::Uuid>,
+    unit: units::Unit,
+) -> Option<(&'static str, serde_json::Value)> {
+    use pcbcraft_engine::board::track::{MAX_VIA_DIAMETER_NM, MAX_WIDTH_NM, MIN_VIA_DRILL_NM, MIN_WIDTH_NM};
+    let tracks: Vec<_> = target.tracks().iter().filter(|track| selected.contains(&track.id)).collect();
+    let vias: Vec<_> = target.vias().iter().filter(|via| selected.contains(&via.id)).collect();
+    let salt = selected.iter().next().copied().unwrap_or_default();
+    let mut edit = None;
+    property(ui, "Selected tracks", &tracks.len().to_string());
+    property(ui, "Selected vias", &vias.len().to_string());
+    if let Some(first) = tracks.first() {
+        let layers = target.layers();
+        if tracks.iter().all(|track| track.layer == first.layer)
+            && let Some(layer) = layers.iter().find(|layer| layer.id == first.layer)
+        {
+            property(ui, "Layer", layer_name(layer, &layers));
+        }
+        ui.label("Width");
+        if let Some(width) = committed_length(ui, ("Selected track width", salt), first.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit) {
+            edit = Some((
+                pcbcraft_engine::SET_TRACK_WIDTH,
+                serde_json::json!({"tracks":tracks.iter().map(|t| t.id).collect::<Vec<_>>(),"width_nm":width}),
+            ));
+        }
+        ui.end_row();
+    }
+    if let Some(first) = vias.first() {
+        let ids: Vec<_> = vias.iter().map(|via| via.id).collect();
+        ui.label("Via pad");
+        if let Some(pad) = committed_length(ui, ("Selected via pad", salt), first.diameter_nm, MIN_VIA_DRILL_NM + 1..=MAX_VIA_DIAMETER_NM, unit) {
+            edit = Some((
+                pcbcraft_engine::SET_VIA_SIZE,
+                serde_json::json!({"vias":ids,"via_diameter_nm":pad,"via_drill_nm":first.drill_nm.min(pad - 1)}),
+            ));
+        }
+        ui.end_row();
+        ui.label("Via drill");
+        if let Some(drill) = committed_length(ui, ("Selected via drill", salt), first.drill_nm, MIN_VIA_DRILL_NM..=first.diameter_nm - 1, unit) {
+            edit = Some((pcbcraft_engine::SET_VIA_SIZE, serde_json::json!({"vias":ids,"via_diameter_nm":first.diameter_nm,"via_drill_nm":drill})));
+        }
+        ui.end_row();
+    }
+    edit
+}
+
+/// A length field in the display units that keeps its draft while dragged or typed into and
+/// returns whole nanometers once, on release or confirmation, only when the value changed.
+/// The salt's name is the field's accessible label; its ID keeps drafts per selection.
+fn committed_length(ui: &mut Ui, salt: (&str, uuid::Uuid), model_nm: i64, range: std::ops::RangeInclusive<i64>, unit: units::Unit) -> Option<i64> {
+    let per_unit = match unit {
+        units::Unit::Mm => units::NM_PER_MM,
+        units::Unit::Mil => units::NM_PER_MIL,
+    } as f64;
+    let id = ui.id().with(salt);
+    let mut value = ui.data(|data| data.get_temp::<f64>(id)).unwrap_or(model_nm as f64 / per_unit);
+    let response = ui.add(
+        egui::DragValue::new(&mut value)
+            .range(*range.start() as f64 / per_unit..=*range.end() as f64 / per_unit)
+            .speed(if unit == units::Unit::Mm { 0.01 } else { 0.5 })
+            .max_decimals(3)
+            .suffix(format!(" {}", unit.symbol())),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, salt.0));
+    let commit = response.drag_stopped() || (response.changed() && !response.dragged());
+    if response.dragged() || response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, value));
+    } else {
+        ui.data_mut(|data| data.remove::<f64>(id));
+    }
+    let nm = ((value * per_unit).round() as i64).clamp(*range.start(), *range.end());
+    (commit && nm != model_nm).then_some(nm)
 }
 
 /// Show values supported by the model without inventing editable geometry or guessed dimensions.
