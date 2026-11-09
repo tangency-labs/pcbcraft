@@ -444,13 +444,21 @@ impl Baseline {
         self.components.get(&assignment.component).and_then(|component| component.package.as_ref()) == Some(&Package::from_assignment(assignment))
     }
 
-    /// Resolve a display name in the accepted graph. The fallback index is local
-    /// to this baseline and is never used as persistent electrical identity.
-    pub(crate) fn net_name(&self, component: u64, terminal: &str) -> Option<String> {
-        let terminal = TerminalKey { component, terminal: terminal.into() };
-        self.nets.iter().enumerate().find_map(|(index, net)| {
-            net.terminals.binary_search(&terminal).ok().map(|_| net.names.first().cloned().unwrap_or_else(|| format!("Net {}", index + 1)))
-        })
+    /// Build a snapshot-bound terminal lookup once for a presentation traversal.
+    /// Borrowed terminal keys stay local to the immutable baseline; public edits
+    /// to net records cannot leave a persistent derived cache stale.
+    pub(crate) fn terminal_net_index(&self) -> BTreeMap<(u64, &str), usize> {
+        self.nets
+            .iter()
+            .enumerate()
+            .flat_map(|(index, net)| net.terminals.iter().map(move |terminal| ((terminal.component, terminal.terminal.as_str()), index)))
+            .collect()
+    }
+
+    /// Resolve a display name by the traversal's accepted-net index. Its fallback
+    /// ordinal is local to this baseline, never persistent electrical identity.
+    pub(crate) fn net_name(&self, index: usize) -> Option<String> {
+        self.nets.get(index).map(|net| net.names.first().cloned().unwrap_or_else(|| format!("Net {}", index + 1)))
     }
 }
 

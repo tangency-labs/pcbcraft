@@ -165,6 +165,53 @@ fn accepted_pad_nets_do_not_follow_unreviewed_schematic_edits() {
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
 }
 
+/// A traversal indexes the exact accepted snapshot, including named, unnamed and
+/// absent memberships. A new accepted graph or source deletion cannot reuse an
+/// older index, while a partly consumed older iterator keeps its original names.
+#[test]
+fn accepted_pad_net_lookup_is_bound_to_each_lazy_snapshot_traversal() {
+    let mut session = initialized();
+    let mut project = session.project().unwrap().clone();
+    let ids: Vec<_> = project.components.keys().copied().collect();
+    let baseline = Arc::make_mut(Arc::make_mut(&mut project.board).baseline.as_mut().unwrap());
+    baseline.nets = vec![
+        NetState { terminals: vec![TerminalKey { component: ids[0], terminal: "1".into() }], names: vec!["RAIL".into(), "VCC".into()] },
+        NetState {
+            terminals: vec![TerminalKey { component: ids[0], terminal: "2".into() }, TerminalKey { component: ids[1], terminal: "1".into() }],
+            names: vec![],
+        },
+    ];
+    baseline.validate().unwrap();
+    let original = Arc::new(project);
+    let mut older_traversal = original.boards().next().unwrap().footprints();
+    let first = older_traversal.next().unwrap();
+    assert_eq!(first.pads.iter().map(|pad| pad.net.as_deref()).collect::<Vec<_>>(), vec![Some("RAIL"), Some("Net 2")]);
+
+    let mut changed = original.as_ref().clone();
+    let baseline = Arc::make_mut(Arc::make_mut(&mut changed.board).baseline.as_mut().unwrap());
+    baseline.nets[0].names = vec!["CHANGED".into()];
+    baseline.nets[1].names = vec!["REVIEWED".into()];
+    baseline.validate().unwrap();
+    let second = older_traversal.next().unwrap();
+    assert_eq!(second.pads.iter().map(|pad| pad.net.as_deref()).collect::<Vec<_>>(), vec![Some("Net 2"), None]);
+    assert!(older_traversal.next().is_none());
+
+    session.open_snapshot(Arc::new(changed));
+    let labels = |project: &Project| {
+        project.boards().next().unwrap().footprints().flat_map(|footprint| footprint.pads.into_iter().map(|pad| pad.net)).collect::<Vec<_>>()
+    };
+    let expected = vec![Some("CHANGED".into()), Some("REVIEWED".into()), Some("REVIEWED".into()), None];
+    assert_eq!(labels(session.project().unwrap()), expected);
+    let symbol = session.project().unwrap().symbols[0].id();
+    session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol,"expected_revision":session.revision()})).unwrap();
+    assert!(session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().pending_removal);
+    assert_eq!(labels(session.project().unwrap()), expected);
+    let restored = decode_documents(&encode_documents(session.snapshot().unwrap()).unwrap()).unwrap();
+    assert_eq!(labels(&restored), expected);
+    session.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(labels(session.project().unwrap()), expected);
+}
+
 /// Ordinary placement edits share immutable accepted history rather than copying
 /// its potentially large component/net records into every undo snapshot.
 #[test]

@@ -629,7 +629,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: sheets::DELETE_SHEET,
         title: "Delete Sheet",
-        summary: "Delete a sheet and its placements, wires and associated board footprints. Retain at least one sheet. Undoable.",
+        summary: "Delete a sheet, its placements and wires, and unused components. With an accepted baseline, retain their footprints pending review; otherwise remove them. Retain at least one sheet. Undoable.",
         params: &[sheets::SHEET, EXPECTED_REVISION],
     },
     Command { id: "project.rename", title: "Rename Project", summary: "Change the open project's name.", params: &[NAME] },
@@ -828,7 +828,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: DELETE_SYMBOL,
         title: "Delete Symbol",
-        summary: "Remove a symbol with the wires attached to it and its footprint. Undoable.",
+        summary: "Remove a symbol, its incident wires and unused component. With an accepted baseline, retain its footprint pending review; otherwise remove it. Undoable.",
         params: &[SYMBOL, EXPECTED_REVISION],
     },
     Command {
@@ -981,7 +981,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: DELETE_ITEMS,
         title: "Delete Selected Items",
-        summary: "Remove symbols, named-net anchors, selected and incident wires, and unused components/footprints. One undoable edit.",
+        summary: "Remove symbols, named-net anchors, selected and incident wires, and unused components. With an accepted baseline, retain their footprints pending review; otherwise remove them. One undoable edit.",
         params: &[ITEMS, EXPECTED_REVISION],
     },
     Command {

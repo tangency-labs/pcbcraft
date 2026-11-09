@@ -192,8 +192,11 @@ impl<'a> BoardView<'a> {
         self.project.board.silkscreen.unwrap_or_default()
     }
 
-    /// Resolve placements without assuming starter-definition geometry in a renderer.
+    /// Resolve placements lazily without assuming starter-definition geometry.
+    /// Accepted terminal membership is indexed once per traversal, rather than
+    /// scanning every net for every pad. The index borrows only this snapshot.
     pub fn footprints(self) -> impl Iterator<Item = FootprintView<'a>> {
+        let accepted = self.project.board.baseline.as_ref().map(|baseline| (baseline, baseline.terminal_net_index()));
         self.project.board.footprints().iter().filter_map(move |footprint| {
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
@@ -218,8 +221,10 @@ impl<'a> BoardView<'a> {
                         let definition = self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.as_str()));
                         let copper = definition.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
                         let terminal = footprint.component_pin(pad).and_then(|(component, pin)| self.project.component_terminal(component, pin));
-                        let net = if let Some(baseline) = &self.project.board.baseline {
-                            footprint.component_pin(pad).and_then(|(component, pin)| baseline.net_name(component, pin))
+                        let net = if let Some((baseline, index)) = &accepted {
+                            footprint
+                                .component_pin(pad)
+                                .and_then(|(component, pin)| index.get(&(component, pin)).and_then(|index| baseline.net_name(*index)))
                         } else {
                             terminal.and_then(|terminal| net_label(self.project, terminal))
                         };
