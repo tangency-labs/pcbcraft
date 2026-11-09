@@ -91,12 +91,46 @@ display's clipboard:
 ```sh
 cargo test --locked -p pcbcraft-app \
   clipboard::native_tests::native_clipboard_between_processes -- --ignored --exact --nocapture
+cargo test --locked -p pcbcraft-app \
+  clipboard::native_tests::native_board_clipboard_between_processes -- --ignored --exact --nocapture
 ```
+
+## PCB canvas
+
+The PCB canvas uses the same system clipboard keys and **Layout → Clipboard**
+menu. Its context menu also offers Copy, Cut, Paste, Paste Options, Duplicate and
+Delete. A directional marquee selects visible footprints, tracks, through vias
+and Board Outline graphics together; Shift adds and Ctrl/Command toggles.
+**Ctrl/Command+A** selects all visible supported categories. Hidden layers and
+selection filters constrain editing targets; correspondence highlights do not.
+Mixed Delete and Cut are one undo step and retain schematic components.
+
+Pasting copied footprints opens **PCB Paste Options**, where each source circuit
+has an explicit destination schematic sheet and independent schematic X/Y anchor.
+Suggested anchors leave a gap below existing sheet content. Paste duplicates
+linked schematic components and their physical packages together, retaining
+internal wiring and related native power annotations. References renumber by
+default; original references and net-name suffixes are available in the form.
+The destination must have no unrelated pending PCB update before duplication.
+
+Pasting a Cut fragment back onto its original project/board defaults to reusing
+compatible, unplaced components. It retains their references and current logical
+wiring. If reuse is no longer valid, the form retains the fragment and reports
+why; turn off **Reuse original unplaced components** to duplicate instead.
+Geometry-only paste needs no schematic destination. Ambiguous layer mappings
+open the form rather than guessing; existing setup is retained.
+
+Paste enters a physical cursor preview: **R** rotates the group, click places it,
+and **Esc** or right-click cancels. Pan and zoom remain local to the receiving
+pane. Focus, opening or revision changes, text entry and competing authored tools
+invalidate the preview. The form stays in its initiating native window. Original
+board coordinates can instead be applied directly from the form. A failed final
+copper or bounds check retains the preview for correction without a partial edit.
 
 ## PCB command contract
 
 The engine and MCP also support `pcb.copy`, `pcb.cut`, `pcb.paste` and
-`pcb.delete_items`. Canvas controls are added separately. Copy/Cut/Delete take
+`pcb.delete_items`. Copy/Cut/Delete take
 an explicit `board`, `expected_revision`, and `items`, whose optional arrays are
 `footprints` (canonical placement IDs), `drawings`, `tracks` and `vias` (UUIDs).
 Copy/Cut return portable `clipboard` text even with `inspect:false`; MCP does not

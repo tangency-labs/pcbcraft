@@ -168,7 +168,7 @@ fn late_clipboard_reads_do_not_retarget_after_a_competing_edit() {
     let text = copied_text(&mut h);
     h.run();
     let ctx = h.ctx.clone();
-    h.state_mut().request_schematic_clipboard(&ctx, false);
+    h.state_mut().request_clipboard(&ctx, false);
     h.state_mut().session.apply("project.rename", &json!({"name":"New revision"})).unwrap();
     h.run();
     let before = h.state().session.snapshot().unwrap();
@@ -200,7 +200,7 @@ fn pending_canvas_read_cannot_paste_native_json_into_a_dialog() {
     let text = copied_text(&mut h);
     h.run();
     let ctx = h.ctx.clone();
-    h.state_mut().request_schematic_clipboard(&ctx, false);
+    h.state_mut().request_clipboard(&ctx, false);
     h.state_mut().dialog = Dialog::Name { command: "project.rename", text: "Keep this draft".into(), error: None, focused: false };
     h.run();
     let before = h.state().session.snapshot().unwrap();
@@ -219,7 +219,7 @@ fn empty_clipboard_completion_clears_pending_options() {
     let text = copied_text(&mut h);
     h.run();
     let ctx = h.ctx.clone();
-    h.state_mut().request_schematic_clipboard(&ctx, true);
+    h.state_mut().request_clipboard(&ctx, true);
     h.event(Event::Paste(String::new()));
     h.run();
     assert!(h.state().clipboard_request.is_none());

@@ -12,6 +12,7 @@ mod arrangements;
 mod assistant;
 mod board_appearance;
 mod board_canvas;
+mod board_clipboard;
 mod board_drawing;
 mod board_drc;
 mod board_panels;
@@ -153,6 +154,7 @@ enum Dialog {
     None,
     LibrarySources,
     PasteOptions(Box<clipboard::Options>),
+    BoardPasteOptions(Box<board_clipboard::Options>),
     /// Asks for the name that `project.rename` takes.
     Name {
         command: &'static str,
@@ -1141,6 +1143,8 @@ impl PcbApp {
                 ui.label(dim(name));
                 if let Some(message) = message {
                     ui.label(shell::error(message));
+                } else if self.views.active.board.clipboard.active() {
+                    ui.label(dim("Paste · Click to place · R rotate · Esc cancel"));
                 } else if self.views.active.workspace == Workspace::Board && self.views.active.board.placement.is_some() {
                     ui.label(dim("Place footprints · Click to place · R rotate · Esc cancel"));
                 } else if self.views.active.workspace == Workspace::Board {
@@ -1149,7 +1153,7 @@ impl PcbApp {
                     if !empty {
                         ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
                     }
-                } else if self.views.active.schematic.clipboard.active() {
+                } else if self.views.active.schematic.clipboard.active() || self.views.active.board.clipboard.active() {
                     ui.label(dim("Paste · Click to place · R rotate · Esc cancel"));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
@@ -1570,7 +1574,7 @@ impl PcbApp {
         use schematic_canvas::ToolAction;
         match action {
             ToolAction::Copy | ToolAction::Cut => self.copy_schematic_clipboard(ctx, matches!(action, ToolAction::Cut)),
-            ToolAction::Paste | ToolAction::PasteOptions => self.request_schematic_clipboard(ctx, matches!(action, ToolAction::PasteOptions)),
+            ToolAction::Paste | ToolAction::PasteOptions => self.request_clipboard(ctx, matches!(action, ToolAction::PasteOptions)),
             ToolAction::Duplicate => self.duplicate_schematic_clipboard(),
             ToolAction::Symbols => self.parts.focus_search(),
             ToolAction::Wire => self.begin_wire(),
@@ -1672,7 +1676,7 @@ impl PcbApp {
         if self.clipboard_shortcuts(ctx, assistant_keys) {
             return;
         }
-        if self.views.active.schematic.clipboard.active() {
+        if self.views.active.schematic.clipboard.active() || self.views.active.board.clipboard.active() {
             return;
         }
         let pressed = |shortcut: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(shortcut));
@@ -1682,22 +1686,26 @@ impl PcbApp {
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
-                && !self.views.active.board.tracks.escape()
-                && !self.views.active.board.drawing.escape()
-                && self.views.active.board.draft.take().is_none()
-                && self.views.active.board.placement.take().is_none()
-                && self.views.active.board.box_drag.take().is_none()
+                && (!board_clipboard::busy(&self.views.active.board)
+                    || (!self.views.active.board.tracks.escape()
+                        && !self.views.active.board.drawing.escape()
+                        && self.views.active.board.draft.take().is_none()
+                        && self.views.active.board.placement.take().is_none()
+                        && self.views.active.board.box_drag.take().is_none()))
             {
-                self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);
+                self.select_board_items(Default::default());
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
-                if !self.views.active.board.tracks.selected.is_empty() {
+                if !board_clipboard::busy(&self.views.active.board) {
+                    self.delete_board_items();
+                } else if !self.views.active.board.tracks.selected.is_empty() {
                     self.views.active.board.tracks.delete_requested = true;
                 } else if self.views.active.board.drawing.selected.is_some() {
                     self.views.active.board.drawing.delete_requested = true;
-                } else {
-                    self.delete_board_footprints(ctx, self.views.active.id());
                 }
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) && !board_clipboard::busy(&self.views.active.board) {
+                self.select_all_board();
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::X)) {
                 self.start_route();
@@ -1914,6 +1922,7 @@ impl PcbApp {
             Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
             Dialog::PasteOptions(draft) => self.paste_options_dialog(ctx, draft),
+            Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
@@ -2215,7 +2224,11 @@ impl PcbApp {
             let _ = workspace;
         });
         self.integrated_titlebar = integrated;
-        let dialog_host = self.arrangement_dialog_host().or_else(|| self.paste_options_host()).unwrap_or(self.views.main);
+        let dialog_host = self
+            .arrangement_dialog_host()
+            .or_else(|| self.paste_options_host())
+            .or_else(|| self.board_paste_options_host())
+            .unwrap_or(self.views.main);
         if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
         } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {

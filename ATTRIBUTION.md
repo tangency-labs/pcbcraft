@@ -883,3 +883,12 @@ are original PCBcraft work using the existing native codecs, board update and
 copper contact model. Command-built tests use native bundled definitions. No
 external implementation, fixture, asset, dependency or saved-format change was
 introduced; the separate EDA importer/source boundary remains unchanged.
+
+## PCB clipboard presentation
+
+The view-owned PCB clipboard form/preview, mixed physical selection and shared
+platform routing are original PCBcraft work over the portable board engine
+contract, independent board renderer and existing Craft controls. Native
+regressions extend the existing two-process eframe clipboard harness; fixtures
+are created with shared commands. No dependency, external source, artwork,
+library data or native saved-format change was introduced.

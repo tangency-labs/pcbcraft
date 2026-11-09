@@ -31,6 +31,7 @@ struct Peer {
     app: PcbApp,
     root: PathBuf,
     sender: bool,
+    board: bool,
     frames: u64,
     requested: Option<u64>,
     started: Instant,
@@ -53,9 +54,14 @@ impl eframe::App for Peer {
                     self.app.views.active.schematic.selection.len(),
                     ui.input(|i| i.focused)
                 );
-                let id = self.app.session.project().unwrap().symbols()[0].id();
-                self.app.select(pcbcraft_engine::selection::Selection::one_symbol(id));
-                self.app.copy_schematic_clipboard(ui.ctx(), false);
+                if self.board {
+                    self.app.select_all_board();
+                    self.app.copy_board_clipboard(ui.ctx(), false);
+                } else {
+                    let id = self.app.session.project().unwrap().symbols()[0].id();
+                    self.app.select(pcbcraft_engine::selection::Selection::one_symbol(id));
+                    self.app.copy_schematic_clipboard(ui.ctx(), false);
+                }
                 self.requested = Some(self.frames);
                 println!("Sender queued OS clipboard output, status={:?}, outputs={}", self.app.message, ui.ctx().output(|o| o.commands.len()));
                 std::fs::write(self.root.join("ready"), b"ready").unwrap();
@@ -68,19 +74,31 @@ impl eframe::App for Peer {
         } else {
             if self.requested.is_none() && self.started.elapsed() > Duration::from_secs(3) && ui.input(|i| i.focused) {
                 println!("Receiver requesting native clipboard, focused={}", ui.input(|i| i.focused));
-                self.app.request_schematic_clipboard(ui.ctx(), false);
+                self.app.request_clipboard(ui.ctx(), false);
                 self.requested = Some(self.frames);
             }
-            if let Some(placement) = self.app.views.active.schematic.clipboard.paste.clone() {
+            let completed = if self.board {
+                self.app.finish_native_board_clipboard().unwrap()
+            } else if let Some(placement) = self.app.views.active.schematic.clipboard.paste.clone() {
                 self.app.commit_schematic_clipboard(&placement, Point { x_nm: 12_700_000, y_nm: 12_700_000 }).unwrap();
+                true
+            } else {
+                false
+            };
+            if completed {
                 assert_eq!(self.app.session.project().unwrap().symbols().len(), 1);
                 assert_eq!(self.app.session.project().unwrap().components().next().unwrap().reference(), "R1");
+                if self.board {
+                    let p = self.app.session.project().unwrap();
+                    assert_eq!(p.board_view(p.board_target().unwrap()).unwrap().footprints().count(), 1);
+                }
                 std::fs::write(self.root.join("done"), b"passed").unwrap();
                 self.passed.store(true, Ordering::SeqCst);
                 self.app.close_allowed = true;
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(true));
         if self.requested.is_none() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -99,17 +117,26 @@ fn native_clipboard_peer() -> eframe::Result {
     let _ = log::set_logger(&CLIPBOARD_LOGGER);
     log::set_max_level(log::LevelFilter::Trace);
     let sender = std::env::var("PCBCRAFT_CLIPBOARD_TEST_ROLE").unwrap() == "sender";
+    let board = std::env::var("PCBCRAFT_CLIPBOARD_TEST_EDITOR").is_ok_and(|s| s == "board");
     let passed = Arc::new(AtomicBool::new(false));
     let evidence = passed.clone();
     let mut app = PcbApp::default();
-    app.session.apply("project.new", &json!({"name":if sender {"Clipboard sender"}else{"Clipboard receiver"}})).unwrap();
+    app.session.apply("project.new", &json!({"name":if sender {"Clipboard sender"}else{"Clipboard receiver"},"create_board":board})).unwrap();
     if sender {
         app.session
             .apply(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}))
             .unwrap();
+        if board {
+            app.session.apply(pcbcraft_engine::PLACE_FOOTPRINT, &json!({"symbol":"symbol-2","definition":"resistor-0402","mapping":{"1":"2","2":"1"},"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()})).unwrap();
+        }
         let id = app.session.project().unwrap().symbols()[0].id();
         app.views.sync(&app.session);
         app.select(pcbcraft_engine::selection::Selection::one_symbol(id));
+    }
+    if board {
+        app.views.sync(&app.session);
+        let id = app.views.active.id();
+        app.views.switch_workspace(id, Workspace::Board, &app.session);
     }
     println!("Peer starting native window, sender={sender}");
     eframe::run_native(
@@ -124,7 +151,7 @@ fn native_clipboard_peer() -> eframe::Result {
         },
         Box::new(move |cc| {
             pcbcraft_chrome::fonts::install(&cc.egui_ctx);
-            Ok(Box::new(Peer { app, root: PathBuf::from(root), sender, frames: 0, requested: None, started: Instant::now(), passed }))
+            Ok(Box::new(Peer { app, root: PathBuf::from(root), sender, board, frames: 0, requested: None, started: Instant::now(), passed }))
         }),
     )?;
     assert!(evidence.load(Ordering::SeqCst), "native clipboard peer closed before verification");
@@ -136,6 +163,19 @@ fn native_clipboard_peer() -> eframe::Result {
 #[test]
 #[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated Wayland display"]
 fn native_clipboard_between_processes() {
+    exchange("schematic");
+}
+
+/// Exercise the same real OS boundary with linked PCB data between independent project instances.
+#[test]
+#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated Wayland display"]
+fn native_board_clipboard_between_processes() {
+    exchange("board");
+}
+
+/// Launch and bound two native peers using the selected editor's actual clipboard path.
+#[allow(clippy::panic)]
+fn exchange(editor: &str) {
     let root = tempfile::tempdir().unwrap();
     let exe = std::env::current_exe().unwrap();
     let launch = |role: &str| {
@@ -143,6 +183,7 @@ fn native_clipboard_between_processes() {
             .args(["--ignored", "--exact", "clipboard::native_tests::native_clipboard_peer", "--nocapture"])
             .env("PCBCRAFT_CLIPBOARD_TEST_ROOT", root.path())
             .env("PCBCRAFT_CLIPBOARD_TEST_ROLE", role)
+            .env("PCBCRAFT_CLIPBOARD_TEST_EDITOR", editor)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

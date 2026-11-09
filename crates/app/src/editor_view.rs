@@ -160,6 +160,7 @@ pub(super) struct SchematicState {
 /// New views hide fabrication/courtyard layers once setup exists; restores preserve user choices.
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
+    pub(super) clipboard: crate::board_clipboard::State,
     pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
@@ -567,6 +568,7 @@ impl EditorView {
     /// Drop unfinished gestures without altering selection or the document.
     pub(super) fn cancel_gesture(&mut self) {
         self.schematic.clipboard = crate::clipboard::State::default();
+        self.board.clipboard = crate::board_clipboard::State::default();
         self.board.drawing.cancel();
         self.board.tracks.cancel();
         self.board.draft = None;

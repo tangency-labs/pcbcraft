@@ -195,37 +195,6 @@ pub(super) fn copper_under(pointer: Pos2, camera: &Camera, rect: Rect, view: Boa
     copper_at(pointer, camera, rect, view, hidden).is_some()
 }
 
-/// Tracks and vias a selection box picks: a left-to-right window needs the whole item inside;
-/// a right-to-left crossing box needs any overlap. Hidden layers never contribute.
-pub(super) fn box_hits(window: Rect, crossing: bool, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>) -> BTreeSet<Uuid> {
-    let tracks = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).filter_map(|track| {
-        let half = width_px(camera, rect, track.width_nm) / 2.;
-        let (a, b) = (camera.screen(track.start, rect), camera.screen(track.end, rect));
-        let bounds = Rect::from_two_pos(a, b).expand(half);
-        let hit = if crossing {
-            window.intersects(bounds) && (window.contains(a) || window.contains(b) || segment_crosses(a, b, window))
-        } else {
-            window.contains_rect(bounds)
-        };
-        hit.then_some(track.id)
-    });
-    let vias = view.vias().iter().filter_map(|via| {
-        let bounds = Rect::from_center_size(camera.screen(via.at, rect), egui::Vec2::splat(width_px(camera, rect, via.diameter_nm)));
-        (if crossing { window.intersects(bounds) } else { window.contains_rect(bounds) }).then_some(via.id)
-    });
-    tracks.chain(vias).collect()
-}
-
-/// Whether a segment crosses any edge of a rectangle.
-fn segment_crosses(a: Pos2, b: Pos2, rect: Rect) -> bool {
-    let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
-    let cross = |o: Pos2, p: Pos2, q: Pos2| (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
-    corners
-        .iter()
-        .zip(corners.iter().cycle().skip(1))
-        .any(|(&c, &d)| cross(c, d, a).signum() * cross(c, d, b).signum() <= 0. && cross(a, b, c).signum() * cross(a, b, d).signum() <= 0.)
-}
-
 /// Every track and via sharing a copper island with any of `seeds`.
 fn connected(view: BoardView<'_>, seeds: &BTreeSet<Uuid>) -> BTreeSet<Uuid> {
     let copper = view.copper();
@@ -389,7 +358,8 @@ pub(super) fn interact(
     let rect = response.rect;
     let visible: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
     let vias = view.vias();
-    state.selected.retain(|id| visible.iter().any(|track| track.id == *id) || vias.iter().any(|via| via.id == *id));
+    let vias_visible = view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
+    state.selected.retain(|id| visible.iter().any(|track| track.id == *id) || vias_visible && vias.iter().any(|via| via.id == *id));
     if !enabled || state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active) {
         state.draft = None;
     }
