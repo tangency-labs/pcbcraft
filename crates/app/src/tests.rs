@@ -2078,3 +2078,7 @@ fn project_location_and_save_choices_fit_a_narrow_window() {
     click(&mut harness, "Cancel");
     assert!(!harness.state().files.busy());
 }
+
+// Compile the native integration predicate here so app tests exercise the shipped patch.
+#[path = "../../../vendor/eframe/src/native/canvas_shortcut.rs"]
+mod native_canvas_shortcut;

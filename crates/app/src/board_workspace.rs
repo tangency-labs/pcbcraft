@@ -184,13 +184,14 @@ impl PcbApp {
             active: false,
             toggle: false,
         }];
+        let via_shortcut = ui.ctx().format_shortcut(&crate::PLACE_VIA);
         let place = [
             place[0],
             RibbonTool {
                 icon: ToolIcon::Via,
                 label: "Via",
                 description: "Place vias",
-                shortcut: "Ctrl+Shift+V",
+                shortcut: &via_shortcut,
                 enabled: enabled && self.can_place_via() && !editing,
                 active: self.views.active.board.tracks.via_tool,
                 toggle: false,
@@ -400,7 +401,7 @@ impl PcbApp {
             .is_some_and(crate::board_tracks::can_place_via)
     }
 
-    /// Arm Place › Via (Ctrl+Shift+V) in the focused board view when the board has two copper
+    /// Arm Place › Via (Ctrl+Shift+X) in the focused board view when the board has two copper
     /// layers and no footprint transform is in progress. Drawing and route tools are dropped first.
     pub(super) fn start_via(&mut self) {
         if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() || !self.can_place_via() {

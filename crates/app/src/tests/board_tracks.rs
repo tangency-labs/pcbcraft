@@ -306,14 +306,14 @@ fn a_delete_pressed_while_track_input_is_disabled_never_deletes_later() {
     assert_eq!(tracks(&h).len(), 1, "the earlier Delete is not replayed once track input returns");
 }
 
-/// Ctrl+Shift+V arms Place › Via. Each click places one via, snapping to a nearby pad center,
+/// Ctrl+Shift+X arms Place › Via. Each click places one via, snapping to a nearby pad center,
 /// and the tool stays armed; Esc leaves it. Each via is its own undo step.
 #[test]
 fn place_via_tool_drops_vias_until_escape() {
     let mut h = routable();
     let pad = airwires(&h)[0].from.position;
     let free = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
-    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::V);
+    h.key_press_modifiers(Modifiers { ctrl: true, command: true, shift: true, ..Modifiers::NONE }, Key::X);
     h.run();
     assert!(h.state().views.active.board.tracks.via_tool);
     assert!(!h.get_by_label("Place vias").accesskit_node().is_disabled(), "Place › Via is a working button");

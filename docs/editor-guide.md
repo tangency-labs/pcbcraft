@@ -585,7 +585,7 @@ route, and a second Esc exits the tool. The whole route is one Undo step. When c
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
 To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
-**Ctrl+Shift+V**. Each click places one through via with the current pad and drill,
+**Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,
 snapping to a nearby pad center or track end on any copper layer, otherwise to the grid;
 the tool stays armed until Esc or right-click, and each via is its own undo step. A via
 that would join pads on two different nets is refused, as is a second via on the same
