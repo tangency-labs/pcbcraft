@@ -298,6 +298,44 @@ fn nested_accepted_package_mappings_reject_duplicate_json_keys() {
     assert!(decode_documents(&documents).is_err());
 }
 
+/// Historical terminals cannot contradict a live immutable symbol with the same
+/// exact identity. Distinct revisions and removed sources still retain their own
+/// independently validated terminal and physical package contracts.
+#[test]
+fn accepted_terminals_must_match_a_live_identical_symbol_revision() {
+    let mut session = initialized();
+    let id = session.project().unwrap().symbols[0].component;
+    let symbol = session.project().unwrap().symbols[0].id();
+    let corrupt = |mut documents: crate::persistence::Documents, different_revision: bool| {
+        let mut board: serde_json::Value = serde_json::from_slice(&documents["board.json"]).unwrap();
+        let historical = &mut board["baseline"]["components"][id.to_string()];
+        historical["terminals"] = json!(["X", "Y"]);
+        historical["package"]["mapping"] = json!({"X":"1","Y":"2"});
+        if different_revision {
+            historical["revision"] = json!(historical["revision"].as_u64().unwrap() + 1);
+        }
+        for footprint in board["footprints"].as_array_mut().unwrap() {
+            if footprint["component"] == id {
+                footprint["mapping"] = json!({"X":"1","Y":"2"});
+            }
+        }
+        // The independent assignment list is optional; accepted placements alone
+        // must not bypass the same-identity logical terminal invariant.
+        board.as_object_mut().unwrap().remove("assignments");
+        documents.insert("board.json".into(), serde_json::to_vec(&board).unwrap());
+        documents
+    };
+    let documents = encode_documents(session.snapshot().unwrap()).unwrap();
+    let same_revision = corrupt(documents.clone(), false);
+    assert!(decode_documents(&same_revision).unwrap_err().contains("same pinned symbol revision"));
+    assert!(decode_documents(&corrupt(documents, true)).is_ok());
+    session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol,"expected_revision":session.revision()})).unwrap();
+    let removed = corrupt(encode_documents(session.snapshot().unwrap()).unwrap(), false);
+    let restored = decode_documents(&removed).unwrap();
+    assert_eq!(restored.boards().next().unwrap().footprints().count(), 2);
+    assert!(!restored.components.contains_key(&id));
+}
+
 /// No monolithic version authorizes baseline records, even when the embedded
 /// history is otherwise valid; diagnostic encoding must also refuse losing it.
 #[test]

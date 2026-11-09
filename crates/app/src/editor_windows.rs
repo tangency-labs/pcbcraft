@@ -354,14 +354,17 @@ impl PcbApp {
         }
     }
 
-    /// Draw project dialogs once in their owner window (normally the main host). A fields
-    /// or package dialog temporarily binds its originating editor for revision validation. Sheet forms can change
+    /// Draw project dialogs once in their owner window (normally the main host). A fields,
+    /// marker or package dialog temporarily binds its originating editor for revision validation. Sheet forms can change
     /// the focused document, so they restore the host's resulting focus rather than its old slot.
     pub(super) fn project_dialogs(&mut self, ctx: &Context) {
         let previous = self.views.active.id();
         let sheet_form = matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_));
         match &self.dialog {
             Dialog::EditFields(edit) => {
+                self.views.bind(edit.source.view());
+            }
+            Dialog::NetLabel(edit) => {
                 self.views.bind(edit.source.view());
             }
             Dialog::Footprint(edit) => {

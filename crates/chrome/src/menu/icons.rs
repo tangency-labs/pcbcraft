@@ -12,6 +12,8 @@ pub enum MenuIcon {
     /// An empty PCB with an add mark for the Home start action.
     NewBoard,
     Open,
+    /// Open an HTTP(S) document or field link in the host browser.
+    ExternalLink,
     Save,
     Download,
     Rename,
@@ -62,6 +64,11 @@ impl MenuIcon {
             painter.add(Shape::mesh(mesh));
         };
         match self {
+            Self::ExternalLink => {
+                line(&[(13., 9.), (13., 14.), (2., 14.), (2., 3.), (7., 3.)], stroke);
+                line(&[(8., 2.), (14., 2.), (14., 8.)], stroke);
+                line(&[(7., 9.), (14., 2.)], stroke);
+            }
             Self::Home => {
                 // The roof and the walls either side of the door, so the doorway shows the surface.
                 filled(&[

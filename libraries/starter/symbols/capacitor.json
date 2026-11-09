@@ -1,10 +1,10 @@
 {
   "format": "pcbcraft-symbol/1",
   "id": "capacitor",
-  "revision": 2,
+  "revision": 3,
   "name": "Capacitor",
   "reference_prefix": "C",
-  "default_value": "100nF",
+  "default_value": "C",
   "terminals": [
     {"id": "1", "electrical_type": "passive"},
     {"id": "2", "electrical_type": "passive"}

@@ -608,10 +608,10 @@ mod tests {
         harness.run();
         harness.get_by_label("Collapse Divider");
         harness.get_by_label("Main");
-        assert!(harness.query_by_label("R1  1k").is_none(), "item lists start folded");
+        assert!(harness.query_by_label("R1  R").is_none(), "item lists start folded");
 
         click(&mut harness, "Expand Symbols");
-        click(&mut harness, "R2  1k");
+        click(&mut harness, "R2  R");
         assert_eq!(harness.state().views.active.schematic.selection.single_symbol(), Some("symbol-3"));
         assert_eq!(harness.state().views.active.schematic.selection.single_wire(), None);
 
@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(harness.state().session.revision(), 4);
 
         click(&mut harness, "Collapse Symbols");
-        assert!(harness.query_by_label("R2  1k").is_none());
+        assert!(harness.query_by_label("R2  R").is_none());
         harness.get_by_label("Net 1");
     }
 

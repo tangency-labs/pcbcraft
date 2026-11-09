@@ -52,8 +52,8 @@ does not confirm a durable write and does not clear the editor's dirty state.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.pc` | `pcbcraft-project/6`, `/7` or `/9` | Project UUID, name, ordered sheet list and shared components; version 7 adds the numeric allocation watermark; version 9 adds explicit zero-or-one board registration |
-| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1`, `/2` or `/3` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors |
+| `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11` or `/12` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, and version 12 combines metadata with explicit board registration |
+| `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
 | `board.json` | `pcbcraft-board/1` through `/11` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
@@ -77,24 +77,73 @@ Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
 intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
 Legacy snapshots retain version 6 until numeric allocation or retirement adopts
-the version-7 watermark, or an eligible physical edit persists the version-9
-board registration with that same compatibility ID. New projects start at version 9
-with no physical board, unless New PCB explicitly requests one. Sheet encodings
-remain sheet/1 for ordinary sheets, sheet/2 for
+the version-7 watermark, an eligible physical edit persists version-9 board
+registration with the same compatibility ID, or component metadata requires
+version 11. New projects start at version 9 with no physical board, unless New PCB
+explicitly requests one. Component metadata with explicit zero-or-one ownership
+uses version 12, which retains the watermark and registry; version 11 keeps legacy
+implicit ownership and rejects a `boards` record. Version 9 rejects component
+metadata rather than interpreting version-12 fields. Sheet encodings remain
+sheet/1 for ordinary sheets, sheet/2 for
 sheets with hierarchy records and sheet/3 for sheets with named anchors, retaining existing board encodings. An unchanged save preserves original version-5 document bytes, and
 editing another document preserves an unaffected entry point. Adding or renaming
 a sheet writes the version-6 entry point. Legacy single-file encoding refuses
-multiple or renamed sheets, hierarchical labels, child symbols and named net anchors rather than discarding them.
+multiple or renamed sheets, hierarchical labels, child symbols, named net anchors,
+component metadata and field appearance rather than discarding them.
+
+### Component fields and text appearance
+
+Project/11 and Project/12 add an optional non-null `metadata` object to each component and
+requires the numeric allocation watermark. A metadata edit upgrades a legacy
+project with a watermark covering its retained IDs; Undo may retain that
+allocation metadata while removing the component extension. Project/7 remains
+the allocation-only vocabulary and rejects component metadata. The new object
+contains `fields`, keyed by stable standard IDs (`datasheet`, `description`,
+`manufacturer`, `manufacturer_part_number`) or non-nil UUIDs for custom fields,
+and `attributes`. Each field has a display `name` and `value`; names are unique
+without case, nonblank and at most 64 characters, and values are single-line
+text of at most 2048 characters. Up to 64 optional fields are allowed. Attributes
+are booleans `do_not_populate`, `exclude_from_bom`, `exclude_from_board`,
+`exclude_from_simulation` and `exclude_from_position_files`. All default false.
+A component excluded from the board cannot receive a new placed footprint. An
+existing placement may remain under an accepted baseline pending reviewed removal;
+legacy boards without a baseline refuse that exclusion. Package
+assignment can remain pinned for later inclusion. Other flags retain authored
+intent for their respective future output/simulation consumers.
+
+Sheet/4 retains sheet/3's required `net_labels`, `labels` and `subsheets` arrays,
+even when empty. Each placement may add non-null `field_layout`, keyed by
+`reference`, `value` or an existing optional field ID. A layout stores `offset`
+(null for automatic placement, otherwise integer `x_nm`/`y_nm` in unrotated
+symbol space), `visible`, `show_name`, `rotation` (0/90/180/270), `align`
+(`start`/`middle`/`end`) and `height_nm` (0.1–10 mm). Offsets are bounded by
+the schematic center range. Manual offsets turn with the symbol; explicit text
+orientation is independent. Unspecified reference/value layouts retain legacy
+automatic rendering, and optional fields start hidden. Absent metadata/layout
+stays omitted, preserving older canonical document encodings. Older readers
+reject the project/11 or /12 and sheet/4 extensions instead of silently discarding data. Reference/value content
+edits stay in `project.pc`; label placement edits stay in the owning sheet.
+
+Sheet/5 extends sheet/4 with optional non-null `text` on each named anchor. It uses
+the same field-layout vocabulary and bounds. Offsets are relative to the electrical
+anchor in its unrotated space; the text angle is explicit and its height scales
+with zoom. Missing `text` preserves the automatic layout and old sheet encoding.
+Only sheets with authored net-name appearance use version 5; older readers reject
+that version. Appearance edits do not move contacts or alter net names.
 
 ### Named net records
 
 Sheet/3 extends sheet/2 with a required, non-null `net_labels` array, one record
 per line in stable object-ID order. Each record contains a project-unique `id`,
-case-sensitive `name`, `style` (`local`, `global`, `power` or `ground`), `at`
+case-sensitive `name`, `style` (`local`, `global`, `power`, `power_bar` or `ground`), `at`
 point in integer nanometers and `rotation` (0, 90, 180 or 270 counterclockwise).
 Names contain 1–200 characters without surrounding whitespace or controls; each
 sheet permits at most 256 named anchors. Ground/power markers are electrical
 annotations without component IDs, references or footprint assignments.
+`power` retains the arrow drawing; `power_bar` selects a flat horizontal bar with
+the same global-name semantics. The style persists independently of its editable
+net name. Builds predating `power_bar` reject that unknown style; existing styles
+and their encodings remain unchanged.
 
 An explicit wire endpoint `{"net_label":<id>}` refers only to an anchor owned by
 that sheet. A named anchor also contacts exact coincident pins and points on
@@ -108,8 +157,10 @@ global names preferred for display and lexical ordering within each scope.
 
 Sheets with named anchors use version 3; sheets without them retain version 1
 or 2 as appropriate. Earlier versions reject named-label fields, and the legacy
-single-file writer refuses named anchors rather than losing them. No project
-entry-point or board-list migration is introduced. Moving/renaming a label
+single-file writer refuses named anchors rather than losing them. Named-anchor
+records do not themselves change the entry-point registry; the independent
+single-board ownership slice adds the zero-or-one `boards` list in project/9
+and project/12. Moving/renaming a label
 changes only its record; an unchanged save retains all document bytes. Folder
 and packed-project validation rejects foreign endpoints, ID collisions, missing
 or null arrays, unknown fields/types and invalid text or geometry before adoption.
@@ -176,7 +227,9 @@ and legacy single-file encodings refuse it rather than lose orientation. Version
 material and mapping identities. Encoding uses versions 1–3 when no footprint is
 rotated, and legacy single-file export refuses rotated footprints. Moving changes
 only the affected footprint record; rotating can additionally change the board
-format header. Empty projects still have sheet and board documents.
+format header. Every project has its sheet documents. A new schematic-only
+project has no board document; an explicitly created PCB and legacy implicit-board
+projects retain `board.json`, even when no footprints are placed.
 
 Physical footprint references require board version 5. Each instance carries
 `library`, `definition`, `revision` and an explicit `mapping` from terminal ID to
@@ -240,7 +293,9 @@ The earlier local format 8 rectangle remains readable and byte-stable on no-op
 save. Its first actual geometry edit materializes a layer-addressed drawing in
 format 9. Versions 1–7 keep their encoding until new data is authored; they reject
 newer fields instead of silently discarding them. Legacy single-file export
-refuses edge graphics. This adds no persisted board list or multiboard migration.
+refuses edge graphics. Board document additions do not introduce a broader
+multiboard migration; the entry point separately records explicit zero-or-one
+ownership in project/9 or project/12.
 
 An unconfigured board without newer footprint, assignment, edge graphic, outline or silkscreen data
 retains version 1 and its existing encoding. Initializing setup uses version 2, whose required `setup` contains a `layers` catalog and a
@@ -295,7 +350,7 @@ reject explicit null. Before adoption, validation checks the entire project:
 component ownership and references, unit membership, wire endpoints, junction
 usage, footprint mappings, exact definition revisions and unused copies. Object
 IDs are unique across placements, junctions, wires and footprints; component IDs
-have their own namespace. Version 7 requires `numeric_id_high_water`, an integer
+have their own namespace. Versions 7, 9, 11 and 12 require `numeric_id_high_water`, an integer
 between zero and the maximum supported object ID and no smaller than any live
 numeric identity. Allocation reserves above that value and the runtime revision.
 The watermark includes retired IDs, does not decrease on undo/redo or restoration
@@ -310,9 +365,10 @@ watermark covering both prior and resulting retained IDs. Previously deleted IDs
 absent from legacy data cannot be recovered; non-reuse begins with adoption.
 The retained single-document encoder uses `pcbcraft-project/8` when a watermark
 is present on legacy ownership, or format 10 for explicit optional ownership;
-unadopted snapshots retain format 4. Formats 7–10 require the field and earlier
+unadopted snapshots retain format 4. Formats 7–12 require the field and earlier
 versions reject it, including explicit null values. Physical registration migration
-also adopts the watermark. This is
+also adopts the watermark. Component metadata and field appearance remain refused
+by single-document encoders. This is
 not a distributed allocator for concurrent branch additions, nor a reservation
 of IDs from discarded unsaved histories.
 A component without a placed unit is still refused.

@@ -329,19 +329,13 @@ fn footer_bar(ui: &mut Ui, width: f32, footer: Footer, action: &mut Action) {
     }
     let mut right = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)));
     right.spacing_mut().item_spacing.x = t.space_8;
-    let button = |text: &str, primary: bool| {
-        let label = RichText::new(text).size(t.font_label).color(if primary { t.form_primary } else { t.text });
-        let fill = if primary { t.selected_bg } else { t.panel_header };
-        let stroke = Stroke::new(1.0, if primary { t.form_primary } else { t.border });
-        egui::Button::new(label).fill(fill).stroke(stroke).corner_radius(t.radius_sm).min_size(vec2(t.space_24 * 3.0, t.control_height))
-    };
-    if right.add(button("OK", true)).clicked() {
+    if right.add(action_button("OK", true)).clicked() {
         *action = Action::Ok;
     }
-    if right.add_enabled(footer.apply_enabled, button("Apply", false)).clicked() {
+    if right.add_enabled(footer.apply_enabled, action_button("Apply", false)).clicked() {
         *action = Action::Apply;
     }
-    if right.add(button("Cancel", false)).clicked() {
+    if right.add(action_button("Cancel", false)).clicked() {
         *action = Action::Cancel;
     }
 }
@@ -391,7 +385,6 @@ pub fn heading(ui: &mut Ui, title: &str, description: &str) {
 /// A titled group of rows under a rule. While searching it shows only when its title, its page
 /// or one of its rows matches, and a title match shows every row in it.
 pub fn section(ui: &mut Ui, title: &str, mut add: impl FnMut(&mut Ui)) {
-    let t = Tokens::get();
     let active = with_search(ui, |search| !search.query.is_empty());
     if active {
         let section_hit = with_search(ui, |search| search.page_hit || matches(&search.query, title));
@@ -401,15 +394,33 @@ pub fn section(ui: &mut Ui, title: &str, mut add: impl FnMut(&mut Ui)) {
         }
         with_search(ui, |search| search.section_hit = section_hit);
     }
+    form_section(ui, title, |ui| add(ui));
+    with_search(ui, |search| search.section_hit = search.page_hit);
+}
+
+/// Draw the Preferences section treatment without search state or repeated probe calls.
+/// Object-property forms share its heading, rule and row rhythm while owning their own draft.
+pub fn form_section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let t = Tokens::get();
     ui.add_space(t.space_16);
     ui.label(RichText::new(title.to_uppercase()).font(fonts::semibold(t.font_small)).color(t.form_dim));
     let (rule, _) = ui.allocate_exact_size(vec2(ui.available_width(), t.space_6), Sense::hover());
-    ui.painter().hline(rule.x_range(), rule.center().y, Stroke::new(1.0, t.dialog_rule));
+    ui.painter().hline(rule.x_range(), rule.center().y, Stroke::new(1., t.dialog_rule));
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = t.space_8;
-        add(ui);
-    });
-    with_search(ui, |search| search.section_hit = search.page_hit);
+        add(ui)
+    })
+    .inner
+}
+
+/// Dialog actions share the Preferences palette, corner radius and minimum control size.
+pub fn action_button(label: &str, primary: bool) -> egui::Button<'_> {
+    let t = Tokens::get();
+    egui::Button::new(RichText::new(label).size(t.font_label).color(if primary { t.form_primary } else { t.text }))
+        .fill(if primary { t.selected_bg } else { t.panel_header })
+        .stroke(Stroke::new(1., if primary { t.form_primary } else { t.border }))
+        .corner_radius(t.radius_sm)
+        .min_size(vec2(t.space_24 * 3., t.control_height))
 }
 
 /// A label and its control. See [`row_with_keywords`].

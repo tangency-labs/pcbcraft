@@ -238,7 +238,7 @@ impl<'a> BoardView<'a> {
                     .collect(),
                 graphics: graphics(self.project, footprint, reference),
                 physical_reference: self.project.board.definition_for(footprint).is_some_and(|d| d.reference.is_some()),
-                pending_removal: component.is_none(),
+                pending_removal: !self.project.component_is_board_eligible(footprint.component),
             })
         })
     }

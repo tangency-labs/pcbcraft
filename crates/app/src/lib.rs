@@ -22,9 +22,11 @@ mod editor_layout;
 mod editor_view;
 mod editor_windows;
 mod editor_workspace;
+mod field_actions;
 mod footprint_assignment;
 mod hierarchy;
 mod home;
+mod inline_text;
 mod library_editors;
 mod library_preview;
 #[cfg(not(target_arch = "wasm32"))]
@@ -61,8 +63,6 @@ use pcbcraft_chrome::{
     shell::{self, dim},
     theme, units, workspace,
 };
-#[cfg(test)]
-use pcbcraft_engine::SET_SYMBOL_FIELDS;
 use pcbcraft_engine::selection::Selection;
 use pcbcraft_engine::{CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, Session, command, schematic::SymbolDefinition};
 use serde_json::{Value, json};
@@ -159,14 +159,14 @@ enum Dialog {
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
     Hierarchy(hierarchy::Edit),
-    NetLabel(net_labels::Edit),
+    NetLabel(Box<net_labels::Edit>),
     /// Chooses and pins a package independently of board placement.
-    Footprint(footprint_assignment::Edit),
+    Footprint(Box<footprint_assignment::Edit>),
     LayerColor(board_appearance::Edit),
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     /// Expanded selection properties retain their originating view and revision.
-    EditFields(properties::Edit),
+    EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
     LibraryClose(Option<u64>),
     LibraryProperties(u64, ViewId),
@@ -562,7 +562,7 @@ impl PcbApp {
             }
             SymbolAction::EditFields => {
                 if let Some(edit) = self.read_property_edit() {
-                    self.dialog = Dialog::EditFields(edit);
+                    self.dialog = Dialog::EditFields(Box::new(edit));
                 }
             }
         }
@@ -1107,10 +1107,12 @@ impl PcbApp {
                     ui.label(dim(format!("{reference} selected · R rotate · E edit fields · Del delete")));
                 } else if let Some(tool) = &self.views.active.schematic.tool {
                     ui.label(match tool {
+                        Tool::Field { .. } => dim("Move symbol field · Esc to cancel"),
                         Tool::SheetGesture { drag, .. } => {
                             dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
                         }
                         Tool::NetLabel { .. } => dim("Place net label · R to rotate · Esc to cancel"),
+                        Tool::NetLabelText { .. } => dim("Move net name · R to rotate · Esc to cancel"),
                         Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
@@ -1170,6 +1172,8 @@ impl PcbApp {
     /// gesture's starting revision to reject stale actions. M picks up the selected symbol or,
     /// without a selection, the hovered symbol for disconnected movement. Cancel clears only
     /// the local preview, and another active tool cannot be replaced by a queued shortcut.
+    /// R targets hovered field text before its body; D opens a component's saved datasheet
+    /// through the host without publishing an engineering edit.
     fn canvas(&mut self, ui: &mut Ui) {
         let snapshot = self.views.active.snapshot(&self.session);
         let label = if self.views.is_split() { format!("Schematic canvas {}", self.views.active.id().0 + 1) } else { "Schematic canvas".to_owned() };
@@ -1180,6 +1184,7 @@ impl PcbApp {
             && (IN_BROWSER || ui.input(|input| input.focused))
             && !self.home
             && !self.project_action_pending()
+            && self.views.active.schematic.text_edit.is_none()
             && matches!(self.dialog, Dialog::None)
             && !self.parts.is_modal()
             && !egui::Popup::is_any_open(ui.ctx());
@@ -1191,8 +1196,37 @@ impl PcbApp {
                     {
                         self.pointer_next = Some(point);
                     }
+                    let editing = std::mem::take(&mut self.views.active.schematic.edit_requested);
+                    if editing && input_enabled && self.views.active.schematic.tool.is_none() && self.views.active.filters.symbols {
+                        let rect = ui.available_rect_before_wrap();
+                        let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p));
+                        let field = pointer.and_then(|p| {
+                            snapshot.as_deref().and_then(|project| schematic_canvas::fields::at(ui, project, &self.views.active.camera, rect, p))
+                        });
+                        if let (Some(field), Some(source)) = (field, source) {
+                            self.begin_inline_text(source, inline_text::Target::Symbol { symbol: field.symbol, field: field.field });
+                        } else {
+                            let hovered = pointer
+                                .and_then(|p| {
+                                    snapshot.as_deref().and_then(|project| schematic_canvas::symbol_at(project, &self.views.active.camera, rect, p))
+                                })
+                                .map(|(symbol, _)| symbol.id());
+                            if let Some(symbol) = hovered.or_else(|| self.views.active.schematic.selection.single_symbol().map(str::to_owned)) {
+                                self.select(Selection::one_symbol(symbol));
+                                self.edit_selected(SymbolAction::EditFields);
+                            }
+                        }
+                    }
                     let moving = std::mem::take(&mut self.views.active.schematic.move_requested);
                     let rotating = std::mem::take(&mut self.views.active.schematic.rotate_requested);
+                    let datasheet = std::mem::take(&mut self.views.active.schematic.datasheet_requested);
+                    if datasheet
+                        && input_enabled
+                        && self.views.active.filters.symbols
+                        && let Some(project) = snapshot.as_deref()
+                    {
+                        self.open_datasheet(ui, project);
+                    }
                     if (moving || rotating)
                         && input_enabled
                         && self.views.active.schematic.tool.is_none()
@@ -1207,16 +1241,31 @@ impl PcbApp {
                                 .flatten()
                                 .map(|(symbol, _)| symbol.id())
                         });
-                        let selected = self.views.active.schematic.selection.single_symbol().map(str::to_owned);
-                        let target = if moving { selected.or(hovered) } else { hovered.or(selected) };
-                        if let Some(symbol) = target {
-                            self.select(Selection::one_symbol(symbol));
-                            self.edit_selected(if moving { SymbolAction::DisconnectMove } else { SymbolAction::Rotate });
+                        let field = if rotating {
+                            snapshot.as_deref().and_then(|project| {
+                                let pointer = ui.input(|i| i.pointer.hover_pos())?;
+                                rect.contains(pointer)
+                                    .then(|| schematic_canvas::fields::at(ui, project, &self.views.active.camera, rect, pointer))
+                                    .flatten()
+                            })
+                        } else {
+                            None
+                        };
+                        if let (Some(field), Some(source)) = (field, source) {
+                            self.view_click(source, Click::RotateField(field));
+                        } else {
+                            let selected = self.views.active.schematic.selection.single_symbol().map(str::to_owned);
+                            let target = if moving { selected.or(hovered) } else { hovered.or(selected) };
+                            if let Some(symbol) = target {
+                                self.select(Selection::one_symbol(symbol));
+                                self.edit_selected(if moving { SymbolAction::DisconnectMove } else { SymbolAction::Rotate });
+                            }
                         }
                     }
                     if let Some(project) = snapshot.as_deref() {
                         let highlight = self.views.highlight_for(self.views.active.id(), &self.session);
-                        return schematic_canvas::show(
+                        let edited = self.views.active.schematic.text_edit.as_ref().map(|edit| edit.target.clone());
+                        let click = schematic_canvas::show(
                             ui,
                             project,
                             self.session.revision(),
@@ -1234,7 +1283,10 @@ impl PcbApp {
                             self.preferences.auto_heal_wires,
                             &self.views.active.schematic.wire_draft,
                             &label,
+                            edited.as_ref(),
                         );
+                        self.show_inline_text(ui, project);
+                        return click;
                     }
                     let t = Tokens::get();
                     ui.centered_and_justified(|ui| {
@@ -1267,11 +1319,39 @@ impl PcbApp {
             return;
         }
         match (self.views.active.schematic.tool.clone(), click) {
-            (Some(Tool::NetLabel { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
-            (Some(Tool::NetLabel { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
+            (None, Click::GrabField(drag)) => {
+                self.select(Selection::one_symbol(drag.symbol.clone()));
+                self.views.active.schematic.tool = Some(Tool::Field { drag, revision: source.revision });
+            }
+            (None, Click::EditField(field)) => {
+                self.begin_inline_text(source, inline_text::Target::Symbol { symbol: field.symbol, field: field.field })
+            }
+            (None, Click::RotateField(drag)) => {
+                if let Some(layouts) = self.views.active.snapshot(&self.session).and_then(|p| schematic_canvas::fields::rotated(&p, &drag)) {
+                    self.select(Selection::one_symbol(drag.symbol.clone()));
+                    self.set_field_layout(&drag.symbol, layouts, source.revision);
+                }
+            }
+            (Some(Tool::Field { drag, revision }), Click::FinishField(layouts)) => {
+                self.views.active.schematic.tool = None;
+                if let Some(layouts) = layouts {
+                    self.set_field_layout(&drag.symbol, layouts, revision);
+                }
+            }
+            (Some(Tool::NetLabel { .. } | Tool::NetLabelText { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
+            (Some(Tool::NetLabel { .. } | Tool::NetLabelText { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
             (Some(Tool::NetLabel { mut label, revision, drag }), Click::NetLabelRotate) => {
                 label.rotation = (label.rotation + 90) % 360;
                 self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision, drag });
+            }
+            (Some(Tool::NetLabelText { mut label, revision, drag }), Click::NetLabelTextRotate) => {
+                let text = label.text.get_or_insert_default();
+                text.rotation = (text.rotation + 90) % 360;
+                self.views.active.schematic.tool = Some(Tool::NetLabelText { label, revision, drag });
+            }
+            (None, Click::NetLabelTextDrag(label, offset)) => {
+                self.select(Selection::one_net_label(label.id));
+                self.views.active.schematic.tool = Some(Tool::NetLabelText { label, revision: source.revision, drag: Some(offset) });
             }
             (None, Click::NetLabelDrag(label, offset)) => {
                 self.select(Selection::one_net_label(label.id));
@@ -1438,9 +1518,14 @@ impl PcbApp {
             return;
         }
         self.views.active.schematic.rotate_requested = false;
+        self.views.active.schematic.edit_requested = false;
+        self.views.active.schematic.datasheet_requested = false;
         self.views.active.schematic.move_requested = false;
         self.views.active.board.move_requested = false;
         self.views.active.board.rotate_requested = 0;
+        if self.views.active.schematic.text_edit.is_some() {
+            return;
+        }
         if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.take_panel_escape(ctx) {
             return;
         }
@@ -1591,19 +1676,20 @@ impl PcbApp {
             if !hierarchy_hovered && self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M)) {
                 self.views.active.schematic.move_requested = true;
             }
+            if self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::D)) {
+                self.views.active.schematic.datasheet_requested = true;
+            }
             if !hierarchy_hovered && pressed(&ROTATE) {
                 if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.schematic.tool {
                     *turns = (*turns + 1) % 4;
+                } else if let Some(Tool::Field { drag, .. }) = &mut self.views.active.schematic.tool {
+                    drag.rotation = (drag.rotation + 90) % 360;
                 } else if self.views.active.schematic.tool.is_none() {
                     self.views.active.schematic.rotate_requested = true;
                 }
             }
-            if !hierarchy_hovered
-                && self.views.active.schematic.tool.is_none()
-                && self.views.active.schematic.selection.single_symbol().is_some()
-                && pressed(&EDIT_FIELDS)
-            {
-                self.edit_selected(SymbolAction::EditFields);
+            if !hierarchy_hovered && self.views.active.schematic.tool.is_none() && pressed(&EDIT_FIELDS) {
+                self.views.active.schematic.edit_requested = true;
             }
             // Shift+N first: an unshifted pattern also matches a shifted key.
             if pressed(&COARSER_GRID) {
@@ -1694,16 +1780,16 @@ impl PcbApp {
                     self.dialog = Dialog::Name { command: id, text, error, focused };
                 }
             }
-            Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, edit),
+            Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, *edit),
             Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
-            Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, edit),
+            Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
-            Dialog::NetLabel(edit) => self.net_label_dialog(ctx, edit),
+            Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {
                 let mut selected = None;
@@ -2053,7 +2139,8 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
     list.push(("Schematic", "Drag wire segment", "G".to_owned()));
-    list.push(("Schematic", "Rotate the selected symbol", key(&ROTATE)));
+    list.push(("Schematic", "Rotate symbol or hovered field", key(&ROTATE)));
+    list.push(("Schematic", "Open component datasheet", "D".to_owned()));
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));

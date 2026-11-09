@@ -42,6 +42,48 @@ fn complete(files: &mut ProjectFiles, session: &mut Session, result: Result<Outc
     files.poll(session, &egui::Context::default())
 }
 
+/// Both desktop and CLI readers recognize legacy metadata format 11 and explicit-owner
+/// format 12 through a folder, its entry
+/// point or a packed archive, preserving the allocation watermark and unchanged saved bytes.
+#[test]
+fn component_metadata_opens_and_saves_through_every_native_entry_path() {
+    for explicit in [None, Some(false), Some(true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = match explicit {
+            None => session(),
+            Some(create_board) => {
+                let mut session = Session::default();
+                session.apply("project.new", &json!({"create_board":create_board})).unwrap();
+                apply(&mut session, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+                session
+            }
+        };
+        let mut metadata = pcbcraft_engine::schematic::fields::Metadata::default();
+        metadata.attributes.do_not_populate = true;
+        apply(&mut s, pcbcraft_engine::SET_SYMBOL_FIELDS, json!({"symbol":"symbol-2","reference":"R1","value":"1k","metadata":metadata}));
+        let snapshot = s.snapshot().unwrap();
+        let documents = encode_documents(snapshot.clone()).unwrap();
+        let entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], if explicit.is_some() { "pcbcraft-project/12" } else { "pcbcraft-project/11" });
+        let root = dir.path().join("metadata");
+        let archive = dir.path().join("metadata.pc.zip");
+        folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+        fs::write(&archive, encode_packed(snapshot).unwrap()).unwrap();
+        for path in [&root, &root.join(ENTRY_POINT), &archive] {
+            assert_eq!(encode_documents(folder::open(path).unwrap()).unwrap(), documents);
+            assert_eq!(encode_documents(folder::preview(path).unwrap()).unwrap(), documents);
+            let loaded = load(path).unwrap();
+            assert_eq!(encode_documents(loaded.snapshot.clone()).unwrap(), documents);
+            let before = if path == &archive { Some(fs::read(path).unwrap()) } else { None };
+            save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
+            assert_eq!(encode_documents(load(path).unwrap().snapshot).unwrap(), documents);
+            if let Some(before) = before {
+                assert_eq!(fs::read(path).unwrap(), before);
+            }
+        }
+    }
+}
+
 /// Initial Home stays visible through pending, cancelled and failed opens; a completed open
 /// enters the loaded schematic through the same file-result polling used by the real window.
 #[test]

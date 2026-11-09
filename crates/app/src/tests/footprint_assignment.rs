@@ -16,8 +16,12 @@ fn component_harness() -> Harness<'static, PcbApp> {
 /// Choose a package through the actual UI; every pad remains explicit rather than guessed.
 fn choose_resistor(h: &mut Harness<'_, PcbApp>) {
     click(h, "starter / Resistor 0402 (1005 metric) · r4");
+    h.get_by_label("Terminal 1").scroll_to_me();
+    h.run();
     click(h, "Terminal 1");
     click(h, "Pad 2");
+    h.get_by_label("Terminal 2").scroll_to_me();
+    h.run();
     click(h, "Terminal 2");
     click(h, "Pad 1");
 }
@@ -76,6 +80,12 @@ fn footprint_assignment_invalid_cancel_and_stale_dialog_preserve_state() {
     click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
     click(&mut h, "Assign");
     assert!(matches!(h.state().dialog, Dialog::Footprint(_)));
+    assert!(
+        h.output().shapes.iter().any(|clipped| matches!(&clipped.shape,
+        egui::Shape::Text(text) if (text.galley.job.text.contains("Map every terminal and pad exactly once") || text.galley.job.text.contains("must map terminal IDs to pad IDs"))
+            && clipped.clip_rect.contains_rect(text.visual_bounding_rect()))),
+        "mapping error must be visible after validation"
+    );
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     click(&mut h, "Close");
     h.state_mut().begin_footprint_assignment(None);
@@ -148,4 +158,161 @@ fn live_assignment_uses_modal_ownership_and_shared_history() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
     crate::tests::assert_same_content(&decode_documents(&assigned).unwrap(), &h.state().session.snapshot().unwrap());
+}
+
+/// Library, token search and physical filters narrow the list without changing the project.
+/// Preview navigation changes the rendered copper, while Fit restores its original framing.
+#[test]
+fn footprint_browser_filters_and_preview_leave_assignment_untouched() {
+    let mut h = component_harness();
+    h.set_size(egui::vec2(1440., 1000.));
+    h.state_mut().begin_footprint_assignment(None);
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "starter");
+    click(&mut h, "Search footprints");
+    h.get_by_label("Search footprints").type_text("resistor 0603");
+    h.run();
+    h.get_by_label("starter / Resistor 0603 (1608 metric) · r4");
+    assert!(h.query_by_label("starter / Resistor 0402 (1005 metric) · r4").is_none());
+    click(&mut h, "starter / Resistor 0603 (1608 metric) · r4");
+    let row = h.get_by_label("starter / Resistor 0603 (1608 metric) · r4").rect();
+    let rendered = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.job.text.starts_with("Resistor 0603 (1608 metric)\n") => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    assert!(rendered.pos.x - row.left() < 20., "result name must stay left aligned");
+    assert!(rendered.galley.job.sections[0].format.font_id.size > rendered.galley.job.sections[1].format.font_id.size);
+    let preview = h.get_by_label("Footprint preview").rect();
+    assert!(preview.width() >= 360. && preview.height() >= 300., "{preview:?}");
+    let copper_bounds = |h: &Harness<'_, PcbApp>| {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Path(path)
+                    if path.fill == pcbcraft_chrome::board::copper_color(Some(true)) && preview.contains(path.visual_bounding_rect().center()) =>
+                {
+                    Some(path.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .reduce(|a, b| a.union(b))
+            .expect("preview copper")
+    };
+    let fitted = copper_bounds(&h);
+    click(&mut h, "Zoom footprint preview in");
+    assert!((copper_bounds(&h).width() / fitted.width() - 1.25).abs() < 0.02);
+    let start = preview.center();
+    h.drag_at(start);
+    h.run();
+    h.hover_at(start + egui::vec2(25., 15.));
+    h.run();
+    h.drop_at(start + egui::vec2(25., 15.));
+    h.run();
+    assert!(copper_bounds(&h).center().distance(fitted.center()) > 20.);
+    click(&mut h, "Fit");
+    assert!(copper_bounds(&h).center().distance(fitted.center()) < 0.1);
+    assert!((copper_bounds(&h).width() - fitted.width()).abs() < 0.1);
+    click(&mut h, "Mounting type");
+    click(&mut h, "Through hole");
+    h.get_by_label("No footprints match");
+    click(&mut h, "Clear filters");
+    h.get_by_label("starter / Resistor 0402 (1005 metric) · r4");
+    h.get_by_label("starter / SOT-23 (TO-236AB) · r4");
+    click(&mut h, "Match pin count");
+    assert!(h.query_by_label("starter / SOT-23 (TO-236AB) · r4").is_none());
+    click(&mut h, "All libraries");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    click(&mut h, "Close");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// A different preview cannot place an existing assignment; assigning still requires a valid map.
+#[test]
+fn browsing_another_package_cannot_silently_place_or_replace_the_saved_assignment() {
+    let mut h = component_harness();
+    h.set_size(egui::vec2(1440., 1000.));
+    h.state_mut().begin_footprint_assignment(None);
+    h.run();
+    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "Match numbers");
+    click(&mut h, "Assign");
+    click(&mut h, "Close");
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let target = h.state().session.project().unwrap().board_target().unwrap();
+    let app = h.state_mut();
+    app.views.active.open_document(crate::editor_view::DocumentTarget::Board(target), &app.session);
+    app.begin_footprint_assignment(None);
+    h.run();
+    click(&mut h, "starter / Resistor 0603 (1608 metric) · r4");
+    assert!(h.get_by_label("Place on board").accesskit_node().is_disabled());
+    click(&mut h, "Assign");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    click(&mut h, "Close");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// A large project uses a virtual scrolling component list with reference/value search.
+/// Symbol-originated assignment stays bound to its selected component without a global picker.
+#[test]
+fn component_browser_searches_large_projects_and_contextual_assignment_stays_focused() {
+    let mut h = component_harness();
+    for index in 1..64 {
+        let revision = h.state().session.revision();
+        h.state_mut().session.apply(PLACE_RESISTOR, &json!({"x_nm": index * 2_540_000, "y_nm":0,"expected_revision":revision})).unwrap();
+    }
+    h.set_size(egui::vec2(1440., 1000.));
+    h.state_mut().begin_footprint_assignment(None);
+    h.run();
+    click(&mut h, "Find component");
+    h.get_by_label("Find component").type_text("R64");
+    h.run();
+    click(&mut h, "R64 · R");
+    h.get_by_label("R64");
+    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "Match numbers");
+    click(&mut h, "Assign");
+    click(&mut h, "Close");
+    let project = h.state().session.project().unwrap();
+    let component = project.components().find(|c| c.reference() == "R64").unwrap().id();
+    let assignments = project.footprint_assignments();
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0]["component"], component);
+    h.state_mut().begin_footprint_assignment(Some(component));
+    h.run();
+    assert!(h.query_by_label("Find component").is_none());
+    h.get_by_label("R64");
+    h.get_by_label("Assigned · not placed");
+    click(&mut h, "Close");
+}
+
+/// The narrow browser scrolls the full preview into view, rather than trapping it in a tiny
+/// nested scrolling area. Assignment controls remain reachable below the preview.
+#[test]
+fn narrow_footprint_browser_can_show_the_preview_and_mapping() {
+    let mut h = component_harness();
+    h.set_size(egui::vec2(600., 850.));
+    let component = h.state().session.project().unwrap().components().next().unwrap().id();
+    h.state_mut().begin_footprint_assignment(Some(component));
+    h.run();
+    h.get_by_label("starter / Resistor 0402 (1005 metric) · r4").scroll_to_me();
+    h.run();
+    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    h.get_by_label("Footprint preview").scroll_to_me();
+    h.run();
+    let rect = h.get_by_label("Footprint preview").rect();
+    assert!(rect.top() >= h.get_by_label("Assign Footprint").rect().bottom(), "{rect:?}");
+    assert!(rect.bottom() < h.get_by_label("Close").rect().top(), "{rect:?}");
+    h.get_by_label("Match numbers").scroll_to_me();
+    h.run();
+    click(&mut h, "Match numbers");
+    click(&mut h, "Assign");
+    h.get_by_label("Assigned · not placed");
+    click(&mut h, "Close");
 }

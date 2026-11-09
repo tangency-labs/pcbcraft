@@ -172,6 +172,8 @@ struct ComponentRecord<'a> {
     reference_number: usize,
     reference: std::borrow::Cow<'a, str>,
     value: std::borrow::Cow<'a, str>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    metadata: Option<crate::schematic::fields::Metadata>,
 }
 
 /// A schematic unit stores only its identity, owner and geometry.
@@ -184,6 +186,8 @@ struct Placement<'a> {
     x_nm: i64,
     y_nm: i64,
     rotation: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    field_layout: Option<crate::schematic::fields::Layouts>,
 }
 
 #[derive(Deserialize)]
@@ -269,6 +273,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
             x_nm: record.x_nm,
             y_nm: record.y_nm,
             rotation: 0,
+            field_layout: None,
         });
     }
     let board = legacy.board.map(|board| BoardRecords {
@@ -338,6 +343,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
             reference_number: record.reference_number,
             reference: record.reference.into(),
             value: record.value.into(),
+            metadata: None,
         });
         used.insert((definition.id.clone(), definition.revision()), definition);
     }
@@ -433,9 +439,15 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    /// Start a single document without walking the schematic. Setup, physical definitions,
-    /// silkscreen settings, outlines, layer drawings and rotation require split documents or an archive; refuse lossy export.
+    /// Begin incremental single-document encoding after rejecting unsupported document features.
+    /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
+    /// drawings and rotation require split documents or an archive; refuse lossy export.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.components.values().any(|c| !c.metadata.is_empty())
+            || project.sheets.iter().any(|s| s.symbols.iter().any(|s| !s.field_layout.is_empty()))
+        {
+            return Err("component fields and text appearance require the split project format".into());
+        }
         if project.sheets.len() != 1 || project.sheet_name() != "Main" {
             return Err("legacy single-file encoding cannot represent multiple or renamed sheets; use split documents or a packed archive".to_owned());
         }
@@ -524,6 +536,7 @@ impl Encoder {
                     reference_number: component.reference_number,
                     reference: component.reference.as_str().into(),
                     value: component.value.as_str().into(),
+                    metadata: None,
                 };
                 let more = self.project.components.last_key_value().is_some_and(|(&last, _)| last != id);
                 write_record(&mut self.bytes, &record, more)?;
@@ -543,6 +556,7 @@ impl Encoder {
                     x_nm: symbol.position.x_nm,
                     y_nm: symbol.position.y_nm,
                     rotation: u16::from(symbol.rotation) * 90,
+                    field_layout: None,
                 };
                 write_record(&mut self.bytes, &record, self.symbols + 1 < self.project.symbols.len())?;
                 self.symbols += 1;
@@ -646,6 +660,9 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         }
         format => return Err(format!("unsupported project format {format}")),
     };
+    if document.components.iter().any(|c| c.metadata.is_some()) || document.sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
+        return Err("component fields and text appearance require split project/sheet formats 11/4".into());
+    }
     if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.rotation != 0 || f.library.is_some())) {
         return Err("physical footprints and rotation require split board format 5 or 4 respectively".to_owned());
     }
@@ -733,6 +750,8 @@ fn validate_with_hierarchy(
         if !shown.insert(record.reference.clone()) {
             return Err("two components show the same reference".to_owned());
         }
+        let metadata = record.metadata.unwrap_or_default();
+        metadata.validate()?;
         components.insert(
             record.id,
             Component {
@@ -741,6 +760,7 @@ fn validate_with_hierarchy(
                 reference_number: record.reference_number,
                 reference: record.reference.into_owned(),
                 value: record.value.into_owned(),
+                metadata,
             },
         );
     }
@@ -767,12 +787,15 @@ fn validate_with_hierarchy(
             degrees @ (0 | 90 | 180 | 270) => (degrees / 90) as u8,
             _ => return Err("symbol rotation must be 0, 90, 180 or 270 degrees".to_owned()),
         };
+        let field_layout = record.field_layout.unwrap_or_default();
+        crate::schematic::fields::validate_layouts(&field_layout, &component.metadata)?;
         symbols.push(SymbolPlacement {
             definition: component.definition.clone(),
             ordinal: record.id,
             component: record.component,
             unit: unit.to_owned(),
             position: Point { x_nm: record.x_nm, y_nm: record.y_nm },
+            field_layout,
             rotation,
         });
     }
@@ -867,6 +890,9 @@ fn validate_with_hierarchy(
             } else {
                 match components.get(&footprint.component) {
                     None => return Err("footprint points to a missing component".to_owned()),
+                    Some(component) if component.metadata.attributes.exclude_from_board => {
+                        return Err("a board footprint points to a component excluded from the board".into());
+                    }
                     Some(component) if !layout.mapping_valid(&footprint, &component.definition) => {
                         return Err(
                         "the two-pad footprint only fits symbols with exactly pins 1 and 2; physical footprint mappings must cover every terminal"
@@ -977,12 +1003,12 @@ mod tests {
         assert_eq!(
             summary,
             [
-                ("capacitor", "C1", "100nF"),
+                ("capacitor", "C1", "C"),
                 ("connector", "J1", "Input"),
                 ("header-4", "J2", "Header"),
                 ("led", "D1", "LED"),
                 ("npn", "Q1", "NPN"),
-                ("resistor", "R1", "1k"),
+                ("resistor", "R1", "R"),
             ]
             .map(|(kind, reference, value)| (json!(kind), json!(reference), json!(value)))
         );

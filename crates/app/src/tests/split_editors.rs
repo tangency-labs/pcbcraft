@@ -105,7 +105,7 @@ fn browser_highlights_prune_deleted_targets_and_reset_on_reopen() {
     focus_tab(&mut h, 1);
     click(&mut h, "Toggle Browser");
     click(&mut h, "Expand Symbols");
-    click(&mut h, "R1  1k");
+    click(&mut h, "R1  R");
     assert_eq!(reference_color(&h, 0, "R1"), Tokens::get().schematic_highlight);
     click(&mut h, "Expand Nets");
     click(&mut h, "Net 1");
@@ -123,7 +123,7 @@ fn browser_highlights_prune_deleted_targets_and_reset_on_reopen() {
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
     click(&mut h, "Undo");
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
-    click(&mut h, "R1  1k");
+    click(&mut h, "R1  R");
     let source = h.state().views.active.input(&h.state().session).unwrap();
     let snapshot = h.state().session.snapshot().unwrap();
     h.state_mut().session.open_snapshot(snapshot);
@@ -373,7 +373,7 @@ fn browser_and_home_preserve_view_identity_and_project_state() {
     let before = h.state().session.inspect();
     click(&mut h, "Toggle Browser");
     click(&mut h, "Expand Symbols");
-    click(&mut h, "R1  1k");
+    click(&mut h, "R1  R");
     assert_eq!(view(&h, 1).schematic.selection.single_symbol(), Some("symbol-2"));
     assert!(view(&h, 0).schematic.selection.single_symbol().is_none());
     assert_eq!(view(&h, 0).camera.screen(origin, canvas(&h, 0)), first_origin);

@@ -548,11 +548,11 @@ mod tests {
         assert_eq!(led.reference_prefix(), "D");
     }
 
-    /// New placements use compact revision 2; older pinned revisions retain every original pin.
+    /// New placements use the latest revision; older pinned revisions retain their original pins and values.
     #[test]
     fn compact_revisions_preserve_old_projects_and_choose_newest_in_any_order() {
         for symbol in starter().symbols().iter().filter(|symbol| ["capacitor", "connector", "led", "resistor"].contains(&symbol.id.as_str())) {
-            assert_eq!(symbol.revision(), 2);
+            assert_eq!(symbol.revision(), if ["resistor", "capacitor"].contains(&symbol.id.as_str()) { 3 } else { 2 });
             let old = starter().symbol_revision(&symbol.id, 1).unwrap();
             for (new, old) in symbol.pins().iter().zip(old.pins()) {
                 assert_eq!(old.offset.x_nm.abs(), PIN_OFFSET_NM);
@@ -563,9 +563,9 @@ mod tests {
         let files = starter_files::SYMBOLS.iter().rev().copied().collect::<Vec<_>>();
         let reversed = Library::load(starter_files::MANIFEST, &files);
         assert!(reversed.problems().is_empty());
-        assert_eq!(reversed.symbol("resistor").unwrap().revision(), 2);
+        assert_eq!(reversed.symbol("resistor").unwrap().revision(), 3);
         assert_eq!(reversed.symbol_revision("resistor", 1).unwrap().pins()[1].offset.x_nm, PIN_OFFSET_NM);
-        assert!(reversed.symbol_revision("resistor", 3).is_none());
+        assert!(reversed.symbol_revision("resistor", 4).is_none());
         let old = crate::persistence::decode(include_bytes!("../../app/tests/fixtures/two-resistors.pc")).unwrap();
         assert_eq!(old.symbols()[0].pins()[1].x_nm, PIN_OFFSET_NM);
     }
