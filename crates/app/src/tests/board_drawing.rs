@@ -6,7 +6,7 @@ use pcbcraft_engine::{ADD_DRAWING, persistence::encode_documents, schematic::Poi
 fn board<'a>() -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
-    h.state_mut().run("project.new", &json!({}));
+    h.state_mut().run("project.new", &json!({"create_board":true}));
     h.run();
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
@@ -300,7 +300,7 @@ fn live_drawing_command_shares_gui_history() {
     let mut h = board();
     let ctx = h.ctx.clone();
     let revision = h.state().session.revision();
-    let board = h.state().session.project().unwrap().board_target().board;
+    let board = h.state().session.project().unwrap().board_target().unwrap().board;
     let layer = h.state().views.active.board.active_layer.clone().unwrap();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     {

@@ -606,7 +606,13 @@ pub(crate) fn show(
                 ("Assign Footprint…", "", SymbolAction::AssignFootprint),
                 ("Delete", "Del", SymbolAction::Delete),
             ];
-            rows.into_iter().find_map(|(label, key, action)| MenuItem::new(label).shortcut(key).show(ui).then(|| Click::Edit(action, id.clone())))
+            rows.into_iter().find_map(|(label, key, action)| {
+                MenuItem::new(label)
+                    .shortcut(key)
+                    .enabled(action != SymbolAction::AssignFootprint || project.board_target().is_some())
+                    .show(ui)
+                    .then(|| Click::Edit(action, id.clone()))
+            })
         });
         if let Some(click) = picked.and_then(|shown| shown.inner) {
             return Some(click);

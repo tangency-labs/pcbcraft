@@ -213,7 +213,7 @@ impl Action {
                         Workspace::Board => {
                             app.views.active.board.selection.len() == 1
                                 && app.views.active.snapshot(&app.session).is_some_and(|project| {
-                                    project.board_view(project.board_target()).is_some_and(|board| {
+                                    project.board_target().and_then(|target| project.board_view(target)).is_some_and(|board| {
                                         board
                                             .footprints()
                                             .any(|footprint| footprint.physical_reference && app.views.active.board.selection.contains(&footprint.id))

@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 /// All mutations use revision-checked engine commands; no saved documents are edited directly.
 fn build_demo() -> Result<Session, Box<dyn Error>> {
     let mut session = Session::default();
-    session.apply("project.new", &json!({"name": "Dual LED · editing demo"}))?;
+    session.apply("project.new", &json!({"create_board":true,"name": "Dual LED · editing demo"}))?;
     let input = place(&mut session, "connector", "J1", "Input", 0, -18)?;
     let r1 = place(&mut session, "resistor", "R1", "1k", -7, -6)?;
     let d1 = place(&mut session, "led", "D1", "Green", 7, -6)?;

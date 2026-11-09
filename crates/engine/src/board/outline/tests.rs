@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 #[test]
 fn legacy_rectangle_migrates_on_graphic_edit_without_losing_geometry() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let mut project = s.snapshot().unwrap();
     std::sync::Arc::make_mut(&mut std::sync::Arc::make_mut(&mut project).board).outline =
         Some(Outline::rectangle(Point { x_nm: -20_000_001, y_nm: -15_000_001 }, Point { x_nm: 20_000_002, y_nm: 15_000_002 }).unwrap());

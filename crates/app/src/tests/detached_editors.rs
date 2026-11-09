@@ -62,7 +62,7 @@ type Peers = Rc<RefCell<HashMap<ViewportId, Rc<RefCell<Peer>>>>>;
 fn many_windows() -> (Harness<'static, PcbApp>, Peers) {
     let mut h = harness();
     h.set_size(vec2(1400.0, 900.0));
-    resistor_at_origin(&mut h);
+    resistor_with_board_at_origin(&mut h);
     h.state_mut().browser.open = false;
     let peers = Peers::default();
     let state = peers.clone();
@@ -1602,7 +1602,7 @@ fn project_open_rebinds_detached_pcb_and_main_schematic() {
     assert_eq!(h.state().views.view(child).unwrap().workspace, Workspace::Board);
     assert!(!h.state().views.view(child).unwrap().unavailable());
     assert!(!h.state().views.view(child).unwrap().accepts(stale, &h.state().session));
-    assert_eq!(h.state().views.view(child).unwrap().board.target, Some(h.state().session.project().unwrap().board_target()));
+    assert_eq!(h.state().views.view(child).unwrap().board.target, Some(h.state().session.project().unwrap().board_target().unwrap()));
     h.get_by_label("Schematic canvas");
     child_rect(&peer, "PCB canvas");
     assert!(h.state().arrangement_snapshot().unwrap().valid());

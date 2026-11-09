@@ -227,7 +227,7 @@ fn technical_layer_draft_and_stale_form_preserve_authored_data() {
 #[test]
 fn rounded_display_does_not_rewrite_exact_setup_dimensions() {
     let mut s = pcbcraft_engine::Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
     s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
     let mut value = serde_json::to_value(s.project().unwrap().board_setup().unwrap()).unwrap();
     value["stackup"]["strata"][0]["thickness_nm"] = json!(1_234_567);

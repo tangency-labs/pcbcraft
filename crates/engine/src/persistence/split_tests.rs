@@ -101,6 +101,7 @@ fn edit_to_file_boundaries_and_one_record_diffs() {
         let path = if owner == "sheet" { sheet(&before) } else { owner.to_owned() };
         let mut expected = BTreeSet::from([path.clone()]);
         if command == PLACE_FOOTPRINT {
+            // The first physical edit also persists the legacy board registration.
             expected.insert(ENTRY_POINT.to_owned());
         }
         assert_eq!(changed(&before, &after), expected);

@@ -197,6 +197,7 @@ fn metadata_format_requires_valid_watermark_and_refuses_legacy_smuggling() {
 #[test]
 fn board_exclusion_is_enforced_without_destroying_placements() {
     let mut s = fixture();
+    s.apply(crate::board::identity::CREATE_BOARD, &json!({"expected_revision":s.revision()})).unwrap();
     let mut metadata = Metadata::default();
     metadata.attributes.exclude_from_board = true;
     let fields = json!({"symbol":"symbol-2","reference":"R1","value":"R","metadata":metadata,"expected_revision":s.revision()});

@@ -11,10 +11,12 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
+const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const POWER_TEXT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
 const PROJECT_FORMAT: &str = "pcbcraft-project/6";
 const WATERMARK_PROJECT_FORMAT: &str = "pcbcraft-project/7";
+const OPTIONAL_BOARD_PROJECT_FORMAT: &str = "pcbcraft-project/9";
 const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
 const SHEET_FORMAT: &str = "pcbcraft-sheet/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-sheet/2";
@@ -44,6 +46,8 @@ struct SheetReference {
 #[serde(deny_unknown_fields)]
 struct ProjectDocument {
     format: String,
+    #[serde(default, deserialize_with = "present")]
+    boards: Option<Vec<crate::board::identity::Registration>>,
     id: Uuid,
     name: String,
     #[serde(default, deserialize_with = "present")]
@@ -115,14 +119,29 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    if !matches!(project.format.as_str(), PROJECT_FORMAT | PREVIOUS_PROJECT_FORMAT | WATERMARK_PROJECT_FORMAT | FIELDS_PROJECT_FORMAT) {
+    let registered = matches!(project.format.as_str(), OPTIONAL_BOARD_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT);
+    let fields = matches!(project.format.as_str(), FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT);
+    if !matches!(
+        project.format.as_str(),
+        PROJECT_FORMAT
+            | PREVIOUS_PROJECT_FORMAT
+            | WATERMARK_PROJECT_FORMAT
+            | OPTIONAL_BOARD_PROJECT_FORMAT
+            | FIELDS_PROJECT_FORMAT
+            | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
+    ) || registered != project.boards.is_some()
+    {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
-    if project.format != FIELDS_PROJECT_FORMAT && project.components.iter().any(|c| c.metadata.is_some()) {
-        return Err("component metadata requires project format 11".into());
+    if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
+        return Err("component metadata requires project format 11 or 12".into());
     }
-    if matches!(project.format.as_str(), WATERMARK_PROJECT_FORMAT | FIELDS_PROJECT_FORMAT) != project.numeric_id_high_water.is_some() {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7 or 11"));
+    if matches!(
+        project.format.as_str(),
+        WATERMARK_PROJECT_FORMAT | OPTIONAL_BOARD_PROJECT_FORMAT | FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
+    ) != project.numeric_id_high_water.is_some()
+    {
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11 or 12"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -132,7 +151,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let mut sheet_ids = BTreeSet::from([project.id]);
     let mut sheet_names = BTreeSet::new();
-    let mut used = BTreeSet::from([ENTRY_POINT.to_owned(), "board.json".to_owned()]);
+    let mut used = BTreeSet::from([ENTRY_POINT.to_owned()]);
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
     let mut anchors = BTreeSet::new();
@@ -239,7 +258,22 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         combined.junctions.get_or_insert_with(Vec::new).extend(sheet.junctions);
         combined.wires.extend(sheet.wires);
     }
-    let board: BoardDocument = parse(documents, "board.json")?;
+    let ownership = crate::board::identity::Ownership::decode(project.boards.clone(), &metadata)?;
+    let has_board = !matches!(ownership, crate::board::identity::Ownership::Explicit(None));
+    let board: BoardDocument = if has_board {
+        used.insert("board.json".into());
+        parse(documents, "board.json")?
+    } else {
+        BoardDocument {
+            format: BOARD_FORMAT.into(),
+            setup: None,
+            silkscreen: None,
+            assignments: None,
+            outline: None,
+            graphics: None,
+            footprints: vec![],
+        }
+    };
     if board.format != ROTATED_BOARD_FORMAT
         && board.format != PHYSICAL_BOARD_FORMAT
         && board.format != SILKSCREEN_BOARD_FORMAT
@@ -338,14 +372,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let previous_format = project.format == PREVIOUS_PROJECT_FORMAT;
     let numeric_id_high_water = project.numeric_id_high_water;
     let document = Document {
-        format: super::FORMAT.to_owned(),
+        format: if project.boards.is_some() { super::OPTIONAL_BOARD_FORMAT } else { super::FORMAT }.to_owned(),
+        boards: project.boards.clone(),
         id: project.id,
         name: project.name,
-        numeric_id_high_water: None,
+        numeric_id_high_water: if project.boards.is_some() { numeric_id_high_water } else { None },
         symbol_definitions: definitions,
         components: project.components,
         sheet: combined,
-        board: Some(BoardRecords { footprints: board.footprints }),
+        board: has_board.then_some(BoardRecords { footprints: board.footprints }),
     };
     let mut project = validate_with_hierarchy(document, None, footprint_definitions, &anchors, &hierarchy_ids)
         .map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
@@ -501,15 +536,24 @@ impl DocumentsEncoder {
                             file: format!("sheets/{}.json", sheet.sheet_id),
                         })
                         .collect::<Vec<_>>();
-                    let has_metadata = p.components.values().any(|c| !c.metadata.is_empty());
-                    let format = if has_metadata { FIELDS_PROJECT_FORMAT } else { format };
+                    let registrations = p.board.ownership.records();
+                    let has_metadata = p.components.values().any(|component| !component.metadata.is_empty());
+                    let format = match (registrations.is_some(), has_metadata) {
+                        (true, true) => OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT,
+                        (true, false) => OPTIONAL_BOARD_PROJECT_FORMAT,
+                        (false, true) => FIELDS_PROJECT_FORMAT,
+                        (false, false) => format,
+                    };
                     if has_metadata && p.numeric_id_high_water.is_none() {
                         return Err("component metadata requires an adopted numeric ID watermark".into());
                     }
-                    write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {},\n", p.id, json(&p.name)?,)
+                    write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {},\n", p.id, json(&p.name)?)
                         .map_err(|e| e.to_string())?;
                     if let Some(high_water) = p.numeric_id_high_water {
                         writeln!(self.bytes, "  \"numeric_id_high_water\": {high_water},").map_err(|e| e.to_string())?;
+                    }
+                    if let Some(registrations) = registrations {
+                        writeln!(self.bytes, "  \"boards\": {},", json(&registrations)?).map_err(|e| e.to_string())?;
                     }
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
                     self.next();
@@ -619,9 +663,13 @@ impl DocumentsEncoder {
                             self.cursor = 0;
                             self.first = true;
                             self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
-                        } else {
+                        } else if self.project.board_target().is_some() {
                             self.next();
                             board_header(&mut self.bytes, &self.project.board)?;
+                        } else {
+                            self.phase = 9;
+                            self.cursor = 0;
+                            self.first = true;
                         }
                     }
                 }

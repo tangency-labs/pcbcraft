@@ -242,7 +242,7 @@ fn home_new_pcb_waits_for_save_and_keeps_work_on_failure() {
             assert!(!h.state().home);
             assert!(!current.same_document(&original));
             assert_eq!(h.state().views.active.workspace, Workspace::Board);
-            assert_eq!(h.state().views.active.board.target, Some(current.board_target()));
+            assert_eq!(h.state().views.active.board.target, Some(current.board_target().unwrap()));
             h.get_by_label("PCB canvas");
             h.state_mut().run("edit.undo", &Value::Null);
             assert!(h.state().session().snapshot().unwrap().same_document(&original));

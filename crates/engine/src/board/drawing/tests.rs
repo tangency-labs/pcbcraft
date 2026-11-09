@@ -7,7 +7,7 @@ use crate::{
 /// Exercise technical layers on both configured boards and legacy boards with assigned parts.
 fn session(configured: bool, placed: bool) -> Session {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     if configured {
         s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
     }
@@ -118,7 +118,7 @@ fn invalid_geometry_and_storage_are_rejected() {
 #[test]
 fn later_stackup_setup_preserves_edge_layer() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let layer = edge(&s);
     s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points(),"closed":true,"expected_revision":s.revision()})).unwrap();
     s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();

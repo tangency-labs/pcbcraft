@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let destination = std::env::args_os().nth(1).map(PathBuf::from).ok_or("usage: board_workspace NEW_OUTPUT_DIRECTORY")?;
     fs::create_dir(&destination)?;
     let mut session = Session::default();
-    session.apply("project.new", &json!({"name":"Board inspection"}))?;
+    session.apply("project.new", &json!({"create_board":true,"name":"Board inspection"}))?;
     for (command, mut params) in [
         (pcbcraft_engine::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2})),
         (pcbcraft_engine::PLACE_SYMBOL, json!({"definition":"resistor","x_nm":-12_700_000,"y_nm":0})),

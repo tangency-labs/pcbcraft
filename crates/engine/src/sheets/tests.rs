@@ -11,7 +11,7 @@ fn apply(session: &mut Session, command: &str, mut params: Value) {
 #[test]
 fn sheets_are_explicit_isolated_and_share_one_undo_history() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let main = s.project().unwrap().sheet_target();
     apply(&mut s, PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
     let first = s.snapshot().unwrap();
@@ -52,7 +52,7 @@ fn sheets_are_explicit_isolated_and_share_one_undo_history() {
 #[test]
 fn sheet_lifecycle_is_atomic_and_undo_restores_placements_and_footprints() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let main = s.project().unwrap().sheet_target();
     let revision = s.revision();
     assert!(s.apply(DELETE_SHEET, &json!({"sheet":main.id(),"expected_revision":revision})).is_err());
@@ -96,7 +96,7 @@ fn sheet_lifecycle_is_atomic_and_undo_restores_placements_and_footprints() {
 #[test]
 fn multi_sheet_storage_is_lossless_local_and_rejects_cross_sheet_links() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let main = s.project().unwrap().sheet_target();
     apply(&mut s, PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
     apply(&mut s, CREATE_SHEET, json!({"name":"Power"}));

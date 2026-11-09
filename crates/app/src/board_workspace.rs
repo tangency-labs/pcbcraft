@@ -59,7 +59,7 @@ impl PcbApp {
                             .and_then(|view| view.snapshot(&self.session))
                             .map_or_else(|| project.sheet_target(), |p| p.sheet_target()),
                     ),
-                    Workspace::Board => DocumentTarget::Board(project.board_target()),
+                    Workspace::Board => project.board_target().map_or_else(|| DocumentTarget::BoardWorkspace(project.id()), DocumentTarget::Board),
                 };
                 self.views.open_document(source, target, &self.session);
             }
@@ -90,7 +90,7 @@ impl PcbApp {
     /// Components › Footprints opens the package chooser for the selected footprint's component,
     /// or leaves the component unselected when no footprint is selected.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
-        let enabled = self.session.project().is_some();
+        let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let setup =
             RibbonTool { icon: ToolIcon::Settings, label: "Setup", description: "Board setup", shortcut: "", enabled, active: false, toggle: false };
         if workspace::ribbon_group(ui, "Board", &[setup]).is_some() {
@@ -157,7 +157,7 @@ impl PcbApp {
             let component = self
                 .session
                 .project()
-                .and_then(|p| p.board_view(p.board_target()))
+                .and_then(|p| p.board_target().and_then(|target| p.board_view(target)))
                 .and_then(|board| board.footprints().find(|f| self.views.active.board.selection.contains(&f.id)).map(|f| f.component));
             self.begin_footprint_assignment(component);
         }
@@ -247,6 +247,12 @@ impl PcbApp {
             && matches!(self.dialog, Dialog::None)
             && !self.project_action_pending()
             && !egui::Popup::is_any_open(ui.ctx());
+        if self.session.project().is_some_and(|project| project.board_target().is_none())
+            && self.views.view(id).is_some_and(|view| !view.unavailable())
+        {
+            self.empty_board_pane(ui, id, enabled);
+            return;
+        }
         let highlighted = self.views.board_highlight_for(id, &self.session);
         let label = if self.views.is_split() { format!("PCB canvas {}", id.0 + 1) } else { "PCB canvas".to_owned() };
         let Some(project) = self.session.project() else {
@@ -309,6 +315,31 @@ impl PcbApp {
                         "rotation": draft.rotation, "expected_revision": draft.source.revision,
                     }),
                 );
+            }
+            self.repaint_editors(ui.ctx());
+        }
+    }
+
+    /// Present the empty PCB workspace without creating a physical owner. Explicit creation
+    /// uses the shared revision-checked command and binds the resulting board after success.
+    fn empty_board_pane(&mut self, ui: &mut Ui, id: ViewId, enabled: bool) {
+        let revision = self.session.revision();
+        let Some(widget_id) = self.views.view(id).map(|view| view.widget_id()) else { return };
+        let create = ui
+            .push_id(widget_id, |ui| {
+                shell::canvas(ui, |ui| {
+                    ui.add_space((ui.available_height() * 0.5 - 16.0).max(0.0));
+                    ui.vertical_centered(|ui| ui.add_enabled(enabled, pcbcraft_chrome::catalog::button("Create board", true)).clicked()).inner
+                })
+            })
+            .inner;
+        if create && self.session.available("pcb.create_board") {
+            self.run("pcb.create_board", &serde_json::json!({"expected_revision":revision}));
+            if self.message.is_none()
+                && let Some(target) = self.session.project().and_then(|project| project.board_target())
+                && let Some(view) = self.views.view_mut(id)
+            {
+                view.open_document(DocumentTarget::Board(target), &self.session);
             }
             self.repaint_editors(ui.ctx());
         }

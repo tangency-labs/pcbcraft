@@ -60,7 +60,7 @@ impl Assignment {
     pub(crate) fn inspect(&self, project: &Project) -> Value {
         let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
         value["component"] = json!(format!("component-{}", self.component));
-        value["board"] = json!(project.board_target().board);
+        value["board"] = json!(project.board_target().map(|target| target.board));
         value["placed"] = json!(project.board.by_component.contains_key(&self.component));
         value
     }

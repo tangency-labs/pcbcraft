@@ -88,6 +88,8 @@ pub fn encode_file(project: Arc<Project>, encoding: Encoding) -> Result<Vec<u8>,
 const FORMAT: &str = "pcbcraft-project/4";
 /// Single-document watermark encoding; versions 5 through 7 identify split-document forms.
 const WATERMARK_FORMAT: &str = "pcbcraft-project/8";
+/// Explicit optional physical-board registration in the diagnostic single-document form.
+const OPTIONAL_BOARD_FORMAT: &str = "pcbcraft-project/10";
 /// Format 3 added free wire endpoints, junctions and authored bends; it opens through
 /// [`migrate_to_4`].
 const FORMAT_3: &str = "pcbcraft-project/3";
@@ -102,6 +104,8 @@ pub const MAX_PROJECT_BYTES: usize = 4 * 1024 * 1024;
 #[serde(deny_unknown_fields)]
 struct Document {
     format: String,
+    #[serde(default, deserialize_with = "present")]
+    boards: Option<Vec<crate::board::identity::Registration>>,
     id: Uuid,
     name: String,
     #[serde(default, deserialize_with = "present")]
@@ -346,6 +350,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
         .collect::<Result<_, _>>()?;
     Ok(Document {
         format: FORMAT.to_owned(),
+        boards: None,
         id: document.id,
         name: document.name,
         numeric_id_high_water: None,
@@ -460,10 +465,21 @@ impl Encoder {
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
         let mut bytes = Vec::new();
-        let format = if project.numeric_id_high_water.is_some() { WATERMARK_FORMAT } else { FORMAT };
+        let registrations = project.board.ownership.records();
+        let format = if registrations.is_some() {
+            OPTIONAL_BOARD_FORMAT
+        } else if project.numeric_id_high_water.is_some() {
+            WATERMARK_FORMAT
+        } else {
+            FORMAT
+        };
         write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {name},\n", project.id).map_err(|error| error.to_string())?;
         if let Some(high_water) = project.numeric_id_high_water {
             writeln!(bytes, "  \"numeric_id_high_water\": {high_water},").map_err(|error| error.to_string())?;
+        }
+        if let Some(registrations) = registrations {
+            writeln!(bytes, "  \"boards\": {},", serde_json::to_string(&registrations).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
         }
         bytes.extend_from_slice(b"  \"symbol_definitions\": [\n");
         Ok(Self {
@@ -626,7 +642,9 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     }
     let header: Header = serde_json::from_slice(bytes).map_err(|error| format!("invalid project JSON: {error}"))?;
     let (document, upgraded_from) = match header.format.as_str() {
-        FORMAT | WATERMARK_FORMAT => (serde_json::from_slice::<Document>(bytes).map_err(|error| format!("invalid project JSON: {error}"))?, None),
+        FORMAT | WATERMARK_FORMAT | OPTIONAL_BOARD_FORMAT => {
+            (serde_json::from_slice::<Document>(bytes).map_err(|error| format!("invalid project JSON: {error}"))?, None)
+        }
         FORMAT_2 | FORMAT_3 => {
             let version = if header.format == FORMAT_2 { 2 } else { 3 };
             let document = serde_json::from_slice(bytes).map_err(|error| format!("invalid format {version} project: {error}"))?;
@@ -664,12 +682,15 @@ fn validate_with_hierarchy(
     anchors: &BTreeSet<WireEndpoint>,
     hierarchy_ids: &BTreeSet<u64>,
 ) -> Result<Arc<Project>, String> {
-    let Document { format, id, name, numeric_id_high_water, symbol_definitions, components: records, sheet, board } = document;
-    if format != FORMAT && format != WATERMARK_FORMAT {
+    let Document { format, boards, id, name, numeric_id_high_water, symbol_definitions, components: records, sheet, board } = document;
+    if !matches!(format.as_str(), FORMAT | WATERMARK_FORMAT | OPTIONAL_BOARD_FORMAT) || (format == OPTIONAL_BOARD_FORMAT) != boards.is_some() {
         return Err(format!("unsupported project format {format}"));
     }
-    if (format == WATERMARK_FORMAT) != numeric_id_high_water.is_some() {
-        return Err("numeric ID watermark requires project format 8".into());
+    if matches!(format.as_str(), WATERMARK_FORMAT | OPTIONAL_BOARD_FORMAT) != numeric_id_high_water.is_some() {
+        return Err("numeric ID watermark requires project format 8 or 10".into());
+    }
+    if boards.as_ref().is_some_and(Vec::is_empty) && board.is_some() {
+        return Err("schematic-only project cannot contain physical board data".into());
     }
     if id.is_nil() || sheet.id.is_nil() || id == sheet.id {
         return Err("invalid project or sheet identity".to_owned());
@@ -866,7 +887,7 @@ fn validate_with_hierarchy(
         }
     }
 
-    let project = Arc::new(Project {
+    let mut result = Project {
         id,
         numeric_id_high_water,
         sheets: Arc::new(vec![crate::sheets::SchematicSheet {
@@ -887,9 +908,11 @@ fn validate_with_hierarchy(
         board: Arc::new(layout),
         named_graph: Arc::default(),
         upgraded_from,
-    });
-    validate_watermark(&project)?;
-    Ok(project)
+    };
+    let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
+    Arc::make_mut(&mut result.board).ownership = ownership;
+    validate_watermark(&result)?;
+    Ok(Arc::new(result))
 }
 
 /// Validate allocation metadata after all current numeric identities have been resolved.
@@ -919,7 +942,7 @@ mod tests {
 
     fn fixture() -> Session {
         let mut session = Session::default();
-        session.apply("project.new", &json!({"name": "LED indicator"})).unwrap();
+        session.apply("project.new", &json!({"name": "LED indicator", "create_board":true})).unwrap();
         for (definition, x_nm) in [("resistor", 0), ("led", 25_400_000)] {
             session
                 .apply(
@@ -948,7 +971,7 @@ mod tests {
     #[test]
     fn every_library_symbol_places_and_round_trips() {
         let mut session = Session::default();
-        session.apply("project.new", &json!({"name": "All parts"})).unwrap();
+        session.apply("project.new", &json!({"name": "All parts", "create_board":true})).unwrap();
         for (index, definition) in crate::library::starter().symbols().iter().enumerate() {
             let x_nm = index as i64 * 25_400_000;
             session
@@ -983,7 +1006,7 @@ mod tests {
     #[test]
     fn multi_pin_symbols_wire_by_number_and_refuse_missing_pins() {
         let mut session = Session::default();
-        session.apply("project.new", &json!({"name": "Supply"})).unwrap();
+        session.apply("project.new", &json!({"name": "Supply", "create_board":true})).unwrap();
         for (definition, x_nm) in [("led", 0), ("header-4", 50_800_000)] {
             session
                 .apply(PLACE_SYMBOL, &json!({"definition": definition, "x_nm": x_nm, "y_nm": 0, "expected_revision": session.revision()}))
@@ -1271,7 +1294,7 @@ mod tests {
         let decoded = decode(&bytes).unwrap();
         let pin = decoded.symbols()[1].terminals()[0];
         let pad = decoded.pad_for_terminal(pin).unwrap();
-        assert_eq!(pad.inspect(), json!({"board":decoded.board_target().board,"footprint":"footprint-5", "pad":"2"}));
+        assert_eq!(pad.inspect(), json!({"board":decoded.board_target().unwrap().board,"footprint":"footprint-5", "pad":"2"}));
         assert_eq!(decoded.terminal_for_pad(pad), Some(pin));
         assert_eq!(decoded.pad_position(pad), Some(Point { x_nm: 13_970_000, y_nm: 0 }));
         assert_eq!(encode(decoded.clone()).unwrap(), bytes);
@@ -1370,7 +1393,7 @@ mod tests {
         let migrated = decode(&serde_json::to_vec(&legacy).unwrap()).unwrap();
         let terminal = migrated.symbols()[0].terminals()[0];
         let pad = migrated.pad_for_terminal(terminal).unwrap();
-        assert_eq!(pad.inspect(), json!({"board":migrated.board_target().board,"footprint": "footprint-5", "pad": "2"}));
+        assert_eq!(pad.inspect(), json!({"board":migrated.board_target().unwrap().board,"footprint": "footprint-5", "pad": "2"}));
         for encoding in [Encoding::Json, Encoding::Zip] {
             let bytes = encode_file(migrated.clone(), encoding).unwrap();
             let (project, detected) = decode_file(&bytes).unwrap();

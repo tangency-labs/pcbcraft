@@ -29,7 +29,7 @@ fn body(result: &Value) -> Value {
 fn board_edge_tools_share_layer_geometry_and_undo() {
     use pcbcraft_engine::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
     let mut s = server();
-    let opened = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let opened = body(&call(&mut s, "execute", json!({"command":"project.new","params":{"create_board":true}})));
     let layer = opened["project"]["boards"][0]["layers"][0]["id"].clone();
     let schema = body(&call(&mut s, "describe_command", json!({"command":ADD_DRAWING})));
     assert_eq!(schema["params"]["properties"]["layer"]["format"], "uuid");
@@ -124,7 +124,7 @@ fn hierarchy_tools_share_engine_transactions_and_endpoint_schemas() {
 fn multi_sheet_tools_preserve_explicit_ownership_and_cross_probe() {
     use pcbcraft_engine::sheets::{CREATE_SHEET, DELETE_SHEET, RENAME_SHEET};
     let mut server = server();
-    for (command, params) in [("project.new", json!({})), (CREATE_SHEET, json!({"name":"Power","expected_revision":1}))] {
+    for (command, params) in [("project.new", json!({"create_board":true})), (CREATE_SHEET, json!({"name":"Power","expected_revision":1}))] {
         assert_ne!(call(&mut server, "execute", json!({"command":command,"params":params}))["isError"], true);
     }
     let before = body(&call(&mut server, "inspect_project", json!({})));
@@ -281,7 +281,7 @@ fn board_setup_commands_are_discoverable_and_atomic() {
     assert_eq!(material_schema["tg"]["items"]["properties"]["temperature_milli_c"]["type"], "integer");
     assert_eq!(material_schema["dielectric"]["items"]["properties"]["frequency_hz"]["type"], "integer");
     assert_eq!(schema["properties"]["stackup"]["properties"]["strata"]["items"]["oneOf"][0]["properties"]["thickness_nm"]["type"], "integer");
-    let created = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let created = body(&call(&mut s, "execute", json!({"command":"project.new","params":{"create_board":true}})));
     let initialized = body(&call(
         &mut s,
         "execute",
@@ -397,7 +397,7 @@ fn execute_can_return_only_the_new_revision() {
 fn cross_probe_follows_the_explicit_pin_to_pad_mapping() {
     let mut server = server();
     for (command, params) in [
-        ("project.new", json!({"name":"Links"})),
+        ("project.new", json!({"name":"Links","create_board":true})),
         (PLACE_SYMBOL, json!({"definition":"led", "x_nm":0, "y_nm":0, "expected_revision":1})),
         (
             pcbcraft_engine::PLACE_FOOTPRINT,
@@ -727,7 +727,7 @@ fn a_token_file_is_read_trimmed_and_bounded() -> Result<(), Box<dyn std::error::
 fn footprint_assignment_is_discoverable_and_separate_from_placement() {
     use pcbcraft_engine::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT};
     let mut s = server();
-    call(&mut s, "execute", json!({"command":"project.new","params":{}}));
+    call(&mut s, "execute", json!({"command":"project.new","params":{"create_board":true}}));
     call(&mut s, "execute", json!({"command":PLACE_RESISTOR,"params":{"x_nm":0,"y_nm":0,"expected_revision":1}}));
     let before = body(&call(&mut s, "inspect_project", json!({})));
     let component = before["project"]["components"][0]["id"].clone();
@@ -759,6 +759,32 @@ fn footprint_assignment_is_discoverable_and_separate_from_placement() {
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), body(&placed));
 }
 
+/// Headless clients start schematic-only and create the same addressed board as the GUI.
+#[test]
+fn optional_board_creation_is_discoverable_revision_checked_and_undoable() {
+    let mut server = server();
+    let initial = body(&call(&mut server, "execute", json!({"command":"project.new","params":{}})));
+    assert_eq!(initial["project"]["boards"], json!([]));
+    let schema = body(&call(&mut server, "describe_command", json!({"command":"pcb.create_board"})));
+    assert_eq!(schema["params"]["properties"]["expected_revision"]["type"], "integer");
+    let stale = call(&mut server, "execute", json!({"command":"pcb.create_board","params":{"expected_revision":0}}));
+    assert_eq!(stale["isError"], true);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), initial);
+    let created = body(&call(
+        &mut server,
+        "execute",
+        json!({
+            "command":"pcb.create_board", "params":{"name":"Controller","expected_revision":initial["revision"]}
+        }),
+    ));
+    assert_eq!(created["project"]["boards"][0]["name"], "Controller");
+    let board = created["project"]["boards"][0]["id"].clone();
+    let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
+    assert_eq!(undone["project"]["boards"], json!([]));
+    let redone = body(&call(&mut server, "execute", json!({"command":"edit.redo","params":{}})));
+    assert_eq!(redone["project"]["boards"][0]["id"], board);
+}
+
 /// Headless clients discover explicit populated-board binding adoption and placement-only
 /// deletion, using the same revision gates and undo history as the graphical controls.
 #[test]
@@ -766,7 +792,7 @@ fn populated_setup_and_footprint_deletion_are_discoverable_shared_commands() {
     use pcbcraft_engine::{DELETE_FOOTPRINTS, INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT};
     let mut s = server();
     let execute = |s: &mut Server, command: &str, params: Value| body(&call(s, "execute", json!({"command":command,"params":params})));
-    execute(&mut s, "project.new", json!({}));
+    execute(&mut s, "project.new", json!({"create_board":true}));
     let placed_symbol = execute(&mut s, PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0,"expected_revision":1}));
     let symbol = placed_symbol["project"]["schematic"]["symbols"][0]["id"].clone();
     let original = execute(

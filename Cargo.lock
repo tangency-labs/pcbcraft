@@ -2612,6 +2612,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ureq",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "winit",

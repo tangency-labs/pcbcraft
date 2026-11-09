@@ -49,19 +49,22 @@ impl ViewInput {
     }
 }
 
-/// Document identity is distinct from the local view and display name.
+/// Document and empty-workspace targets are distinct from the local view and display name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(super) enum DocumentTarget {
     Sheet(SheetTarget),
     Board(BoardTarget),
+    /// A PCB workspace has no physical target until a board is explicitly created.
+    BoardWorkspace(uuid::Uuid),
 }
 
 impl DocumentTarget {
-    /// Resolve only an explicitly addressed document in this project; names are not identities.
+    /// Resolve an addressed document or project-scoped empty workspace; names are not identities.
     pub(super) fn available(self, session: &Session) -> bool {
         session.project().is_some_and(|project| match self {
             Self::Sheet(target) => project.for_sheet(target).is_some(),
             Self::Board(target) => project.board_view(target).is_some(),
+            Self::BoardWorkspace(project_id) => project.id() == project_id,
         })
     }
 }
@@ -116,12 +119,17 @@ struct Binding {
 }
 
 impl Binding {
-    /// Resolve a target in the current opening, including a board without setup or placements.
+    /// Resolve a target in the current opening, including an empty PCB workspace or a board
+    /// without setup or placements. An explicit missing board never becomes the empty workspace.
     fn current(session: &Session, workspace: Workspace, board: Option<BoardTarget>, sheet: Option<SheetTarget>) -> Option<Self> {
         let project = session.project()?;
         let target = match workspace {
             Workspace::Schematic => DocumentTarget::Sheet(project.for_sheet(sheet.unwrap_or_else(|| project.sheet_target()))?.sheet_target()),
-            Workspace::Board => DocumentTarget::Board(project.board_view(board?)?.target),
+            Workspace::Board => match board {
+                Some(board) => DocumentTarget::Board(project.board_view(board)?.target),
+                None if project.board_target().is_none() => DocumentTarget::BoardWorkspace(project.id()),
+                None => return None,
+            },
         };
         Some(Self { target, history_root_revision: session.history_root_revision() })
     }
@@ -258,6 +266,11 @@ impl EditorView {
                 self.board.target = Some(board);
                 self.sync(session);
             }
+            DocumentTarget::BoardWorkspace(_) => {
+                self.switch(Workspace::Board, session);
+                self.board.target = session.project().and_then(|project| project.board_target());
+                self.sync(session);
+            }
         }
     }
 
@@ -313,13 +326,14 @@ impl EditorView {
     }
 
     /// Resolve a saved target with a fresh runtime identity and no selection or gesture.
-    /// Missing targets retain their snapshot and cannot authorize editing another document.
+    /// Empty workspaces may bind the board subsequently created in their project. Missing
+    /// explicit targets retain their snapshot and cannot authorize editing another document.
     /// Filter and card choices restore independently of selection, which always starts empty.
     pub(super) fn from_state(id: ViewId, state: &ViewState, session: &Session) -> Self {
         let mut view = Self::new(id);
         view.workspace = match state.target {
             DocumentTarget::Sheet(_) => Workspace::Schematic,
-            DocumentTarget::Board(_) => Workspace::Board,
+            DocumentTarget::Board(_) | DocumentTarget::BoardWorkspace(_) => Workspace::Board,
         };
         view.board.target = state.board;
         view.sheet = state.schematic;
@@ -327,7 +341,8 @@ impl EditorView {
             view.sheet = Some(sheet);
         }
         view.sync(session);
-        if view.binding.is_none_or(|binding| binding.target != state.target) {
+        let generic_board = matches!(state.target, DocumentTarget::BoardWorkspace(project) if session.project().is_some_and(|p| p.id() == project));
+        if !generic_board && view.binding.is_none_or(|binding| binding.target != state.target) {
             view.binding = None;
             view.unavailable = Some(state.clone());
         }
@@ -452,7 +467,10 @@ impl EditorView {
         self.input(session)?;
         let name = match self.workspace {
             Workspace::Schematic => self.sheet_snapshot.as_ref()?.sheet_name(),
-            Workspace::Board => session.project()?.board_view(self.board.target?)?.name(),
+            Workspace::Board => match self.board.target {
+                Some(target) => session.project()?.board_view(target)?.name(),
+                None => Workspace::Board.title(),
+            },
         };
         Some(format!("{} › {name}", session.project()?.name))
     }
@@ -566,7 +584,7 @@ impl EditorView {
             }
             return true;
         }
-        let board_target = self.board.target.or_else(|| session.project().map(|p| p.board_target()));
+        let board_target = self.board.target.or_else(|| session.project().and_then(|p| p.board_target()));
         if self.workspace == Workspace::Board
             && let Some(target) = board_target
             && session.project().is_some_and(|project| project.board_view(target).is_none())

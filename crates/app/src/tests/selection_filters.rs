@@ -231,6 +231,8 @@ fn live_filters_match_the_card_and_refuse_unsupported_or_filtered_targets() {
 fn board_filters_prevent_footprint_selection_and_keep_graphics_independent() {
     let mut h = fixture();
     let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
     h.state_mut().run(
         pcbcraft_engine::PLACE_FOOTPRINT,
         &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),

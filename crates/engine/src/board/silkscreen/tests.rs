@@ -8,7 +8,7 @@ use serde_json::json;
 /// Build a physical placement through public commands, without relying on saved file edits.
 fn session() -> Session {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     let symbol = s.project().unwrap().symbols()[0].id();
     s.apply(
@@ -36,7 +36,7 @@ fn settings_are_atomic_undoable_and_persistent() {
     assert_eq!(encode_documents(decode_documents(&after).unwrap()).unwrap(), after);
     assert_eq!(encode_documents(decode_packed(&encode_packed(s.snapshot().unwrap()).unwrap()).unwrap().project).unwrap(), after);
     assert_eq!(s.inspect()["project"]["board"]["silkscreen"], style);
-    let board = s.project().unwrap().board_view(s.project().unwrap().board_target()).unwrap();
+    let board = s.project().unwrap().board_view(s.project().unwrap().board_target().unwrap()).unwrap();
     assert_eq!(board.silkscreen().stroke_width_nm, 180_000);
     assert!(board.footprints().next().unwrap().graphics.iter().filter_map(|g| g.stroke_nm).all(|width| width == 180_000));
     let current = s.revision();
@@ -94,7 +94,7 @@ fn technical_reference_retains_the_q_tail_above_sot23() {
     )
     .unwrap();
     let project = s.project().unwrap();
-    let footprint = project.board_view(project.board_target()).unwrap().footprints().find(|f| f.reference == "Q1").unwrap();
+    let footprint = project.board_view(project.board_target().unwrap()).unwrap().footprints().find(|f| f.reference == "Q1").unwrap();
     assert!(footprint.graphics.iter().any(|g| g.stroke_nm.is_some() && g.points.len() == 2 && g.points.iter().all(|p| p.y_nm < -1_350_000) && {
         let dx = g.points[1].x_nm - g.points[0].x_nm;
         let dy = g.points[1].y_nm - g.points[0].y_nm;

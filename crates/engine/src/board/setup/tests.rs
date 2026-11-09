@@ -7,7 +7,7 @@ use std::sync::Arc;
 /// Start an ordinary project and initialize its board through the command catalog.
 fn session(copper_layers: u64) -> Session {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":copper_layers}));
     s
 }
@@ -89,7 +89,7 @@ fn setup_availability_follows_board_state() {
     };
     unavailable(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}), "no project is open");
     unavailable(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}), "no project is open");
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     assert!(s.available(INITIALIZE_BOARD_SETUP));
     unavailable(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}), "initialize board setup first");
     let stale_revision = s.revision();
@@ -112,7 +112,7 @@ fn setup_availability_follows_board_state() {
     assert!(!s.available(INITIALIZE_BOARD_SETUP));
     assert!(s.available(SET_BOARD_SETUP), "populated boards still permit metadata edits");
 
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     populate(&mut s);
     assert!(s.available(INITIALIZE_BOARD_SETUP), "existing placements require explicit binding resolution at execution");
     let before = s.inspect();
@@ -223,7 +223,7 @@ fn populated_boards_reject_structural_edits() {
     reject(&mut s, SET_BOARD_SETUP, json!({"setup":candidate,"expected_revision":revision}));
     let configured = s.snapshot().unwrap();
     let mut legacy = Session::default();
-    legacy.apply("project.new", &json!({})).unwrap();
+    legacy.apply("project.new", &json!({"create_board":true,})).unwrap();
     populate(&mut legacy);
     let revision = legacy.revision();
     reject(&mut legacy, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"expected_revision":revision}));
@@ -341,7 +341,7 @@ fn populated_initialization_explicitly_resolves_existing_copper_bindings() {
     use crate::board::{definition::CopperBinding, view::CopperLayers};
     for count in [2, 4] {
         let mut s = Session::default();
-        s.apply("project.new", &json!({})).unwrap();
+        s.apply("project.new", &json!({"create_board":true,})).unwrap();
         for (index, definition) in ["resistor-0402", "header-1x02-254", "generic-through-hole-2"].into_iter().enumerate() {
             s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":index as i64*20_000_000,"y_nm":0,"expected_revision":s.revision()}))
                 .unwrap();
@@ -369,7 +369,7 @@ fn populated_initialization_explicitly_resolves_existing_copper_bindings() {
             json!({"board":"00000000-0000-4000-8000-000000000099","copper_layers":count,"resolve_existing_footprints":true,"expected_revision":revision}),
         );
         reject(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":count,"resolve_existing_footprints":true,"expected_revision":revision-1}));
-        let board = s.project().unwrap().board_target().board;
+        let board = s.project().unwrap().board_target().unwrap().board;
         apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"board":board,"copper_layers":count,"resolve_existing_footprints":true}));
         assert_eq!(s.revision(), revision + 1);
         let after = s.inspect();
@@ -496,7 +496,7 @@ fn setup_and_silkscreen_publish_atomically() {
     for initialize in [true, false] {
         let mut s = if initialize {
             let mut s = Session::default();
-            s.apply("project.new", &json!({})).unwrap();
+            s.apply("project.new", &json!({"create_board":true,})).unwrap();
             s
         } else {
             session(2)
@@ -538,7 +538,7 @@ fn setup_and_silkscreen_publish_atomically() {
 #[test]
 fn complete_initial_setup_drafts_preserve_legacy_drawings() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let edge = s.project().unwrap().boards().next().unwrap().layers().into_iter().find(|l| l.purpose == LayerPurpose::Outline).unwrap().id;
     apply(&mut s, crate::ADD_DRAWING, json!({"layer":edge,"points":[{"x_nm":0,"y_nm":0},{"x_nm":1000000,"y_nm":0}],"closed":false}));
     let before = persistence::encode_documents(s.snapshot().unwrap()).unwrap();

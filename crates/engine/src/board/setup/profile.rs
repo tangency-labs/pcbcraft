@@ -132,7 +132,7 @@ mod tests {
     /// Create an original two-layer board through production commands for profile tests.
     fn session() -> Session {
         let mut s = Session::default();
-        s.apply("project.new", &json!({})).unwrap();
+        s.apply("project.new", &json!({"create_board":true,})).unwrap();
         s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
         s
     }

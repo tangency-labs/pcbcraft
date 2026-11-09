@@ -31,7 +31,7 @@ fn properties_visibility_defaults_and_saved_choices_restore_consistently() {
 /// Open an original project with one editable symbol through the shared commands.
 fn harness() -> Harness<'static, PcbApp> {
     let mut app = PcbApp::default();
-    app.run("project.new", &json!({"name":"Arrangement test"}));
+    app.run("project.new", &json!({"name":"Arrangement test","create_board":true}));
     app.run(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":1}));
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(30).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
     h.run();

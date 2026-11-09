@@ -85,6 +85,10 @@ impl PcbApp {
     pub(super) fn begin_footprint_assignment(&mut self, component: Option<String>) {
         let Some(source) = self.views.active.input(&self.session) else { return };
         let Some(project) = self.session.project() else { return };
+        if project.board_target().is_none() {
+            self.message = Some("Create a board before assigning footprints.".into());
+            return;
+        }
         let component_browser = component.is_none();
         let Some(component) = component.or_else(|| project.components().next().map(|c| c.id())) else { return };
         let mut edit = Edit {
@@ -120,7 +124,10 @@ impl PcbApp {
         let Some(project) = self.session.snapshot() else { return };
         let catalog = project.footprint_catalog();
         let component = project.components().find(|c| c.id() == edit.component);
-        let placed = project.board_view(project.board_target()).is_some_and(|board| board.footprints().any(|f| f.component == edit.component));
+        let placed = project
+            .board_target()
+            .and_then(|target| project.board_view(target))
+            .is_some_and(|board| board.footprints().any(|f| f.component == edit.component));
         let assigned = project.footprint_assignments().into_iter().find(|a| a["component"] == edit.component);
         let excluded = component.is_some_and(|c| c.metadata.attributes.exclude_from_board);
         let placement = (self.views.active.workspace == Workspace::Board && assigned.is_some() && !placed)
@@ -345,7 +352,8 @@ impl PcbApp {
             return;
         }
         if assign || place {
-            let mut params = json!({"board": project.board_target().board,"component":edit.component,"expected_revision":edit.source.revision});
+            let Some(board) = project.board_target() else { return };
+            let mut params = json!({"board": board.board,"component":edit.component,"expected_revision":edit.source.revision});
             let command = if assign {
                 let Some(d) = &edit.definition else { return };
                 params["library"] = json!(d.library);
@@ -375,7 +383,7 @@ impl PcbApp {
                         && let Some(footprint) = self
                             .session
                             .project()
-                            .and_then(|p| p.board_view(p.board_target()))
+                            .and_then(|p| p.board_target().and_then(|target| p.board_view(target)))
                             .and_then(|board| board.footprints().find(|f| f.component == edit.component))
                     {
                         self.views.active.camera.request_center(footprint.position);
