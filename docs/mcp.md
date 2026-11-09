@@ -154,11 +154,15 @@ without a manufacturing or clearance claim.
 route tool. Each takes `board` and `expected_revision`. Routing also takes a copper
 `layer` UUID from `project.boards[].layers`, `width_nm` (10,000 to 10,000,000) and
 2–256 ordered `points`; each neighboring pair becomes one straight segment, all in
-one undo step. Deleting takes `tracks`, unique segment UUIDs from
-`project.boards[].tracks`. A route is refused whole when a point is out of range,
+one undo step. Optional `layer_changes`, a list of `{at, layer}` in increasing
+vertex order after the first, places a through via at `points[at]` and continues on
+that copper layer; a change at the last vertex ends the route on a via. Layer changes
+require `via_diameter_nm` and `via_drill_nm`, with the drill smaller than the pad.
+Deleting takes `tracks` and/or `vias`, unique UUIDs from `project.boards[].tracks`
+and `.vias`; at least one item is required, and deleting a via keeps its tracks. A route is refused whole when a point is out of range,
 neighbors repeat, the layer is not copper in the board setup, or its copper would
 join pads on two different nets (the error names both). Copper connects where it
-overlaps on a shared layer, and the board ratsnest drops airwires between
+overlaps on a shared layer, a via joins the copper it overlaps on every layer, and the board ratsnest drops airwires between
 terminals already joined by tracks. This is not a clearance or DRC check. Live `view.set_layer` uses the same
 Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.

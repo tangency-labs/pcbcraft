@@ -460,12 +460,13 @@ impl Encoder {
             || project.board.outline.is_some()
             || project.board.drawings.is_some()
             || !project.board.tracks.is_empty()
+            || !project.board.vias.is_empty()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
             || project.board.footprints().iter().any(|f| f.rotation != 0)
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks or footprint rotation; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias or footprint rotation; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;

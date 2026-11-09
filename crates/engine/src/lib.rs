@@ -107,6 +107,9 @@ enum ParamKind {
     TrackPath,
     TrackWidth,
     TrackIds,
+    LayerChanges,
+    ViaDiameter,
+    ViaDrill,
     Closed,
     BoardId,
     SheetId,
@@ -135,6 +138,9 @@ impl ParamKind {
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
+            Self::LayerChanges => board::track::layer_changes_schema(),
+            Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
+            Self::ViaDrill => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM,"maximum":board::track::MAX_VIA_DIAMETER_NM - 1}),
             Self::TrackWidth => json!({"type":"integer","minimum":board::track::MIN_WIDTH_NM,"maximum":board::track::MAX_WIDTH_NM}),
             Self::TrackIds => {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"uniqueItems":true,"items":{"type":"string","format":"uuid"}})
@@ -274,6 +280,23 @@ impl ParamKind {
             {
                 Ok(())
             }
+            Self::LayerChanges
+                if serde_json::from_value::<Vec<board::track::LayerChange>>(value.clone())
+                    .is_ok_and(|changes| changes.len() <= board::track::MAX_PATH_POINTS) =>
+            {
+                Ok(())
+            }
+            Self::ViaDiameter
+                if value.as_i64().is_some_and(|n| (board::track::MIN_VIA_DRILL_NM + 1..=board::track::MAX_VIA_DIAMETER_NM).contains(&n)) =>
+            {
+                Ok(())
+            }
+            Self::ViaDrill if value.as_i64().is_some_and(|n| (board::track::MIN_VIA_DRILL_NM..board::track::MAX_VIA_DIAMETER_NM).contains(&n)) => {
+                Ok(())
+            }
+            Self::LayerChanges => Err("must contain layer changes with a vertex index and a copper layer UUID"),
+            Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
+            Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
             Self::TrackPath => Err("must contain 2–256 bounded vertices"),
             Self::TrackWidth => Err("must be a track width from 10000 to 10000000 nanometers"),
             Self::TrackIds => Err("must contain unique non-nil track UUIDs"),
@@ -1162,7 +1185,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: ADD_TRACKS,
         title: "Route Track",
-        summary: "Add a path of straight copper segments on one copper layer, in one undo step. Refused if its copper would join two different nets.",
+        summary: "Add a path of straight copper segments, with a through via wherever it changes layer, in one undo step. Refused if its copper would join two different nets.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
@@ -1174,16 +1197,35 @@ const CATALOG: &[Command] = &[
                 summary: "Ordered path vertices in integer nanometers; each neighbor pair becomes one segment",
                 kind: ParamKind::TrackPath,
             },
+            Param {
+                name: "layer_changes",
+                required: false,
+                summary: "Interior vertices where a via switches the route to another copper layer, in increasing order",
+                kind: ParamKind::LayerChanges,
+            },
+            Param {
+                name: "via_diameter_nm",
+                required: false,
+                summary: "Via pad diameter in integer nanometers; required with layer changes",
+                kind: ParamKind::ViaDiameter,
+            },
+            Param {
+                name: "via_drill_nm",
+                required: false,
+                summary: "Via drill diameter in integer nanometers, smaller than the pad; required with layer changes",
+                kind: ParamKind::ViaDrill,
+            },
         ],
     },
     Command {
         id: DELETE_TRACKS,
         title: "Delete Tracks",
-        summary: "Remove addressed track segments, leaving footprints and other copper unchanged. One undo step.",
+        summary: "Remove addressed track segments and vias, leaving footprints and other copper unchanged. One undo step.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
-            Param { name: "tracks", required: true, summary: "Unique track segment UUIDs from board inspection", kind: ParamKind::TrackIds },
+            Param { name: "tracks", required: false, summary: "Unique track segment UUIDs from board inspection", kind: ParamKind::TrackIds },
+            Param { name: "vias", required: false, summary: "Unique via UUIDs from board inspection", kind: ParamKind::TrackIds },
         ],
     },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
@@ -1585,7 +1627,7 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json", "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json", "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks(), "vias":board.vias()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),

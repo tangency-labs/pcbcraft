@@ -93,6 +93,8 @@ struct BoardDocument {
     graphics: Option<crate::board::drawing::Drawings>,
     #[serde(default, deserialize_with = "present")]
     tracks: Option<Vec<crate::board::track::Track>>,
+    #[serde(default, deserialize_with = "present")]
+    vias: Option<Vec<crate::board::track::Via>>,
     footprints: Vec<Footprint>,
 }
 
@@ -279,14 +281,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             outline: None,
             graphics: None,
             tracks: None,
+            vias: None,
             baseline: None,
             footprints: vec![],
         }
     };
 
     let tracked = board.format == TRACK_BOARD_FORMAT;
-    if tracked != board.tracks.as_ref().is_some_and(|tracks| !tracks.is_empty()) {
-        return Err("board.json: nonempty tracks require board format 12".into());
+    let routed = board.tracks.as_ref().is_some_and(|tracks| !tracks.is_empty()) || board.vias.as_ref().is_some_and(|vias| !vias.is_empty());
+    if tracked != routed || board.tracks.as_ref().is_some_and(Vec::is_empty) || board.vias.as_ref().is_some_and(Vec::is_empty) {
+        return Err("board.json: tracks and vias require board format 12, which requires at least one".into());
     }
     if !tracked && matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
         return Err("board.json: accepted baselines require board format 10, 11 or 12".into());
@@ -488,9 +492,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         graphics.validate(project_data).map_err(|error| format!("board.json: {error}"))?;
         Arc::make_mut(&mut project_data.board).drawings = Some(graphics);
     }
-    if let Some(mut tracks) = board.tracks {
-        crate::board::track::validate(project_data, &mut tracks).map_err(|error| format!("board.json: {error}"))?;
-        Arc::make_mut(&mut project_data.board).tracks = tracks;
+    if tracked {
+        let mut tracks = board.tracks.unwrap_or_default();
+        let mut vias = board.vias.unwrap_or_default();
+        crate::board::track::validate(project_data, &mut tracks, &mut vias).map_err(|error| format!("board.json: {error}"))?;
+        let routed = Arc::make_mut(&mut project_data.board);
+        routed.tracks = tracks;
+        routed.vias = vias;
     }
     validate_watermark(&project)?;
     Ok(project)
@@ -847,7 +855,7 @@ impl DocumentsEncoder {
 /// Keep legacy bytes until newer authored data requires a newer format. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
-/// desired package choices version 11, and copper tracks version 12. Version 12 is a
+/// desired package choices version 11, and copper tracks and vias version 12. Version 12 is a
 /// superset: it may carry any earlier field, so tracks never drop baseline or intent data.
 fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let board = &project.board;
@@ -858,7 +866,7 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
     if let Some(setup) = setup {
-        let format = if !board.tracks.is_empty() {
+        let format = if !board.tracks.is_empty() || !board.vias.is_empty() {
             TRACK_BOARD_FORMAT
         } else if board.has_pending_package_intent(project) {
             INTENT_BOARD_FORMAT
@@ -902,7 +910,7 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if !board.tracks.is_empty() {
+        let format = if !board.tracks.is_empty() || !board.vias.is_empty() {
             TRACK_BOARD_FORMAT
         } else if board.has_pending_package_intent(project) {
             INTENT_BOARD_FORMAT
@@ -960,6 +968,14 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         let mut first = true;
         for track in &board.tracks {
             record(bytes, &mut first, track)?;
+        }
+        bytes.extend_from_slice(b"  ],\n");
+    }
+    if !board.vias.is_empty() {
+        bytes.extend_from_slice(b"  \"vias\": [\n");
+        let mut first = true;
+        for via in &board.vias {
+            record(bytes, &mut first, via)?;
         }
         bytes.extend_from_slice(b"  ],\n");
     }

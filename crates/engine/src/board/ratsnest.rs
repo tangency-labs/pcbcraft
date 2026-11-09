@@ -1,7 +1,7 @@
 //! Accepted-connectivity display geometry, independent of the proposed schematic.
 //!
 //! Each net uses a lexicographically spatially sorted spanning chain. Terminals already
-//! joined by copper tracks share an island, and the chain skips pairs whose islands are
+//! joined by copper tracks and vias share an island, and the chain skips pairs whose islands are
 //! already joined, so a fully routed net shows no airwires. This bounded approximation is a
 //! display aid, not a minimum spanning tree, router, clearance or fabrication-readiness check.
 
@@ -85,7 +85,7 @@ impl BoardView<'_> {
             net_count: baseline.nets.len(),
             terminal_count: 0,
         };
-        let copper = if board.tracks.is_empty() { super::track::Copper::default() } else { self.copper() };
+        let copper = if board.tracks.is_empty() && board.vias.is_empty() { super::track::Copper::default() } else { self.copper() };
         for (net, state) in baseline.nets.iter().enumerate() {
             let mut endpoints = Vec::with_capacity(state.terminals.len());
             result.terminal_count += state.terminals.len();

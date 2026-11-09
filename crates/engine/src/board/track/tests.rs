@@ -196,3 +196,117 @@ fn connectivity_geometry_is_exact_at_boundaries() {
     let clockwise = [p(0, 0), p(0, 10), p(10, 10), p(10, 0)];
     assert!(inside(p(5, 5), &clockwise));
 }
+
+/// Add a route with layer changes and the default via size.
+fn route_with_vias(session: &mut Session, layer: Uuid, points: &[Point], changes: &[(usize, Uuid)]) -> Result<u64, CommandError> {
+    let changes: Vec<_> = changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect();
+    session.apply(
+        ADD_TRACKS,
+        &json!({"layer":layer,"width_nm":DEFAULT_WIDTH_NM,"points":points,"layer_changes":changes,
+            "via_diameter_nm":DEFAULT_VIA_DIAMETER_NM,"via_drill_nm":DEFAULT_VIA_DRILL_NM,"expected_revision":session.revision()}),
+    )
+}
+
+/// A route can leave a front pad, drop through a via to the back, cross there, and come back up
+/// through a second via into the other pad. Vias join copper on every layer, so the airwire
+/// clears. The route is one edit, saves vias beside tracks, reopens identically and undoes whole.
+#[test]
+fn vias_carry_a_route_between_layers_in_one_edit() {
+    let mut s = routed_fixture();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let line = view(&s).ratsnest().unwrap().lines[0].clone();
+    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let (a, b) = (line.from.position, line.to.position);
+    let y = a.y_nm + 2_000_000;
+    let points = [a, Point { x_nm: a.x_nm, y_nm: y }, Point { x_nm: b.x_nm, y_nm: y }, b];
+    let revision = s.revision();
+    route_with_vias(&mut s, front, &points, &[(1, back), (2, front)]).unwrap();
+    assert_eq!(s.revision(), revision + 1, "segments and vias land in one edit");
+    let layers: Vec<_> = {
+        let mut tracks = view(&s).tracks().to_vec();
+        tracks.sort_by_key(|track| (track.start.y_nm, track.start.x_nm == a.x_nm));
+        tracks.iter().map(|track| (track.start, track.layer)).collect()
+    };
+    assert_eq!(layers.len(), 3);
+    assert_eq!(view(&s).tracks().iter().filter(|track| track.layer == back).count(), 1, "only the crossing runs on the back");
+    let vias = view(&s).vias().to_vec();
+    assert_eq!(vias.len(), 2);
+    assert!(vias.iter().all(|via| via.diameter_nm == DEFAULT_VIA_DIAMETER_NM && via.drill_nm == DEFAULT_VIA_DRILL_NM));
+    let at: Vec<_> = vias.iter().map(|via| via.at).collect();
+    assert!(at.contains(&points[1]) && at.contains(&points[2]), "vias sit at the layer-change vertices");
+    let on_net = |lines: &[super::super::ratsnest::Airwire]| lines.iter().filter(|l| l.net == line.net).count();
+    assert_eq!(on_net(&view(&s).ratsnest().unwrap().lines), 1, "the via route joins both pads");
+
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    let text = String::from_utf8(saved["board.json"].clone()).unwrap();
+    assert!(text.contains("\"format\": \"pcbcraft-board/12\"") && text.contains("  \"vias\": [\n"), "{text}");
+    assert_eq!(text.matches("\"drill_nm\":300000").count(), 2, "one line per via");
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    s.apply("edit.redo", &json!({})).unwrap();
+
+    let id = vias[0].id;
+    s.apply(DELETE_TRACKS, &json!({"vias":[id],"expected_revision":s.revision()})).unwrap();
+    assert_eq!(view(&s).vias().len(), 1);
+    assert_eq!(view(&s).tracks().len(), 3, "deleting a via leaves its tracks");
+    assert_eq!(on_net(&view(&s).ratsnest().unwrap().lines), 2, "without the via the layers no longer join");
+}
+
+/// A via joins pads on any layer, so one that lands on a pad of another net is a short.
+#[test]
+fn a_via_onto_another_nets_pad_is_refused() {
+    let mut s = routed_fixture();
+    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let footprint = view(&s).footprints().find(|f| f.pads.iter().all(|p| p.net.is_some()) && f.pads[0].net != f.pads[1].net).unwrap();
+    let (a, b) = (footprint.pads[0].center, footprint.pads[1].center);
+    let y = a.y_nm + 2_000_000;
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let error = route_with_vias(
+        &mut s,
+        front,
+        &[a, Point { x_nm: a.x_nm, y_nm: y }, Point { x_nm: b.x_nm, y_nm: y }, b, Point { x_nm: b.x_nm + 1_000_000, y_nm: b.y_nm }],
+        &[(1, back), (3, front)],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("would connect nets"), "{error}");
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Layer changes must sit at increasing vertices after the first, change layer, and carry a
+/// valid via size; deleting needs at least one item. Every refusal leaves the board unchanged.
+#[test]
+fn invalid_layer_changes_and_deletes_change_nothing() {
+    let mut s = routed_fixture();
+    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let p = |x| Point { x_nm: x, y_nm: 20_000_000 };
+    let points = [p(0), p(2_000_000), p(4_000_000), p(6_000_000)];
+    let revision = s.revision();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    for changes in [vec![(0, back)], vec![(4, back)], vec![(3, front)], vec![(2, back), (1, front)], vec![(1, back), (1, front)], vec![(1, front)]] {
+        assert!(route_with_vias(&mut s, front, &points, &changes).is_err(), "{changes:?}");
+    }
+    let base =
+        json!({"layer":front,"width_nm":DEFAULT_WIDTH_NM,"points":points,"layer_changes":[{"at":1,"layer":back}],"expected_revision":revision});
+    assert!(s.apply(ADD_TRACKS, &base).is_err(), "via sizes are required with layer changes");
+    let mut wide_drill = base.clone();
+    wide_drill["via_diameter_nm"] = json!(400_000);
+    wide_drill["via_drill_nm"] = json!(400_000);
+    assert!(s.apply(ADD_TRACKS, &wide_drill).is_err(), "the drill must be smaller than the pad");
+    assert!(s.apply(DELETE_TRACKS, &json!({"expected_revision":revision})).is_err());
+    assert!(s.apply(DELETE_TRACKS, &json!({"vias":[Uuid::from_u128(3)],"expected_revision":revision})).is_err());
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// A route may end on a via, ready for the other layer.
+#[test]
+fn a_route_can_end_on_a_via() {
+    let mut s = routed_fixture();
+    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let end = Point { x_nm: 2_000_000, y_nm: 20_000_000 };
+    route_with_vias(&mut s, front, &[Point { x_nm: 0, y_nm: 20_000_000 }, end], &[(1, back)]).unwrap();
+    assert_eq!(view(&s).tracks().len(), 1);
+    assert_eq!(view(&s).vias().iter().map(|via| via.at).collect::<Vec<_>>(), vec![end]);
+}

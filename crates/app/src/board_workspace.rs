@@ -9,6 +9,38 @@ use pcbcraft_chrome::{
     workspace::{self, Placement, RibbonTool, ToolIcon},
 };
 
+/// A ribbon length field shown and edited in the display units, holding whole nanometers in
+/// `value`, clamped to `range`. Returns whether the person changed it.
+fn length_field(
+    ui: &mut Ui,
+    title: &str,
+    value: &mut i64,
+    range: std::ops::RangeInclusive<i64>,
+    unit: pcbcraft_chrome::units::Unit,
+    enabled: bool,
+) -> bool {
+    let per_unit = match unit {
+        pcbcraft_chrome::units::Unit::Mm => pcbcraft_chrome::units::NM_PER_MM,
+        pcbcraft_chrome::units::Unit::Mil => pcbcraft_chrome::units::NM_PER_MIL,
+    } as f64;
+    let mut shown = *value as f64 / per_unit;
+    let changed = workspace::ribbon_field(ui, title, |ui| {
+        ui.add_enabled(
+            enabled,
+            egui::DragValue::new(&mut shown)
+                .range(*range.start() as f64 / per_unit..=*range.end() as f64 / per_unit)
+                .speed(if unit == pcbcraft_chrome::units::Unit::Mm { 0.01 } else { 0.5 })
+                .max_decimals(3)
+                .suffix(format!(" {}", unit.symbol())),
+        )
+        .changed()
+    });
+    if changed {
+        *value = ((shown * per_unit).round() as i64).clamp(*range.start(), *range.end());
+    }
+    changed
+}
+
 impl PcbApp {
     /// Delete only explicitly selected placements in the addressed focused view. Active tools
     /// and previews keep ownership of input; schematic components and package choices remain.
@@ -90,8 +122,9 @@ impl PcbApp {
     /// The active-layer field uses the Layers card's view-local handler, without editing the project.
     /// Components › Footprints opens the package chooser for the selected footprint's component,
     /// or leaves the component unselected when no footprint is selected.
-    /// Route › Track (X) arms copper routing on a visible active copper layer; Track width sets
-    /// the next route's width, in the display units, for this view only without editing the project.
+    /// Route › Track (X) arms copper routing on a visible active copper layer. Track width, Via
+    /// diameter and Via drill set the next route's sizes, in the display units, for this view only
+    /// without editing the project.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let setup =
@@ -247,30 +280,14 @@ impl PcbApp {
         if workspace::ribbon_group(ui, "Route", &[route]).is_some() {
             self.start_route();
         }
-        // The width is shown and edited in the display units; the view keeps whole nanometers.
+        use pcbcraft_engine::board::track::{MAX_VIA_DIAMETER_NM, MAX_WIDTH_NM, MIN_VIA_DRILL_NM, MIN_WIDTH_NM};
         let unit = self.preferences.units;
-        let per_unit = match unit {
-            pcbcraft_chrome::units::Unit::Mm => pcbcraft_chrome::units::NM_PER_MM,
-            pcbcraft_chrome::units::Unit::Mil => pcbcraft_chrome::units::NM_PER_MIL,
-        } as f64;
-        let mut width = self.views.active.board.tracks.width_nm as f64 / per_unit;
-        let changed = workspace::ribbon_field(ui, "Track width", |ui| {
-            ui.add_enabled(
-                enabled,
-                egui::DragValue::new(&mut width)
-                    .range(
-                        pcbcraft_engine::board::track::MIN_WIDTH_NM as f64 / per_unit..=pcbcraft_engine::board::track::MAX_WIDTH_NM as f64 / per_unit,
-                    )
-                    .speed(if unit == pcbcraft_chrome::units::Unit::Mm { 0.01 } else { 0.5 })
-                    .max_decimals(3)
-                    .suffix(format!(" {}", unit.symbol())),
-            )
-            .changed()
-        });
-        if changed {
-            self.views.active.board.tracks.width_nm =
-                ((width * per_unit).round() as i64).clamp(pcbcraft_engine::board::track::MIN_WIDTH_NM, pcbcraft_engine::board::track::MAX_WIDTH_NM);
-        }
+        let tracks = &mut self.views.active.board.tracks;
+        length_field(ui, "Track width", &mut tracks.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, enabled);
+        length_field(ui, "Via diameter", &mut tracks.via_diameter_nm, MIN_VIA_DRILL_NM + 1..=MAX_VIA_DIAMETER_NM, unit, enabled);
+        let drill_max = tracks.via_diameter_nm - 1;
+        length_field(ui, "Via drill", &mut tracks.via_drill_nm, MIN_VIA_DRILL_NM..=drill_max, unit, enabled);
+        tracks.via_drill_nm = tracks.via_drill_nm.min(drill_max);
         workspace::ribbon_separator(ui);
         let tools = [
             RibbonTool { icon: ToolIcon::Fit, label: "Fit", description: "Fit board", shortcut: "", enabled, active: false, toggle: false },

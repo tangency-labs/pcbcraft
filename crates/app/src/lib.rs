@@ -1691,6 +1691,7 @@ impl PcbApp {
                 tracks.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
                 tracks.backspace_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace));
                 tracks.posture_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Slash));
+                tracks.via_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::V));
             }
             if self.views.active.board.drawing.tool == Some(board_drawing::Tool::Lines) {
                 self.views.active.board.drawing.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
@@ -2260,6 +2261,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB layout", "Route track", "X".to_owned()));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));
+    list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));
     list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
     list.push(("PCB layout", "Remove last track vertex", "Backspace".to_owned()));
     list.push(("PCB layout", "Next layer", "+".to_owned()));

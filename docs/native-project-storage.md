@@ -54,7 +54,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11` or `/12` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, and version 12 combines metadata with explicit board registration |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/12` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks |
+| `board.json` | `pcbcraft-board/1` through `/12` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks and vias |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -297,11 +297,15 @@ one straight segment on its own line: a UUID `id`, a copper `layer` UUID from th
 setup, an integer `width_nm` from 10,000 to 10,000,000, and integer-nanometer
 `start` and `end` points that differ. Records sort by UUID, so adding or deleting a
 segment changes only its own line. The codec rejects duplicate IDs, non-copper or
-unknown layers, out-of-range widths and more than 4096 segments. Format 12 requires
-at least one track, and earlier formats reject a `tracks` field. Deleting the last
-track returns the board to the format its other data requires, with the same bytes
-as before the first route. Net membership is not stored; it is derived from copper
-geometry and the accepted nets. Legacy single-file export refuses tracks.
+unknown layers, out-of-range widths and more than 4096 segments. A `vias` array
+follows in the same style: a UUID `id`, an integer-nanometer `at` point, and
+`diameter_nm` and `drill_nm`, with the drill at least 50,000 and smaller than the pad
+and the pad at most 10,000,000. A via spans every copper layer and needs a setup with
+at least two; a board holds at most 2048. Format 12 requires at least one track or
+via, either array is omitted when empty, and earlier formats reject both fields.
+Deleting the last track and via returns the board to the format its other data
+requires, with the same bytes as before the first route. Net membership is not stored; it is derived from copper
+geometry and the accepted nets. Legacy single-file export refuses tracks and vias.
 
 The earlier local format 8 rectangle remains readable and byte-stable on no-op
 save. Its first actual geometry edit materializes a layer-addressed drawing in
