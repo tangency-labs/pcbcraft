@@ -470,15 +470,32 @@ fn normalized_targets_keep_the_plain_drive_form() {
 }
 
 /// The plain spelling is used only when Windows reads it as the same file. Guards the #155
-/// review: `CON.pc.zip` is the console device and a trailing dot is dropped in the plain form,
-/// so those targets keep `\\?\`. Simplifying only the parent folder missed both.
+/// review: every Windows version drops a trailing dot or space from the plain form, so those
+/// targets keep `\\?\`. Simplifying only the parent folder missed this.
 #[cfg(windows)]
 #[test]
 fn targets_whose_plain_spelling_differs_keep_the_verbatim_form() {
     let dir = tempfile::tempdir().unwrap();
-    for name in ["CON.pc.zip", "board.pc.zip."] {
+    for name in ["board.pc.zip.", "board.pc.zip "] {
         let target = normalize(&dir.path().join(name)).unwrap();
         assert!(target.to_string_lossy().starts_with(r"\\?\"), "{name}: {}", target.display());
+        assert_eq!(target.file_name(), Some(std::ffi::OsStr::new(name)));
+    }
+}
+
+/// A device-named target such as `CON.pc.zip` keeps `\\?\` exactly when this Windows reads
+/// its plain spelling as the device. Windows 10 and earlier do; Windows 11 reads it as an
+/// ordinary file, and then the plain spelling is the one people chose.
+#[cfg(windows)]
+#[test]
+fn device_named_targets_follow_how_windows_reads_them() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["CON.pc.zip", "NUL.pc.zip", "COM1.pc.zip"] {
+        let target = normalize(&dir.path().join(name)).unwrap();
+        let text = target.to_string_lossy();
+        let plain = std::path::PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(&text));
+        let device = std::path::absolute(&plain).unwrap() != plain;
+        assert_eq!(target.to_string_lossy().starts_with(r"\\?\"), device, "{name}: {}", target.display());
         assert_eq!(target.file_name(), Some(std::ffi::OsStr::new(name)));
     }
 }

@@ -199,12 +199,26 @@ mod tests {
     }
 
     /// A stored `\\?\` path stays as it is when the plain spelling would open something else.
-    /// Guards the #155 review: Windows reads `C:\Projects\CON.pc.zip` as the console device.
+    /// Guards the #155 review: every Windows version drops the trailing dot from
+    /// `C:\Projects\board.pc.zip.`, naming a different file.
     #[cfg(windows)]
     #[test]
-    fn windows_history_keeps_verbatim_paths_whose_plain_form_names_a_device() {
-        let reserved = PathBuf::from(r"\\?\C:\Projects\CON.pc.zip");
-        let text = serde_json::to_string(&vec![RecentProject { name: "Reserved name".to_owned(), path: reserved.clone() }]).unwrap();
-        assert_eq!(RecentProjects::parse(&text).entries()[0].path, reserved);
+    fn windows_history_keeps_verbatim_paths_whose_plain_form_names_another_file() {
+        let verbatim = PathBuf::from(r"\\?\C:\Projects\board.pc.zip.");
+        let text = serde_json::to_string(&vec![RecentProject { name: "Trailing dot".to_owned(), path: verbatim.clone() }]).unwrap();
+        assert_eq!(RecentProjects::parse(&text).entries()[0].path, verbatim);
+    }
+
+    /// A stored device-named path such as `\\?\C:\Projects\CON.pc.zip` keeps `\\?\` exactly when
+    /// this Windows reads the plain spelling as the device: Windows 10 and earlier do, Windows 11
+    /// reads it as an ordinary file and restores the plain form.
+    #[cfg(windows)]
+    #[test]
+    fn windows_history_follows_how_windows_reads_device_names() {
+        let verbatim = PathBuf::from(r"\\?\C:\Projects\CON.pc.zip");
+        let plain = PathBuf::from(r"C:\Projects\CON.pc.zip");
+        let expected = if std::path::absolute(&plain).unwrap() == plain { plain } else { verbatim.clone() };
+        let text = serde_json::to_string(&vec![RecentProject { name: "Device name".to_owned(), path: verbatim }]).unwrap();
+        assert_eq!(RecentProjects::parse(&text).entries()[0].path, expected);
     }
 }
