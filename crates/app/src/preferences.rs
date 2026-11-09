@@ -184,10 +184,11 @@ pub(crate) enum Outcome {
 const APPEARANCE: usize = 0;
 const NAVIGATION: usize = 1;
 const VIEWS: usize = 2;
-const SHORTCUTS: usize = 3;
+const SCHEMATIC: usize = 3;
+const SHORTCUTS: usize = 4;
 /// The AI page follows Shortcuts, as SolidCraft's Assistant page does. Desktop only.
 #[cfg(not(target_arch = "wasm32"))]
-const AI: usize = 4;
+const AI: usize = 5;
 
 /// The settings a page draws, and the shortcut list the read-only Shortcuts page shows.
 pub(crate) struct PageData<'a> {
@@ -239,12 +240,13 @@ impl PreferencesWindow {
             Page { icon: MenuIcon::Appearance, label: "Appearance", draw: appearance },
             Page { icon: MenuIcon::Navigation, label: "Navigation", draw: navigation },
             Page { icon: MenuIcon::Settings, label: "Views", draw: views },
+            Page { icon: MenuIcon::Settings, label: "Schematic", draw: schematic },
             Page { icon: MenuIcon::Keyboard, label: "Shortcuts", draw: shortcuts_page },
         ];
         #[cfg(not(target_arch = "wasm32"))]
         pages.push(Page { icon: MenuIcon::Assistant, label: "AI", draw: ai_page });
         // Search results span pages, so there is no single page whose defaults to restore.
-        let defaults_enabled = matches!(self.state.page, APPEARANCE | NAVIGATION | VIEWS) && !settings::searching(&self.state.query);
+        let defaults_enabled = matches!(self.state.page, APPEARANCE | NAVIGATION | VIEWS | SCHEMATIC) && !settings::searching(&self.state.query);
         let footer = Footer { apply_enabled: *preferences != self.kept, defaults_enabled };
         let mut data = PageData {
             preferences,
@@ -293,8 +295,26 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
         }
         NAVIGATION => preferences.navigation = defaults.navigation,
         VIEWS => preferences.selection_follow = defaults.selection_follow,
+        SCHEMATIC => preferences.auto_heal_wires = defaults.auto_heal_wires,
         _ => {}
     }
+}
+
+/// Automatic wire cleanup shares the Modify menu's saved preference. Disabling it preserves
+/// authored detours and loops; explicit Heal remains available without changing this setting.
+fn schematic(ui: &mut Ui, data: &mut PageData<'_>) {
+    settings::section(ui, "Wiring", |ui| {
+        settings::row_with_keywords(ui, "Auto-heal wires", &["smart routing", "cleanup", "detours", "loops", "overlaps"], |ui| {
+            let response = ui.checkbox(&mut data.preferences.auto_heal_wires, "Enabled");
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), data.preferences.auto_heal_wires, "Auto-heal wires")
+            });
+        });
+        settings::hint(
+            ui,
+            "Simplifies overlapping routes, detours and loops while drawing or moving. Turn off to preserve their shape; use Heal for manual cleanup.",
+        );
+    });
 }
 
 /// Theme, interface scale, PCB grid display, shared grid opacity and display units.
@@ -523,5 +543,7 @@ mod tests {
         assert_eq!((preferences.theme, preferences.grid_opacity_percent), (ThemeChoice::Light, 20));
         restore_page_defaults(&mut preferences, APPEARANCE);
         assert_eq!(preferences, Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, auto_heal_wires: false, ..Preferences::default() });
+        restore_page_defaults(&mut preferences, SCHEMATIC);
+        assert_eq!(preferences, Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, ..Preferences::default() });
     }
 }

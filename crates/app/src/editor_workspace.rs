@@ -1003,6 +1003,8 @@ impl PcbApp {
                                     self.preferences.navigation,
                                     self.preferences.grid_opacity_percent,
                                     self.preferences.auto_heal_wires,
+                                    self.parts.repeats(),
+                                    self.preferences.units,
                                     &view.schematic.wire_draft,
                                     &label,
                                     None,

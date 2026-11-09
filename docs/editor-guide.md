@@ -102,10 +102,18 @@ the sheet. **Cancel**, **Esc** or the header's **×** closes the large form with
 changing the project. On narrower hosts, a Library selector replaces its
 navigation pane; the smallest forms have Parts and Preview tabs.
 
-**Repeat placement** in either catalog keeps the chosen part or power symbol
+**Repeat placement**, enabled by default for new settings, keeps the chosen part or power symbol
 active after each placement, preserving its rotation until **Esc**. With it off,
 one placement finishes the tool. Each instance has its own undo step, and the
 choice is retained when switching catalog presentations or restoring an arrangement.
+The active placement's right-click menu also offers **Repeat placement**, **Rotate**
+and **Cancel**. Placement commits on the primary press, so motion before releasing
+cannot turn a quick placement into a discarded drag.
+
+Right-click empty canvas in the default pointer mode for **Draw wires**, **Place symbol…**,
+**Place ground**, **Select all**, **Unselect all**, **Fit schematic** and a **Grid**
+submenu with the same spacing presets as the status bar. Opening this
+menu preserves the current selection; symbol and wire hits retain their object menus.
 
 **Dock** in the large form switches to a compact catalog, initially docked
 beneath Browser. Its header's **Expand** control returns to the large form.
@@ -128,12 +136,17 @@ geometry.
 
 ## Moving symbols
 
+Hover a symbol and press **G**, or choose **Grab (keep connected)** from its context
+menu, to move it without holding a mouse button. Attached wires follow the symbol;
+click to finish, or use **Esc** or right-click to cancel. Ordinary symbol dragging
+keeps the same connected movement.
+
 Press **M** with a symbol selected, or hover a symbol with no selection, to pick
 it up while leaving its wiring in place. Click to place it elsewhere, or press
 **Esc** or right-click to cancel the preview. **Disconnect and Move** in the
 symbol's context menu performs the same action.
 The move and disconnection share one undo step; placing a replacement at the vacated
-pins connects it to the preserved wire ends. Ordinary symbol dragging keeps wires attached.
+pins connects it to the preserved wire ends.
 
 ## Drawing and editing wires
 
@@ -146,10 +159,16 @@ snapping. Pins and wire connections still use their exact positions. Ordinary cl
 Click to add corners, **Space** to flip the current
 elbow, and **Backspace** to remove the last corner. Click a destination pin or endpoint
 to finish, or press **Enter** or double-click to finish on empty space. **Esc** or
-right-click → **Cancel** discards the draft. Click a completed wire segment to select it;
+right-click → **Cancel** discards the draft and exits drawing. Completing a wire clears
+its corners and keeps the tool ready for a new start; **Esc** returns to selection.
+Click a completed wire segment in selection mode to select it;
 only that segment turns blue, and **Delete** removes it. Drag a segment perpendicular to its
 direction to adjust alignment, or hover it and press **G**, then click to finish. Attached pins
 and junctions stay fixed while the adjoining legs adjust. **Esc** cancels the preview.
+Free endpoints, shared junctions and interior corners can be dragged without selecting
+the wire first. Hover a handle and press **G**, or right-click the wire and choose
+**Grab**, to pick it up without holding a button, then click to place it. Moving a
+shared junction adjusts all its attached routes; terminal pins stay on their symbols.
 Right-click → **Select Wire** selects the whole route for dragging or deletion; box and
 modifier selections continue to select whole wires. Crossings stay disconnected.
 Select a wire segment, then use Capture → **Modify** for **Slice**, **Heal**
@@ -207,8 +226,8 @@ geometry-only moves retain the shorter-route policy.
 While drawing, retracing the draft shortens its preview immediately, including a
 reversal that runs past an earlier corner. Backspace restores the previous clicked
 corner, and finishing keeps the shortened route in one undo step.
-The Modify menu's **Auto-heal wires** toggle defaults on and is remembered as a
-user preference. Turn it off to keep detours and loops during editing, then use **Heal**
+**Preferences → Schematic → Auto-heal wires** defaults on and is remembered as a
+user preference; the Modify menu offers the same toggle. Turn it off to keep detours and loops during editing, then use **Heal**
 on selected wires when you want cleanup. Commands that draw, place, move or attach
 support the optional `auto_heal` boolean with the same default; `schematic.heal_wires`
 always performs cleanup.

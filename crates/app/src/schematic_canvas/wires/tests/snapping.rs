@@ -73,7 +73,7 @@ fn ctrl_temporarily_bypasses_grid_for_the_complete_wire_gesture() {
     assert_eq!(h.state().views.active.camera.snap_nm(), spacing);
     key_ctrl(&mut h, egui::Key::Enter);
     assert_eq!(h.state().message, None);
-    assert!(h.state().views.active.schematic.tool.is_none());
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
     let project = h.state().session.project().unwrap();
     let route = project.wire_path(&project.wires()[0]);
     assert_eq!(route[0], from);
@@ -120,7 +120,7 @@ fn ctrl_preserves_pin_and_stroke_connections() {
             if pin { point } else { Point { y_nm: 0, ..h.state().views.active.camera.unsnapped(target, h.get_by_label("Schematic canvas").rect()) } };
         click_ctrl(&mut h, target);
         assert_eq!(h.state().message, None);
-        assert!(h.state().views.active.schematic.tool.is_none());
+        assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
         let project = h.state().session.project().unwrap();
         let connected = project
             .wires()

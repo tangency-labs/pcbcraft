@@ -777,3 +777,14 @@ The in-place schematic text editor is original PCBcraft code. Its canvas-local d
 use the existing symbol-field and named-net commands, with view/opening/revision checks
 and shared live-command input ownership. No external implementation, asset, dependency
 or native-format change was used for this interaction.
+
+Press-based part placement, persistent wire mode and canvas tool menus are original
+PCBcraft code using the existing engine commands and Craft menu controls. The user's
+context-menu screenshot informed action grouping only; no KiCad implementation,
+icons or artwork was incorporated. No dependency, asset or native-format change
+was introduced.
+
+Wire handle pickup and connected G/context-menu symbol movement extend the existing
+native reshape/move commands with original PCBcraft hit testing and gesture state.
+Fixtures use shared commands. No external implementation, artwork, library data,
+dependency or saved format was added.

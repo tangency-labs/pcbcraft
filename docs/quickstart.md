@@ -77,7 +77,9 @@ the same `VCC` net name, which can be changed before placement.
 
 1. Drag a resistor on the canvas; its wire endpoint follows. Use **Undo**, then
    **Redo**, to check that the move is one edit. Select a resistor and press
-   **E** to change its reference or value, or **R** to rotate it. **M** picks up
+   **E** to change its reference or value, or **R** to rotate it. Hover and press
+   **G** to grab a symbol with its wires attached, then click to place it.
+   **M** picks up
    the selected symbol while leaving its wiring in place; with nothing selected,
    it picks the symbol under the pointer. Click to place it elsewhere, or **Esc**
    to cancel. Right-click → **Disconnect and Move** performs the same action. A replacement placed at the old pins reconnects
@@ -85,8 +87,9 @@ the same `VCC` net name, which can be changed before placement.
 2. Press **A** to open the **Parts Catalog** and focus search. Select a library,
    search for a capacitor and click the result to inspect its preview. Choose
    **Place**, then click the canvas to place it. **R** rotates the placement
-   preview and **Esc** cancels it. Enable **Repeat placement** in the catalog to
-   place several copies with the same rotation, then press **Esc** to stop.
+   preview and **Esc** cancels it. **Repeat placement** keeps placing copies with
+   the same rotation and is enabled by default for new settings. Toggle it in the
+   catalog or the active tool's right-click menu, then press **Esc** to stop.
    Double-clicking a result or pressing **Enter**
    also starts placement; dragging a result onto the canvas places it directly.
    **Manage libraries…** in the catalog or **Libraries → Sources** adds native
@@ -105,7 +108,8 @@ the same `VCC` net name, which can be changed before placement.
    restores snapping, while pins and wires remain connection targets. Click corners
    and a destination pin. **Space**
    flips the current elbow and **Backspace** removes the last corner. **Enter**
-   or a double-click finishes a free end; **Esc** cancels the unfinished wire.
+   or a double-click finishes a free end. The wire tool stays ready for a new route;
+   **Esc** exits it or cancels an unfinished wire.
    Finish on an existing wire segment to create a connected branch. Dragging a
    free-end handle onto a pin or segment also connects it; simply crossing a
    wire still leaves the routes separate. Redrawing onto the same net keeps your new
@@ -127,8 +131,8 @@ the same `VCC` net name, which can be changed before placement.
    until pulled clear, after which dropping back onto them reconnects normally. Moves and draws clean up overlapping
    runs, and **Heal** applies that cleanup to existing selected wires. Dropping
    a part with a pin exactly on a wire connects it; a two-pin part placed across
-   a straight run replaces the wire between its pins. **Auto-heal wires** in the
-   Modify menu defaults on. Retracing a draft shortens the preview as you draw;
+   a straight run replaces the wire between its pins. **Auto-heal wires** in
+   **Preferences → Schematic** (also in the Modify menu) defaults on. Retracing a draft shortens the preview as you draw;
    Backspace restores the preceding clicked corner. Switch automatic healing off to keep detours and loops while
    drawing, then select a wire and use **Heal** for cleanup when desired.
 6. Save your desktop copy, reopen its `project.pc`, and check the edit. In the

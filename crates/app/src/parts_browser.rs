@@ -146,7 +146,7 @@ impl Default for PartsBrowser {
             mode: Mode::Expanded,
             panel: catalog::Panel::at_position(catalog::Position::Left),
             rect: Rect::NOTHING,
-            repeat: false,
+            repeat: true,
         }
     }
 }
@@ -159,8 +159,12 @@ pub(super) struct PartsState {
     panel: catalog::PanelState,
     #[serde(default)]
     mode: Mode,
-    #[serde(default)]
+    #[serde(default = "repeat_default")]
     repeat: bool,
+}
+/// New and pre-repeat catalog settings keep placement armed; an explicit false stays one-shot.
+fn repeat_default() -> bool {
+    true
 }
 impl Default for PartsState {
     /// New compact catalogs start docked beneath Browser; the full chooser starts closed.

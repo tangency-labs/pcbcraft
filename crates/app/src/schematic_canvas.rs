@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 pub(crate) mod fields;
 mod selection;
+mod tool_menu;
+pub(crate) use tool_menu::Action as ToolAction;
 #[cfg(not(target_arch = "wasm32"))]
 mod thumbnail;
 #[cfg(not(target_arch = "wasm32"))]
@@ -16,7 +18,7 @@ pub(crate) use crate::canvas_camera::Camera;
 pub(crate) use wires::{Draft, LegTarget, ReshapeDrag};
 
 use crate::preferences::Navigation;
-use egui::{Align2, FontId, Key, Modifiers, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{Align2, FontId, Key, Painter, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use pcbcraft_chrome::{MenuItem, Tokens, grid as canvas_grid, menu, theme};
 use pcbcraft_engine::wire::Anchor;
 use pcbcraft_engine::{
@@ -76,8 +78,10 @@ pub(crate) enum Tool {
         symbol: SymbolPlacement,
         offset: Vec2,
         revision: u64,
-        /// Context-menu pickup leaves the old wiring in place and finishes on a canvas click.
+        /// Leave old wires at the original pins instead of stretching them when true.
         disconnect: bool,
+        /// Keyboard/context pickup follows the pointer without holding a mouse button.
+        pickup: bool,
     },
     /// Dragging a segment, corner or free end of the selected wire.
     Reshape {
@@ -107,6 +111,7 @@ impl Tool {
 
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
+    ToolAction(ToolAction, egui::Context),
     GrabField(fields::Drag),
     RotateField(fields::Drag),
     EditField(fields::Drag),
@@ -139,7 +144,7 @@ pub(crate) enum Click {
     /// A plain terminal/node click begins a fresh wire draft without a tool shortcut.
     StartWire(Anchor),
     CancelWire,
-    Grab(SymbolPlacement, Vec2),
+    Grab(SymbolPlacement, Vec2, bool),
     FinishMove(Option<Point>),
     /// Select a symbol by ID, or clear the selection after a click on empty canvas.
     Select(Option<String>),
@@ -189,6 +194,7 @@ pub(crate) enum WireAction {
 /// What the selected symbol's context menu asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SymbolAction {
+    Grab,
     DisconnectMove,
     Rotate,
     EditFields,
@@ -204,11 +210,10 @@ pub(crate) enum SymbolAction {
 ///
 /// Disconnect and Move follows the pointer until a primary click commits; Escape, a secondary
 /// click or focus loss discards the preview without changing the document.
-/// Return `Click::CancelWire` when Cancel or Escape dismisses an in-progress wire
-/// through its context menu. An open wire menu can handle cancellation even
-/// while canvas input is blocked.
+/// Active tool menus return `Click::ToolAction` and retain the preview while the popup owns
+/// input. Empty canvas offers drawing, selection and navigation actions.
 ///
-/// With canvas input enabled and no drag in progress, a primary click during
+/// With canvas input enabled, a primary press during
 /// placement returns `Click::Place` at a valid snapped point. In Wire mode,
 /// primary clicks return `Click::WirePoint` for pins, junctions or snapped free points;
 /// double-click or a queued Enter request marks the route complete.
@@ -250,6 +255,8 @@ pub(crate) fn show(
     navigation: Navigation,
     grid_opacity: u8,
     auto_heal: bool,
+    repeat: bool,
+    unit: pcbcraft_chrome::units::Unit,
     draft: &Draft,
     label: &str,
     editing: Option<&crate::inline_text::Target>,
@@ -419,24 +426,36 @@ pub(crate) fn show(
         wires::paint_handles(&painter, rect, project, camera, wire);
     }
 
-    if let Some(Tool::Wire { start: Some(start), .. }) = tool
-        && (input_enabled || response.context_menu_opened())
-        && let Some(popup) = menu::context(&response, |ui| {
-            let cancel = MenuItem::new("Cancel").shortcut("Esc").show(ui);
-            let wire_keys = Modifiers { ctrl: ui.input(|input| input.modifiers.ctrl), ..Modifiers::NONE };
-            let escape = ui.input_mut(|input| input.consume_key(wire_keys, Key::Escape));
-            if escape {
-                ui.close();
-            }
-            cancel || escape
-        })
-    {
-        if popup.inner {
-            return Some(Click::CancelWire);
+    // A placement commits on press. Own the rest of that press/release even if one-shot
+    // placement already returned to selection mode, so it cannot drag the newly placed part.
+    let pressed_placement = response.id.with("placed_on_press");
+    if ui.data(|data| data.get_temp::<bool>(pressed_placement).unwrap_or(false)) {
+        if !ui.input(|input| input.pointer.primary_down())
+            || ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))))
+        {
+            ui.data_mut(|data| data.remove::<bool>(pressed_placement));
         }
-        let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
-        wires::preview(&painter, rect, project, camera, Some(start), draft, anchor, auto_heal, revision);
         return None;
+    }
+
+    if tool_menu::supports(tool.as_ref())
+        && (input_enabled || response.context_menu_opened())
+        && let Some(popup) = menu::context(&response, |ui| tool_menu::active(ui, tool.as_ref(), repeat))
+    {
+        let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
+        if let (Some(Tool::PlaceSymbol { definition, turns, .. }), Some(at)) = (&tool, anchor) {
+            let at = camera.snap(at, rect);
+            if valid_position(at) {
+                paint_symbol(&painter, definition, screen(at), unit_step, *turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
+            }
+        }
+        if let Some(Tool::Wire { start, .. }) = tool {
+            wires::preview(&painter, rect, project, camera, start, draft, anchor, auto_heal, revision);
+            if matches!(popup.inner, Some(ToolAction::Cancel)) {
+                return Some(Click::CancelWire);
+            }
+        }
+        return popup.inner.map(|action| Click::ToolAction(action, ui.ctx().clone()));
     }
 
     // A part dragged from the browser previews under the pointer and places where it's released.
@@ -495,11 +514,15 @@ pub(crate) fn show(
         }
         return None;
     }
-    if matches!(tool, Some(Tool::Reshape { .. })) {
+    if let Some(Tool::Reshape { drag, .. }) = &tool {
         if lost_focus || response.secondary_clicked() {
             return Some(Click::FinishReshape(None));
         }
-        if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+        if if drag.pickup {
+            response.clicked_by(egui::PointerButton::Primary)
+        } else {
+            ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary))
+        } {
             return Some(Click::FinishReshape(reshape_target.filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some())));
         }
         return None;
@@ -512,6 +535,28 @@ pub(crate) fn show(
             return Some(Click::FinishItems(group_delta.filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some())));
         }
         return None;
+    }
+    // Endpoint and corner handles use their own hit area before the narrow stroke picker.
+    // A ready wire tool allows a deliberate handle drag; a plain click still starts a wire.
+    if input_enabled
+        && !lost_focus
+        && matches!(tool, None | Some(Tool::Wire { start: None, .. }))
+        && selected.len() <= 1
+        && !whole_wire_drag
+        && filters.wires
+        && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        && (!filters.symbols || fields::at(ui, project, camera, rect, origin).is_none())
+    {
+        let selected_drag = selected.single_wire().and_then(|wire| wires::reshape_at(project, camera, rect, wire, origin, camera.snap(origin, rect)));
+        let drag = match selected_drag {
+            Some(drag) => Some(drag),
+            None => wires::handle_at(project, camera, rect, origin, camera.snap(origin, rect)).ok()?,
+        };
+        if let Some(drag) = drag {
+            return Some(Click::GrabReshape(drag));
+        }
     }
     if input_enabled
         && !lost_focus
@@ -560,25 +605,37 @@ pub(crate) fn show(
         {
             return Some(Click::GrabReshape(drag));
         }
-        return grab_symbol(project, camera, rect, origin);
+        return grab_symbol(project, camera, rect, origin, false);
     }
 
     if tool.is_none() && (input_enabled || response.context_menu_opened()) {
         // A right-click names its symbol this frame; afterwards the menu follows the selection.
         let pressed = response.secondary_clicked().then(|| response.interact_pointer_pos()).flatten();
-        let target = match pressed {
+        let mut target = match pressed {
             Some(pointer) => filters.symbols.then(|| symbol_at(project, camera, rect, pointer)).flatten().map(|(symbol, _)| symbol.id()),
             None => selected.single_symbol().filter(|_| filters.symbols).map(str::to_owned),
         };
-        let group = selected.len() > 1
+        let mut group = selected.len() > 1
             && (pressed.is_none()
                 || pressed.is_some_and(|p| {
                     let hit = selection::at(ui, project, camera, rect, p, filters);
                     !hit.is_empty() && hit.is_subset(selected)
                 }));
+        // Capture the menu's hit once. An empty-space menu must not turn into the selected
+        // symbol's menu on the next frame, or clear that selection just to keep its rows stable.
+        let context_target = response.id.with("context_target");
+        if pressed.is_some() {
+            ui.data_mut(|data| data.insert_temp(context_target, (target.clone(), group)));
+        } else if response.context_menu_opened()
+            && let Some(captured) = ui.data(|data| data.get_temp::<(Option<String>, bool)>(context_target))
+        {
+            (target, group) = captured;
+        }
         // A wire's menu keeps the leg it was opened on until it closes.
         let leg_id = response.id.with("wire_menu_leg");
+        let origin_id = response.id.with("wire_menu_origin");
         if let Some(pointer) = pressed {
+            ui.data_mut(|data| data.insert_temp(origin_id, pointer));
             let leg = (filters.wires && target.is_none() && !group).then(|| wires::leg_at(project, camera, rect, pointer, revision)).flatten();
             ui.data_mut(|data| match leg {
                 Some(leg) => {
@@ -588,18 +645,24 @@ pub(crate) fn show(
             });
         }
         let leg = ui.data(|data| data.get_temp::<wires::LegTarget>(leg_id)).filter(|_| filters.wires && target.is_none() && !group);
+        let grab = leg.as_ref().filter(|leg| leg.revision == revision).and_then(|leg| {
+            let pointer = ui.data(|data| data.get_temp::<Pos2>(origin_id))?;
+            let mut drag = wires::reshape_at(project, camera, rect, &leg.wire, pointer, camera.snap(pointer, rect))?;
+            drag.pickup = true;
+            Some(drag)
+        });
         let picked = menu::context(&response, |ui| {
             if group {
                 return MenuItem::new("Delete selected items").shortcut("Del").show(ui).then_some(Click::DeleteItems);
             }
             if let Some(leg) = leg.clone() {
-                return wire_menu(ui, &painter, rect, camera, leg);
+                return wire_menu(ui, &painter, rect, camera, leg, grab);
             }
             let Some(id) = target.clone() else {
-                ui.close();
-                return None;
+                return tool_menu::idle(ui, camera.snap_nm(), unit).map(|action| Click::ToolAction(action, ui.ctx().clone()));
             };
             let rows = [
+                ("Grab (keep connected)", "G", SymbolAction::Grab),
                 ("Disconnect and Move", "M", SymbolAction::DisconnectMove),
                 ("Rotate", "R", SymbolAction::Rotate),
                 ("Edit Fields…", "E", SymbolAction::EditFields),
@@ -621,23 +684,26 @@ pub(crate) fn show(
             if let Some(leg) = leg.filter(|_| target.is_none()) {
                 return Some(Click::SelectLeg(leg));
             }
-            return Some(Click::Select(target));
+            if target.is_some() {
+                return Some(Click::Select(target));
+            }
         }
     }
 
-    let disconnecting = matches!(tool, Some(Tool::Move { disconnect: true, .. }));
-    if disconnecting && (lost_focus || response.secondary_clicked()) {
+    let symbol_move = matches!(tool, Some(Tool::Move { .. }));
+    let pickup = matches!(tool, Some(Tool::Move { pickup: true, .. }));
+    if symbol_move && (lost_focus || response.secondary_clicked()) {
         return Some(Click::FinishMove(None));
     }
-    if (disconnecting && response.clicked_by(egui::PointerButton::Primary))
-        || (!disconnecting && moving && response.drag_stopped_by(egui::PointerButton::Primary))
+    if (pickup && response.clicked_by(egui::PointerButton::Primary))
+        || (symbol_move && !pickup && response.drag_stopped_by(egui::PointerButton::Primary))
     {
         return Some(Click::FinishMove(
             moved.map(|(_, point)| point).filter(|_| input_enabled && response.contains_pointer() && group_preview.is_some()),
         ));
     }
 
-    if !input_enabled || response.dragged() {
+    if !input_enabled || (response.dragged() && !matches!(tool, Some(Tool::PlaceSymbol { .. }))) {
         return None;
     }
     if tool.is_none()
@@ -655,15 +721,36 @@ pub(crate) fn show(
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         pcbcraft_chrome::cursor::wire(&painter, screen(point), true);
     }
-    if tool.is_none()
+    if matches!(tool, None | Some(Tool::Wire { start: None, .. }))
         && response.contains_pointer()
         && !ui.ctx().egui_wants_keyboard_input()
         && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::G))
         && let Some(pointer) = response.hover_pos()
-        && let Some(wire) = selection::at(ui, project, camera, rect, pointer, filters).single_wire()
-        && let Some(drag) = wires::reshape_at(project, camera, rect, wire, pointer, camera.snap(pointer, rect))
     {
-        return Some(Click::GrabReshape(drag));
+        if filters.symbols && fields::at(ui, project, camera, rect, pointer).is_some() {
+            return None;
+        }
+        if filters.wires {
+            let selected_drag =
+                selected.single_wire().and_then(|wire| wires::reshape_at(project, camera, rect, wire, pointer, camera.snap(pointer, rect)));
+            let mut drag = match selected_drag {
+                Some(drag) => Some(drag),
+                None => wires::handle_at(project, camera, rect, pointer, camera.snap(pointer, rect)).ok()?,
+            }
+            .or_else(|| {
+                let hit = selection::at(ui, project, camera, rect, pointer, filters);
+                wires::reshape_at(project, camera, rect, hit.single_wire()?, pointer, camera.snap(pointer, rect))
+            });
+            if let Some(drag) = &mut drag {
+                drag.pickup = true;
+            }
+            if let Some(drag) = drag {
+                return Some(Click::GrabReshape(drag));
+            }
+        }
+        if filters.symbols && fields::at(ui, project, camera, rect, pointer).is_none() {
+            return grab_symbol(project, camera, rect, pointer, true);
+        }
     }
     // Field editing and body properties precede click-to-wire for enabled symbols.
     // Explicit placement/wiring tools retain their own double click.
@@ -736,7 +823,10 @@ pub(crate) fn show(
 /// has a grid point to split at), Break (when the leg has any attachment), Delete Segment
 /// and Delete Wire, plus Select Wire for whole-route selection. The hovered row previews
 /// its effect on the canvas.
-fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: wires::LegTarget) -> Option<Click> {
+fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: wires::LegTarget, grab: Option<wires::ReshapeDrag>) -> Option<Click> {
+    if MenuItem::new("Grab").shortcut("G").enabled(grab.is_some()).show(ui) {
+        return grab.map(Click::GrabReshape);
+    }
     let rows = [
         (MenuItem::new("Slice").enabled(leg.split.is_some()), WireAction::Slice),
         (MenuItem::new("Break").enabled(leg.breakable), WireAction::Break),
@@ -761,9 +851,9 @@ fn wire_menu(ui: &mut Ui, painter: &Painter, rect: Rect, camera: &Camera, leg: w
 }
 
 /// Pick the nearest symbol body under the original press and preserve the grab offset.
-fn grab_symbol(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2) -> Option<Click> {
+fn grab_symbol(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, pickup: bool) -> Option<Click> {
     let (symbol, center) = symbol_at(project, camera, rect, pointer)?;
-    Some(Click::Grab(symbol.clone(), center - pointer))
+    Some(Click::Grab(symbol.clone(), center - pointer, pickup))
 }
 
 /// The symbol whose body is under the pointer, nearest center first, with its screen center.
@@ -803,7 +893,8 @@ fn valid_position(point: Point) -> bool {
     (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&point.x_nm) && (-MAX_CENTER_NM..=MAX_CENTER_NM).contains(&point.y_nm)
 }
 
-/// Draw the pending symbol on its snapped model point until the user commits or cancels.
+/// Place on the primary press so a fast release or incidental motion cannot discard the click.
+/// Explicit placement owns this press; the following release never places a second symbol.
 fn placement_preview(
     painter: &Painter,
     rect: Rect,
@@ -820,7 +911,12 @@ fn placement_preview(
         return None;
     }
     paint_symbol(painter, definition, screen(point), camera.unit_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
-    response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
+    let pressed = response.contains_pointer() && response.ctx.input(|input| input.pointer.primary_pressed());
+    if pressed && response.ctx.input(|input| input.pointer.primary_down()) {
+        response.ctx.data_mut(|data| data.insert_temp(response.id.with("placed_on_press"), true));
+    }
+    response.on_hover_cursor(egui::CursorIcon::Crosshair);
+    pressed.then_some(point)
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.
