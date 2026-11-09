@@ -63,8 +63,10 @@ were used.
 The subsequent Board Outline terminology update is original PCBcraft work over
 these existing tools and commands. Earlier default layer names remain saved as
 authored and display as Board Outline in the canvas controls; custom layer names
-remain unchanged. No external source, asset, dependency or native-format change
-was introduced for this update.
+remain unchanged. When that display mapping would give distinct layers the same
+label, the controls retain their saved names so each choice remains identifiable.
+No external source, asset, dependency or native-format change was introduced for
+this update.
 
 PCBcraft Next's original workspace documentation and the existing FigCraft exports
 `03-layout-top.png` and `pcb-workspace.png` were reviewed as visual references

@@ -168,9 +168,14 @@ pub(super) fn ordered_catalog(mut layers: Vec<Layer>, setup: Option<&pcbcraft_en
     layers
 }
 
-/// Display previous default outline names as Board Outline without rewriting saved names or IDs.
-pub(super) fn layer_name(layer: &Layer) -> &str {
-    if layer.purpose == LayerPurpose::Outline && matches!(layer.name.as_str(), "Board Edge" | "Board outline") {
+/// Display previous default outline names as Board Outline unless that would duplicate another
+/// layer's label. A collision retains authored names; saved names and IDs are never rewritten.
+pub(super) fn layer_name<'a>(layer: &'a Layer, layers: &[Layer]) -> &'a str {
+    let collision = layers.iter().any(|other| {
+        other.id != layer.id
+            && (other.name.eq_ignore_ascii_case("Board Outline") || (other.purpose == LayerPurpose::Outline && other.name == "Board Edge"))
+    });
+    if layer.purpose == LayerPurpose::Outline && matches!(layer.name.as_str(), "Board Edge" | "Board outline") && !collision {
         "Board Outline"
     } else {
         &layer.name
@@ -212,7 +217,7 @@ fn layer_groups(
             ui,
             |ui| {
                 for layer in items {
-                    if layer_row(ui, layer, state, reveal, board, appearance) {
+                    if layer_row(ui, layer, &layers, state, reveal, board, appearance) {
                         *pick = Some(layer.id.to_string());
                     }
                 }
@@ -226,13 +231,14 @@ fn layer_groups(
 fn layer_row(
     ui: &mut Ui,
     layer: &Layer,
+    layers: &[Layer],
     state: &mut BoardState,
     reveal: bool,
     board: pcbcraft_engine::board::view::BoardView<'_>,
     appearance: &crate::board_appearance::Appearance,
 ) -> bool {
     let id = layer.id.to_string();
-    let label = layer_name(layer);
+    let label = layer_name(layer, layers);
     let mut color_clicked = false;
     ui.push_id(&id, |ui| {
         ui.horizontal(|ui| {

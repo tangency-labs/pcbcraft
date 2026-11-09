@@ -180,7 +180,7 @@ impl PcbApp {
             let labels: Vec<_> = layers
                 .iter()
                 .map(|layer| {
-                    let label = crate::board_panels::layer_name(layer);
+                    let label = crate::board_panels::layer_name(layer, &layers);
                     if self.views.active.board.hidden_layers.contains(&layer.id.to_string()) { format!("{label} (hidden)") } else { label.to_owned() }
                 })
                 .collect();

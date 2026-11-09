@@ -60,6 +60,46 @@ fn legacy_outline_names_preserve_saved_geometry_and_custom_names() {
     }
 }
 
+/// Distinct authored outline layers retain unique choices across the card, ribbon and status,
+/// including when both old defaults coexist. Selecting either one leaves saved bytes unchanged.
+#[test]
+fn colliding_outline_defaults_remain_distinct_in_all_layer_controls() {
+    for other_name in ["Board Outline", "Board outline"] {
+        let mut h = board();
+        let legacy = layer(&h, "Board Outline");
+        let other = uuid::Uuid::from_u128(0x101).to_string();
+        let mut setup = h.state().session.inspect()["project"]["board"]["setup"].clone();
+        for entry in setup["layers"].as_array_mut().unwrap() {
+            if entry["id"] == legacy {
+                entry["name"] = json!("Board Edge");
+            }
+        }
+        setup["layers"].as_array_mut().unwrap().push(json!({"id":other,"name":other_name,"purpose":"outline"}));
+        let revision = h.state().session.revision();
+        h.state_mut().session.apply(pcbcraft_engine::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":revision})).unwrap();
+        let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.state_mut().session.open_snapshot(pcbcraft_engine::persistence::decode_documents(&saved).unwrap());
+        h.run();
+        for (name, id) in [("Board Edge", &legacy), (other_name, &other)] {
+            h.get_by_label(&format!("Activate layer {name}"));
+            click(&mut h, &format!("Activate layer {name}"));
+            assert_eq!(h.state().views.active.board.active_layer.as_ref(), Some(id));
+            click(&mut h, "Draw lines on Board Outline");
+            h.get_by_label(&format!("Line · {name}"));
+            h.key_press(Key::Escape);
+            h.run();
+        }
+        for (name, id) in [("Board Edge", &legacy), (other_name, &other)] {
+            click(&mut h, "Active layer");
+            click(&mut h, name);
+            assert_eq!(h.state().views.active.board.active_layer.as_ref(), Some(id));
+        }
+        assert_eq!(layer(&h, "Board Edge"), legacy);
+        assert_eq!(layer(&h, other_name), other);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    }
+}
+
 /// Picker, full rows and status agree; the visibility eye never activates a different layer.
 #[test]
 fn active_layer_picker_and_rows_share_state_without_document_edits() {
