@@ -268,13 +268,15 @@ impl PcbApp {
         workspace::ribbon_separator(ui);
 
         let selected = enabled && self.views.active.board.selection.len() == 1;
+        // Move also starts a copper move when tracks or vias are selected and no footprint is.
+        let copper = enabled && self.views.active.board.selection.is_empty() && !self.views.active.board.tracks.selected.is_empty();
         let modify = [
             RibbonTool {
                 icon: ToolIcon::Move,
                 label: "Move",
                 description: "Move footprint",
                 shortcut: "M",
-                enabled: selected && !editing,
+                enabled: (selected || copper) && !editing,
                 active: editing,
                 toggle: false,
             },

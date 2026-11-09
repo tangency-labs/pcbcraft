@@ -595,7 +595,8 @@ Without a tool, click a track or via to select it (Shift adds, Ctrl or ⌘ toggl
 press Delete to remove it; deleting a via keeps its tracks. A selection box also picks
 tracks and vias, with the same Window/Crossing rules as footprints. **U** selects every
 track and via joined by copper to the one under the pointer, or to the current copper
-selection. With copper selected and no footprint selected, **M** moves the selection
+selection. With copper selected and no footprint selected, **M** (or **Layout → Modify → Move**)
+moves the selection
 with the pointer until the next click, and dragging a track or via moves it directly;
 both snap to the grid, Esc or right-click cancels, and each completed move is one undo
 step. Properties shows the selected tracks and vias, with editable **Width**, **Via
