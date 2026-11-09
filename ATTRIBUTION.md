@@ -844,3 +844,18 @@ The standalone-via shortcut follows KiCad 10's documented Ctrl+Shift+X binding
 0.36.2 input patch preserves this key before egui-winit's Cut conversion when
 no widget owns keyboard input. See vendor/eframe/PATCH.md; upstream MIT/Apache
 licenses remain unchanged. No KiCad implementation or artwork was consulted.
+
+## Bundled Default and Power native libraries
+
+The original PCBcraft power-marker geometry is represented as native symbol
+files under `libraries/power`, under MIT OR Apache-2.0. Default retains the
+existing `starter` identity and original definitions. Embedded-source delivery,
+electrical-role metadata, instance defaults and the common placement path are
+original PCBcraft work using the existing native loader, authoring model and
+engine transactions. No external implementation, library data, artwork or
+dependency was introduced. Test circuits are constructed through shared commands.
+
+The separate Power/Ground annotation styles and marker-only text tools have been
+removed. Native power Home-preview and shared field-tool regressions use original
+command-built circuits, production save/load and the existing thumbnail painter.
+No external source, asset, dependency or project fixture was introduced.

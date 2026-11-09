@@ -156,23 +156,21 @@ that version. Appearance edits do not move contacts or alter net names.
 
 Sheet/3 extends sheet/2 with a required, non-null `net_labels` array, one record
 per line in stable object-ID order. Each record contains a project-unique `id`,
-case-sensitive `name`, `style` (`local`, `global`, `power`, `power_bar` or `ground`), `at`
+case-sensitive `name`, `style` (`local` or `global`), `at`
 point in integer nanometers and `rotation` (0, 90, 180 or 270 counterclockwise).
 Names contain 1–200 characters without surrounding whitespace or controls; each
-sheet permits at most 256 named anchors. Ground/power markers are electrical
-annotations without component IDs, references or footprint assignments.
-`power` retains the arrow drawing; `power_bar` selects a flat horizontal bar with
-the same global-name semantics. The style persists independently of its editable
-net name. Builds predating `power_bar` reject that unknown style; existing styles
-and their encodings remain unchanged.
+sheet permits at most 256 text labels. Power symbols are ordinary components and
+unit placements with pinned native definitions and terminal endpoints. The
+former `power`, `power_bar` and `ground` annotation styles are no longer accepted;
+the decoder rejects them without migrating or silently omitting records.
 
 An explicit wire endpoint `{"net_label":<id>}` refers only to an anchor owned by
 that sheet. A named anchor also contacts exact coincident pins and points on
 wire segments; it is an authored connection marker, so placing one at a crossing
 joins the contacted routes. Other crossings and coincident distinct endpoints
 retain their existing behavior. Names join within a sheet, including its
-hierarchical interfaces; global/power/ground markers additionally join matching
-global names across sheets. Derived net names and graphs are never persisted as
+hierarchical interfaces; global labels and definition-declared power terminals
+additionally join matching global names across sheets. Derived net names and graphs are never persisted as
 a second set of electrical identities. All aliases remain in inspection, with
 global names preferred for display and lexical ordering within each scope.
 

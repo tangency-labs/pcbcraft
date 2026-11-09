@@ -27,13 +27,9 @@ impl Default for Filters {
 }
 
 impl Filters {
-    /// Power/ground anchors follow Symbols; local and global names follow Labels.
-    pub(super) fn allows_net_label(self, style: pcbcraft_engine::net_labels::Style) -> bool {
-        use pcbcraft_engine::net_labels::Style;
-        match style {
-            Style::Power | Style::PowerBar | Style::Ground => self.symbols,
-            Style::Local | Style::Global => self.labels,
-        }
+    /// Local/global annotations follow Labels; native power instances follow Symbols normally.
+    pub(super) fn allows_net_label(self, _style: pcbcraft_engine::net_labels::Style) -> bool {
+        self.labels
     }
 
     /// Report only selectable categories for the displayed workspace; parked workspace choices

@@ -261,3 +261,64 @@ fn restored_home_cards_preview_saved_schematics_without_opening_them() {
     assert!(!h.state().files.dirty(&h.state().session));
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
 }
+
+/// Home reloads pinned power definitions from disk, showing both supply names without opening
+/// the project or editing its bytes. This covers the actual recent-card worker/painter path.
+#[test]
+fn recent_cards_show_native_power_symbols_in_both_themes() {
+    /// Capture exact bytes from the test-owned folder, including pinned definitions.
+    fn saved_bytes(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+        let mut todo = vec![root.to_owned()];
+        let mut bytes = std::collections::BTreeMap::new();
+        while let Some(path) = todo.pop() {
+            for entry in std::fs::read_dir(path).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    todo.push(path);
+                } else {
+                    bytes.insert(path.strip_prefix(root).unwrap().to_owned(), std::fs::read(path).unwrap());
+                }
+            }
+        }
+        bytes
+    }
+    for theme in [preferences::ThemeChoice::Dark, preferences::ThemeChoice::Light] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Power preview");
+        let mut h = harness();
+        new_project(&mut h);
+        h.state_mut().preferences.theme = theme;
+        for (id, x) in [("gnd", 0), ("vcc-bar", 8 * pcbcraft_engine::schematic::GRID_NM)] {
+            let d = h.state().session.libraries().latest_symbol("power", id).unwrap();
+            let rev = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::PLACE_SYMBOL,&json!({"library":"power","definition":id,"definition_revision":d.revision(),"definition_digest":pcbcraft_engine::library::sources::symbol_digest(&d).unwrap(),"x_nm":x,"y_nm":0,"expected_revision":rev}));
+        }
+        h.state_mut().files.use_stand_in();
+        let ctx = h.ctx.clone();
+        h.state_mut().save_project_file(None, &ctx);
+        h.state_mut().files.finish_stand_in(path.clone());
+        finish_file(&mut h);
+        let bytes = saved_bytes(&path);
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        let history = h.state().files.recent.to_text();
+        h.state_mut().files.recent = crate::recent_projects::RecentProjects::parse(&history);
+        open_home(&mut h);
+        finish_previews(&mut h);
+        let text: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.text()),
+                _ => None,
+            })
+            .collect();
+        assert!(text.contains(&"GND"));
+        assert!(text.contains(&"VCC"));
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        assert_eq!(h.state().session.revision(), revision);
+        assert_eq!(saved_bytes(&path), bytes);
+        assert!(!h.state().files.dirty(&h.state().session));
+    }
+}

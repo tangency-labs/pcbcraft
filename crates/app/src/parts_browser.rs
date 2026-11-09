@@ -6,11 +6,7 @@ use pcbcraft_chrome::{
     catalog as chrome, properties,
     workspace::catalog::{self, View},
 };
-use pcbcraft_engine::{
-    library,
-    net_labels::{Label, Style},
-    schematic::{Point, SymbolDefinition},
-};
+use pcbcraft_engine::{library, schematic::SymbolDefinition};
 use std::sync::Arc;
 
 /// Collections are presentation filters, not electrical identities or source registrations.
@@ -19,72 +15,34 @@ enum Collection {
     #[default]
     All,
     Library(String),
-    Power,
 }
 /// Exact item keys prevent display-name collisions and stale source revisions from aliasing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Key {
     Symbol(String, String, u32),
-    Power(&'static str),
 }
 
-/// A built-in marker's stable catalog identity and display name are independent of its default
-/// electrical net name. Different glyph choices can therefore join the same supply net.
-#[derive(Debug)]
-struct PowerPreset {
-    id: &'static str,
-    name: &'static str,
-    net_name: &'static str,
-    style: Style,
-}
-
-static POWER_PRESETS: [PowerPreset; 9] = [
-    PowerPreset { id: "gnd", name: "GND", net_name: "GND", style: Style::Ground },
-    PowerPreset { id: "vcc", name: "VCC", net_name: "VCC", style: Style::Power },
-    PowerPreset { id: "vcc-bar", name: "VCC (bar)", net_name: "VCC", style: Style::PowerBar },
-    PowerPreset { id: "3v3", name: "+3V3", net_name: "+3V3", style: Style::Power },
-    PowerPreset { id: "5v", name: "+5V", net_name: "+5V", style: Style::Power },
-    PowerPreset { id: "12v", name: "+12V", net_name: "+12V", style: Style::Power },
-    PowerPreset { id: "vdd", name: "VDD", net_name: "VDD", style: Style::Power },
-    PowerPreset { id: "vss", name: "VSS", net_name: "VSS", style: Style::Power },
-    PowerPreset { id: "gnda", name: "GNDA", net_name: "GNDA", style: Style::Ground },
-];
-
-/// Display entries retain qualified symbol definitions; built-in power markers use their own commands.
+/// Every catalog row retains the same validated native definition, independent of delivery.
 #[derive(Clone, Debug)]
-enum Entry {
-    Symbol(Arc<SymbolDefinition>),
-    Power(&'static PowerPreset),
-}
+struct Entry(Arc<SymbolDefinition>);
 impl Entry {
-    /// A catalog row's identity remains independent of its visible name.
+    /// Qualified item identity remains independent of display names and source paths.
     fn key(&self) -> Key {
-        match self {
-            Self::Symbol(s) => Key::Symbol(s.library.clone(), s.id.clone(), s.revision()),
-            Self::Power(preset) => Key::Power(preset.id),
-        }
+        Key::Symbol(self.0.library.clone(), self.0.id.clone(), self.0.revision())
     }
-    /// Search/display text comes from the source definition or the original power preset.
+    /// Display names come from native definitions, never from collection membership.
     fn name(&self) -> &str {
-        match self {
-            Self::Symbol(s) => &s.name,
-            Self::Power(preset) => preset.name,
-        }
+        &self.0.name
     }
-    /// A glyph's descriptive catalog name never becomes its electrical name by accident.
-    fn default_net_name(&self) -> Option<&'static str> {
-        match self {
-            Self::Power(preset) => Some(preset.net_name),
-            Self::Symbol(_) => None,
-        }
+    /// The editable template starts with the same Value as direct engine placement.
+    fn default_value(&self) -> &str {
+        self.0.default_value()
     }
-    /// Keep power markers separate from component symbol libraries and footprint mappings.
+    /// Libraries are presentation filters; electrical roles do not define a second item kind.
     fn in_collection(&self, collection: &Collection) -> bool {
-        match (collection, self) {
-            (Collection::All, _) => true,
-            (Collection::Power, Self::Power(..)) => true,
-            (Collection::Library(id), Self::Symbol(s)) => *id == s.library,
-            _ => false,
+        match collection {
+            Collection::All => true,
+            Collection::Library(id) => *id == self.0.library,
         }
     }
 }
@@ -95,12 +53,17 @@ pub(crate) enum Pick {
     Stale,
 }
 
-/// Catalog contents shared by click placement and drag/drop; power markers keep their own
-/// electrical command and custom net name rather than masquerading as component definitions.
+/// One instance template shared by native library selection, drag/drop and canvas tools.
 #[derive(Clone, Debug)]
-pub(crate) enum Placement {
-    Symbol(Arc<SymbolDefinition>),
-    Power(Label),
+pub(crate) struct Placement {
+    pub definition: Arc<SymbolDefinition>,
+    pub value: String,
+}
+impl Placement {
+    /// Copy definition defaults without altering the pinned library item.
+    pub fn new(definition: Arc<SymbolDefinition>) -> Self {
+        Self { value: definition.default_value().to_owned(), definition }
+    }
 }
 
 /// The full chooser is the normal entry point; the compact catalog retains its own dock.
@@ -126,7 +89,7 @@ pub(crate) struct PartsBrowser {
     view: View,
     collection: Collection,
     selected: Option<Key>,
-    power_name: String,
+    value: String,
     source: Option<ViewInput>,
     focus: bool,
     focus_ids: Vec<egui::Id>,
@@ -145,7 +108,7 @@ impl Default for PartsBrowser {
             view: View::List,
             collection: Collection::All,
             selected: None,
-            power_name: String::new(),
+            value: String::new(),
             source: None,
             focus: false,
             focus_ids: Vec::new(),
@@ -219,7 +182,7 @@ impl PartsBrowser {
     /// A reopens the current library, retaining ordinary search text between placements.
     /// After power placement it returns to all libraries and clears the power search.
     pub(crate) fn focus_search(&mut self) {
-        if self.collection == Collection::Power {
+        if self.collection == Collection::Library("power".into()) {
             self.query.clear();
             self.collection = Collection::All;
             self.selected = None;
@@ -231,7 +194,7 @@ impl PartsBrowser {
     }
     /// P opens the same catalog with the power collection selected, without a property form.
     pub(crate) fn focus_power(&mut self) {
-        self.collection = Collection::Power;
+        self.collection = Collection::Library("power".into());
         self.query.clear();
         self.selected = None;
         self.reveal_selection = true;
@@ -354,10 +317,10 @@ impl PartsBrowser {
         let entries: Vec<_> = entries(&query, libraries).into_iter().filter(|e| e.in_collection(&self.collection)).collect();
         if self.selected.is_none() {
             self.selected = entries.first().map(Entry::key);
-            self.power_name = entries.first().and_then(Entry::default_net_name).unwrap_or_default().into();
+            self.value = entries.first().map(Entry::default_value).unwrap_or_default().into();
         }
         self.focus_ids.clear();
-        let enabled = entries.iter().any(|e| Some(e.key()) == self.selected) && valid_power_name(&self.power_name, self.selected.as_ref());
+        let enabled = entries.iter().any(|e| Some(e.key()) == self.selected) && valid_value(&self.value);
         let mut choices = Choices::default();
         let mut action = if expanded {
             chrome::form(ui.ctx(), "parts_catalog", "Parts Catalog", 1108., "Place", enabled, true, ui.is_enabled(), |ui| {
@@ -370,7 +333,7 @@ impl PartsBrowser {
                 });
                 chrome::panes(ui, |ui, region| match region {
                     chrome::Region::Libraries => {
-                        pcbcraft_chrome::library_sources::heading(ui, "Libraries", sources.as_array().map_or(1, |s| s.len() + 1));
+                        pcbcraft_chrome::library_sources::heading(ui, "Libraries", collections(&sources).len());
                         pcbcraft_chrome::library_sources::list(ui, "catalog_libraries", |ui| self.library_rows(ui, &all, &sources));
                     }
                     chrome::Region::Results => {
@@ -388,10 +351,8 @@ impl PartsBrowser {
                 self.search(ui);
                 self.library_selector(ui, &sources);
                 self.placement_options(ui);
-                if matches!(self.selected, Some(Key::Power(_))) {
-                    let field = properties::text(ui, "Net name", &mut self.power_name);
-                    self.focus_ids.push(field.id);
-                }
+                let field = properties::text(ui, "Value", &mut self.value);
+                self.focus_ids.push(field.id);
                 choices = self.results(ui, &entries, owner, short);
                 choices.confirm |= ui.input(|i| i.key_pressed(egui::Key::Enter))
                     && (choices.focused || self.focused(ui.ctx()))
@@ -438,13 +399,12 @@ impl PartsBrowser {
             return Some(Pick::Libraries);
         }
         action.primary |= choices.confirm;
-        if action.primary && enabled && valid_power_name(&self.power_name, self.selected.as_ref()) {
+        if action.primary && enabled && valid_value(&self.value) {
             if owner != source {
                 self.close(ui.ctx());
                 return Some(Pick::Stale);
             }
-            let picked =
-                entries.iter().find(|e| Some(e.key()) == self.selected).and_then(|entry| placement(entry, &self.power_name)).map(Pick::Place);
+            let picked = entries.iter().find(|e| Some(e.key()) == self.selected).and_then(|entry| placement(entry, &self.value)).map(Pick::Place);
             if expanded {
                 self.close(ui.ctx());
             } else {
@@ -475,16 +435,7 @@ impl PartsBrowser {
     /// Library filters use stable source IDs and retain unavailable selections until an explicit
     /// choice, so removing a source cannot silently substitute a remaining part.
     fn library_selector(&mut self, ui: &mut Ui, sources: &serde_json::Value) {
-        let mut choices: Vec<_> = [(Collection::All, "All libraries".to_owned()), (Collection::Power, "Power".to_owned())]
-            .into_iter()
-            .chain(
-                sources
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|s| Some((Collection::Library(s["library"].as_str()?.into()), s["name"].as_str()?.into()))),
-            )
-            .collect();
+        let mut choices = collections(sources);
         if let Collection::Library(id) = &self.collection
             && !choices.iter().any(|(collection, _)| collection == &self.collection)
         {
@@ -494,7 +445,6 @@ impl PartsBrowser {
             .iter()
             .map(|(choice, _)| match choice {
                 Collection::All => "all".to_owned(),
-                Collection::Power => "power".to_owned(),
                 Collection::Library(id) => format!("library:{id}"),
             })
             .collect();
@@ -520,15 +470,10 @@ impl PartsBrowser {
             self.reveal_selection = false;
         }
         catalog::grid(ui, view, entries, reveal, |ui, entry, width| {
-            let identity = match entry {
-                Entry::Symbol(s) if s.library != "starter" => Some(format!("{}/{} r{}", s.library, s.id, s.revision())),
-                _ => None,
-            };
-            let value = match entry {
-                Entry::Symbol(s) => s.default_value(),
-                Entry::Power(preset) if preset.style == Style::Ground => "Ground",
-                Entry::Power(..) => "Power",
-            };
+            let symbol = &entry.0;
+            let identity = (entries.iter().filter(|other| other.name() == entry.name()).count() > 1)
+                .then(|| format!("{}/{} r{}", symbol.library, symbol.id, symbol.revision()));
+            let value = symbol.default_value();
             let response = catalog::tile(
                 ui,
                 view,
@@ -536,14 +481,14 @@ impl PartsBrowser {
                 catalog::Item { name: entry.name(), value, identity: identity.as_deref(), selected: self.selected == Some(entry.key()) },
                 |p, r, ink| paint_entry(p, r, entry, ink),
             );
-            let name = if self.selected == Some(entry.key()) { &self.power_name } else { entry.default_net_name().unwrap_or_default() };
+            let name = if self.selected == Some(entry.key()) { &self.value } else { entry.default_value() };
             if let Some(placement) = placement(entry, name) {
                 response.dnd_set_drag_payload(crate::schematic_canvas::PartDrag { placement, source: owner });
                 choices.dragging |= response.drag_started();
             }
             if response.clicked() || response.drag_started() {
                 if self.selected != Some(entry.key()) {
-                    self.power_name = entry.default_net_name().unwrap_or_default().into();
+                    self.value = entry.default_value().into();
                 }
                 self.selected = Some(entry.key());
             }
@@ -561,37 +506,20 @@ impl PartsBrowser {
         };
         chrome::title(ui, entry.name());
         chrome::preview(ui, |p, r| paint_entry(p, r, entry, pcbcraft_chrome::Tokens::get().canvas_ink));
-        match entry {
-            Entry::Symbol(s) => {
-                properties::section(ui, "Symbol");
-                properties::field(ui, "Value", |ui| {
-                    ui.label(s.default_value());
-                });
-                properties::field(ui, "Pins", |ui| {
-                    ui.label(s.pins().len().to_string());
-                });
-                properties::section(ui, "Source");
-                ui.label(format!("{} · r{}", collection_name(&Collection::Library(s.library.clone()), sources), s.revision()));
-            }
-            Entry::Power(..) => {
-                properties::section(ui, "Power symbol");
-                let field = properties::text(ui, "Net name", &mut self.power_name);
-                self.focus_ids.push(field.id);
-                properties::field(ui, "Scope", |ui| {
-                    ui.label("Global");
-                });
-            }
-        }
+        let symbol = &entry.0;
+        properties::section(ui, "Symbol");
+        let field = properties::text(ui, "Value", &mut self.value);
+        self.focus_ids.push(field.id);
+        properties::field(ui, "Pins", |ui| {
+            ui.label(symbol.pins().len().to_string());
+        });
+        properties::section(ui, "Source");
+        ui.label(format!("{} · r{}", collection_name(&Collection::Library(symbol.library.clone()), sources), symbol.revision()));
     }
+
     /// Render actual loaded library identities independently of search terms and display names.
     fn library_rows(&mut self, ui: &mut Ui, entries: &[Entry], sources: &serde_json::Value) {
-        for (collection, name) in [(Collection::All, "All libraries".to_owned()), (Collection::Power, "Power".to_owned())].into_iter().chain(
-            sources
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|s| Some((Collection::Library(s["library"].as_str()?.into()), s["name"].as_str()?.into()))),
-        ) {
+        for (collection, name) in collections(sources) {
             let count = entries.iter().filter(|entry| entry.in_collection(&collection)).count();
             let response = ui.selectable_label(self.collection == collection, format!("{name}  {count}"));
             response
@@ -605,82 +533,52 @@ impl PartsBrowser {
     }
 }
 
-/// Both placement gestures capture the same validated power name and style. Dragging an
-/// unselected tile uses its preset name; an invalid edited name never creates a payload.
-fn placement(entry: &Entry, name: &str) -> Option<Placement> {
-    match entry {
-        Entry::Symbol(symbol) => Some(Placement::Symbol(symbol.clone())),
-        Entry::Power(preset) if valid_power_name(name, Some(&entry.key())) => Some(Placement::Power(Label {
-            id: 0,
-            name: name.to_owned(),
-            style: preset.style,
-            at: Point { x_nm: 0, y_nm: 0 },
-            rotation: 0,
-            text: None,
-        })),
-        Entry::Power(_) => None,
-    }
+/// Click and drag capture the same editable Value and exact native definition.
+fn placement(entry: &Entry, value: &str) -> Option<Placement> {
+    valid_value(value).then(|| Placement { definition: entry.0.clone(), value: value.to_owned() })
 }
 
-/// Preset drawings are original app markers; source symbols retain their licensed definitions.
+/// Native drawings use one painter for bundled, folder and portable-bundle sources.
 fn paint_entry(p: &egui::Painter, r: Rect, entry: &Entry, ink: egui::Color32) {
-    match entry {
-        Entry::Symbol(s) => paint_preview(p, s, r, ink),
-        Entry::Power(preset) => {
-            let ground = preset.style == Style::Ground;
-            let glyph = crate::net_labels::visual(preset.style);
-            let step = (r.height() / 4.).clamp(6., 22.);
-            let offset = if ground { -11. } else { 10. } * step / 10.;
-            pcbcraft_chrome::net_label::paint(p, r.center() + egui::vec2(0., offset), "", glyph, 0, step, ink, false);
+    paint_preview(p, &entry.0, r, ink);
+}
+/// Equivalent registrations share a library filter, while the source manager keeps each
+/// registration inspectable. Display ordering uses library names, never source delivery kind.
+fn collections(sources: &serde_json::Value) -> Vec<(Collection, String)> {
+    let mut libraries = std::collections::BTreeMap::new();
+    for source in sources.as_array().into_iter().flatten() {
+        if let (Some(id), Some(name)) = (source["library"].as_str(), source["name"].as_str()) {
+            libraries.entry(id.to_owned()).or_insert_with(|| name.to_owned());
         }
     }
+    let mut choices: Vec<_> = libraries.into_iter().map(|(id, name)| (Collection::Library(id), name)).collect();
+    choices.sort_by(|(_, a), (_, b)| a.cmp(b));
+    choices.insert(0, (Collection::All, "All libraries".into()));
+    choices
 }
-/// Read a library display name while retaining its stable identity as the filter key.
+
+/// Resolve a library display name without changing its stable filter key.
 fn collection_name(collection: &Collection, sources: &serde_json::Value) -> String {
     match collection {
         Collection::All => "All libraries".into(),
-        Collection::Power => "Power".into(),
         Collection::Library(id) => {
             sources.as_array().into_iter().flatten().find(|s| s["library"].as_str() == Some(id)).and_then(|s| s["name"].as_str()).unwrap_or(id).into()
         }
     }
 }
-/// Disable Place and drag payloads for invalid custom power names before a preview is created.
-fn valid_power_name(name: &str, key: Option<&Key>) -> bool {
-    !matches!(key, Some(Key::Power(_)))
-        || (!name.is_empty() && name.trim() == name && name.chars().count() <= 200 && !name.chars().any(char::is_control))
+/// Placement values share the component validator's bounds before creating any gesture.
+fn valid_value(value: &str) -> bool {
+    !value.is_empty() && value.trim() == value && value.chars().count() <= 64 && !value.chars().any(char::is_control)
 }
-/// Combine current unambiguous native revisions with the original built-in power collection.
+/// Search current unambiguous source revisions without separately injecting bundled items.
 fn entries(query: &str, catalog: &library::sources::Catalog) -> Vec<Entry> {
-    let mut entries: Vec<_> = matches_sources(query, catalog).into_iter().map(Entry::Symbol).collect();
-    for preset in &POWER_PRESETS {
-        let text =
-            format!("{} {} {}", preset.name, preset.net_name, if preset.style == Style::Ground { "ground" } else { "power supply" }).to_lowercase();
-        if text.contains(query) {
-            entries.push(Entry::Power(preset));
-        }
-    }
-    entries
+    matches_sources(query, catalog).into_iter().map(Entry).collect()
 }
-/// Search definition names, IDs and prefixes without inspecting external implementation sources.
-fn matches(query: &str) -> Vec<Arc<SymbolDefinition>> {
-    let query = query.trim().to_lowercase();
-    let mut parts: Vec<_> = library::starter()
-        .symbols()
-        .iter()
-        .filter(|d| {
-            query.is_empty() || d.name.to_lowercase().contains(&query) || d.id.contains(&query) || d.reference_prefix().eq_ignore_ascii_case(&query)
-        })
-        .cloned()
-        .collect();
-    let order = ["resistor", "capacitor", "led", "connector"];
-    parts.sort_by_key(|part| order.iter().position(|id| *id == part.id).unwrap_or(order.len()));
-    parts
-}
-/// Source search preserves qualified library identity, revision and provenance for placement.
+/// Qualified source identities, revisions and attribution survive into placement.
 fn matches_sources(query: &str, catalog: &library::sources::Catalog) -> Vec<Arc<SymbolDefinition>> {
-    let mut parts = matches(query);
-    parts.extend(catalog.search(query, Some(library::sources::Kind::Symbol)).into_iter().filter_map(|(_, item)| item.symbol()));
+    let mut parts: Vec<_> = catalog.search(query, Some(library::sources::Kind::Symbol)).into_iter().filter_map(|(_, item)| item.symbol()).collect();
+    let sources = catalog.inspect();
+    parts.sort_by_cached_key(|part| collection_name(&Collection::Library(part.library.clone()), &sources));
     parts
 }
 

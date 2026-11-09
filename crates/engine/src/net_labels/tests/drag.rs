@@ -24,7 +24,7 @@ fn fixture(kind: &str) -> (Session, u64, Point) {
     } else if kind == "named" {
         apply(&mut s, ADD, json!({"name":"LOCAL","style":"local","x_nm":0,"y_nm":0}));
     }
-    apply(&mut s, ADD, json!({"name":"GND","style":"ground","x_nm":origin.x_nm,"y_nm":origin.y_nm}));
+    apply(&mut s, ADD, json!({"name":"GND","style":"global","x_nm":origin.x_nm,"y_nm":origin.y_nm}));
     let id = s.project().unwrap().net_labels().last().unwrap().id;
     (s, id, origin)
 }
@@ -53,7 +53,7 @@ fn connected_marker_moves_capture_contacts_and_match_the_preview() {
             apply(
                 &mut s,
                 SET,
-                json!({"id":format!("net-label-{id}"),"name":"GND","style":"ground","x_nm":to.x_nm,"y_nm":to.y_nm,"rotation":90,"keep_connected":true,"auto_heal":auto_heal}),
+                json!({"id":format!("net-label-{id}"),"name":"GND","style":"global","x_nm":to.x_nm,"y_nm":to.y_nm,"rotation":90,"keep_connected":true,"auto_heal":auto_heal}),
             );
             let after = s.snapshot().unwrap();
             crate::assert_same_content(&Arc::new(preview), &after);
@@ -116,11 +116,11 @@ fn marker_contact_capture_is_optional_and_rejected_edits_are_atomic() {
         ("GND", 0, revision - 1, json!(true)),
         ("GND", 0, revision, json!("yes")),
     ] {
-        assert!(s.apply(SET, &json!({"id":format!("net-label-{id}"),"name":name,"style":"ground","x_nm":6*G,"y_nm":8*G,"rotation":rotation,"keep_connected":keep,"expected_revision":expected})).is_err());
+        assert!(s.apply(SET, &json!({"id":format!("net-label-{id}"),"name":name,"style":"global","x_nm":6*G,"y_nm":8*G,"rotation":rotation,"keep_connected":keep,"expected_revision":expected})).is_err());
         assert_eq!(s.revision(), revision);
         assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     }
-    apply(&mut s, SET, json!({"id":format!("net-label-{id}"),"name":"GND","style":"ground","x_nm":6*G,"y_nm":8*G}));
+    apply(&mut s, SET, json!({"id":format!("net-label-{id}"),"name":"GND","style":"global","x_nm":6*G,"y_nm":8*G}));
     let after = s.snapshot().unwrap();
     assert_eq!(after.wires(), before.wires());
     assert_eq!(after.wire_path(&after.wires()[0]), before.wire_path(&before.wires()[0]));

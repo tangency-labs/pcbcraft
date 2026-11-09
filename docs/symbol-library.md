@@ -6,13 +6,13 @@ their own libraries. A symbol file never names a footprint or a pad; a part
 links the two later, by assigning a footprint and a pin-to-pad mapping (issue
 #28). This document covers symbols only.
 
-## Starter library
+## Bundled libraries
 
-PCBcraft ships one library, `libraries/starter`. The engine embeds it at build
-time, so the desktop and browser builds offer the same symbols without reading the
-file system. Every `*.json` file in `libraries/starter/symbols` is included, in
-file-name order. Adding a symbol is adding a file; no code changes. The symbols
-are original work under the project's MIT OR Apache-2.0 license.
+PCBcraft ships **Default** (`libraries/starter`, retaining the stable `starter` ID)
+and **Power** (`libraries/power`). Both use the native source loader, catalog and
+ordinary symbol instances. Build-time embedding supplies their native documents
+to desktop and browser; folder and portable-bundle loading use the same parser.
+The definitions are original work under MIT OR Apache-2.0.
 
 ```text
 libraries/starter/
@@ -30,7 +30,7 @@ libraries/starter/
 The manifest:
 
 ```json
-{"format": "pcbcraft-library/1", "id": "starter", "name": "PCBcraft starter", "license": "MIT OR Apache-2.0"}
+{"format": "pcbcraft-library/1", "id": "starter", "name": "Default", "license": "MIT OR Apache-2.0"}
 ```
 
 New placements use the highest loaded revision of each symbol ID. The browser
@@ -145,3 +145,16 @@ the saved definition.
   [library-sources.md](library-sources.md) proposes the model for them.
 - **Footprint libraries** follow the same approach, as their own format and
   files.
+
+## Electrical behavior and defaults (`pcbcraft-symbol/2`)
+
+Version 2 accepts the version 1 drawing/terminal vocabulary and optionally adds
+`behavior: {"type":"power","terminal":"1"}` and `defaults` containing ordinary
+component `metadata` and unit `field_layout`. The declared terminal must exist;
+its global electrical name comes from the placed component's Value. A custom
+library can use this role regardless of its names or drawings. Defaults can be
+supplied by any definition and remain editable on each instance. Version 1
+rejects these fields rather than silently ignoring them.
+
+The [bundled-library contract](builtin-symbol-libraries.md) describes source
+identity, instance behavior and removal of the old power-marker representation.

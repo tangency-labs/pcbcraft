@@ -26,13 +26,13 @@ fn large_catalog_selects_libraries_and_confirms_before_placement() {
     let mut h = editor(1400.);
     let before = h.state().session.inspect();
     let canvas = h.get_by_label("Schematic canvas").rect();
-    h.get_by_label("PCBcraft starter");
+    h.get_by_label("Default");
     h.get_by_label("All libraries");
     let close = h.get_by_label("Close Parts Catalog").rect();
     let place = h.get_by_label("Place").rect();
     assert!(close.right() - place.left() < 400.);
     assert!(close.top() + 300. < place.bottom());
-    click(&mut h, "PCBcraft starter");
+    click(&mut h, "Default");
     click(&mut h, "Capacitor");
     assert_eq!(h.state().session.inspect(), before);
     assert!(h.state().views.active.schematic.tool.is_none());
@@ -74,12 +74,12 @@ fn power_uses_catalog_and_custom_net_names() {
     click(&mut h, "Cancel");
     h.key_press(Key::P);
     h.run();
-    assert_eq!(h.state().parts.collection, Collection::Power);
+    assert_eq!(h.state().parts.collection, Collection::Library("power".into()));
     assert!(h.query_by_label("Type").is_none());
     assert!(h.query_by_label("Preset").is_none());
     click(&mut h, "+3V3");
-    assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("+3V3"));
-    h.get_by_label("Net name").click();
+    assert_eq!(h.get_by_label("Value").value().as_deref(), Some("+3V3"));
+    h.get_by_label("Value").click();
     h.run();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.key_press(Key::Backspace);
@@ -89,11 +89,11 @@ fn power_uses_catalog_and_custom_net_names() {
     h.run();
     assert!(h.state().parts.open);
     assert!(h.state().views.active.schematic.tool.is_none());
-    h.get_by_label("Net name").click();
-    h.get_by_label("Net name").type_text("+3V3_ANALOG");
+    h.get_by_label("Value").click();
+    h.get_by_label("Value").type_text("+3V3_ANALOG");
     h.run();
     click(&mut h, "Place");
-    assert!(matches!(h.state().views.active.schematic.tool,Some(crate::Tool::NetLabel{ref label,..}) if label.name=="+3V3_ANALOG"));
+    assert!(matches!(h.state().views.active.schematic.tool,Some(crate::Tool::PlaceSymbol{ref value,..}) if value=="+3V3_ANALOG"));
 }
 
 /// The flat-bar VCC is a distinct catalog choice but still names the VCC electrical net.
@@ -113,24 +113,24 @@ fn flat_bar_vcc_is_an_additional_power_choice() {
         h.get_by_label("VCC (bar)").scroll_to_me();
         h.run();
         click(&mut h, "VCC (bar)");
-        assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("VCC"), "width={width}, compact={compact}");
-        assert_eq!(h.state().parts.selected, Some(super::Key::Power("vcc-bar")));
+        assert_eq!(h.get_by_label("Value").value().as_deref(), Some("VCC"), "width={width}, compact={compact}");
+        assert_eq!(h.state().parts.selected, Some(super::Key::Symbol("power".into(), "vcc-bar".into(), 1)));
         h.get_by_label("VCC").scroll_to_me();
         h.run();
         click(&mut h, "VCC");
-        assert_eq!(h.state().parts.selected, Some(super::Key::Power("vcc")));
+        assert_eq!(h.state().parts.selected, Some(super::Key::Symbol("power".into(), "vcc".into(), 1)));
         h.get_by_label("VCC (bar)").scroll_to_me();
         h.run();
         click(&mut h, "VCC (bar)");
         assert_eq!(h.state().session.inspect(), before);
         click(&mut h, "Place");
         assert!(
-            matches!(&h.state().views.active.schematic.tool,Some(crate::Tool::NetLabel {label,..}) if label.style==Style::PowerBar && label.name=="VCC")
+            matches!(&h.state().views.active.schematic.tool,Some(crate::Tool::PlaceSymbol {definition,value,..}) if definition.id=="vcc-bar" && value=="VCC")
         );
         h.get_by_label("Schematic canvas").click();
         h.run();
         let project = h.state().session.project().unwrap();
-        assert_eq!((project.net_labels()[0].style, project.net_labels()[0].name.as_str()), (Style::PowerBar, "VCC"));
+        assert_eq!((&*project.symbols()[0].definition.id, project.component(&project.symbols()[0]).unwrap().value()), ("vcc-bar", "VCC"));
         let documents = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
         let ctx = h.ctx.clone();
@@ -138,16 +138,16 @@ fn flat_bar_vcc_is_an_additional_power_choice() {
         h.run();
         h.key_press(Key::E);
         h.run();
-        assert!(matches!(h.state().dialog, crate::Dialog::NetLabel(_)));
-        assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("VCC"));
-        h.get_by_label("Net name").click();
+        assert!(matches!(h.state().dialog, crate::Dialog::EditFields(_)));
+        assert_eq!(h.get_by_label("Value").value().as_deref(), Some("VCC"));
+        h.get_by_label("Value").click();
         h.run();
         h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-        h.get_by_label("Net name").type_text("VCC_ANALOG");
+        h.get_by_label("Value").type_text("VCC_ANALOG");
         h.run();
-        click(&mut h, "Apply");
-        let label = &h.state().session.project().unwrap().net_labels()[0];
-        assert_eq!((label.style, label.name.as_str()), (Style::PowerBar, "VCC_ANALOG"));
+        click(&mut h, "OK");
+        let project = h.state().session.project().unwrap();
+        assert_eq!(project.component(&project.symbols()[0]).unwrap().value(), "VCC_ANALOG");
         click(&mut h, "Undo");
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), documents);
     }
@@ -193,12 +193,12 @@ fn catalog_reaches_existing_library_manager() {
 
 /// Catalog selection does not use display text as identity, and source filters use library IDs.
 #[test]
-fn search_preserves_original_starter_order_and_native_identity() {
-    assert_eq!(matches("CAP")[0].id, "capacitor");
-    assert!(matches("zzz").is_empty());
-    assert_eq!(matches("j").len(), 2);
-    let catalog = library::sources::Catalog::default();
-    assert_eq!(entries("", &catalog).iter().filter(|e| e.in_collection(&Collection::Power)).count(), 9);
+fn library_search_preserves_native_identity() {
+    assert_eq!(matches_sources("CAP", &library::sources::Catalog::bundled())[0].id, "capacitor");
+    assert!(matches_sources("zzz", &library::sources::Catalog::bundled()).is_empty());
+    assert_eq!(matches_sources("j", &library::sources::Catalog::bundled()).len(), 2);
+    let catalog = library::sources::Catalog::bundled();
+    assert_eq!(entries("", &catalog).iter().filter(|e| e.in_collection(&Collection::Library("power".into()))).count(), 9);
 }
 
 /// Registered libraries appear as selectable collections. If a chosen source is removed,
@@ -227,7 +227,7 @@ fn loaded_library_filters_and_removed_selection_do_not_alias_starter_parts() {
             click(&mut h, "Library");
         }
         click(&mut h, "Workshop demo");
-        h.get_by_label("Workshop resistor · workshop/resistor r2");
+        h.get_by_label("Workshop resistor");
         assert!(h.query_by_label("Resistor").is_none());
         assert!(matches!(h.state().parts.selected,Some(super::Key::Symbol(ref library,_,_)) if library=="workshop"));
         h.state_mut().session.apply(library::sources::REMOVE, &json!({"source":"workshop"})).unwrap();
@@ -245,7 +245,7 @@ fn loaded_library_filters_and_removed_selection_do_not_alias_starter_parts() {
 #[test]
 fn switching_forms_keeps_library_query_selection_and_dock_position() {
     let mut h = editor(1400.);
-    click(&mut h, "PCBcraft starter");
+    click(&mut h, "Default");
     click(&mut h, "Search parts");
     h.get_by_label("Search parts").type_text("cap");
     h.run();
@@ -317,20 +317,20 @@ fn power_name_survives_round_trip_and_compact_placement() {
     h.key_press(Key::P);
     h.run();
     click(&mut h, "+3V3");
-    click(&mut h, "Net name");
+    click(&mut h, "Value");
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-    h.get_by_label("Net name").type_text("V_ANALOG");
+    h.get_by_label("Value").type_text("V_ANALOG");
     h.run();
     click(&mut h, "Dock Parts Catalog");
-    assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("V_ANALOG"));
+    assert_eq!(h.get_by_label("Value").value().as_deref(), Some("V_ANALOG"));
     assert!(h.state().parts.rect().contains_rect(h.get_by_label("+3V3").rect()));
     click(&mut h, "Expand Parts Catalog");
     h.get_by_label("Preview +3V3");
-    assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("V_ANALOG"));
+    assert_eq!(h.get_by_label("Value").value().as_deref(), Some("V_ANALOG"));
     click(&mut h, "Dock Parts Catalog");
     click(&mut h, "Place");
     assert!(h.state().parts.open);
-    assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::NetLabel{ref label,..}) if label.name=="V_ANALOG"));
+    assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::PlaceSymbol{ref value,..}) if value=="V_ANALOG"));
 }
 
 /// Compact visibility/position persist; the previous arrangement vocabulary remains readable
@@ -412,9 +412,8 @@ fn compact_drags_place_once_and_reject_intervening_edits() {
 /// marker at the snapped pointer, retains its custom name/style and arms repeat with a fresh ID.
 #[test]
 fn power_catalog_drags_preview_place_and_repeat_in_both_presentations() {
-    use pcbcraft_engine::net_labels::Style;
     for compact in [false, true] {
-        for (tile, name, style) in [("GND", "GND", Style::Ground), ("VCC (bar)", "VCC_ANALOG", Style::PowerBar)] {
+        for (tile, name, style) in [("GND", "GND", "gnd"), ("VCC (bar)", "VCC_ANALOG", "vcc-bar")] {
             let mut h = editor(1400.);
             h.state_mut().browser.open = false;
             h.run();
@@ -425,12 +424,14 @@ fn power_catalog_drags_preview_place_and_repeat_in_both_presentations() {
             if compact {
                 click(&mut h, "Dock Parts Catalog");
             }
+            h.get_by_label(tile).scroll_to_me();
+            h.run();
             click(&mut h, tile);
             if name != "GND" {
-                h.get_by_label("Net name").click();
+                h.get_by_label("Value").click();
                 h.run();
                 h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-                h.get_by_label("Net name").type_text(name);
+                h.get_by_label("Value").type_text(name);
                 h.run();
             }
             click(&mut h, "Repeat placement");
@@ -447,24 +448,25 @@ fn power_catalog_drags_preview_place_and_repeat_in_both_presentations() {
             assert_eq!(h.state().parts.open, compact);
             assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
             let drag = egui::DragAndDrop::payload::<crate::PartDrag>(&h.ctx).expect("power payload follows the pointer onto the canvas");
-            assert!(matches!(&drag.placement, Placement::Power(label) if label.name == name && label.style == style));
+            assert!(matches!(&drag.placement, Placement { definition,value } if value == name && definition.id == style));
             let canvas = h.get_by_label("Schematic canvas").rect();
             let point = h.state().views.active.camera.snap(to, canvas);
             h.drop_at(to);
             h.run();
             assert_eq!(h.state().session.revision(), drag.source.revision + 1);
-            let label = h.state().session.project().unwrap().net_labels()[0].clone();
-            assert_eq!((label.at, label.name.as_str(), label.style), (point, name, style));
-            assert!(matches!(&h.state().views.active.schematic.tool, Some(crate::Tool::NetLabel {label,..}) if label.id == 0));
+            let project = h.state().session.project().unwrap();
+            let symbol = project.symbols()[0].clone();
+            assert_eq!((symbol.position, project.component(&symbol).unwrap().value(), symbol.definition.id.as_str()), (point, name, style));
+            assert!(matches!(&h.state().views.active.schematic.tool, Some(crate::Tool::PlaceSymbol { .. })));
             crate::tests::click_canvas_at(&mut h, to + egui::vec2(100., 60.));
             let after = h.state().session.snapshot().unwrap();
-            assert_eq!(after.net_labels().len(), 2);
-            assert_ne!(after.net_labels()[0].id, after.net_labels()[1].id);
-            assert!(after.symbols().is_empty());
+            assert_eq!(after.symbols().len(), 2);
+            assert_ne!(after.symbols()[0].id(), after.symbols()[1].id());
+            assert!(after.net_labels().is_empty());
             h.key_press(Key::Escape);
             h.run();
             click(&mut h, "Undo");
-            assert_eq!(h.state().session.project().unwrap().net_labels().len(), 1);
+            assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
             click(&mut h, "Undo");
             crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
             click(&mut h, "Redo");
@@ -489,7 +491,7 @@ fn power_drags_use_their_own_names_and_reject_invalid_or_cancelled_drops() {
         click(&mut h, "Dock Parts Catalog");
         if mode == "invalid" {
             click(&mut h, "+3V3");
-            h.get_by_label("Net name").click();
+            h.get_by_label("Value").click();
             h.run();
             h.key_press_modifiers(Modifiers::COMMAND, Key::A);
             h.key_press(Key::Backspace);
@@ -518,7 +520,7 @@ fn power_drags_use_their_own_names_and_reject_invalid_or_cancelled_drops() {
         assert_eq!(h.state().session.revision(), revision + u64::from(placed), "{mode}");
         assert!(h.state().views.active.schematic.tool.is_none(), "{mode}");
         if placed {
-            assert_eq!(h.state().session.project().unwrap().net_labels()[0].name, "+3V3");
+            assert_eq!(h.state().session.project().unwrap().components().next().unwrap().value(), "+3V3");
         } else {
             assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()), "{mode}");
         }
@@ -602,6 +604,7 @@ fn repeat_power_uses_fresh_ids_and_stops_after_intervening_edits() {
     click(&mut h, "Cancel");
     h.key_press(Key::P);
     h.run();
+    click(&mut h, "GND");
     click(&mut h, "Place");
     h.key_press(Key::R);
     h.run();
@@ -610,15 +613,15 @@ fn repeat_power_uses_fresh_ids_and_stops_after_intervening_edits() {
         crate::tests::click_canvas_at(&mut h, center + offset);
     }
     let project = h.state().session.project().unwrap();
-    assert_eq!(project.net_labels().len(), 2);
-    assert_ne!(project.net_labels()[0].id, project.net_labels()[1].id);
-    assert!(project.net_labels().iter().all(|l| l.name == "GND" && l.rotation == 90));
+    assert_eq!(project.symbols().len(), 2);
+    assert_ne!(project.symbols()[0].id(), project.symbols()[1].id());
+    assert!(project.symbols().iter().all(|s| project.component(s).unwrap().value() == "GND" && s.turns() == 1));
     h.state_mut().run("project.rename", &json!({"name":"Intervening"}));
     h.run();
     let revision = h.state().session.revision();
     crate::tests::click_canvas_at(&mut h, center + egui::vec2(200., 100.));
     assert_eq!(h.state().session.revision(), revision);
-    assert_eq!(h.state().session.project().unwrap().net_labels().len(), 2);
+    assert_eq!(h.state().session.project().unwrap().symbols().len(), 2);
     assert!(h.state().views.active.schematic.tool.is_none());
 }
 
@@ -651,4 +654,18 @@ fn live_panel_commands_open_and_close_modal_catalog_without_switching_modes() {
         }
         assert_eq!(h.state().session.inspect(), before);
     }
+}
+
+/// Loading an equivalent bundled folder retains one library filter and one row per identity.
+#[test]
+fn equivalent_source_registrations_do_not_duplicate_catalog_libraries() {
+    let mut h = editor(1400.);
+    let (_, docs) = library::bundled_documents().find(|(id, _)| *id == "starter").unwrap();
+    h.state_mut().session.execute(library::sources::LOAD, &json!({"source":"folder-copy","documents":docs})).unwrap();
+    h.run();
+    assert_eq!(collections(&h.state().session.libraries().inspect()).len(), 3);
+    assert_eq!(entries("", h.state().session.libraries()).len(), 15);
+    h.get_by_label("Default");
+    click(&mut h, "Default");
+    h.get_by_label("Capacitor");
 }

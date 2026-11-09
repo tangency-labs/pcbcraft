@@ -1,12 +1,22 @@
 use super::*;
 
+/// Place a native naming terminal with the ordinary placement command and exact source digest.
+fn power(s: &mut Session, at: Point) -> WireEndpoint {
+    let d = s.libraries().latest_symbol("power", "gnd").unwrap();
+    run(
+        s,
+        PLACE_SYMBOL,
+        json!({"library":"power","definition":"gnd","definition_revision":d.revision(),"definition_digest":crate::library::sources::symbol_digest(&d).unwrap(),"x_nm":at.x_nm,"y_nm":at.y_nm}),
+    );
+    WireEndpoint::Terminal(s.project().unwrap().symbols().last().unwrap().terminals()[0])
+}
+
 /// One original resistor pin with an explicitly placed ground marker at the same coordinate.
 fn marked_pin() -> (Session, WireEndpoint, WireEndpoint) {
     let mut s = session();
     run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":p(14,8).x_nm,"y_nm":p(14,8).y_nm}));
     let pin = WireEndpoint::Terminal(s.project().unwrap().symbols()[0].terminals()[0]);
-    run(&mut s, crate::net_labels::ADD, json!({"name":"GND","style":"ground","x_nm":p(10,8).x_nm,"y_nm":p(10,8).y_nm}));
-    let label = WireEndpoint::NetLabel(s.project().unwrap().net_labels()[0].id);
+    let label = power(&mut s, p(10, 8));
     (s, pin, label)
 }
 
@@ -117,8 +127,7 @@ fn declared_contacts_without_one_unique_component_pin_keep_the_marker_identity()
                     run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":p(x,8).x_nm,"y_nm":p(x,8).y_nm}));
                 }
             }
-            run(&mut s, crate::net_labels::ADD, json!({"name":"GND","style":"ground","x_nm":p(10,8).x_nm,"y_nm":p(10,8).y_nm}));
-            let marker = WireEndpoint::NetLabel(s.project().unwrap().net_labels()[0].id);
+            let marker = power(&mut s, p(10, 8));
             draw(&mut s, p(0, 0), p(10, 0));
             let wire = s.project().unwrap().wires.last().unwrap().id();
             run(&mut s, MOVE_ITEMS, json!({"items":{"symbols":[],"wires":[wire]},"dx_nm":0,"dy_nm":p(0,8).y_nm,"auto_heal":auto_heal}));

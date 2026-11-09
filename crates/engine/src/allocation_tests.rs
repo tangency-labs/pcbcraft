@@ -144,7 +144,7 @@ fn exhausted_watermark_refuses_allocation_without_partial_mutation() {
     project.numeric_id_high_water = Some(MAX_OBJECT_ID);
     for (command, params) in [
         (PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0})),
-        (net_labels::ADD, json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0})),
+        (net_labels::ADD, json!({"name":"GND","style":"global","x_nm":0,"y_nm":0})),
         (hierarchy::CREATE_CHILD, json!({"name":"Child","x_nm":0,"y_nm":0})),
         (hierarchy::ADD_LABEL, json!({"name":"PORT","direction":"input","x_nm":0,"y_nm":0})),
         (DRAW_WIRE, json!({"from":{"x_nm":0,"y_nm":0},"to":{"x_nm":1_270_000,"y_nm":0},"bends":[]})),

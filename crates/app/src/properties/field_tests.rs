@@ -859,3 +859,56 @@ fn inline_text_belongs_to_its_split_canvas() {
     assert!(h.state().views.view(crate::ViewId(1)).unwrap().schematic.text_edit.is_none());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// Native power Values use ordinary field drag/rotation and inline editing. The terminal
+/// keeps its wires while the Value continues to name the actual global electrical net.
+#[test]
+fn native_power_value_uses_common_field_tools_and_inline_editing() {
+    let mut h = fixture();
+    let d = h.state().session.libraries().latest_symbol("power", "gnd").unwrap();
+    let rev = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::PLACE_SYMBOL,&json!({"library":"power","definition":"gnd","definition_revision":d.revision(),"definition_digest":pcbcraft_engine::library::sources::symbol_digest(&d).unwrap(),"x_nm":12*pcbcraft_engine::schematic::GRID_NM,"y_nm":0,"expected_revision":rev}));
+    let p = h.state().session.snapshot().unwrap();
+    let power = p.symbols()[1].clone();
+    let pin = power.terminals()[0];
+    let rev = h.state().session.revision();
+    h.state_mut()
+        .run(pcbcraft_engine::CONNECT_PINS, &json!({"from":p.symbols()[0].terminals()[1].inspect(),"to":pin.inspect(),"expected_revision":rev}));
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let start = text_center(&h, "GND");
+    let to = start + egui::vec2(80., 60.);
+    h.drag_at(start);
+    h.run();
+    h.hover_at(to);
+    h.run();
+    h.key_press(Key::R);
+    h.run();
+    assert!(matches!(h.state().views.active.schematic.tool, Some(crate::schematic_canvas::Tool::Field { .. })));
+    h.drop_at(to);
+    h.run();
+    let moved = h.state().session.snapshot().unwrap();
+    assert_eq!(moved.symbols()[1].position, power.position);
+    assert_eq!(moved.symbols()[1].turns(), power.turns());
+    assert_eq!(moved.symbols()[1].field_layout["value"].rotation, 90);
+    assert_eq!(moved.wire_path(&moved.wires()[0]), before.wire_path(&before.wires()[0]));
+    let point = text_center(&h, "GND");
+    double_click(&mut h, point, Modifiers::NONE);
+    assert!(
+        matches!(&h.state().views.active.schematic.text_edit,Some(edit) if matches!(&edit.target,crate::inline_text::Target::Symbol{symbol,field} if *symbol==power.id() && field=="value"))
+    );
+    type_field(&mut h, "Edit Value", "AGND");
+    h.key_press(Key::Enter);
+    h.run();
+    let after = h.state().session.snapshot().unwrap();
+    assert_eq!(after.component(&after.symbols()[1]).unwrap().value(), "AGND");
+    assert_eq!(after.connectivity().net_name(after.connectivity().net_index_for(pin).unwrap()), "AGND");
+    assert_eq!(after.wire_path(&after.wires()[0]), before.wire_path(&before.wires()[0]));
+    assert!(after.net_labels().is_empty());
+    let docs = encode_documents(after).unwrap();
+    assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+    click(&mut h, "Undo");
+    crate::tests::assert_same_content(&moved, &h.state().session.snapshot().unwrap());
+    click(&mut h, "Undo");
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
+}
