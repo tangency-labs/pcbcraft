@@ -424,6 +424,7 @@ pub(super) fn paint_leg_preview(painter: &Painter, rect: Rect, camera: &Camera, 
 }
 
 /// Pick a connection or free point; Ctrl bypasses the placement grid. Enter/double-click finishes.
+/// The crosshair tracks the raw pointer while a marker shows the snapped point a click would use.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pick(
     painter: &Painter,
@@ -446,7 +447,8 @@ pub(super) fn pick(
             if painter.ctx().input(|input| input.modifiers.ctrl) { camera.unsnapped(pointer, rect) } else { camera.snap(pointer, rect) }
         });
         painter.ctx().set_cursor_icon(egui::CursorIcon::None);
-        pcbcraft_chrome::cursor::wire(painter, camera.screen(point, rect), target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_))));
+        let connected = target.is_some_and(|anchor| !matches!(anchor, Anchor::Free(_)));
+        pcbcraft_chrome::cursor::wire(painter, pointer, camera.screen(point, rect), connected);
     }
     let finish = draft.finish_requested || response.double_clicked_by(PointerButton::Primary);
     target.filter(|_| clicked || finish || (start.is_none() && draft.start_requested)).map(|target| (target, finish))

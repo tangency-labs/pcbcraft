@@ -735,7 +735,7 @@ pub(crate) fn show(
             || camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_PIN_RADIUS.min(camera.unit_step() / 2.))
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-        pcbcraft_chrome::cursor::wire(&painter, screen(point), true);
+        pcbcraft_chrome::cursor::wire(&painter, pointer, screen(point), true);
     }
     if matches!(tool, None | Some(Tool::Wire { start: None, .. }))
         && response.contains_pointer()
