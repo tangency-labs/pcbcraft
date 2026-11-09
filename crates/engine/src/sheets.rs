@@ -160,6 +160,7 @@ impl Project {
             .max()
             .unwrap_or_default()
             .max(self.components.last_key_value().map_or(0, |(&id, _)| id))
+            .max(self.board.baseline.as_ref().and_then(|baseline| baseline.components.keys().next_back().copied()).unwrap_or(0))
             .max(self.board.footprints().last().map_or(0, |f| f.id))
     }
 }
@@ -198,7 +199,8 @@ impl Session {
     }
 
     /// Create, rename or delete a sheet in one project undo step. Names are unique without case;
-    /// deleting a populated sheet removes its components and associated board footprints atomically.
+    /// deleting a populated sheet removes its live components and retains accepted
+    /// footprints when reviewed baseline mode is enabled, otherwise removing them.
     pub(super) fn edit_sheet(&mut self, id: &str, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let mut project = self.open_project()?.clone();
@@ -249,9 +251,8 @@ impl Session {
                 }
                 let removed = Arc::make_mut(&mut project.sheets).remove(index);
                 for symbol in removed.symbols.iter() {
-                    Arc::make_mut(&mut project.components).remove(&symbol.component);
+                    project.retire_component(symbol.component);
                     Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
-                    Arc::make_mut(&mut project.board).remove_component(symbol.component);
                 }
             }
             _ => return Err(CommandError::InvalidParams("unknown sheet operation or target".into())),

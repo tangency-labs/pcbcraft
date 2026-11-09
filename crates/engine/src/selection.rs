@@ -216,8 +216,9 @@ impl Session {
     }
 
     /// Remove a validated group of components, wires and named anchors, incident wires,
-    /// orphan junctions and unused components/footprints
-    /// together. A failure leaves every item and history entry unchanged.
+    /// orphan junctions and unused live components together. Accepted footprints
+    /// remain pending removal when a board baseline is enabled. A failure leaves
+    /// every item and history entry unchanged.
     pub(crate) fn delete_items(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| CommandError::InvalidParams("invalid selection".to_owned()))?;
@@ -240,8 +241,7 @@ impl Session {
         let removed: BTreeSet<_> =
             project.symbols().iter().filter(|s| deleted.contains(&s.ordinal) && !used.contains(&s.component)).map(|s| s.component).collect();
         for id in removed {
-            Arc::make_mut(&mut next.components).remove(&id);
-            Arc::make_mut(&mut next.board).remove_component(id);
+            next.retire_component(id);
         }
         next.prune_junctions();
         next.sheet_mut().connectivity = Arc::default();

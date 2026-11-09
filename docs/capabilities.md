@@ -21,6 +21,12 @@ still needs to work before the first collaboration-ready preview.
 | Native library sources | Desktop folder registration and session bundle uploads on desktop/browser; symbol/footprint search with file/conflict diagnostics; external symbol placement with pinned identity and license attribution; [source guide](native-library-sources.md) | External footprint assignment, native parts and remaining source acceptance [#92](https://github.com/tangency-labs/pcbcraft/issues/92) |
 | Later professional work | Planned, not implemented as a complete workflow | Full ERC/DRC [#47](https://github.com/tangency-labs/pcbcraft/issues/47)/#58, copper zones [#57](https://github.com/tangency-labs/pcbcraft/issues/57), fabrication [#59](https://github.com/tangency-labs/pcbcraft/issues/59), advanced routing [#85](https://github.com/tangency-labs/pcbcraft/issues/85) and 3D/STEP [#86](https://github.com/tangency-labs/pcbcraft/issues/86) are outside the first MVP |
 
+The engine-only [accepted board baseline foundation](single-board-update.md) can
+explicitly retain footprints and package assets across schematic deletions and
+offline reopen. The reviewed preview/Apply UI and ratsnest remain work under #55;
+enabling baseline mode currently refuses new or changed package choices until
+that Apply workflow exists.
+
 Issue numbers above refer to the
 [repository backlog](https://github.com/tangency-labs/pcbcraft/issues). The
 [MVP milestone](https://github.com/tangency-labs/pcbcraft/milestone/1) selects

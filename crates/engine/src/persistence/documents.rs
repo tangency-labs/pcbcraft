@@ -30,6 +30,7 @@ const SILKSCREEN_BOARD_FORMAT: &str = "pcbcraft-board/6";
 const ASSIGNED_BOARD_FORMAT: &str = "pcbcraft-board/7";
 const OUTLINE_BOARD_FORMAT: &str = "pcbcraft-board/8";
 const DRAWING_BOARD_FORMAT: &str = "pcbcraft-board/9";
+const BASELINE_BOARD_FORMAT: &str = "pcbcraft-board/10";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -76,6 +77,8 @@ struct SheetDocument {
 #[serde(deny_unknown_fields)]
 struct BoardDocument {
     format: String,
+    #[serde(default, deserialize_with = "present")]
+    baseline: Option<crate::board::update::Baseline>,
     #[serde(default, deserialize_with = "present")]
     setup: Option<Box<serde_json::value::RawValue>>,
     #[serde(default, deserialize_with = "present")]
@@ -271,15 +274,30 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             assignments: None,
             outline: None,
             graphics: None,
+            baseline: None,
             footprints: vec![],
         }
     };
+
+    if (board.format == BASELINE_BOARD_FORMAT) != board.baseline.is_some() {
+        return Err("board.json: accepted baselines require board format 10".into());
+    }
+    if let Some(baseline) = &board.baseline {
+        baseline.validate()?;
+        if baseline.components.values().any(|component| component.package.is_none()) {
+            return Err("board.json: accepted baseline contains an unassigned package".into());
+        }
+        if baseline.project != project.id {
+            return Err("board.json: accepted baseline has a foreign project owner".into());
+        }
+    }
     if board.format != ROTATED_BOARD_FORMAT
         && board.format != PHYSICAL_BOARD_FORMAT
         && board.format != SILKSCREEN_BOARD_FORMAT
         && board.format != ASSIGNED_BOARD_FORMAT
         && board.format != OUTLINE_BOARD_FORMAT
         && board.format != DRAWING_BOARD_FORMAT
+        && board.format != BASELINE_BOARD_FORMAT
         && board.footprints.iter().any(|f| f.rotation != 0)
     {
         return Err("board.json: footprint rotation requires board format 4".to_owned());
@@ -289,28 +307,32 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         && board.format != ASSIGNED_BOARD_FORMAT
         && board.format != OUTLINE_BOARD_FORMAT
         && board.format != DRAWING_BOARD_FORMAT
+        && board.format != BASELINE_BOARD_FORMAT
         && board.footprints.iter().any(|f| f.library.is_some())
     {
         return Err("board.json: pinned physical footprints require board format 5".into());
     }
-    if !matches!(board.format.as_str(), ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT)
+    if !matches!(board.format.as_str(), ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT)
         && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
     }
     if (board.format == ASSIGNED_BOARD_FORMAT && board.assignments.is_none())
-        || (!matches!(board.format.as_str(), ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT) && board.assignments.is_some())
-        || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > project.components.len())
+        || (!matches!(board.format.as_str(), ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT)
+            && board.assignments.is_some())
+        || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
         return Err("board.json: nonempty assignments require board format 7".into());
     }
-    if (board.format == OUTLINE_BOARD_FORMAT) != board.outline.is_some() {
+    if board.format != BASELINE_BOARD_FORMAT && (board.format == OUTLINE_BOARD_FORMAT) != board.outline.is_some() {
         return Err("board.json: an outline requires board format 8".into());
     }
-    if (board.format == DRAWING_BOARD_FORMAT) != board.graphics.is_some() {
+    if board.format != BASELINE_BOARD_FORMAT && (board.format == DRAWING_BOARD_FORMAT) != board.graphics.is_some() {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
+        (BASELINE_BOARD_FORMAT, None) => None,
+        (BASELINE_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (DRAWING_BOARD_FORMAT, None) => None,
         (DRAWING_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (OUTLINE_BOARD_FORMAT, None) => None,
@@ -347,8 +369,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     }
     let mut footprint_definitions = BTreeMap::new();
-    for key in
-        board.footprints.iter().filter_map(Footprint::key).chain(board.assignments.iter().flatten().map(crate::board::assignment::Assignment::key))
+    for key in board
+        .footprints
+        .iter()
+        .filter_map(Footprint::key)
+        .chain(board.assignments.iter().flatten().map(crate::board::assignment::Assignment::key))
+        .chain(board.baseline.iter().flat_map(crate::board::update::Baseline::package_keys))
     {
         {
             let (library, id, revision) = &key;
@@ -380,7 +406,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         symbol_definitions: definitions,
         components: project.components,
         sheet: combined,
-        board: has_board.then_some(BoardRecords { footprints: board.footprints }),
+        board: has_board.then_some(BoardRecords { baseline: board.baseline, footprints: board.footprints }),
     };
     let mut project = validate_with_hierarchy(document, None, footprint_definitions, &anchors, &hierarchy_ids)
         .map_err(|error| format!("{ENTRY_POINT}, sheets, board.json: {error}"))?;
@@ -403,6 +429,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
     project_data.sheets = Arc::new(sheets);
+    if let Some(baseline) = &project_data.board.baseline {
+        if !project_data.boards().any(|board| board.target.board == baseline.board) {
+            return Err("board.json: accepted baseline has a foreign board owner".into());
+        }
+        baseline.validate_assets(project_data)?;
+    }
     Arc::make_mut(&mut project_data.board).setup = setup;
     Arc::make_mut(&mut project_data.board).silkscreen = board.silkscreen;
     Arc::make_mut(&mut project_data.board).outline = board.outline;
@@ -520,7 +552,8 @@ impl DocumentsEncoder {
 
     /// Write at most `records` records or phase transitions. The board-header transition also
     /// writes its bounded setup (at most 64 material revisions, 128 layers, 127 strata and
-    /// 256 nested prepreg plies). Stop on completed documents.
+    /// 256 nested prepreg plies) and an enabled baseline within its 16 MiB bound.
+    /// Stop on completed documents.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
             match self.phase {
@@ -703,6 +736,24 @@ impl DocumentsEncoder {
                     }
                 }
                 9 => {
+                    let next =
+                        self.project.board.baseline.as_ref().and_then(|baseline| {
+                            baseline.components.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
+                        });
+                    if let Some((&id, component)) = next {
+                        if let Some(package) = &component.package
+                            && let Some(library) = &package.library
+                        {
+                            let key = (library.clone(), package.definition.clone(), package.revision);
+                            let definition = self.project.board.definitions.get(&key).ok_or("unresolved accepted package during save")?;
+                            self.footprint_definitions.insert(key, Arc::clone(definition));
+                        }
+                        self.cursor = id;
+                    } else {
+                        self.next();
+                    }
+                }
+                10 => {
                     if let Some(((library, id, revision), definition)) = self.definitions.pop_first() {
                         let mut bytes = Vec::new();
                         saved_document(&mut bytes, &definition)?;
@@ -711,14 +762,14 @@ impl DocumentsEncoder {
                         self.next();
                     }
                 }
-                10 => {
+                11 => {
                     if let Some(((library, id, revision), definition)) = self.footprint_definitions.pop_first() {
                         let mut bytes = serde_json::to_vec_pretty(definition.as_ref()).map_err(|e| e.to_string())?;
                         bytes.push(b'\n');
                         self.documents.insert(format!("library/footprints/{library}/{id}.r{revision}.json"), bytes);
                     } else {
                         check_documents(&self.documents)?;
-                        self.next();
+                        self.phase = 13;
                         return Ok(Some(std::mem::take(&mut self.documents)));
                     }
                 }
@@ -750,7 +801,8 @@ impl DocumentsEncoder {
 }
 
 /// Keep legacy bytes until newer authored data requires a newer format. Independent
-/// assignments use version 7, earlier local rectangles version 8, and layer graphics version 9.
+/// assignments use version 7, earlier local rectangles version 8, layer graphics
+/// version 9, and explicitly enabled accepted update baselines version 10.
 fn board_header(bytes: &mut Vec<u8>, board: &Board) -> Result<(), String> {
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
@@ -759,7 +811,9 @@ fn board_header(bytes: &mut Vec<u8>, board: &Board) -> Result<(), String> {
     let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
     if let Some(setup) = setup {
-        let format = if board.drawings.is_some() {
+        let format = if board.baseline.is_some() {
+            BASELINE_BOARD_FORMAT
+        } else if board.drawings.is_some() {
             DRAWING_BOARD_FORMAT
         } else if outline.is_some() {
             OUTLINE_BOARD_FORMAT
@@ -797,7 +851,9 @@ fn board_header(bytes: &mut Vec<u8>, board: &Board) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if board.drawings.is_some() {
+        let format = if board.baseline.is_some() {
+            BASELINE_BOARD_FORMAT
+        } else if board.drawings.is_some() {
             DRAWING_BOARD_FORMAT
         } else if outline.is_some() {
             OUTLINE_BOARD_FORMAT
@@ -813,6 +869,17 @@ fn board_header(bytes: &mut Vec<u8>, board: &Board) -> Result<(), String> {
             BOARD_FORMAT
         };
         bytes.extend_from_slice(format!("{{\n  \"format\": \"{format}\",\n").as_bytes());
+    }
+    if let Some(baseline) = &board.baseline {
+        let encoded = baseline.encode()?;
+        bytes.extend_from_slice(b"  \"baseline\": ");
+        for (index, line) in encoded.split(|byte| *byte == b'\n').enumerate() {
+            if index != 0 {
+                bytes.extend_from_slice(b"\n  ");
+            }
+            bytes.extend_from_slice(line);
+        }
+        bytes.extend_from_slice(b",\n");
     }
     if let Some(settings) = silkscreen {
         writeln!(bytes, "  \"silkscreen\": {},", serde_json::to_string(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;

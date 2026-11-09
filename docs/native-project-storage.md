@@ -54,7 +54,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11` or `/12` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, and version 12 combines metadata with explicit board registration |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/9` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics |
+| `board.json` | `pcbcraft-board/1` through `/10` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -261,6 +261,13 @@ budget and emits shared definition copies once. Setup and silkscreen remain
 optional under version 7, with their existing validation. Older boards retain
 their prior encoding until a package assignment is authored. Legacy single-file
 export refuses independent assignments rather than losing them.
+
+Board format 10 is explicitly enabled by `pcb.initialize_update_baseline` and
+stores accepted historical components, packages and terminal membership. It can
+retain a footprint after its live component is deleted and preserves assets
+referenced only by accepted history. The [single-board update foundation](single-board-update.md)
+defines the codec and current engine-only limitations; older readers refuse this
+format instead of dropping retained physical state.
 
 Board format 9 stores `graphics` with `layers` and `items` arrays. Items have
 independent UUIDs, a layer UUID, integer-nanometer `points`, and a `closed` flag.

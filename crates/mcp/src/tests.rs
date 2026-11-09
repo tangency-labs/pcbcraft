@@ -785,6 +785,51 @@ fn optional_board_creation_is_discoverable_revision_checked_and_undoable() {
     assert_eq!(redone["project"]["boards"][0]["id"], board);
 }
 
+/// Opt-in accepted history retains the physical object through the same headless commands.
+#[test]
+fn accepted_baseline_retains_deleted_source_footprints_through_mcp() {
+    let mut server = server();
+    for command in [pcbcraft_engine::DELETE_SYMBOL, pcbcraft_engine::DELETE_ITEMS, pcbcraft_engine::sheets::DELETE_SHEET] {
+        let described = body(&call(&mut server, "describe_command", json!({"command":command})));
+        let summary = described["summary"].as_str().unwrap();
+        assert!(summary.contains("accepted baseline") && summary.contains("pending review") && summary.contains("otherwise"), "{described}");
+    }
+    let execute = |server: &mut Server, command: &str, params: Value| {
+        let result = call(server, "execute", json!({"command":command,"params":params}));
+        assert_ne!(result["isError"], true, "{result}");
+        body(&result)
+    };
+    execute(&mut server, "project.new", json!({"create_board":true}));
+    let state = execute(&mut server, PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0,"expected_revision":1}));
+    let component = state["project"]["components"][0]["id"].clone();
+    let symbol = state["project"]["schematic"]["symbols"][0]["id"].clone();
+    let package = state["footprint_catalog"].as_array().unwrap().iter().find(|package| package["id"] == "resistor-0402").unwrap();
+    let assigned = execute(
+        &mut server,
+        pcbcraft_engine::ASSIGN_FOOTPRINT,
+        json!({
+            "component":component,"library":package["library"],"definition":package["id"],
+            "definition_revision":package["revision"],"mapping":{"1":"1","2":"2"},"expected_revision":state["revision"]
+        }),
+    );
+    let placed = execute(
+        &mut server,
+        pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINT,
+        json!({
+            "component":component,"x_nm":0,"y_nm":0,"expected_revision":assigned["revision"]
+        }),
+    );
+    let initialized = execute(&mut server, pcbcraft_engine::INITIALIZE_UPDATE_BASELINE, json!({"expected_revision":placed["revision"]}));
+    let removed = execute(&mut server, pcbcraft_engine::DELETE_SYMBOL, json!({"symbol":symbol,"expected_revision":initialized["revision"]}));
+    assert_eq!(removed["project"]["components"], json!([]));
+    assert_eq!(removed["project"]["board"]["footprints"][0]["id"], placed["project"]["board"]["footprints"][0]["id"]);
+    assert_eq!(removed["project"]["board"]["footprints"][0]["pending_removal"], true);
+    assert_eq!(removed["project"]["board"]["pending_removals"], json!([component]));
+    let restored = execute(&mut server, "edit.undo", json!({}));
+    assert_eq!(restored["project"]["components"], placed["project"]["components"]);
+    assert_eq!(restored["project"]["board"]["footprints"][0]["pending_removal"], false);
+}
+
 /// Headless clients discover explicit populated-board binding adoption and placement-only
 /// deletion, using the same revision gates and undo history as the graphical controls.
 #[test]
