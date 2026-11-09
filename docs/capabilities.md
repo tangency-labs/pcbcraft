@@ -33,8 +33,8 @@ accepted unplaced parts to explicit placement. Stale or replaced previews requir
 re-review; legacy current-state adoption and board creation remain separate
 explicit edits.
 
-Schematic part/power placement repeats by default for new settings, and completed
-wires leave the tool ready for another route. Canvas context menus provide the
+Schematic part/power placement repeats by default for new settings, including catalog
+drag/drop with custom power-net names, and completed wires leave the tool ready for another route. Canvas context menus provide the
 supported drawing, selection and view actions, with spacing choices in a Grid submenu.
 The [editor guide](editor-guide.md) covers one-shot placement and cancellation.
 

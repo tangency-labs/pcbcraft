@@ -98,7 +98,7 @@ Click a result to inspect its drawing, value and source, then choose **Place**.
 Double-clicking a result or pressing **Enter** also starts placement. In the large
 form, the catalog closes and leaves a preview on the canvas; click to place it,
 **R** to rotate or **Esc** to cancel. A result can also be dragged directly onto
-the sheet. **Cancel**, **Esc** or the header's **×** closes the large form without
+the sheet, including Power entries with their chosen net name. **Cancel**, **Esc** or the header's **×** closes the large form without
 changing the project. On narrower hosts, a Library selector replaces its
 navigation pane; the smallest forms have Parts and Preview tabs.
 

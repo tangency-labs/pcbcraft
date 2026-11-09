@@ -59,7 +59,10 @@ fn stale_and_foreign_view_input_cannot_replace_current_interactions() {
         assert_eq!(app.views.active.camera.screen(origin, rect), before_camera);
         app.begin_wire();
         let current = app.views.active.input(&app.session).unwrap();
-        app.view_click(current, Click::Drop(PartDrag { definition: definition.clone(), source }, Point { x_nm: 0, y_nm: 0 }));
+        app.view_click(
+            current,
+            Click::Drop(PartDrag { placement: crate::parts_browser::Placement::Symbol(definition.clone()), source }, Point { x_nm: 0, y_nm: 0 }),
+        );
         app.view_click(source, Click::CancelWire);
         assert!(matches!(app.views.active.schematic.tool, Some(Tool::Wire { .. })));
         app.views.active.cancel_gesture();

@@ -90,10 +90,17 @@ impl Entry {
 }
 /// The host owns the placement tool or source manager; compact catalogs can remain visible.
 pub(crate) enum Pick {
-    Symbol(Arc<SymbolDefinition>),
-    Power(Label),
+    Place(Placement),
     Libraries,
     Stale,
+}
+
+/// Catalog contents shared by click placement and drag/drop; power markers keep their own
+/// electrical command and custom net name rather than masquerading as component definitions.
+#[derive(Clone, Debug)]
+pub(crate) enum Placement {
+    Symbol(Arc<SymbolDefinition>),
+    Power(Label),
 }
 
 /// The full chooser is the normal entry point; the compact catalog retains its own dock.
@@ -436,17 +443,8 @@ impl PartsBrowser {
                 self.close(ui.ctx());
                 return Some(Pick::Stale);
             }
-            let picked = entries.iter().find(|e| Some(e.key()) == self.selected).map(|entry| match entry {
-                Entry::Symbol(symbol) => Pick::Symbol(symbol.clone()),
-                Entry::Power(preset) => Pick::Power(Label {
-                    id: 0,
-                    name: self.power_name.clone(),
-                    style: preset.style,
-                    at: Point { x_nm: 0, y_nm: 0 },
-                    rotation: 0,
-                    text: None,
-                }),
-            });
+            let picked =
+                entries.iter().find(|e| Some(e.key()) == self.selected).and_then(|entry| placement(entry, &self.power_name)).map(Pick::Place);
             if expanded {
                 self.close(ui.ctx());
             } else {
@@ -538,11 +536,12 @@ impl PartsBrowser {
                 catalog::Item { name: entry.name(), value, identity: identity.as_deref(), selected: self.selected == Some(entry.key()) },
                 |p, r, ink| paint_entry(p, r, entry, ink),
             );
-            if let Entry::Symbol(definition) = entry {
-                response.dnd_set_drag_payload(crate::schematic_canvas::PartDrag { definition: definition.clone(), source: owner });
+            let name = if self.selected == Some(entry.key()) { &self.power_name } else { entry.default_net_name().unwrap_or_default() };
+            if let Some(placement) = placement(entry, name) {
+                response.dnd_set_drag_payload(crate::schematic_canvas::PartDrag { placement, source: owner });
                 choices.dragging |= response.drag_started();
             }
-            if response.clicked() {
+            if response.clicked() || response.drag_started() {
                 if self.selected != Some(entry.key()) {
                     self.power_name = entry.default_net_name().unwrap_or_default().into();
                 }
@@ -605,6 +604,24 @@ impl PartsBrowser {
         }
     }
 }
+
+/// Both placement gestures capture the same validated power name and style. Dragging an
+/// unselected tile uses its preset name; an invalid edited name never creates a payload.
+fn placement(entry: &Entry, name: &str) -> Option<Placement> {
+    match entry {
+        Entry::Symbol(symbol) => Some(Placement::Symbol(symbol.clone())),
+        Entry::Power(preset) if valid_power_name(name, Some(&entry.key())) => Some(Placement::Power(Label {
+            id: 0,
+            name: name.to_owned(),
+            style: preset.style,
+            at: Point { x_nm: 0, y_nm: 0 },
+            rotation: 0,
+            text: None,
+        })),
+        Entry::Power(_) => None,
+    }
+}
+
 /// Preset drawings are original app markers; source symbols retain their licensed definitions.
 fn paint_entry(p: &egui::Painter, r: Rect, entry: &Entry, ink: egui::Color32) {
     match entry {
@@ -628,7 +645,7 @@ fn collection_name(collection: &Collection, sources: &serde_json::Value) -> Stri
         }
     }
 }
-/// Disable Place for invalid custom power names before a canvas preview is created.
+/// Disable Place and drag payloads for invalid custom power names before a preview is created.
 fn valid_power_name(name: &str, key: Option<&Key>) -> bool {
     !matches!(key, Some(Key::Power(_)))
         || (!name.is_empty() && name.trim() == name && name.chars().count() <= 200 && !name.chars().any(char::is_control))
