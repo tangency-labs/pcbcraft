@@ -327,16 +327,7 @@ impl Session {
                 } else {
                     project.resolve_sheet(params["child"].as_str())?
                 };
-                let block = SheetSymbol {
-                    id: project
-                        .highest_id()
-                        .max(self.revision)
-                        .checked_add(1)
-                        .ok_or_else(|| CommandError::Unavailable("object IDs exhausted".into()))?,
-                    child: child.sheet,
-                    at: at()?,
-                    size: None,
-                };
+                let block = SheetSymbol { id: self.next_object_id()?, child: child.sheet, at: at()?, size: None };
                 Arc::make_mut(&mut project.sheet_mut().subsheets).push(block);
             }
             RESIZE_SHEET => {
@@ -403,7 +394,10 @@ impl Session {
                     })
                     .ok_or_else(|| CommandError::Unavailable("no free sheet pin slot".into()))?;
                 let label = Label {
-                    id: existing.map_or_else(|| project.highest_id().max(self.revision).saturating_add(1), |i| project.labels[i].id),
+                    id: match existing {
+                        Some(index) => project.labels[index].id,
+                        None => self.next_object_id()?,
+                    },
                     name,
                     direction,
                     at: at()?,

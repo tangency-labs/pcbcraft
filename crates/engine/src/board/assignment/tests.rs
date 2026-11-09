@@ -58,7 +58,7 @@ fn assignment_and_placement_are_independent_offline_transactions() {
     assert_eq!(stored["project"]["board"]["footprints"][0]["x_nm"], 2_540_000);
     assert_eq!(stored["project"]["schematic"], s.inspect()["project"]["schematic"]);
     restored.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(encode_documents(restored.snapshot().unwrap()).unwrap(), assigned);
+    crate::assert_same_content(&decode_documents(&assigned).unwrap(), &restored.snapshot().unwrap());
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
