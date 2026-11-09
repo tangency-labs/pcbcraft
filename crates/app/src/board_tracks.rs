@@ -255,7 +255,8 @@ fn add(state: &mut State, draft: Draft) -> Option<Command> {
 /// Route on the active copper layer, or select tracks and vias when no tool owns input. V drops a
 /// via at the pointer and continues on the paired layer, reported through `switch_layer`.
 /// Release over chrome, right-click, stale input, disabled input or a hidden/changed layer never
-/// commits an unfinished route. `over_footprint` gives footprints priority for plain picks.
+/// commits an unfinished route. Key requests (Delete, Enter, Backspace, `/`, V) are consumed every
+/// frame and ignored while input is disabled. `over_footprint` gives footprints priority for picks.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn interact(
     ui: &mut Ui,
@@ -281,6 +282,13 @@ pub(super) fn interact(
     if state.tool && !can_route(view, active, hidden) {
         state.cancel();
     }
+    // Key requests apply to this frame only. Taking them before the disabled-input return keeps
+    // a Delete pressed while another gesture owned input from deleting on a later frame.
+    let delete = std::mem::take(&mut state.delete_requested);
+    let posture = std::mem::take(&mut state.posture_requested);
+    let backspace = std::mem::take(&mut state.backspace_requested);
+    let finish = std::mem::take(&mut state.finish_requested);
+    let via = std::mem::take(&mut state.via_requested);
     let Some(source) = source.filter(|_| enabled) else { return out };
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) && state.busy() {
         if state.draft.take().is_none() {
@@ -289,7 +297,7 @@ pub(super) fn interact(
         out.consumed = true;
         return out;
     }
-    if std::mem::take(&mut state.delete_requested) && !state.selected.is_empty() {
+    if delete && !state.selected.is_empty() {
         let (gone_vias, gone_tracks): (Vec<Uuid>, Vec<Uuid>) = state.selected.iter().partition(|id| vias.iter().any(|via| via.id == **id));
         let mut params = json!({"expected_revision":source.revision});
         if !gone_tracks.is_empty() {
@@ -307,12 +315,10 @@ pub(super) fn interact(
     if state.tool {
         out.consumed = true;
         let Some(layer) = active else { return out };
-        if std::mem::take(&mut state.posture_requested) {
+        if posture {
             state.diagonal_first = !state.diagonal_first;
         }
-        if std::mem::take(&mut state.backspace_requested)
-            && let Some(draft) = &mut state.draft
-        {
+        if backspace && let Some(draft) = &mut state.draft {
             // Undo the most recent step: a via at the last vertex first, then the vertex itself.
             if draft.changes.last().is_some_and(|(at, _)| *at + 1 == draft.points.len()) {
                 draft.changes.pop();
@@ -325,7 +331,7 @@ pub(super) fn interact(
                 }
             }
         }
-        if std::mem::take(&mut state.via_requested)
+        if via
             && let Some(pointer) = pointer
             && let Some(draft) = &mut state.draft
             && let Some(next) = paired_layer(view, &draft.layer, hidden)
@@ -341,7 +347,7 @@ pub(super) fn interact(
             }
             return out;
         }
-        if std::mem::take(&mut state.finish_requested) {
+        if finish {
             if let Some(draft) = state.draft.take() {
                 out.command = add(state, draft);
             }

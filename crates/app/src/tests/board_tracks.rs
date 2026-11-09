@@ -270,3 +270,38 @@ fn backspace_undoes_a_via_and_vias_select_and_delete() {
     assert!(vias(&h).is_empty());
     assert_eq!(tracks(&h).len(), 2, "deleting the via keeps its tracks");
 }
+
+/// Delete pressed while track input is disabled is dropped, not replayed later. A box-selection
+/// drag disables track input but keeps the track selection: Delete during the drag, then release,
+/// must leave the track in place on the frames after.
+#[test]
+fn a_delete_pressed_while_track_input_is_disabled_never_deletes_later() {
+    let mut h = routable();
+    let top = h.state().views.active.board.active_layer.clone().unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":2_540_000},{"x_nm":7_620_000,"y_nm":2_540_000}],"expected_revision":revision}),
+    );
+    h.run();
+    let middle = at(&h, Point { x_nm: 3_810_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, middle);
+    assert_eq!(h.state().views.active.board.tracks.selected.len(), 1);
+    let (from, to) = (at(&h, Point { x_nm: 2_540_000, y_nm: -1_270_000 }), at(&h, Point { x_nm: 5_080_000, y_nm: -3_810_000 }));
+    h.hover_at(from);
+    h.run();
+    h.drag_at(from);
+    h.run();
+    h.hover_at(to);
+    h.run();
+    assert!(h.state().views.active.board.box_drag.is_some(), "a box selection is in progress");
+    assert_eq!(h.state().views.active.board.tracks.selected.len(), 1);
+    h.key_press(Key::Delete);
+    h.run();
+    assert_eq!(tracks(&h).len(), 1, "track input is disabled during the box drag");
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    h.run();
+    assert!(h.state().views.active.board.box_drag.is_none());
+    assert_eq!(tracks(&h).len(), 1, "the earlier Delete is not replayed once track input returns");
+}

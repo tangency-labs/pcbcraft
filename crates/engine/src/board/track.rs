@@ -313,12 +313,21 @@ fn point_distance(p: Point, a: Point, b: Point) -> f64 {
     ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
 }
 
-/// Name the first two distinct nets that a candidate's copper would join, if any.
-fn short(project: &Project) -> Option<(String, String)> {
+/// Name the first two distinct nets joined by an island that contains one of the `added`
+/// tracks or vias, if any. Islands without new copper are ignored, so a short made earlier by
+/// another edit (such as moving a footprint onto a track) does not block unrelated routes.
+fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> {
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
-    let (_, members) = islands(&lands, view.tracks(), view.vias());
-    members.iter().find_map(|island| {
+    let (tracks, vias) = (view.tracks(), view.vias());
+    let (_, members) = islands(&lands, tracks, vias);
+    let is_added = |node: usize| {
+        let index = node.checked_sub(lands.len());
+        let track = index.and_then(|index| tracks.get(index)).map(|track| track.id);
+        let via = index.and_then(|index| index.checked_sub(tracks.len())).and_then(|index| vias.get(index)).map(|via| via.id);
+        track.or(via).is_some_and(|id| added.contains(&id))
+    };
+    members.iter().filter(|island| island.iter().any(|node| is_added(*node))).find_map(|island| {
         let mut nets = island.iter().filter_map(|node| lands.get(*node)?.net.clone());
         let first = nets.next()?;
         nets.find(|net| *net != first).map(|second| (first, second))
@@ -365,6 +374,7 @@ impl Session {
         let project = self.open_project()?;
         let mut tracks = project.board.tracks.clone();
         let mut vias = project.board.vias.clone();
+        let mut added = BTreeSet::new();
         if command == ADD_TRACKS {
             let mut layer: Uuid = param(params, "layer")?;
             let width_nm: i64 = param(params, "width_nm")?;
@@ -401,16 +411,22 @@ impl Session {
                         return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
                     }
                     layer = change.layer;
-                    vias.push(Via { id: crate::fresh_id()?, at: pair[0], diameter_nm, drill_nm });
+                    let id = crate::fresh_id()?;
+                    added.insert(id);
+                    vias.push(Via { id, at: pair[0], diameter_nm, drill_nm });
                 }
-                tracks.push(Track { id: crate::fresh_id()?, layer, width_nm, start: pair[0], end: pair[1] });
+                let id = crate::fresh_id()?;
+                added.insert(id);
+                tracks.push(Track { id, layer, width_nm, start: pair[0], end: pair[1] });
             }
             // A change at the final vertex ends the route on a via, ready to continue on that layer.
             if let Some(change) = changes.next() {
                 if change.layer == layer {
                     return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
                 }
-                vias.push(Via { id: crate::fresh_id()?, at: points[change.at], diameter_nm, drill_nm });
+                let id = crate::fresh_id()?;
+                added.insert(id);
+                vias.push(Via { id, at: points[change.at], diameter_nm, drill_nm });
             }
         } else {
             let gone_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
@@ -426,9 +442,7 @@ impl Session {
         let board = std::sync::Arc::make_mut(&mut next.board);
         board.tracks = tracks;
         board.vias = vias;
-        if command == ADD_TRACKS
-            && let Some((a, b)) = short(&next)
-        {
+        if let Some((a, b)) = short(&next, &added) {
             return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
         }
         self.change(next);

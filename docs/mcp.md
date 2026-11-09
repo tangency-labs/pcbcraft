@@ -161,7 +161,8 @@ require `via_diameter_nm` and `via_drill_nm`, with the drill smaller than the pa
 Deleting takes `tracks` and/or `vias`, unique UUIDs from `project.boards[].tracks`
 and `.vias`; at least one item is required, and deleting a via keeps its tracks. A route is refused whole when a point is out of range,
 neighbors repeat, the layer is not copper in the board setup, or its copper would
-join pads on two different nets (the error names both). Copper connects where it
+join pads on two different nets (the error names both). Only copper the new route
+touches is checked, so a short left by an earlier edit does not block unrelated routes. Copper connects where it
 overlaps on a shared layer, a via joins the copper it overlaps on every layer, and the board ratsnest drops airwires between
 terminals already joined by tracks. This is not a clearance or DRC check. Live `view.set_layer` uses the same
 Layers handler for `active` and `visible` changes on an addressed view; those
