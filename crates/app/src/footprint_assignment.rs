@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Debug)]
 pub(super) struct Edit {
     pub(super) source: ViewInput,
+    pub(super) update_review: Option<Box<crate::board_update::Edit>>,
     component: String,
     component_browser: bool,
     component_query: String,
@@ -93,6 +94,7 @@ impl PcbApp {
         let Some(component) = component.or_else(|| project.components().next().map(|c| c.id())) else { return };
         let mut edit = Edit {
             source,
+            update_review: None,
             component,
             component_browser,
             component_query: String::new(),
@@ -114,11 +116,16 @@ impl PcbApp {
     }
 
     /// Show package provenance and an explicit terminal map. Assign and Place are separate undoable
-    /// commands; a stale form closes before dispatch. Already placed packages stay read-only until
-    /// reviewed remapping exists. Source/library files are never edited by this dialog.
+    /// commands; a stale form closes before dispatch. Placed choices remain proposals until
+    /// reviewed update acceptance, and legacy boards first need explicit adoption.
+    /// Source/library files are never edited by this dialog.
     pub(super) fn footprint_assignment_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
         if !self.views.view(edit.source.view()).is_some_and(|v| v.input(&self.session) == Some(edit.source)) {
             self.message = Some("View or project changed; reopen footprint assignment to continue.".into());
+            if let Some(mut review) = edit.update_review.take() {
+                review.invalidate_review();
+                self.resume_board_update(review);
+            }
             return;
         }
         let Some(project) = self.session.snapshot() else { return };
@@ -130,9 +137,15 @@ impl PcbApp {
             .is_some_and(|board| board.footprints().any(|f| f.component == edit.component));
         let assigned = project.footprint_assignments().into_iter().find(|a| a["component"] == edit.component);
         let excluded = component.is_some_and(|c| c.metadata.attributes.exclude_from_board);
-        let placement = (self.views.active.workspace == Workspace::Board && assigned.is_some() && !placed)
-            .then(|| edit.matches_assignment(&project) && !excluded);
-        let action = pcbcraft_chrome::catalog::footprint_form(ctx, !placed && edit.definition.is_some(), placement, |ui| {
+        let editable =
+            !placed || project.board_target().and_then(|target| project.board_view(target)).is_some_and(|board| !board.needs_update_initialization());
+        let place_allowed = edit.update_review.as_ref().is_none_or(|review| review.allows_placement());
+        let placement = (place_allowed && self.views.active.workspace == Workspace::Board && assigned.is_some() && !placed).then(|| {
+            edit.matches_assignment(&project)
+                && !excluded
+                && assigned.as_ref().is_some_and(|assignment| assignment["pending_update"] != true && assignment["pending_removal"] != true)
+        });
+        let action = pcbcraft_chrome::catalog::footprint_form(ctx, editable && edit.definition.is_some(), placement, |ui| {
             let wide = ui.available_width() >= 900.;
             pcbcraft_chrome::catalog::footprint_panes(ui, |ui, region| {
                 use pcbcraft_chrome::{catalog::Region, properties as form};
@@ -211,6 +224,8 @@ impl PcbApp {
                         }
                         ui.label(if excluded {
                             "Excluded from board"
+                        } else if placed && assigned.as_ref().is_some_and(|assignment| assignment["pending_update"] == true) {
+                            "Placed · update pending"
                         } else if placed {
                             "Placed"
                         } else if assigned.is_some() {
@@ -219,7 +234,7 @@ impl PcbApp {
                             "Unassigned"
                         });
                         ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
-                        ui.add_enabled_ui(!placed, |ui| {
+                        ui.add_enabled_ui(editable, |ui| {
                             let label = ui.label(pcbcraft_chrome::shell::dim("Search footprints"));
                             ui.add(form::input(&mut edit.query).desired_width(ui.available_width()).hint_text("Name or package"))
                                 .labelled_by(label.id);
@@ -292,7 +307,7 @@ impl PcbApp {
                             ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
                             form::card(ui, "Pin mapping", |ui| {
                                 if let Some(component) = project.components().find(|c| c.id() == edit.component) {
-                                    ui.add_enabled_ui(!placed, |ui| {
+                                    ui.add_enabled_ui(editable, |ui| {
                                         let pins = component.definition.pins();
                                         let numbers: std::collections::BTreeSet<_> = pins.iter().map(|p| p.number.as_str()).collect();
                                         let pads: std::collections::BTreeSet<_> = definition.pads.iter().map(|p| p.number.as_str()).collect();
@@ -320,7 +335,11 @@ impl PcbApp {
                                 ui.add(egui::Label::new(&definition.source.reference).wrap());
                             });
                             if placed {
-                                ui.label("Changing a placed package requires a reviewed board update.");
+                                ui.label(if editable {
+                                    "Assign records the proposed footprint choice. Update PCB from schematic applies it to the placed footprint."
+                                } else {
+                                    "Use current state in Update PCB from schematic before changing this placed package."
+                                });
                             }
                             if placement.is_some() {
                                 form::card(ui, "Board position", |ui| {
@@ -378,6 +397,9 @@ impl PcbApp {
             match self.session.apply(command, &params) {
                 Ok(_) => {
                     self.message = None;
+                    if assign && let Some(review) = edit.update_review.as_mut() {
+                        review.invalidate_review();
+                    }
                     self.views.sync(&self.session);
                     if place
                         && let Some(footprint) = self
@@ -394,6 +416,8 @@ impl PcbApp {
                         edit.source = source;
                         edit.error = None;
                         self.dialog = Dialog::Footprint(Box::new(edit));
+                    } else if place && let Some(review) = edit.update_review.take() {
+                        self.resume_board_update(review);
                     }
                 }
                 Err(error) => {
@@ -401,7 +425,12 @@ impl PcbApp {
                     self.dialog = Dialog::Footprint(Box::new(edit));
                 }
             }
-        } else if !action.close {
+        } else if action.close {
+            if let Some(review) = edit.update_review.take() {
+                self.resume_board_update(review);
+                self.repaint_editors(ctx);
+            }
+        } else {
             self.dialog = Dialog::Footprint(Box::new(edit));
         }
     }

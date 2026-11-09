@@ -344,6 +344,12 @@ mod live {
 
     const CATALOG: &[WindowCommand] = &[
         WindowCommand {
+            id: "app.update_pcb",
+            title: "Update PCB from Schematic",
+            summary: "Open the reviewed schematic-to-PCB update dialog from an addressed project pane. Board creation and legacy adoption remain explicit actions; opening never applies changes.",
+            params: &[VIEW],
+        },
+        WindowCommand {
             id: "app.set_workspace",
             title: "Choose Workspace",
             summary: "Choose a workspace in an addressed pane (default: focused main pane), here, beside it or in a native window. Definition sessions and project history remain independent.",
@@ -1097,6 +1103,7 @@ mod live {
                 }
             }
             match (id, view, window) {
+                ("app.update_pcb", Some((view, _)), _) => self.begin_board_update(view)?,
                 ("view.focus", Some((view, host)), _) => self.in_window(host, |app| app.activate_editor(ctx, view)),
                 ("view.split", Some((view, host)), _) => {
                     let split = params["split"].as_bool() == Some(true);

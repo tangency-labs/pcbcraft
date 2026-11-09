@@ -107,6 +107,7 @@ const CAPTURE: &[Group] = &[
         extras: &[],
     },
     Group { title: "Sheets", tools: SHEETS, extras: &[] },
+    Group { title: "PCB", tools: &[tool(Action::Sync, "Update PCB", Icon::Sync, "Update PCB from schematic", "")], extras: &[] },
     Group {
         title: "Modify",
         tools: &[
@@ -163,7 +164,6 @@ const MANAGE: &[Group] = &[
         tools: &[
             tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
             tool(Action::Variants, "Variants", Icon::Bom, "Assembly variants are not available yet.", ""),
-            tool(Action::Sync, "Update PCB", Icon::Sync, "Schematic-to-board synchronization is not available yet.", ""),
         ],
         extras: &[],
     },
@@ -191,6 +191,7 @@ impl Action {
                 | Self::Slice
                 | Self::Heal
                 | Self::AutoHeal
+                | Self::Sync
         )
     }
 
@@ -203,6 +204,7 @@ impl Action {
         let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
         match self {
             Self::Sources => true,
+            Self::Sync => project && app.views.active.input(&app.session).is_some(),
             Self::OpenLibraryItem => !app.library_editors.busy(),
             Self::ResumeLibraryEditors => app.library_editors.has_documents(),
             Self::EditDefinitionCopy => {
@@ -305,6 +307,7 @@ impl PcbApp {
         }
         match action {
             Action::Sources => self.dialog = Dialog::LibrarySources,
+            Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
             Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),
             Action::ResumeLibraryEditors => self.resume_library_workspace(ctx),
             Action::EditDefinitionCopy => {
