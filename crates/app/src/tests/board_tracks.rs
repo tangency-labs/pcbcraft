@@ -581,3 +581,34 @@ fn right_click_cancels_and_ribbon_starts_copper_moves() {
     click(&mut h, "Move footprint");
     assert!(h.state().views.active.board.tracks.busy(), "the ribbon started a copper move");
 }
+
+/// Design › Flip view mirrors this view left-to-right around the centered point, keeps the zoom,
+/// and maps pointer picks back to the same model points, so clicks still select what they hit.
+#[test]
+fn flip_view_mirrors_drawing_and_picking_without_editing() {
+    let mut h = routable();
+    let left = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
+    let right = Point { x_nm: 7_620_000, y_nm: 2_540_000 };
+    let track = add_track(&mut h, left, right);
+    let revision = h.state().session.revision();
+    let (left_before, right_before) = (at(&h, left), at(&h, right));
+    assert!(left_before.x < right_before.x);
+    click(&mut h, "View the board from below");
+    assert!(h.state().views.active.camera.mirrored());
+    let (left_after, right_after) = (at(&h, left), at(&h, right));
+    assert!(left_after.x > right_after.x, "model X now runs right to left");
+    assert!(((right_before - left_before).length() - (left_after - right_after).length()).abs() < 0.01, "the zoom is unchanged");
+    assert!(h.query_by_label_contains("Bottom view").is_some());
+    let middle = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, middle);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "picking follows the mirror");
+    click(&mut h, "View the board from below");
+    assert!(!h.state().views.active.camera.mirrored());
+    assert!((at(&h, left) - left_before).length() < 0.5, "flipping back restores the view");
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    h.state_mut().run_window_command(&ctx, "view.set_board_flipped", &json!({"view":view,"flipped":true})).unwrap();
+    assert!(h.state().views.active.camera.mirrored(), "live MCP flips through the same handler");
+    assert!(h.state_mut().run_window_command(&ctx, "view.set_board_flipped", &json!({"view":999,"flipped":true})).is_err());
+    assert_eq!(h.state().session.revision(), revision, "flipping never edits the project");
+}
