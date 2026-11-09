@@ -277,3 +277,33 @@ fn a_track_crossing_a_pad_off_center_touches_it() {
     let clear = Track { start: Point { x_nm: -1_000_000, y_nm: 700_000 }, end: Point { x_nm: 2_000_000, y_nm: 700_000 }, ..crossing };
     assert!(!touches_land(&clear, &square), "copper clear of the land");
 }
+
+/// A track that crosses a pad with both ends outside its land joins that pad's copper island, and
+/// leaves other pads out of it. A crossing like that over pads on two different nets is refused.
+#[test]
+fn a_track_crossing_a_pad_with_both_ends_outside_joins_its_island() {
+    let mut s = routed_fixture();
+    let front = copper_layers(&s)[0];
+    let (footprint, a, b) = {
+        let f = view(&s).footprints().find(|f| f.pads.iter().all(|p| p.net.is_some()) && f.pads[0].net != f.pads[1].net).unwrap();
+        (f.id.clone(), (f.pads[0].number.clone(), f.pads[0].center), (f.pads[1].number.clone(), f.pads[1].center))
+    };
+    // Vertical, 0.2 mm off the center of pad `a`, starting and ending 1 mm outside its 0.6 mm land.
+    let x = a.1.x_nm + (a.1.x_nm - b.1.x_nm).signum() * 200_000;
+    let crossing = [Point { x_nm: x, y_nm: a.1.y_nm - 1_000_000 }, Point { x_nm: x, y_nm: a.1.y_nm + 1_000_000 }];
+    s.apply(ADD_TRACKS, &json!({"layer":front,"width_nm":100_000,"points":crossing,"expected_revision":s.revision()})).unwrap();
+    let track = view(&s).tracks()[0].id;
+    let copper = view(&s).copper();
+    assert_eq!(copper.pads[&(footprint.clone(), a.0.clone())], copper.tracks[&track], "the crossed pad joins the track's island");
+    assert_ne!(copper.pads[&(footprint.clone(), b.0.clone())], copper.tracks[&track], "the neighboring pad stays separate");
+
+    // Horizontal, 0.2 mm off both pad centers, starting and ending 1 mm outside the pair.
+    let (left, right) = if a.1.x_nm < b.1.x_nm { (a.1, b.1) } else { (b.1, a.1) };
+    let y = a.1.y_nm + 200_000;
+    let across = [Point { x_nm: left.x_nm - 1_000_000, y_nm: y }, Point { x_nm: right.x_nm + 1_000_000, y_nm: y }];
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let error =
+        s.apply(ADD_TRACKS, &json!({"layer":front,"width_nm":100_000,"points":across,"expected_revision":s.revision()})).unwrap_err().to_string();
+    assert!(error.contains("would connect nets"), "crossing two nets' pads is a short: {error}");
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
