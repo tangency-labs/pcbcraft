@@ -21,10 +21,11 @@ R rotates a preview and Escape cancels. E opens an existing label's properties;
 M picks up the complete label, R rotates it and Delete removes it. A held drag
 moves the complete label; cancellation leaves the document unchanged.
 
-A text label or a definition-declared power terminal contacts exact coincident
-pins and wire segments. Either one at a crossing joins every route there, even
-when the power terminal has no text label. Crossings without either contact
-remain separate.
+A text label or a definition-declared power terminal connects exact coincident
+pins and every wire segment through its anchor, so either contact at a crossing
+joins all routes there. Wire legs referencing the same electrical endpoint, such
+as a junction or symbol terminal, also connect without a named contact; a geometric
+crossing alone creates no connection.
 Connected label movement retains touching wires, with fixed pins connected by
 a wire leg. Local names join only within their sheet, including hierarchical
 interfaces. Global labels and definition-declared power terminals join matching
