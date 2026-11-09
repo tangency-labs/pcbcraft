@@ -173,17 +173,28 @@ fn deleting_placements_is_atomic_and_preserves_components_and_packages() {
     assert_eq!(s.project().unwrap().board.footprints().len(), 2);
 }
 
+/// Every mode round-trips through its MCP name, and only the distribute modes need three.
+#[test]
+fn align_modes_round_trip_their_names() {
+    for mode in super::AlignMode::ALL {
+        assert_eq!(super::AlignMode::parse(mode.name()), Some(mode));
+        assert_eq!(mode.minimum(), if mode.name().starts_with("distribute") { 3 } else { 2 });
+    }
+    assert_eq!(super::ALIGN_MODES.map(super::AlignMode::parse).map(Option::unwrap), super::AlignMode::ALL);
+    assert_eq!(super::AlignMode::parse("distribute"), None);
+}
+
 /// Edge, center and distribute modes move boxes exactly; distribution keeps the outer items and
 /// leaves equal gaps.
 #[test]
 fn alignment_moves_boxes_to_shared_edges_and_equal_gaps() {
     let boxes = [[0, 0, 10, 10], [30, 5, 34, 25], [12, -4, 20, 2]];
-    assert_eq!(super::alignment("left", &boxes), vec![(0, 0), (-30, 0), (-12, 0)]);
-    assert_eq!(super::alignment("right", &boxes), vec![(24, 0), (0, 0), (14, 0)]);
-    assert_eq!(super::alignment("top", &boxes), vec![(0, -4), (0, -9), (0, 0)]);
-    assert_eq!(super::alignment("bottom", &boxes), vec![(0, 15), (0, 0), (0, 23)]);
-    assert_eq!(super::alignment("center_x", &boxes), vec![(12, 0), (-15, 0), (1, 0)]);
-    let spread = super::alignment("distribute_x", &boxes);
+    assert_eq!(super::alignment(super::AlignMode::Left, &boxes), vec![(0, 0), (-30, 0), (-12, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Right, &boxes), vec![(24, 0), (0, 0), (14, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Top, &boxes), vec![(0, -4), (0, -9), (0, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Bottom, &boxes), vec![(0, 15), (0, 0), (0, 23)]);
+    assert_eq!(super::alignment(super::AlignMode::CenterX, &boxes), vec![(12, 0), (-15, 0), (1, 0)]);
+    let spread = super::alignment(super::AlignMode::DistributeX, &boxes);
     let placed: Vec<_> = boxes.iter().zip(&spread).map(|(b, (dx, _))| [b[0] + dx, b[2] + dx]).collect();
     assert_eq!(placed, vec![[0, 10], [30, 34], [16, 24]], "gaps of 6: 34 of span minus 22 of sizes, in two gaps");
 }

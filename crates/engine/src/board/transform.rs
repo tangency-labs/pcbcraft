@@ -6,7 +6,63 @@ use std::sync::Arc;
 /// Align or evenly distribute the addressed footprints by their bounds, in one undo step.
 pub const ALIGN_FOOTPRINTS: &str = "pcb.align_footprints";
 /// The alignment modes, as MCP clients name them.
-pub const ALIGN_MODES: [&str; 8] = ["left", "right", "top", "bottom", "center_x", "center_y", "distribute_x", "distribute_y"];
+pub const ALIGN_MODES: [&str; 8] = {
+    let mut names = [""; 8];
+    let mut i = 0;
+    while i < names.len() {
+        names[i] = AlignMode::ALL[i].name();
+        i += 1;
+    }
+    names
+};
+
+/// How `pcb.align_footprints` moves the selection: onto a shared edge or center line, or
+/// spread with equal gaps along an axis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlignMode {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    CenterX,
+    CenterY,
+    DistributeX,
+    DistributeY,
+}
+
+impl AlignMode {
+    /// Every mode, in the order the Modify menu lists them.
+    pub const ALL: [Self; 8] = [Self::Left, Self::Right, Self::Top, Self::Bottom, Self::CenterX, Self::CenterY, Self::DistributeX, Self::DistributeY];
+
+    /// The mode's MCP name.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::CenterX => "center_x",
+            Self::CenterY => "center_y",
+            Self::DistributeX => "distribute_x",
+            Self::DistributeY => "distribute_y",
+        }
+    }
+
+    /// The mode an MCP name refers to, if any.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == name)
+    }
+
+    /// Whether the mode spreads footprints rather than lining them up.
+    pub const fn distributes(self) -> bool {
+        matches!(self, Self::DistributeX | Self::DistributeY)
+    }
+
+    /// The fewest footprints the mode applies to: three to distribute, two to align.
+    pub const fn minimum(self) -> usize {
+        if self.distributes() { 3 } else { 2 }
+    }
+}
 
 /// A footprint's physical extent: pad centers and lands plus courtyard and fabrication graphics.
 /// Silkscreen, including the reference text, is left out so labels never shift an alignment.
@@ -30,18 +86,18 @@ fn bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
 /// Displacements that align or distribute `boxes` (min x, min y, max x, max y). Top is the
 /// smallest board Y. Centers align on the middle of the whole selection's bounds. Distribution
 /// keeps the outermost items and makes the gaps between neighbors' bounds equal.
-fn alignment(mode: &str, boxes: &[[i64; 4]]) -> Vec<(i64, i64)> {
+fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Vec<(i64, i64)> {
     let min = |i: usize| boxes.iter().map(|b| b[i]).min().unwrap_or(0);
     let max = |i: usize| boxes.iter().map(|b| b[i]).max().unwrap_or(0);
     match mode {
-        "left" => boxes.iter().map(|b| (min(0) - b[0], 0)).collect(),
-        "right" => boxes.iter().map(|b| (max(2) - b[2], 0)).collect(),
-        "top" => boxes.iter().map(|b| (0, min(1) - b[1])).collect(),
-        "bottom" => boxes.iter().map(|b| (0, max(3) - b[3])).collect(),
-        "center_x" => boxes.iter().map(|b| ((min(0) + max(2)) / 2 - (b[0] + b[2]) / 2, 0)).collect(),
-        "center_y" => boxes.iter().map(|b| (0, (min(1) + max(3)) / 2 - (b[1] + b[3]) / 2)).collect(),
-        _ => {
-            let axis = if mode == "distribute_x" { 0 } else { 1 };
+        AlignMode::Left => boxes.iter().map(|b| (min(0) - b[0], 0)).collect(),
+        AlignMode::Right => boxes.iter().map(|b| (max(2) - b[2], 0)).collect(),
+        AlignMode::Top => boxes.iter().map(|b| (0, min(1) - b[1])).collect(),
+        AlignMode::Bottom => boxes.iter().map(|b| (0, max(3) - b[3])).collect(),
+        AlignMode::CenterX => boxes.iter().map(|b| ((min(0) + max(2)) / 2 - (b[0] + b[2]) / 2, 0)).collect(),
+        AlignMode::CenterY => boxes.iter().map(|b| (0, (min(1) + max(3)) / 2 - (b[1] + b[3]) / 2)).collect(),
+        AlignMode::DistributeX | AlignMode::DistributeY => {
+            let axis = if mode == AlignMode::DistributeX { 0 } else { 1 };
             let mut order: Vec<usize> = (0..boxes.len()).collect();
             order.sort_by_key(|&i| (boxes[i][axis] + boxes[i][axis + 2], i));
             let span = boxes[order[order.len() - 1]][axis + 2] - boxes[order[0]][axis];
@@ -103,10 +159,7 @@ impl Session {
     pub(crate) fn align_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        let mode = params["mode"]
-            .as_str()
-            .filter(|mode| ALIGN_MODES.contains(mode))
-            .ok_or_else(|| CommandError::InvalidParams("unknown alignment mode".into()))?;
+        let mode = params["mode"].as_str().and_then(AlignMode::parse).ok_or_else(|| CommandError::InvalidParams("unknown alignment mode".into()))?;
         let ids: Vec<u64> = params["footprints"]
             .as_array()
             .into_iter()
@@ -114,18 +167,20 @@ impl Session {
             .map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
             .collect::<Option<_>>()
             .ok_or_else(|| CommandError::InvalidParams("footprints must be footprint IDs".into()))?;
-        let needed = if mode.starts_with("distribute") { 3 } else { 2 };
+        let needed = mode.minimum();
         if ids.len() < needed || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len() {
-            return Err(CommandError::InvalidParams(format!("{mode} needs at least {needed} different footprints")));
+            return Err(CommandError::InvalidParams(format!("{} needs at least {needed} different footprints", mode.name())));
         }
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        let mut boxes = Vec::with_capacity(ids.len());
-        for id in &ids {
-            let name = format!("footprint-{id}");
-            let footprint = view.footprints().find(|f| f.id == name).ok_or_else(|| CommandError::InvalidParams("unknown footprint ID".into()))?;
-            boxes.push(bounds(&footprint));
-        }
+        let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
+        let mut found: std::collections::BTreeMap<String, [i64; 4]> =
+            view.footprints().filter(|f| wanted.contains(&f.id)).map(|f| (f.id.clone(), bounds(&f))).collect();
+        let boxes = ids
+            .iter()
+            .map(|id| found.remove(&format!("footprint-{id}")))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| CommandError::InvalidParams("unknown footprint ID".into()))?;
         let deltas = alignment(mode, &boxes);
         if deltas.iter().all(|delta| *delta == (0, 0)) {
             return Ok(());

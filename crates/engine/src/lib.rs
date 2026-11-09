@@ -358,7 +358,7 @@ impl ParamKind {
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
             Self::BoardSide => Err("must be front or back"),
-            Self::AlignMode if value.as_str().is_some_and(|mode| ALIGN_MODES.contains(&mode)) => Ok(()),
+            Self::AlignMode if value.as_str().and_then(AlignMode::parse).is_some() => Ok(()),
             Self::AlignMode => Err("must be an alignment mode"),
             Self::LayerChanges => Err("must contain layer changes with a vertex index and a copper layer UUID"),
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
@@ -561,7 +561,7 @@ pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINTS};
-pub use board::transform::{ALIGN_FOOTPRINTS, ALIGN_MODES};
+pub use board::transform::{ALIGN_FOOTPRINTS, ALIGN_MODES, AlignMode};
 pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
 pub use board::update::{APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE};
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.

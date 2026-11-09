@@ -8,6 +8,7 @@ use pcbcraft_chrome::{
     shell,
     workspace::{self, Placement, RibbonTool, ToolIcon},
 };
+use pcbcraft_engine::AlignMode;
 
 /// A ribbon length field shown and edited in the display units, holding whole nanometers in
 /// `value`, clamped to `range`. Returns whether the person changed it.
@@ -87,26 +88,26 @@ fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_ch
     changed
 }
 
-/// Modify menu alignments: KiCad's names and the engine mode each runs.
-const ALIGNMENTS: [(&str, &str); 8] = [
-    ("Align to Left", "left"),
-    ("Align to Right", "right"),
-    ("Align to Top", "top"),
-    ("Align to Bottom", "bottom"),
-    ("Align to Vertical Center", "center_x"),
-    ("Align to Horizontal Center", "center_y"),
-    ("Distribute Horizontally", "distribute_x"),
-    ("Distribute Vertically", "distribute_y"),
+/// Modify menu alignments: the label and the engine mode each runs.
+const ALIGNMENTS: [(&str, AlignMode); 8] = [
+    ("Align to Left", AlignMode::Left),
+    ("Align to Right", AlignMode::Right),
+    ("Align to Top", AlignMode::Top),
+    ("Align to Bottom", AlignMode::Bottom),
+    ("Align to Vertical Center", AlignMode::CenterX),
+    ("Align to Horizontal Center", AlignMode::CenterY),
+    ("Distribute Horizontally", AlignMode::DistributeX),
+    ("Distribute Vertically", AlignMode::DistributeY),
 ];
 
 impl PcbApp {
     /// Align or distribute the focused view's selected footprints through the shared engine
     /// command, as one undo step. Refusals, such as too few footprints, appear in the status bar.
-    pub(super) fn align_footprints(&mut self, mode: &str) {
+    pub(super) fn align_footprints(&mut self, mode: AlignMode) {
         let Some(target) = self.views.active.board.target else { return };
         let params = serde_json::json!({
             "board": target.board, "footprints": self.views.active.board.selection,
-            "mode": mode, "expected_revision": self.session.revision(),
+            "mode": mode.name(), "expected_revision": self.session.revision(),
         });
         self.run(pcbcraft_engine::ALIGN_FOOTPRINTS, &params);
     }
@@ -345,7 +346,7 @@ impl PcbApp {
                 label,
                 description: label,
                 shortcut: "",
-                enabled: enabled && !editing && count >= if mode.starts_with("distribute") { 3 } else { 2 },
+                enabled: enabled && !editing && count >= mode.minimum(),
                 active: false,
                 toggle: false,
             })
