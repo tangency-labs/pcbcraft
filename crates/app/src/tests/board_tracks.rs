@@ -761,4 +761,15 @@ fn properties_set_exact_footprint_position_rotation_and_side() {
     assert_eq!(placed(&h), (Point { x_nm: 12_700_000, y_nm: -2_540_000 }, 90, true));
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 4, "one edit per field");
+
+    // Rotations wrap into 0–359°, and coordinates past the board range clamp to its edge.
+    set(&mut h, "Footprint rotation", "-90");
+    assert_eq!(placed(&h).1, 270);
+    set(&mut h, "Footprint rotation", "360");
+    assert_eq!(placed(&h).1, 0);
+    set(&mut h, "Footprint X", "5000");
+    assert_eq!(placed(&h).0.x_nm, pcbcraft_engine::schematic::MAX_CENTER_NM);
+    set(&mut h, "Footprint Y", "-5000");
+    assert_eq!(placed(&h).0.y_nm, -pcbcraft_engine::schematic::MAX_CENTER_NM);
+    assert_eq!(h.state().message, None);
 }

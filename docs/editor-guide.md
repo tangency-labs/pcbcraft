@@ -507,13 +507,13 @@ Browser builds support panes within one tab; native window actions are desktop
 only. The workspace tile can switch to PCB layout, open it beside
 the schematic or create a board window directly. Physical SMD placements render rounded rectangular copper pads, body outlines,
 courtyards and silkscreen, with component counterpart highlights, grouped Layers
-and read-only Properties. Legacy placements retain pad-center markers. The editor
+and Properties. Legacy placements retain pad-center markers. The editor
 supports up to 64 flat or hierarchical schematic sheets sharing one board. Existing footprints can be moved by left-dragging or by
 hovering/selecting one and pressing **M**, then clicking to place it. **R** rotates
 90° counterclockwise and **Shift+R** clockwise, including during a move. **Esc**
 or a right-click cancels a move; releasing a drag over a panel also cancels it.
 The Layout ribbon offers **Move** and **Rotate** for a single selection, and
-Properties reports the saved orientation. Moves snap the footprint origin to the
+Properties shows the saved position, rotation and side as editable fields. Moves snap the footprint origin to the
 view's grid, independently of grid visibility; each completed move and its
 preview rotations form one undo step. A conflicting edit, focus/workspace change
 or project reopen cancels the draft. The [starter footprints](footprint-library.md) include 0402/0603
