@@ -250,11 +250,11 @@ pub fn field_row(ui: &mut Ui, name: &str, value: &mut String, visible: Option<&m
             ui.allocate_space(vec2(t.space_24, t.space_24));
         }
         if let Some(visible) = visible {
-            if crate::board::visibility(ui, &format!("Show {name}"), *visible).clicked() {
+            if crate::board::visibility(ui, name, *visible).clicked() {
                 *visible = !*visible;
             }
         } else {
-            ui.add_enabled_ui(false, |ui| crate::board::visibility(ui, &format!("Show {name}"), false));
+            ui.add_enabled_ui(false, |ui| crate::board::visibility(ui, name, false));
         }
         response
     })

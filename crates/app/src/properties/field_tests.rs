@@ -31,16 +31,29 @@ fn fixture() -> Harness<'static, PcbApp> {
 }
 
 /// Locate actual painted text, rather than assuming a fixed label offset or camera zoom.
-fn text_center(h: &Harness<'_, PcbApp>, text: &str) -> Pos2 {
+fn field_ink(h: &Harness<'_, PcbApp>, text: &str) -> egui::epaint::TextShape {
     let canvas = h.get_by_label("Schematic canvas").rect();
     h.output()
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::Text(field) if field.galley.job.text == text && canvas.contains(field.pos) => Some(field.visual_bounding_rect().center()),
+            egui::Shape::Text(field) if field.galley.job.text == text && canvas.contains(field.pos) => Some(field.clone()),
             _ => None,
         })
         .unwrap()
+}
+
+/// Pick the visual center of the same glyphs that the canvas paints.
+fn text_center(h: &Harness<'_, PcbApp>, text: &str) -> Pos2 {
+    field_ink(h, text).visual_bounding_rect().center()
+}
+
+/// Recover the legacy side anchor from rendered ink without depending on field-layout state.
+/// On a vertical symbol Reference attaches at its lower left and Value at its upper left.
+fn vertical_field_anchor(h: &Harness<'_, PcbApp>, text: &str, reference: bool) -> Pos2 {
+    let ink = field_ink(h, text);
+    let corner = if reference { egui::vec2(0., ink.galley.size().y) } else { egui::Vec2::ZERO };
+    ink.pos + egui::emath::Rot2::from_angle(ink.angle) * corner
 }
 
 /// Replace input through accessibility; every character must stay owned by the form.
@@ -206,6 +219,65 @@ fn field_appearance_controls_preserve_physical_positions_and_reset_to_auto() {
     click(&mut h, "OK");
     assert!(!h.state().session.project().unwrap().symbols()[0].field_layout["reference"].visible);
     assert!(h.output().shapes.iter().all(|s| !matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="R1")));
+}
+
+/// Appearance changes and R over reference/value text retain the automatic side anchor on
+/// vertical symbols. Resetting a saved layout must restore the exact legacy text placement.
+#[test]
+fn vertical_symbols_keep_automatic_field_alignment_through_appearance_edits() {
+    use pcbcraft_engine::schematic::fields::Layout;
+    for rotation in [90, 270] {
+        let mut h = fixture();
+        let rev = h.state().session.revision();
+        h.state_mut()
+            .session
+            .apply(
+                pcbcraft_engine::SET_SYMBOL_FIELDS,
+                &json!({"symbol":"symbol-2","reference":"R1","value":"R","rotation":rotation,"expected_revision":rev}),
+            )
+            .unwrap();
+        h.run();
+        let reference = vertical_field_anchor(&h, "R1", true);
+        let value = vertical_field_anchor(&h, "R", false);
+        let original = h.state().session.snapshot().unwrap();
+        for (text, field, expected, is_reference) in [("R1", "reference", reference, true), ("R", "value", value, false)] {
+            h.hover_at(text_center(&h, text));
+            h.run();
+            h.key_press(Key::R);
+            h.run();
+            let project = h.state().session.project().unwrap();
+            assert_eq!(project.symbols()[0].field_layout[field].rotation, 90);
+            assert!(project.symbols()[0].field_layout[field].offset.is_none());
+            assert!(vertical_field_anchor(&h, text, is_reference).distance(expected) < 0.01, "{rotation} {field}");
+            click(&mut h, "Undo");
+        }
+        let rev = h.state().session.revision();
+        let layout = Layout { show_name: true, height_nm: 2_540_000, align: pcbcraft_engine::schematic::TextAlign::End, ..Default::default() };
+        h.state_mut()
+            .session
+            .apply(
+                pcbcraft_engine::SET_SYMBOL_FIELDS,
+                &json!({"symbol":"symbol-2","reference":"R1","value":"R","field_layout":{"reference":layout,"value":layout},"expected_revision":rev}),
+            )
+            .unwrap();
+        h.run();
+        assert!(vertical_field_anchor(&h, "Reference: R1", true).distance(reference) < 0.01);
+        assert!(vertical_field_anchor(&h, "Value: R", false).distance(value) < 0.01);
+        h.state_mut().select(Selection::one_symbol("symbol-2".into()));
+        h.hover_at(h.get_by_label("Schematic canvas").rect().left_top() + egui::vec2(20., 20.));
+        h.run();
+        h.key_press(Key::E);
+        h.run();
+        if h.query_by_label("Reset appearance").is_none() {
+            click(&mut h, "Text appearance");
+        }
+        click(&mut h, "Reset appearance");
+        click(&mut h, "OK");
+        assert!(vertical_field_anchor(&h, "R1", true).distance(reference) < 0.01);
+        let project = h.state().session.project().unwrap();
+        assert_eq!(project.symbols()[0].pins(), original.symbols()[0].pins());
+        assert!(project.same_connectivity(&original));
+    }
 }
 
 /// A label over the body remains independently draggable in either pane, and a disabled symbol
@@ -731,16 +803,22 @@ fn invalid_inline_text_stays_editable_without_partial_changes() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn inline_text_owns_live_command_input_until_finished() {
+    use pcbcraft_mcp::live::Editor;
     let mut h = fixture();
+    assert_eq!(crate::window_commands::inspect_editor(h.state())["text_editing"], false);
     let point = text_center(&h, "R1");
     double_click(&mut h, point, Modifiers::NONE);
     let before = h.state().session.snapshot().unwrap();
     let ctx = h.ctx.clone();
+    assert_eq!(crate::window_commands::inspect_editor(h.state())["text_editing"], true);
+    assert!(crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }.refusal("project.rename").is_some());
     let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::SET_SYMBOL_FIELDS,"params":{"symbol":"symbol-2","reference":"R1","value":"new","expected_revision":h.state().session.revision()}}});
     assert!(pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).is_err());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     h.key_press(Key::Escape);
     h.run();
+    assert_eq!(crate::window_commands::inspect_editor(h.state())["text_editing"], false);
+    assert!(crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }.refusal("project.rename").is_none());
     pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).unwrap();
     assert_eq!(h.state().session.project().unwrap().component(&h.state().session.project().unwrap().symbols()[0]).unwrap().value(), "new");
 }

@@ -104,7 +104,9 @@ The live connection runs every project command in `list_commands`, such as
 editor and the agent share one undo history and the status bar names each edit
 (for example **Delete Wire through MCP**). `project.new` waits until the open
 project's unsaved changes are saved or discarded in the editor, and every
-command waits while a dialog or file operation is open.
+command waits while an inline text edit, dialog or file operation is open.
+`inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
+clients can identify the state holding command input.
 
 It also lists window commands, marked `"scope": "window"`, which run through the
 same handlers as the editor's own controls and never edit the project, its

@@ -48,7 +48,8 @@ fn instance_ink(ui: &Ui, project: &Project, symbol: &SymbolPlacement, camera: &C
     )
 }
 
-/// Resolve automatic anchors exactly as legacy labels, then apply explicit physical offsets.
+/// Preserve legacy automatic anchors and alignment until text has an explicit physical offset.
+/// Appearance-only edits retain both automatic alignment axes, including on vertical symbols.
 fn ink(painter: &Painter, symbol: &SymbolPlacement, content: Content<'_>, center: Pos2, step: f32, color: egui::Color32) -> Vec<Ink> {
     if step < theme::SCHEMATIC_MIN_GRID_SPACING {
         return Vec::new();
@@ -85,13 +86,7 @@ fn ink(painter: &Painter, symbol: &SymbolPlacement, content: Content<'_>, center
                 TextAlign::Middle => egui::Align::Center,
                 TextAlign::End => egui::Align::Max,
             };
-            let align = if !symbol.field_layout.contains_key(id) {
-                automatic_align
-            } else if layout.offset.is_none() {
-                Align2([horizontal, automatic_align.y()])
-            } else {
-                Align2([horizontal, egui::Align::Center])
-            };
+            let align = if layout.offset.is_none() { automatic_align } else { Align2([horizontal, egui::Align::Center]) };
             let text = if layout.show_name { format!("{name}: {value}") } else { value.to_owned() };
             let height = (step * layout.height_nm as f32 / GRID_NM as f32).max(1.);
             let galley = painter.layout_no_wrap(text, FontId::proportional(height), color);

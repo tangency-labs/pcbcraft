@@ -654,7 +654,8 @@ impl Edit {
     }
 }
 
-/// One form exposes the name, drawing style, placement and text of any named net anchor.
+/// All named anchors expose name, style and placement; power/ground symbols additionally
+/// expose independent text appearance. Ordinary labels retain their style-specific text.
 fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
     use pcbcraft_chrome::properties as form;
     let name = form::text(ui, "Net name", &mut edit.label.name);
@@ -698,10 +699,12 @@ fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
     } else {
         false
     };
-    egui::CollapsingHeader::new("Text appearance").show(ui, |ui| {
-        if edit.appearance.controls(ui, true) {
-            edit.appearance = crate::properties::fields::Appearance::new(Default::default(), edit.units);
-        }
-    });
+    if power {
+        egui::CollapsingHeader::new("Text appearance").show(ui, |ui| {
+            if edit.appearance.controls(ui, true) {
+                edit.appearance = crate::properties::fields::Appearance::new(Default::default(), edit.units);
+            }
+        });
+    }
     enter || position_enter
 }

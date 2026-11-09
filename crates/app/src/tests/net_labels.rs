@@ -92,6 +92,33 @@ fn power_properties_are_editable_from_the_selection_inspector() {
     }
 }
 
+/// Ordinary local/global labels keep style-owned text in both property presentations;
+/// editing their name must not create a layout that changes alignment or orientation.
+#[test]
+fn ordinary_labels_do_not_offer_independent_text_appearance() {
+    for style in ["local", "global"] {
+        let mut h = editor(1200.);
+        let revision = h.state().session.revision();
+        h.state_mut().run(engine::ADD, &json!({"name":"SIGNAL","style":style,"x_nm":0,"y_nm":0,"rotation":90,"expected_revision":revision}));
+        let label = h.state().session.project().unwrap().net_labels()[0].clone();
+        h.state_mut().select(pcbcraft_engine::selection::Selection::one_net_label(label.id));
+        h.state_mut().properties_open = true;
+        h.run();
+        h.get_by_label("Net name");
+        assert!(h.query_by_label("Text appearance").is_none());
+        click(&mut h, "More properties ↗");
+        assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
+        assert!(h.query_by_label("Text appearance").is_none());
+        name(&mut h, "RENAMED");
+        click(&mut h, "Apply");
+        let project = h.state().session.project().unwrap();
+        let edited = &project.net_labels()[0];
+        assert_eq!(edited.name, "RENAMED");
+        assert_eq!((edited.at, edited.style, edited.rotation), (label.at, label.style, label.rotation));
+        assert!(edited.text.is_none());
+    }
+}
+
 /// Opening a power form from the second pane retains that pane as its command source even
 /// when the shared project dialog is painted by the main host.
 #[test]
