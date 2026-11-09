@@ -95,6 +95,7 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
                     | "pcbcraft-project/9"
                     | "pcbcraft-project/11"
                     | "pcbcraft-project/12"
+                    | "pcbcraft-project/13"
             )
         ) {
             if path.file_name().is_none_or(|name| name != ENTRY_POINT) {

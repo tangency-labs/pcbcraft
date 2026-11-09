@@ -29,7 +29,7 @@ New renderers consume the resolved board, not a global project placement list.
 The [single-board ownership slice](single-board-storage.md) persists an explicit
 zero-or-one registry in the project entry point; new schematic-only projects have
 no board. This remains a bridge to the broader #122 storage migration. A physical
-board stays in `board.json`, and layer-addressed Board Edge graphics use board
+board stays in `board.json`, and layer-addressed Board Outline graphics use board
 document version 9. For legacy implicit ownership, the board UUID is derived deterministically from
 SHA-256 of the UTF-8 bytes `pcbcraft:legacy-board:1` followed by a zero byte and
 the saved project UUID's 16 bytes. The first 16 digest bytes use UUID v8 version

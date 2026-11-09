@@ -160,12 +160,12 @@ fn clicking_a_track_selects_it_and_delete_removes_it() {
     assert!(h.state().views.active.board.tracks.selected.is_empty(), "clicking empty space clears the track selection");
 }
 
-/// The route tool is only available on visible copper: X does nothing on Board Edge, and hiding
+/// The route tool is only available on visible copper: X does nothing on Board Outline, and hiding
 /// the routing layer drops the tool and any unfinished route.
 #[test]
 fn routing_requires_a_visible_copper_layer() {
     let mut h = routable();
-    click(&mut h, "Activate layer Board Edge");
+    click(&mut h, "Activate layer Board Outline");
     h.key_press(Key::X);
     h.run();
     assert!(!h.state().views.active.board.tracks.tool);

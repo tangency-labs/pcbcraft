@@ -306,7 +306,7 @@ and windows, independently of snap spacing. Copper
 markers use visible layers; active layer, layer visibility and document ownership
 remain distinct. Pinned starter SMD definitions now provide rounded rectangular copper pads, body
 outlines, courtyards and silkscreen. Legacy placements retain their markers;
-arcs, slots and tracks remain future work. The Board Edge layer now accepts
+arcs, slots and tracks remain future work. The Board Outline layer now accepts
 open/closed line paths and rectangles through the Layout ribbon's Draw tools.
 Selection, vertex dragging, whole-graphic movement and deletion use the same
 revision-checked commands as live/headless MCP, with shared undo and board-local

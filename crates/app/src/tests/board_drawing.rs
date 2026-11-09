@@ -1,4 +1,4 @@
-//! Board Edge tests exercise canvas input and the same transactions used by MCP.
+//! Board Outline tests exercise canvas input and the same transactions used by MCP.
 use super::*;
 use pcbcraft_engine::{ADD_DRAWING, persistence::encode_documents, schematic::Point};
 
@@ -10,7 +10,7 @@ fn board<'a>() -> Harness<'a, PcbApp> {
     h.run();
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
-    click(&mut h, "Activate layer Board Edge");
+    click(&mut h, "Activate layer Board Outline");
     h
 }
 
@@ -43,7 +43,7 @@ fn selection_filters_cancel_graphic_edits_and_leave_creation_tools_available() {
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     let count = drawings(&h).len();
-    click(&mut h, "Draw rectangle on Board Edge");
+    click(&mut h, "Draw rectangle on Board Outline");
     let first = at(&h, -10_160_000, 10_160_000);
     click_canvas_at(&mut h, first);
     let second = at(&h, 10_160_000, 20_320_000);
@@ -132,7 +132,7 @@ fn footprint_drag_overlapping_board_edge_keeps_input_ownership() {
 #[test]
 fn explicit_board_edge_tool_can_draw_over_footprint() {
     let mut h = overlapping_footprint();
-    click(&mut h, "Draw lines on Board Edge");
+    click(&mut h, "Draw lines on Board Outline");
     let origin = at(&h, 0, 0);
     click_canvas_at(&mut h, origin);
     let destination = at(&h, 0, 10_160_000);
@@ -176,7 +176,7 @@ fn rectangle_canvas_create_cancel_delete_and_undo() {
     let mut h = board();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
-    click(&mut h, "Draw rectangle on Board Edge");
+    click(&mut h, "Draw rectangle on Board Outline");
     let a = at(&h, -10_000_000, -8_000_000);
     let b = at(&h, 10_000_000, 8_000_000);
     click_canvas_at(&mut h, a);
@@ -215,7 +215,7 @@ fn rectangle_canvas_create_cancel_delete_and_undo() {
 #[test]
 fn lines_open_close_vertex_drag_and_stale_cancellation() {
     let mut h = board();
-    click(&mut h, "Draw lines on Board Edge");
+    click(&mut h, "Draw lines on Board Outline");
     let positions = [at(&h, -15_000_000, -8_000_000), at(&h, 10_000_000, -8_000_000), at(&h, 15_000_000, 8_000_000)];
     for pos in positions {
         click_canvas_at(&mut h, pos);
@@ -248,7 +248,7 @@ fn lines_open_close_vertex_drag_and_stale_cancellation() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
-    click(&mut h, "Draw lines on Board Edge");
+    click(&mut h, "Draw lines on Board Outline");
     for pos in positions {
         click_canvas_at(&mut h, pos);
         h.run_steps(20);
@@ -264,7 +264,7 @@ fn lines_open_close_vertex_drag_and_stale_cancellation() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), concurrent);
 }
 
-/// Whether the most recent frame painted a Board Edge path through this screen point.
+/// Whether the most recent frame painted a Board Outline path through this screen point.
 fn painted_path_through(h: &Harness<'_, PcbApp>, point: egui::Pos2) -> bool {
     h.output().shapes.iter().any(|shape| {
         matches!(&shape.shape, egui::Shape::Path(path) if path.fill == egui::Color32::TRANSPARENT
@@ -304,7 +304,7 @@ fn committed_board_edge_reshape_never_paints_the_previous_shape() {
 #[test]
 fn layer_visibility_is_view_only_and_cancels_editing() {
     let mut h = board();
-    click(&mut h, "Draw rectangle on Board Edge");
+    click(&mut h, "Draw rectangle on Board Outline");
     let a = at(&h, -10_000_000, -8_000_000);
     let b = at(&h, 10_000_000, 8_000_000);
     click_canvas_at(&mut h, a);
@@ -361,7 +361,7 @@ fn live_layer_choices_preserve_document_and_cancel_preview() {
     let view = h.state().views.active.id().0;
     let layer = h.state().views.active.board.active_layer.clone().unwrap();
     let before = h.state().session.inspect();
-    click(&mut h, "Draw rectangle on Board Edge");
+    click(&mut h, "Draw rectangle on Board Outline");
     let a = at(&h, 0, 0);
     click_canvas_at(&mut h, a);
     assert!(h.state().views.active.board.drawing.source().is_some());
@@ -378,7 +378,7 @@ fn live_layer_choices_preserve_document_and_cancel_preview() {
 #[test]
 fn drawing_moves_and_panel_release_use_one_captured_edit() {
     let mut h = board();
-    click(&mut h, "Draw rectangle on Board Edge");
+    click(&mut h, "Draw rectangle on Board Outline");
     let a = at(&h, -10_000_000, -8_000_000);
     let b = at(&h, 10_000_000, 8_000_000);
     click_canvas_at(&mut h, a);

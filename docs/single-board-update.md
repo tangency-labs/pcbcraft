@@ -16,6 +16,10 @@ Update PCB** from the PCB workspace. Sheet and board Browser rows also offer
 dialog with `app.update_pcb`, addressing the originating `view`; approval still
 uses the engine commands below.
 
+Package selection and pin mapping can be authored and saved before a board exists.
+Creating the first board adopts those exact choices; reviewed updates and physical
+placement then use the existing board-owned assignment path.
+
 Opening or cancelling the review changes no authored data. If the project has no
 board, **Create board** explicitly creates its first PCB as a separate undoable
 edit. Existing footprints without an accepted baseline require **Use current

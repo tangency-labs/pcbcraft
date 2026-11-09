@@ -320,7 +320,7 @@ a hidden active layer is labeled **(hidden)** in the selector and status bar.
 Layers groups copper in physical stack order and retains visibility by layer ID.
 Click a layer swatch to change its color; the form supports a picker, **#RRGGBB**,
 Apply, Cancel and Reset to default. The swatch and supported geometry use the
-same color, including pad metal, Board Edge and technical graphics.
+same color, including pad metal, Board Outline and technical graphics.
 The selected ribbon layer and its menu rows show matching color patches.
 **+** / **−** cycle through picker order (including hidden/technical layers);
 **PgUp** / **PgDn** select front/back copper. These keys change the active layer
@@ -359,10 +359,13 @@ and **Materials** offers generic material families or custom definitions. **Prof
 imports or exports a portable `.pcsetup.json`; imported values stay in the draft until
 **Apply board setup**. General copper-clearance and routing rule editors remain planned.
 
-To choose a package for an unplaced component, right-click its schematic symbol
+You can assign footprints while the project is still schematic-only. To choose
+a package for an unplaced component, right-click its schematic symbol
 and choose **Assign Footprint…**. For a starter resistor, choose **Resistor 0402**,
 map terminal 1 to pad 1 and terminal 2 to pad 2, then choose **Assign** and
-**Close**. This pins the package without creating a board placement. In PCB layout,
+**Close**. This pins the package without creating a PCB or placement; folder and
+archive saves retain it offline. Creating your first board later adopts these
+choices for Update PCB. In PCB layout,
 open **Layout → Components → Footprints**, select the component, enter X/Y and
 choose **Place on board**. Assignment and placement are separate undo steps;
 save/reopen retains the package and mapping offline. The chooser also supports
@@ -393,7 +396,7 @@ and place later. **Copy report** includes all message categories.
 adoption remain separate edits. External changes or another client's preview
 require **Review again**; a reopened/replaced project requires a fresh dialog.
 
-In **Layers → Board**, select **Board Edge**, then choose **Layout → Draw → Line**
+In **Layers → Board**, select **Board Outline**, then choose **Layout → Draw → Line**
 or **Rectangle**. Click successive vertices for a line path; click its first vertex
 to close it, or press **Enter** to finish an open path. Rectangle uses two opposite
 corner clicks. Points snap to the current grid and nearby existing edge vertices.

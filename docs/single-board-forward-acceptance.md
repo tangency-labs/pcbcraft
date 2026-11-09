@@ -27,7 +27,7 @@ after the test.
 | --- | --- |
 | Capture and reopen | A new project is schematic-only, with no board target or `board.json`; both sheet organizations survive folder and archive reopen. |
 | First update | Explicit board creation, incomplete package choices, a blocker report, refused Apply, Cancel, a fresh valid preview and first Apply use the shared commands. Preview and refusal retain the exact immutable snapshot; Cancel preserves authored bytes. |
-| Physical layout | Accepted parts start unplaced, are placed explicitly, and resolve board-qualified pin/pad correspondence in both directions. Moving/rotating one package and adding a Board Edge graphic establish the layout that later updates must preserve. |
+| Physical layout | Accepted parts start unplaced, are placed explicitly, and resolve board-qualified pin/pad correspondence in both directions. Moving/rotating one package and adding a Board Outline graphic establish the layout that later updates must preserve. |
 | Pending changes | Add a part, change a placed package and terminal mapping, change cross-sheet wiring and remove a schematic part. Accepted airwires and existing physical geometry remain unchanged while removal and desired package intent are pending. |
 | Offline review | Pending intent and retained footprints survive actual folder/archive reopen, with pinned geometry available and no runtime preview token restored. |
 | Reviewed Apply | One Apply adopts the reviewed package, mapping and connectivity, removes the retained footprint, leaves the new part unplaced and preserves existing placement IDs/poses and board graphics. |

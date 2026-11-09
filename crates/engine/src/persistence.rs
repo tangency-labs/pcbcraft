@@ -454,7 +454,8 @@ impl Encoder {
         if !project.labels.is_empty() || !project.subsheets.is_empty() || !project.net_labels.is_empty() {
             return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
         }
-        if !project.board.assignments.is_empty()
+        if !project.schematic_packages.assignments.is_empty()
+            || !project.board.assignments.is_empty()
             || project.board.baseline.is_some()
             || project.board.silkscreen.is_some()
             || project.board.outline.is_some()
@@ -926,6 +927,7 @@ fn validate_with_hierarchy(
         name,
         components: Arc::new(components),
         units: Arc::new(units),
+        schematic_packages: Arc::default(),
         board: Arc::new(layout),
         named_graph: Arc::default(),
         upgraded_from,
