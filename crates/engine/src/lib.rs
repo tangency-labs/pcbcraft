@@ -19,7 +19,7 @@ pub mod selection;
 pub mod sheets;
 pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
-pub use board::track::{ADD_TRACKS, DELETE_TRACKS};
+pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -1224,6 +1224,23 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: ADD_VIA,
+        title: "Place Via",
+        summary: "Place one standalone through via, in one undo step. Refused if its pad would join two different nets.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "at", required: true, summary: "Via center in integer nanometers", kind: ParamKind::Point },
+            Param { name: "via_diameter_nm", required: true, summary: "Via pad diameter in integer nanometers", kind: ParamKind::ViaDiameter },
+            Param {
+                name: "via_drill_nm",
+                required: true,
+                summary: "Via drill diameter in integer nanometers, smaller than the pad",
+                kind: ParamKind::ViaDrill,
+            },
+        ],
+    },
+    Command {
         id: DELETE_TRACKS,
         title: "Delete Tracks",
         summary: "Remove addressed track segments and vias, leaving footprints and other copper unchanged. One undo step.",
@@ -1614,6 +1631,7 @@ impl Session {
             | SET_DRAWING
             | DELETE_DRAWING
             | ADD_TRACKS
+            | ADD_VIA
             | DELETE_TRACKS
             | DRAW_WIRE
             | DELETE_WIRE
@@ -1749,6 +1767,7 @@ impl Session {
                 | SET_DRAWING
                 | DELETE_DRAWING
                 | ADD_TRACKS
+                | ADD_VIA
                 | DELETE_TRACKS
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
@@ -1896,7 +1915,7 @@ impl Session {
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
-            ADD_TRACKS | DELETE_TRACKS => self.edit_tracks(id, params)?,
+            ADD_TRACKS | ADD_VIA | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),

@@ -468,11 +468,11 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 
 ## PCB layout
 
-The **Layout** tab groups the board tools as **Place** (Footprint), **Outline** (Line,
+The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline** (Line,
 Rectangle), **Route** (Track, followed by the Active layer, Track width and Via pad /
 drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (Reveal in its
 menu) and **Design** (Sync updates the PCB from the schematic; Setup opens Board setup).
-Tools that are not built yet, such as Via, Zone, Pair, Tune, Align, Rules, DRC, Measure,
+Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules, DRC, Measure,
 Flip view, Outputs and Refill zones, appear disabled in their group's menu and say
 "planned". The ribbon scrolls sideways when the window is too narrow for every group.
 
@@ -575,11 +575,18 @@ previous layer, or else the last vertex. Esc or right-click drops the unfinished
 route, and a second Esc exits the tool. The whole route is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
+To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
+**Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,
+snapping to a nearby pad center or track end on any copper layer, otherwise to the grid;
+the tool stays armed until Esc or right-click, and each via is its own undo step. A via
+that would join pads on two different nets is refused, as is a second via on the same
+spot. The tool needs a board setup with at least two copper layers.
+
 Without a tool, click a track or via to select it (Shift adds, Ctrl or ⌘ toggles) and
 press Delete to remove it; deleting a via keeps its tracks. The **Tracks** selection
 filter turns track picking off. Tracks stay on their layer, so a back-side track does
 not reach front-only SMD pads, while a via joins copper on every layer. Dragging
-tracks, standalone vias, blind or buried vias, and clearance or DRC checks are not
+tracks, blind or buried vias, and clearance or DRC checks are not
 implemented yet. PgUp and PgDn still change layer by cancelling the route.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the

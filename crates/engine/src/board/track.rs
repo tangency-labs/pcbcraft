@@ -18,6 +18,8 @@ use uuid::Uuid;
 
 /// Add a routed path of straight track segments, with any vias where it changes layer, in one undo step.
 pub const ADD_TRACKS: &str = "pcb.add_tracks";
+/// Place one standalone through via, for stitching or to start a route, in one undo step.
+pub const ADD_VIA: &str = "pcb.add_via";
 /// Remove addressed track segments and vias without changing footprints or other copper.
 pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
 /// The width the PCB route tool starts with, 0.25 mm.
@@ -366,7 +368,8 @@ fn ids(params: &Value, name: &str, existing: impl Fn(&Uuid) -> bool) -> Result<B
 }
 
 impl Session {
-    /// Add one routed path or delete addressed tracks and vias atomically. A path of N distinct
+    /// Add one routed path, place one standalone via, or delete addressed tracks and vias
+    /// atomically. A standalone via may not sit exactly on another via. A path of N distinct
     /// consecutive points becomes N-1 segments with one width, starting on `layer`. Each layer
     /// change places one via at a vertex after the first, in strictly increasing order, and later
     /// segments continue on its layer; a change at the last vertex ends the route on a via. The whole candidate is validated first: unknown layers or IDs,
@@ -431,6 +434,17 @@ impl Session {
                 added.insert(id);
                 vias.push(Via { id, at: points[change.at], diameter_nm, drill_nm });
             }
+        } else if command == ADD_VIA {
+            let at: Point = param(params, "at")?;
+            if !crate::wire::valid_point(&at) {
+                return Err(CommandError::InvalidParams("the via position is out of range".into()));
+            }
+            if vias.iter().any(|via| via.at == at) {
+                return Err(CommandError::InvalidParams("a via already sits at this position".into()));
+            }
+            let id = crate::fresh_id()?;
+            added.insert(id);
+            vias.push(Via { id, at, diameter_nm: param(params, "via_diameter_nm")?, drill_nm: param(params, "via_drill_nm")? });
         } else {
             let gone_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
             let gone_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;

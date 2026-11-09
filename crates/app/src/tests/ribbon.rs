@@ -130,7 +130,7 @@ fn pcb_layout_tab_groups_working_and_planned_tools() {
         assert!(!h.get_by_label(tool).accesskit_node().is_disabled(), "{tool} is enabled");
     }
     for (group, planned) in [
-        ("Place", &["Via", "Zone"][..]),
+        ("Place", &["Zone"][..]),
         ("Route", &["Pair", "Tune"]),
         ("Modify", &["Align"]),
         ("Inspect", &["Rules", "DRC", "Measure"]),

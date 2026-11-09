@@ -98,6 +98,7 @@ const ADD_POWER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
 const ADD_SHEET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::S);
 const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::H);
+const PLACE_VIA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
 /// KiCad's keys for the next and previous grid: N for finer, Shift+N for coarser.
@@ -1680,6 +1681,9 @@ impl PcbApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::X)) {
                 self.start_route();
             }
+            if pressed(&PLACE_VIA) {
+                self.start_via();
+            }
             if self.views.active.board.tracks.tool {
                 let tracks = &mut self.views.active.board.tracks;
                 tracks.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
@@ -2254,6 +2258,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB layout", "Route track", "X".to_owned()));
+    list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));
     list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));
     list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));

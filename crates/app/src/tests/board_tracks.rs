@@ -305,3 +305,32 @@ fn a_delete_pressed_while_track_input_is_disabled_never_deletes_later() {
     assert!(h.state().views.active.board.box_drag.is_none());
     assert_eq!(tracks(&h).len(), 1, "the earlier Delete is not replayed once track input returns");
 }
+
+/// Ctrl+Shift+X arms Place › Via. Each click places one via, snapping to a nearby pad center,
+/// and the tool stays armed; Esc leaves it. Each via is its own undo step.
+#[test]
+fn place_via_tool_drops_vias_until_escape() {
+    let mut h = routable();
+    let pad = airwires(&h)[0].from.position;
+    let free = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
+    h.key_press_modifiers(Modifiers { ctrl: true, command: true, shift: true, ..Modifiers::NONE }, Key::X);
+    h.run();
+    assert!(h.state().views.active.board.tracks.via_tool);
+    assert!(!h.get_by_label("Place vias").accesskit_node().is_disabled(), "Place › Via is a working button");
+    let revision = h.state().session.revision();
+    click_route(&mut h, free);
+    let near_pad = at(&h, pad) + egui::vec2(3., 2.);
+    click_canvas_at(&mut h, near_pad);
+    h.run_steps(20);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 2, "one edit per via");
+    let placed: Vec<_> = vias(&h).iter().map(|via| via.at).collect();
+    assert!(placed.contains(&free) && placed.contains(&pad), "{placed:?}");
+    assert!(h.state().views.active.board.tracks.via_tool, "the tool stays armed");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().views.active.board.tracks.via_tool);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(vias(&h).len(), 1, "undo removes only the last via");
+}

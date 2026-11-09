@@ -61,6 +61,8 @@ struct Committed {
 #[derive(Debug)]
 pub(super) struct State {
     pub(super) tool: bool,
+    /// Place › Via: each click places one standalone via until Esc or right-click.
+    pub(super) via_tool: bool,
     pub(super) width_nm: i64,
     pub(super) via_diameter_nm: i64,
     pub(super) via_drill_nm: i64,
@@ -81,6 +83,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             tool: false,
+            via_tool: false,
             width_nm: DEFAULT_WIDTH_NM,
             via_diameter_nm: DEFAULT_VIA_DIAMETER_NM,
             via_drill_nm: DEFAULT_VIA_DRILL_NM,
@@ -113,9 +116,16 @@ impl State {
         self.tool = true;
         self.selected.clear();
     }
+    /// Arm Place › Via with no authored changes; each click captures the current revision.
+    pub(super) fn start_via(&mut self) {
+        self.cancel();
+        self.via_tool = true;
+        self.selected.clear();
+    }
     /// Drop the tool, any unfinished route and pending key requests. Selection and sizes remain.
     pub(super) fn cancel(&mut self) {
         self.tool = false;
+        self.via_tool = false;
         self.draft = None;
         self.delete_requested = false;
         self.finish_requested = false;
@@ -129,15 +139,36 @@ impl State {
         if self.draft.take().is_some() {
             return true;
         }
-        if std::mem::take(&mut self.tool) {
+        if std::mem::take(&mut self.tool) | std::mem::take(&mut self.via_tool) {
             return true;
         }
         !std::mem::take(&mut self.selected).is_empty()
     }
-    /// Whether the tool or an unfinished route owns canvas input.
+    /// Whether a tool or an unfinished route owns canvas input.
     pub(super) fn busy(&self) -> bool {
-        self.tool || self.draft.is_some()
+        self.tool || self.via_tool || self.draft.is_some()
     }
+}
+
+/// Whether the board has the two copper layers a through via needs.
+pub(super) fn can_place_via(view: BoardView<'_>) -> bool {
+    view.setup().is_some_and(|setup| setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).count() >= 2)
+}
+
+/// Snap a via to the nearest pad center or track end on any copper layer within reach of the
+/// pointer, otherwise to this view's grid.
+fn via_target(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>) -> Point {
+    view.footprints()
+        .flat_map(|footprint| footprint.pads)
+        .filter(|pad| matches!(pad.copper_layers, Some(CopperLayers::Resolved { .. })))
+        .map(|pad| pad.center)
+        .chain(view.tracks().iter().flat_map(|track| [track.start, track.end]))
+        .filter_map(|point| {
+            let distance = camera.screen(point, rect).distance(pointer);
+            (distance <= SNAP_PX).then_some((distance, point))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or_else(|| camera.snap(pointer, rect), |(_, point)| point)
 }
 
 /// Whether the active layer is a visible copper layer of the board setup.
@@ -293,6 +324,7 @@ pub(super) fn interact(
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) && state.busy() {
         if state.draft.take().is_none() {
             state.tool = false;
+            state.via_tool = false;
         }
         out.consumed = true;
         return out;
@@ -312,6 +344,31 @@ pub(super) fn interact(
         return out;
     }
     let pointer = ui.input(|input| input.pointer.hover_pos()).filter(|point| rect.contains(*point));
+    if state.via_tool {
+        out.consumed = true;
+        if !can_place_via(view) {
+            state.cancel();
+            return out;
+        }
+        if response.clicked()
+            && let Some(pointer) = pointer
+        {
+            let at = via_target(pointer, camera, rect, view);
+            state.committed = Some(Committed {
+                width_nm: state.width_nm,
+                via_diameter_nm: state.via_diameter_nm,
+                via_drill_nm: state.via_drill_nm,
+                segments: Vec::new(),
+                vias: vec![at],
+            });
+            out.command = Some(Command {
+                source,
+                id: pcbcraft_engine::ADD_VIA,
+                params: json!({"at":at,"via_diameter_nm":state.via_diameter_nm,"via_drill_nm":state.via_drill_nm,"expected_revision":source.revision}),
+            });
+        }
+        return out;
+    }
     if state.tool {
         out.consumed = true;
         let Some(layer) = active else { return out };
@@ -470,6 +527,19 @@ pub(super) fn paint(
 pub(super) fn paint_draft(ui: &Ui, rect: Rect, camera: &Camera, view: BoardView<'_>, state: &State, active: Option<&str>) {
     let painter = ui.painter().with_clip_rect(rect);
     let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|point| rect.contains(*point)) else { return };
+    if state.via_tool {
+        let at = camera.screen(via_target(pointer, camera, rect, view), rect);
+        pcbcraft_chrome::board::via(
+            &painter,
+            at,
+            width_px(camera, rect, state.via_diameter_nm) / 2.,
+            width_px(camera, rect, state.via_drill_nm) / 2.,
+            false,
+            true,
+        );
+        pcbcraft_chrome::board::drawing_target(&painter, at);
+        return;
+    }
     let Some(layer) = state.draft.as_ref().map(|draft| draft.layer.as_str()).or(active.filter(|_| state.tool)) else { return };
     let (at, _) = snapped(pointer, camera, rect, view, layer);
     if let Some(draft) = &state.draft {

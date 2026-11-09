@@ -839,6 +839,12 @@ reuse this repository's already qualified pinned definitions and Craft chooser;
 no external implementation, data, dependency or asset was added. Board creation
 adopts existing package intent without creating physical placements.
 
+The standalone-via shortcut follows KiCad 10's documented Ctrl+Shift+X binding
+(https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html). The original local eframe
+0.36.2 input patch preserves this key before egui-winit's Cut conversion when
+no widget owns keyboard input. See vendor/eframe/PATCH.md; upstream MIT/Apache
+licenses remain unchanged. No KiCad implementation or artwork was consulted.
+
 ## Bundled Default and Power native libraries
 
 The original PCBcraft power-marker geometry is represented as native symbol
