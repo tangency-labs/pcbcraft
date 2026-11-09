@@ -854,3 +854,15 @@ fn backtick_highlights_the_net_under_the_pointer() {
     assert_eq!(h.state().views.active.board.highlight_net, None);
     assert_eq!(h.state().session.revision(), revision);
 }
+
+/// A highlighted net that disappears from the board clears instead of staying named.
+#[test]
+fn a_vanished_highlight_net_clears() {
+    let mut h = routable();
+    h.state_mut().views.active.board.highlight_net = Some("NO SUCH NET".into());
+    let app = h.state_mut();
+    app.views.sync(&app.session);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, None);
+    assert!(h.query_by_label_contains("Net NO SUCH NET highlighted").is_none());
+}

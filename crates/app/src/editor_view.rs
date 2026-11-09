@@ -674,6 +674,16 @@ impl EditorView {
             self.binding = binding;
         }
         self.board.target = board_target;
+        // A highlighted net that no pad carries any more (after an edit, undo or rename) clears,
+        // so the status bar never names a net that nothing on the board shows.
+        if let Some(net) = &self.board.highlight_net
+            && !root
+                .as_ref()
+                .and_then(|p| board_target.and_then(|target| p.board_view(target)))
+                .is_some_and(|board| board.footprints().any(|footprint| footprint.pads.iter().any(|pad| pad.net.as_deref() == Some(net.as_str()))))
+        {
+            self.board.highlight_net = None;
+        }
         if !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new))
             || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet
         {
