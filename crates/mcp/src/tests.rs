@@ -1044,3 +1044,24 @@ fn external_clipboard_preparation_preserves_payload_without_inspection() {
         assert!(session.project().is_none());
     }
 }
+
+/// Extended hierarchy payloads and Cut relocation use the same public dispatcher and retain
+/// clipboard results when callers suppress unrelated project inspection.
+#[test]
+fn hierarchical_clipboard_commands_preserve_payload_and_child_identity() {
+    let mut s = pcbcraft_engine::Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    s.apply(pcbcraft_engine::hierarchy::CREATE_CHILD, &json!({"name":"Child","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let p = s.project().unwrap();
+    let root = p.sheet_target();
+    let child = p.sheets().find(|p| p.name == "Child").unwrap().target;
+    let block = p.sheet_symbols()[0].id;
+    let cut = json!({"command":pcbcraft_engine::clipboard::CUT,"inspect":false,"params":{"sheet":root.id(),"items":{"symbols":[],"wires":[]},"objects":[format!("sheet-symbol-{block}")],"expected_revision":s.revision()}});
+    let data = crate::backend::call_session(&mut s, "engine.execute", &cut).unwrap();
+    assert!(data["clipboard"].as_str().unwrap().contains("pcbcraft-clipboard/2"));
+    assert_eq!(s.project().unwrap().parent_sheet(child), None);
+    let paste = json!({"command":pcbcraft_engine::clipboard::PASTE,"inspect":false,"params":{"sheet":root.id(),"text":data["clipboard"],"reuse_sheets":true,"x_nm":1_270_000,"y_nm":1_270_000,"expected_revision":s.revision()}});
+    crate::backend::call_session(&mut s, "engine.execute", &paste).unwrap();
+    assert_eq!(s.project().unwrap().parent_sheet(child), Some(root));
+    assert_eq!(s.project().unwrap().sheets().len(), 2);
+}

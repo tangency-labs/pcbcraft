@@ -900,3 +900,13 @@ form, dimension preview and regression data are original PCBcraft work using
 shared native commands and codecs. No external EDA implementation, source-derived
 fixture, artwork, library data, parser dependency or saved-format change was
 introduced. These explicit text conversions do not use the paused importer.
+
+## Hierarchical clipboard contract
+
+The rooted hierarchy envelope, closed-subtree capture, independent document and
+interface remapping, Cut relocation, incident-route preservation and cached
+schematic snapshot API are original PCBcraft work over existing native codecs
+and commands. The contract creates independent sheets, not repeated instances;
+native saved formats are unchanged. The PCB export topology guard compares only
+selected terminals and carried global names. Command-built tests introduce no
+external EDA source, source-derived fixture, artwork, data or dependency.

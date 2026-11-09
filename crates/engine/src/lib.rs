@@ -67,6 +67,7 @@ enum ParamKind {
     SchematicPasteTargets,
     ClipboardLayers,
     ClipboardText,
+    ClipboardHierarchyObjects,
     ReferencePolicy,
     CreateBoard,
     ComponentMetadata,
@@ -147,6 +148,9 @@ impl ParamKind {
             }
             Self::ClipboardLayers => json!({"type":"object","maxProperties":128,"additionalProperties":ParamKind::DrawingId.schema()}),
 
+            Self::ClipboardHierarchyObjects => {
+                json!({"type":"array","maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}})
+            }
             Self::ClipboardText => json!({"type":"string","maxLength":clipboard::MAX_BYTES}),
             Self::ReferencePolicy => json!({"type":"string","enum":["renumber","preserve"]}),
             Self::CreateBoard => json!({"type":"boolean"}),
@@ -262,6 +266,8 @@ impl ParamKind {
             Self::SchematicPasteTargets => Err("must map source sheet UUIDs to explicit destination sheets and anchors"),
             Self::ClipboardLayers => Err("must map source layer UUIDs to destination layer UUIDs"),
 
+            Self::ClipboardHierarchyObjects if clipboard::hierarchy_objects(Some(value)).is_some() => Ok(()),
+            Self::ClipboardHierarchyObjects => Err("must be bounded unique sheet-symbol/label IDs"),
             Self::ClipboardText if value.as_str().is_some_and(|s| s.len() <= clipboard::MAX_BYTES) => Ok(()),
             Self::ReferencePolicy if matches!(value.as_str(), Some("renumber" | "preserve")) => Ok(()),
             Self::ClipboardText => Err("must be UTF-8 text of at most 8 MiB"),
@@ -598,6 +604,12 @@ const INTERFACE_NAME: Param = Param { required: true, name: "name", summary: "In
 const ANCHOR_X: Param = Param { required: true, name: "x_nm", summary: "Anchor X in nanometers, increasing right", kind: ParamKind::Coordinate };
 const ANCHOR_Y: Param = Param { required: true, name: "y_nm", summary: "Anchor Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 const DIRECTION: Param = Param { required: true, name: "direction", summary: "Hierarchical interface direction", kind: ParamKind::Direction };
+const CLIPBOARD_OBJECTS: Param = Param {
+    name: "objects",
+    required: false,
+    kind: ParamKind::ClipboardHierarchyObjects,
+    summary: "Selected root sheet symbols and hierarchical labels; sheet symbols include their complete child subtree",
+};
 const CATALOG: &[Command] = &[
     Command {
         id: clipboard_text::LABELS,
@@ -703,23 +715,34 @@ const CATALOG: &[Command] = &[
         id: clipboard::COPY,
         title: "Copy",
         summary: "Export selected schematic objects as a portable native clipboard fragment; no project change.",
-        params: &[ITEMS, EXPECTED_REVISION],
+        params: &[ITEMS, EXPECTED_REVISION, CLIPBOARD_OBJECTS],
     },
     Command {
         id: clipboard::CUT,
         title: "Cut",
         summary: "Copy selected objects and remove them in one edit, preserving other incident wires as dangling routes.",
-        params: &[ITEMS, EXPECTED_REVISION],
+        params: &[ITEMS, EXPECTED_REVISION, CLIPBOARD_OBJECTS],
     },
     Command {
         id: clipboard::PASTE,
         title: "Paste",
         summary: "Paste a portable schematic fragment with fresh identities in one undo step.",
         params: &[
-            Param { name: "text", required: true, kind: ParamKind::ClipboardText, summary: "pcbcraft-clipboard/1 UTF-8 envelope" },
+            Param {
+                name: "text",
+                required: true,
+                kind: ParamKind::ClipboardText,
+                summary: "pcbcraft-clipboard/1 or pcbcraft-clipboard/2 UTF-8 envelope",
+            },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
+            Param {
+                name: "reuse_sheets",
+                required: false,
+                kind: ParamKind::CreateBoard,
+                summary: "Relocate eligible original unparented child sheets after Cut; their current content is retained",
+            },
             NET_ROTATION,
             Param {
                 name: "references",
@@ -2002,7 +2025,7 @@ impl Session {
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if matches!(id, clipboard::COPY | clipboard::CUT) {
-            let text = self.copy_schematic(params)?;
+            let text = self.copy_schematic(params, id == clipboard::CUT)?;
             if id == clipboard::CUT {
                 self.apply(id, params)?;
             }
@@ -2202,7 +2225,7 @@ impl Session {
             board::clipboard::DELETE => self.delete_board_items(params, false)?,
             board::clipboard::PASTE => self.paste_board(params)?,
             clipboard::COPY => {
-                self.copy_schematic(params)?;
+                self.copy_schematic(params, false)?;
             }
             clipboard::CUT => self.cut_schematic(params)?,
             clipboard::PASTE => self.paste_schematic(params)?,

@@ -20,6 +20,8 @@ use std::{
 };
 use uuid::Uuid;
 
+mod connectivity;
+
 /// Export a board selection without changing the project or system clipboard.
 pub const COPY: &str = "pcb.copy";
 /// Export and remove physical objects, retaining their logical component identities.
@@ -383,6 +385,7 @@ impl BoardFragment {
             Arc::make_mut(&mut fragment.project).schematic_packages = Arc::new(packages);
             circuits.push(Circuit { source_sheet: sheet.target.id(), name: sheet.name.into(), fragment });
         }
+        connectivity::validate(project, &circuits, &components)?;
         let used: BTreeSet<_> = drawings.iter().map(|d| d.layer).chain(tracks.iter().map(|t| t.layer)).collect();
         let layers = view.layers().into_iter().filter(|l| used.contains(&l.id)).collect();
         let anchor = footprints
@@ -428,6 +431,9 @@ impl BoardFragment {
         let mut numeric = BTreeSet::new();
         for circuit in envelope.circuits {
             let fragment = Fragment::from_text(&circuit.text)?;
+            if fragment.has_hierarchy() {
+                return Err(invalid("board circuit fragments must be flat"));
+            }
             if circuit.sheet != fragment.project.sheet_target().id()
                 || fragment.project.id() != envelope.source_project
                 || !sheets.insert(circuit.sheet)
@@ -875,6 +881,7 @@ impl Session {
                 preserve_references: params["references"].as_str() == Some("preserve"),
                 net_name_suffix: params["net_name_suffix"].as_str().unwrap_or_default().into(),
                 quarter_turns: (params["rotation"].as_u64().unwrap_or(0) / 90) as u8,
+                reuse_sheets: false,
             },
         };
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
