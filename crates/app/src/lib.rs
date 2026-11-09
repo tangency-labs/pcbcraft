@@ -1158,6 +1158,11 @@ impl PcbApp {
                     if !empty {
                         ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
                     }
+                    // File results, such as a saved fabrication archive, would otherwise be hidden
+                    // behind the board status in this workspace.
+                    if let Some(notice) = &self.file_notice {
+                        ui.label(dim(notice.as_str()));
+                    }
                 } else if self.views.active.schematic.clipboard.active() || self.views.active.board.clipboard.active() {
                     ui.label(dim(if self.views.active.schematic.clipboard.can_rotate() {
                         "Paste · Click to place · R rotate · Esc cancel"
