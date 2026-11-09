@@ -51,7 +51,7 @@ fn click_and_delete_target_only_the_indicated_segment() {
             assert_eq!(routes(&h), vec![vec![grid(-8, 0), grid(8, 0)]]);
             focus_tab(&mut h, 1 - id);
             click(&mut h, "Undo");
-            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
         }
     }
 }
@@ -97,12 +97,12 @@ fn dragging_a_segment_aligns_adjacent_runs_without_moving_the_whole_wire() {
             h.run();
             assert_eq!(routes(&h).len(), 2, "The retained selection deletes only the newly aligned segment");
             click(&mut h, "Undo");
-            assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+            crate::tests::assert_same_content(&after, &h.state().session.snapshot().unwrap());
             focus_tab(&mut h, 1 - id);
             click(&mut h, "Undo");
-            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
             click(&mut h, "Redo");
-            assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+            crate::tests::assert_same_content(&after, &h.state().session.snapshot().unwrap());
         }
     }
 }
@@ -141,7 +141,7 @@ fn dragging_a_split_step_consumes_the_folded_corner() {
             assert_eq!(routes(&h), vec![expected]);
             let after = h.state().session.snapshot().unwrap();
             click(&mut h, "Undo");
-            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
             click(&mut h, "Redo");
             assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
         }

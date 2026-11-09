@@ -48,7 +48,7 @@ fn source_commands_place_and_pin_offline_through_the_existing_command_path() {
     assert_eq!(symbol.provenance.as_ref().unwrap().license, "MIT OR Apache-2.0");
     assert!(!String::from_utf8(pinned.values().flatten().copied().collect()).unwrap().contains("personal"));
     session.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    crate::assert_same_content(&before, &session.snapshot().unwrap());
 }
 
 /// Invalid files are isolated, malformed manifests/transport bounds fail, and upload/folder data agree.

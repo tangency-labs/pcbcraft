@@ -41,7 +41,7 @@ fn sheets_are_explicit_isolated_and_share_one_undo_history() {
     s.apply("edit.undo", &Value::Null).unwrap();
     assert!(s.project().unwrap().for_sheet(power).unwrap().symbols().is_empty());
     s.apply("edit.undo", &Value::Null).unwrap();
-    assert!(Arc::ptr_eq(&first, &s.snapshot().unwrap()));
+    crate::assert_same_content(&first, &s.snapshot().unwrap());
     assert!(s.project().unwrap().for_sheet(main).is_some());
     s.apply("edit.redo", &Value::Null).unwrap();
     s.apply("edit.redo", &Value::Null).unwrap();

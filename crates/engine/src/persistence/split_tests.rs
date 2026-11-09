@@ -84,7 +84,8 @@ fn round_trip_and_legacy_migrations_have_identical_documents() {
     assert_eq!(encode_documents(decode_packed(&packed).unwrap().project).unwrap(), canonical);
 }
 
-/// Each common edit changes only its owning document and one editable record where applicable.
+/// Nonallocating edits change only their owning document; allocating edits also reserve IDs
+/// in the project entry point. Existing authored records retain one-line diffs.
 #[test]
 fn edit_to_file_boundaries_and_one_record_diffs() {
     for (command, params, owner) in [
@@ -98,7 +99,11 @@ fn edit_to_file_boundaries_and_one_record_diffs() {
         apply(&mut s, command, params);
         let after = documents(&s);
         let path = if owner == "sheet" { sheet(&before) } else { owner.to_owned() };
-        assert_eq!(changed(&before, &after), BTreeSet::from([path.clone()]));
+        let mut expected = BTreeSet::from([path.clone()]);
+        if command == PLACE_FOOTPRINT {
+            expected.insert(ENTRY_POINT.to_owned());
+        }
+        assert_eq!(changed(&before, &after), expected);
         if command != PLACE_FOOTPRINT {
             let a = std::str::from_utf8(&before[&path]).unwrap();
             let b = std::str::from_utf8(&after[&path]).unwrap();
@@ -109,7 +114,8 @@ fn edit_to_file_boundaries_and_one_record_diffs() {
     }
 }
 
-/// Free-space wires and symbol-copy lifetimes affect exactly the documents that own them.
+/// Wire/component allocations update their owning documents and retain allocation metadata
+/// after deletion, while unused pinned definitions are removed.
 #[test]
 fn wire_and_definition_changes_remain_local() {
     let mut s = session();
@@ -117,17 +123,17 @@ fn wire_and_definition_changes_remain_local() {
     let path = sheet(&before);
     apply(&mut s, DRAW_WIRE, json!({"from":{"x_nm":0,"y_nm":1270000},"to":{"x_nm":2540000,"y_nm":1270000},"bends":[]}));
     let wired = documents(&s);
-    assert_eq!(changed(&before, &wired), BTreeSet::from([path.clone()]));
+    assert_eq!(changed(&before, &wired), BTreeSet::from([ENTRY_POINT.to_owned(), path.clone()]));
     let wire = s.inspect()["project"]["schematic"]["wires"].as_array().unwrap().last().unwrap()["id"].clone();
     apply(&mut s, DELETE_WIRE, json!({"wire":wire}));
-    assert_eq!(documents(&s), before);
+    crate::assert_same_content(&decode_documents(&before).unwrap(), &s.snapshot().unwrap());
     apply(&mut s, PLACE_SYMBOL, json!({"definition":"led","x_nm":0,"y_nm":0}));
     let added = documents(&s);
     let new_file = added.keys().find(|path| !before.contains_key(*path)).unwrap().clone();
     assert_eq!(changed(&before, &added), BTreeSet::from([ENTRY_POINT.to_owned(), path, new_file]));
     let id = s.inspect()["project"]["schematic"]["symbols"].as_array().unwrap().last().unwrap()["id"].clone();
     apply(&mut s, DELETE_SYMBOL, json!({"symbol":id}));
-    assert_eq!(documents(&s), before);
+    crate::assert_same_content(&decode_documents(&before).unwrap(), &s.snapshot().unwrap());
 }
 
 /// Appending records keeps all earlier record lines intact, including their separators.

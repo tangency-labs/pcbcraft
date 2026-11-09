@@ -30,6 +30,26 @@ mod save_changes;
 mod selection_filters;
 mod split_editors;
 
+/// Compare restored authored state while preserving the allocation metadata retained by Undo.
+/// Rejected commands, cancelled gestures and no-ops must still use exact snapshot comparisons.
+pub(crate) fn assert_same_content(expected: &Arc<pcbcraft_engine::Project>, actual: &Arc<pcbcraft_engine::Project>) {
+    let mut expected = pcbcraft_engine::persistence::encode_documents(expected.clone()).unwrap();
+    let mut actual = pcbcraft_engine::persistence::encode_documents(actual.clone()).unwrap();
+    let normalize = |documents: &mut pcbcraft_engine::persistence::Documents| {
+        let mut entry: Value = serde_json::from_slice(&documents["project.pc"]).unwrap();
+        let watermark = entry.as_object_mut().unwrap().remove("numeric_id_high_water").and_then(|value| value.as_u64()).unwrap_or(0);
+        if entry["format"] == "pcbcraft-project/7" {
+            entry["format"] = json!("pcbcraft-project/6");
+        }
+        documents.insert("project.pc".into(), serde_json::to_vec(&entry).unwrap());
+        watermark
+    };
+    let previous_watermark = normalize(&mut expected);
+    let current_watermark = normalize(&mut actual);
+    assert!(current_watermark >= previous_watermark);
+    assert_eq!(actual, expected);
+}
+
 /// Start editor-control tests without the filter overlay over their coordinate fixtures.
 /// Filter tests opt in explicitly; startup tests exercise the real constructor and visible defaults.
 pub(super) fn harness<'a>() -> Harness<'a, PcbApp> {

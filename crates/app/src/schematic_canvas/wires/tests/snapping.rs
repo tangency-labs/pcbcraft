@@ -86,7 +86,7 @@ fn ctrl_temporarily_bypasses_grid_for_the_complete_wire_gesture() {
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.run();
     click(&mut h, "Undo");
-    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
     click(&mut h, "Redo");
     assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
 }

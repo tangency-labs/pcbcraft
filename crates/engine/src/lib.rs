@@ -5,6 +5,8 @@
 //! [`Session::execute`] also includes an inspection result for existing callers.
 //! The native codec snapshots authored data independently of editing history and transport.
 
+#[cfg(test)]
+mod allocation_tests;
 pub mod authoring;
 pub mod board;
 pub mod hierarchy;
@@ -1021,6 +1023,8 @@ pub struct SheetTarget {
 pub struct Project {
     pub name: String,
     id: uuid::Uuid,
+    /// Allocation metadata is retained across undo and saved once the watermark format is adopted.
+    numeric_id_high_water: Option<u64>,
     /// Ordered authored sheets. A projection chooses a sheet without changing this collection.
     sheets: Arc<Vec<sheets::SchematicSheet>>,
     /// Transient immutable projection; canonical session snapshots always use index zero.
@@ -1204,7 +1208,9 @@ impl Session {
     /// so old revision checks fail and newly created objects cannot reuse loaded IDs. Record the
     /// new root revision even when reopening the same snapshot, so views can reset local state.
     /// A sheet projection is normalized to the first sheet without changing authored documents.
+    /// Restoring this live project's older content retains its adopted allocation watermark.
     pub fn open_snapshot(&mut self, project: Arc<Project>) {
+        let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
         self.history_root_revision = self.revision;
@@ -1447,6 +1453,7 @@ impl Session {
             "project.new" => self.change(Project {
                 name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
                 id: fresh_id()?,
+                numeric_id_high_water: Some(0),
                 sheets: Arc::new(vec![sheets::SchematicSheet::empty(fresh_id()?, "Main".into())]),
                 sheet_index: 0,
                 components: Arc::default(),
@@ -1544,7 +1551,7 @@ impl Session {
     }
 
     /// Add a symbol from validated parameters if the caller's revision is still current.
-    /// Use the resulting revision as the identity so undo and a new placement cannot reuse it.
+    /// Reserve above the allocation watermark and runtime revision so undo cannot recycle it.
     /// Exact wire contacts connect; a two-pin placement on a straight run inserts the part.
     /// Explicit native selections reject conflicting pinned content. Legacy starter-only calls
     /// retain their compatibility behavior of reusing the project's existing saved definition.
@@ -1811,9 +1818,11 @@ impl Session {
         Ok(())
     }
 
-    /// Reserve a bounded stable ID for the next edit.
+    /// Reserve above both the monotonic allocation watermark and runtime revision. The candidate
+    /// transaction records the reservation only on success; stale/invalid requests allocate nothing.
     fn next_object_id(&self) -> Result<u64, CommandError> {
         self.revision
+            .max(self.project.as_ref().map_or(0, |project| project.allocation_high_water()))
             .checked_add(1)
             .filter(|id| *id <= MAX_OBJECT_ID)
             .ok_or_else(|| CommandError::Unavailable("project has exhausted its object IDs".to_owned()))
@@ -1827,8 +1836,9 @@ impl Session {
         Ok(())
     }
 
-    /// Commit a snapshot and bound undo history. New edits clear redo; revisions advance
-    /// past every ID allocated by a compound wire edit, preventing reuse after undo.
+    /// Commit a snapshot and bound undo history. Preserve adopted allocation metadata across
+    /// content changes, adopting it for legacy allocations/retirements. New edits clear redo;
+    /// revisions advance past every live ID allocated by a compound wire edit.
     fn change(&mut self, mut project: Project) {
         // Named anchors can attach to moving geometry and join other sheets.
         if project.has_named_nets() || self.project.as_ref().is_some_and(|p| p.has_named_nets()) {
@@ -1838,7 +1848,12 @@ impl Session {
             }
         }
         let highest = project.highest_id();
-        self.undo.push(self.project.replace(Arc::new(project)));
+        let previous_highest = self.project.as_ref().filter(|old| old.same_document(&project)).map_or(0, |old| old.highest_id());
+        if project.numeric_id_high_water.is_some() || highest != previous_highest {
+            project.numeric_id_high_water = Some(project.numeric_id_high_water.unwrap_or(0).max(highest).max(previous_highest));
+        }
+        let project = self.retain_allocation_watermark(Arc::new(project));
+        self.undo.push(self.project.replace(project));
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
         }
@@ -1846,13 +1861,28 @@ impl Session {
         self.revision = (self.revision + 1).max(highest);
     }
 
-    /// Restore an existing snapshot, advancing the revision in either direction.
+    /// Restore authored content and advance the revision, retaining the allocation watermark
+    /// from the state being left when both snapshots belong to the same project.
     fn step(&mut self, forward: bool) {
         let (from, to) = if forward { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
         if let Some(state) = from.pop() {
             to.push(std::mem::replace(&mut self.project, state));
             self.revision += 1;
         }
+        if let Some(project) = self.project.clone() {
+            // The state just left is now at the end of the opposite history stack.
+            let prior = if forward { self.undo.last() } else { self.redo.last() }.and_then(Option::as_ref);
+            if let Some(prior) = prior.filter(|prior| prior.same_document(&project)) {
+                self.project = Some(Project::with_allocation_watermark(project, prior.numeric_id_high_water));
+            }
+        }
+    }
+
+    /// Preserve allocation metadata when adopting an earlier snapshot of the current project.
+    /// Opening a different project starts that project's independent saved allocation lineage.
+    fn retain_allocation_watermark(&self, project: Arc<Project>) -> Arc<Project> {
+        let previous = self.project.as_ref().filter(|old| old.same_document(&project)).and_then(|old| old.numeric_id_high_water);
+        Project::with_allocation_watermark(project, previous)
     }
 }
 
@@ -1861,6 +1891,15 @@ fn fresh_id() -> Result<uuid::Uuid, CommandError> {
     let mut bytes = [0; 16];
     getrandom::fill(&mut bytes).map_err(|error| CommandError::Unavailable(format!("could not create a project identity: {error}")))?;
     Ok(uuid::Builder::from_random_bytes(bytes).into_uuid())
+}
+
+/// Compare restored authored content while allowing monotonic allocation metadata to advance.
+/// Failure/no-op tests should continue comparing exact pointers instead.
+#[cfg(test)]
+fn assert_same_content(expected: &Arc<Project>, actual: &Arc<Project>) {
+    assert!(actual.numeric_id_high_water.unwrap_or(0) >= expected.numeric_id_high_water.unwrap_or(0));
+    let expected = Project::with_allocation_watermark(expected.clone(), actual.numeric_id_high_water);
+    assert_eq!(persistence::encode_documents(expected).unwrap(), persistence::encode_documents(actual.clone()).unwrap());
 }
 
 /// Validate declared inputs, requiring mandatory parameters and rejecting unknown or invalid values.
@@ -2139,11 +2178,11 @@ mod tests {
         assert_eq!((name(&s), s.project().unwrap().symbols().len()), (Some("blinky"), 2));
         assert!(!Arc::ptr_eq(&s.snapshot().unwrap(), &saved), "the later edit is still unsaved");
         s.apply("edit.undo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &saved));
+        crate::assert_same_content(&saved, &s.snapshot().unwrap());
         s.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(name(&s), Some("blinky"), "undo doesn't bring Untitled back");
         s.apply("edit.redo", &Value::Null).unwrap();
-        assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &saved));
+        crate::assert_same_content(&saved, &s.snapshot().unwrap());
         assert!(!s.adopt_saved_name(&original, &saved), "nothing is left to rename");
 
         // Renamed by the person during the save, the project keeps their name.

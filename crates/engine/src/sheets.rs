@@ -69,6 +69,25 @@ impl Deref for Project {
 }
 
 impl Project {
+    /// Highest live or retired numeric identity reserved by this saved lineage.
+    pub(crate) fn allocation_high_water(&self) -> u64 {
+        self.highest_id().max(self.numeric_id_high_water.unwrap_or(0))
+    }
+
+    /// Overlay monotonic metadata on historical content without mutating a shared snapshot.
+    /// Keep the original pointer when neither adoption nor a larger watermark is needed.
+    pub(crate) fn with_allocation_watermark(project: Arc<Self>, previous: Option<u64>) -> Arc<Self> {
+        let watermark = match (project.numeric_id_high_water, previous) {
+            (None, None) => None,
+            (current, previous) => Some(current.unwrap_or(0).max(previous.unwrap_or(0)).max(project.highest_id())),
+        };
+        if watermark == project.numeric_id_high_water {
+            project
+        } else {
+            Arc::new(Self { numeric_id_high_water: watermark, ..Self::clone(&project) })
+        }
+    }
+
     /// Internal commands clone only the addressed sheet's metadata and touched geometry.
     pub(crate) fn sheet_mut(&mut self) -> &mut SchematicSheet {
         // Labels can contact geometry and join other sheets, including in pure previews.
