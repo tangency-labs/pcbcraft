@@ -188,6 +188,30 @@ fn digest_without_library_cannot_bypass_pinned_content_authority() {
     assert_eq!(state, s.inspect());
 }
 
+/// A revision alone is an exact selection and requires its content digest, while unqualified
+/// calls keep the default-library compatibility path. Refusal does not author a partial edit.
+#[test]
+fn explicit_revision_requires_digest_even_without_library() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    let before = s.snapshot().unwrap();
+    let state = s.inspect();
+    let d = s.libraries().latest_symbol("starter", "resistor").unwrap();
+    let mut params = json!({"definition":"resistor","definition_revision":d.revision(),"x_nm":0,"y_nm":0,"expected_revision":s.revision()});
+    let error = s.apply(PLACE_SYMBOL, &params).unwrap_err();
+    assert!(error.to_string().contains("`definition_digest` is required"));
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    assert_eq!(s.inspect(), state);
+    params["definition_digest"] = json!(sources::symbol_digest(&d).unwrap());
+    s.apply(PLACE_SYMBOL, &params).unwrap();
+    params.as_object_mut().unwrap().remove("definition_revision");
+    params.as_object_mut().unwrap().remove("definition_digest");
+    params["expected_revision"] = json!(s.revision());
+    params["x_nm"] = json!(10 * GRID_NM);
+    s.apply(PLACE_SYMBOL, &params).unwrap();
+    assert_eq!(s.project().unwrap().symbols().len(), 2);
+}
+
 /// Native power defaults and pinned definitions coexist with schematic-only package intent.
 /// Offline round trips preserve both, and first-board creation adopts only the chosen package.
 #[test]

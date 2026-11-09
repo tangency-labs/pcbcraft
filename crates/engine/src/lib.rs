@@ -1740,7 +1740,7 @@ impl Session {
                 let library = params["library"].as_str().unwrap_or("starter");
                 let id = params["definition"].as_str().unwrap_or_default();
                 let revision = params.get("definition_revision").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
-                let legacy = params.get("library").is_none() && params.get("definition_digest").is_none();
+                let legacy = ["library", "definition_revision", "definition_digest"].iter().all(|name| params.get(*name).is_none());
                 if !legacy && revision.is_none() {
                     return Err(CommandError::InvalidParams("`definition_revision` is required for explicit library selections".into()));
                 }
@@ -1809,8 +1809,8 @@ impl Session {
     /// Add a symbol from validated parameters if the caller's revision is still current.
     /// Reserve above the allocation watermark and runtime revision so undo cannot recycle it.
     /// Exact wire contacts connect; a two-pin placement on a straight run inserts the part.
-    /// Explicit native selections reject conflicting pinned content. Legacy calls omitting
-    /// both library and digest retain the compatibility behavior of reusing saved definitions.
+    /// Explicit native selections reject conflicting pinned content. Calls omitting all
+    /// selection qualifiers retain the compatibility behavior of reusing saved definitions.
     fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1914,15 +1914,15 @@ impl Session {
             .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))
     }
 
-    /// Turn a symbol a quarter turn counterclockwise, as KiCad's R does. Its wires follow its pins.
+    /// Turn a symbol a quarter turn counterclockwise, retaining exact naming contacts.
+    /// Explicit wire endpoints follow their pins without rewriting authored route bends.
     fn rotate_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let index = Self::symbol_param(project, params)?;
-        let mut project = project.clone();
-        let symbol = &mut Arc::make_mut(&mut project.sheet_mut().symbols)[index];
-        symbol.rotation = (symbol.rotation + 1) % 4;
-        self.change(project);
+        let symbol = &project.symbols[index];
+        let next = project.retained_symbol_pose(index, symbol.position, (symbol.rotation + 1) % 4, self.revision())?;
+        self.change(next);
         Ok(())
     }
 
@@ -1952,6 +1952,7 @@ impl Session {
     /// components; both fields are bounded single-line text. Optional orientation and center axes
     /// change in the same transaction; omitted placement fields retain their values. Center changes
     /// share Move Symbol's exact contacts and optional healing, preserving attached wires.
+    /// Orientation changes retain naming-terminal contacts without rewriting authored bends.
     /// Optional metadata replaces component fields/attributes and optional field layout replaces
     /// only this unit's text appearance. Omission preserves either. Invalid/dangling fields or
     /// board exclusion of a legacy placed component reject every accompanying change.
@@ -2009,15 +2010,16 @@ impl Session {
         component.reference = reference;
         component.value = value;
         component.metadata = metadata;
-        let mut next = project.clone();
+        let mut next = if position != original_position {
+            project.transformed_symbol(&project.symbols[index].id(), position, Some(rotation), false, self.revision(), wire::auto_heal(params))?
+        } else if project.symbols[index].rotation != rotation {
+            project.retained_symbol_pose(index, position, rotation, self.revision())?
+        } else {
+            project.clone()
+        };
         Arc::make_mut(&mut next.components).insert(component.ordinal, component);
         let symbol = &mut Arc::make_mut(&mut next.sheet_mut().symbols)[index];
         symbol.field_layout = field_layout;
-        symbol.rotation = rotation;
-        symbol.position = position;
-        if position != original_position {
-            next = next.healed(project, self.revision(), wire::auto_heal(params))?;
-        }
         self.change(next);
         Ok(())
     }

@@ -2,6 +2,30 @@
 use super::*;
 
 impl Edit {
+    /// Apply a validated pose while retaining exact contacts of an offset naming terminal.
+    /// Capture against the old geometry, so fixed pins and unsplit interiors remain connected.
+    pub(super) fn pose_symbol(&mut self, index: usize, to: Point, rotation: u8) -> Result<(), CommandError> {
+        let symbol = self.project.symbols().get(index).ok_or_else(|| CommandError::InvalidParams("symbol does not exist".into()))?;
+        let contact = self.project.power_terminals().find(|(end, _, from)| {
+            let WireEndpoint::Terminal(pin) = end else { return false };
+            pin.symbol == symbol.ordinal
+                && symbol.definition.pin_index(pin.number()).is_some_and(|i| symbol.definition.pin_positions(to, rotation)[i] != *from)
+        });
+        let captured = match contact {
+            Some((end, _, from)) => Some((end, from, self.capture_named_contact(end, from)?)),
+            None => None,
+        };
+        let symbol = &mut Arc::make_mut(&mut self.project.sheet_mut().symbols)[index];
+        symbol.position = to;
+        symbol.rotation = rotation;
+        if let Some((end, from, fixed)) = captured {
+            let at = self.project.endpoint_position(end).ok_or_else(|| CommandError::InvalidParams("missing named terminal".into()))?;
+            self.retain_fixed_contacts(end, from, at, fixed)?;
+        }
+        self.project.named_graph = Arc::default();
+        Ok(())
+    }
+
     /// Retain all exact authored wire contacts of a globally naming terminal. Fixed pins stay
     /// put and receive a connecting leg; wire interiors split using the shared bounded allocator.
     pub(super) fn capture_named_contact(&mut self, end: WireEndpoint, from: Point) -> Result<BTreeSet<WireEndpoint>, CommandError> {
@@ -52,6 +76,18 @@ impl Edit {
 }
 
 impl Project {
+    /// Set a current-sheet pose while preserving naming-terminal contacts. Existing explicit
+    /// routes keep their endpoints and authored bends; no automatic route cleanup is performed.
+    /// Invalid indices, coordinates, orientations or bounded contact allocations fail atomically.
+    pub(crate) fn retained_symbol_pose(&self, index: usize, to: Point, rotation: u8, revision: u64) -> Result<Self, CommandError> {
+        if !valid_point(&to) || rotation > 3 {
+            return Err(CommandError::InvalidParams("invalid symbol pose".into()));
+        }
+        let mut edit = Edit::new(self, revision);
+        edit.pose_symbol(index, to, rotation)?;
+        if edit.touched.is_empty() { Ok(edit.project) } else { edit.finish(false) }
+    }
+
     /// Move an existing named marker with its touching wires, independent of placement order.
     /// Free-end/branch contacts become explicit marker endpoints; interior routes split at
     /// the old anchor. Component pins and other named anchors stay fixed and gain a connecting

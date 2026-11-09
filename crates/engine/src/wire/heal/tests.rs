@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 mod detach;
 mod named_contacts;
+mod named_pose;
 mod redraws;
 mod segment_slides;
 mod symbol_transform;

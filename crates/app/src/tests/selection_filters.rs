@@ -327,9 +327,7 @@ fn named_labels_follow_the_label_selection_category() {
         assert!(h.state().message.is_none(), "{:?}", h.state().message);
         let label = h.state().session.project().unwrap().net_labels()[0].clone();
         let before = document(&h);
-        let symbols = false;
-        let category = if symbols { "symbols" } else { "labels" };
-        let other = if symbols { "labels" } else { "symbols" };
+        let (category, other) = ("labels", "symbols");
         h.state_mut().select(pcbcraft_engine::selection::Selection::one_net_label(label.id));
         h.state_mut().set_selection_filters(id, &json!({other:false})).unwrap();
         assert_eq!(h.state().views.active.schematic.selection.single_net_label(), Some(label.id));

@@ -59,8 +59,10 @@ Both the live editor and headless MCP use these same schemas and transactions.
 ## Storage and limits
 
 Each sheet supports 256 text labels, with names of 1–200 characters without
-surrounding whitespace or control characters. Named labels use sheet format 3;
-explicit text layouts require format 5. Power uses the normal component budget
+surrounding whitespace or control characters. Named labels require at least sheet
+format 3. Symbol field layouts select format 4, including the defaults of a bundled
+GND symbol on the same sheet; an explicit label text layout selects format 5.
+Power uses the normal component budget
 and project-pinned native definitions, including offline reopening and Home
 previews. The former `power`, `power_bar` and `ground` net-label styles and their
 separate editing tools have been removed. Such older records are rejected;

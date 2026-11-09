@@ -384,10 +384,12 @@ fn named_pin_defaults_use_revision_qualified_library_mappings() {
     for revision in [1, 2] {
         let mut session = Session::default();
         session.apply("project.new", &json!({"create_board":true})).unwrap();
+        let symbol = session.libraries().symbol("starter", "led", revision).unwrap();
+        let digest = crate::library::sources::symbol_digest(&symbol).unwrap();
         session
             .apply(
                 crate::PLACE_SYMBOL,
-                &json!({"definition":"led","definition_revision":revision,"x_nm":0,"y_nm":0,"expected_revision":session.revision()}),
+                &json!({"library":"starter","definition":"led","definition_revision":revision,"definition_digest":digest,"x_nm":0,"y_nm":0,"expected_revision":session.revision()}),
             )
             .unwrap();
         let component = session.project().unwrap().components().next().unwrap().id();

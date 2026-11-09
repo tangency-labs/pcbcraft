@@ -37,8 +37,9 @@ local/global text labels remain independent annotations.
 Version 1 remains readable and retains its original encoding when saved. Version
 2 is pinned with the project, so it reopens offline and older readers reject the
 new semantics instead of silently discarding them. Explicit selections from any
-library require a revision and digest. Omitted-library compatibility commands
-still default to `starter` and may reuse its existing pinned copy. Provenance-free
+library require a revision and digest. Supplying a revision alone also requires
+its digest. Commands omitting library, revision and digest still default to
+`starter` and may reuse its existing pinned copy. Provenance-free
 older definitions can match an otherwise identical current definition without
 weakening conflict checks between complete source definitions.
 

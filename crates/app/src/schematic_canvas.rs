@@ -918,8 +918,9 @@ fn placement_preview(
 /// Preview ordinary drawing and instance fields from the same native defaults as placement.
 fn paint_template(painter: &Painter, definition: &Arc<SymbolDefinition>, value: &str, center: Pos2, step: f32, turns: u8, color: egui::Color32) {
     paint_symbol(painter, definition, center, step, turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
-    let defaults = definition.defaults.clone().unwrap_or_default();
-    let symbol = SymbolPlacement::preview(definition.clone(), turns, defaults.field_layout);
+    let fallback = pcbcraft_engine::library::Defaults::default();
+    let defaults = definition.defaults.as_ref().unwrap_or(&fallback);
+    let symbol = SymbolPlacement::preview(definition.clone(), turns, defaults.field_layout.clone());
     fields::paint_labels(painter, &symbol, fields::Content { reference: "", value, metadata: &defaults.metadata }, center, step, color);
 }
 

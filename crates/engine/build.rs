@@ -25,7 +25,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     for library in libraries {
         let id = library.file_name().ok_or("missing library folder name")?.to_string_lossy();
         code.push_str(&format!("({id:?}, &[\n"));
-        let mut files = vec![("library.json".to_owned(), library.join("library.json"))];
+        let manifest_path = library.join("library.json");
+        if !manifest_path.is_file() {
+            return Err(format!("Bundled library `{id}` has no library.json").into());
+        }
+        let mut files = vec![("library.json".to_owned(), manifest_path)];
         for directory in ["symbols", "footprints"] {
             let folder = library.join(directory);
             if !folder.is_dir() {

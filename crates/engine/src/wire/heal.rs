@@ -834,26 +834,7 @@ impl Project {
             return self.transformed_symbol_disconnected(index, to, rotation, revision, auto_heal);
         }
         let mut edit = Edit::new(self, revision);
-        let contact = self.power_terminals().find(|(end, _, from)| {
-            let WireEndpoint::Terminal(pin) = end else { return false };
-            if pin.symbol != self.symbols[index].ordinal {
-                return false;
-            }
-            let definition = &self.symbols[index].definition;
-            definition.pin_index(pin.number()).is_some_and(|i| definition.pin_positions(to, rotation)[i] != *from)
-        });
-        let captured = match contact {
-            Some((end, _, from)) => Some((end, from, edit.capture_named_contact(end, from)?)),
-            None => None,
-        };
-        let symbol = &mut Arc::make_mut(&mut edit.project.sheet_mut().symbols)[index];
-        symbol.position = to;
-        symbol.rotation = rotation;
-        if let Some((end, from, fixed)) = captured {
-            let at = edit.project.endpoint_position(end).ok_or_else(|| CommandError::InvalidParams("missing named terminal".into()))?;
-            edit.retain_fixed_contacts(end, from, at, fixed)?;
-        }
-        edit.project.named_graph = Arc::default();
+        edit.pose_symbol(index, to, rotation)?;
         let moved = edit.finish(auto_heal)?;
         moved.healed(self, revision, auto_heal)
     }
