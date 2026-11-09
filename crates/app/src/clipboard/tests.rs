@@ -111,7 +111,7 @@ fn paste_options_and_duplicate_share_the_validated_path() {
 fn invalid_clipboard_text_is_rejected_without_a_partial_edit() {
     let mut h = source();
     let before = h.state().session.snapshot().unwrap();
-    h.event(Event::Paste("ordinary external text".into()));
+    h.event(Event::Paste("{invalid native clipboard JSON}".into()));
     h.run();
     assert!(h.state().message.as_ref().is_some_and(|s| s.contains("supported PCBcraft")));
     assert!(!h.state().views.active.schematic.clipboard.active());

@@ -165,9 +165,10 @@ impl Project {
     }
 }
 
-/// Only geometry commands take a schematic target; sheet lifecycle and board setup are project operations.
+/// Authored schematic geometry takes a sheet target; portable text preparation is independent
+/// of any project/sheet. Sheet lifecycle and board setup remain project operations.
 pub fn scoped_command(id: &str) -> bool {
-    id.starts_with("schematic.") || id == PLACE_FOOTPRINT
+    (id.starts_with("schematic.") && id != crate::clipboard_text::LABELS) || id == PLACE_FOOTPRINT
 }
 
 impl Session {

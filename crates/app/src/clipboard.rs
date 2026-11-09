@@ -160,6 +160,11 @@ impl PcbApp {
             self.message = Some("The clipboard contains no text.".into());
             return;
         }
+        let start = text.trim_start_matches('\u{feff}').trim_start();
+        if !start.starts_with(['{', '[']) && !text.contains("pcbcraft-clipboard/") {
+            self.begin_external_clipboard(text);
+            return;
+        }
         match self.views.active.workspace {
             Workspace::Schematic => self.receive_schematic_clipboard(text, special),
             Workspace::Board => self.receive_board_clipboard(text, special),
