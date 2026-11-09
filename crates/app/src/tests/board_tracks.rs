@@ -1090,6 +1090,30 @@ fn d_drags_a_segment_and_keeps_neighbors_attached() {
     assert_eq!(ends, expected, "the route stays connected");
 }
 
+/// With nothing selected, Properties summarizes the board: outline size, copper layers,
+/// footprints, tracks, vias and unrouted connections.
+#[test]
+fn properties_summarize_the_board_when_nothing_is_selected() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    h.run();
+    assert!(h.query_by_label("No outline").is_some());
+    let outline = layer_named(&h, "Board Outline");
+    let revision = h.state().session.revision();
+    let p = |x: i64, y: i64| json!({"x_nm":x,"y_nm":y});
+    h.state_mut().run(
+        pcbcraft_engine::ADD_DRAWING,
+        &json!({"layer":outline,"points":[p(-5_000_000,-5_000_000),p(15_000_000,-5_000_000),p(15_000_000,5_000_000),p(-5_000_000,5_000_000)],"closed":true,"expected_revision":revision}),
+    );
+    add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    h.run();
+    for (label, value) in [("Size", "20 mm × 10 mm"), ("Copper layers", "2"), ("Footprints", "2"), ("Tracks", "1"), ("Vias", "0"), ("Unrouted", "1")]
+    {
+        assert!(h.query_all_by_label(label).next().is_some(), "{label} row");
+        assert!(h.query_all_by_label(value).next().is_some(), "{label} shows {value}");
+    }
+}
+
 /// At a T-junction, D keeps the connection: a dragged end on the middle of another track holds
 /// there while the segment pivots, and a track ending along a dragged segment follows it.
 #[test]

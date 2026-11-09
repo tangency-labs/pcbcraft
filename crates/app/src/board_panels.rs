@@ -75,6 +75,8 @@ impl PcbApp {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
         let unit = self.preferences.units;
+        let unrouted =
+            state.ratsnest_cache.as_ref().filter(|(_, ratsnest)| ratsnest.board == target.target).map(|(_, ratsnest)| ratsnest.lines.len());
         let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
         let (properties, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
@@ -104,13 +106,27 @@ impl PcbApp {
                     }
                     [] => {
                         property(ui, "Board", target.name());
-                        property(ui, "Footprints", &target.footprints().count().to_string());
+                        match target.outline_bounds() {
+                            Some((min, max)) => property(
+                                ui,
+                                "Size",
+                                &format!("{} × {}", units::label(max.x_nm - min.x_nm, unit), units::label(max.y_nm - min.y_nm, unit)),
+                            ),
+                            None => property(ui, "Size", "No outline"),
+                        }
                         if let Some(setup) = target.setup() {
                             property(
                                 ui,
                                 "Copper layers",
                                 &setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).count().to_string(),
                             );
+                        }
+                        property(ui, "Footprints", &target.footprints().count().to_string());
+                        property(ui, "Tracks", &target.tracks().len().to_string());
+                        property(ui, "Vias", &target.vias().len().to_string());
+                        // The canvas caches the ratsnest per revision; reuse it rather than recompute.
+                        if let Some(lines) = unrouted {
+                            property(ui, "Unrouted", &lines.to_string());
                         }
                     }
                     items => property(ui, "Selected footprints", &items.len().to_string()),
