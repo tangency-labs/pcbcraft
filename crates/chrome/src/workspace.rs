@@ -311,6 +311,7 @@ pub fn ribbon(
                         ui.spacing_mut().scroll.bar_inner_margin = 0.0;
                         ui.spacing_mut().scroll.bar_outer_margin = 0.0;
                         ScrollArea::horizontal().id_salt("ribbon_actions").auto_shrink([false, true]).show(ui, |ui| {
+                            describe_scroll_viewport(ui);
                             ui.horizontal_top(|ui| add(ui, *tab));
                         });
                     });
@@ -843,6 +844,24 @@ pub fn ribbon_field<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R)
         t.text_dim,
     );
     result
+}
+
+/// Tell assistive technology which part of a scroll area's content is on screen. Call it first
+/// thing inside `ScrollArea::show`: the content `ui`'s accessibility node gets the visible
+/// viewport, its clip rectangle, as its bounds and is marked as clipping its children. egui
+/// leaves these containers without bounds, so without this a control scrolled under the edge
+/// of the area still reports its full rectangle as if it were visible.
+pub fn describe_scroll_viewport(ui: &Ui) {
+    let viewport = ui.clip_rect();
+    ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+        node.set_bounds(egui::accesskit::Rect {
+            x0: viewport.min.x.into(),
+            y0: viewport.min.y.into(),
+            x1: viewport.max.x.into(),
+            y1: viewport.max.y.into(),
+        });
+        node.set_clips_children();
+    });
 }
 
 /// The quiet rule between two ribbon groups, in a slot as tall as the groups.
