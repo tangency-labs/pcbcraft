@@ -1,10 +1,48 @@
-# Single board update foundation
+# Single board update review
 
 The engine command `pcb.initialize_update_baseline` explicitly adopts the current
 board's package choices and schematic connectivity as an accepted baseline. This
 is the storage and retention foundation for [reviewed board updates](https://github.com/tangency-labs/pcbcraft/issues/55).
-It does not yet provide an Update PCB dialog or a command that accepts later
-schematic differences.
+The engine also provides preview, Apply and Cancel commands for later schematic
+differences, through headless and live MCP. An Update PCB dialog and ratsnest
+rendering remain separate frontend work.
+
+## Preview and Apply
+
+`pcb.preview_update` takes `board` and `expected_revision`. It freezes the
+current authored input and returns `board_update_preview` with an opaque
+`plan_token`, captured source identity, complete component/connectivity changes
+and package blockers. It changes no project bytes, revision, dirty state or undo
+history. This query returns its requested data even when MCP uses `inspect:false`.
+Ordinary project inspection includes a smaller cached-preview summary.
+`can_apply` means the blocker list is empty, including for a no-op; native views
+use `changes.is_noop()` separately when showing whether anything needs acceptance.
+
+`pcb.apply_update` takes the same board, current `expected_revision` and the
+preview's `plan_token`. It revalidates the immutable input, constructs the complete
+physical candidate, checks native document budgets and publishes the candidate
+with its matching baseline in one undo step. Unchanged footprint IDs, positions,
+rotations, setup and board graphics survive. Added parts remain unplaced with
+accepted assignments. Missing choices and unsupported mappings prevent Apply
+without partial changes. A no-op consumes the token without changing bytes,
+history, accepted capture identity or revision.
+
+`pcb.cancel_update` takes `plan_token` and revokes only that runtime preview.
+There is one cached plan per session. A new preview replaces its predecessor;
+authored edits, undo/redo, opening another snapshot and save-name adoption
+invalidate it. UUID capabilities cannot be replayed in another session even when
+project IDs and numeric revisions match. Tokens and preview captures are never
+saved; real acceptance persists the captured source without forcing a save.
+
+Complete reports are bounded to 8 MiB, below the live reply budget. Larger
+change sets are refused explicitly rather than returning a truncated review with
+an Apply token. Native UI can borrow `Session::cached_board_update()` for the typed
+report, including captured metadata for removed components; it still submits
+Apply/Cancel through the shared commands.
+
+A new board with no placements can preview against an empty accepted predecessor.
+An existing placed board without a baseline needs explicit adoption through the
+initialization command below, because its earlier accepted state is unavailable.
 
 ## Initializing accepted state
 
@@ -30,10 +68,11 @@ connectivity or source identity, and is not an authority for reconstructing the
 captured source schematic. Other physical edits share the immutable baseline
 across undo snapshots; the display overlay copies it only when values differ.
 
-Unchanged accepted assignments can still be placed, moved and rotated. New or
-changed package choices in baseline mode are explicitly refused until the reviewed
-Apply workflow exists. Pending footprint removal is not performed by calling
-initialization again. Ordinary explicit PCB footprint deletion remains available
+Unchanged accepted assignments can still be placed, moved and rotated. Package
+selection in baseline mode stages desired intent without changing accepted
+geometry. Pending choices must be applied before placement. Pending footprint
+removal is not performed by calling initialization again. Ordinary explicit PCB
+footprint deletion remains available
 and undoable; accepted history and its package assets remain until reconciled.
 
 ## Persisted records
@@ -42,6 +81,15 @@ Board format `pcbcraft-board/10` requires a `baseline` object. Earlier board
 formats reject that field and retain their previous no-op encoding until baseline
 initialization. Setup, silkscreen, graphics, legacy outline, assignments and
 placements retain their existing records alongside it.
+
+Board format `pcbcraft-board/11` is used while a desired `assignments` entry
+differs from accepted history. The entry is the sole package intent; its mapping
+must cover the current live component and exact pinned package. The baseline and
+placement retain the accepted package/mapping independently. Inspection reports
+`pending_update`. An older reader rejects version 11 instead of equating desired
+and physical choices. Apply adopts those choices and returns to version 10 when
+no pending package intent remains. Resetting intent to the accepted package is
+also a normal desired-assignment edit.
 
 | Baseline field | Meaning |
 | --- | --- |
@@ -58,7 +106,7 @@ Historical component records need no live schematic placement or installed symbo
 library to validate their accepted terminal set. Physical assets remain pinned
 while any placement, assignment or accepted record references them.
 
-Proposed inputs may have unresolved package choices so a later preview can report
+Proposed inputs may have unresolved package choices so a preview can report
 blockers; persisted accepted board records require a package for every component.
 
 The baseline has at most 4096 component records with at most 128 terminal tokens
@@ -68,8 +116,10 @@ unknown or multiply assigned terminals, invalid capture addresses and incompatib
 package mappings. Named single-terminal groups can retain their display names;
 unnamed isolated terminals are not stored as connections.
 
-Source capture occurs before the baseline is added, avoiding a self-referential
-digest. Hash the canonical document bundle in sorted path order, beginning with
+Source capture hashes the complete canonical pre-Apply bundle, including prior
+accepted history and current desired intent. The new capture is attached only
+after hashing, so it is not self-referential. Hash documents in sorted path order,
+beginning with
 `pcbcraft-board-source-bundle/1` followed by a NUL byte. Each document contributes
 its UTF-8 path byte length as unsigned 64-bit big-endian, path bytes, document
 byte length with the same encoding, and exact document bytes. A fresh capture
@@ -80,13 +130,10 @@ to inspect the accepted physical state.
 
 ## Following slices
 
-The engine's pure update helpers normalize all-sheet connectivity to stable
-component/terminal addresses, compare accepted and proposed inputs, report missing
-package choices, and construct an atomic physical candidate. They preserve
-unchanged placements and explicit mappings. Runtime preview authority, persisted
-Apply, GUI/MCP workflows and ratsnest rendering remain later work. The future
-command must publish the complete candidate, which already contains its matching
-baseline, after checking the project opening, board, revision and accepted baseline.
+The engine normalizes all-sheet connectivity to stable component/terminal
+addresses without persisting every derived net as a stable ID. Native UI review,
+unplaced-part handoff and ratsnest rendering remain later work. Routing and
+manufacturing readiness are separate milestones.
 
 Broader design boundaries are recorded in the [circuit instance contract](circuit-instances.md#package-intent-and-physical-acceptance)
 and [storage design](multiboard-storage.md). Repeated circuits, multiple boards,

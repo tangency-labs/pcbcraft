@@ -287,6 +287,8 @@ impl Board {
             historical.value = value.to_owned();
         }
         if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
             return;
         }
         if self.by_component.remove(&component).is_some() || assigned {
@@ -306,6 +308,11 @@ impl Board {
             .chain(self.assignments.values().map(assignment::Assignment::key))
             .chain(self.baseline.iter().flat_map(|baseline| baseline.package_keys()))
             .collect()
+    }
+
+    /// Distinguish authored desired intent from the package accepted by the board.
+    pub(crate) fn has_pending_package_intent(&self) -> bool {
+        self.baseline.as_ref().is_some_and(|baseline| self.assignments.values().any(|assignment| !baseline.validate_assignment(assignment)))
     }
     /// Find a terminal's corresponding physical pad by the explicit component mapping.
     pub(crate) fn pad_for(&self, component: u64, pin: &str) -> Option<Pad> {

@@ -150,6 +150,12 @@ impl Project {
 }
 
 impl<'a> BoardView<'a> {
+    /// Existing placements without accepted history need explicit adoption before
+    /// reviewed updates. Fresh empty boards and already initialized boards do not.
+    pub fn needs_update_initialization(self) -> bool {
+        self.project.board.baseline.is_none() && !self.project.board.footprints().is_empty()
+    }
+
     /// Access the resolved owner for board-local projections within the engine.
     pub(crate) fn project(self) -> &'a Project {
         self.project

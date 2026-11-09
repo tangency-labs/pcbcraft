@@ -23,6 +23,81 @@ fn body(result: &Value) -> Value {
     serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// Headless and live clients share preview/apply capability validation, including
+/// dedicated read-query results when the caller suppresses project inspection.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn reviewed_board_updates_share_headless_and_live_authority_rules() {
+    use crate::{
+        Backend,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::{APPLY_UPDATE, ASSIGN_FOOTPRINT, PREVIEW_UPDATE};
+    struct OpenEditor {
+        session: Session,
+        blocked: bool,
+    }
+    impl Editor for OpenEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.session
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            self.blocked.then(|| "finish the dialog".into())
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            vec![]
+        }
+        fn inspect(&self) -> Value {
+            json!({})
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), String> {
+            Err("not a window operation".into())
+        }
+    }
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let component = setup.inspect()["project"]["components"][0]["id"].clone();
+    let definition = setup.project().unwrap().footprint_catalog().into_iter().find(|definition| definition.id == "resistor-0402").unwrap();
+    setup.apply(ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"1","2":"2"},"expected_revision":setup.revision()})).unwrap();
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut session = Session::default();
+    session.open_snapshot(snapshot);
+    let mut editor = OpenEditor { session, blocked: false };
+    let before = headless.call("project.inspect", json!({})).unwrap();
+    let revision = before["revision"].clone();
+    assert_eq!(editor.session.revision(), revision.as_u64().unwrap());
+    let params = json!({"command":PREVIEW_UPDATE,"params":{"expected_revision":revision},"inspect":false});
+    let headless_report = headless.call("engine.execute", params.clone()).unwrap()["board_update_preview"].clone();
+    let live_report = call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap()["board_update_preview"].clone();
+    assert_eq!(headless_report["changes"], live_report["changes"]);
+    assert_eq!(headless_report["source"]["content_digest"], live_report["source"]["content_digest"]);
+    assert_ne!(headless_report["plan_token"], live_report["plan_token"]);
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap()["project"], before["project"]);
+    let foreign = json!({"method":"engine.execute","params":{"command":APPLY_UPDATE,"params":{"plan_token":headless_report["plan_token"],"expected_revision":revision}}});
+    assert!(call_editor(&mut editor, &foreign).is_err());
+    let own = json!({"method":"engine.execute","params":{"command":APPLY_UPDATE,"params":{"plan_token":live_report["plan_token"],"expected_revision":revision}}});
+    editor.blocked = true;
+    assert!(call_editor(&mut editor, &own).unwrap_err().contains("dialog"));
+    editor.blocked = false;
+    let adopted = call_editor(&mut editor, &own).unwrap();
+    assert_eq!(adopted["project"]["board"]["accepted_baseline"]["component_count"], 1);
+    assert!(adopted["board_update_preview"].is_null());
+    let adopted = headless
+        .call("engine.execute", json!({"command":APPLY_UPDATE,"params":{"plan_token":headless_report["plan_token"],"expected_revision":revision}}))
+        .unwrap();
+    assert_eq!(adopted["project"]["board"]["accepted_baseline"]["component_count"], 1);
+    assert!(
+        headless
+            .call(
+                "engine.execute",
+                json!({"command":APPLY_UPDATE,"params":{"plan_token":headless_report["plan_token"],"expected_revision":adopted["revision"]}})
+            )
+            .is_err()
+    );
+}
+
 /// Headless clients discover Board Edge layers and create/update/delete their graphics through
 /// revision-checked transactions rather than editing a rectangle settings object.
 #[test]

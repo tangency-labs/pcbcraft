@@ -54,7 +54,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6`, `/7` or `/9` | Project UUID, name, ordered sheet list and shared components; version 7 adds the numeric allocation watermark; version 9 adds explicit zero-or-one board registration |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1`, `/2` or `/3` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors |
-| `board.json` | `pcbcraft-board/1` through `/10` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines |
+| `board.json` | `pcbcraft-board/1` through `/11` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -217,6 +217,12 @@ retain a footprint after its live component is deleted and preserves assets
 referenced only by accepted history. The [single-board update foundation](single-board-update.md)
 defines the codec and current engine-only limitations; older readers refuse this
 format instead of dropping retained physical state.
+
+Board format 11 retains that baseline while allowing desired assignments to differ
+from accepted placements. It is required exactly when package intent is pending;
+Apply or resetting intent to accepted values removes that difference. Desired
+mappings validate against live logical terminals and pinned package pads, while
+accepted footprint mappings validate independently against historical terminals.
 
 Board format 9 stores `graphics` with `layers` and `items` arrays. Items have
 independent UUIDs, a layer UUID, integer-nanometer `points`, and a `closed` flag.
