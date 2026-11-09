@@ -4,8 +4,38 @@ The engine command `pcb.initialize_update_baseline` explicitly adopts the curren
 board's package choices and schematic connectivity as an accepted baseline. This
 is the storage and retention foundation for [reviewed board updates](https://github.com/tangency-labs/pcbcraft/issues/55).
 The engine also provides preview, Apply and Cancel commands for later schematic
-differences, through headless and live MCP. An Update PCB dialog and ratsnest
-rendering remain separate frontend work.
+differences, through headless and live MCP. The native Update PCB dialog uses
+those same commands, and the [ratsnest](board-ratsnest.md) displays accepted
+connections.
+
+## Update dialog
+
+Open **Capture → PCB → Update PCB** from the schematic, or **Layout → Schematic →
+Update PCB** from the PCB workspace. Sheet and board Browser rows also offer
+**Update PCB from schematic…** in their context menus. Live MCP can open this same
+dialog with `app.update_pcb`, addressing the originating `view`; approval still
+uses the engine commands below.
+
+Opening or cancelling the review changes no authored data. If the project has no
+board, **Create board** explicitly creates its first PCB as a separate undoable
+edit. Existing footprints without an accepted baseline require **Use current
+state**, which records today's logical/package inputs; it cannot reconstruct an
+earlier accepted state. Cancelling a later preview does not undo either action.
+
+The review lists component additions/removals, old/new footprint and mapping
+details, changed connection groups and missing package choices. Assignment opens
+the existing package chooser and returns to explicit re-review. Apply is disabled
+for blockers, unchanged inputs or stale/replaced previews. Re-review stays within
+the same opening and original document; reopening or replacing the source requires
+closing the form and starting again. Cancel cannot revoke another client's newer
+preview.
+
+After **Apply update**, the dialog lists accepted unplaced footprints. **Place…**
+opens the existing coordinate-based placement chooser in the originating pane's
+PCB workspace. Reopening an up-to-date review offers the same unplaced list, so
+placement can continue after saving or closing the dialog. Changing a package
+choice from that handoff requires another explicit review and Apply. Updates
+never invent overlapping board coordinates or move an unchanged footprint.
 
 ## Preview and Apply
 
@@ -153,9 +183,9 @@ to inspect the accepted physical state.
 ## Following slices
 
 The engine normalizes all-sheet connectivity to stable component/terminal
-addresses without persisting every derived net as a stable ID. Native UI review,
-unplaced-part handoff and ratsnest rendering remain later work. Routing and
-manufacturing readiness are separate milestones.
+addresses without persisting every derived net as a stable ID. The native review,
+unplaced-part handoff and ratsnest use that accepted state; routing and
+manufacturing readiness remain separate milestones.
 
 Broader design boundaries are recorded in the [circuit instance contract](circuit-instances.md#package-intent-and-physical-acceptance)
 and [storage design](multiboard-storage.md). Repeated circuits, multiple boards,

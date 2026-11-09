@@ -358,10 +358,24 @@ map terminal 1 to pad 1 and terminal 2 to pad 2, then choose **Assign** and
 open **Layout → Components → Footprints**, select the component, enter X/Y and
 choose **Place on board**. Assignment and placement are separate undo steps;
 save/reopen retains the package and mapping offline. The chooser also supports
-assigning an unassigned component directly from PCB layout. Already placed
-packages remain read-only pending reviewed board updates. See the
+assigning an unassigned component directly from PCB layout. On a board with
+recorded accepted state, changing a placed package records a proposal for the
+next reviewed update. See the
 [footprint contract](footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
+
+To forward a captured schematic, choose **Capture → PCB → Update PCB**; from PCB
+layout use **Layout → Schematic → Update PCB**. **Create board** explicitly adds
+the first PCB when needed. Existing footprints without recorded accepted state
+first require **Use current state**, which adopts today's schematic, packages and
+connections as the starting point rather than reconstructing earlier history.
+Resolve missing footprint choices, review the component and connection changes,
+then choose **Apply update**. New accepted parts remain in **Unplaced footprints**;
+**Place…** opens their existing X/Y placement form. Cancel leaves the preview
+unapplied, while a board creation or current-state adoption remains its own
+undoable edit. Later edits or another client's preview require **Review again**;
+a reopened or replaced project requires a fresh dialog.
+
 In **Layers → Board**, select **Board Edge**, then choose **Layout → Draw → Line**
 or **Rectangle**. Click successive vertices for a line path; click its first vertex
 to close it, or press **Enter** to finish an open path. Rectangle uses two opposite
@@ -377,9 +391,10 @@ a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.
 
 Arcs, slots, routing, individual pad selection and Flip view still need
-implementation. Removing the last schematic
-unit currently removes its footprint too; reviewed board updates are tracked
-separately in #55.
+implementation. After reviewed updates are initialized, removing the last
+schematic unit retains its footprint until an update accepts the removal. A
+legacy board retains its prior deletion behavior until explicit current-state
+adoption, so establish that starting point before editing its schematic.
 
 Share the entire project folder or its `.pc.zip` archive, rather than the entry
 point alone. Used symbol definitions are pinned so the recipient does not need

@@ -35,8 +35,13 @@ available built-in/project-pinned revisions. Legacy physical placements report
 their effective assignment without changing saved bytes; marker-only legacy
 placements remain explicit compatibility data.
 
-A placed package cannot be silently reassigned: its package and mapping stay
-read-only until reviewed board updates (#55) exist. The chooser does not register
+A placed package cannot be silently reassigned: after the board has an accepted
+state, **Assign** records a proposed package or mapping and **Update PCB from
+schematic** reviews and applies it. Existing boards without recorded accepted
+state first need explicit **Use current state** adoption in that dialog. Package
+choices opened from an update review return to that review before placement;
+accepted new parts remain unplaced until the user chooses coordinates.
+The chooser does not register
 folders, import external footprints or create library parts. Those source and
 library workflows remain under #92/#28. This slice supports the original starter
 packages and physical definitions already pinned into an opened project.

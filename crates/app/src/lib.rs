@@ -15,6 +15,7 @@ mod board_canvas;
 mod board_drawing;
 mod board_panels;
 mod board_setup;
+mod board_update;
 mod board_workspace;
 mod canvas_camera;
 mod definition_graphics;
@@ -162,6 +163,8 @@ enum Dialog {
     NetLabel(Box<net_labels::Edit>),
     /// Chooses and pins a package independently of board placement.
     Footprint(Box<footprint_assignment::Edit>),
+    /// A captured engine-owned schematic-to-PCB update review.
+    BoardUpdate(Box<board_update::Edit>),
     LayerColor(board_appearance::Edit),
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
@@ -1013,11 +1016,15 @@ impl PcbApp {
             self.begin_sheet_edit(source, command, sheet);
             return;
         }
+        if action == Action::UpdatePcb {
+            self.message = self.begin_board_update(source).err();
+            return;
+        }
         let Some(project) = self.session.project() else {
             return;
         };
         let valid = match &action {
-            Action::ManageSheet { .. } => false,
+            Action::ManageSheet { .. } | Action::UpdatePcb => false,
             Action::OpenDocument(_) => true,
             Action::Schematic { sheet, pick } => project.for_sheet(*sheet).is_some_and(|project| {
                 if pick.wire {
@@ -1038,7 +1045,7 @@ impl PcbApp {
         };
         self.views.bind(view);
         match action {
-            Action::OpenDocument(_) | Action::ManageSheet { .. } => {}
+            Action::OpenDocument(_) | Action::ManageSheet { .. } | Action::UpdatePcb => {}
             Action::Schematic { pick, .. } => {
                 if let Some(source) = self.views.active.input(&self.session) {
                     let at = pick.at;
@@ -1801,6 +1808,7 @@ impl PcbApp {
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
+            Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),

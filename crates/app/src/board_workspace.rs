@@ -97,6 +97,19 @@ impl PcbApp {
             self.begin_board_setup(self.views.active.id());
         }
         workspace::ribbon_separator(ui);
+        let update = RibbonTool {
+            icon: ToolIcon::Sync,
+            label: "Update PCB",
+            description: "Update PCB from schematic",
+            shortcut: "",
+            enabled: self.session.project().is_some() && self.views.active.input(&self.session).is_some(),
+            active: false,
+            toggle: false,
+        };
+        if workspace::ribbon_group(ui, "Schematic", &[update]).is_some() {
+            self.message = self.begin_board_update(self.views.active.id()).err();
+        }
+        workspace::ribbon_separator(ui);
         let selected = enabled && self.views.active.board.selection.len() == 1;
         let editing = self.views.active.board.draft.is_some();
         let edit_tools = [

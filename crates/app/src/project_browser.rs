@@ -50,6 +50,7 @@ pub(crate) enum Action {
     Schematic { sheet: SheetTarget, pick: Pick },
     Footprint { board: BoardTarget, id: String, at: Point },
     ManageSheet { command: &'static str, sheet: Option<SheetTarget> },
+    UpdatePcb,
 }
 
 impl Action {
@@ -60,7 +61,7 @@ impl Action {
             Self::OpenDocument(DocumentTarget::Board(_) | DocumentTarget::BoardWorkspace(_)) => Some("Open in PCB layout"),
             Self::Schematic { .. } => Some("Show in Schematic"),
             Self::Footprint { .. } => Some("Show in PCB layout"),
-            Self::ManageSheet { .. } => None,
+            Self::ManageSheet { .. } | Self::UpdatePcb => None,
         }
     }
 
@@ -70,7 +71,7 @@ impl Action {
             Self::OpenDocument(target) => Some(*target),
             Self::Schematic { sheet, .. } => Some(DocumentTarget::Sheet(*sheet)),
             Self::Footprint { board, .. } => Some(DocumentTarget::Board(*board)),
-            Self::ManageSheet { .. } => None,
+            Self::ManageSheet { .. } | Self::UpdatePcb => None,
         }
     }
 }
@@ -497,6 +498,10 @@ impl Tree<'_> {
                     && self.open_menu(ui, pick)
                 {
                     self.reset = Some(node);
+                }
+                if matches!(node, Node::Sheet(_) | Node::Board(_)) && ui.button("Update PCB from schematic…").clicked() {
+                    self.picked = Some(Action::UpdatePcb);
+                    ui.close();
                 }
                 if matches!(node, Node::Sheets | Node::Sheet(_))
                     && ui.add_enabled(self.sheet_count < pcbcraft_engine::sheets::MAX_SHEETS, egui::Button::new("New Sheet…")).clicked()
