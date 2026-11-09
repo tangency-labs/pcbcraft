@@ -207,7 +207,7 @@ impl Tokens {
             error: Color32::from_rgb(190, 40, 40),
             canvas: Color32::from_rgb(240, 243, 247),
             canvas_ink: Color32::from_rgb(110, 116, 128),
-            canvas_grid: Color32::from_rgb(194, 201, 211),
+            canvas_grid: Color32::from_rgb(135, 148, 166),
             schematic_wire: Color32::from_rgb(20, 112, 75),
             schematic_highlight: Color32::from_rgb(145, 88, 12),
             board_canvas: Color32::from_rgb(0, 16, 32),

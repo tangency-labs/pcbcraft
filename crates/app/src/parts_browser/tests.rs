@@ -4,9 +4,10 @@ use egui::{Key, Modifiers};
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-/// Open the real chooser at a requested viewport, leaving project state untouched.
+/// Open the real chooser in explicit one-shot mode for independent catalog interaction cases.
 fn editor(width: f32) -> egui_kittest::Harness<'static, PcbApp> {
     let mut app = PcbApp::default();
+    app.parts.set_repeat(false);
     app.run("project.new", &json!({}));
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(width, 800.))
@@ -344,7 +345,7 @@ fn compact_state_restores_without_restoring_modal_or_input_authority() {
     previous.as_object_mut().unwrap().remove("repeat");
     let previous: PartsState = serde_json::from_value(previous).unwrap();
     assert!(!PartsBrowser::from_state(&previous).open);
-    assert!(!PartsBrowser::from_state(&previous).repeats());
+    assert!(PartsBrowser::from_state(&previous).repeats());
     click(&mut h, "Dock Parts Catalog");
     let saved = h.state().parts.saved_state();
     let restored = PartsBrowser::from_state(&saved);

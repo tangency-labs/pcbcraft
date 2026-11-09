@@ -107,7 +107,7 @@ fn wire_tool_finishes_on_a_segment() {
         }
     }
     assert_eq!(h.state().message, None);
-    assert!(h.state().views.active.schematic.tool.is_none());
+    assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::Wire { start: None, .. })));
     let project = h.state().session.project().unwrap();
     assert_eq!(project.wires().len(), 3);
     assert_eq!(project.connectivity().nets.len(), 1);
@@ -141,16 +141,16 @@ fn wire_tool_heals_a_return_to_the_connected_trunk() {
         }
     }
     assert_eq!(h.state().message, None);
-    assert!(h.state().views.active.schematic.tool.is_none());
+    assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::Wire { start: None, .. })));
     assert_eq!(routes(&h), vec![vec![grid(2, 12), grid(6, 12)], vec![grid(6, 12), grid(14, 12)], vec![grid(-10, 0), grid(6, 0), grid(6, 12)]]);
     click(&mut h, "Undo");
     crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
 }
 
-/// The remembered menu toggle affects actual W gestures without adding document history.
+/// The remembered Preferences toggle affects actual W gestures without adding document history.
 /// Off retains a loop; explicit Heal still removes it and Undo brings the loop back.
 #[test]
-fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
+fn auto_heal_preferences_control_same_wire_shortcuts_and_persist() {
     for automatic in [false, true] {
         let mut h = harness();
         h.state_mut().session.apply("project.new", &json!({"name":"Optional healing"})).unwrap();
@@ -167,8 +167,10 @@ fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
         assert!(h.state().preferences.auto_heal_wires);
         let before = h.state().session.snapshot().unwrap();
         if !automatic {
-            click(&mut h, "Modify menu");
-            click(&mut h, "Auto-heal wires");
+            click(&mut h, "Preferences");
+            click(&mut h, "Schematic");
+            click(&mut h, "Enabled");
+            click(&mut h, "OK");
             assert!(!h.state().preferences.auto_heal_wires);
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
             let restored = crate::preferences::Preferences::parse(&h.state().preferences.to_text());
@@ -188,7 +190,7 @@ fn auto_heal_menu_controls_same_wire_shortcuts_and_persists() {
             }
         }
         assert_eq!(h.state().message, None);
-        assert!(h.state().views.active.schematic.tool.is_none());
+        assert!(matches!(h.state().views.active.schematic.tool, Some(crate::Tool::Wire { start: None, .. })));
         assert_eq!(h.state().session.project().unwrap().wires().len(), if automatic { 2 } else { 5 });
         if !automatic {
             let looped = h.state().session.snapshot().unwrap();

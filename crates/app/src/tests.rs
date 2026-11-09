@@ -19,6 +19,7 @@ mod detached_editors;
 mod display_units;
 mod editor_views;
 mod footprint_assignment;
+mod grab;
 mod grid_spacing;
 mod hierarchy;
 mod multiple_sheets;
@@ -31,6 +32,7 @@ mod ribbon;
 mod save_changes;
 mod selection_filters;
 mod split_editors;
+mod tool_modes;
 
 /// Compare restored authored state while preserving the allocation metadata retained by Undo.
 /// Rejected commands, cancelled gestures and no-ops must still use exact snapshot comparisons.
@@ -52,10 +54,12 @@ pub(crate) fn assert_same_content(expected: &Arc<pcbcraft_engine::Project>, actu
     assert_eq!(actual, expected);
 }
 
-/// Start editor-control tests without the filter overlay over their coordinate fixtures.
+/// Start editor-control fixtures in explicit one-shot placement without the filter overlay.
+/// Tool-mode tests exercise shipped repeating defaults separately.
 /// Filter tests opt in explicitly; startup tests exercise the real constructor and visible defaults.
 pub(super) fn harness<'a>() -> Harness<'a, PcbApp> {
     let mut app = PcbApp::default();
+    app.parts.set_repeat(false);
     for view in app.views.all_mut() {
         view.filters_open = false;
     }
@@ -773,6 +777,49 @@ fn preferences_cancel_restores_and_apply_keeps() {
     assert_eq!(harness.state().preferences().theme, ThemeChoice::Dark);
 }
 
+/// Cleanup is discoverable in Preferences and shares the ribbon's saved setting. Cancel
+/// restores it, Apply keeps it, and page defaults do not change the project or appearance.
+#[test]
+fn schematic_cleanup_preferences_share_the_menu_setting() {
+    let mut h = harness();
+    new_project(&mut h);
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    assert!(h.state().preferences.auto_heal_wires);
+    click(&mut h, "Preferences");
+    click(&mut h, "Schematic");
+    assert_eq!(h.get_by_label("Enabled").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    click(&mut h, "Enabled");
+    assert!(!h.state().preferences.auto_heal_wires);
+    click(&mut h, "Cancel");
+    assert!(h.state().preferences.auto_heal_wires);
+
+    click(&mut h, "Preferences");
+    click(&mut h, "Schematic");
+    click(&mut h, "Enabled");
+    click(&mut h, "Apply");
+    click(&mut h, "Restore page defaults");
+    assert!(h.state().preferences.auto_heal_wires);
+    click(&mut h, "Cancel");
+    assert!(!h.state().preferences.auto_heal_wires);
+    assert!(!crate::preferences::Preferences::parse(&h.state().preferences.to_text()).auto_heal_wires);
+    choose(&mut h, "Modify menu", "Auto-heal wires");
+    assert!(h.state().preferences.auto_heal_wires);
+
+    click(&mut h, "Preferences");
+    h.get_by_role(egui::accesskit::Role::TextInput).click();
+    h.run();
+    h.get_by_role(egui::accesskit::Role::TextInput).type_text("smart routing");
+    h.run();
+    h.run();
+    h.get_by_label("Auto-heal wires");
+    click(&mut h, "Enabled");
+    click(&mut h, "OK");
+    assert!(!h.state().preferences.auto_heal_wires);
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
 /// Adding an agent from the AI page returns to the same Preferences window, so Cancel there
 /// still puts back changes made before the agent dialog opened.
 #[test]
@@ -835,7 +882,7 @@ fn preferences_search_filters_rows_across_pages() {
     harness.get_by_label("Theme");
     assert!(harness.query_by_label("Zoom speed").is_none());
 
-    search(&mut harness, "wire");
+    search(&mut harness, "Draw wire");
     harness.get_by_label("Draw wire");
     harness.key_press(Key::Enter);
     harness.run();
@@ -1393,7 +1440,7 @@ fn the_symbol_context_menu_rotates_and_edits() {
 }
 
 fn open_wire_context(harness: &mut Harness<'_, PcbApp>) {
-    let point = canvas_center(harness) + egui::vec2(80.0, 26.0);
+    let point = canvas_center(harness) + egui::vec2(80.0, 100.0);
     harness.hover_at(point);
     harness.run();
     for pressed in [true, false] {
@@ -1453,6 +1500,8 @@ fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
     click(&mut harness, "Draw wire (W)");
     click_pin(&mut harness, 0, 1);
     click_pin(&mut harness, 1, 0);
+    harness.key_press(Key::Escape);
+    harness.run();
     let before = harness.state().session().snapshot().unwrap();
     let revision = harness.state().session().revision();
     let start = canvas_center(&harness);
@@ -1896,7 +1945,9 @@ fn free_wire_gesture_finishes_saves_and_deletes_with_shared_history() {
     harness.run();
     harness.key_press(Key::Enter);
     harness.run();
-    assert!(harness.state().views.active.schematic.tool.is_none());
+    assert!(matches!(harness.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+    harness.key_press(Key::Escape);
+    harness.run();
     let before = harness.state().session().snapshot().unwrap();
     assert_eq!(before.wires().len(), 1);
     let path = before.wire_path(&before.wires()[0]);

@@ -13,7 +13,7 @@ catalog name does not create a separate net. Each drawing retains its style when
 its net name is edited.
 
 Choose **Place**, then click to place the anchor. **R** turns its preview
-counterclockwise in quarter turns, and **Esc** or right-click cancels. Hover a
+counterclockwise in quarter turns, and **Esc** or right-click → **Cancel** cancels. Hover a
 placed marker and use **E** for properties, **M** to pick it up, **R** to rotate or
 **Delete** to remove it. Drag an ordinary label or a power symbol's drawing to move
 the anchor, releasing to finish; Escape or releasing outside the canvas cancels
@@ -24,7 +24,8 @@ confirms property changes. Each completed placement, move, property change or
 deletion is one shared undo step. Cancelled previews and forms leave project data
 unchanged; stale forms cannot replace newer work.
 
-The catalog's **Repeat placement** keeps new markers active after each placement,
+The catalog's **Repeat placement**, also available in the active tool's right-click
+menu, keeps new markers active after each placement and is enabled by default for new settings,
 with fresh IDs and the same name/rotation until **Esc**. Moving an existing marker
 remains one edit regardless of that setting.
 

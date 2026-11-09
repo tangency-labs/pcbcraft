@@ -537,12 +537,17 @@ impl PcbApp {
         let Some(id) = self.views.active.schematic.selection.single_symbol().map(str::to_owned) else { return };
         let revision = self.session.revision();
         match action {
-            SymbolAction::DisconnectMove => {
+            SymbolAction::Grab | SymbolAction::DisconnectMove => {
                 if let Some(symbol) =
                     self.views.active.snapshot(&self.session).and_then(|project| project.symbols().iter().find(|symbol| symbol.id() == id).cloned())
                 {
-                    self.views.active.schematic.tool =
-                        Some(Tool::Move { symbol: symbol.clone(), offset: egui::Vec2::ZERO, revision, disconnect: true });
+                    self.views.active.schematic.tool = Some(Tool::Move {
+                        symbol: symbol.clone(),
+                        offset: egui::Vec2::ZERO,
+                        revision,
+                        disconnect: matches!(action, SymbolAction::DisconnectMove),
+                        pickup: true,
+                    });
                 }
             }
             SymbolAction::Rotate => self.run(ROTATE_SYMBOL, &json!({"symbol": id, "expected_revision": revision})),
@@ -1132,8 +1137,10 @@ impl PcbApp {
                         Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
+                        Tool::Move { pickup: true, .. } => dim("Grab symbol · Click to place · Esc cancel"),
                         Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
                         Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
+                        Tool::Reshape { drag, .. } if drag.pickup => dim("Grab wire · Click to place · Esc cancel"),
                         Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
                         Tool::BoxSelect { .. } => dim("Select items · Esc to cancel"),
                         Tool::Wire { start: None, .. } => dim("Wire · Click a start point"),
@@ -1297,6 +1304,8 @@ impl PcbApp {
                             self.preferences.navigation,
                             self.preferences.grid_opacity_percent,
                             self.preferences.auto_heal_wires,
+                            self.parts.repeats(),
+                            self.preferences.units,
                             &self.views.active.schematic.wire_draft,
                             &label,
                             edited.as_ref(),
@@ -1335,6 +1344,7 @@ impl PcbApp {
             return;
         }
         match (self.views.active.schematic.tool.clone(), click) {
+            (_, Click::ToolAction(action, ctx)) => self.canvas_tool_action(&ctx, action),
             (None, Click::GrabField(drag)) => {
                 self.select(Selection::one_symbol(drag.symbol.clone()));
                 self.views.active.schematic.tool = Some(Tool::Field { drag, revision: source.revision });
@@ -1431,16 +1441,16 @@ impl PcbApp {
                             &json!({"from": from.inspect(), "to": to.inspect(), "bends": &path[1..path.len()-1], "expected_revision": revision}),
                         );
                         if self.message.is_none() {
-                            self.views.active.schematic.tool = None;
+                            self.begin_wire();
                         }
                     } else if !self.views.active.schematic.wire_draft.corner(a, b, self.preferences.auto_heal_wires) {
                         self.message = Some("Wire has too many corners; finish it before continuing.".to_owned());
                     }
                 }
             }
-            (None, Click::Grab(symbol, offset)) => {
+            (None | Some(Tool::Wire { start: None, .. }), Click::Grab(symbol, offset, pickup)) => {
                 self.select(Selection::one_symbol(symbol.id()));
-                self.views.active.schematic.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision(), disconnect: false });
+                self.views.active.schematic.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision(), disconnect: false, pickup });
             }
             (None, Click::StartBox(drag)) => {
                 self.views.active.schematic.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
@@ -1465,7 +1475,7 @@ impl PcbApp {
                     self.run(pcbcraft_engine::MOVE_ITEMS, &json!({"items":items,"dx_nm":delta.x_nm,"dy_nm":delta.y_nm,"expected_revision":revision}));
                 }
             }
-            (None, Click::GrabReshape(drag)) => {
+            (None | Some(Tool::Wire { start: None, .. }), Click::GrabReshape(drag)) => {
                 if let pcbcraft_engine::wire::Reshape::Segment { wire, at } = &drag.edit {
                     if let Some(leg) = self
                         .views
@@ -1522,6 +1532,48 @@ impl PcbApp {
             }
             _ => {}
         }
+    }
+
+    /// Context menus share the same catalog, drawing and preview handlers as ribbon actions.
+    /// These actions never publish authored data; placement still uses validated canvas input.
+    fn canvas_tool_action(&mut self, ctx: &egui::Context, action: schematic_canvas::ToolAction) {
+        use schematic_canvas::ToolAction;
+        match action {
+            ToolAction::Symbols => self.parts.focus_search(),
+            ToolAction::Wire => self.begin_wire(),
+            ToolAction::Ground => self.begin_ground(ctx),
+            ToolAction::SelectAll => self.select_all_schematic(),
+            ToolAction::UnselectAll => self.select(Selection::default()),
+            ToolAction::Fit => self.views.active.camera.request_fit(),
+            ToolAction::Grid(spacing) => self.set_view_grid(self.views.active.id(), spacing),
+            ToolAction::Repeat(repeat) => self.parts.set_repeat(repeat),
+            ToolAction::FlipWire => {
+                self.views.active.schematic.wire_draft.horizontal_first = !self.views.active.schematic.wire_draft.horizontal_first;
+            }
+            ToolAction::Rotate => match &mut self.views.active.schematic.tool {
+                Some(Tool::PlaceSymbol { turns, .. }) => *turns = (*turns + 1) % 4,
+                Some(Tool::NetLabel { label, .. }) if label.id == 0 => label.rotation = (label.rotation + 90) % 360,
+                _ => {}
+            },
+            ToolAction::Cancel => {
+                self.views.active.schematic.tool = None;
+                self.views.active.schematic.wire_draft = schematic_canvas::Draft::default();
+                self.message = None;
+            }
+        }
+    }
+
+    /// Select supported items on the focused sheet, respecting its category filters. No model
+    /// data or revision changes; cross-probe highlights never supply editing targets.
+    fn select_all_schematic(&mut self) {
+        let Some(project) = self.views.active.snapshot(&self.session) else { return };
+        let mut selected = Selection {
+            symbols: project.symbols().iter().map(|symbol| symbol.id()).collect(),
+            wires: project.wires().iter().map(|wire| wire.id()).collect(),
+            net_labels: project.net_labels().iter().map(|label| label.object_id()).collect(),
+        };
+        self.views.active.filters.retain(&mut selected, Some(&project));
+        self.select(selected);
     }
 
     /// Route shortcuts only from the addressed view, outside text fields and dialogs. A different
@@ -2154,7 +2206,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("Schematic", "Place hierarchical label", key(&ADD_HIERARCHICAL_LABEL)));
     list.push(("Schematic", "Draw wire", key(&ADD_WIRE)));
     list.push(("Schematic", "Disconnect and move symbol", "M".to_owned()));
-    list.push(("Schematic", "Drag wire segment", "G".to_owned()));
+    list.push(("Schematic", "Grab connected symbol or wire", "G".to_owned()));
     list.push(("Schematic", "Rotate symbol or hovered field", key(&ROTATE)));
     list.push(("Schematic", "Open component datasheet", "D".to_owned()));
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));

@@ -114,10 +114,12 @@ pub fn context<R>(response: &Response, add: impl FnOnce(&mut Ui) -> R) -> Option
     })
 }
 
-/// Draw a divider across the popup between groups of related actions.
+/// Draw a divider across the popup without expanding its provisional sizing-pass width.
+/// Once content is measured, dividers fill the same width as the menu rows.
 pub fn separator(ui: &mut Ui) {
     let t = Tokens::get();
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), t.space_8 + 1.0), Sense::hover());
+    let width = if ui.is_sizing_pass() { ui.min_rect().width() } else { ui.available_width() };
+    let (r, _) = ui.allocate_exact_size(vec2(width, t.space_8 + 1.0), Sense::hover());
     ui.painter().hline(r.x_range(), r.center().y, egui::Stroke::new(1.0, t.border));
 }
 
@@ -135,6 +137,26 @@ pub struct MenuItem<'a> {
 }
 
 impl<'a> MenuItem<'a> {
+    /// Open nested choices from the shared row painter, retaining egui's submenu behavior
+    /// and the Craft popup surface. Disabled rows cannot open a submenu.
+    pub fn submenu<R>(&self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
+        let response = self.row(ui);
+        if !self.enabled || !ui.is_enabled() {
+            return None;
+        }
+        ui.scope(|ui| {
+            let surface = frame();
+            let style = ui.style_mut();
+            style.spacing.menu_margin = surface.inner_margin;
+            style.visuals.menu_corner_radius = surface.corner_radius;
+            style.visuals.popup_shadow = surface.shadow;
+            style.visuals.window_fill = surface.fill;
+            style.visuals.window_stroke = surface.stroke;
+            egui::containers::menu::SubMenu::default().show(ui, &response, add)
+        })
+        .inner
+    }
+
     /// Start with an enabled text row. Use the builders to add a glyph or shortcut.
     pub fn new(label: &'a str) -> Self {
         Self { label, shortcut: "", enabled: true, icon: None, tool: None, checked: None }

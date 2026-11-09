@@ -72,11 +72,19 @@ pub(crate) struct ReshapeDrag {
     /// have no axis constraint, like corners and free-end handles.
     horizontal: Option<bool>,
     origin: Point,
+    /// G/context pickup finishes on a click; pointer dragging finishes on its held release.
+    pub(crate) pickup: bool,
     /// Transient suppression of contacts occupied when a detached straight piece is grabbed.
     departure: std::rc::Rc<RefCell<departure::Departure>>,
 }
 
 impl ReshapeDrag {
+    /// Capture geometry and the departure guard only after an unambiguous handle is picked.
+    fn new(project: &Project, wire: &str, edit: Reshape, grabbed: Point, horizontal: Option<bool>, origin: Point) -> Self {
+        let departure = std::rc::Rc::new(RefCell::new(departure::Departure::new(project, wire, &edit)));
+        Self { wire: wire.to_owned(), edit, grabbed, horizontal, origin, pickup: false, departure }
+    }
+
     /// Resolve a drag destination using drawing's unambiguous pin/junction hit test for a
     /// movable endpoint. Other handles and empty space keep their snapped pointer travel.
     /// The source itself is never an attachment target; coincident candidates cancel the drop.
@@ -152,10 +160,7 @@ pub(super) fn reshape_at(project: &Project, camera: &Camera, rect: Rect, wire: &
     let found = project.wires().iter().find(|candidate| candidate.id() == wire)?;
     let route = project.wire_path(found);
     let near = |point: Point| camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_HANDLE_HIT_RADIUS;
-    let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| {
-        let departure = std::rc::Rc::new(RefCell::new(departure::Departure::new(project, wire, &edit)));
-        ReshapeDrag { wire: wire.to_owned(), edit, grabbed, horizontal, origin, departure }
-    };
+    let drag = |edit: Reshape, grabbed: Point, horizontal: Option<bool>| ReshapeDrag::new(project, wire, edit, grabbed, horizontal, origin);
     for end in found.endpoints() {
         if let WireEndpoint::Junction(id) = end
             && let Some(point) = project.endpoint_position(end)
@@ -172,6 +177,49 @@ pub(super) fn reshape_at(project: &Project, camera: &Camera, rect: Rect, wire: &
     let at = leg.inside();
     let constraint = (!project.wire_moves_freely(wire)).then_some(a.y_nm == b.y_nm);
     Some(drag(Reshape::Segment { wire: wire.to_owned(), at }, at, constraint))
+}
+
+/// Pick the nearest free endpoint, junction or corner across all wires using the node hit area,
+/// without requiring a prior stroke selection. Several routes sharing one junction are one
+/// handle; tied distinct identities are ambiguous and cannot start a move. Pins stay on parts.
+pub(super) fn handle_at(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, origin: Point) -> Result<Option<ReshapeDrag>, ()> {
+    let mut best: Option<(String, Reshape, Point, f32)> = None;
+    let mut ambiguous = false;
+    let mut consider = |wire: &str, edit: Reshape, point: Point| {
+        let distance = camera.screen(point, rect).distance_sq(pointer);
+        if distance > theme::SCHEMATIC_PIN_HIT_RADIUS.powi(2) {
+            return;
+        }
+        if let Some((_, previous, _, nearest)) = &best {
+            if (distance - nearest).abs() < 0.01 {
+                ambiguous |= previous != &edit;
+                return;
+            }
+            if distance > *nearest {
+                return;
+            }
+        }
+        best = Some((wire.to_owned(), edit, point, distance));
+        ambiguous = false;
+    };
+    for wire in project.wires() {
+        let id = wire.id();
+        for end in wire.endpoints() {
+            if let WireEndpoint::Junction(junction) = end
+                && let Some(point) = project.endpoint_position(end)
+            {
+                consider(&id, Reshape::Junction(junction), point);
+            }
+        }
+        let route = project.wire_path(wire);
+        for &at in route.get(1..route.len().saturating_sub(1)).unwrap_or_default() {
+            consider(&id, Reshape::Corner { wire: id.clone(), at }, at);
+        }
+    }
+    if ambiguous {
+        return Err(());
+    }
+    Ok(best.map(|(wire, edit, point, _)| ReshapeDrag::new(project, &wire, edit, point, None, origin)))
 }
 
 /// Draw the handles of the selected wire: a square on each interior corner, and an outlined
