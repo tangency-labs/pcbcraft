@@ -182,13 +182,14 @@ fn islands(lands: &[Land], tracks: &[Track]) -> (Copper, Vec<Vec<usize>>) {
     (copper, members)
 }
 
-/// Whether a track's copper reaches a convex pad land: an end inside it, or the land's center
-/// within half the track width of the centerline. Corners arrive in boundary order.
+/// Whether a track's copper overlaps a convex pad land: an end inside it, or the centerline
+/// within half the track width of any land edge. A centerline crossing an edge has distance
+/// zero, so a track passing over the land off-center counts. Corners arrive in boundary order.
 fn touches_land(track: &Track, corners: &[Point; 4]) -> bool {
-    let center = Point { x_nm: corners.iter().map(|p| p.x_nm).sum::<i64>() / 4, y_nm: corners.iter().map(|p| p.y_nm).sum::<i64>() / 4 };
+    let half = track.width_nm as f64 / 2.;
     inside(track.start, corners)
         || inside(track.end, corners)
-        || segment_distance(track.start, track.end, center, center) <= track.width_nm as f64 / 2.
+        || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| segment_distance(track.start, track.end, *a, *b) <= half)
 }
 
 /// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.

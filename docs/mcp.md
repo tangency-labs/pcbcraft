@@ -158,10 +158,12 @@ one undo step. Deleting takes `tracks`, unique segment UUIDs from
 `project.boards[].tracks`. A route is refused whole when a point is out of range,
 neighbors repeat, the layer is not copper in the board setup, or its copper would
 join pads on two different nets (the error names both). Only copper the new route
-touches is checked, so a short left by an earlier edit does not block unrelated routes. Copper connects where it
-overlaps on a shared layer, and the board ratsnest drops airwires between
-terminals already joined by tracks. This is not a clearance or DRC check. Live `view.set_layer` uses the same
-Layers handler for `active` and `visible` changes on an addressed view; those
+touches is checked, so a short left by an earlier edit does not block unrelated routes.
+Copper connects where it overlaps on a shared layer, and the board ratsnest drops
+airwires between terminals already joined by tracks. This is not a clearance or DRC
+check.
+
+Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.
 `view.set_layer_visibility` takes `view` and `mode` (`all` or `active`) through the
 same handler as Show all / Isolate active. Isolation reveals the active layer,
