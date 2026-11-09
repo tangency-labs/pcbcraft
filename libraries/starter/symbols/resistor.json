@@ -1,10 +1,10 @@
 {
   "format": "pcbcraft-symbol/1",
   "id": "resistor",
-  "revision": 2,
+  "revision": 3,
   "name": "Resistor",
   "reference_prefix": "R",
-  "default_value": "1k",
+  "default_value": "R",
   "terminals": [
     {"id": "1", "electrical_type": "passive"},
     {"id": "2", "electrical_type": "passive"}

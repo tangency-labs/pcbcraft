@@ -30,7 +30,7 @@ impl Filters {
     pub(super) fn allows_net_label(self, style: pcbcraft_engine::net_labels::Style) -> bool {
         use pcbcraft_engine::net_labels::Style;
         match style {
-            Style::Power | Style::Ground => self.symbols,
+            Style::Power | Style::PowerBar | Style::Ground => self.symbols,
             Style::Local | Style::Global => self.labels,
         }
     }

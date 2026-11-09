@@ -45,6 +45,8 @@ pub enum ToolIcon {
     Circle,
     Subsheet,
     Power,
+    /// Original three-bar ground marker for direct placement actions.
+    Ground,
     Text,
     Bus,
     NetLabel,
@@ -1150,6 +1152,12 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
     let stroke = |width: f32, color| Stroke::new(width * size / 64.0, color);
     let line = |points: &[(f32, f32)], stroke: Stroke| p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
     match icon {
+        ToolIcon::Ground => {
+            line(&[(32., 10.), (32., 29.)], stroke(3., ink));
+            for (y, width) in [(29., 18.), (39., 12.), (49., 6.)] {
+                line(&[(32. - width, y), (32. + width, y)], stroke(3., ink));
+            }
+        }
         ToolIcon::Line => {
             line(&[(10., 50.), (54., 14.)], stroke(4., ink));
             p.circle_filled(at(10., 50.), 4. * size / 64., accent);

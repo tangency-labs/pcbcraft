@@ -166,3 +166,97 @@ fn legacy_typed_uuid_collision_keeps_a_readable_compatibility_encoding() {
     }
     assert_eq!(session.project().unwrap().board.footprints().len(), 2);
 }
+
+/// Component metadata and explicit zero/one ownership use a combined vocabulary;
+/// no reader may reinterpret its fields under either separate predecessor schema.
+#[test]
+fn metadata_and_optional_board_ownership_round_trip_with_strict_combined_schema() {
+    use crate::schematic::fields::Metadata;
+    for create_board in [false, true] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":create_board})).unwrap();
+        session.apply(crate::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        let before = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
+        let target = session.project().unwrap().board_target();
+        let mut metadata = Metadata::default();
+        metadata.attributes.do_not_populate = true;
+        session
+            .apply(
+                crate::SET_SYMBOL_FIELDS,
+                &json!({"symbol":"symbol-2","reference":"R1","value":"10k","metadata":metadata,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+        let documents = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
+        let header: Value = serde_json::from_slice(&documents["project.pc"]).unwrap();
+        assert_eq!(header["format"], "pcbcraft-project/12");
+        assert_eq!(header["boards"].as_array().unwrap().len(), usize::from(create_board));
+        assert_eq!(documents.contains_key("board.json"), create_board);
+        let loaded = persistence::decode_documents(&documents).unwrap();
+        assert_eq!(loaded.board_target(), target);
+        assert_eq!(persistence::encode_documents(loaded.clone()).unwrap(), documents);
+        let packed = persistence::encode_packed(loaded).unwrap();
+        assert_eq!(persistence::encode_documents(persistence::decode_packed(&packed).unwrap().project).unwrap(), documents);
+        assert!(persistence::encode(session.snapshot().unwrap()).is_err());
+        for mutation in 0..4 {
+            let mut malformed = documents.clone();
+            let mut entry = header.clone();
+            match mutation {
+                0 => entry["format"] = json!("pcbcraft-project/9"),
+                1 => entry["format"] = json!("pcbcraft-project/11"),
+                2 => {
+                    entry.as_object_mut().unwrap().remove("boards");
+                }
+                _ => {
+                    entry.as_object_mut().unwrap().remove("numeric_id_high_water");
+                }
+            }
+            malformed.insert("project.pc".into(), serde_json::to_vec(&entry).unwrap());
+            assert!(persistence::decode_documents(&malformed).is_err(), "mutation {mutation}");
+        }
+        session.apply("edit.undo", &json!({})).unwrap();
+        assert_eq!(persistence::encode_documents(session.snapshot().unwrap()).unwrap(), before);
+        session.apply("edit.redo", &json!({})).unwrap();
+        assert_eq!(persistence::encode_documents(session.snapshot().unwrap()).unwrap(), documents);
+    }
+}
+
+/// Legacy metadata keeps its implicit board and format-11 bytes until an actual
+/// physical edit registers the same board identity under the combined schema.
+#[test]
+fn legacy_metadata_remains_version_11_until_the_first_physical_edit() {
+    let legacy = persistence::decode(include_bytes!("../../../../app/tests/fixtures/two-resistors.pc")).unwrap();
+    let mut session = Session::default();
+    session.open_snapshot(legacy);
+    let target = session.project().unwrap().board_target().unwrap();
+    let mut metadata = crate::schematic::fields::Metadata::default();
+    metadata.attributes.do_not_populate = true;
+    session
+        .apply(
+            crate::SET_SYMBOL_FIELDS,
+            &json!({"symbol":"symbol-2","reference":"R1","value":"1k","metadata":metadata,"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let before = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
+    let entry: Value = serde_json::from_slice(&before["project.pc"]).unwrap();
+    assert_eq!(entry["format"], "pcbcraft-project/11");
+    assert!(entry.get("boards").is_none());
+    let reopened = persistence::decode_documents(&before).unwrap();
+    assert_eq!(reopened.board_target(), Some(target));
+    assert_eq!(persistence::encode_documents(reopened.clone()).unwrap(), before);
+    session.open_snapshot(reopened);
+    session.apply(crate::PLACE_FOOTPRINT,&json!({"board":target.board,"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let after = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
+    let registered: Value = serde_json::from_slice(&after["project.pc"]).unwrap();
+    assert_eq!(registered["format"], "pcbcraft-project/12");
+    assert_eq!(registered["boards"][0]["id"], json!(target.board));
+    assert_eq!(registered["components"], entry["components"]);
+    let reopened = persistence::decode_documents(&after).unwrap();
+    assert_eq!(reopened.board_target(), Some(target));
+    assert_eq!(persistence::encode_documents(reopened).unwrap(), after);
+    session.apply("edit.undo", &json!({})).unwrap();
+    let undone = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
+    let undone_entry: Value = serde_json::from_slice(&undone["project.pc"]).unwrap();
+    assert_eq!(undone_entry["format"], "pcbcraft-project/11");
+    assert_eq!(undone_entry["components"], entry["components"]);
+    assert_eq!(session.project().unwrap().board_target(), Some(target));
+}

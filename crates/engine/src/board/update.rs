@@ -384,8 +384,21 @@ impl Baseline {
     }
 
     /// Resolve retained package bytes independently of live schematic membership.
+    /// When a live component names the exact same immutable symbol revision, its
+    /// pins must agree with historical terminals; distinct revisions and removed
+    /// sources retain their independently validated historical terminal contracts.
     pub fn validate_assets(&self, project: &Project) -> Result<(), String> {
-        for component in self.components.values() {
+        for (&id, component) in &self.components {
+            if let Some(live) = project.components.get(&id)
+                && component.library == live.definition.library
+                && component.definition == live.definition.id
+                && component.revision == live.definition.revision()
+            {
+                let live_terminals: BTreeSet<_> = live.definition.pins().iter().map(|pin| pin.number.as_str()).collect();
+                if component.terminals.iter().map(String::as_str).collect::<BTreeSet<_>>() != live_terminals {
+                    return Err("accepted terminal set contradicts the same pinned symbol revision".into());
+                }
+            }
             if let Some(package) = &component.package {
                 package.validate_assets(&project.board)?;
             }
