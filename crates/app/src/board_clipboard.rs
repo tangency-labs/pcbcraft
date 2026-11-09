@@ -295,39 +295,30 @@ impl PcbApp {
             self.dialog = Dialog::BoardPasteOptions(draft);
         }
     }
-    /// Paint a disposable candidate through the independent PCB renderer; navigation remains local
-    /// and only a primary placement click can request a real transaction.
-    pub(super) fn board_clipboard_canvas(&mut self, ui: &mut Ui, id: ViewId, enabled: bool, label: &str) {
-        let Some(project) = self.session.snapshot() else { return };
-        let Some(view) = self.views.view_mut(id) else { return };
-        let Some(mut placement) = view.board.clipboard.paste.clone() else { return };
+    /// Expire a ghost before allocating canvas layout, leaving a newly chosen authored tool
+    /// intact for the ordinary renderer. Text/modal/focus changes cannot consume placement keys.
+    pub(super) fn board_clipboard_ready(&mut self, ctx: &Context, id: ViewId, enabled: bool) -> bool {
+        let Some(view) = self.views.view_mut(id) else { return false };
+        let Some(placement) = view.board.clipboard.paste.as_ref() else { return false };
         let valid = enabled
             && !authored_tool(&view.board)
             && view.accepts(placement.source, &self.session)
-            && !ui.ctx().egui_wants_keyboard_input()
-            && !ui.input(|i| i.events.iter().any(|event| matches!(event, Event::WindowFocused(false))));
-        if !valid || ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            && !ctx.egui_wants_keyboard_input()
+            && !ctx.input(|i| i.events.iter().any(|event| matches!(event, Event::WindowFocused(false))));
+        if !valid || ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             view.board.clipboard = State::default();
-            if let Some(board) = view.board.target.and_then(|t| project.board_view(t)) {
-                let source = view.input(&self.session);
-                let _ = crate::board_canvas::show(
-                    ui,
-                    board,
-                    &mut view.camera,
-                    &mut view.board,
-                    source,
-                    &Default::default(),
-                    view.filters,
-                    &self.board_appearance,
-                    false,
-                    self.preferences.navigation,
-                    self.preferences.grid_opacity_percent,
-                    self.preferences.board_grid_style,
-                    label,
-                );
-            }
-            return;
+            return false;
         }
+        true
+    }
+
+    /// Paint a disposable candidate through the independent PCB renderer; navigation remains local
+    /// and only a primary placement click can request a real transaction. The host has already
+    /// granted this ghost the current canvas input through board_clipboard_ready.
+    pub(super) fn board_clipboard_canvas(&mut self, ui: &mut Ui, id: ViewId, label: &str) {
+        let Some(project) = self.session.snapshot() else { return };
+        let Some(view) = self.views.view_mut(id) else { return };
+        let Some(mut placement) = view.board.clipboard.paste.clone() else { return };
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
             placement.options.items.quarter_turns = (placement.options.items.quarter_turns + 1) % 4;
             view.board.clipboard.paste = Some(placement.clone());

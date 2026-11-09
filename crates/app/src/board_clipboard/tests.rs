@@ -315,9 +315,21 @@ fn clipboard_preview_yields_to_a_new_authored_tool() {
     h.run();
     click(&mut h, "Paste");
     let before = h.state().session.snapshot().unwrap();
-    let layer = h.state().views.active.board.active_layer.clone();
-    h.state_mut().views.active.board.drawing.start(crate::board_drawing::Tool::Lines, layer);
+    let project = h.state().session.project().unwrap();
+    let layer = project
+        .boards()
+        .next()
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Outline)
+        .unwrap()
+        .id
+        .to_string();
+    h.state_mut().views.active.board.active_layer = Some(layer.clone());
+    h.state_mut().views.active.board.drawing.start(crate::board_drawing::Tool::Lines, Some(layer));
     h.run();
     assert!(!h.state().views.active.board.clipboard.active());
+    assert_eq!(h.state().views.active.board.drawing.tool, Some(crate::board_drawing::Tool::Lines));
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }

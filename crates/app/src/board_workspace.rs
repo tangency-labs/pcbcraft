@@ -464,8 +464,10 @@ impl PcbApp {
         }
         let highlighted = self.views.board_highlight_for(id, &self.session);
         let label = if self.views.is_split() { format!("PCB canvas {}", id.0 + 1) } else { "PCB canvas".to_owned() };
-        if let Some(widget) = self.views.view(id).filter(|v| v.board.clipboard.active()).map(|v| v.widget_id()) {
-            ui.push_id(widget, |ui| shell::canvas(ui, |ui| self.board_clipboard_canvas(ui, id, enabled, &label)));
+        if self.board_clipboard_ready(ui.ctx(), id, enabled)
+            && let Some(widget) = self.views.view(id).map(|v| v.widget_id())
+        {
+            ui.push_id(widget, |ui| shell::canvas(ui, |ui| self.board_clipboard_canvas(ui, id, &label)));
             return;
         }
         let Some(project) = self.session.project() else {
