@@ -6,13 +6,29 @@ use pcbcraft_engine::{
 };
 use std::{
     fs::{self, File, OpenOptions},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
 mod folder;
 pub mod library;
 pub use folder::{load, save};
+
+/// Return the plain `C:\…` spelling of a Windows `\\?\C:\…` path when Windows reads that spelling
+/// as the same path, and `path` unchanged otherwise (#154). `std::fs::canonicalize` produces the
+/// `\\?\` form, which people don't recognise. It stays where the plain spelling would name
+/// something else: device names such as `CON.pc.zip`, names ending in a dot or space, and very
+/// long paths. Paths on other platforms never carry the prefix and pass through unchanged.
+pub fn plain_path_if_equivalent(path: PathBuf) -> PathBuf {
+    let plain = dunce::simplified(&path);
+    // dunce looks only at the text before a name's last dot when it checks device names, so
+    // `CON.pc.zip` passes it. Windows' own parser (GetFullPathNameW, behind `std::path::absolute`)
+    // reads that name as `\\.\CON`, so the plain form is used only if the parser returns it as is.
+    if plain != path && std::path::absolute(plain).is_ok_and(|parsed| parsed == plain) {
+        return plain.to_path_buf();
+    }
+    path
+}
 
 /// Windows' `FILE_ATTRIBUTE_HIDDEN`, which Explorer uses to hide a file.
 #[cfg(windows)]
@@ -50,8 +66,10 @@ pub fn preview(path: &Path) -> Result<Arc<Project>, String> {
 fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persistence::Documents, String>) -> Result<Arc<Project>, String> {
     let name = path.file_name().ok_or("Project path has no filename")?;
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let parent = fs::canonicalize(parent).map_err(|e| e.to_string())?;
-    let path = parent.join(name);
+    // Canonical so the desktop and CLI agree on one path, then plain where Windows reads it the
+    // same, so errors name the path people chose rather than its `\\?\` form (#154).
+    let path = plain_path_if_equivalent(fs::canonicalize(parent).map_err(|e| e.to_string())?.join(name));
+    let parent = path.parent().ok_or("Project path has no parent folder")?.to_path_buf();
     if name == ENTRY_POINT && parent.join(".pcbcraft-save").try_exists().map_err(|e| e.to_string())? {
         return decode_documents(&folder(&parent)?);
     }
@@ -208,5 +226,18 @@ mod tests {
         assert!(open(&root).unwrap_err().contains("Could not lock"));
         held.unlock().unwrap();
         assert_eq!(encode_documents(open(&root).unwrap()).unwrap(), documents);
+    }
+    /// Opening a folder through the shared reader, as `pcbcraft-cli mcp --project` does, names a
+    /// failing document by the path people use, not its Windows `\\?\` form (#154). The error
+    /// still names the file, so the person can find it.
+    #[test]
+    fn open_errors_name_documents_without_the_windows_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("oversized");
+        save(&root, None, &encode_documents(project()).unwrap(), &mut |_| Ok(())).unwrap();
+        fs::write(root.join("board.json"), vec![b' '; 17 * 1024 * 1024]).unwrap();
+        let error = open(&root).unwrap_err();
+        assert!(error.ends_with("board.json: exceeds size limit"), "{error}");
+        assert!(!error.contains(r"\\?\"), "{error}");
     }
 }

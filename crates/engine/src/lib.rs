@@ -374,6 +374,7 @@ impl Command {
 
 const NAME: Param = Param { required: true, name: "name", summary: "The project's name", kind: ParamKind::Name };
 const NEW_NAME: Param = Param { required: false, name: "name", summary: "The project's name (default Untitled)", kind: ParamKind::Name };
+const NEW_BOARD_NAME: Param = Param { required: false, name: "name", summary: "The board's name (default Board)", kind: ParamKind::Name };
 /// Compatibility command for callers that placed resistors before the symbol picker.
 pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
 /// Place the specified starter library symbol on the schematic.
@@ -549,7 +550,7 @@ const CATALOG: &[Command] = &[
         id: board::identity::CREATE_BOARD,
         title: "Create Board",
         summary: "Create the first physical board in a schematic-only project. Undoable.",
-        params: &[NEW_NAME, EXPECTED_REVISION],
+        params: &[NEW_BOARD_NAME, EXPECTED_REVISION],
     },
     Command {
         id: sheets::CREATE_SHEET,

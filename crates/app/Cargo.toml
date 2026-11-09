@@ -33,9 +33,6 @@ eframe = { workspace = true, features = ["wayland", "x11"] }
 rfd = "=0.17.2"
 tempfile = "=3.27.0"
 pcbcraft-storage = { workspace = true }
-# Windows `std::fs::canonicalize` returns `\\?\C:\…` paths. dunce removes that prefix where safe, so
-# Recent projects show the plain `C:\…` path people chose (#154).
-dunce = "=1.0.5"
 
 [dev-dependencies]
 winit = { version = "=0.30.13", default-features = false, features = ["wayland"] }
