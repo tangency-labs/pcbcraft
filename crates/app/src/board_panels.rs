@@ -168,9 +168,13 @@ pub(super) fn ordered_catalog(mut layers: Vec<Layer>, setup: Option<&pcbcraft_en
     layers
 }
 
-/// Retain older saved layer names while displaying the product's Board Edge terminology.
+/// Display previous default outline names as Board Outline without rewriting saved names or IDs.
 pub(super) fn layer_name(layer: &Layer) -> &str {
-    if layer.purpose == LayerPurpose::Outline && layer.name == "Board outline" { "Board Edge" } else { &layer.name }
+    if layer.purpose == LayerPurpose::Outline && matches!(layer.name.as_str(), "Board Edge" | "Board outline") {
+        "Board Outline"
+    } else {
+        &layer.name
+    }
 }
 
 /// Layer keys share the effective palette used by their supported canvas geometry.

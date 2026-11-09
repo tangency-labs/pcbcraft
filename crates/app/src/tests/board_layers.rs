@@ -19,6 +19,47 @@ fn layer(h: &Harness<'_, PcbApp>, name: &str) -> String {
     h.state().session.project().unwrap().boards().next().unwrap().layers().into_iter().find(|layer| layer.name == name).unwrap().id.to_string()
 }
 
+/// Old default names display consistently after reopening, without rewriting layer identities,
+/// drawings or saved bytes. Custom names remain visible as authored.
+#[test]
+fn legacy_outline_names_preserve_saved_geometry_and_custom_names() {
+    for (saved_name, displayed_name) in [("Board Edge", "Board Outline"), ("Board outline", "Board Outline"), ("Panel perimeter", "Panel perimeter")]
+    {
+        let mut h = board();
+        let outline = layer(&h, "Board Outline");
+        let mut setup = h.state().session.inspect()["project"]["board"]["setup"].clone();
+        for entry in setup["layers"].as_array_mut().unwrap() {
+            if entry["id"] == outline {
+                entry["name"] = json!(saved_name);
+            }
+        }
+        let revision = h.state().session.revision();
+        h.state_mut().session.apply(pcbcraft_engine::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":revision})).unwrap();
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .session
+            .apply(
+                pcbcraft_engine::ADD_DRAWING,
+                &json!({
+                    "layer":outline,"points":[{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0}],
+                    "closed":false,"expected_revision":revision
+                }),
+            )
+            .unwrap();
+        let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.state_mut().session.open_snapshot(pcbcraft_engine::persistence::decode_documents(&saved).unwrap());
+        let before = h.state().session.inspect();
+        h.run();
+        click(&mut h, &format!("Activate layer {displayed_name}"));
+        click(&mut h, "Draw lines on Board Outline");
+        h.get_by_label(&format!("Line · {displayed_name}"));
+        assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(outline.as_str()));
+        assert_eq!(layer(&h, saved_name), outline);
+        assert_eq!(h.state().session.inspect(), before);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
+    }
+}
+
 /// Picker, full rows and status agree; the visibility eye never activates a different layer.
 #[test]
 fn active_layer_picker_and_rows_share_state_without_document_edits() {
@@ -26,19 +67,19 @@ fn active_layer_picker_and_rows_share_state_without_document_edits() {
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
     let top = layer(&h, "Top");
-    let edge = layer(&h, "Board Edge");
+    let edge = layer(&h, "Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
     click(&mut h, "Active layer");
-    click(&mut h, "Board Edge");
+    click(&mut h, "Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(edge.clone()));
-    assert_eq!(h.get_by_label("Activate layer Board Edge").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
-    click(&mut h, "Draw lines on Board Edge");
-    h.get_by_label("Line · Board Edge");
-    click(&mut h, "Show layer Board Edge");
+    assert_eq!(h.get_by_label("Activate layer Board Outline").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    click(&mut h, "Draw lines on Board Outline");
+    h.get_by_label("Line · Board Outline");
+    click(&mut h, "Show layer Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(edge.clone()));
     assert!(h.state().views.active.board.hidden_layers.contains(&edge));
-    h.get_by_label("Board Edge (hidden)");
-    assert!(h.get_by_label("Draw lines on Board Edge").accesskit_node().is_disabled());
+    h.get_by_label("Board Outline (hidden)");
+    assert!(h.get_by_label("Draw lines on Board Outline").accesskit_node().is_disabled());
     click(&mut h, "Activate layer Top");
     assert_eq!(h.state().views.active.board.active_layer, Some(top));
     assert!(h.state().views.active.board.hidden_layers.contains(&edge));
@@ -52,9 +93,9 @@ fn active_layer_picker_and_rows_share_state_without_document_edits() {
 fn isolate_and_show_all_remain_view_local_and_reject_invalid_targets() {
     let mut h = board();
     let before = h.state().session.inspect();
-    let edge = layer(&h, "Board Edge");
-    click(&mut h, "Activate layer Board Edge");
-    click(&mut h, "Show layer Board Edge");
+    let edge = layer(&h, "Board Outline");
+    click(&mut h, "Activate layer Board Outline");
+    click(&mut h, "Show layer Board Outline");
     click(&mut h, "Isolate active");
     let records = h.state().session.project().unwrap().boards().next().unwrap().layers();
     assert_eq!(h.state().views.active.board.hidden_layers.len(), records.len() - 1);
@@ -78,7 +119,7 @@ fn isolate_and_show_all_remain_view_local_and_reject_invalid_targets() {
 fn compact_layers_reveal_the_active_row_after_resize() {
     let mut h = board();
     click(&mut h, "Active layer");
-    click(&mut h, "Board Edge");
+    click(&mut h, "Board Outline");
     h.set_size(egui::vec2(760., 560.));
     h.run();
     let header = h.get_by_label("Collapse Layers").rect();
@@ -87,7 +128,7 @@ fn compact_layers_reveal_the_active_row_after_resize() {
     assert!(setup.height() >= pcbcraft_chrome::Tokens::get().control_height);
     let visibility = h.get_by_label("Show all").rect();
     assert!(visibility.top() >= setup.bottom());
-    let row = h.get_by_label("Activate layer Board Edge").rect();
+    let row = h.get_by_label("Activate layer Board Outline").rect();
     assert!(row.center().y > visibility.bottom());
     assert!(row.bottom() < 528., "active row is outside the compact card: {row:?}");
     let selector = h.get_by_label("Active layer").rect();
@@ -98,7 +139,7 @@ fn compact_layers_reveal_the_active_row_after_resize() {
 #[test]
 fn visibility_eye_is_separate_from_layer_activation_and_keyboard_operable() {
     let mut h = board();
-    click(&mut h, "Activate layer Board Edge");
+    click(&mut h, "Activate layer Board Outline");
     let active = h.state().views.active.board.active_layer.clone();
     let top = layer(&h, "Top");
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
@@ -128,7 +169,7 @@ fn keyboard_layer_navigation_matches_the_picker_and_preserves_history() {
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let top = layer(&h, "Top");
     let bottom = layer(&h, "Bottom");
-    let edge = layer(&h, "Board Edge");
+    let edge = layer(&h, "Board Outline");
     click(&mut h, "Show layer Bottom");
     let hidden = h.state().views.active.board.hidden_layers.clone();
     h.key_press(Key::Plus);
@@ -166,7 +207,7 @@ fn keyboard_layer_navigation_matches_the_picker_and_preserves_history() {
 fn layer_shortcuts_respect_fields_popups_and_discard_old_layer_gestures() {
     let mut h = board();
     let top = layer(&h, "Top");
-    let edge = layer(&h, "Board Edge");
+    let edge = layer(&h, "Board Outline");
     click(&mut h, "Active layer");
     h.key_press(Key::Plus);
     h.run();
@@ -182,8 +223,8 @@ fn layer_shortcuts_respect_fields_popups_and_discard_old_layer_gestures() {
     h.run();
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
     click(&mut h, "Cancel");
-    click(&mut h, "Activate layer Board Edge");
-    click(&mut h, "Draw rectangle on Board Edge");
+    click(&mut h, "Activate layer Board Outline");
+    click(&mut h, "Draw rectangle on Board Outline");
     let canvas = h.get_by_label("PCB canvas").rect();
     click_canvas_at(&mut h, canvas.center());
     assert!(h.state().views.active.board.drawing.source().is_some());

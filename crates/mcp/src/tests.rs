@@ -98,7 +98,7 @@ fn reviewed_board_updates_share_headless_and_live_authority_rules() {
     );
 }
 
-/// Headless clients discover Board Edge layers and create/update/delete their graphics through
+/// Headless clients discover Board Outline layers and create/update/delete their graphics through
 /// revision-checked transactions rather than editing a rectangle settings object.
 #[test]
 fn board_edge_tools_share_layer_geometry_and_undo() {

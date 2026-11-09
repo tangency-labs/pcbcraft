@@ -1103,12 +1103,12 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[3],
     Command {
         id: ADD_DRAWING,
-        title: "Draw Board Edge",
-        summary: "Add one open or closed graphic on a Board Edge layer, with one undo step.",
+        title: "Draw Board Outline",
+        summary: "Add one open or closed graphic on a Board Outline layer, with one undo step.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
-            Param { name: "layer", required: true, summary: "Board Edge layer UUID from inspection", kind: ParamKind::DrawingId },
+            Param { name: "layer", required: true, summary: "Board Outline layer UUID from inspection", kind: ParamKind::DrawingId },
             Param { name: "points", required: true, summary: "Ordered vertices in integer nanometers", kind: ParamKind::DrawingPoints },
             Param { name: "closed", required: true, summary: "Join the last vertex to the first", kind: ParamKind::Closed },
         ],

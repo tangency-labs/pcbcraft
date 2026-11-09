@@ -1,4 +1,4 @@
-//! Board Edge drawing gestures. Previews are view-local; every completed edit is an engine command.
+//! Board Outline drawing gestures. Previews are view-local; every completed edit is an engine command.
 use crate::{canvas_camera::Camera, editor_view::ViewInput};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
 use pcbcraft_engine::{
@@ -8,7 +8,7 @@ use pcbcraft_engine::{
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-/// The first canvas drawing tools; both author ordinary graphics on the active Board Edge layer.
+/// The first canvas drawing tools; both author ordinary graphics on the active Board Outline layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tool {
     Lines,

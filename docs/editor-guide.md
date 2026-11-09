@@ -542,23 +542,23 @@ board data and document undo unchanged. Click a layer color swatch to open the
 themed color form. Choose a color or enter **#RRGGBB**,
 then **Apply color**; **Cancel** discards the draft, and **Reset to default** removes
 that layer's override. Colors are local settings shared by every view of this
-board, including copper, Board Edge, silkscreen, mask and other technical layers. They survive
+board, including copper, Board Outline, silkscreen, mask and other technical layers. They survive
 renames without changing layer ownership or entering project files and undo.
 The ribbon's selected layer and every dropdown row include the same effective
 color patch. **+** and **−** cycle through the picker order, wrapping through
 technical and hidden layers without changing visibility. **PgUp** selects front
 copper and **PgDn** selects back copper when that side exists. Text fields,
 menus and dialogs keep their normal keys; switching layers cancels an unfinished
-Board Edge gesture. The keys are also listed in Keyboard Shortcuts.
+Board Outline gesture. The keys are also listed in Keyboard Shortcuts.
 
-For a board boundary, select **Board Edge** in the selector or Layers card and
+For a board boundary, select **Board Outline** in the selector or Layers card and
 use **Layout → Draw → Line** or **Rectangle**. Line accepts successive clicked
 vertices, closes when you click the first vertex, and finishes an open path with
 Enter. Rectangle uses two opposite corners. Both snap to the grid and nearby edge
 vertices, and Esc cancels unfinished geometry before exiting the tool. After
 exiting, click an edge to select it, drag a vertex to reshape it, drag a segment
 or press M to move the drawing, and Delete to remove it. These edits share project
-Undo; Fit and layer visibility include the edge geometry. A Board Edge layer is
+Undo; Fit and layer visibility include the edge geometry. A Board Outline layer is
 available independently of copper setup, including on older populated boards.
 Open paths remain valid editing state; no closure, clearance or manufacturing
 validation is implemented yet.

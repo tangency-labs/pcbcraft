@@ -207,7 +207,7 @@ fn purpose_name(purpose: LayerPurpose) -> &'static str {
         LayerPurpose::Adhesive => "Adhesive",
         LayerPurpose::Fabrication => "Fabrication",
         LayerPurpose::Courtyard => "Courtyard",
-        LayerPurpose::Outline => "Board Edge",
+        LayerPurpose::Outline => "Board Outline",
         LayerPurpose::Mechanical => "Mechanical",
         LayerPurpose::User => "User",
     }

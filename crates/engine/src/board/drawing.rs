@@ -1,4 +1,4 @@
-//! Layer-addressed board drawings, with the Board Edge layer independent of copper setup.
+//! Layer-addressed board drawings, with the Board Outline layer independent of copper setup.
 use super::{
     setup::{Layer, LayerPurpose, Stratum},
     view::BoardView,
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-/// Add one open or closed graphic to an explicitly addressed Board Edge layer.
+/// Add one open or closed graphic to an explicitly addressed Board Outline layer.
 pub const ADD_DRAWING: &str = "pcb.add_drawing";
 /// Replace one graphic's vertices while retaining its identity and layer.
 pub const SET_DRAWING: &str = "pcb.set_drawing";
@@ -19,7 +19,7 @@ const MAX_ITEMS: usize = 512;
 const MAX_POINTS: usize = 256;
 const MAX_TOTAL_POINTS: usize = 4096;
 
-/// An independently selectable graphic on one explicitly addressed Board Edge layer.
+/// An independently selectable graphic on one explicitly addressed Board Outline layer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Drawing {
@@ -54,7 +54,7 @@ fn compatibility_id(board: Uuid, domain: &[u8]) -> Uuid {
 
 impl BoardView<'_> {
     /// One resolved layer catalog, including technical layers on legacy boards without a stackup.
-    /// The virtual Board Edge entry becomes authored metadata only when its first drawing is made.
+    /// The virtual Board Outline entry becomes authored metadata only when its first drawing is made.
     pub fn layers(self) -> Vec<Layer> {
         let mut layers = self.setup().map_or_else(Vec::new, |setup| setup.layers().to_vec());
         if let Some(data) = &self.project().board.drawings {
@@ -62,10 +62,10 @@ impl BoardView<'_> {
         }
         let edges = layers.iter().filter(|layer| layer.purpose == LayerPurpose::Outline).count();
         if edges == 0 || (self.outline().is_some() && self.project().board.drawings.is_none() && edges > 1) {
-            let mut name = "Board Edge".to_owned();
+            let mut name = "Board Outline".to_owned();
             let mut suffix = 2;
             while layers.iter().any(|layer| layer.name.eq_ignore_ascii_case(&name)) {
-                name = format!("Board Edge {suffix}");
+                name = format!("Board Outline {suffix}");
                 suffix += 1;
             }
             layers.push(Layer {
@@ -151,7 +151,7 @@ impl Drawings {
                 || !names.insert(layer.name.to_lowercase())
                 || layers.insert(layer.id, layer).is_some()
             {
-                return Err("invalid or conflicting Board Edge layer".into());
+                return Err("invalid or conflicting Board Outline layer".into());
             }
         }
         if layers.len() > 128 || self.items.len() > MAX_ITEMS || self.items.iter().map(|item| item.points.len()).sum::<usize>() > MAX_TOTAL_POINTS {
@@ -197,7 +197,7 @@ impl Session {
                 .layers()
                 .into_iter()
                 .find(|record| record.id == layer && record.purpose == LayerPurpose::Outline)
-                .ok_or_else(|| CommandError::InvalidParams("select a Board Edge layer".into()))?;
+                .ok_or_else(|| CommandError::InvalidParams("select a Board Outline layer".into()))?;
             if !view.setup().is_some_and(|setup| setup.layers().iter().any(|existing| existing.id == layer))
                 && !data.layers.iter().any(|existing| existing.id == layer)
             {

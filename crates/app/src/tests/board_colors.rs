@@ -272,7 +272,7 @@ fn technical_layer_colors_reach_edges_silkscreen_and_ribbon_patches() {
     let mut h = board();
     let ctx = h.ctx.clone();
     let view = h.state().views.active.id().0;
-    let edge = layer(&h, "Board Edge");
+    let edge = layer(&h, "Board Outline");
     let silk = layer(&h, "Front silkscreen");
     let mask = layer(&h, "Front mask");
     let revision = h.state().session.revision();
@@ -292,7 +292,7 @@ fn technical_layer_colors_reach_edges_silkscreen_and_ribbon_patches() {
     assert!(path_color(&h, egui::Color32::from_rgb(0xAE, 0x63, 0xD1)));
     assert!(path_color(&h, egui::Color32::from_rgb(0x40, 0xC8, 0xD0)));
     click(&mut h, "Active layer");
-    click(&mut h, "Board Edge");
+    click(&mut h, "Board Outline");
     let field = h.get_by_label("Active layer").rect();
     let color = egui::Color32::from_rgb(0xAE, 0x63, 0xD1);
     assert!(
@@ -305,7 +305,7 @@ fn technical_layer_colors_reach_edges_silkscreen_and_ribbon_patches() {
     );
     h.key_press(Key::Escape);
     h.run();
-    swatch(&mut h, "Board Edge");
+    swatch(&mut h, "Board Outline");
     hex_field(&mut h, "#DD8822");
     click(&mut h, "Apply color");
     assert_eq!(h.state().views.active.board.active_layer, Some(edge));
