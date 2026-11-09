@@ -237,7 +237,7 @@ pub(super) fn show(
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
     let ratsnest = state.ratsnest(project, source);
-    if !state.hidden_layers.contains("ratsnest")
+    if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
         && let Some(ratsnest) = ratsnest
     {
         let draft = state

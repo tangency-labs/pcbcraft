@@ -12,6 +12,8 @@ pub fn repeat_placement(ui: &mut Ui, repeat: &mut bool) -> egui::Response {
 pub struct FormAction {
     pub close: bool,
     pub primary: bool,
+    /// A separate host action, such as placing the saved footprint assignment.
+    pub secondary: bool,
     pub libraries: bool,
     pub compact: bool,
 }
@@ -31,13 +33,36 @@ pub fn form(
     active: bool,
     add: impl FnOnce(&mut Ui),
 ) -> FormAction {
-    form_body(ctx, id, title, width, primary, enabled, libraries, active, if libraries { 18. } else { 8. }, add)
+    form_body(ctx, id, title, width, primary, enabled, libraries, active, if libraries { 18. } else { 8. }, None, "Cancel", add)
+}
+
+/// A consolidated property form keeps Apply/Cancel visible while its fields scroll.
+pub fn property_form(ctx: &egui::Context, id: &'static str, title: &str, width: f32, primary: &str, add: impl FnOnce(&mut Ui)) -> FormAction {
+    form_body(ctx, id, title, width, primary, true, false, true, 26., None, "Cancel", add)
+}
+
+/// The footprint browser shares the property shell and keeps assignment/placement actions fixed.
+pub fn footprint_form(ctx: &egui::Context, enabled: bool, place: Option<bool>, add: impl FnOnce(&mut Ui)) -> FormAction {
+    form_body(
+        ctx,
+        "footprint_assignment",
+        "Assign Footprint",
+        1160.,
+        "Assign",
+        enabled,
+        false,
+        true,
+        24.,
+        place.map(|enabled| ("Place on board", enabled)),
+        "Close",
+        add,
+    )
 }
 
 /// Settings editors share the catalog header/footer but reserve a taller body for navigation
 /// and physical data; their primary action remains fixed while individual pages scroll.
 pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: bool, add: impl FnOnce(&mut Ui)) -> FormAction {
-    form_body(ctx, "board_setup_form", title, Tokens::get().form_card_width * 4., primary, enabled, false, true, 20., add)
+    form_body(ctx, "board_setup_form", title, Tokens::get().form_card_width * 4., primary, enabled, false, true, 20., None, "Cancel", add)
 }
 
 /// Render the common shell with a bounded body, preserving modal input and dismissal behavior.
@@ -52,11 +77,13 @@ fn form_body(
     libraries: bool,
     active: bool,
     rows: f32,
+    secondary: Option<(&str, bool)>,
+    dismiss: &str,
     add: impl FnOnce(&mut Ui),
 ) -> FormAction {
     let t = Tokens::get();
     let mut action = FormAction::default();
-    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_lg);
+    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(if libraries { t.radius_lg } else { t.radius_md });
     let modal = egui::Modal::new(id.into()).frame(frame).show(ctx, |ui| {
         if !active {
             ui.disable();
@@ -64,14 +91,17 @@ fn form_body(
         let width = width.min((ctx.content_rect().width() - 2. * t.space_16).max(0.));
         ui.set_width(width);
         ui.spacing_mut().item_spacing = vec2(0., 0.);
-        let (header, _) = ui.allocate_exact_size(vec2(width, t.form_header_height + t.space_8), Sense::hover());
-        let icon = if libraries { MenuIcon::Open } else { MenuIcon::Settings };
-        icon.paint_sized(ui.painter(), header.left_center() + vec2(t.space_24, 0.), t.space_16, t, true);
+        let (header, header_response) =
+            ui.allocate_exact_size(vec2(width, t.form_header_height + if libraries { t.space_8 } else { 0. }), Sense::hover());
+        header_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, title));
+        if libraries {
+            MenuIcon::Open.paint_sized(ui.painter(), header.left_center() + vec2(t.space_24, 0.), t.space_16, t, true);
+        }
         ui.painter().text(
-            header.left_center() + vec2(2. * t.space_24, 0.),
+            header.left_center() + vec2(if libraries { 2. * t.space_24 } else { t.space_24 }, 0.),
             egui::Align2::LEFT_CENTER,
             title,
-            fonts::interface_heading(ui, t.font_heading),
+            fonts::interface_heading(ui, if libraries { t.font_intro } else { t.font_button }),
             t.text,
         );
         let close = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.), vec2(t.control_height, t.control_height));
@@ -97,13 +127,25 @@ fn form_body(
         child.spacing_mut().item_spacing = vec2(t.space_8, t.space_8);
         add(&mut child);
         let (footer, _) = ui.allocate_exact_size(vec2(width, t.form_footer_height), Sense::hover());
-        ui.painter().rect_filled(footer, egui::CornerRadius { nw: 0, ne: 0, sw: t.radius_lg, se: t.radius_lg }, t.dialog_footer);
+        ui.painter().rect_filled(
+            footer,
+            egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: if libraries { t.radius_lg } else { t.radius_md },
+                se: if libraries { t.radius_lg } else { t.radius_md },
+            },
+            t.dialog_footer,
+        );
         rule(ui, footer.top(), footer.x_range());
         let inner = footer.shrink2(vec2(t.space_16, t.space_8));
         ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)), |ui| {
             ui.spacing_mut().item_spacing.x = t.space_8;
             action.primary = ui.add_enabled(enabled, button(primary, true)).clicked();
-            action.close |= ui.add(button("Cancel", false)).clicked();
+            if let Some((label, enabled)) = secondary {
+                action.secondary = ui.add_enabled(enabled, button(label, false)).clicked();
+            }
+            action.close |= ui.add(button(dismiss, false)).clicked();
             if libraries {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     action.libraries = ui.add(button("Manage libraries…", false)).clicked();
@@ -117,12 +159,7 @@ fn form_body(
 
 /// Consistent action surfaces match the library source manager and Preferences.
 pub fn button(label: &str, primary: bool) -> egui::Button<'_> {
-    let t = Tokens::get();
-    egui::Button::new(RichText::new(label).size(t.font_label).color(if primary { t.form_primary } else { t.text }))
-        .fill(if primary { t.selected_bg } else { t.dialog_body })
-        .stroke(Stroke::new(1., if primary { t.form_primary } else { t.border }))
-        .corner_radius(t.control_radius)
-        .min_size(vec2(80., t.control_height))
+    crate::settings::action_button(label, primary)
 }
 /// Draw a shared divider without introducing a second border palette.
 fn rule(ui: &Ui, y: f32, x: egui::emath::Rangef) {
@@ -130,7 +167,7 @@ fn rule(ui: &Ui, y: f32, x: egui::emath::Rangef) {
 }
 
 /// Regions of a catalog: collection/library navigation, selectable results and a large preview.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Region {
     Libraries,
     Results,
@@ -204,4 +241,61 @@ pub fn toolbar(ui: &mut Ui, rows: usize, add: impl FnOnce(&mut Ui)) {
         add(ui);
     });
     rule(ui, rect.bottom(), rect.x_range());
+}
+
+/// Responsive footprint browsing keeps three independent panes on desktop and stacks them in
+/// a scrollable body on narrow hosts, with the same selection state in either layout.
+pub fn footprint_panes(ui: &mut Ui, mut add: impl FnMut(&mut Ui, Region)) {
+    let t = Tokens::get();
+    if ui.available_width() >= 900. {
+        let rect = ui.available_rect_before_wrap();
+        let library = 176.;
+        let results = (rect.width() * 0.34).clamp(280., 380.);
+        let libraries = Rect::from_min_max(rect.min, pos2(rect.left() + library, rect.bottom()));
+        let list = Rect::from_min_max(pos2(libraries.right(), rect.top()), pos2(libraries.right() + results, rect.bottom()));
+        let preview = Rect::from_min_max(pos2(list.right(), rect.top()), rect.max);
+        for (rect, region) in [(libraries, Region::Libraries), (list, Region::Results), (preview, Region::Preview)] {
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .id_salt(match region {
+                        Region::Libraries => "footprint_libraries",
+                        Region::Results => "footprint_results",
+                        Region::Preview => "footprint_preview",
+                    })
+                    .max_rect(rect.shrink(t.space_12)),
+            );
+            child.set_clip_rect(ui.clip_rect().intersect(rect));
+            add(&mut child, region);
+            if region != Region::Preview {
+                ui.painter().vline(rect.right(), rect.y_range(), Stroke::new(1., t.dialog_rule));
+            }
+        }
+        ui.advance_cursor_after_rect(rect);
+    } else {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::Frame::new().inner_margin(t.space_12).show(ui, |ui| {
+                add(ui, Region::Libraries);
+                ui.add_space(t.space_8);
+                add(ui, Region::Results);
+                ui.add_space(t.space_12);
+                add(ui, Region::Preview);
+            });
+        });
+    }
+}
+
+/// A footprint result uses distinct name and library/pad metadata while keeping one accessible
+/// selection identity, independent of its visual line wrapping.
+pub fn footprint_result(ui: &mut Ui, label: &str, name: &str, detail: &str, selected: bool) -> egui::Response {
+    let t = Tokens::get();
+    let mut text = egui::text::LayoutJob::default();
+    text.append(
+        &format!("{name}\n"),
+        0.,
+        egui::TextFormat { font_id: egui::FontId::proportional(t.font_label), color: t.text, ..Default::default() },
+    );
+    text.append(detail, 0., egui::TextFormat { font_id: egui::FontId::proportional(t.font_label - 1.), color: t.text_dim, ..Default::default() });
+    let response = ui.add_sized(vec2(ui.available_width(), t.control_height * 2.), egui::Button::selectable(selected, text).right_text(()).wrap());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, label));
+    response
 }

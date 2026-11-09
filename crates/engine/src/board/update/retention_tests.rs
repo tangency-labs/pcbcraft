@@ -165,6 +165,53 @@ fn accepted_pad_nets_do_not_follow_unreviewed_schematic_edits() {
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
 }
 
+/// A traversal indexes the exact accepted snapshot, including named, unnamed and
+/// absent memberships. A new accepted graph or source deletion cannot reuse an
+/// older index, while a partly consumed older iterator keeps its original names.
+#[test]
+fn accepted_pad_net_lookup_is_bound_to_each_lazy_snapshot_traversal() {
+    let mut session = initialized();
+    let mut project = session.project().unwrap().clone();
+    let ids: Vec<_> = project.components.keys().copied().collect();
+    let baseline = Arc::make_mut(Arc::make_mut(&mut project.board).baseline.as_mut().unwrap());
+    baseline.nets = vec![
+        NetState { terminals: vec![TerminalKey { component: ids[0], terminal: "1".into() }], names: vec!["RAIL".into(), "VCC".into()] },
+        NetState {
+            terminals: vec![TerminalKey { component: ids[0], terminal: "2".into() }, TerminalKey { component: ids[1], terminal: "1".into() }],
+            names: vec![],
+        },
+    ];
+    baseline.validate().unwrap();
+    let original = Arc::new(project);
+    let mut older_traversal = original.boards().next().unwrap().footprints();
+    let first = older_traversal.next().unwrap();
+    assert_eq!(first.pads.iter().map(|pad| pad.net.as_deref()).collect::<Vec<_>>(), vec![Some("RAIL"), Some("Net 2")]);
+
+    let mut changed = original.as_ref().clone();
+    let baseline = Arc::make_mut(Arc::make_mut(&mut changed.board).baseline.as_mut().unwrap());
+    baseline.nets[0].names = vec!["CHANGED".into()];
+    baseline.nets[1].names = vec!["REVIEWED".into()];
+    baseline.validate().unwrap();
+    let second = older_traversal.next().unwrap();
+    assert_eq!(second.pads.iter().map(|pad| pad.net.as_deref()).collect::<Vec<_>>(), vec![Some("Net 2"), None]);
+    assert!(older_traversal.next().is_none());
+
+    session.open_snapshot(Arc::new(changed));
+    let labels = |project: &Project| {
+        project.boards().next().unwrap().footprints().flat_map(|footprint| footprint.pads.into_iter().map(|pad| pad.net)).collect::<Vec<_>>()
+    };
+    let expected = vec![Some("CHANGED".into()), Some("REVIEWED".into()), Some("REVIEWED".into()), None];
+    assert_eq!(labels(session.project().unwrap()), expected);
+    let symbol = session.project().unwrap().symbols[0].id();
+    session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol,"expected_revision":session.revision()})).unwrap();
+    assert!(session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().pending_removal);
+    assert_eq!(labels(session.project().unwrap()), expected);
+    let restored = decode_documents(&encode_documents(session.snapshot().unwrap()).unwrap()).unwrap();
+    assert_eq!(labels(&restored), expected);
+    session.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(labels(session.project().unwrap()), expected);
+}
+
 /// Ordinary placement edits share immutable accepted history rather than copying
 /// its potentially large component/net records into every undo snapshot.
 #[test]
@@ -296,6 +343,44 @@ fn nested_accepted_package_mappings_reject_duplicate_json_keys() {
     let corrupted = super::tests::duplicate_mapping(&documents["board.json"], &package.mapping);
     documents.insert("board.json".into(), corrupted);
     assert!(decode_documents(&documents).is_err());
+}
+
+/// Historical terminals cannot contradict a live immutable symbol with the same
+/// exact identity. Distinct revisions and removed sources still retain their own
+/// independently validated terminal and physical package contracts.
+#[test]
+fn accepted_terminals_must_match_a_live_identical_symbol_revision() {
+    let mut session = initialized();
+    let id = session.project().unwrap().symbols[0].component;
+    let symbol = session.project().unwrap().symbols[0].id();
+    let corrupt = |mut documents: crate::persistence::Documents, different_revision: bool| {
+        let mut board: serde_json::Value = serde_json::from_slice(&documents["board.json"]).unwrap();
+        let historical = &mut board["baseline"]["components"][id.to_string()];
+        historical["terminals"] = json!(["X", "Y"]);
+        historical["package"]["mapping"] = json!({"X":"1","Y":"2"});
+        if different_revision {
+            historical["revision"] = json!(historical["revision"].as_u64().unwrap() + 1);
+        }
+        for footprint in board["footprints"].as_array_mut().unwrap() {
+            if footprint["component"] == id {
+                footprint["mapping"] = json!({"X":"1","Y":"2"});
+            }
+        }
+        // The independent assignment list is optional; accepted placements alone
+        // must not bypass the same-identity logical terminal invariant.
+        board.as_object_mut().unwrap().remove("assignments");
+        documents.insert("board.json".into(), serde_json::to_vec(&board).unwrap());
+        documents
+    };
+    let documents = encode_documents(session.snapshot().unwrap()).unwrap();
+    let same_revision = corrupt(documents.clone(), false);
+    assert!(decode_documents(&same_revision).unwrap_err().contains("same pinned symbol revision"));
+    assert!(decode_documents(&corrupt(documents, true)).is_ok());
+    session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol,"expected_revision":session.revision()})).unwrap();
+    let removed = corrupt(encode_documents(session.snapshot().unwrap()).unwrap(), false);
+    let restored = decode_documents(&removed).unwrap();
+    assert_eq!(restored.boards().next().unwrap().footprints().count(), 2);
+    assert!(!restored.components.contains_key(&id));
 }
 
 /// No monolithic version authorizes baseline records, even when the embedded

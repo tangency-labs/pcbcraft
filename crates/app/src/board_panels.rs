@@ -43,7 +43,7 @@ impl PcbApp {
         }
         let slots = crate::workspace_panels::areas(area, browser, &self.views.active.panels, [true, true, self.views.active.filters_open], false);
         let can_isolate = state.active_layer.is_some();
-        let mut ratsnest_visible = !state.hidden_layers.contains("ratsnest");
+        let mut ratsnest_visible = !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY);
         let (layers, collapse) = self.views.active.panels[crate::workspace_panels::LAYERS].show_with_toolbar(
             ui,
             host.with("layers"),

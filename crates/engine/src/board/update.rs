@@ -210,10 +210,18 @@ impl Baseline {
         Ok(baseline)
     }
 
-    /// Capture current component and cross-sheet connectivity inputs. `desired`
-    /// is authoritative package intent; callers can seed it with current choices.
-    /// This does not accept changes, allocate physical objects or alter the project.
+    /// Capture physically eligible component and cross-sheet connectivity inputs.
+    /// `desired` is authoritative package intent; excluded live choices are retained
+    /// elsewhere without becoming physical input. This does not accept changes,
+    /// allocate physical objects or alter the project.
     pub fn proposed(project: &Project, desired: &BTreeMap<u64, Package>, source: SourceCapture) -> Result<Self, String> {
+        Self::capture(project, desired, source, false)
+    }
+
+    /// Capture ordinary physical input, or adopt an existing physical predecessor.
+    /// Adoption also includes excluded parts that are already placed, preserving
+    /// their real packages until the first reviewed update proposes their removal.
+    fn capture(project: &Project, desired: &BTreeMap<u64, Package>, source: SourceCapture, adopt_placed: bool) -> Result<Self, String> {
         source.validate()?;
         let target = project.boards().next().map(|board| board.target).ok_or("no physical board is available")?;
         if desired.keys().any(|id| !project.components.contains_key(id)) {
@@ -222,6 +230,9 @@ impl Baseline {
         let mut components = BTreeMap::new();
         let mut terminal_keys = BTreeMap::new();
         for (&id, component) in project.components.iter() {
+            if !project.component_is_board_eligible(id) && !(adopt_placed && project.board.by_component.contains_key(&id)) {
+                continue;
+            }
             let mut terminals: Vec<_> = component.definition.pins().iter().map(|pin| pin.number.as_str().to_owned()).collect();
             terminals.sort();
             for pin in &terminals {
@@ -388,8 +399,21 @@ impl Baseline {
     }
 
     /// Resolve retained package bytes independently of live schematic membership.
+    /// When a live component names the exact same immutable symbol revision, its
+    /// pins must agree with historical terminals; distinct revisions and removed
+    /// sources retain their independently validated historical terminal contracts.
     pub fn validate_assets(&self, project: &Project) -> Result<(), String> {
-        for component in self.components.values() {
+        for (&id, component) in &self.components {
+            if let Some(live) = project.components.get(&id)
+                && component.library == live.definition.library
+                && component.definition == live.definition.id
+                && component.revision == live.definition.revision()
+            {
+                let live_terminals: BTreeSet<_> = live.definition.pins().iter().map(|pin| pin.number.as_str()).collect();
+                if component.terminals.iter().map(String::as_str).collect::<BTreeSet<_>>() != live_terminals {
+                    return Err("accepted terminal set contradicts the same pinned symbol revision".into());
+                }
+            }
             if let Some(package) = &component.package {
                 package.validate_assets(&project.board)?;
             }
@@ -420,13 +444,21 @@ impl Baseline {
         self.components.get(&assignment.component).and_then(|component| component.package.as_ref()) == Some(&Package::from_assignment(assignment))
     }
 
-    /// Resolve a display name in the accepted graph. The fallback index is local
-    /// to this baseline and is never used as persistent electrical identity.
-    pub(crate) fn net_name(&self, component: u64, terminal: &str) -> Option<String> {
-        let terminal = TerminalKey { component, terminal: terminal.into() };
-        self.nets.iter().enumerate().find_map(|(index, net)| {
-            net.terminals.binary_search(&terminal).ok().map(|_| net.names.first().cloned().unwrap_or_else(|| format!("Net {}", index + 1)))
-        })
+    /// Build a snapshot-bound terminal lookup once for a presentation traversal.
+    /// Borrowed terminal keys stay local to the immutable baseline; public edits
+    /// to net records cannot leave a persistent derived cache stale.
+    pub(crate) fn terminal_net_index(&self) -> BTreeMap<(u64, &str), usize> {
+        self.nets
+            .iter()
+            .enumerate()
+            .flat_map(|(index, net)| net.terminals.iter().map(move |terminal| ((terminal.component, terminal.terminal.as_str()), index)))
+            .collect()
+    }
+
+    /// Resolve a display name by the traversal's accepted-net index. Its fallback
+    /// ordinal is local to this baseline, never persistent electrical identity.
+    pub(crate) fn net_name(&self, index: usize) -> Option<String> {
+        self.nets.get(index).map(|net| net.names.first().cloned().unwrap_or_else(|| format!("Net {}", index + 1)))
     }
 }
 
@@ -441,10 +473,16 @@ impl crate::Session {
             return Ok(());
         }
         let source = capture_source(project)?;
-        let baseline = Baseline::proposed(project, &Baseline::current_choices(project), source).map_err(crate::CommandError::InvalidParams)?;
+        let mut choices = Baseline::current_choices(project);
+        for footprint in project.board.footprints().iter().filter(|footprint| !project.component_is_board_eligible(footprint.component)) {
+            // Adoption describes actual physical state, not an excluded component's
+            // independently retained desired package choice.
+            choices.insert(footprint.component, Package::from_footprint(footprint));
+        }
+        let baseline = Baseline::capture(project, &choices, source, true).map_err(crate::CommandError::InvalidParams)?;
         if baseline.components.values().any(|component| component.package.is_none()) {
             return Err(crate::CommandError::InvalidParams(
-                "Assign a supported footprint to every component before initializing reviewed board updates.".into(),
+                "Assign a supported footprint to every board-eligible component before initializing reviewed board updates.".into(),
             ));
         }
         let mut next = project.clone();
@@ -597,11 +635,15 @@ pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseli
             return Err("replacement footprint is outside supported bounds".into());
         }
     }
-    board.assignments = proposed
-        .components
-        .iter()
-        .filter_map(|(&id, component)| component.package.as_ref().and_then(|package| package.assignment(id)).map(|assignment| (id, assignment)))
-        .collect();
+    // Excluded components keep their authored choices for a later unexclude.
+    // They do not become accepted physical members or force a pending update.
+    board.assignments.retain(|id, _| project.components.contains_key(id) && !project.component_is_board_eligible(*id));
+    board.assignments.extend(
+        proposed
+            .components
+            .iter()
+            .filter_map(|(&id, component)| component.package.as_ref().and_then(|package| package.assignment(id)).map(|assignment| (id, assignment))),
+    );
     let used: BTreeSet<_> =
         board.assignments.values().map(super::assignment::Assignment::key).chain(board.footprints.iter().filter_map(Footprint::key)).collect();
     board.definitions.retain(|key, _| used.contains(key));

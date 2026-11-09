@@ -68,9 +68,11 @@ impl Assignment {
         value["board"] = json!(project.board_target().map(|target| target.board));
         value["placed"] = json!(project.board.by_component.contains_key(&self.component));
         if let Some(baseline) = &project.board.baseline {
-            value["pending_update"] = json!(!baseline.validate_assignment(self));
+            value["pending_update"] = json!(project.component_is_board_eligible(self.component) && !baseline.validate_assignment(self));
         }
-        if !project.components.contains_key(&self.component) {
+        if project.board.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&self.component))
+            && !project.component_is_board_eligible(self.component)
+        {
             value["pending_removal"] = json!(true);
         }
         value
@@ -193,6 +195,9 @@ impl Session {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let component = component_id(params, project)?;
+        if project.components.get(&component).is_some_and(|c| c.metadata.attributes.exclude_from_board) {
+            return Err(CommandError::InvalidParams("This component is excluded from the board.".into()));
+        }
         let assignment = project
             .board
             .assignments

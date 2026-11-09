@@ -9,18 +9,34 @@ use std::{collections::BTreeMap, sync::Arc};
 pub(super) struct Edit {
     pub(super) source: ViewInput,
     component: String,
+    component_browser: bool,
+    component_query: String,
     definition: Option<Arc<FootprintDefinition>>,
     mapping: BTreeMap<String, String>,
     query: String,
+    library: String,
+    compatible: bool,
+    mounting: Mounting,
+    camera: crate::library_preview::FootprintCamera,
     x: String,
     y: String,
     units: units::Unit,
     error: Option<String>,
+    reveal_error: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Mounting {
+    #[default]
+    All,
+    Surface,
+    Through,
 }
 
 impl Edit {
     /// Restore an exact pinned choice; unassigned components start with an empty explicit map.
     fn select_component(&mut self, project: &pcbcraft_engine::Project) {
+        self.camera = Default::default();
         self.definition = None;
         self.mapping.clear();
         if let Some(a) = project.footprint_assignments().into_iter().find(|a| a["component"] == self.component) {
@@ -31,6 +47,35 @@ impl Edit {
             self.mapping = serde_json::from_value(a["mapping"].clone()).unwrap_or_default();
         }
         self.error = None;
+        self.reveal_error = false;
+    }
+
+    /// Reveal a validation failure once, allowing subsequent scrolling back to its inputs.
+    fn fail(&mut self, error: impl Into<String>) {
+        self.error = Some(error.into());
+        self.reveal_error = true;
+    }
+
+    /// Search tokens, explicit library and physical mounting filters compose with optional pin count.
+    fn matches(&self, d: &FootprintDefinition, pin_count: Option<usize>) -> bool {
+        let text = format!("{} {} {}", d.library, d.id, d.name).to_lowercase();
+        (self.library.is_empty() || self.library == d.library)
+            && self.query.split_whitespace().all(|word| text.contains(&word.to_lowercase()))
+            && (!self.compatible || pin_count == Some(d.pads.len()))
+            && match self.mounting {
+                Mounting::All => true,
+                Mounting::Through => d.pads.iter().any(|p| p.drill_nm.is_some()),
+                Mounting::Surface => d.pads.iter().all(|p| p.drill_nm.is_none()),
+            }
+    }
+
+    /// Placement uses the exact assignment, never a different preview candidate or draft mapping.
+    fn matches_assignment(&self, project: &pcbcraft_engine::Project) -> bool {
+        project.footprint_assignments().iter().find(|a| a["component"] == self.component).is_some_and(|a| {
+            self.definition.as_ref().is_some_and(|d| {
+                a["library"] == d.library && a["definition"] == d.id && a["definition_revision"] == d.revision && a["mapping"] == json!(self.mapping)
+            })
+        })
     }
 }
 
@@ -44,20 +89,28 @@ impl PcbApp {
             self.message = Some("Create a board before assigning footprints.".into());
             return;
         }
+        let component_browser = component.is_none();
         let Some(component) = component.or_else(|| project.components().next().map(|c| c.id())) else { return };
         let mut edit = Edit {
             source,
             component,
+            component_browser,
+            component_query: String::new(),
             definition: None,
             mapping: BTreeMap::new(),
             query: String::new(),
+            library: String::new(),
+            compatible: true,
+            mounting: Mounting::All,
+            camera: Default::default(),
             x: "0".into(),
             y: "0".into(),
             units: self.preferences.units,
             error: None,
+            reveal_error: false,
         };
         edit.select_component(project);
-        self.dialog = Dialog::Footprint(edit);
+        self.dialog = Dialog::Footprint(Box::new(edit));
     }
 
     /// Show package provenance and an explicit terminal map. Assign and Place are separate undoable
@@ -69,116 +122,235 @@ impl PcbApp {
             return;
         }
         let Some(project) = self.session.snapshot() else { return };
-        let mut assign = false;
-        let mut place = false;
-        let mut cancel = false;
-        let closing = shell::scrolling_dialog_width(ctx, "footprint_assignment", "Assign Footprint", 760.0, |ui| {
-            let previous = edit.component.clone();
-            let component = project.components().find(|c| c.id() == edit.component);
-            egui::ComboBox::from_label("Component")
-                .selected_text(component.map_or("Choose component".into(), |c| format!("{} · {}", c.reference(), c.value())))
-                .show_ui(ui, |ui| {
-                    for c in project.components() {
-                        ui.selectable_value(&mut edit.component, c.id(), format!("{} · {}", c.reference(), c.value()));
-                    }
-                });
-            if previous != edit.component {
-                edit.select_component(&project);
-            }
-            let assigned = project.footprint_assignments().into_iter().find(|a| a["component"] == edit.component);
-            let placed = project
-                .board_target()
-                .and_then(|target| project.board_view(target))
-                .is_some_and(|board| board.footprints().any(|f| f.component == edit.component));
-            ui.label(if placed {
-                "Placed"
-            } else if assigned.is_some() {
-                "Assigned · not placed"
-            } else {
-                "Unassigned"
-            });
-            pcbcraft_chrome::properties::split(ui, |ui, column| {
-                if column == 0 {
-                    ui.add_enabled_ui(!placed, |ui| {
-                        let label = ui.label("Search footprints");
-                        ui.add(egui::TextEdit::singleline(&mut edit.query)).labelled_by(label.id);
-                        let old = edit.definition.as_ref().map(|d| (d.library.clone(), d.id.clone(), d.revision));
-                        ui.label("Package");
-                        egui::ScrollArea::vertical().id_salt("package_results").max_height(150.0).show(ui, |ui| {
-                            for d in project.footprint_catalog() {
-                                let text = format!("{} / {} · r{}", d.library, d.name, d.revision);
-                                if !text.to_lowercase().contains(&edit.query.to_lowercase()) && !d.id.contains(&edit.query.to_lowercase()) {
-                                    continue;
-                                }
-                                if ui.selectable_label(edit.definition.as_ref().is_some_and(|current| current == &d), text).clicked() {
-                                    edit.definition = Some(d);
-                                }
+        let catalog = project.footprint_catalog();
+        let component = project.components().find(|c| c.id() == edit.component);
+        let placed = project
+            .board_target()
+            .and_then(|target| project.board_view(target))
+            .is_some_and(|board| board.footprints().any(|f| f.component == edit.component));
+        let assigned = project.footprint_assignments().into_iter().find(|a| a["component"] == edit.component);
+        let excluded = component.is_some_and(|c| c.metadata.attributes.exclude_from_board);
+        let placement = (self.views.active.workspace == Workspace::Board && assigned.is_some() && !placed)
+            .then(|| edit.matches_assignment(&project) && !excluded);
+        let action = pcbcraft_chrome::catalog::footprint_form(ctx, !placed && edit.definition.is_some(), placement, |ui| {
+            let wide = ui.available_width() >= 900.;
+            pcbcraft_chrome::catalog::footprint_panes(ui, |ui, region| {
+                use pcbcraft_chrome::{catalog::Region, properties as form};
+                match region {
+                    Region::Libraries => {
+                        if edit.component_browser {
+                            form::section(ui, "Components");
+                            let label = ui.label(pcbcraft_chrome::shell::dim("Find component"));
+                            ui.add(form::input(&mut edit.component_query).desired_width(ui.available_width()).hint_text("Reference or value"))
+                                .labelled_by(label.id);
+                            let query = edit.component_query.to_lowercase();
+                            let components: Vec<_> =
+                                project.components().filter(|c| format!("{} {}", c.reference(), c.value()).to_lowercase().contains(&query)).collect();
+                            if components.is_empty() {
+                                ui.label("No components match");
                             }
-                        });
-                        if old != edit.definition.as_ref().map(|d| (d.library.clone(), d.id.clone(), d.revision)) {
-                            edit.mapping.clear();
+                            let row_height = pcbcraft_chrome::Tokens::get().control_height;
+                            egui::ScrollArea::vertical().id_salt("assignment_components").max_height(if wide { 250. } else { 120. }).show_rows(
+                                ui,
+                                row_height,
+                                components.len(),
+                                |ui, rows| {
+                                    for component in &components[rows] {
+                                        let id = component.id();
+                                        let name = format!("{} · {}", component.reference(), component.value());
+                                        if ui
+                                            .add_sized(
+                                                egui::vec2(ui.available_width(), row_height),
+                                                egui::Button::selectable(edit.component == id, name).right_text(()).truncate(),
+                                            )
+                                            .clicked()
+                                            && edit.component != id
+                                        {
+                                            edit.component = id;
+                                            edit.select_component(&project);
+                                        }
+                                    }
+                                },
+                            );
+                            ui.separator();
                         }
-                    });
-                } else {
-                    if let Some(definition) = &edit.definition {
-                        crate::library_preview::footprint(ui, definition);
-                        pcbcraft_chrome::properties::identity(
-                            ui,
-                            &definition.name,
-                            &format!("{} / {} · revision {}", definition.library, definition.id, definition.revision),
-                        );
-                        ui.collapsing("Source and license", |ui| {
-                            ui.label(&definition.license);
-                            ui.add(egui::Label::new(&definition.source.reference).wrap());
-                        });
-                        if let Some(component) = project.components().find(|c| c.id() == edit.component) {
-                            ui.add_enabled_ui(!placed, |ui| {
-                                for pin in component.definition.pins() {
-                                    let mapped = edit.mapping.entry(pin.number.clone()).or_default();
-                                    egui::ComboBox::from_label(format!("Terminal {}", pin.number))
-                                        .selected_text(if mapped.is_empty() { "Choose pad".into() } else { format!("Pad {mapped}") })
-                                        .show_ui(ui, |ui| {
-                                            for pad in &definition.pads {
-                                                ui.selectable_value(mapped, pad.number.clone(), format!("Pad {}", pad.number));
-                                            }
-                                        });
+                        form::section(ui, "Libraries");
+                        if ui.available_width() < 190. {
+                            egui::ScrollArea::vertical().id_salt("assignment_libraries").show(ui, |ui| {
+                                if ui.selectable_label(edit.library.is_empty(), "All libraries").clicked() {
+                                    edit.library.clear();
+                                }
+                                for library in catalog.iter().map(|d| d.library.as_str()).collect::<std::collections::BTreeSet<_>>() {
+                                    if ui.selectable_label(edit.library == library, library).clicked() {
+                                        edit.library = library.into();
+                                    }
                                 }
                             });
+                        } else {
+                            form::choice(
+                                ui,
+                                "Library",
+                                ui.id().with("footprint_library"),
+                                &mut edit.library,
+                                &std::iter::once(("", "All libraries".into()))
+                                    .chain(
+                                        catalog
+                                            .iter()
+                                            .map(|d| d.library.as_str())
+                                            .collect::<std::collections::BTreeSet<_>>()
+                                            .into_iter()
+                                            .map(|id| (id, id.into())),
+                                    )
+                                    .collect::<Vec<_>>(),
+                            );
+                        }
+                    }
+                    Region::Results => {
+                        if let Some(component) = project.components().find(|c| c.id() == edit.component) {
+                            form::identity(ui, component.reference(), component.value());
+                        }
+                        ui.label(if excluded {
+                            "Excluded from board"
+                        } else if placed {
+                            "Placed"
+                        } else if assigned.is_some() {
+                            "Assigned · not placed"
+                        } else {
+                            "Unassigned"
+                        });
+                        ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
+                        ui.add_enabled_ui(!placed, |ui| {
+                            let label = ui.label(pcbcraft_chrome::shell::dim("Search footprints"));
+                            ui.add(form::input(&mut edit.query).desired_width(ui.available_width()).hint_text("Name or package"))
+                                .labelled_by(label.id);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.checkbox(&mut edit.compatible, "Match pin count");
+                                egui::ComboBox::from_id_salt("mounting_filter")
+                                    .selected_text(match edit.mounting {
+                                        Mounting::All => "All mounting types",
+                                        Mounting::Surface => "Surface mount",
+                                        Mounting::Through => "Through hole",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut edit.mounting, Mounting::All, "All mounting types");
+                                        ui.selectable_value(&mut edit.mounting, Mounting::Surface, "Surface mount");
+                                        ui.selectable_value(&mut edit.mounting, Mounting::Through, "Through hole");
+                                    })
+                                    .response
+                                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Mounting type"));
+                            });
+                            let pin_count = project.components().find(|c| c.id() == edit.component).map(|c| c.definition.pins().len());
+                            let matches: Vec<_> = catalog.iter().filter(|d| edit.matches(d, pin_count)).cloned().collect();
+                            ui.label(pcbcraft_chrome::shell::dim(format!("{} of {} footprints", matches.len(), catalog.len())));
+                            let height = if wide { ui.available_height().max(120.) } else { 180. };
+                            egui::ScrollArea::vertical().id_salt("package_results").max_height(height).show(ui, |ui| {
+                                if matches.is_empty() {
+                                    ui.label("No footprints match");
+                                    if ui.button("Clear filters").clicked() {
+                                        edit.query.clear();
+                                        edit.library.clear();
+                                        edit.compatible = false;
+                                        edit.mounting = Mounting::All;
+                                    }
+                                }
+                                for definition in matches {
+                                    let label = format!("{} / {} · r{}", definition.library, definition.name, definition.revision);
+                                    let detail = format!(
+                                        "{} · {} pads · {} · r{}",
+                                        definition.library,
+                                        definition.pads.len(),
+                                        if definition.pads.iter().any(|p| p.drill_nm.is_some()) { "Through hole" } else { "SMD" },
+                                        definition.revision
+                                    );
+                                    let selected = edit.definition.as_ref().is_some_and(|d| d == &definition);
+                                    if pcbcraft_chrome::catalog::footprint_result(ui, &label, &definition.name, &detail, selected).clicked()
+                                        && !selected
+                                    {
+                                        edit.definition = Some(definition);
+                                        edit.mapping.clear();
+                                        edit.camera = Default::default();
+                                        edit.error = None;
+                                        edit.reveal_error = false;
+                                    }
+                                }
+                            });
+                        });
+                    }
+                    Region::Preview => {
+                        let mut details = |ui: &mut egui::Ui| {
+                            let Some(definition) = &edit.definition else {
+                                form::section(ui, "Preview");
+                                ui.label("No footprint selected");
+                                return;
+                            };
+                            form::identity(
+                                ui,
+                                &definition.name,
+                                &format!("{} / {} · revision {}", definition.library, definition.id, definition.revision),
+                            );
+                            crate::library_preview::interactive_footprint(ui, definition, &mut edit.camera);
+                            ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
+                            form::card(ui, "Pin mapping", |ui| {
+                                if let Some(component) = project.components().find(|c| c.id() == edit.component) {
+                                    ui.add_enabled_ui(!placed, |ui| {
+                                        let pins = component.definition.pins();
+                                        let numbers: std::collections::BTreeSet<_> = pins.iter().map(|p| p.number.as_str()).collect();
+                                        let pads: std::collections::BTreeSet<_> = definition.pads.iter().map(|p| p.number.as_str()).collect();
+                                        if ui.add_enabled(numbers == pads, egui::Button::new("Match numbers")).clicked() {
+                                            edit.mapping = numbers.into_iter().map(|id| (id.into(), id.into())).collect();
+                                        }
+                                        for pin in pins {
+                                            let mapped = edit.mapping.entry(pin.number.clone()).or_default();
+                                            let options: Vec<_> = std::iter::once(("", "Choose pad".into()))
+                                                .chain(definition.pads.iter().map(|pad| (pad.number.as_str(), format!("Pad {}", pad.number))))
+                                                .collect();
+                                            form::choice(
+                                                ui,
+                                                &format!("Terminal {}", pin.number),
+                                                ui.id().with((&edit.component, &pin.number)),
+                                                mapped,
+                                                &options,
+                                            );
+                                        }
+                                    });
+                                }
+                            });
+                            ui.collapsing("Source and license", |ui| {
+                                ui.label(&definition.license);
+                                ui.add(egui::Label::new(&definition.source.reference).wrap());
+                            });
+                            if placed {
+                                ui.label("Changing a placed package requires a reviewed board update.");
+                            }
+                            if placement.is_some() {
+                                form::card(ui, "Board position", |ui| {
+                                    form::text(ui, &format!("X ({})", edit.units.symbol()), &mut edit.x);
+                                    form::text(ui, &format!("Y ({})", edit.units.symbol()), &mut edit.y);
+                                });
+                            }
+                            if let Some(error) = &edit.error {
+                                let response = ui.label(shell::error(error));
+                                if std::mem::take(&mut edit.reveal_error) {
+                                    response.scroll_to_me(Some(egui::Align::Center));
+                                }
+                            }
+                        };
+                        if wide {
+                            egui::ScrollArea::vertical().id_salt("package_details").show(ui, details);
+                        } else {
+                            details(ui);
                         }
                     }
                 }
             });
-            if placed {
-                ui.label("Changing a placed package requires a reviewed board update.");
-            }
-            if let Some(error) = &edit.error {
-                ui.label(shell::error(error.as_str()));
-            }
-            ui.horizontal(|ui| {
-                assign = ui.add_enabled(!placed && edit.definition.is_some(), egui::Button::new("Assign")).clicked();
-                cancel = ui.button("Close").clicked();
-            });
-            if self.views.active.workspace == Workspace::Board && assigned.is_some() && !placed {
-                ui.separator();
-                ui.horizontal(|ui| {
-                    let label = ui.label(format!("X ({})", edit.units.symbol()));
-                    ui.text_edit_singleline(&mut edit.x).labelled_by(label.id);
-                });
-                ui.horizontal(|ui| {
-                    let label = ui.label(format!("Y ({})", edit.units.symbol()));
-                    ui.text_edit_singleline(&mut edit.y).labelled_by(label.id);
-                });
-                let unchanged = assigned.as_ref().is_some_and(|a| {
-                    edit.definition.as_ref().is_some_and(|d| {
-                        a["library"] == d.library
-                            && a["definition"] == d.id
-                            && a["definition_revision"] == d.revision
-                            && a["mapping"] == json!(edit.mapping)
-                    })
-                });
-                place = ui.add_enabled(unchanged, egui::Button::new("Place on board")).clicked();
-            }
         });
+        let assign = action.primary;
+        let place = action.secondary;
+        if place && !edit.matches_assignment(&project) {
+            edit.fail("Assign the selected footprint and mapping before placing it.");
+            self.dialog = Dialog::Footprint(Box::new(edit));
+            return;
+        }
         if assign || place {
             let Some(board) = project.board_target() else { return };
             let mut params = json!({"board": board.board,"component":edit.component,"expected_revision":edit.source.revision});
@@ -196,8 +368,8 @@ impl PcbApp {
                         params["y_nm"] = json!(y);
                     }
                     _ => {
-                        edit.error = Some("Enter valid X and Y lengths.".into());
-                        self.dialog = Dialog::Footprint(edit);
+                        edit.fail("Enter valid X and Y lengths.");
+                        self.dialog = Dialog::Footprint(Box::new(edit));
                         return;
                     }
                 }
@@ -221,16 +393,16 @@ impl PcbApp {
                     if assign && let Some(source) = self.views.view(edit.source.view()).and_then(|v| v.input(&self.session)) {
                         edit.source = source;
                         edit.error = None;
-                        self.dialog = Dialog::Footprint(edit);
+                        self.dialog = Dialog::Footprint(Box::new(edit));
                     }
                 }
                 Err(error) => {
-                    edit.error = Some(error.to_string());
-                    self.dialog = Dialog::Footprint(edit);
+                    edit.fail(error.to_string());
+                    self.dialog = Dialog::Footprint(Box::new(edit));
                 }
             }
-        } else if !(closing || cancel) {
-            self.dialog = Dialog::Footprint(edit);
+        } else if !action.close {
+            self.dialog = Dialog::Footprint(Box::new(edit));
         }
     }
 }

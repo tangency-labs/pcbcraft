@@ -181,7 +181,7 @@ fn detached_browser_navigation_and_selection_stay_in_the_child_host() {
     h.run_steps(3);
     let at = child_rect(&peer, "Open in PCB layout").center();
     child_click_at(&mut h, &peer, at);
-    let at = child_rect(&peer, "Footprint R1  1k").center();
+    let at = child_rect(&peer, "Footprint R1  R").center();
     child_click_at(&mut h, &peer, at);
     let child = h.state().views.hosts[&HostId(1)].focused;
     let app = h.state();
@@ -221,7 +221,7 @@ fn detached_sheet_navigation_and_symbol_rotation_keep_other_sheets_untouched() {
     let at = child_rect(&peer, "Symbols").center();
     child_click_at(&mut h, &peer, at);
     h.run();
-    let at = child_rect(&peer, "R2  1k").center();
+    let at = child_rect(&peer, "R2  R").center();
     child_click_at(&mut h, &peer, at);
     h.run();
     child_key(&mut h, &peer, Key::R, Modifiers::NONE);
@@ -1829,4 +1829,42 @@ fn detached_physical_footprint_click_then_delete_uses_its_own_input() {
         child_key(&mut h, &peer, Key::Z, Modifiers::COMMAND);
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     }
+}
+
+/// E over a field renders an inline textbox in the native child, never the root host or a
+/// new properties window. Enter commits to that child's captured symbol through shared history.
+#[test]
+fn detached_inline_text_remains_in_the_child_canvas() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let id = h.state().views.hosts[&HostId(1)].focused;
+    focus(&mut h, &peer, true);
+    h.run();
+    let point = peer
+        .borrow()
+        .output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "R1" => Some(text.visual_bounding_rect().center()),
+            _ => None,
+        })
+        .unwrap();
+    peer.borrow_mut().events.push(Event::PointerMoved(point));
+    h.run();
+    child_key(&mut h, &peer, Key::E, Modifiers::NONE);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    let rect = child_rect(&peer, "Edit Reference");
+    assert!(child_rect(&peer, "Schematic canvas").contains_rect(rect));
+    assert!(h.query_by_label("Edit Reference").is_none());
+    let before = h.state().session.snapshot().unwrap();
+    child_key(&mut h, &peer, Key::A, Modifiers::COMMAND);
+    peer.borrow_mut().events.push(Event::Text("R42".into()));
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    child_key(&mut h, &peer, Key::Enter, Modifiers::NONE);
+    assert!(h.state().views.view(id).unwrap().schematic.text_edit.is_none());
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().reference(), "R42");
+    child_key(&mut h, &peer, Key::Z, Modifiers::COMMAND);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }

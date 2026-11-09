@@ -26,9 +26,11 @@ existing `pcb.*` commands accept an optional `board` UUID, defaulting only under
 the current single-board compatibility model. Unknown IDs fail before mutation.
 New renderers consume the resolved board, not a global project placement list.
 
-This is an address bridge, not the full #122 storage migration. The board remains
-in `board.json`; layer-addressed Board Edge graphics use board document version 9 without adding
-a persisted board list. The board UUID is derived deterministically from
+The [single-board ownership slice](single-board-storage.md) persists an explicit
+zero-or-one registry in the project entry point; new schematic-only projects have
+no board. This remains a bridge to the broader #122 storage migration. A physical
+board stays in `board.json`, and layer-addressed Board Edge graphics use board
+document version 9. For legacy implicit ownership, the board UUID is derived deterministically from
 SHA-256 of the UTF-8 bytes `pcbcraft:legacy-board:1` followed by a zero byte and
 the saved project UUID's 16 bytes. The first 16 digest bytes use UUID v8 version
 and standard variant bits. This keeps the address stable through rename, edits,
@@ -40,19 +42,21 @@ The [multiboard design](multiboard-and-sheet-instances.md) calls
 for an ordered board registry, per-board folders, shared definitions and stable
 instance mappings. Its [storage contract](multiboard-storage.md) defines the
 migration direction and preservation rules. Implementation proceeds in bounded
-slices with exact codecs and versioned migration tests. The current single
-`board.json` encoding remains unchanged until that work lands.
+slices with exact codecs and versioned migration tests. The current root
+`board.json` path remains transitional until the per-board folder codec lands.
 
 Component-to-board assignment must become an explicit project-model choice,
-including assigned but unplaced components. The current legacy model still has
-one implicit owner, and this slice does not change it. Each physical board owns
+including assigned but unplaced components. The current bounded implementation
+binds the complete schematic capture to its one explicit board; it does not yet
+support per-component owner selection. Each physical board owns
 its outline, stackup/materials, placements, routing, local rule/output settings
 and results. Shared electrical intent remains project-owned; connectors/cables,
 a system netlist and assembly transforms are later contracts. Board duplication
 for panelization and assembly variants remain separate concepts. More than one
 board must make an omitted command target ambiguous rather than select the first
-board silently. Board creation, rename/reorder/delete, ownership assignment and
-per-board outputs remain open under #122 and its linked issues.
+board silently. Creation of the first board is implemented; multiple-board
+creation, rename/reorder/delete, ownership assignment and per-board outputs remain
+open under #122 and its linked issues.
 
 ## Ownership
 

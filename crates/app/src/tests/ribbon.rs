@@ -18,11 +18,11 @@ fn ribbon_reaches_sheet_and_hierarchical_label_workflows_at_both_widths() {
         }
         if width < 1000. {
             click(&mut h, "Place menu");
-            assert!(!h.get_by_label("Power").accesskit_node().is_disabled());
+            assert!(!h.get_by_label("Ground").accesskit_node().is_disabled());
             h.key_press(Key::Escape);
             h.run();
         } else {
-            assert!(!h.get_by_label("Place power or ground (P)").accesskit_node().is_disabled());
+            assert!(!h.get_by_label("Place ground").accesskit_node().is_disabled());
         }
         // The scrolled button and its caption-menu entry must target the same view.
         h.get_by_label("Place hierarchical sheet (S)").scroll_to_me();

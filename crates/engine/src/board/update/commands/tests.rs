@@ -174,7 +174,7 @@ fn resetting_desired_intent_restores_the_accepted_package_bytes() {
             "definition":choice.definition,"definition_revision":choice.definition_revision,"mapping":choice.mapping}),
         );
     }
-    assert!(!session.project().unwrap().board.has_pending_package_intent());
+    assert!(!session.project().unwrap().board.has_pending_package_intent(session.project().unwrap()));
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
 
@@ -261,3 +261,5 @@ fn complete_report_limit_is_enforced_without_retaining_payload() {
     assert!(writer.write_all(b"x").is_err());
     assert_eq!(writer.bytes, MAX_PREVIEW_BYTES);
 }
+
+mod eligibility;

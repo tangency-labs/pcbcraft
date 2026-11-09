@@ -9,6 +9,9 @@ use pcbcraft_engine::{Session, SheetTarget, board::view::BoardTarget, selection:
 #[cfg(test)]
 mod tests;
 
+/// Stable arrangement key for the connection overlay, separate from physical layer UUIDs.
+pub(super) const RATSNEST_KEY: &str = "ratsnest";
+
 /// Runtime view identity, independent of its document or native window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct ViewId(pub(super) u64);
@@ -146,6 +149,9 @@ pub(super) struct SchematicState {
     pub(super) tool: Option<Tool>,
     pub(super) wire_draft: Draft,
     pub(super) rotate_requested: bool,
+    pub(super) edit_requested: bool,
+    pub(super) text_edit: Option<crate::inline_text::Edit>,
+    pub(super) datasheet_requested: bool,
     pub(super) move_requested: bool,
 }
 
@@ -191,17 +197,22 @@ impl BoardState {
     /// Change only this view's accepted-connection overlay, using its saved presentation set.
     pub(super) fn set_ratsnest_visibility(&mut self, visible: bool) {
         if visible {
-            self.hidden_layers.remove("ratsnest");
+            self.hidden_layers.remove(RATSNEST_KEY);
         } else {
-            self.hidden_layers.insert("ratsnest".into());
+            self.hidden_layers.insert(RATSNEST_KEY.into());
         }
     }
 
     /// Replace the view's layer visibility in one action; isolation always reveals the active layer.
-    /// Neither document revision nor saved files change, and unfinished drawing gestures expire.
+    /// Ratsnest visibility is independent of physical layer actions. Neither document revision
+    /// nor saved files change, and unfinished drawing gestures expire.
     pub(super) fn set_layer_visibility(&mut self, layers: impl IntoIterator<Item = String>, active_only: bool) {
         self.drawing.cancel();
+        let ratsnest_hidden = self.hidden_layers.contains(RATSNEST_KEY);
         self.hidden_layers = layers.into_iter().filter(|id| active_only && self.active_layer.as_ref() != Some(id)).collect();
+        if ratsnest_hidden {
+            self.hidden_layers.insert(RATSNEST_KEY.into());
+        }
     }
 
     /// Apply view-local layer choices through the same handler for Layers and live control.
@@ -556,6 +567,9 @@ impl EditorView {
         self.schematic.tool = None;
         self.schematic.wire_draft = Draft::default();
         self.schematic.rotate_requested = false;
+        self.schematic.edit_requested = false;
+        self.schematic.text_edit = None;
+        self.schematic.datasheet_requested = false;
         self.schematic.move_requested = false;
     }
 
@@ -703,7 +717,7 @@ impl EditorView {
                 );
                 self.board.layer_defaults_applied = true;
             }
-            self.board.hidden_layers.retain(|id| id == "ratsnest" || layers.contains(id));
+            self.board.hidden_layers.retain(|id| id == RATSNEST_KEY || layers.contains(id));
             if self.board.active_layer.as_ref().is_none_or(|id| !layers.contains(id)) {
                 self.board.active_layer = setup
                     .and_then(|setup| {

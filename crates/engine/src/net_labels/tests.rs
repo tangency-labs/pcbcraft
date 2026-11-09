@@ -55,6 +55,32 @@ fn scope_power_and_case_are_resolved_before_sheet_projection() {
     assert_eq!(s.project().unwrap().for_sheet(child).unwrap().net_labels()[0].name, "gnd");
 }
 
+/// A flat-bar marker joins the same global VCC net as an existing arrow in another sheet.
+/// The codec retains both distinct drawings and byte-stable documents, with shared undo/redo.
+#[test]
+fn power_bar_keeps_its_drawing_and_global_name() {
+    let mut s = session();
+    let main = s.project().unwrap().sheet_target();
+    apply(&mut s, sheets::CREATE_SHEET, json!({"name":"Supply"}));
+    let other = s.project().unwrap().sheets().nth(1).unwrap().target;
+    let a = resistor(&mut s, main, 0);
+    let b = resistor(&mut s, other, 0);
+    label(&mut s, main, a, "VCC", "power");
+    let before = s.snapshot().unwrap();
+    label(&mut s, other, b, "VCC", "power_bar");
+    assert_eq!(s.project().unwrap().electrical_connectivity().net_for(a).unwrap(), &[a, b]);
+    let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let reopened = persistence::decode_documents(&documents).unwrap();
+    assert_eq!(reopened.for_sheet(main).unwrap().net_labels()[0].style, Style::Power);
+    assert_eq!(reopened.for_sheet(other).unwrap().net_labels()[0].style, Style::PowerBar);
+    assert_eq!(persistence::encode_documents(reopened).unwrap(), documents);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), documents);
+    assert!(crate::command(ADD).unwrap().to_json()["params"]["properties"]["style"]["enum"].as_array().unwrap().contains(&json!("power_bar")));
+}
+
 /// A label at a wire interior names that explicit route; ordinary geometric crossings remain
 /// separate until a label is deliberately placed there. Geometry edits invalidate contact caches.
 #[test]
@@ -177,6 +203,46 @@ fn direct_endpoint_draw_delete_and_history() {
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
     s.apply("edit.redo", &Value::Null).unwrap();
     assert!(s.project().unwrap().net_labels().is_empty());
+}
+
+/// Net-name appearance changes neither the electrical anchor nor attached routes, and is
+/// preserved by later edits that omit text. Older sheet versions cannot discard it on load.
+#[test]
+fn power_text_appearance_is_persistent_atomic_and_separate_from_wiring() {
+    let mut s = session();
+    apply(&mut s, ADD, json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0}));
+    let label = s.project().unwrap().net_labels()[0].clone();
+    apply(&mut s, DRAW_WIRE, json!({"from":{"net_label":label.object_id()},"to":{"x_nm":10*G,"y_nm":0},"bends":[]}));
+    let before = s.snapshot().unwrap();
+    let text = schematic::fields::Layout { offset: Some(Point { x_nm: 2 * G, y_nm: 4 * G }), height_nm: 2_000_000, ..Default::default() };
+    apply(&mut s, SET, json!({"id":label.object_id(),"name":"GND","style":"ground","x_nm":0,"y_nm":0,"text":text}));
+    let after = s.snapshot().unwrap();
+    assert_eq!(before.inspect_schematic()["netlist"], after.inspect_schematic()["netlist"]);
+    assert_eq!(before.wire_path(&before.wires()[0]), after.wire_path(&after.wires()[0]));
+    assert_eq!(after.net_labels()[0].at, label.at);
+    let documents = persistence::encode_documents(after.clone()).unwrap();
+    assert_eq!(persistence::encode_documents(persistence::decode_documents(&documents).unwrap()).unwrap(), documents);
+    let path = format!("sheets/{}.json", after.sheet_target().id());
+    let mut downgraded = documents.clone();
+    let mut sheet: Value = serde_json::from_slice(&downgraded[&path]).unwrap();
+    assert_eq!(sheet["format"], "pcbcraft-sheet/5");
+    sheet["format"] = json!("pcbcraft-sheet/3");
+    downgraded.insert(path, serde_json::to_vec(&sheet).unwrap());
+    assert!(persistence::decode_documents(&downgraded).is_err());
+    for invalid in [json!(null), json!({"height_nm":-1}), json!(schematic::fields::Layout { height_nm: -1, ..Default::default() })] {
+        let revision = s.revision();
+        assert!(
+            s.apply(SET, &json!({"id":label.object_id(),"name":"BAD","style":"power","x_nm":G,"y_nm":G,"text":invalid,"expected_revision":revision}))
+                .is_err()
+        );
+        assert!(Arc::ptr_eq(&after, &s.snapshot().unwrap()));
+    }
+    apply(&mut s, SET, json!({"id":label.object_id(),"name":"GND","style":"power_bar","x_nm":0,"y_nm":0}));
+    assert_eq!(s.project().unwrap().net_labels()[0].text, Some(text));
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&after, &s.snapshot().unwrap()));
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
 }
 
 /// A remote wire can bridge two differently named global nets; local inspection must see the

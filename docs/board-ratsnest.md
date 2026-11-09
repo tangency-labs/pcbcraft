@@ -5,6 +5,7 @@ baseline. Before the first accepted update, schematic connections do not produce
 airwires or a zero-connection status that could imply the board is synchronized.
 The Layers card's **Ratsnest** checkbox controls the overlay for that view;
 `view.set_ratsnest_visibility` exposes the same presentation change to live MCP.
+**Show all** and **Isolate active** preserve that overlay choice while changing physical layers.
 Visibility survives local arrangement saves and leaves project bytes, electrical
 revision and document Undo unchanged. Existing arrangements show it by default.
 

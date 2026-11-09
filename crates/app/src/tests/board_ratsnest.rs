@@ -107,6 +107,11 @@ fn ratsnest_visibility_is_saved_per_view_and_exposed_to_live_control() {
     let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     click(&mut h, "Ratsnest");
     assert!(airwires(&h).is_empty());
+    for action in ["Isolate active", "Show all"] {
+        click(&mut h, action);
+        assert!(h.state().views.active.board.hidden_layers.contains("ratsnest"));
+        assert!(airwires(&h).is_empty());
+    }
     let saved = h.state().views.active.saved_state(&h.state().session).unwrap();
     let mut restored = crate::editor_view::EditorView::from_state(ViewId(99), &saved, &h.state().session);
     restored.sync(&h.state().session);

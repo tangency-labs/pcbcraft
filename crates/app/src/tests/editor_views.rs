@@ -1,4 +1,4 @@
-use pcbcraft_engine::{persistence::encode, schematic::Point};
+use pcbcraft_engine::{SET_SYMBOL_FIELDS, persistence::encode, schematic::Point};
 
 use super::*;
 

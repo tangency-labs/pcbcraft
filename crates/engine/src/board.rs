@@ -187,7 +187,7 @@ impl Footprint {
             value["mapping"] = json!(self.mapping);
         }
         if let Some(baseline) = &project.board.baseline {
-            let pending_removal = !project.components.contains_key(&self.component);
+            let pending_removal = !project.component_is_board_eligible(self.component);
             if pending_removal {
                 value["accepted_component"] = json!(baseline.components.get(&self.component));
             }
@@ -311,9 +311,14 @@ impl Board {
             .collect()
     }
 
-    /// Distinguish authored desired intent from the package accepted by the board.
-    pub(crate) fn has_pending_package_intent(&self) -> bool {
-        self.baseline.as_ref().is_some_and(|baseline| self.assignments.values().any(|assignment| !baseline.validate_assignment(assignment)))
+    /// Distinguish physically eligible desired intent from accepted packages;
+    /// excluded live choices remain authored without requiring a physical update.
+    pub(crate) fn has_pending_package_intent(&self, project: &crate::Project) -> bool {
+        self.baseline.as_ref().is_some_and(|baseline| {
+            self.assignments
+                .values()
+                .any(|assignment| project.component_is_board_eligible(assignment.component) && !baseline.validate_assignment(assignment))
+        })
     }
     /// Find a terminal's corresponding physical pad by the explicit component mapping.
     pub(crate) fn pad_for(&self, component: u64, pin: &str) -> Option<Pad> {

@@ -47,8 +47,11 @@ initialization command below, because its earlier accepted state is unavailable.
 ## Initializing accepted state
 
 The command takes the addressed `board` and `expected_revision`, through the same
-engine command path as other board edits. Every current component must have a
-supported pinned physical assignment or an existing compatible legacy marker.
+engine command path as other board edits. Every board-eligible component must have
+a supported pinned physical assignment or an existing compatible legacy marker.
+Unplaced components excluded from the board need no package. An excluded component
+that is already placed is adopted with its actual physical package, so initialization
+preserves that predecessor until a reviewed update removes it.
 Missing choices, incompatible mappings and stale targets fail without changing
 the project. Initialization is one undo step; a repeated invocation is a no-op
 and does not accept subsequent schematic changes.
@@ -75,6 +78,23 @@ removal is not performed by calling initialization again. Ordinary explicit PCB
 footprint deletion remains available
 and undoable; accepted history and its package assets remain until reconciled.
 
+## Physical membership and exclusion
+
+This single-board slice forwards all live components except those with
+`exclude_from_board`. Population, BOM, simulation and position-file filters do
+not change physical membership. Connectivity is resolved across the complete
+schematic before excluded terminals are removed from the board input, preserving
+connections that meet at an excluded terminal.
+
+With an accepted baseline, excluding a placed component stages a physical removal;
+the footprint retains its pose and is marked `pending_removal` until Apply.
+Uninitialized legacy boards continue to refuse exclusion of placed components.
+Excluded components can retain or change a desired package choice, with the same
+live-symbol and pinned-pad validation as other choices. That intent stays saved
+with its assets, without becoming a pending physical package change. Apply removes
+the accepted physical part while preserving its live excluded choice. Unexcluding
+it later proposes an addition using that choice, which remains unplaced after Apply.
+
 ## Persisted records
 
 Board format `pcbcraft-board/10` requires a `baseline` object. Earlier board
@@ -83,7 +103,8 @@ initialization. Setup, silkscreen, graphics, legacy outline, assignments and
 placements retain their existing records alongside it.
 
 Board format `pcbcraft-board/11` is used while a desired `assignments` entry
-differs from accepted history. The entry is the sole package intent; its mapping
+for a board-eligible component differs from accepted history. Excluded-only choices
+remain in version 10. The entry is the sole package intent; its mapping
 must cover the current live component and exact pinned package. The baseline and
 placement retain the accepted package/mapping independently. Inspection reports
 `pending_update`. An older reader rejects version 11 instead of equating desired
@@ -103,7 +124,8 @@ Each physical package keeps its pinned library/item/revision and exact
 terminal-to-pad mapping. A legacy marker has a null library and its explicit
 two-pad mapping; it cannot become an unplaced catalog package by implication.
 Historical component records need no live schematic placement or installed symbol
-library to validate their accepted terminal set. Physical assets remain pinned
+library to validate their accepted terminal set. When the exact symbol identity and
+revision are still live, their terminal sets must agree. Physical assets remain pinned
 while any placement, assignment or accepted record references them.
 
 Proposed inputs may have unresolved package choices so a preview can report

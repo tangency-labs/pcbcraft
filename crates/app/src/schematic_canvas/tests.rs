@@ -16,16 +16,24 @@ fn rotated_led_labels_clear_the_drawing() {
 
     for step in [5.0, 10.16, 20.0] {
         for turns in 0..4 {
+            session
+                .execute(
+                    pcbcraft_engine::SET_SYMBOL_FIELDS,
+                    &json!({"symbol":"symbol-2","reference":"D1","value":"LED","rotation":u16::from(turns)*90,"expected_revision":session.revision()}),
+                )
+                .unwrap();
+            let project = session.snapshot().unwrap();
+            let symbol = &project.symbols()[0];
             ctx.begin_pass(egui::RawInput::default());
             let painter = ctx.layer_painter(egui::LayerId::background());
-            paint_symbol(
+            paint_symbol(&painter, &definition, pos2(250.0, 250.0), step, turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, egui::Color32::WHITE));
+            fields::paint_labels(
                 &painter,
-                &definition,
-                pos2(250.0, 250.0),
+                symbol,
+                fields::Content { reference: "D1", value: "LED", metadata: &project.component(symbol).unwrap().metadata },
+                pos2(250., 250.),
                 step,
-                turns,
-                Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, egui::Color32::WHITE),
-                Some(("D1", "LED")),
+                egui::Color32::WHITE,
             );
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
@@ -82,15 +90,7 @@ fn integrated_pin_text_obeys_the_schematic_detail_threshold() {
     pcbcraft_chrome::fonts::install(&ctx);
     let count = |definition: &SymbolDefinition, step| {
         ctx.begin_pass(egui::RawInput::default());
-        paint_symbol(
-            &ctx.layer_painter(egui::LayerId::background()),
-            definition,
-            pos2(100., 100.),
-            step,
-            0,
-            Stroke::new(1., egui::Color32::WHITE),
-            None,
-        );
+        paint_symbol(&ctx.layer_painter(egui::LayerId::background()), definition, pos2(100., 100.), step, 0, Stroke::new(1., egui::Color32::WHITE));
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         output.shapes.len()
