@@ -242,7 +242,7 @@ impl PcbApp {
         match action {
             ViewAction::Browse(action) => {
                 self.apply_browser_action(id, action);
-                if matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_)) {
+                if matches!(self.dialog, Dialog::Sheet(_) | Dialog::Hierarchy(_) | Dialog::BoardUpdate(_)) {
                     ctx.send_viewport_cmd_to(viewport(self.views.main), ViewportCommand::Focus);
                 }
             }
@@ -368,6 +368,9 @@ impl PcbApp {
                 self.views.bind(edit.source.view());
             }
             Dialog::Footprint(edit) => {
+                self.views.bind(edit.source.view());
+            }
+            Dialog::BoardUpdate(edit) => {
                 self.views.bind(edit.source.view());
             }
             _ => {}

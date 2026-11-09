@@ -221,7 +221,7 @@ Quarter turns resolve exactly; other angles round pad offsets to the nearest
 nanometer. The GUI steps by 90°, while the shared command accepts any supported
 whole-degree orientation.
 Omitted rotation means zero, and canonical records omit zero to preserve legacy
-bytes. A nonzero orientation requires `pcbcraft-board/4` through `/7`; earlier board versions
+bytes. A nonzero orientation requires `pcbcraft-board/4` or a later supported board version; earlier versions
 and legacy single-file encodings refuse it rather than lose orientation. Version
 4 permits an absent setup or the version-3 setup vocabulary, preserving layer,
 material and mapping identities. Encoding uses versions 1–3 when no footprint is
@@ -229,11 +229,13 @@ rotated, and legacy single-file export refuses rotated footprints. Moving change
 only the affected footprint record; rotating can additionally change the board
 format header. Every project has its sheet documents. A new schematic-only
 project has no board document; an explicitly created PCB and legacy implicit-board
-projects retain `board.json`, even when no footprints are placed.
+projects retain `board.json`, even when no footprints are placed. The board registry
+supports zero or one board. Newer physical-board versions add data for that board,
+rather than implementing multiple boards.
 
 Physical footprint references require board version 5. Each instance carries
 `library`, `definition`, `revision` and an explicit `mapping` from terminal ID to
-numeric pad ID, together with its position and optional rotation. The complete
+pad ID, together with its position and optional rotation. The complete
 [footprint definition](footprint-library.md) is saved separately and must match
 its path identity. Missing, conflicting or unused definitions are refused; loading
 never substitutes a built-in definition. Version 5 allows absent setup or the
