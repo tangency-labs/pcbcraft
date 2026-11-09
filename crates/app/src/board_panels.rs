@@ -14,6 +14,7 @@ impl PcbApp {
             return ([Rect::NOTHING; 3], Rect::NOTHING);
         };
         let view_id = self.views.active.id();
+        let input = self.views.active.input(&self.session);
         let state = &mut self.views.active.board;
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
             return ([Rect::NOTHING; 3], Rect::NOTHING);
@@ -75,8 +76,8 @@ impl PcbApp {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
         let unit = self.preferences.units;
-        let unrouted =
-            state.ratsnest_cache.as_ref().filter(|(_, ratsnest)| ratsnest.board == target.target).map(|(_, ratsnest)| ratsnest.lines.len());
+        // The ratsnest for this revision, through the same per-input cache the canvas reads.
+        let unrouted = state.ratsnest(target, input).map(|ratsnest| ratsnest.lines.len());
         let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
         let (properties, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
@@ -124,7 +125,6 @@ impl PcbApp {
                         property(ui, "Footprints", &target.footprints().count().to_string());
                         property(ui, "Tracks", &target.tracks().len().to_string());
                         property(ui, "Vias", &target.vias().len().to_string());
-                        // The canvas caches the ratsnest per revision; reuse it rather than recompute.
                         if let Some(lines) = unrouted {
                             property(ui, "Unrouted", &lines.to_string());
                         }

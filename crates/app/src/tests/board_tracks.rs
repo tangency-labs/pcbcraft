@@ -1112,11 +1112,25 @@ fn properties_summarize_the_board_when_nothing_is_selected() {
     );
     add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
     h.run();
+    // Each value sits in its own label's row: right of it and on the same line.
+    let in_row = |h: &Harness<'_, PcbApp>, label: &str, value: &str| {
+        h.query_all_by_label(label).any(|label| {
+            let row = label.rect();
+            h.query_all_by_label(value).any(|value| (value.rect().center().y - row.center().y).abs() < 2. && value.rect().left() > row.right())
+        })
+    };
     for (label, value) in [("Size", "20 mm × 10 mm"), ("Copper layers", "2"), ("Footprints", "2"), ("Tracks", "1"), ("Vias", "0"), ("Unrouted", "1")]
     {
-        assert!(h.query_all_by_label(label).next().is_some(), "{label} row");
-        assert!(h.query_all_by_label(value).next().is_some(), "{label} shows {value}");
+        assert!(in_row(&h, label, value), "{label} shows {value}");
     }
+    let line = &airwires(&h)[0];
+    let (a, b) = (line.from.position, line.to.position);
+    let path = [a, Point { x_nm: a.x_nm, y_nm: -2_540_000 }, Point { x_nm: b.x_nm, y_nm: -2_540_000 }, b];
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    h.run();
+    assert!(in_row(&h, "Unrouted", "0"), "the next frame uses the new connectivity revision");
 }
 
 /// At a T-junction, D keeps the connection: a dragged end on the middle of another track holds
