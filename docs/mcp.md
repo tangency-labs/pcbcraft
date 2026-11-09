@@ -158,6 +158,14 @@ one undo step. Optional `layer_changes`, a list of `{at, layer}` in increasing
 vertex order after the first, places a through via at `points[at]` and continues on
 that copper layer; a change at the last vertex ends the route on a via. Layer changes
 require `via_diameter_nm` and `via_drill_nm`, with the drill smaller than the pad.
+`pcb.check_design` checks the addressed board without editing it; `execute` returns
+`design_check` with the `rules` used, `violations` (each with a `kind`, `message`,
+representative `at` point and `items`), `counts` per kind and the `total`, listing at
+most 1000 findings. Optional `clearance_nm` (default 200000), `min_track_width_nm`
+(150000), `edge_clearance_nm` (300000) and `min_annular_ring_nm` (100000) override the
+defaults. Kinds are `clearance`, `track_width`, `annular_ring`, `unconnected`,
+`no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
+
 `pcb.add_via` places one standalone through via from `at`, `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad
 that would join two nets. `pcb.move_tracks` moves `tracks` and/or `vias` by `dx_nm` and

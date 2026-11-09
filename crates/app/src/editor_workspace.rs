@@ -896,6 +896,19 @@ impl PcbApp {
                 covered.push(self.selection_properties(ui, area, properties_area));
             }
         }
+        if board && let Some((panels, _)) = board_panel {
+            // The DRC card floats on the right below Properties, leaving Layers and Properties clear.
+            let mut drc_area = area;
+            // `board_panels` returns the Browser, Layers and Properties cards in that order.
+            drc_area.min.y = drc_area.min.y.max(panels[2].bottom() + 8.);
+            let revision = self.session.revision();
+            match self.views.active.board.drc.show(ui, drc_area, revision, self.preferences.units) {
+                crate::board_drc::Action::Focus(at) => self.views.active.camera.center_on(at),
+                crate::board_drc::Action::Rerun => self.run_drc(),
+                crate::board_drc::Action::None => {}
+            }
+            covered.push(self.views.active.board.drc.rect);
+        }
         if project_focus && self.views.active.filters_open {
             covered.push(self.selection_filters(ui, area, filters_area));
         }

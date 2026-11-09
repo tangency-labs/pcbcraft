@@ -158,11 +158,11 @@ pub struct Copper {
 }
 
 /// A pad reduced to what connectivity needs: its land corners, layers and net label.
-struct Land {
-    key: (String, String),
-    corners: [Point; 4],
-    layers: Vec<Uuid>,
-    net: Option<String>,
+pub(super) struct Land {
+    pub(super) key: (String, String),
+    pub(super) corners: [Point; 4],
+    pub(super) layers: Vec<Uuid>,
+    pub(super) net: Option<String>,
 }
 
 impl<'a> BoardView<'a> {
@@ -186,7 +186,7 @@ impl<'a> BoardView<'a> {
 
 /// Resolve each physical pad's land, layers and net once per snapshot. Markers without
 /// physical copper and pads on an unconfigured board are omitted.
-fn lands(view: BoardView<'_>) -> Vec<Land> {
+pub(super) fn lands(view: BoardView<'_>) -> Vec<Land> {
     view.footprints()
         .flat_map(|footprint| {
             let id = footprint.id.clone();
@@ -201,7 +201,7 @@ fn lands(view: BoardView<'_>) -> Vec<Land> {
 
 /// Union-find over lands, then tracks, then vias. Returns islands plus each island's member
 /// node indices, numbered in that order.
-fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
+pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
     let mut parent: Vec<usize> = (0..lands.len() + tracks.len() + vias.len()).collect();
     fn find(parent: &mut [usize], mut node: usize) -> usize {
         while parent[node] != node {
@@ -289,7 +289,7 @@ fn via_touches_land(at: Point, radius: f64, corners: &[Point; 4]) -> bool {
 }
 
 /// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.
-fn inside(point: Point, corners: &[Point; 4]) -> bool {
+pub(super) fn inside(point: Point, corners: &[Point; 4]) -> bool {
     let mut sign = 0i8;
     for (a, b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
         let cross = (b.x_nm - a.x_nm) as i128 * (point.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (point.x_nm - a.x_nm) as i128;
@@ -305,7 +305,7 @@ fn inside(point: Point, corners: &[Point; 4]) -> bool {
 }
 
 /// Shortest distance between two closed segments in nanometers; zero when they cross.
-fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
+pub(super) fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
     let cross =
         |o: Point, p: Point, q: Point| (p.x_nm - o.x_nm) as i128 * (q.y_nm - o.y_nm) as i128 - (p.y_nm - o.y_nm) as i128 * (q.x_nm - o.x_nm) as i128;
     let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
@@ -316,7 +316,7 @@ fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
 }
 
 /// Distance from a point to a closed segment; a degenerate segment is a point.
-fn point_distance(p: Point, a: Point, b: Point) -> f64 {
+pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
     let (px, py, ax, ay, bx, by) = (p.x_nm as f64, p.y_nm as f64, a.x_nm as f64, a.y_nm as f64, b.x_nm as f64, b.y_nm as f64);
     let (dx, dy) = (bx - ax, by - ay);
     let length = dx * dx + dy * dy;
@@ -529,4 +529,4 @@ pub(crate) fn path_schema() -> Value {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

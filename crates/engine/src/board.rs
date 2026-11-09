@@ -10,6 +10,7 @@ use std::{
 pub mod assignment;
 pub mod definition;
 pub mod drawing;
+pub mod drc;
 pub mod identity;
 pub mod materials;
 pub mod outline;

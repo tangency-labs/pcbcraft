@@ -320,13 +320,24 @@ impl PcbApp {
             active: false,
             toggle: false,
         }];
-        let inspect_planned = [
-            planned(ToolIcon::Rules, "Rules", "Edit design rules (planned)"),
-            planned(ToolIcon::Drc, "DRC", "Run design rules check (planned)"),
-            planned(ToolIcon::Measure, "Measure", "Measure distance (planned)"),
+        let inspect = [
+            RibbonTool {
+                icon: ToolIcon::Drc,
+                label: "DRC",
+                description: "Run design rules check",
+                shortcut: "",
+                enabled,
+                active: self.views.active.board.drc.open,
+                toggle: false,
+            },
+            reveal[0],
         ];
-        if workspace::ribbon_group_with_menu(ui, "Inspect", &reveal, &inspect_planned) == Some(0) {
-            self.views.reveal_highlight(self.views.active.id(), &self.session);
+        let inspect_planned =
+            [planned(ToolIcon::Rules, "Rules", "Edit design rules (planned)"), planned(ToolIcon::Measure, "Measure", "Measure distance (planned)")];
+        match workspace::ribbon_group_with_menu(ui, "Inspect", &inspect, &inspect_planned) {
+            Some(0) => self.run_drc(),
+            Some(1) => self.views.reveal_highlight(self.views.active.id(), &self.session),
+            _ => {}
         }
         workspace::ribbon_separator(ui);
 
@@ -392,6 +403,17 @@ impl PcbApp {
             .is_some_and(|view| crate::board_tracks::can_route(view, board.active_layer.as_deref(), &board.hidden_layers))
     }
 
+    /// Run the design rules check for the focused board view with the default rules, opening its
+    /// results card. The check reads the current board and never edits it.
+    pub(super) fn run_drc(&mut self) {
+        let revision = self.session.revision();
+        if let Some(project) = self.session.project()
+            && let Some(view) = self.views.active.board.target.and_then(|target| project.board_view(target))
+        {
+            self.views.active.board.drc.run(view, revision);
+        }
+    }
+
     /// Whether the focused board view's board has the two copper layers a through via needs.
     fn can_place_via(&self) -> bool {
         self.session
@@ -449,6 +471,7 @@ impl PcbApp {
         let Some(project) = view.board.target.and_then(|target| project.board_view(target)) else {
             return;
         };
+        let markers = view.board.drc.markers(view.board.target);
         let pick = ui
             .push_id(view.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
@@ -469,6 +492,7 @@ impl PcbApp {
                         self.preferences.grid_opacity_percent,
                         self.preferences.board_grid_style,
                         &label,
+                        &markers,
                     )
                 })
             })

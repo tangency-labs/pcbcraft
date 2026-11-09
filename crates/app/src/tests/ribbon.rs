@@ -113,7 +113,7 @@ fn pcb_layout_tab_groups_working_and_planned_tools() {
         ("Place", &["Zone"][..]),
         ("Route", &["Pair", "Tune"]),
         ("Modify", &["Align"]),
-        ("Inspect", &["Rules", "DRC", "Measure"]),
+        ("Inspect", &["Rules", "Measure"]),
         ("Design", &["Flip view", "Outputs", "Refill zones"]),
     ] {
         click(&mut h, &format!("{group} menu"));

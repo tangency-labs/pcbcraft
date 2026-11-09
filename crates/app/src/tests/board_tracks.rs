@@ -453,3 +453,35 @@ fn properties_edit_the_selected_track_width() {
     assert_eq!(h.state().session.revision(), revision + 1);
     assert_eq!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().width_nm, 400_000);
 }
+
+/// Inspect › DRC checks the board without editing it and lists its findings; clicking one
+/// centers the view there. An edit marks the result out of date until it is run again.
+#[test]
+fn drc_lists_findings_focuses_them_and_goes_stale_after_edits() {
+    let mut h = routable();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    click(&mut h, "Run design rules check");
+    assert_eq!(h.state().session.revision(), revision, "DRC edits nothing");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    assert!(h.query_by_label_contains("No outline · The board has no closed Board Outline").is_some());
+    let unconnected = h.get_all_by_label_contains("Unconnected · Unrouted connection").count();
+    assert_eq!(unconnected, airwires(&h).len());
+    assert!(h.query_by_label_contains("DRC 2 issues").is_some(), "the status bar counts the findings");
+
+    let rect = h.get_by_label("PCB canvas").rect();
+    let line = airwires(&h)[0].clone();
+    let finding =
+        Point { x_nm: line.from.position.x_nm / 2 + line.to.position.x_nm / 2, y_nm: line.from.position.y_nm / 2 + line.to.position.y_nm / 2 };
+    let camera_before = h.state().views.active.camera.screen(finding, rect);
+    h.get_all_by_label_contains("Unconnected · Unrouted connection").next().unwrap().click();
+    h.run();
+    assert_ne!(h.state().views.active.camera.screen(finding, rect), camera_before, "the view moved to the finding");
+
+    add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    assert!(h.query_by_label_contains("out of date").is_some());
+    click(&mut h, "Run again");
+    assert!(h.query_by_label_contains("out of date").is_none());
+    click(&mut h, "Close");
+    assert!(h.query_by_label_contains("Unrouted connection").is_none());
+}

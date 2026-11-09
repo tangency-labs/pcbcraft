@@ -477,11 +477,11 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 
 ## PCB layout
 
-The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline** (Line,
-Rectangle), **Route** (Track, followed by the Active layer, Track width and Via pad /
-drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (Reveal in its
-menu) and **Design** (Sync updates the PCB from the schematic; Setup opens Board setup).
-Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules, DRC, Measure,
+The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline**
+(Line, Rectangle), **Route** (Track, followed by the Active layer, Track width and Via
+pad / drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (DRC,
+Reveal) and **Design** (Sync updates the PCB from the schematic; Setup opens Board
+setup). Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules, Measure,
 Flip view, Outputs and Refill zones, appear disabled in their group's menu and say
 "planned". The ribbon scrolls sideways when the window is too narrow for every group.
 
@@ -584,6 +584,17 @@ previous layer, or else the last vertex. Esc or right-click drops the unfinished
 route, and a second Esc exits the tool. The whole route is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
+**Layout → Inspect → DRC** checks the board without editing it and opens a DRC card
+listing each finding. It reports copper of different nets closer than the clearance
+(0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
+connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
+of its edge, and overlapping footprint courtyards. Copper joined by tracks or on the
+same net needs no clearance. Click a finding to center the view on its marker; the
+status bar shows the result, and an edit marks it out of date until **Run again**.
+These rule values are fixed defaults until net classes and board rules arrive (#77);
+zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
+not a manufacturing sign-off.
+
 To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
 **Ctrl+Shift+V**. Each click places one through via with the current pad and drill,
 snapping to a nearby pad center or track end on any copper layer, otherwise to the grid;
