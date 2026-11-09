@@ -595,7 +595,7 @@ Without a tool, click a track or via to select it (Shift adds, Ctrl or ⌘ toggl
 press Delete to remove it; deleting a via keeps its tracks. The **Tracks** selection
 filter turns track picking off. Tracks stay on their layer, so a back-side track does
 not reach front-only SMD pads, while a via joins copper on every layer. Dragging
-tracks, standalone vias, blind or buried vias, and clearance or DRC checks are not
+tracks, blind or buried vias, and clearance or DRC checks are not
 implemented yet. PgUp and PgDn still change layer by cancelling the route.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
