@@ -644,6 +644,10 @@ pub(crate) fn show(
             Some(drag)
         });
         let picked = menu::context(&response, |ui| {
+            if let Some(action) = tool_menu::clipboard(ui, !selected.is_empty()) {
+                return Some(Click::ToolAction(action, ui.ctx().clone()));
+            }
+            menu::separator(ui);
             if group {
                 return MenuItem::new("Delete selected items").shortcut("Del").show(ui).then_some(Click::DeleteItems);
             }

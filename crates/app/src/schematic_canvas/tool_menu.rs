@@ -3,6 +3,11 @@ use super::*;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Action {
+    Copy,
+    Cut,
+    Paste,
+    PasteOptions,
+    Duplicate,
     Symbols,
     Wire,
     Ground,
@@ -73,4 +78,17 @@ pub(super) fn active(ui: &mut Ui, tool: Option<&Tool>, repeat: bool) -> Option<A
         }
     }
     MenuItem::new("Cancel").shortcut("Esc").show(ui).then_some(Action::Cancel)
+}
+
+/// Clipboard actions follow the existing selection while Paste always reads the system clipboard.
+pub(super) fn clipboard(ui: &mut Ui, selected: bool) -> Option<Action> {
+    [
+        ("Copy", "Ctrl+C", Action::Copy, selected),
+        ("Cut", "Ctrl+X", Action::Cut, selected),
+        ("Paste", "Ctrl+V", Action::Paste, true),
+        ("Paste Options…", "Ctrl+Shift+V", Action::PasteOptions, true),
+        ("Duplicate", "Ctrl+D", Action::Duplicate, selected),
+    ]
+    .into_iter()
+    .find_map(|(label, key, action, enabled)| MenuItem::new(label).shortcut(key).enabled(enabled).show(ui).then_some(action))
 }

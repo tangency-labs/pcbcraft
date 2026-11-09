@@ -853,3 +853,13 @@ The separate Power/Ground annotation styles and marker-only text tools have been
 removed. Native power Home-preview and shared field-tool regressions use original
 command-built circuits, production save/load and the existing thumbnail painter.
 No external source, asset, dependency or project fixture was introduced.
+
+
+## Portable schematic clipboard
+
+The versioned native fragment contract, identity remapping, cut/paste transactions,
+canvas preview and Paste Options are original PCBcraft work over the existing
+engine codecs and Craft controls. Clipboard exchange uses eframe/egui's already
+qualified system clipboard events and output; no new dependency, external EDA
+implementation, artwork, library data or saved-project format is introduced.
+Regression circuits are built through shared native commands.
