@@ -511,14 +511,14 @@ stages physical text height, stroke width and pad clearance alongside the layer
 and stackup settings. Apply commits them in one undoable board change; Cancel
 discards the draft. Defaults are 1 mm, 0.15 mm and 0.25 mm respectively; lengths accept mil/mm
 input and save with the project. **Assign Footprint…** in a schematic symbol's
-context menu, or **Footprints** in the PCB Layout ribbon, opens package selection
+context menu, or **Layout → Place → Footprint** in PCB layout, opens package selection
 and explicit terminal-to-pad mapping. Assigning pins the package without placing
 it. In PCB layout, **Place on board** places an assigned component at unit-aware
 X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
-registration, arcs, slots and routing remain planned.
+registration, arcs and slots remain planned.
 
-**Layout → Board → Setup** and **Layers → Board setup…** share a revision-bound
+**Layout → Design → Setup** and **Layers → Board setup…** share a revision-bound
 Craft settings form, including on a board with no saved stackup. The first opening
 shows a complete editable two-layer 1.6 mm FR-4/1 oz draft; nothing changes until Apply.
 Existing setups retain their own dimensions and materials. Board editor layers provides names and optional membership;
