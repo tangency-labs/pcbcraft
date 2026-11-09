@@ -239,7 +239,7 @@ fn vias_carry_a_route_between_layers_in_one_edit() {
 
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved["board.json"].clone()).unwrap();
-    assert!(text.contains("\"format\": \"pcbcraft-board/12\"") && text.contains("  \"vias\": [\n"), "{text}");
+    assert!(text.contains("\"format\": \"pcbcraft-board/13\"") && text.contains("  \"vias\": [\n"), "{text}");
     assert_eq!(text.matches("\"drill_nm\":300000").count(), 2, "one line per via");
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     s.apply("edit.undo", &json!({})).unwrap();
@@ -431,4 +431,39 @@ fn a_track_crossing_a_pad_with_both_ends_outside_joins_its_island() {
         s.apply(ADD_TRACKS, &json!({"layer":front,"width_nm":100_000,"points":across,"expected_revision":s.revision()})).unwrap_err().to_string();
     assert!(error.contains("would connect nets"), "crossing two nets' pads is a short: {error}");
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Format 12 stays tracks-only, as first released, so its readers never meet vias. Boards with
+/// vias save as format 13, with or without tracks; deleting the last via returns to format 12.
+#[test]
+fn vias_use_board_format_13_and_format_12_stays_tracks_only() {
+    let mut s = routed_fixture();
+    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let y = 20_000_000;
+    route(&mut s, front, &[Point { x_nm: 0, y_nm: y }, Point { x_nm: 2_000_000, y_nm: y }]).unwrap();
+    let tracks_only = encode_documents(s.snapshot().unwrap()).unwrap();
+    let text = String::from_utf8(tracks_only["board.json"].clone()).unwrap();
+    assert!(text.contains("\"format\": \"pcbcraft-board/12\"") && !text.contains("\"vias\""), "{text}");
+
+    route_with_vias(&mut s, front, &[Point { x_nm: 4_000_000, y_nm: y }, Point { x_nm: 6_000_000, y_nm: y }], &[(1, back)]).unwrap();
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    let text = String::from_utf8(saved["board.json"].clone()).unwrap();
+    assert!(text.contains("\"format\": \"pcbcraft-board/13\""), "{text}");
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    let mut as_12 = saved.clone();
+    as_12.insert("board.json".into(), text.replace("pcbcraft-board/13", "pcbcraft-board/12").into_bytes());
+    assert!(decode_documents(&as_12).is_err(), "format 12 rejects vias");
+
+    // Format 13 may carry vias alone, and requires at least one.
+    let tracks: Vec<_> = view(&s).tracks().iter().map(|track| track.id).collect();
+    s.apply(DELETE_TRACKS, &json!({"tracks":tracks,"expected_revision":s.revision()})).unwrap();
+    let vias_only = encode_documents(s.snapshot().unwrap()).unwrap();
+    let text = String::from_utf8(vias_only["board.json"].clone()).unwrap();
+    assert!(text.contains("\"format\": \"pcbcraft-board/13\"") && !text.contains("\"tracks\""), "{text}");
+    assert_eq!(encode_documents(decode_documents(&vias_only).unwrap()).unwrap(), vias_only);
+    let start = text.find("  \"vias\": [").unwrap();
+    let end = start + text[start..].find("  ],\n").unwrap() + "  ],\n".len();
+    let mut no_vias = vias_only.clone();
+    no_vias.insert("board.json".into(), format!("{}{}", &text[..start], &text[end..]).into_bytes());
+    assert!(decode_documents(&no_vias).is_err(), "format 13 requires vias");
 }
