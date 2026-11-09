@@ -408,6 +408,123 @@ fn compact_drags_place_once_and_reject_intervening_edits() {
     }
 }
 
+/// Power tiles share component dragging in both catalog presentations. A drop commits one
+/// marker at the snapped pointer, retains its custom name/style and arms repeat with a fresh ID.
+#[test]
+fn power_catalog_drags_preview_place_and_repeat_in_both_presentations() {
+    use pcbcraft_engine::net_labels::Style;
+    for compact in [false, true] {
+        for (tile, name, style) in [("GND", "GND", Style::Ground), ("VCC (bar)", "VCC_ANALOG", Style::PowerBar)] {
+            let mut h = editor(1400.);
+            h.state_mut().browser.open = false;
+            h.run();
+            click(&mut h, "Cancel");
+            h.key_press(Key::P);
+            h.run();
+            click(&mut h, "List");
+            if compact {
+                click(&mut h, "Dock Parts Catalog");
+            }
+            click(&mut h, tile);
+            if name != "GND" {
+                h.get_by_label("Net name").click();
+                h.run();
+                h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+                h.get_by_label("Net name").type_text(name);
+                h.run();
+            }
+            click(&mut h, "Repeat placement");
+            let before = h.state().session.snapshot().unwrap();
+            let from = h.get_by_label(tile).rect().center();
+            let to = h.get_by_label("Schematic canvas").rect().center() + egui::vec2(150., 60.);
+            h.drag_at(from);
+            h.run();
+            h.hover_at(from + egui::vec2(8., 0.));
+            h.run();
+            assert!(egui::DragAndDrop::payload::<crate::PartDrag>(&h.ctx).is_some(), "power drag starts: compact={compact} tile={tile}");
+            h.hover_at(to);
+            h.run();
+            assert_eq!(h.state().parts.open, compact);
+            assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+            let drag = egui::DragAndDrop::payload::<crate::PartDrag>(&h.ctx).expect("power payload follows the pointer onto the canvas");
+            assert!(matches!(&drag.placement, Placement::Power(label) if label.name == name && label.style == style));
+            let canvas = h.get_by_label("Schematic canvas").rect();
+            let point = h.state().views.active.camera.snap(to, canvas);
+            h.drop_at(to);
+            h.run();
+            assert_eq!(h.state().session.revision(), drag.source.revision + 1);
+            let label = h.state().session.project().unwrap().net_labels()[0].clone();
+            assert_eq!((label.at, label.name.as_str(), label.style), (point, name, style));
+            assert!(matches!(&h.state().views.active.schematic.tool, Some(crate::Tool::NetLabel {label,..}) if label.id == 0));
+            crate::tests::click_canvas_at(&mut h, to + egui::vec2(100., 60.));
+            let after = h.state().session.snapshot().unwrap();
+            assert_eq!(after.net_labels().len(), 2);
+            assert_ne!(after.net_labels()[0].id, after.net_labels()[1].id);
+            assert!(after.symbols().is_empty());
+            h.key_press(Key::Escape);
+            h.run();
+            click(&mut h, "Undo");
+            assert_eq!(h.state().session.project().unwrap().net_labels().len(), 1);
+            click(&mut h, "Undo");
+            crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
+            click(&mut h, "Redo");
+            click(&mut h, "Redo");
+            crate::tests::assert_same_content(&after, &h.state().session.snapshot().unwrap());
+        }
+    }
+}
+
+/// Dragging another supply uses that tile's own default name. One-shot, invalid names,
+/// stale revisions, Escape and release over the catalog never create unintended markers.
+#[test]
+fn power_drags_use_their_own_names_and_reject_invalid_or_cancelled_drops() {
+    for mode in ["place", "invalid", "stale", "escape", "panel"] {
+        let mut h = editor(1400.);
+        h.state_mut().browser.open = false;
+        h.run();
+        click(&mut h, "Cancel");
+        h.key_press(Key::P);
+        h.run();
+        click(&mut h, "List");
+        click(&mut h, "Dock Parts Catalog");
+        if mode == "invalid" {
+            click(&mut h, "+3V3");
+            h.get_by_label("Net name").click();
+            h.run();
+            h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+            h.key_press(Key::Backspace);
+            h.run();
+        }
+        let from = h.get_by_label("+3V3").rect().center();
+        let to = h.get_by_label("Schematic canvas").rect().center() + egui::vec2(150., 60.);
+        h.drag_at(from);
+        h.run();
+        h.hover_at(from + egui::vec2(8., 0.));
+        h.run();
+        h.hover_at(to);
+        h.run();
+        if mode == "stale" {
+            h.state_mut().run("project.rename", &json!({"name":"Intervening"}));
+            h.run();
+        } else if mode == "escape" {
+            h.key_press(Key::Escape);
+            h.run();
+        }
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        h.drop_at(if mode == "panel" { from } else { to });
+        h.run();
+        let placed = mode == "place";
+        assert_eq!(h.state().session.revision(), revision + u64::from(placed), "{mode}");
+        assert!(h.state().views.active.schematic.tool.is_none(), "{mode}");
+        if placed {
+            assert_eq!(h.state().session.project().unwrap().net_labels()[0].name, "+3V3");
+        } else {
+            assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()), "{mode}");
+        }
+    }
+}
+
 /// Compact controls remain reachable as their dock follows the host, and floating a card
 /// does not lose its dock/expand controls when the viewport shrinks.
 #[test]

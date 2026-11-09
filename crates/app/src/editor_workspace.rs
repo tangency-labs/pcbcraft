@@ -1071,8 +1071,8 @@ impl PcbApp {
         );
         if let Some(pick) = self.parts.show(ui, area, self.browser.rect(), source, self.session.libraries()) {
             match pick {
-                crate::parts_browser::Pick::Symbol(definition) => self.begin_placement(definition),
-                crate::parts_browser::Pick::Power(label) => {
+                crate::parts_browser::Pick::Place(crate::parts_browser::Placement::Symbol(definition)) => self.begin_placement(definition),
+                crate::parts_browser::Pick::Place(crate::parts_browser::Placement::Power(label)) => {
                     self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None })
                 }
                 crate::parts_browser::Pick::Libraries => self.dialog = Dialog::LibrarySources,

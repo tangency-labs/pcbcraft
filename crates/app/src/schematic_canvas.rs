@@ -152,14 +152,14 @@ pub(crate) enum Click {
     Edit(SymbolAction, String),
     /// A row of a wire's context menu, with the leg it was opened on.
     WireEdit(WireAction, wires::LegTarget),
-    /// A part dragged from the parts browser was released over the canvas at this snapped point.
+    /// A component or power marker dragged from the catalog was released at this snapped point.
     Drop(PartDrag, Point),
 }
 
-/// A browser drag bound to the view, sheet and revision at which the gesture began.
+/// A component/power catalog drag bound to its originating view, sheet and revision.
 #[derive(Clone, Debug)]
 pub(crate) struct PartDrag {
-    pub(crate) definition: Arc<SymbolDefinition>,
+    pub(crate) placement: crate::parts_browser::Placement,
     pub(crate) source: crate::editor_view::ViewInput,
 }
 
@@ -470,7 +470,23 @@ pub(crate) fn show(
     {
         let point = camera.snap(pointer, rect);
         if valid_position(point) {
-            paint_symbol(&painter, &drag.definition, screen(point), unit_step, 0, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
+            match &drag.placement {
+                crate::parts_browser::Placement::Symbol(definition) => {
+                    paint_symbol(&painter, definition, screen(point), unit_step, 0, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
+                }
+                crate::parts_browser::Placement::Power(label) => {
+                    pcbcraft_chrome::net_label::paint(
+                        &painter,
+                        screen(point),
+                        &label.name,
+                        crate::net_labels::visual(label.style),
+                        label.rotation,
+                        unit_step,
+                        tokens.accent,
+                        false,
+                    );
+                }
+            }
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()

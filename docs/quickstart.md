@@ -63,7 +63,7 @@ Choose **Capture → Ground** to start placing GND directly. Press **P** to open
 the **Parts Catalog** at its Power collection. Choose GND, VCC, **VCC (bar)** or
 another drawing, edit its net name in the preview
 if needed, then choose **Place** and click a pin, wire or grid point for its
-anchor. **L** opens a local label form; **Ctrl+L** opens a global label form,
+anchor, or drag the chosen power entry directly onto the sheet. **L** opens a local label form; **Ctrl+L** opens a global label form,
 where **Scope** selects either scope. **R** rotates a placement preview and
 **Esc** cancels it. Local names join within a sheet, while global labels and
 power rails join matching names across sheets. Hover a label and press **E** to
