@@ -788,3 +788,39 @@ Wire handle pickup and connected G/context-menu symbol movement extend the exist
 native reshape/move commands with original PCBcraft hit testing and gesture state.
 Fixtures use shared commands. No external implementation, artwork, library data,
 dependency or saved format was added.
+
+
+## Schematic-to-PCB update flow
+
+The compact update report, direct assignment return and disposable group-placement
+preview are original PCBcraft work over the existing engine commands and Craft
+form/canvas controls. Travis Lowe's supplied update-dialog screenshot and requested
+workflow informed the change. Update confirmation followed by cursor placement
+was checked against the published [KiCad 10 Getting Started guide](https://docs.kicad.org/10.0/en/getting_started_in_kicad/getting_started_in_kicad.html)
+and [PCB Editor manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html),
+consulted November 8, 2026. No KiCad implementation, tests, source-derived fixtures,
+icons, artwork or library data were consulted or copied. Geometry and regression
+circuits use existing original pinned packages. No dependency or native-format
+change is introduced.
+
+The report-style revision follows Travis's supplied KiCad Update PCB screenshot
+(November 8, 2026) for the options/report/filter/footer organization. The report,
+counts, corrective actions, clipboard export and placement toggle are original
+PCBcraft code using existing Craft controls. No screenshot assets, vendor icons
+or implementation source are included; unavailable synchronization options are
+not represented as operational controls.
+
+The editable footprint-mapping defaults are original PCBcraft code and library
+data. `libraries/starter/footprint-mapping-defaults.json` records the exact
+starter LED symbol revisions 1/2 and footprint revision 4 pairing, using their
+already qualified terminal and pad polarity contracts documented in
+`docs/footprint-library.md`. Generic number matching uses stable terminal/pad IDs;
+no display-name, geometry or array-order inference is introduced. Travis's
+chooser screenshot and request informed the default-selection behavior. No
+external source, dependency or native project-format change is added.
+
+The chooser's pin-mapping section now reuses the existing Preferences section
+heading, rule, control height and secondary action treatment. Its aligned
+symbol-terminal / footprint-pad columns and responsive dropdowns are original
+PCBcraft presentation code prompted by Travis's supplied chooser screenshot;
+no additional source, asset, dependency or electrical mapping change is used.

@@ -22,20 +22,47 @@ edit. Existing footprints without an accepted baseline require **Use current
 state**, which records today's logical/package inputs; it cannot reconstruct an
 earlier accepted state. Cancelling a later preview does not undo either action.
 
-The review lists component additions/removals, old/new footprint and mapping
-details, changed connection groups and missing package choices. Assignment opens
-the existing package chooser and returns to explicit re-review. Apply is disabled
-for blockers, unchanged inputs or stale/replaced previews. Re-review stays within
-the same opening and original document; reopening or replacing the source requires
-closing the form and starting again. Cancel cannot revoke another client's newer
-preview.
+The dialog has an Options section above one scrollable **Changes to Be Applied**
+report. Errors, warnings, actions and infos have independent Show filters;
+unfiltered totals remain visible even when errors are hidden. Missing-package
+errors provide **Assign footprint** actions and block Update PCB. **Copy report**
+copies the complete report, including hidden categories. Closing the dialog
+cancels the preview without authoring changes.
 
-After **Apply update**, the dialog lists accepted unplaced footprints. **Place…**
-opens the existing coordinate-based placement chooser in the originating pane's
-PCB workspace. Reopening an up-to-date review offers the same unplaced list, so
-placement can continue after saving or closing the dialog. Changing a package
-choice from that handoff requires another explicit review and Apply. Updates
-never invent overlapping board coordinates or move an unchanged footprint.
+Assigning a package returns directly to a refreshed report. Compatible terminal
+and pad numbers are preselected, including named terminals; revision-qualified
+library data handles known alternative numbering. Existing mappings for the
+selected package take precedence, and every default remains editable. Terminal
+functions stay visible beside the controls.
+The current placement option controls whether acceptance starts the cursor tool;
+turning it off leaves the updated report open so placement can resume later.
+Reference/value fields remain shared project data. Reference-based relinking,
+group transfer, locks and selective field synchronization are separate engine
+features, not operational options in this dialog.
+
+**Update PCB** accepts the captured plan and opens PCB layout in the originating
+pane. New accepted footprints follow the cursor together in an initial spaced
+grid. Click to place, **R**/**Shift+R** to rotate, or **Esc**/right-click to cancel.
+The canvas click makes one atomic group-placement edit; cancelling retains the
+accepted assignments without placing them. Reopen Update PCB and choose
+**Place footprints** to resume unplaced work, including after save/reopen.
+Existing placements remain fixed. The initial arrangement is not a clearance or
+manufacturing check.
+
+External edits or a replaced preview still require **Review again**. Re-review
+stays within the same opening and original document; reopening or replacing the
+source requires a fresh dialog. Cancel cannot revoke another client's newer
+preview. A stale canvas group, focus loss or switching documents cancels the
+disposable placement without changing authored geometry.
+
+`pcb.place_assigned_footprints` exposes the same atomic placement to live/headless
+MCP. Pass explicit `components` (unique canonical IDs in placement order), `board`,
+`x_nm`, `y_nm`, optional quarter-turn `rotation` and `expected_revision`. The engine
+resolves pinned geometry, spaces conservative cells by 2 mm and validates every
+assignment and final origin before committing. Already placed, excluded, pending,
+unknown or duplicate components refuse the whole group. The engine's disposable
+`Session::preview_footprint_placement` uses that same candidate builder without
+altering history or consuming an update preview token.
 
 ## Preview and Apply
 

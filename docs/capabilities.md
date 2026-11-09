@@ -28,8 +28,16 @@ distinct across offline reopen; deleted schematic parts retain their footprints
 until acceptance. The [PCB ratsnest](board-ratsnest.md) displays only accepted
 logical connections, with per-view visibility, live MCP control and explicit
 unavailable endpoints. The Update PCB dialog reviews those typed changes from
-either workspace, resolves missing choices through the package chooser and hands
-accepted unplaced parts to explicit placement. Stale or replaced previews require
+either workspace in a scrollable change report, with category filters, unfiltered
+warning/error totals and clipboard export. It resolves missing choices through the
+package chooser and, by default, hands
+accepted unplaced parts to a spaced cursor group for one-click placement, with
+quarter-turn rotation and cancellation. Package assignment refreshes the review
+directly; compatible pad numbers are preselected for named and unnamed terminals, with
+saved choices taking precedence over revision-qualified library defaults. Full change
+records remain available in the report, and a placement option can leave the
+updated report open. Atomic group placement shares the engine and
+live/headless MCP command, while the individual X/Y chooser remains available. Stale or replaced previews require
 re-review; legacy current-state adoption and board creation remain separate
 explicit edits.
 

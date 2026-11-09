@@ -82,6 +82,7 @@ enum ParamKind {
     FootprintMapping,
     FootprintId,
     FootprintIds,
+    ComponentIds,
     ResolveExistingFootprints,
     BoardRotation,
     PadNumber,
@@ -154,6 +155,9 @@ impl ParamKind {
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
             Self::FootprintId => json!({"type":"string", "pattern":"^footprint-[1-9][0-9]*$"}),
+            Self::ComponentIds => {
+                json!({"type":"array","minItems":1,"maxItems":MAX_SYMBOLS,"uniqueItems":true,"items":{"type":"string","pattern":"^component-[1-9][0-9]*$"}})
+            }
             Self::FootprintIds => json!({"type":"array","minItems":1,"maxItems":MAX_SYMBOLS,"uniqueItems":true,"items":Self::FootprintId.schema()}),
             Self::ResolveExistingFootprints => json!({"type":"boolean"}),
             Self::SymbolId => json!({"type": "string", "pattern": "^symbol-[1-9][0-9]*$"}),
@@ -286,6 +290,7 @@ impl ParamKind {
             {
                 Ok(())
             }
+            Self::ComponentIds if board::assignment::component_ids(value).is_some() => Ok(()),
             Self::ResolveExistingFootprints if value.is_boolean() => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::NetLabelStyle if serde_json::from_value::<net_labels::Style>(value.clone()).is_ok() => Ok(()),
@@ -318,6 +323,7 @@ impl ParamKind {
             Self::FootprintMapping => Err("must map terminal IDs to pad IDs of 1 to 8 letters, digits, +, - or _"),
             Self::BoardRotation => Err("must be a whole-degree orientation from 0 through 359"),
             Self::FootprintId => Err("must identify a placed footprint"),
+            Self::ComponentIds => Err("must contain unique component IDs within the symbol limit"),
             Self::FootprintIds => Err("must contain unique placed footprint IDs within the symbol limit"),
             Self::ResolveExistingFootprints => Err("must be a boolean"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
@@ -436,7 +442,7 @@ pub const DELETE_SYMBOL: &str = "schematic.delete_symbol";
 pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
-pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT};
+pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINTS};
 pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
 pub use board::update::{APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE};
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
@@ -925,6 +931,24 @@ const CATALOG: &[Command] = &[
             Param { required: true, name: "component", summary: "Assigned component ID", kind: ParamKind::Text },
             Param { required: true, name: "x_nm", summary: "Footprint origin X in nanometers", kind: ParamKind::Coordinate },
             Param { required: true, name: "y_nm", summary: "Footprint origin Y in nanometers", kind: ParamKind::Coordinate },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: PLACE_ASSIGNED_FOOTPRINTS,
+        title: "Place Assigned Footprints",
+        summary: "Place a group of accepted assigned packages in a spaced grid at the given anchor. One atomic undo step; existing placements stay fixed.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "components", summary: "Unique assigned component IDs, in placement order", kind: ParamKind::ComponentIds },
+            SYMBOL_X,
+            SYMBOL_Y,
+            Param {
+                required: false,
+                name: "rotation",
+                summary: "Counterclockwise quarter-turn group rotation, default zero",
+                kind: ParamKind::Rotation,
+            },
             EXPECTED_REVISION,
         ],
     },
@@ -1459,6 +1483,7 @@ impl Session {
             | APPLY_UPDATE
             | CANCEL_UPDATE
             | PLACE_ASSIGNED_FOOTPRINT
+            | PLACE_ASSIGNED_FOOTPRINTS
             | SET_FOOTPRINT_TRANSFORM
             | DELETE_FOOTPRINTS
             | SET_SILKSCREEN
@@ -1583,6 +1608,7 @@ impl Session {
                 | PREVIEW_UPDATE
                 | APPLY_UPDATE
                 | PLACE_ASSIGNED_FOOTPRINT
+                | PLACE_ASSIGNED_FOOTPRINTS
                 | PLACE_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
                 | DELETE_FOOTPRINTS
@@ -1617,6 +1643,7 @@ impl Session {
                 | APPLY_UPDATE
                 | CANCEL_UPDATE
                 | PLACE_ASSIGNED_FOOTPRINT
+                | PLACE_ASSIGNED_FOOTPRINTS
                 | SET_FOOTPRINT_TRANSFORM
                 | DELETE_FOOTPRINTS
                 | SET_SILKSCREEN
@@ -1726,6 +1753,10 @@ impl Session {
             APPLY_UPDATE => self.apply_board_update(params)?,
             CANCEL_UPDATE => self.cancel_board_update(params)?,
             PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
+            PLACE_ASSIGNED_FOOTPRINTS => {
+                let candidate = self.preview_footprint_placement(params)?;
+                self.change((*candidate).clone());
+            }
             PLACE_FOOTPRINT => self.place_footprint(params)?,
             SET_FOOTPRINT_TRANSFORM => self.set_footprint_transform(params)?,
             DELETE_FOOTPRINTS => self.delete_footprints(params)?,

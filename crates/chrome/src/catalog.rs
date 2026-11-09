@@ -67,7 +67,7 @@ pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: b
 
 /// Render the common shell with a bounded body, preserving modal input and dismissal behavior.
 #[allow(clippy::too_many_arguments)]
-fn form_body(
+pub(crate) fn form_body(
     ctx: &egui::Context,
     id: &'static str,
     title: &str,

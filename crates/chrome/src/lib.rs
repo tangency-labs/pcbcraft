@@ -20,6 +20,7 @@ pub mod home;
 pub mod library_sources;
 pub mod menu;
 pub mod net_label;
+pub mod pcb_update;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview;
 pub mod properties;

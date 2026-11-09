@@ -302,7 +302,7 @@ impl PcbApp {
                 })
             })
             .inner;
-        if (pick.selection.is_some() || pick.edit.is_some() || pick.drawing_edit.is_some())
+        if (pick.selection.is_some() || pick.edit.is_some() || pick.drawing_edit.is_some() || pick.placement.is_some())
             && enabled
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
@@ -315,6 +315,19 @@ impl PcbApp {
             {
                 edit.params["board"] = serde_json::json!(target.board);
                 self.run(edit.id, &edit.params);
+            }
+            if let Some(placement) = pick.placement
+                && self.views.active.accepts(placement.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                self.run(
+                    pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINTS,
+                    &serde_json::json!({
+                        "board": target.board, "components": placement.components,
+                        "x_nm": placement.position.x_nm, "y_nm": placement.position.y_nm,
+                        "rotation": placement.rotation, "expected_revision": placement.source.revision,
+                    }),
+                );
             }
             if let Some(draft) = pick.edit
                 && self.views.active.accepts(draft.source, &self.session)

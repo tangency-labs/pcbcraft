@@ -377,12 +377,21 @@ layout use **Layout → Schematic → Update PCB**. **Create board** explicitly 
 the first PCB when needed. Existing footprints without recorded accepted state
 first require **Use current state**, which adopts today's schematic, packages and
 connections as the starting point rather than reconstructing earlier history.
-Resolve missing footprint choices, review the component and connection changes,
-then choose **Apply update**. New accepted parts remain in **Unplaced footprints**;
-**Place…** opens their existing X/Y placement form. Cancel leaves the preview
-unapplied, while a board creation or current-state adoption remains its own
-undoable edit. Later edits or another client's preview require **Review again**;
-a reopened or replaced project requires a fresh dialog.
+Resolve missing footprint choices in **Changes to Be Applied**, review the report, then
+choose **Update PCB**. The PCB opens with new footprints together on the cursor;
+click to place the group, **R**/**Shift+R** to rotate or **Esc**/right-click to cancel.
+Cancellation retains accepted assignments; reopen Update PCB and choose
+**Place footprints** to resume. Package assignment returns directly to the review.
+Compatible pad mappings are preselected, including named terminals. The starter
+LED defaults to terminal 1 (Anode) → pad 2 and terminal 2 (Cathode) → pad 1 from
+revision-qualified library data. Saved package mappings take precedence, and
+you can change any default before assigning. The report includes full mapping and connection changes;
+Show filters control visibility while totals always count every warning/error.
+Turn off **Place new footprints after updating** to keep the updated report open
+and place later. **Copy report** includes all message categories.
+Cancel leaves an unapplied review unchanged, while board creation/current-state
+adoption remain separate edits. External changes or another client's preview
+require **Review again**; a reopened/replaced project requires a fresh dialog.
 
 In **Layers → Board**, select **Board Edge**, then choose **Layout → Draw → Line**
 or **Rectangle**. Click successive vertices for a line path; click its first vertex

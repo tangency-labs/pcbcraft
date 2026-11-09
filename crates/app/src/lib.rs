@@ -1127,6 +1127,8 @@ impl PcbApp {
                 ui.label(dim(name));
                 if let Some(message) = message {
                     ui.label(shell::error(message));
+                } else if self.views.active.workspace == Workspace::Board && self.views.active.board.placement.is_some() {
+                    ui.label(dim("Place footprints · Click to place · R rotate · Esc cancel"));
                 } else if self.views.active.workspace == Workspace::Board {
                     let empty = self.session.project().is_some_and(|project| project.board_target().is_none());
                     ui.label(dim(board_status.as_deref().unwrap_or(if empty { "No board" } else { "Board" })));
@@ -1665,6 +1667,7 @@ impl PcbApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
                 && !self.views.active.board.drawing.escape()
                 && self.views.active.board.draft.take().is_none()
+                && self.views.active.board.placement.take().is_none()
                 && self.views.active.board.box_drag.take().is_none()
             {
                 self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);

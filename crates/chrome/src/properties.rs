@@ -59,6 +59,46 @@ pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, option
     .inner
 }
 
+/// Distinguish symbol terminal identities from footprint pad identities above mapping rows.
+/// Both columns keep the same proportions as [`mapping_choice`] in narrow and wide previews.
+pub fn mapping_header(ui: &mut Ui) {
+    let t = Tokens::get();
+    let label_width = mapping_label_width(ui.available_width());
+    ui.horizontal(|ui| {
+        field_name(ui, "Symbol terminal", label_width, true);
+        ui.label(RichText::new("Footprint pad").size(t.font_small).color(t.text_dim));
+    });
+}
+
+/// A mapping row uses the Preferences control height and a full-width pad selector.
+/// Long terminal names wrap within their column; the accessible name remains complete.
+pub fn mapping_choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, options: &[(&str, String)]) -> egui::Response {
+    let t = Tokens::get();
+    let label_width = mapping_label_width(ui.available_width());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = t.space_8;
+        ui.spacing_mut().interact_size.y = t.control_height;
+        let label = field_name(ui, label, label_width, false);
+        let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, text)| text.as_str()).unwrap_or(value.as_str());
+        egui::ComboBox::from_id_salt(id)
+            .width(ui.available_width())
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                for (key, text) in options {
+                    ui.selectable_value(value, (*key).into(), text);
+                }
+            })
+            .response
+            .labelled_by(label.id)
+    })
+    .inner
+}
+
+/// Reserve enough of the preview for named terminals without shrinking pad controls off-screen.
+fn mapping_label_width(width: f32) -> f32 {
+    (width * 0.48).min(Tokens::get().form_label_width * 3.)
+}
+
 /// A quarter-turn field shares its label and alignment in compact and expanded properties.
 pub fn rotation(ui: &mut Ui, degrees: &mut u16) {
     let t = Tokens::get();

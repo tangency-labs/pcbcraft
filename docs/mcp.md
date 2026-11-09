@@ -202,3 +202,14 @@ use integer-nanometre `Point` objects; copies allocate unused terminal/pad
 numbers. `app.library_view` can set a distinct `selected_objects` ID array instead
 of scalar `selected`; per-pane inspection reports `selection`. These are live
 editor contracts; headless project sessions do not host authoring documents.
+
+### Placing an accepted footprint group
+
+`pcb.place_assigned_footprints` places a specified list of assigned, accepted
+`components` at `x_nm`/`y_nm`, with optional quarter-turn `rotation`, explicit
+`board` and the current `expected_revision`. Packages use pinned definitions and
+mappings; initial spacing follows their resolved geometry. Existing placements
+stay fixed, and the entire group is one undo step. Duplicate/unknown, already
+placed, excluded or pending assignments refuse the whole command. The native
+Update PCB cursor handoff commits through this same command. Inspect and describe
+the command before supplying IDs or coordinates; spacing is not a DRC result.

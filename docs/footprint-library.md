@@ -40,7 +40,17 @@ state, **Assign** records a proposed package or mapping and **Update PCB from
 schematic** reviews and applies it. Existing boards without recorded accepted
 state first need explicit **Use current state** adoption in that dialog. Package
 choices opened from an update review return to that review before placement;
-accepted new parts remain unplaced until the user chooses coordinates.
+accepted new parts enter a cursor group in PCB layout and remain unplaced until
+its canvas click. Esc/right-click cancels geometry placement while retaining the
+assignments. The individual coordinate-based chooser remains available separately.
+Compatible terminal/pad numbers are preselected, including named terminals.
+Exact revision-qualified library defaults handle known alternative numbering,
+such as the starter LED's Anode → pad 2 / Cathode → pad 1. A saved mapping for
+the selected package takes precedence. All defaults remain editable, and
+incompatible numbering still requires an explicit mapping.
+The Preferences-style mapping section separates **Symbol terminal** from
+**Footprint pad** in aligned columns. **Match numbers** explicitly replaces the
+mapping with equal identifiers, which can differ from a package's library default.
 The chooser does not register
 folders, import external footprints or create library parts. Those source and
 library workflows remain under #92/#28. This slice supports the original starter
