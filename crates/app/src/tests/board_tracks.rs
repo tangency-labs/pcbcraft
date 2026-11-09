@@ -453,3 +453,26 @@ fn properties_edit_the_selected_track_width() {
     assert_eq!(h.state().session.revision(), revision + 1);
     assert_eq!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().width_nm, 400_000);
 }
+
+/// Vias of different sizes show their sizes as "Mixed" and offer no field that would overwrite
+/// the other dimension; vias of one size stay editable.
+#[test]
+fn mixed_via_sizes_are_read_only_in_properties() {
+    let mut h = routable();
+    for (x, pad) in [(2_540_000, 600_000), (5_080_000, 800_000)] {
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::ADD_VIA,
+            &json!({"at":{"x_nm":x,"y_nm":-1_270_000},"via_diameter_nm":pad,"via_drill_nm":300_000,"expected_revision":revision}),
+        );
+    }
+    h.run();
+    let ids: std::collections::BTreeSet<_> = vias(&h).iter().map(|via| via.id).collect();
+    h.state_mut().views.active.board.tracks.selected = ids.clone();
+    h.run();
+    assert_eq!(h.get_all_by_label("Mixed").count(), 2);
+    assert!(h.query_by_label("Selected via pad").is_none() && h.query_by_label("Selected via drill").is_none());
+    h.state_mut().views.active.board.tracks.selected = ids.into_iter().take(1).collect();
+    h.run();
+    assert!(h.query_by_label("Selected via pad").is_some() && h.query_by_label("Mixed").is_none());
+}

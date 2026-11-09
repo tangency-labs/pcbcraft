@@ -144,7 +144,8 @@ impl PcbApp {
 
 /// Show the selected tracks and vias, with their width and via size editable in the display units.
 /// Returns at most one command, submitted when a field is released or confirmed; the caller adds
-/// the board and revision. Mixed values show the first item's value and apply to all of them.
+/// the board and revision. Mixed track widths show the first width and set all of them; vias
+/// of different sizes show "Mixed" and stay read-only, since each via field sends both sizes.
 fn copper_properties(
     ui: &mut Ui,
     target: pcbcraft_engine::board::view::BoardView<'_>,
@@ -174,7 +175,13 @@ fn copper_properties(
         }
         ui.end_row();
     }
-    if let Some(first) = vias.first() {
+    if let Some(first) = vias.first()
+        && !vias.iter().all(|via| (via.diameter_nm, via.drill_nm) == (first.diameter_nm, first.drill_nm))
+    {
+        // One field would overwrite the other dimension on every via; select matching vias to edit.
+        property(ui, "Via pad", "Mixed");
+        property(ui, "Via drill", "Mixed");
+    } else if let Some(first) = vias.first() {
         let ids: Vec<_> = vias.iter().map(|via| via.id).collect();
         ui.label("Via pad");
         if let Some(pad) = committed_length(ui, ("Selected via pad", salt), first.diameter_nm, MIN_VIA_DRILL_NM + 1..=MAX_VIA_DIAMETER_NM, unit) {
