@@ -206,21 +206,34 @@ impl State {
     }
 }
 
-/// The topmost visible via or track under a screen point.
-pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>) -> Option<Uuid> {
-    view.vias().iter().rev().find(|via| hit_via(pointer, camera, rect, via)).map(|via| via.id).or_else(|| {
+/// Which copper the selection filters allow picking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Kinds {
+    pub(super) tracks: bool,
+    pub(super) vias: bool,
+}
+
+impl Kinds {
+    /// Every kind, for lookups that are not selection, such as net highlighting.
+    pub(super) const ALL: Self = Self { tracks: true, vias: true };
+}
+
+/// The topmost visible via or track under a screen point, among the allowed kinds.
+pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>, kinds: Kinds) -> Option<Uuid> {
+    let via = view.vias().iter().rev().filter(|_| kinds.vias).find(|via| hit_via(pointer, camera, rect, via)).map(|via| via.id);
+    via.or_else(|| {
         view.tracks()
             .iter()
             .rev()
-            .filter(|track| !hidden.contains(&track.layer.to_string()))
+            .filter(|track| kinds.tracks && !hidden.contains(&track.layer.to_string()))
             .find(|track| hit(pointer, camera, rect, track))
             .map(|track| track.id)
     })
 }
 
 /// Whether a press here would start a copper drag rather than a box selection.
-pub(super) fn copper_under(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>) -> bool {
-    copper_at(pointer, camera, rect, view, hidden).is_some()
+pub(super) fn copper_under(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>, kinds: Kinds) -> bool {
+    copper_at(pointer, camera, rect, view, hidden, kinds).is_some()
 }
 
 /// Where `p` projects onto `track`, as a fraction from its start (0) to its end (1), and how far
@@ -436,6 +449,7 @@ fn add(state: &mut State, draft: Draft) -> Option<Command> {
 /// Release over chrome, right-click, stale input, disabled input or a hidden/changed layer never
 /// commits an unfinished route. Key requests (Delete, Enter, Backspace, `/`, V) are consumed every
 /// frame and ignored while input is disabled. `over_footprint` gives footprints priority for picks.
+/// Selection and connected copper selection honor `kinds`; routing uses the full board geometry.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn interact(
     ui: &mut Ui,
@@ -448,6 +462,7 @@ pub(super) fn interact(
     source: Option<ViewInput>,
     enabled: bool,
     over_footprint: bool,
+    kinds: Kinds,
 ) -> Interaction {
     let mut out = Interaction::default();
     state.committed = None;
@@ -455,7 +470,10 @@ pub(super) fn interact(
     let visible: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
     let vias = view.vias();
     let vias_visible = view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
-    state.selected.retain(|id| visible.iter().any(|track| track.id == *id) || vias_visible && vias.iter().any(|via| via.id == *id));
+    let selectable = |id: &Uuid| {
+        (kinds.tracks && visible.iter().any(|track| track.id == *id)) || (kinds.vias && vias_visible && vias.iter().any(|via| via.id == *id))
+    };
+    state.selected.retain(selectable);
     if !enabled || state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active) {
         state.draft = None;
     }
@@ -597,10 +615,11 @@ pub(super) fn interact(
     if select_connected {
         let seeds = pointer
             .filter(|_| !over_footprint)
-            .and_then(|pointer| copper_at(pointer, camera, rect, view, hidden))
+            .and_then(|pointer| copper_at(pointer, camera, rect, view, hidden, kinds))
             .map_or_else(|| state.selected.clone(), |id| BTreeSet::from([id]));
         if !seeds.is_empty() {
             state.selected = connected(view, &seeds);
+            state.selected.retain(selectable);
             out.consumed = true;
             return out;
         }
@@ -609,7 +628,7 @@ pub(super) fn interact(
         && state.moving.is_none()
         && state.segment.is_none()
         && let Some(pointer) = pointer.filter(|_| !over_footprint)
-        && let Some(track) = copper_at(pointer, camera, rect, view, hidden).filter(|id| visible.iter().any(|track| track.id == *id))
+        && let Some(track) = copper_at(pointer, camera, rect, view, hidden, Kinds { vias: false, ..kinds })
     {
         state.selected = BTreeSet::from([track]);
         state.segment = Some(SegmentDrag { source, track, anchor: camera.snap(pointer, rect), offset: (0, 0) });
@@ -653,7 +672,7 @@ pub(super) fn interact(
         && response.drag_started_by(PointerButton::Primary)
         && let Some(origin) = ui.input(|input| input.pointer.press_origin())
         && !over_footprint
-        && let Some(id) = copper_at(origin, camera, rect, view, hidden)
+        && let Some(id) = copper_at(origin, camera, rect, view, hidden, kinds)
     {
         if !state.selected.contains(&id) {
             state.selected = BTreeSet::from([id]);
@@ -689,15 +708,7 @@ pub(super) fn interact(
     if response.clicked()
         && let Some(pointer) = pointer
     {
-        let picked = (!over_footprint)
-            .then(|| {
-                vias.iter()
-                    .rev()
-                    .find(|via| hit_via(pointer, camera, rect, via))
-                    .map(|via| via.id)
-                    .or_else(|| visible.iter().rev().find(|track| hit(pointer, camera, rect, track)).map(|track| track.id))
-            })
-            .flatten();
+        let picked = (!over_footprint).then(|| copper_at(pointer, camera, rect, view, hidden, kinds)).flatten();
         let modifiers = ui.input(|input| input.modifiers);
         let extend = modifiers.shift || modifiers.ctrl || modifiers.command;
         if !extend {

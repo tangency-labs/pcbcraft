@@ -634,6 +634,8 @@ mod live {
                 setting("sheets", "Select hierarchical sheet symbols", Kind::Bool),
                 setting("labels", "Select hierarchical labels", Kind::Bool),
                 setting("footprints", "Select board footprints", Kind::Bool),
+                setting("tracks", "Select board tracks", Kind::Bool),
+                setting("vias", "Select board vias", Kind::Bool),
                 setting("graphics", "Select board graphics", Kind::Bool),
                 setting("collapsed", "Collapse the filter card", Kind::Bool),
                 setting("open", "Show the filter card", Kind::Bool),
