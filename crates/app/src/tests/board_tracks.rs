@@ -723,3 +723,42 @@ fn f_flips_footprints_between_sides() {
     assert_eq!(h.state().session.revision(), revision + 3, "the move and the flip are one edit");
     assert!(bottom(&h));
 }
+
+/// Properties edits a selected footprint's X, Y, rotation and side exactly, each as one
+/// transform edit that keeps the other values.
+#[test]
+fn properties_set_exact_footprint_position_rotation_and_side() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    let (id, position) = {
+        let project = h.state().session.project().unwrap();
+        let f = project.boards().next().unwrap().footprints().next().unwrap();
+        (f.id.clone(), f.position)
+    };
+    let placed = |h: &Harness<'_, PcbApp>| {
+        let project = h.state().session.project().unwrap();
+        let f = project.boards().next().unwrap().footprints().find(|f| f.id == id).unwrap();
+        (f.position, f.rotation, f.bottom)
+    };
+    let center = at(&h, position);
+    click_canvas_at(&mut h, center);
+    let revision = h.state().session.revision();
+    let set = |h: &mut Harness<'_, PcbApp>, label: &str, text: &str| {
+        h.get_by_label(label).click();
+        h.run();
+        h.get_by_label(label).type_text(text);
+        h.run();
+        h.key_press(Key::Enter);
+        h.run();
+    };
+    set(&mut h, "Footprint X", "12.7");
+    assert_eq!(placed(&h), (Point { x_nm: 12_700_000, y_nm: position.y_nm }, 0, false));
+    set(&mut h, "Footprint Y", "-2.54");
+    assert_eq!(placed(&h).0, Point { x_nm: 12_700_000, y_nm: -2_540_000 });
+    set(&mut h, "Footprint rotation", "90");
+    assert_eq!(placed(&h).1, 90);
+    click(&mut h, "Bottom");
+    assert_eq!(placed(&h), (Point { x_nm: 12_700_000, y_nm: -2_540_000 }, 90, true));
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 4, "one edit per field");
+}

@@ -492,7 +492,10 @@ Left-drag empty canvas or right-drag to select footprints with the same Window/C
 box used in the schematic. Only visible footprint geometry contributes to selection;
 Shift adds and Ctrl/Command toggles. Escape cancels the box, and Delete removes
 the selected footprints in one undo step. Footprint moves, rotation and flips operate on one
-placement at a time. **F** (or **Layout → Modify → Flip**) moves the hovered or selected
+placement at a time. With one footprint selected, Properties edits its **X**, **Y** and
+**Rotation** exactly (in the display units and whole degrees) and switches its **Side**
+between Top and Bottom; each change is one undo step through the same transform command
+as M, R and F, keeping the other values. **F** (or **Layout → Modify → Flip**) moves the hovered or selected
 footprint to the other side of the board in one undo step, and F during an M move flips the
 part being moved. A bottom-side footprint is mirrored as seen from the top, its surface pads
 use the back copper, mask and paste, and its silkscreen, courtyard and fabrication graphics

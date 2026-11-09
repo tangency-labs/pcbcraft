@@ -92,10 +92,7 @@ impl PcbApp {
                         property(ui, "Value", footprint.value);
                         property(ui, "Board", target.name());
                         property(ui, "Footprint", footprint.definition);
-                        property(ui, "X", &units::label(footprint.position.x_nm, self.preferences.units));
-                        property(ui, "Y", &units::label(footprint.position.y_nm, self.preferences.units));
-                        property(ui, "Rotation", &format!("{}°", footprint.rotation));
-                        property(ui, "Side", if footprint.bottom { "Bottom" } else { "Top" });
+                        copper_edit = footprint_transform(ui, footprint, unit);
                         property(
                             ui,
                             if footprint.pads.iter().any(|pad| pad.copper.is_some()) { "Pads" } else { "Pad centers" },
@@ -141,6 +138,66 @@ impl PcbApp {
         }
         ([browser, layers, properties], slots[crate::workspace_panels::FILTERS])
     }
+}
+
+/// Edit one footprint's X, Y, rotation and side in place. Each field submits the full transform
+/// through `pcb.set_footprint_transform` once, on release or confirmation, keeping the other
+/// values; the caller adds the board and revision. Unchanged values submit nothing.
+fn footprint_transform(
+    ui: &mut Ui,
+    footprint: &pcbcraft_engine::board::view::FootprintView<'_>,
+    unit: units::Unit,
+) -> Option<(&'static str, serde_json::Value)> {
+    let limit = pcbcraft_engine::schematic::MAX_CENTER_NM;
+    let (mut x, mut y, mut rotation, mut bottom) = (footprint.position.x_nm, footprint.position.y_nm, footprint.rotation, footprint.bottom);
+    let mut changed = false;
+    ui.label("X");
+    if let Some(value) = committed_length(ui, ("Footprint X", &footprint.id), x, -limit..=limit, unit) {
+        (x, changed) = (value, true);
+    }
+    ui.end_row();
+    ui.label("Y");
+    if let Some(value) = committed_length(ui, ("Footprint Y", &footprint.id), y, -limit..=limit, unit) {
+        (y, changed) = (value, true);
+    }
+    ui.end_row();
+    ui.label("Rotation");
+    if let Some(value) = committed_degrees(ui, ("Footprint rotation", &footprint.id), rotation) {
+        (rotation, changed) = (value, true);
+    }
+    ui.end_row();
+    ui.label("Side");
+    ui.horizontal(|ui| {
+        for (label, value) in [("Top", false), ("Bottom", true)] {
+            if ui.selectable_label(bottom == value, label).clicked() && bottom != value {
+                (bottom, changed) = (value, true);
+            }
+        }
+    });
+    ui.end_row();
+    changed.then(|| {
+        (
+            pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+            serde_json::json!({"footprint":footprint.id,"x_nm":x,"y_nm":y,"rotation":rotation,"side":if bottom { "back" } else { "front" }}),
+        )
+    })
+}
+
+/// A whole-degree rotation field, 0 through 359 with wrap-around, that keeps its draft while
+/// dragged or typed into and returns once on release or confirmation, only when it changed.
+fn committed_degrees(ui: &mut Ui, salt: (&str, impl std::hash::Hash + std::fmt::Debug), model: u16) -> Option<u16> {
+    let id = ui.id().with(&salt);
+    let mut value = ui.data(|data| data.get_temp::<i64>(id)).unwrap_or(i64::from(model));
+    let response = ui.add(egui::DragValue::new(&mut value).speed(1.0).suffix("°"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, salt.0));
+    let commit = response.drag_stopped() || (response.changed() && !response.dragged());
+    if response.dragged() || response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, value));
+    } else {
+        ui.data_mut(|data| data.remove::<i64>(id));
+    }
+    let degrees = value.rem_euclid(360) as u16;
+    (commit && degrees != model).then_some(degrees)
 }
 
 /// Show the selected tracks and vias, with their width and via size editable in the display units.
@@ -203,13 +260,19 @@ fn copper_properties(
 
 /// A length field in the display units that keeps its draft while dragged or typed into and
 /// returns whole nanometers once, on release or confirmation, only when the value changed.
-/// The salt's name is the field's accessible label; its ID keeps drafts per selection.
-fn committed_length(ui: &mut Ui, salt: (&str, uuid::Uuid), model_nm: i64, range: std::ops::RangeInclusive<i64>, unit: units::Unit) -> Option<i64> {
+/// The salt's name is the field's accessible label; its key keeps drafts per selection.
+fn committed_length(
+    ui: &mut Ui,
+    salt: (&str, impl std::hash::Hash + std::fmt::Debug),
+    model_nm: i64,
+    range: std::ops::RangeInclusive<i64>,
+    unit: units::Unit,
+) -> Option<i64> {
     let per_unit = match unit {
         units::Unit::Mm => units::NM_PER_MM,
         units::Unit::Mil => units::NM_PER_MIL,
     } as f64;
-    let id = ui.id().with(salt);
+    let id = ui.id().with(&salt);
     let mut value = ui.data(|data| data.get_temp::<f64>(id)).unwrap_or(model_nm as f64 / per_unit);
     let response = ui.add(
         egui::DragValue::new(&mut value)
