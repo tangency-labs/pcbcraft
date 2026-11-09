@@ -482,11 +482,11 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline**
 (Line, Rectangle), **Route** (Track, followed by the Active layer, Track width and Via
 pad / drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (DRC,
-Reveal) and **Design** (Sync updates the PCB from the schematic; Setup opens Board
-setup; Outputs saves fabrication files; Flip view shows the board from below). Tools
-that are not built yet, such as Zone, Pair, Tune, Align, Rules, Measure and Refill
-zones, appear disabled in their group's menu and say "planned". The ribbon scrolls
-sideways when the window is too narrow for every group.
+Measure, Reveal) and **Design** (Sync updates the PCB from the schematic; Setup opens
+Board setup; Outputs saves fabrication files; Flip view shows the board from below).
+Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules and Refill zones,
+appear disabled in their group's menu and say "planned". The ribbon scrolls sideways
+when the window is too narrow for every group.
 
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;
@@ -614,6 +614,13 @@ preserve the existing file's permission bits and new archives follow the process
 umask. The archive is flushed before replacement and its directory is flushed
 afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
+
+**Layout → Inspect → Measure** (**Ctrl+Shift+M**) is a ruler that never edits the board.
+Click a start point, then an end point; both snap to a nearby pad center, track end or
+via, otherwise to the grid. The ruler shows the length and its horizontal and vertical
+parts (Y up) in the display units, follows the pointer until the second click, and a
+third click starts again. Esc clears the ruler, a second Esc or right-click leaves the
+tool. Measurements are not saved.
 
 **Layout → Design → Flip view** shows the board from below in this view: model X runs
 right to left around the centered point, at the same zoom, and the status bar says

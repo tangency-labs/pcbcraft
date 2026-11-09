@@ -166,6 +166,8 @@ pub(super) struct BoardState {
     pub(super) tracks: crate::board_tracks::State,
     /// The last design rules check run from this view, with its card and focused finding.
     pub(super) drc: crate::board_drc::Drc,
+    /// The view-only ruler and whether its tool is armed.
+    pub(super) measure: crate::board_measure::Measure,
     pub(super) draft: Option<crate::board_canvas::Draft>,
     pub(super) placement: Option<crate::board_canvas::Placement>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
@@ -574,6 +576,7 @@ impl EditorView {
         self.board.clipboard = crate::board_clipboard::State::default();
         self.board.drawing.cancel();
         self.board.tracks.cancel();
+        self.board.measure.cancel();
         self.board.draft = None;
         self.board.placement = None;
         self.board.box_drag = None;

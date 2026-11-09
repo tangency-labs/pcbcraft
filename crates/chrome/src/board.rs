@@ -60,6 +60,23 @@ pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: 
     p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), t.board_canvas);
 }
 
+/// Draw a measuring ruler: a dashed accent line with end ticks and a label near its middle.
+pub fn measurement(p: &Painter, a: Pos2, b: Pos2, label: &str) {
+    let t = Tokens::get();
+    let stroke = Stroke::new(1.5, t.accent);
+    p.extend(egui::Shape::dashed_line(&[a, b], stroke, 6., 4.));
+    let direction = (b - a).normalized();
+    let normal = if direction.is_finite() && direction.length_sq() > 0. { vec2(-direction.y, direction.x) } else { vec2(0., 1.) };
+    for end in [a, b] {
+        p.line_segment([end - normal * 6., end + normal * 6.], stroke);
+    }
+    let galley = p.layout_no_wrap(label.to_owned(), FontId::proportional(t.font_small), t.text);
+    let at = a + (b - a) / 2. + normal * 14.;
+    let rect = Rect::from_center_size(at, galley.size() + vec2(t.space_8, t.space_4));
+    p.rect_filled(rect, t.radius_sm, t.panel);
+    p.galley(rect.center() - galley.size() / 2., galley, t.text);
+}
+
 /// Mark a design rules finding: a small warning triangle in the error color, filled and ringed
 /// when it is the focused finding.
 pub fn drc_marker(p: &Painter, at: Pos2, focused: bool) {

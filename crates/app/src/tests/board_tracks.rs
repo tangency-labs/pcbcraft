@@ -618,3 +618,34 @@ fn flip_view_mirrors_drawing_and_picking_without_editing() {
     assert!(h.state_mut().run_window_command(&ctx, "view.set_board_flipped", &json!({"view":999,"flipped":true})).is_err());
     assert_eq!(h.state().session.revision(), revision, "flipping never edits the project");
 }
+
+/// Ctrl+Shift+M measures between two snapped pad centers without selecting or editing anything;
+/// Esc clears the ruler, then leaves the tool.
+#[test]
+fn measure_reports_the_distance_between_snapped_points() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    let line = airwires(&h)[0].clone();
+    let (a, b) = (line.from.position, line.to.position);
+    let revision = h.state().session.revision();
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::M);
+    h.run();
+    assert!(h.state().views.active.board.measure.tool);
+    let near_a = at(&h, a) + egui::vec2(2., 1.);
+    click_canvas_at(&mut h, near_a);
+    h.run_steps(20);
+    let near_b = at(&h, b) + egui::vec2(-2., 1.);
+    click_canvas_at(&mut h, near_b);
+    h.run_steps(20);
+    let expected = crate::board_measure::label(a, b, pcbcraft_chrome::units::Unit::Mm);
+    let painted = h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == expected));
+    assert!(painted, "the ruler shows {expected}");
+    assert!(h.state().views.active.board.selection.is_empty() && h.state().views.active.board.tracks.selected.is_empty());
+    assert_eq!(h.state().session.revision(), revision, "measuring edits nothing");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.state().views.active.board.measure.tool, "the first Esc clears the ruler");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().views.active.board.measure.tool);
+}

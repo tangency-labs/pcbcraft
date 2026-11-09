@@ -136,13 +136,9 @@ fn pcb_layout_tab_groups_working_and_planned_tools() {
     for tool in ["Assign and place component footprints", "Update PCB from schematic", "Board setup", "Reveal highlighted counterpart"] {
         assert!(!h.get_by_label(tool).accesskit_node().is_disabled(), "{tool} is enabled");
     }
-    for (group, planned) in [
-        ("Place", &["Zone"][..]),
-        ("Route", &["Pair", "Tune"]),
-        ("Modify", &["Align"]),
-        ("Inspect", &["Rules", "Measure"]),
-        ("Design", &["Refill zones"]),
-    ] {
+    for (group, planned) in
+        [("Place", &["Zone"][..]), ("Route", &["Pair", "Tune"]), ("Modify", &["Align"]), ("Inspect", &["Rules"]), ("Design", &["Refill zones"])]
+    {
         click(&mut h, &format!("{group} menu"));
         for tool in planned {
             assert!(h.get_by_label(tool).accesskit_node().is_disabled(), "{group} › {tool} is planned");
