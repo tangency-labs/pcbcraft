@@ -13,8 +13,9 @@ or **Ctrl+V** (**⌘** on macOS). These actions also appear in the canvas contex
 changing the system clipboard. In text fields, these keys retain ordinary text
 editing behavior.
 
-Paste starts a cursor preview. **R** rotates the entire fragment about its
-anchor, a canvas click places it, and **Esc** or a right-click cancels it. The
+Paste starts a cursor preview. **R** rotates a flat fragment about its anchor;
+hierarchical objects retain their model-supported orientation. A canvas click
+places it, and **Esc** or a right-click cancels it. Pan/zoom remain available. The
 active view owns the preview, including its camera and explicit sheet target;
 switching focus, replacing the project or making another edit cancels stale
 placement authority. A completed paste is one shared undo/redo step. Copy and
@@ -48,10 +49,9 @@ a suffix, matching global names can join the destination's existing nets.
 Original-position paste still creates new identities and one undo step.
 
 Package assignments are copied as intent, without creating PCB placements.
-Hierarchical sheet blocks and hierarchical interface labels are not included in
-this flat schematic fragment contract. Ordinary text can be converted explicitly
-as described below. Images, SVG and other EDA applications' native clipboard
-formats are not accepted as native
+Hierarchical bodies and interface labels use the extended contract below.
+Ordinary text can be converted explicitly as described below. Images, SVG and
+other EDA applications' native clipboard formats are not accepted as native
 design fragments; unsupported input does not change the project. The separate
 import/source boundary remains in force.
 
@@ -85,6 +85,50 @@ and `expected_revision`, plus optional `rotation` (0/90/180/270), `references`
 portable text; MCP does not read or write the desktop's system clipboard. The
 selected MCP transport's request/reply budgets also apply to encoded payloads.
 
+## Hierarchical clipboard
+
+Select a sheet body to copy/cut/duplicate it with its complete child subtree,
+including nested sheets, symbols, explicit interface connections and pinned
+package intent. Interface labels can be copied or duplicated while hovered or
+from their context menu. Copy/Cut on a selected sheet body also work from the
+normal canvas/ribbon menus. Root wire routes enter the payload only when selected;
+unselected parent routes stay outside the copied tree.
+
+Duplication creates independent child document UUIDs and new component, symbol,
+wire, junction, interface and block IDs. Child coordinates remain local to each
+new sheet; cursor placement moves only the root geometry. Free source sheet names
+are retained, while collisions receive bounded copy names. References renumber
+by default, and a suffix can distinguish copied labels, interfaces and native
+power values. This creates independent circuit content, not repeated instances
+of a shared definition. Existing single-parent/cycle rules still apply.
+
+Cut detaches sheet bodies while retaining their child documents/content. It
+preserves unselected parent routes as dangling endpoints at their old coordinates.
+Cutting an interface similarly preserves unselected routes on both its child and
+parent sides. A same-project Cut defaults to **Reuse original unparented sheets**,
+which reparents the current child content without duplicating components or
+renaming its nets. The form can instead choose independent duplication. Occupied,
+missing, foreign or cyclic child ownership is refused without stealing a parent
+or publishing part of the operation. Cancel leaves only the preceding Cut;
+ordinary Undo recovers it.
+
+`pcbcraft-clipboard/2`, `kind: "schematic"`, extends the native document map to
+one selected root and its complete reachable child tree, addressed by an explicit
+`root_sheet` UUID independently of native display order, with optional `cut_sheets`
+metadata. Orphan payload sheets/components, board owners, invalid
+records and oversized input are rejected. Flat schematic and PCB exports retain
+version 1, so existing flat interchange stays compatible; older clients reject
+version 2. Saved project formats are unchanged. Clipboard metadata suggests
+relocation but never bypasses live ownership, cycle, revision or geometry checks.
+
+Copy/Cut additionally accept optional `objects`, a unique array of root
+`sheet-symbol-N` and `label-N` IDs. `items` still supplies symbol/wire arrays,
+which may both be empty for a hierarchy-only selection. Paste accepts optional
+`reuse_sheets: true`; its command default remains independent duplication.
+Hierarchical sheet symbols and interfaces retain their orientation. Their
+previews cache document creation and remapping once, with stable transient IDs;
+final paste always uses the original portable text and validates again.
+
 An opt-in Linux native regression exchanges clipboard text between two real
 processes. Run it on a separate Wayland display because it temporarily owns that
 display's clipboard:
@@ -94,6 +138,8 @@ cargo test --locked -p pcbcraft-app \
   clipboard::native_tests::native_clipboard_between_processes -- --ignored --exact --nocapture
 cargo test --locked -p pcbcraft-app \
   clipboard::native_tests::native_board_clipboard_between_processes -- --ignored --exact --nocapture
+cargo test --locked -p pcbcraft-app \
+  clipboard::native_tests::native_hierarchy_clipboard_between_processes -- --ignored --exact --nocapture
 ```
 
 ## Paste from other programs
@@ -159,6 +205,11 @@ linked schematic components and their physical packages together, retaining
 internal wiring and related native power annotations. References renumber by
 default; original references and net-name suffixes are available in the form.
 The destination must have no unrelated pending PCB update before duplication.
+If the selected components have an internal connection that their copied flat
+circuits cannot preserve, such as a missing hierarchical boundary, Copy/Cut
+refuses the entire selection with guidance to copy the complete schematic
+subtree first. It does not silently export a disconnected circuit. Already
+carried global connections remain supported.
 
 Pasting a Cut fragment back onto its original project/board defaults to reusing
 compatible, unplaced components. It retains their references and current logical
@@ -224,3 +275,6 @@ current routing approximation, not a clearance or fabrication sign-off. A failed
 mapping, scope, package, bounds, reference or copper check leaves the destination
 and history unchanged. Preview snapshots cache logical work but confer no commit
 authority; the command validates the complete candidate again.
+
+The engine/MCP scope and identity rules are specified in the
+[hierarchical clipboard contract](hierarchical-clipboard-contract.md).

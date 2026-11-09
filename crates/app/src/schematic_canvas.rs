@@ -122,6 +122,7 @@ pub(crate) enum Click {
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
     SelectSheetSymbol(u64),
     HierarchyPlace(Point),
+    HierarchyClipboard(crate::hierarchy::Kind, u64, tool_menu::Action, egui::Context),
     HierarchyAction(crate::hierarchy::Kind, u64, crate::hierarchy::Action),
     Place(Point),
     StartBox(BoxDrag),
@@ -235,6 +236,8 @@ pub(crate) enum SymbolAction {
 /// `highlighted` marks counterparts selected in another view. It affects paint only; hit
 /// testing, group moves and deletion use `selected`, which takes visual precedence on overlap.
 /// `filters` restricts item picking, boxes and context menus without disabling explicit drawing tools.
+/// Navigation authority is separate from authoring input, allowing a read-only clipboard ghost
+/// to pan/zoom without enabling picking, tools or model edits.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show(
     ui: &mut Ui,
@@ -249,6 +252,7 @@ pub(crate) fn show(
     highlighted: &Selection,
     filters: crate::selection_filters::Filters,
     input_enabled: bool,
+    navigation_enabled: bool,
     navigation: Navigation,
     grid_opacity: u8,
     auto_heal: bool,
@@ -274,7 +278,7 @@ pub(crate) fn show(
                 | Tool::Reshape { .. }
         )
     );
-    camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
+    camera.navigate(&response, rect, project, navigation_enabled && !moving, navigation);
 
     let field_destination = if let Some(Tool::Field { drag, .. }) = &tool {
         ui.input(|i| i.pointer.hover_pos()).and_then(|p| fields::destination(project, camera, rect, drag, p))
@@ -644,7 +648,7 @@ pub(crate) fn show(
             Some(drag)
         });
         let picked = menu::context(&response, |ui| {
-            if let Some(action) = tool_menu::clipboard(ui, !selected.is_empty()) {
+            if let Some(action) = tool_menu::clipboard(ui, !selected.is_empty() || selected_sheet.is_some()) {
                 return Some(Click::ToolAction(action, ui.ctx().clone()));
             }
             menu::separator(ui);

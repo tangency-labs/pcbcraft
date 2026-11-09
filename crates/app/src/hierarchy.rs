@@ -242,6 +242,17 @@ pub(super) fn paint_label(painter: &Painter, pos: Pos2, name: &str, direction: D
     );
 }
 
+/// Resolve an editor-local hierarchy hover for clipboard keys, using current view geometry and
+/// filters. The caller separately checks canvas input ownership and explicit selection priority.
+pub(super) fn clipboard_hover(project: &Project, camera: &Camera, ctx: &egui::Context, filters: crate::selection_filters::Filters) -> Option<String> {
+    let rect = camera.schematic_rect()?;
+    let pointer = ctx.input(|i| i.pointer.hover_pos())?;
+    if !rect.contains(pointer) {
+        return None;
+    }
+    hit(project, camera, rect, pointer, filters).map(|(kind, id, _)| format!("{}-{id}", if kind == Kind::Sheet { "sheet-symbol" } else { "label" }))
+}
+
 /// Hit label text before block interiors; pin anchors retain wire-target priority on plain clicks.
 fn hit(project: &Project, camera: &Camera, rect: Rect, pointer: Pos2, filters: crate::selection_filters::Filters) -> Option<(Kind, u64, Point)> {
     let t = Tokens::get();
@@ -366,8 +377,22 @@ pub(super) fn input(
             } else {
                 vec![("Properties…", "E", Action::Edit), ("Move", "M", Action::Move), ("Delete Hierarchical Label", "Del", Action::Delete)]
             };
-            rows.into_iter()
+            if let Some(action) = rows
+                .into_iter()
                 .find_map(|(name, key, action)| MenuItem::new(name).shortcut(key).show(ui).then_some(Click::HierarchyAction(kind, id, action)))
+            {
+                return Some(action);
+            }
+            pcbcraft_chrome::menu::separator(ui);
+            [
+                ("Copy", "Ctrl+C", crate::schematic_canvas::ToolAction::Copy),
+                ("Cut", "Ctrl+X", crate::schematic_canvas::ToolAction::Cut),
+                ("Duplicate", "Ctrl+D", crate::schematic_canvas::ToolAction::Duplicate),
+            ]
+            .into_iter()
+            .find_map(|(label, key, action)| {
+                MenuItem::new(label).shortcut(key).show(ui).then(|| Click::HierarchyClipboard(kind, id, action, ui.ctx().clone()))
+            })
         })
     {
         return Some(menu.inner);

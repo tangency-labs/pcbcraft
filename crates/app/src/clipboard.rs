@@ -2,7 +2,7 @@
 use crate::{Dialog, PcbApp, ViewInput, Workspace};
 use egui::{Context, Event, Key, Modifiers, Ui};
 use pcbcraft_engine::{
-    clipboard::{self as engine, Fragment, PasteOptions},
+    clipboard::{self as engine, Fragment, PasteOptions, SchematicPastePreview},
     schematic::Point,
 };
 use serde_json::json;
@@ -18,6 +18,10 @@ impl State {
     pub(super) fn active(&self) -> bool {
         self.paste.is_some()
     }
+    /// The status hint advertises rotation only for model-supported flat fragments.
+    pub(super) fn can_rotate(&self) -> bool {
+        self.paste.as_ref().is_some_and(|p| !p.fragment.has_hierarchy())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -26,6 +30,7 @@ struct Placement {
     text: String,
     fragment: Fragment,
     options: PasteOptions,
+    preview: Option<SchematicPastePreview>,
 }
 
 /// Options retain captured destination authority; changing focus cannot retarget Apply.
@@ -148,7 +153,7 @@ impl PcbApp {
             Some(0) => self.copy_clipboard(ctx, false),
             Some(1) => self.copy_clipboard(ctx, true),
             Some(2 | 3) => self.request_clipboard(ctx, action == Some(3)),
-            Some(4) => self.duplicate_clipboard(),
+            Some(4) => self.duplicate_clipboard(ctx),
             _ => {}
         }
         action.is_some()
@@ -178,9 +183,9 @@ impl PcbApp {
         }
     }
     /// Duplication uses the current editor's fragment path without touching OS clipboard text.
-    pub(super) fn duplicate_clipboard(&mut self) {
+    pub(super) fn duplicate_clipboard(&mut self, ctx: &Context) {
         match self.views.active.workspace {
-            Workspace::Schematic => self.duplicate_schematic_clipboard(),
+            Workspace::Schematic => self.duplicate_schematic_clipboard_from(Some(ctx)),
             Workspace::Board => self.duplicate_board_clipboard(),
         }
     }
@@ -197,11 +202,12 @@ impl PcbApp {
         let Some(project) = self.views.active.snapshot(&self.session) else {
             return;
         };
-        let items = &self.views.active.schematic.selection;
-        if items.is_empty() {
+        let items = self.views.active.schematic.selection.clone();
+        let objects = self.schematic_clipboard_objects(Some(ctx));
+        if items.is_empty() && objects.is_empty() {
             return;
         }
-        let params = json!({"items":items,"sheet":project.sheet_target().id(),"expected_revision":source.revision});
+        let params = json!({"items":items,"objects":objects,"sheet":project.sheet_target().id(),"expected_revision":source.revision});
         match self.session.execute(if cut { engine::CUT } else { engine::COPY }, &params) {
             Ok(result) => {
                 if let Some(text) = result["clipboard"].as_str() {
@@ -212,6 +218,54 @@ impl PcbApp {
                 self.repaint_editors(ctx);
             }
             Err(error) => self.message = Some(error.to_string()),
+        }
+    }
+
+    /// Resolve hierarchy editing targets by stable IDs; a current explicit selection wins over
+    /// hover, and ordinary flat selections never collect unrelated objects beneath the pointer.
+    fn schematic_clipboard_objects(&self, ctx: Option<&Context>) -> std::collections::BTreeSet<String> {
+        if let Some(id) = self.views.active.schematic.selected_sheet_symbol {
+            return [format!("sheet-symbol-{id}")].into();
+        }
+        if !self.views.active.schematic.selection.is_empty() || self.pointer.is_none() {
+            return Default::default();
+        }
+        let Some(ctx) = ctx else { return Default::default() };
+        let Some(project) = self.views.active.snapshot(&self.session) else { return Default::default() };
+        crate::hierarchy::clipboard_hover(&project, &self.views.active.camera, ctx, self.views.active.filters).into_iter().collect()
+    }
+
+    /// Hierarchy context menus address their own hovered object, independently of an old flat
+    /// selection. Copy/Cut publish portable OS text; Duplicate keeps the system clipboard intact.
+    pub(super) fn hierarchy_clipboard_action(
+        &mut self,
+        ctx: &Context,
+        kind: crate::hierarchy::Kind,
+        id: u64,
+        action: crate::schematic_canvas::ToolAction,
+    ) {
+        let Some(source) = self.views.active.input(&self.session) else { return };
+        let Some(project) = self.views.active.snapshot(&self.session) else { return };
+        let objects: std::collections::BTreeSet<_> =
+            [format!("{}-{id}", if kind == crate::hierarchy::Kind::Sheet { "sheet-symbol" } else { "label" })].into();
+        let items = pcbcraft_engine::selection::Selection::default();
+        if matches!(action, crate::schematic_canvas::ToolAction::Duplicate) {
+            match Fragment::capture_with_hierarchy(&project, &items, &objects, false).and_then(|f| f.to_text()) {
+                Ok(text) => self.receive_schematic_clipboard(text, false),
+                Err(e) => self.message = Some(e.to_string()),
+            }
+        } else if matches!(action, crate::schematic_canvas::ToolAction::Copy | crate::schematic_canvas::ToolAction::Cut) {
+            let params = json!({"sheet":project.sheet_target().id(),"items":items,"objects":objects,"expected_revision":source.revision});
+            match self.session.execute(if matches!(action, crate::schematic_canvas::ToolAction::Cut) { engine::CUT } else { engine::COPY }, &params) {
+                Ok(result) => {
+                    if let Some(text) = result["clipboard"].as_str() {
+                        ctx.copy_text(text.into());
+                    }
+                    self.views.sync(&self.session);
+                    self.message = None;
+                }
+                Err(error) => self.message = Some(error.to_string()),
+            }
         }
     }
 
@@ -231,11 +285,18 @@ impl PcbApp {
 
     /// Duplicate shares the portable placement path while preserving the person's system clipboard.
     pub(super) fn duplicate_schematic_clipboard(&mut self) {
+        self.duplicate_schematic_clipboard_from(None);
+    }
+
+    /// Keyboard duplication may target a hovered interface when no editing selection exists.
+    fn duplicate_schematic_clipboard_from(&mut self, ctx: Option<&Context>) {
         if self.views.active.schematic.clipboard.active() || self.views.active.schematic.tool.is_some() {
             return;
         }
         let result = self.views.active.snapshot(&self.session).ok_or_else(|| "No schematic is open.".to_owned()).and_then(|project| {
-            Fragment::capture(&project, &self.views.active.schematic.selection).and_then(|f| f.to_text()).map_err(|e| e.to_string())
+            Fragment::capture_with_hierarchy(&project, &self.views.active.schematic.selection, &self.schematic_clipboard_objects(ctx), false)
+                .and_then(|f| f.to_text())
+                .map_err(|e| e.to_string())
         });
         match result {
             Ok(text) => self.receive_schematic_clipboard(text, false),
@@ -255,17 +316,38 @@ impl PcbApp {
         };
         match Fragment::from_text(&text) {
             Ok(fragment) => {
-                let placement = Placement { source, text, fragment, options: PasteOptions::default() };
+                let reuse_sheets = self.views.active.snapshot(&self.session).is_some_and(|p| fragment.offers_sheet_reuse(&p));
+                let options = PasteOptions { reuse_sheets, ..Default::default() };
+                let mut placement = Placement { source, text, fragment, options, preview: None };
                 self.views.active.cancel_gesture();
-                if special {
+                if special || placement.fragment.hierarchy_counts().1 > 0 {
                     self.dialog = Dialog::PasteOptions(Box::new(Options { placement, original: false, error: None }));
+                    self.message = None;
+                } else if let Err(error) = self.prepare_schematic_clipboard(&mut placement) {
+                    if placement.fragment.has_hierarchy() {
+                        self.dialog = Dialog::PasteOptions(Box::new(Options { placement, original: false, error: Some(error) }));
+                    } else {
+                        self.message = Some(error);
+                    }
                 } else {
                     self.views.active.schematic.clipboard.paste = Some(placement);
+                    self.message = None;
                 }
-                self.message = None;
             }
             Err(error) => self.message = Some(error.to_string()),
         }
+    }
+
+    /// Cache logical/child-sheet work once. Cursor movement carries stable transient identities;
+    /// the original text and captured revision still govern the authoritative commit.
+    fn prepare_schematic_clipboard(&self, placement: &mut Placement) -> Result<(), String> {
+        if !self.views.active.accepts(placement.source, &self.session) {
+            return Err("The destination changed. Paste again.".into());
+        }
+        let project = self.views.active.snapshot(&self.session).ok_or("No schematic is open.")?;
+        placement.preview =
+            Some(placement.fragment.preview(&project, self.session.revision().saturating_add(1), &placement.options).map_err(|e| e.to_string())?);
+        Ok(())
     }
 
     /// Paste forms stay in their initiating host so Apply validates the same view and a
@@ -284,9 +366,33 @@ impl PcbApp {
         let mut cancel = false;
         let dismissed = pcbcraft_chrome::shell::dialog(ctx, "paste_options", "Paste Options", |ui| {
             let (symbols, wires, labels) = draft.placement.fragment.counts();
-            ui.label(format!("{symbols} symbols · {wires} wires · {labels} net labels"));
+            ui.label(format!(
+                "{symbols} symbol{} · {wires} wire{} · {labels} net label{}",
+                if symbols == 1 { "" } else { "s" },
+                if wires == 1 { "" } else { "s" },
+                if labels == 1 { "" } else { "s" }
+            ));
+            let (blocks, ports, sheets) = draft.placement.fragment.hierarchy_counts();
+            if blocks + ports + sheets > 0 {
+                ui.label(format!(
+                    "{blocks} sheet symbol{} · {ports} root interface{} · {sheets} child sheet{}",
+                    if blocks == 1 { "" } else { "s" },
+                    if ports == 1 { "" } else { "s" },
+                    if sheets == 1 { "" } else { "s" }
+                ));
+            }
+            if blocks > 0 {
+                let eligible = self.views.active.snapshot(&self.session).is_some_and(|p| draft.placement.fragment.offers_sheet_reuse(&p));
+                ui.add_enabled(eligible, egui::Checkbox::new(&mut draft.placement.options.reuse_sheets, "Reuse original unparented sheets"));
+                if draft.placement.options.reuse_sheets {
+                    draft.placement.options.net_name_suffix.clear();
+                    ui.label(pcbcraft_chrome::shell::dim("Relocation retains the child sheets' current content, references and net names."));
+                }
+            }
             ui.checkbox(&mut draft.placement.options.preserve_references, "Keep original references");
-            pcbcraft_chrome::properties::text(ui, "Net-name suffix", &mut draft.placement.options.net_name_suffix);
+            ui.add_enabled_ui(!draft.placement.options.reuse_sheets, |ui| {
+                pcbcraft_chrome::properties::text(ui, "Net-name suffix", &mut draft.placement.options.net_name_suffix);
+            });
             ui.label(pcbcraft_chrome::shell::dim(
                 "Named nets retain their names and may join existing nets. Add a suffix to keep the copied circuit separate.",
             ));
@@ -311,6 +417,9 @@ impl PcbApp {
                     draft.error = Some(error);
                     self.dialog = Dialog::PasteOptions(draft);
                 }
+            } else if let Err(error) = self.prepare_schematic_clipboard(&mut draft.placement) {
+                draft.error = Some(error);
+                self.dialog = Dialog::PasteOptions(draft);
             } else {
                 self.views.active.schematic.clipboard.paste = Some(draft.placement);
             }
@@ -330,6 +439,7 @@ impl PcbApp {
             return false;
         }
         if !input_enabled
+            || self.views.active.schematic.tool.is_some()
             || ui.ctx().egui_wants_keyboard_input()
             || ui.input(|i| !i.focused || i.events.iter().any(|event| matches!(event, Event::WindowFocused(false))))
         {
@@ -342,15 +452,22 @@ impl PcbApp {
             return false;
         }
         if input_enabled && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
-            placement.options.quarter_turns = (placement.options.quarter_turns + 1) % 4;
-            self.views.active.schematic.clipboard.paste = Some(placement.clone());
+            if placement.fragment.has_hierarchy() {
+                self.message = Some("Hierarchical sheet symbols and interfaces retain their orientation.".into());
+            } else {
+                placement.options.quarter_turns = (placement.options.quarter_turns + 1) % 4;
+                self.views.active.schematic.clipboard.paste = Some(placement.clone());
+            }
         }
         let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|pos| rect.contains(*pos));
         let at = pointer.map(|pos| self.views.active.camera.snap(pos, rect)).unwrap_or_else(|| placement.fragment.anchor());
-        let candidate = placement.fragment.placed(project, at, self.session.revision().saturating_add(1), &placement.options);
-        let (candidate, selection, error) = match candidate {
-            Ok((p, s)) => (p, s, None),
-            Err(error) => (project.clone(), Default::default(), Some(error.to_string())),
+        let Some(preview) = &placement.preview else {
+            self.views.active.schematic.clipboard.paste = None;
+            return false;
+        };
+        let (candidate, selection, block, error) = match preview.at(at, placement.options.quarter_turns) {
+            Ok(p) => (p, preview.selection().clone(), preview.sheet_symbol(), None),
+            Err(error) => (std::sync::Arc::new(project.clone()), Default::default(), None, Some(error.to_string())),
         };
         crate::schematic_canvas::show(
             ui,
@@ -361,10 +478,11 @@ impl PcbApp {
             &selection,
             None,
             false,
-            None,
+            block,
             &Default::default(),
             self.views.active.filters,
             false,
+            true,
             self.preferences.navigation,
             self.preferences.grid_opacity_percent,
             false,
@@ -396,15 +514,30 @@ impl PcbApp {
             return Err("Paste destination changed; paste again.".into());
         }
         let project = self.views.active.snapshot(&self.session).ok_or("No schematic is open.")?;
-        let (_, selection) =
-            placement.fragment.placed(&project, at, self.session.revision().saturating_add(1), &placement.options).map_err(|e| e.to_string())?;
+        let before = pcbcraft_engine::selection::Selection {
+            symbols: project.symbols().iter().map(|s| s.id()).collect(),
+            wires: project.wires().iter().map(|w| w.id()).collect(),
+            net_labels: project.net_labels().iter().map(|l| l.object_id()).collect(),
+        };
+        let blocks: std::collections::BTreeSet<_> = project.sheet_symbols().iter().map(|s| s.id).collect();
         let params = json!({"text":placement.text,"x_nm":at.x_nm,"y_nm":at.y_nm,"sheet":project.sheet_target().id(),
-            "expected_revision":placement.source.revision,"rotation":u16::from(placement.options.quarter_turns)*90,
+            "expected_revision":placement.source.revision,"reuse_sheets":placement.options.reuse_sheets,"rotation":u16::from(placement.options.quarter_turns)*90,
             "references":if placement.options.preserve_references {"preserve"}else{"renumber"},"net_name_suffix":placement.options.net_name_suffix});
         self.session.apply(engine::PASTE, &params).map_err(|e| e.to_string())?;
         self.views.active.schematic.clipboard = State::default();
         self.views.sync(&self.session);
-        self.select(selection);
+        let project = self.views.active.snapshot(&self.session).ok_or("Schematic unavailable after paste.")?;
+        let selected = pcbcraft_engine::selection::Selection {
+            symbols: project.symbols().iter().map(|s| s.id()).filter(|id| !before.symbols.contains(id)).collect(),
+            wires: project.wires().iter().map(|w| w.id()).filter(|id| !before.wires.contains(id)).collect(),
+            net_labels: project.net_labels().iter().map(|l| l.object_id()).filter(|id| !before.net_labels.contains(id)).collect(),
+        };
+        let block = project.sheet_symbols().iter().find(|s| !blocks.contains(&s.id)).map(|s| s.id);
+        let flat = selected.is_empty();
+        self.select(selected);
+        if flat {
+            self.views.active.schematic.selected_sheet_symbol = block;
+        }
         self.message = None;
         Ok(())
     }
@@ -415,3 +548,6 @@ mod tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod native_tests;
+
+#[cfg(test)]
+mod hierarchy_tests;
