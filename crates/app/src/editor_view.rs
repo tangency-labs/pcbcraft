@@ -9,6 +9,9 @@ use pcbcraft_engine::{Session, SheetTarget, board::view::BoardTarget, selection:
 #[cfg(test)]
 mod tests;
 
+/// Stable arrangement key for the connection overlay, separate from physical layer UUIDs.
+pub(super) const RATSNEST_KEY: &str = "ratsnest";
+
 /// Runtime view identity, independent of its document or native window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct ViewId(pub(super) u64);
@@ -156,6 +159,7 @@ pub(super) struct SchematicState {
 /// New views hide fabrication/courtyard layers once setup exists; restores preserve user choices.
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
+    pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) draft: Option<crate::board_canvas::Draft>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
@@ -172,11 +176,43 @@ pub(super) struct BoardState {
 }
 
 impl BoardState {
+    /// Share revision-keyed accepted geometry between frames; navigation never invalidates it.
+    /// Missing input authority is recomputed rather than reusing a possibly foreign opening.
+    pub(super) fn ratsnest(
+        &mut self,
+        board: pcbcraft_engine::board::view::BoardView<'_>,
+        source: Option<ViewInput>,
+    ) -> Option<std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>> {
+        if let Some((previous, cached)) = &self.ratsnest_cache
+            && Some(*previous) == source
+            && cached.board == board.target
+        {
+            return Some(cached.clone());
+        }
+        let result = board.ratsnest().map(std::sync::Arc::new);
+        self.ratsnest_cache = source.zip(result.clone());
+        result
+    }
+
+    /// Change only this view's accepted-connection overlay, using its saved presentation set.
+    pub(super) fn set_ratsnest_visibility(&mut self, visible: bool) {
+        if visible {
+            self.hidden_layers.remove(RATSNEST_KEY);
+        } else {
+            self.hidden_layers.insert(RATSNEST_KEY.into());
+        }
+    }
+
     /// Replace the view's layer visibility in one action; isolation always reveals the active layer.
-    /// Neither document revision nor saved files change, and unfinished drawing gestures expire.
+    /// Ratsnest visibility is independent of physical layer actions. Neither document revision
+    /// nor saved files change, and unfinished drawing gestures expire.
     pub(super) fn set_layer_visibility(&mut self, layers: impl IntoIterator<Item = String>, active_only: bool) {
         self.drawing.cancel();
+        let ratsnest_hidden = self.hidden_layers.contains(RATSNEST_KEY);
         self.hidden_layers = layers.into_iter().filter(|id| active_only && self.active_layer.as_ref() != Some(id)).collect();
+        if ratsnest_hidden {
+            self.hidden_layers.insert(RATSNEST_KEY.into());
+        }
     }
 
     /// Apply view-local layer choices through the same handler for Layers and live control.
@@ -681,7 +717,7 @@ impl EditorView {
                 );
                 self.board.layer_defaults_applied = true;
             }
-            self.board.hidden_layers.retain(|id| layers.contains(id));
+            self.board.hidden_layers.retain(|id| id == RATSNEST_KEY || layers.contains(id));
             if self.board.active_layer.as_ref().is_none_or(|id| !layers.contains(id)) {
                 self.board.active_layer = setup
                     .and_then(|setup| {

@@ -2,6 +2,16 @@
 use crate::Tokens;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, vec2};
 
+/// Paint an accepted logical connection behind copper without suggesting routed geometry.
+pub fn airwire(p: &Painter, from: Pos2, to: Pos2) {
+    p.line_segment([from, to], Stroke::new(1., Tokens::get().board_ink.gamma_multiply(0.55)));
+}
+
+/// The ratsnest is a view overlay, separate from physical drawing layers.
+pub fn ratsnest_visibility(ui: &mut egui::Ui, visible: &mut bool) -> egui::Response {
+    ui.checkbox(visible, "Ratsnest")
+}
+
 /// Paint a layer graphic in its effective color; selection, previews and handles use the shared accent.
 pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, selected: bool, preview: bool, color: Color32) {
     let t = Tokens::get();

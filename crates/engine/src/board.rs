@@ -13,6 +13,7 @@ pub mod drawing;
 pub mod identity;
 pub mod materials;
 pub mod outline;
+pub mod ratsnest;
 pub mod setup;
 pub mod silkscreen;
 mod transform;
