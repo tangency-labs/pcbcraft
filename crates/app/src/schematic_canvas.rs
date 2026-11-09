@@ -109,6 +109,7 @@ impl Tool {
 pub(crate) enum Click {
     GrabField(fields::Drag),
     RotateField(fields::Drag),
+    EditField(fields::Drag),
     FinishField(Option<pcbcraft_engine::schematic::fields::Layouts>),
     NetLabelCommit(pcbcraft_engine::net_labels::Label),
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
@@ -216,7 +217,7 @@ pub(crate) enum SymbolAction {
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
 ///
-/// With no tool, a primary double click on a symbol body or visible field opens its properties.
+/// With no tool, double-click a body for properties or visible text for an in-place editor.
 /// A primary click selects one wire leg or an item, or clears
 /// selection on empty canvas. Shift/Ctrl combine those hits with the previous selection. A secondary click selects the symbol under it and opens its menu; a row
 /// picked there returns `Click::Edit`. A secondary click on a wire selects it and opens Slice, Break, Delete Segment and Delete Wire for the leg under the click, returning `Click::WireEdit`
@@ -251,6 +252,7 @@ pub(crate) fn show(
     auto_heal: bool,
     draft: &Draft,
     label: &str,
+    editing: Option<&crate::inline_text::Target>,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
@@ -406,8 +408,8 @@ pub(crate) fn show(
         }
     }
 
-    fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols);
-    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, input_enabled.then_some(filters));
+    fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols, editing);
+    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, input_enabled.then_some(filters), editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
@@ -657,18 +659,20 @@ pub(crate) fn show(
     {
         return Some(Click::GrabReshape(drag));
     }
-    // Properties takes precedence over click-to-wire and selection only for an enabled symbol
-    // body or its visible fields. Explicit placement/wiring tools retain their own double click.
+    // Field editing and body properties precede click-to-wire for enabled symbols.
+    // Explicit placement/wiring tools retain their own double click.
     if tool.is_none()
         && response.double_clicked_by(egui::PointerButton::Primary)
         && filters.symbols
         && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
-        && let Some(pointer) = response.interact_pointer_pos()
-        && let Some(symbol) = fields::at(ui, project, camera, rect, pointer)
-            .map(|field| field.symbol)
-            .or_else(|| symbol_at(project, camera, rect, pointer).map(|(symbol, _)| symbol.id()))
     {
-        return Some(Click::Edit(SymbolAction::EditFields, symbol));
+        let pointer = response.interact_pointer_pos()?;
+        if let Some(field) = fields::at(ui, project, camera, rect, pointer) {
+            return Some(Click::EditField(field));
+        }
+        if let Some((symbol, _)) = symbol_at(project, camera, rect, pointer) {
+            return Some(Click::Edit(SymbolAction::EditFields, symbol.id()));
+        }
     }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;

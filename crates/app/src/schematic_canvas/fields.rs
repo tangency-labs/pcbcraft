@@ -114,6 +114,7 @@ pub(super) fn paint(
     highlighted: &Selection,
     tool: Option<&Tool>,
     enabled: bool,
+    editing: Option<&crate::inline_text::Target>,
 ) {
     for symbol in project.symbols() {
         let color = if selected.symbols.contains(&symbol.id()) {
@@ -124,6 +125,9 @@ pub(super) fn paint(
             Tokens::get().text
         };
         for field in instance_ink(ui, project, symbol, camera, rect, color) {
+            if matches!(editing,Some(crate::inline_text::Target::Symbol {symbol:owner,field:id}) if *owner==symbol.id() && *id==field.id) {
+                continue;
+            }
             if rect.intersects(field.bounds) {
                 let hovered = enabled && tool.is_none() && ui.rect_contains_pointer(field.bounds);
                 ui.painter_at(rect).add(field.shape);
@@ -182,4 +186,12 @@ pub(crate) fn rotated(project: &Project, drag: &Drag) -> Option<Layouts> {
     layout.rotation = (layout.rotation + 90) % 360;
     pcbcraft_engine::schematic::fields::validate_layouts(&layouts, &project.component(symbol)?.metadata).ok()?;
     Some(layouts)
+}
+
+/// Locate a saved field independently of hover state, so its inline editor follows its own view.
+pub(crate) fn edit_geometry(ui: &Ui, project: &Project, camera: &Camera, rect: Rect, owner: &str, field: &str) -> Option<(Rect, f32)> {
+    let symbol = project.symbols().iter().find(|symbol| symbol.id() == owner)?;
+    let ink = instance_ink(ui, project, symbol, camera, rect, Tokens::get().text).into_iter().find(|ink| ink.id == field)?;
+    let size = ink.shape.galley.job.sections.first()?.format.font_id.size;
+    Some((ink.bounds, size))
 }

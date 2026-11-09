@@ -26,6 +26,7 @@ mod field_actions;
 mod footprint_assignment;
 mod hierarchy;
 mod home;
+mod inline_text;
 mod library_editors;
 mod library_preview;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1179,6 +1180,7 @@ impl PcbApp {
             && (IN_BROWSER || ui.input(|input| input.focused))
             && !self.home
             && !self.project_action_pending()
+            && self.views.active.schematic.text_edit.is_none()
             && matches!(self.dialog, Dialog::None)
             && !self.parts.is_modal()
             && !egui::Popup::is_any_open(ui.ctx());
@@ -1189,6 +1191,27 @@ impl PcbApp {
                         && let Some(point) = pointer_on_canvas(ui, &self.views.active.camera)
                     {
                         self.pointer_next = Some(point);
+                    }
+                    let editing = std::mem::take(&mut self.views.active.schematic.edit_requested);
+                    if editing && input_enabled && self.views.active.schematic.tool.is_none() && self.views.active.filters.symbols {
+                        let rect = ui.available_rect_before_wrap();
+                        let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p));
+                        let field = pointer.and_then(|p| {
+                            snapshot.as_deref().and_then(|project| schematic_canvas::fields::at(ui, project, &self.views.active.camera, rect, p))
+                        });
+                        if let (Some(field), Some(source)) = (field, source) {
+                            self.begin_inline_text(source, inline_text::Target::Symbol { symbol: field.symbol, field: field.field });
+                        } else {
+                            let hovered = pointer
+                                .and_then(|p| {
+                                    snapshot.as_deref().and_then(|project| schematic_canvas::symbol_at(project, &self.views.active.camera, rect, p))
+                                })
+                                .map(|(symbol, _)| symbol.id());
+                            if let Some(symbol) = hovered.or_else(|| self.views.active.schematic.selection.single_symbol().map(str::to_owned)) {
+                                self.select(Selection::one_symbol(symbol));
+                                self.edit_selected(SymbolAction::EditFields);
+                            }
+                        }
                     }
                     let moving = std::mem::take(&mut self.views.active.schematic.move_requested);
                     let rotating = std::mem::take(&mut self.views.active.schematic.rotate_requested);
@@ -1237,7 +1260,8 @@ impl PcbApp {
                     }
                     if let Some(project) = snapshot.as_deref() {
                         let highlight = self.views.highlight_for(self.views.active.id(), &self.session);
-                        return schematic_canvas::show(
+                        let edited = self.views.active.schematic.text_edit.as_ref().map(|edit| edit.target.clone());
+                        let click = schematic_canvas::show(
                             ui,
                             project,
                             self.session.revision(),
@@ -1255,7 +1279,10 @@ impl PcbApp {
                             self.preferences.auto_heal_wires,
                             &self.views.active.schematic.wire_draft,
                             &label,
+                            edited.as_ref(),
                         );
+                        self.show_inline_text(ui, project);
+                        return click;
                     }
                     let t = Tokens::get();
                     ui.centered_and_justified(|ui| {
@@ -1291,6 +1318,9 @@ impl PcbApp {
             (None, Click::GrabField(drag)) => {
                 self.select(Selection::one_symbol(drag.symbol.clone()));
                 self.views.active.schematic.tool = Some(Tool::Field { drag, revision: source.revision });
+            }
+            (None, Click::EditField(field)) => {
+                self.begin_inline_text(source, inline_text::Target::Symbol { symbol: field.symbol, field: field.field })
             }
             (None, Click::RotateField(drag)) => {
                 if let Some(layouts) = self.views.active.snapshot(&self.session).and_then(|p| schematic_canvas::fields::rotated(&p, &drag)) {
@@ -1484,10 +1514,14 @@ impl PcbApp {
             return;
         }
         self.views.active.schematic.rotate_requested = false;
+        self.views.active.schematic.edit_requested = false;
         self.views.active.schematic.datasheet_requested = false;
         self.views.active.schematic.move_requested = false;
         self.views.active.board.move_requested = false;
         self.views.active.board.rotate_requested = 0;
+        if self.views.active.schematic.text_edit.is_some() {
+            return;
+        }
         if !self.home && !assistant_keys && matches!(self.dialog, Dialog::None) && !egui::Popup::is_any_open(ctx) && self.take_panel_escape(ctx) {
             return;
         }
@@ -1650,12 +1684,8 @@ impl PcbApp {
                     self.views.active.schematic.rotate_requested = true;
                 }
             }
-            if !hierarchy_hovered
-                && self.views.active.schematic.tool.is_none()
-                && self.views.active.schematic.selection.single_symbol().is_some()
-                && pressed(&EDIT_FIELDS)
-            {
-                self.edit_selected(SymbolAction::EditFields);
+            if !hierarchy_hovered && self.views.active.schematic.tool.is_none() && pressed(&EDIT_FIELDS) {
+                self.views.active.schematic.edit_requested = true;
             }
             // Shift+N first: an unshifted pattern also matches a shifted key.
             if pressed(&COARSER_GRID) {

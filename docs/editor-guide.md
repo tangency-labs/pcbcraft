@@ -247,8 +247,8 @@ value, orientation, X/Y position and footprint. Coordinates accept mm, mil or
 inch suffixes; bare numbers use the current display unit. Changing display units
 reformats valid drafts without applying or rounding away their stored coordinates.
 **Apply changes** commits all fields in one undo
-step. **More properties**, **E**, or a double-click on the symbol body or its visible
-text opens the expanded form. **General** combines
+step. **More properties**, **E** over the body or away from text with one symbol selected,
+or a double-click on the body opens the expanded form. **General** combines
 reference, value, field visibility, datasheet, description, manufacturer,
 manufacturer part number and named custom fields;
 these belong to the selected component without changing its library definition.
@@ -259,6 +259,13 @@ datasheet for the hovered component (including its text),
 or the single selected component when the pointer is elsewhere. Opening a link
 changes neither the project nor undo history; text entry, dialogs and active tools
 retain their keyboard input. Local document paths remain plain field values.
+
+Double-click visible reference, value or custom-field text, or hover it and press **E**,
+to edit it in place on the canvas. **Enter** applies the string as one undoable edit;
+**Escape**, an outside click, focus loss or a changed view/project cancels it. Invalid
+input stays in the text box for correction without changing the document. The editor
+stays in its originating split pane or native window and holds live mutation commands
+until accepted or cancelled.
 
 The **Text appearance** disclosure selects a field and controls its name display,
 size, alignment, rotation and local offsets. Drag the reference, value or another visible
@@ -305,7 +312,8 @@ there or through **More properties**, **E**, double-click or **Properties…** i
 context menu. Their text appearance controls size, visibility and a separate
 local offset while preserving the electrical anchor. Drag a visible power/ground
 name to move only its text; **M** picks up that name and **R** rotates it when hovered
-or while dragging. Double-click its text to open the name and text controls directly.
+or while dragging. Double-click its text or press **E** over it to edit the net name
+in place; Enter applies and Escape cancels. Full appearance controls remain in Properties.
 Dragging the glyph still moves the whole marker and its attached wires. Changing the net name changes
 the connected global net; changing only its text appearance leaves the wiring in place.
 

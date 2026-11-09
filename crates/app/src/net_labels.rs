@@ -19,7 +19,7 @@ mod text;
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Action {
     Properties,
-    TextProperties,
+    EditText,
     Move,
     MoveText,
     Rotate,
@@ -39,7 +39,6 @@ pub(super) struct Edit {
     y: String,
     units: pcbcraft_chrome::units::Unit,
     appearance: crate::properties::fields::Appearance,
-    reveal_text: bool,
 }
 
 impl Edit {
@@ -48,7 +47,7 @@ impl Edit {
         let x = pcbcraft_chrome::units::edit_label(label.at.x_nm, units);
         let y = pcbcraft_chrome::units::edit_label(label.at.y_nm, units);
         let appearance = crate::properties::fields::Appearance::new(label.text.clone().unwrap_or_default(), units);
-        Self { source, sheet, label, error: None, focused: false, x, y, units, appearance, reveal_text: false }
+        Self { source, sheet, label, error: None, focused: false, x, y, units, appearance }
     }
 
     /// Parse both axes and text together so invalid appearance cannot partially rename a net.
@@ -66,7 +65,7 @@ impl Edit {
 }
 
 /// Map physical name appearance into chrome without importing engine types into the UI crate.
-fn visual_text(label: &Label, step: f32) -> Option<chrome::Text> {
+pub(crate) fn visual_text(label: &Label, step: f32) -> Option<chrome::Text> {
     let text = label.text.as_ref()?;
     let offset = text.offset.map(|p| {
         let v = egui::vec2(p.x_nm as f32, p.y_nm as f32) * (step / pcbcraft_engine::schematic::GRID_NM as f32);
@@ -191,6 +190,7 @@ pub(super) fn paint(
     pointer: Option<Point>,
     selected: &pcbcraft_engine::selection::Selection,
     picking: Option<crate::selection_filters::Filters>,
+    editing: Option<&crate::inline_text::Target>,
 ) {
     let painter = ui.painter_at(rect);
     let attached = attached(project);
@@ -205,6 +205,12 @@ pub(super) fn paint(
         _ => None,
     };
     for label in project.net_labels().iter().filter(|label| moving.is_none_or(|m| m.id != label.id)) {
+        let mut appearance = visual_text(label, camera.unit_step());
+        if matches!(editing,Some(crate::inline_text::Target::NetName(id)) if *id==label.id) {
+            let hidden = label.text.clone().unwrap_or_default();
+            let hidden_label = Label { text: Some(pcbcraft_engine::schematic::fields::Layout { visible: false, ..hidden }), ..label.clone() };
+            appearance = visual_text(&hidden_label, camera.unit_step());
+        }
         chrome::paint_with_text(
             &painter,
             camera.screen(label.at, rect),
@@ -214,7 +220,7 @@ pub(super) fn paint(
             camera.unit_step(),
             if selected.net_labels.contains(&label.object_id()) { Tokens::get().accent } else { Tokens::get().text },
             attached.contains(&label.id),
-            visual_text(label, camera.unit_step()).as_ref(),
+            appearance.as_ref(),
         );
         if tool.is_none()
             && ui.is_enabled()
@@ -313,6 +319,9 @@ pub(super) fn input(
         }
         return None;
     }
+    if !enabled && !response.context_menu_opened() {
+        return None;
+    }
     if selection.len() > 1 {
         return None;
     }
@@ -339,8 +348,11 @@ pub(super) fn input(
     if let Some((id, name_hovered)) = ui.data(|data| data.get_temp::<(u64, bool)>(menu_id))
         && let Some(label) = project.net_labels().iter().find(|label| label.id == id && filters.allows_net_label(label.style))
         && let Some(menu) = pcbcraft_chrome::menu::context(response, |ui| {
+            if name_hovered && MenuItem::new("Edit text…").show(ui) {
+                return Some(Click::NetLabelAction(label.clone(), Action::EditText));
+            }
             for (name, action) in [
-                ("Properties…", if name_hovered { Action::TextProperties } else { Action::Properties }),
+                ("Properties…", Action::Properties),
                 (if name_hovered { "Move text" } else { "Move" }, if name_hovered { Action::MoveText } else { Action::Move }),
                 (if name_hovered { "Rotate text" } else { "Rotate" }, if name_hovered { Action::RotateText } else { Action::Rotate }),
                 ("Delete Net Label", Action::Delete),
@@ -362,7 +374,7 @@ pub(super) fn input(
         selection.single_net_label().and_then(|id| project.net_labels().iter().find(|l| l.id == id && filters.allows_net_label(l.style)).cloned())
     })?;
     for (key, action) in [
-        (Key::E, if name_hovered { Action::TextProperties } else { Action::Properties }),
+        (Key::E, if name_hovered { Action::EditText } else { Action::Properties }),
         (Key::M, if name_hovered { Action::MoveText } else { Action::Move }),
         (Key::R, if name_hovered { Action::RotateText } else { Action::Rotate }),
         (Key::Delete, Action::Delete),
@@ -373,7 +385,7 @@ pub(super) fn input(
         }
     }
     if hovered && response.double_clicked() {
-        return Some(Some(Click::NetLabelAction(label, if name_hovered { Action::TextProperties } else { Action::Properties })));
+        return Some(Some(Click::NetLabelAction(label, if name_hovered { Action::EditText } else { Action::Properties })));
     }
     // Keep the anchor available to click-to-wire; clicking ink selects only this marker.
     if hovered && response.clicked() && response.hover_pos().is_some_and(|p| camera.screen(label.at, rect).distance(p) > 6.) {
@@ -425,13 +437,13 @@ impl PcbApp {
     /// Apply only view-authorized actions; property edits and previews retain the source revision.
     pub(super) fn net_label_action(&mut self, source: ViewInput, mut label: Label, action: Action) {
         match action {
-            Action::Properties | Action::TextProperties => {
+            Action::EditText => self.begin_inline_text(source, crate::inline_text::Target::NetName(label.id)),
+            Action::Properties => {
                 let Some(project) = self.views.active.snapshot(&self.session) else {
                     return;
                 };
                 self.views.active.schematic.tool = None;
-                let mut edit = Edit::new(source, project.sheet_target(), label, self.preferences.units);
-                edit.reveal_text = matches!(action, Action::TextProperties);
+                let edit = Edit::new(source, project.sheet_target(), label, self.preferences.units);
                 self.dialog = Dialog::NetLabel(Box::new(edit));
             }
             Action::Move => self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None }),
@@ -686,8 +698,7 @@ fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
     } else {
         false
     };
-    let open = std::mem::take(&mut edit.reveal_text).then_some(true);
-    egui::CollapsingHeader::new("Text appearance").open(open).show(ui, |ui| {
+    egui::CollapsingHeader::new("Text appearance").show(ui, |ui| {
         if edit.appearance.controls(ui, true) {
             edit.appearance = crate::properties::fields::Appearance::new(Default::default(), edit.units);
         }

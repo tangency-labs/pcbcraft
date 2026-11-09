@@ -308,7 +308,7 @@ fn double_click(h: &mut Harness<'_, PcbApp>, point: Pos2, modifiers: Modifiers) 
 /// Bodies and visible fields open the same revision-bound properties form without editing the
 /// document. Nearby pin hit radii must not turn a small capacitor's first body click into a wire.
 #[test]
-fn double_clicking_symbols_and_fields_opens_properties_without_editing() {
+fn double_click_routes_bodies_to_properties_and_fields_to_inline_text() {
     for (definition, turns, zoom) in [("resistor", 0, 1.), ("capacitor", 0, 0.5), ("capacitor", 90, 0.5), ("led", 90, 1.), ("npn", 0, 1.)] {
         let mut h = fixture();
         let revision = h.state().session.revision();
@@ -329,7 +329,9 @@ fn double_clicking_symbols_and_fields_opens_properties_without_editing() {
     let point = text_center(&h, "R1");
     let before = h.state().session.snapshot().unwrap();
     double_click(&mut h, point, Modifiers::NONE);
-    assert!(matches!(h.state().dialog, Dialog::EditFields(_)));
+    assert!(matches!(h.state().dialog, Dialog::None));
+    h.get_by_label("Edit Reference");
+    assert!(h.state().views.active.schematic.text_edit.is_some());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
@@ -350,6 +352,7 @@ fn double_click_properties_respects_filters_modifiers_and_active_tools() {
         }
         double_click(&mut h, point, if mode == "shift" { Modifiers::SHIFT } else { Modifiers::NONE });
         assert!(matches!(h.state().dialog, Dialog::None), "{mode}");
+        assert!(h.state().views.active.schematic.text_edit.is_none(), "{mode}");
     }
 }
 
@@ -587,5 +590,194 @@ fn library_property_actions_keep_pinned_geometry_and_pending_edits_safe() {
     click(&mut h, "Edit symbol copy…");
     assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(h.state().library_editors.active_kind(), Some(pcbcraft_engine::authoring::Kind::Symbol));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Enter publishes the addressed reference/value once, preserving electrical geometry and every
+/// other field. The old glyph is replaced by a canvas text box, without a dialog or new viewport.
+#[test]
+fn inline_symbol_fields_commit_once_and_keep_their_owner() {
+    for (old, edited, label) in [("R1", "R42", "Edit Reference"), ("R", "4.7k", "Edit Value")] {
+        let mut h = fixture();
+        let before = h.state().session.snapshot().unwrap();
+        let point = text_center(&h, old);
+        double_click(&mut h, point, Modifiers::NONE);
+        assert!(matches!(h.state().dialog, Dialog::None));
+        let rect = h.get_by_label(label).rect();
+        assert!(h.get_by_label("Schematic canvas").rect().contains_rect(rect));
+        assert!(rect.expand(30.).contains(point));
+        assert_eq!(
+            h.output().shapes.iter().filter(|s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text==old)).count(),
+            1,
+            "the editor must replace the canvas text"
+        );
+        type_field(&mut h, label, edited);
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        let rev = h.state().session.revision();
+        h.key_press(Key::Enter);
+        h.run();
+        assert!(h.state().views.active.schematic.text_edit.is_none());
+        assert_eq!(h.state().session.revision(), rev + 1);
+        let after = h.state().session.snapshot().unwrap();
+        let component = after.component(&after.symbols()[0]).unwrap();
+        if label == "Edit Reference" {
+            assert_eq!(component.reference(), edited);
+            assert_eq!(component.value(), "R");
+        } else {
+            assert_eq!(component.value(), edited);
+            assert_eq!(component.reference(), "R1");
+        }
+        assert_eq!(after.symbols()[0].pins(), before.symbols()[0].pins());
+        assert_eq!(after.symbols()[0].field_layout, before.symbols()[0].field_layout);
+        assert!(after.same_connectivity(&before));
+        click(&mut h, "Undo");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        click(&mut h, "Redo");
+        assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// E edits visible custom text without selecting or opening its component. Blank optional text
+/// remains a named metadata field, and native persistence retains both content and appearance.
+#[test]
+fn inline_custom_fields_use_the_shared_metadata_command() {
+    let mut h = fixture();
+    let id = "00000000-0000-4000-8000-000000000001";
+    let rev = h.state().session.revision();
+    h.state_mut().session.apply(pcbcraft_engine::SET_SYMBOL_FIELDS,&json!({"symbol":"symbol-2","reference":"R1","value":"R","metadata":{"fields":{id:{"name":"Note","value":"Visible note"}},"attributes":pcbcraft_engine::schematic::fields::Attributes::default()},"field_layout":{id:pcbcraft_engine::schematic::fields::Layout{offset:Some(Point{x_nm:0,y_nm:6_350_000}),..Default::default()}},"expected_revision":rev})).unwrap();
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let point = text_center(&h, "Visible note");
+    h.hover_at(point);
+    h.run();
+    h.key_press(Key::E);
+    h.run();
+    h.get_by_label("Edit Note");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    type_field(&mut h, "Edit Note", "Changed note");
+    h.key_press(Key::Enter);
+    h.run();
+    let after = h.state().session.snapshot().unwrap();
+    assert_eq!(after.component(&after.symbols()[0]).unwrap().metadata.fields[id].value, "Changed note");
+    assert_eq!(after.symbols()[0].field_layout, before.symbols()[0].field_layout);
+    let docs = encode_documents(after).unwrap();
+    assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+}
+
+/// Escape, focus loss, outside click, a new opening or a competing revision discard drafts.
+/// The outside release is consumed rather than selecting a node or starting a wire.
+#[test]
+fn inline_drafts_cancel_without_misrouting_canvas_input() {
+    for mode in ["escape", "focus", "outside", "stale", "reopen"] {
+        let mut h = fixture();
+        let point = text_center(&h, "R1");
+        double_click(&mut h, point, Modifiers::NONE);
+        type_field(&mut h, "Edit Reference", "R42");
+        match mode {
+            "escape" => h.key_press(Key::Escape),
+            "focus" => h.event(egui::Event::WindowFocused(false)),
+            "outside" => {
+                let project = h.state().session.project().unwrap();
+                let terminal = project.symbols()[0].terminals()[0];
+                let point = project.terminal_position(terminal).unwrap();
+                let pointer = h.state().views.active.camera.screen(point, h.get_by_label("Schematic canvas").rect());
+                assert!(!h.get_by_label("Edit Reference").rect().contains(pointer));
+                h.hover_at(pointer);
+                h.run();
+                for pressed in [true, false] {
+                    h.event(egui::Event::PointerButton { pos: pointer, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                    h.run();
+                }
+            }
+            "reopen" => {
+                let snapshot = h.state().session.snapshot().unwrap();
+                h.state_mut().session.open_snapshot(snapshot);
+            }
+            _ => {
+                h.state_mut().session.apply("project.rename", &json!({"name":"Concurrent"})).unwrap();
+            }
+        }
+        let before = h.state().session.snapshot().unwrap();
+        h.run();
+        assert!(h.state().views.active.schematic.text_edit.is_none(), "{mode}");
+        assert!(h.state().views.active.schematic.tool.is_none(), "{mode}");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()), "{mode}");
+    }
+}
+
+/// Native command validation rejects invalid strings in place and leaves the draft available
+/// for correction; accepting unchanged text creates no history entry.
+#[test]
+fn invalid_inline_text_stays_editable_without_partial_changes() {
+    let mut h = fixture();
+    let before = h.state().session.snapshot().unwrap();
+    let point = text_center(&h, "R1");
+    double_click(&mut h, point, Modifiers::NONE);
+    type_field(&mut h, "Edit Reference", "");
+    h.key_press(Key::Enter);
+    h.run();
+    h.get_by_label("Edit Reference");
+    assert!(h.state().views.active.schematic.text_edit.is_some());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    type_field(&mut h, "Edit Reference", "R1");
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.state().views.active.schematic.text_edit.is_none());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// The live command path respects inline input ownership; after cancellation the same revision
+/// remains usable and executes through the normal shared field command.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn inline_text_owns_live_command_input_until_finished() {
+    let mut h = fixture();
+    let point = text_center(&h, "R1");
+    double_click(&mut h, point, Modifiers::NONE);
+    let before = h.state().session.snapshot().unwrap();
+    let ctx = h.ctx.clone();
+    let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::SET_SYMBOL_FIELDS,"params":{"symbol":"symbol-2","reference":"R1","value":"new","expected_revision":h.state().session.revision()}}});
+    assert!(pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).is_err());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.key_press(Key::Escape);
+    h.run();
+    pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).unwrap();
+    assert_eq!(h.state().session.project().unwrap().component(&h.state().session.project().unwrap().symbols()[0]).unwrap().value(), "new");
+}
+
+/// In-place editors render and commit inside the focused split, and changing panes cancels a
+/// pending draft rather than moving the editor or applying it to another view's selection.
+#[test]
+fn inline_text_belongs_to_its_split_canvas() {
+    let mut h = fixture();
+    h.set_size(egui::vec2(1500., 1000.));
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    let canvas = h.get_by_label("Schematic canvas 2").rect();
+    let point = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "R1" && canvas.contains(text.visual_bounding_rect().center()) => {
+                Some(text.visual_bounding_rect().center())
+            }
+            _ => None,
+        })
+        .unwrap();
+    double_click(&mut h, point, Modifiers::NONE);
+    assert_eq!(h.state().views.active.id(), crate::ViewId(1));
+    assert!(canvas.contains_rect(h.get_by_label("Edit Reference").rect()));
+    type_field(&mut h, "Edit Reference", "R42");
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().reference(), "R42");
+    click(&mut h, "Undo");
+    double_click(&mut h, point, Modifiers::NONE);
+    type_field(&mut h, "Edit Reference", "discarded");
+    let before = h.state().session.snapshot().unwrap();
+    let other = h.get_by_label("Schematic canvas 1").rect().center();
+    crate::tests::click_canvas_at(&mut h, other);
+    assert!(h.state().views.view(crate::ViewId(1)).unwrap().schematic.text_edit.is_none());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }

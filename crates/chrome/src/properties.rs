@@ -299,6 +299,51 @@ pub fn web_link(value: &str) -> Option<&str> {
     .then_some(value)
 }
 
+/// A canvas-local field editor has no window or popup. It stays inside the owning canvas,
+/// uses a readable zoom-aware font and shows validation errors beside the current draft.
+#[allow(clippy::too_many_arguments)]
+pub fn inline_text(
+    ui: &mut Ui,
+    id: egui::Id,
+    label: &str,
+    value: &mut String,
+    canvas: egui::Rect,
+    anchor: egui::Rect,
+    size: f32,
+    focus: bool,
+    error: Option<&str>,
+) -> egui::Response {
+    let t = Tokens::get();
+    let font = egui::FontId::proportional(size.clamp(t.font_label, t.font_page_heading * 2.));
+    let measured = ui.painter().layout_no_wrap(value.clone(), font.clone(), t.text).size();
+    let width = (measured.x + 2. * t.space_8).max(anchor.width()).max(t.space_24 * 4.).min(canvas.width().max(1.));
+    let height = (measured.y + 2. * t.space_4).max(t.control_height).min(canvas.height().max(1.));
+    let left = (anchor.left() - t.space_8).clamp(canvas.left(), (canvas.right() - width).max(canvas.left()));
+    let top = (anchor.center().y - height / 2.).clamp(canvas.top(), (canvas.bottom() - height).max(canvas.top()));
+    let rect = egui::Rect::from_min_size(egui::pos2(left, top), vec2(width, height));
+    let response = ui.put(rect, input(value).id(id).font(font).char_limit(2048));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, label));
+    if focus {
+        response.request_focus();
+        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(value.chars().count()))));
+            state.store(ui.ctx(), id);
+        }
+    }
+    if let Some(error) = error {
+        ui.painter().rect_stroke(rect, t.radius_sm, egui::Stroke::new(1., t.error), egui::StrokeKind::Outside);
+        let below = rect.bottom() + t.space_4;
+        let at = if below + t.control_height * 2. < canvas.bottom() { below } else { (rect.top() - t.control_height * 2.).max(canvas.top()) };
+        ui.put(
+            egui::Rect::from_min_size(egui::pos2(rect.left(), at), vec2((canvas.right() - rect.left()).max(width), t.control_height * 2.)),
+            egui::Label::new(RichText::new(error).color(t.error)).wrap(),
+        );
+    }
+    response
+}
+
 #[cfg(test)]
 mod link_tests {
     /// Ordinary URL fields open on either host, while non-web values remain plain metadata.

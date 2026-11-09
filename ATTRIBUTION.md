@@ -771,3 +771,9 @@ metadata, and the Library tab opens existing source-manager/copy-authoring workf
 no definition-replacement behavior, new dependency, native format or external asset
 was introduced. The pick-and-place flag description was checked against the published
 KiCad Schematic Editor manual linked above, consulted 8-Nov-2026.
+
+
+The in-place schematic text editor is original PCBcraft code. Its canvas-local drafts
+use the existing symbol-field and named-net commands, with view/opening/revision checks
+and shared live-command input ownership. No external implementation, asset, dependency
+or native-format change was used for this interaction.

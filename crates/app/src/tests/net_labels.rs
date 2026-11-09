@@ -17,10 +17,11 @@ fn editor(width: f32) -> Harness<'static, PcbApp> {
 }
 /// Replace the focused name through actual text input.
 fn name(h: &mut Harness<'_, PcbApp>, name: &str) {
-    h.get_by_label("Net name").click();
+    let label = if h.state().views.active.schematic.text_edit.is_some() { "Edit Net name" } else { "Net name" };
+    h.get_by_label(label).click();
     h.run();
     clear_name(h);
-    h.get_by_label("Net name").type_text(name);
+    h.get_by_label(label).type_text(name);
     h.run();
 }
 /// Pick a model-derived label anchor so canvas and toolbar dimensions may evolve independently.
@@ -111,6 +112,8 @@ fn power_properties_keep_their_originating_split_view() {
         })
         .unwrap();
     click_canvas_at(&mut h, point);
+    h.hover_at(point + egui::vec2(200., 100.));
+    h.run();
     h.key_press(Key::E);
     h.run();
     assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
@@ -594,23 +597,25 @@ fn power_names_drag_independently_of_their_electrical_anchors() {
     }
 }
 
-/// A double click on GND opens the editable name and text controls directly. Renaming changes
+/// A double click on GND opens an inline text box on the owning canvas. Renaming changes
 /// the real net name, while cancelling leaves the complete snapshot and connection unchanged.
 #[test]
-fn double_clicking_power_text_opens_its_name_and_appearance() {
+fn double_clicking_power_text_edits_its_name_in_place() {
     for style in ["ground", "power", "power_bar"] {
         let mut h = wired_power(style, 0);
         let before = h.state().session.snapshot().unwrap();
         let point = power_name(&h, "Schematic canvas", "GND");
         double_click_name(&mut h, point);
-        assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
-        h.get_by_label("Text height");
+        assert!(matches!(h.state().dialog, Dialog::None));
+        h.get_by_label("Edit Net name");
         name(&mut h, "GNDA");
-        click(&mut h, "Cancel");
+        h.key_press(Key::Escape);
+        h.run();
         assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         double_click_name(&mut h, point);
         name(&mut h, "GNDA");
-        click(&mut h, "Apply");
+        h.key_press(Key::Enter);
+        h.run();
         let project = h.state().session.project().unwrap();
         let label = &project.net_labels()[0];
         assert_eq!(label.name, "GNDA");
@@ -705,7 +710,8 @@ fn power_name_drag_belongs_to_the_focused_split_pane() {
     let point = power_name(&h, "Schematic canvas 2", "GND");
     double_click_name(&mut h, point);
     name(&mut h, "GNDA");
-    click(&mut h, "Apply");
+    h.key_press(Key::Enter);
+    h.run();
     assert_eq!(h.state().session.project().unwrap().net_labels()[0].name, "GNDA");
 }
 

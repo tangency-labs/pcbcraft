@@ -1830,3 +1830,41 @@ fn detached_physical_footprint_click_then_delete_uses_its_own_input() {
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     }
 }
+
+/// E over a field renders an inline textbox in the native child, never the root host or a
+/// new properties window. Enter commits to that child's captured symbol through shared history.
+#[test]
+fn detached_inline_text_remains_in_the_child_canvas() {
+    let (mut h, peer) = multi_window();
+    detach(&mut h);
+    let id = h.state().views.hosts[&HostId(1)].focused;
+    focus(&mut h, &peer, true);
+    h.run();
+    let point = peer
+        .borrow()
+        .output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "R1" => Some(text.visual_bounding_rect().center()),
+            _ => None,
+        })
+        .unwrap();
+    peer.borrow_mut().events.push(Event::PointerMoved(point));
+    h.run();
+    child_key(&mut h, &peer, Key::E, Modifiers::NONE);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    let rect = child_rect(&peer, "Edit Reference");
+    assert!(child_rect(&peer, "Schematic canvas").contains_rect(rect));
+    assert!(h.query_by_label("Edit Reference").is_none());
+    let before = h.state().session.snapshot().unwrap();
+    child_key(&mut h, &peer, Key::A, Modifiers::COMMAND);
+    peer.borrow_mut().events.push(Event::Text("R42".into()));
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    child_key(&mut h, &peer, Key::Enter, Modifiers::NONE);
+    assert!(h.state().views.view(id).unwrap().schematic.text_edit.is_none());
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().reference(), "R42");
+    child_key(&mut h, &peer, Key::Z, Modifiers::COMMAND);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
