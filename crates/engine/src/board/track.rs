@@ -227,12 +227,16 @@ fn point_distance(p: Point, a: Point, b: Point) -> f64 {
     ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
 }
 
-/// Name the first two distinct nets that a candidate's copper would join, if any.
-fn short(project: &Project) -> Option<(String, String)> {
+/// Name the first two distinct nets joined by an island that contains one of the `added`
+/// tracks, if any. Islands without a new track are ignored, so a short made earlier by another
+/// edit (such as moving a footprint onto a track) does not block unrelated routes.
+fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> {
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
-    let (_, members) = islands(&lands, view.tracks());
-    members.iter().find_map(|island| {
+    let tracks = view.tracks();
+    let (_, members) = islands(&lands, tracks);
+    let is_added = |node: usize| node.checked_sub(lands.len()).and_then(|index| tracks.get(index)).is_some_and(|track| added.contains(&track.id));
+    members.iter().filter(|island| island.iter().any(|node| is_added(*node))).find_map(|island| {
         let mut nets = island.iter().filter_map(|node| lands.get(*node)?.net.clone());
         let first = nets.next()?;
         nets.find(|net| *net != first).map(|second| (first, second))
@@ -247,12 +251,14 @@ fn param<T: serde::de::DeserializeOwned>(params: &Value, name: &str) -> Result<T
 impl Session {
     /// Add one routed path or delete addressed segments atomically. A path of N distinct
     /// consecutive points becomes N-1 segments on one copper layer with one width. The whole
-    /// candidate is validated first: unknown layers or IDs, invalid geometry, and copper that
+    /// candidate is validated first: unknown layers or IDs, invalid geometry, and new copper that
     /// would join two different nets leave the board, revision and undo history unchanged.
+    /// Only islands touched by the new segments are checked for shorts.
     pub(crate) fn edit_tracks(&mut self, command: &str, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let mut tracks = project.board.tracks.clone();
+        let mut added = BTreeSet::new();
         if command == ADD_TRACKS {
             let layer: Uuid = param(params, "layer")?;
             let width_nm: i64 = param(params, "width_nm")?;
@@ -261,7 +267,9 @@ impl Session {
                 return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
             }
             for pair in points.windows(2) {
-                tracks.push(Track { id: crate::fresh_id()?, layer, width_nm, start: pair[0], end: pair[1] });
+                let id = crate::fresh_id()?;
+                added.insert(id);
+                tracks.push(Track { id, layer, width_nm, start: pair[0], end: pair[1] });
             }
         } else {
             let ids: Vec<Uuid> = param(params, "tracks")?;
@@ -274,9 +282,7 @@ impl Session {
         validate(project, &mut tracks).map_err(CommandError::InvalidParams)?;
         let mut next = project.clone();
         std::sync::Arc::make_mut(&mut next.board).tracks = tracks;
-        if command == ADD_TRACKS
-            && let Some((a, b)) = short(&next)
-        {
+        if let Some((a, b)) = short(&next, &added) {
             return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
         }
         self.change(next);

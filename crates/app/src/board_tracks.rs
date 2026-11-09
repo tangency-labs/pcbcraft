@@ -189,7 +189,8 @@ fn add(state: &mut State, draft: Draft) -> Option<Command> {
 
 /// Route on the active copper layer, or select tracks when no tool owns input. Release over
 /// chrome, right-click, stale input, disabled input or a hidden/changed layer never commits an
-/// unfinished route. `over_footprint` gives footprints priority over tracks for plain picks.
+/// unfinished route. Delete, Enter, Backspace and `/` requests are consumed every frame and
+/// ignored while input is disabled, so they never act on a later frame. `over_footprint` gives footprints priority over tracks for plain picks.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn interact(
     ui: &mut Ui,
@@ -214,6 +215,12 @@ pub(super) fn interact(
     if state.tool && !can_route(view, active, hidden) {
         state.cancel();
     }
+    // Key requests apply to this frame only. Taking them before the disabled-input return keeps
+    // a Delete pressed while another tool owned input from deleting on a later frame.
+    let delete = std::mem::take(&mut state.delete_requested);
+    let posture = std::mem::take(&mut state.posture_requested);
+    let backspace = std::mem::take(&mut state.backspace_requested);
+    let finish = std::mem::take(&mut state.finish_requested);
     let Some(source) = source.filter(|_| enabled) else { return out };
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) && state.busy() {
         if state.draft.take().is_none() {
@@ -222,7 +229,7 @@ pub(super) fn interact(
         out.consumed = true;
         return out;
     }
-    if std::mem::take(&mut state.delete_requested) && !state.selected.is_empty() {
+    if delete && !state.selected.is_empty() {
         out.command = Some(Command {
             source,
             id: pcbcraft_engine::DELETE_TRACKS,
@@ -236,18 +243,16 @@ pub(super) fn interact(
     if state.tool {
         out.consumed = true;
         let Some(layer) = active else { return out };
-        if std::mem::take(&mut state.posture_requested) {
+        if posture {
             state.diagonal_first = !state.diagonal_first;
         }
-        if std::mem::take(&mut state.backspace_requested)
-            && let Some(draft) = &mut state.draft
-        {
+        if backspace && let Some(draft) = &mut state.draft {
             draft.points.pop();
             if draft.points.is_empty() {
                 state.draft = None;
             }
         }
-        if std::mem::take(&mut state.finish_requested) {
+        if finish {
             if let Some(draft) = state.draft.take() {
                 out.command = add(state, draft);
             }

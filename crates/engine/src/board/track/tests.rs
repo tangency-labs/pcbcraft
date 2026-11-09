@@ -196,3 +196,45 @@ fn connectivity_geometry_is_exact_at_boundaries() {
     let clockwise = [p(0, 0), p(0, 10), p(10, 10), p(10, 0)];
     assert!(inside(p(5, 5), &clockwise));
 }
+
+/// A short made by another edit, here moving a footprint onto a track of another net, refuses
+/// only routes that touch that island. Unrelated routes still succeed.
+#[test]
+fn an_existing_short_blocks_only_routes_into_it() {
+    let mut s = routed_fixture();
+    let front = copper_layers(&s)[0];
+    let (id, position, rotation, moved, moved_net) = {
+        let f = view(&s).footprints().find(|f| f.pads.iter().all(|p| p.net.is_some()) && f.pads[0].net != f.pads[1].net).unwrap();
+        (f.id.clone(), f.position, f.rotation, f.pads[0].center, f.pads[0].net.clone())
+    };
+    let target = view(&s).footprints().filter(|f| f.id != id).flat_map(|f| f.pads).find(|p| p.net.is_some() && p.net != moved_net).unwrap().center;
+    let stub_end = Point { x_nm: target.x_nm, y_nm: target.y_nm + 3_000_000 };
+    route(&mut s, front, &[target, stub_end]).unwrap();
+    // Move the first footprint so its first pad lands on the stub's free end.
+    let offset = (moved.x_nm - position.x_nm, moved.y_nm - position.y_nm);
+    s.apply(
+        crate::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":id,"x_nm":stub_end.x_nm - offset.0,"y_nm":stub_end.y_nm - offset.1,
+            "rotation":rotation,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    assert!(short(s.project().unwrap(), &view(&s).tracks().iter().map(|t| t.id).collect()).is_some(), "the move created a short");
+    route(&mut s, front, &[Point { x_nm: 0, y_nm: 30_000_000 }, Point { x_nm: 5_000_000, y_nm: 30_000_000 }])
+        .expect("an unrelated route is not blamed for an existing short");
+    let error = route(&mut s, front, &[stub_end, Point { x_nm: stub_end.x_nm + 2_000_000, y_nm: stub_end.y_nm }]).unwrap_err().to_string();
+    assert!(error.contains("would connect nets"), "a route into the shorted island is refused: {error}");
+}
+
+/// Earlier formats reject a `tracks` field even when it is empty, so files stay canonical.
+#[test]
+fn an_empty_tracks_field_is_rejected_before_format_12() {
+    let s = routed_fixture();
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    let text = String::from_utf8(saved["board.json"].clone()).unwrap();
+    assert!(text.contains("\"format\": \"pcbcraft-board/10\""), "{text}");
+    let list = if text.contains("  \"assignments\": [\n") { "  \"assignments\": [\n" } else { "  \"footprints\": [\n" };
+    let mut with_empty = saved.clone();
+    with_empty.insert("board.json".into(), text.replacen(list, &format!("  \"tracks\": [],\n{list}"), 1).into_bytes());
+    assert!(decode_documents(&with_empty).is_err());
+    assert!(decode_documents(&saved).is_ok());
+}

@@ -285,8 +285,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     };
 
     let tracked = board.format == TRACK_BOARD_FORMAT;
-    if tracked != board.tracks.as_ref().is_some_and(|tracks| !tracks.is_empty()) {
-        return Err("board.json: nonempty tracks require board format 12".into());
+    // Compare presence, not just contents: earlier formats reject even an empty `tracks` field.
+    if tracked != board.tracks.is_some() || board.tracks.as_ref().is_some_and(Vec::is_empty) {
+        return Err("board.json: tracks require board format 12, which requires at least one track".into());
     }
     if !tracked && matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
         return Err("board.json: accepted baselines require board format 10, 11 or 12".into());
