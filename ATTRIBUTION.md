@@ -50,7 +50,7 @@ and position-menu interaction. It reuses the Craft frame, palette, typography
 and popup controls. Panel positions are presentation data; no project format,
 external dependency or artwork is added.
 
-## Board Edge drawings
+## Board Outline drawings
 
 The layer-addressed drawing model, commands, native board version 9 codec, canvas
 tools and ribbon glyphs are original PCBcraft work under MIT OR Apache-2.0.
@@ -59,6 +59,14 @@ board-boundary terminology was checked against the published [KiCad 10 PCB Edito
 manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#board_outlines_edge_cuts),
 consulted November 7, 2026. No KiCad implementation, fixtures, icons or artwork
 were used.
+
+The subsequent Board Outline terminology update is original PCBcraft work over
+these existing tools and commands. Earlier default layer names remain saved as
+authored and display as Board Outline in the canvas controls; custom layer names
+remain unchanged. When that display mapping would give distinct layers the same
+label, the controls retain their saved names so each choice remains identifiable.
+No external source, asset, dependency or native-format change was introduced for
+this update.
 
 PCBcraft Next's original workspace documentation and the existing FigCraft exports
 `03-layout-top.png` and `pcb-workspace.png` were reviewed as visual references

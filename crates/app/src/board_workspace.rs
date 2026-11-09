@@ -180,7 +180,7 @@ impl PcbApp {
             let labels: Vec<_> = layers
                 .iter()
                 .map(|layer| {
-                    let label = crate::board_panels::layer_name(layer);
+                    let label = crate::board_panels::layer_name(layer, &layers);
                     if self.views.active.board.hidden_layers.contains(&layer.id.to_string()) { format!("{label} (hidden)") } else { label.to_owned() }
                 })
                 .collect();
@@ -208,7 +208,7 @@ impl PcbApp {
             RibbonTool {
                 icon: ToolIcon::Line,
                 label: "Line",
-                description: "Draw lines on Board Edge",
+                description: "Draw lines on Board Outline",
                 shortcut: "",
                 enabled: enabled && can_draw && !editing,
                 active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Lines),
@@ -217,7 +217,7 @@ impl PcbApp {
             RibbonTool {
                 icon: ToolIcon::Rectangle,
                 label: "Rectangle",
-                description: "Draw rectangle on Board Edge",
+                description: "Draw rectangle on Board Outline",
                 shortcut: "",
                 enabled: enabled && can_draw && !editing,
                 active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Rectangle),

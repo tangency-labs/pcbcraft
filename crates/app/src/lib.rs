@@ -1088,23 +1088,22 @@ impl PcbApp {
         let mut unit = self.preferences.units;
         let pointer = self.pointer.filter(|_| grid_view.is_some());
         let units_shortcut = ui.ctx().format_shortcut(&SWITCH_UNITS);
-        let mut board_status = self
-            .session
-            .project()
-            .and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target)))
-            .and_then(|board| {
-                board.layers().into_iter().find(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str()))
-            })
-            .map(|layer| {
-                let name = crate::board_panels::layer_name(&layer);
-                let hidden = self.views.active.board.hidden_layers.contains(&layer.id.to_string());
-                let tool = match self.views.active.board.drawing.tool {
-                    Some(board_drawing::Tool::Lines) => "Line · ",
-                    Some(board_drawing::Tool::Rectangle) => "Rectangle · ",
-                    None => "",
-                };
-                format!("{tool}{name}{}", if hidden { " (hidden)" } else { "" })
-            });
+        let mut board_status =
+            self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))).and_then(
+                |board| {
+                    let layers = board.layers();
+                    layers.iter().find(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str())).map(|layer| {
+                        let name = crate::board_panels::layer_name(layer, &layers);
+                        let hidden = self.views.active.board.hidden_layers.contains(&layer.id.to_string());
+                        let tool = match self.views.active.board.drawing.tool {
+                            Some(board_drawing::Tool::Lines) => "Line · ",
+                            Some(board_drawing::Tool::Rectangle) => "Rectangle · ",
+                            None => "",
+                        };
+                        format!("{tool}{name}{}", if hidden { " (hidden)" } else { "" })
+                    })
+                },
+            );
         if let Some((input, ratsnest)) = &self.views.active.board.ratsnest_cache
             && input.revision == self.session.revision()
             && Some(ratsnest.board) == self.views.active.board.target

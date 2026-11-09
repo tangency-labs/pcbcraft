@@ -141,13 +141,13 @@ commands with a reason.
 ## Headless MCP
 
 `pcb.add_drawing`, `pcb.set_drawing` and `pcb.delete_drawing` use the same
-transactions as canvas Board Edge editing. Each takes `board` and
+transactions as canvas Board Outline editing. Each takes `board` and
 `expected_revision`; creation also takes a `layer` UUID, ordered `points`
 (`x_nm`, `y_nm` integers) and `closed`. Updating takes `drawing`, `points` and
 `closed`; deleting takes `drawing`. Inspection exposes layer metadata and drawing
 identities at `project.boards[].layers` and `.drawings`. Paths contain 2–256
 vertices (at least three when closed), without a repeated closing vertex. Only
-Board Edge layers accept these graphics in this slice. Open paths are allowed,
+Board Outline layers accept these graphics in this slice. Open paths are allowed,
 without a manufacturing or clearance claim. Live `view.set_layer` uses the same
 Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.

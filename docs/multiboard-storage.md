@@ -448,7 +448,7 @@ Start by recording optional board association and independent board identities,
 then introduce board registries and folders through a reviewed storage migration. Existing
 single-board projects must retain their current compatibility board ID when it
 becomes a persisted record; allocate independent IDs for additional boards.
-Preserve placements, package mappings, layers, stackups, materials, Board Edge
+Preserve placements, package mappings, layers, stackups, materials, Board Outline
 graphics and silkscreen settings. Preserve existing component and terminal IDs
 where their meaning is unchanged.
 
