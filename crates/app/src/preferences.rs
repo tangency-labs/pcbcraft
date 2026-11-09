@@ -305,7 +305,10 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
 fn schematic(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::section(ui, "Wiring", |ui| {
         settings::row_with_keywords(ui, "Auto-heal wires", &["smart routing", "cleanup", "detours", "loops", "overlaps"], |ui| {
-            ui.checkbox(&mut data.preferences.auto_heal_wires, "Enabled");
+            let response = ui.checkbox(&mut data.preferences.auto_heal_wires, "Enabled");
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), data.preferences.auto_heal_wires, "Auto-heal wires")
+            });
         });
         settings::hint(
             ui,

@@ -530,8 +530,8 @@ impl PcbApp {
     }
 
     /// Rotate, delete, edit fields, open the symbol component's footprint chooser, or pick up a
-    /// symbol for disconnected movement.
-    /// Pickup is view-only until placement; deleting clears selection and failures show in status.
+    /// symbol with its wires attached (Grab) or disconnected (DisconnectMove).
+    /// Pickup stays view-only until a click commits it; deleting clears selection and failures show in status.
     fn edit_selected(&mut self, action: SymbolAction) {
         if self.views.active.workspace != Workspace::Schematic {
             return;
@@ -1200,8 +1200,9 @@ impl PcbApp {
 
     /// Draw the schematic and send completed edits through the shared command catalog using each
     /// gesture's starting revision to reject stale actions. M picks up the selected symbol or,
-    /// without a selection, the hovered symbol for disconnected movement. Cancel clears only
-    /// the local preview, and another active tool cannot be replaced by a queued shortcut.
+    /// without a selection, the hovered symbol for disconnected movement. G picks up the hovered
+    /// symbol with its wires attached, or a wire handle. Pickup stays view-only until a click commits it.
+    /// Cancel clears only the local preview, and an unfinished tool cannot be replaced by a queued shortcut.
     /// R targets hovered field text before its body; D opens a component's saved datasheet
     /// through the host without publishing an engineering edit.
     fn canvas(&mut self, ui: &mut Ui) {

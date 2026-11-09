@@ -169,7 +169,8 @@ fn auto_heal_preferences_control_same_wire_shortcuts_and_persist() {
         if !automatic {
             click(&mut h, "Preferences");
             click(&mut h, "Schematic");
-            click(&mut h, "Enabled");
+            h.get_by_role(egui::accesskit::Role::CheckBox).click();
+            h.run();
             click(&mut h, "OK");
             assert!(!h.state().preferences.auto_heal_wires);
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));

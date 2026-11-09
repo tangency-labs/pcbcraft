@@ -789,15 +789,18 @@ fn schematic_cleanup_preferences_share_the_menu_setting() {
     assert!(h.state().preferences.auto_heal_wires);
     click(&mut h, "Preferences");
     click(&mut h, "Schematic");
-    assert_eq!(h.get_by_label("Enabled").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
-    click(&mut h, "Enabled");
+    assert_eq!(h.get_by_role(egui::accesskit::Role::CheckBox).accesskit_node().label().as_deref(), Some("Auto-heal wires"));
+    assert_eq!(h.get_by_role(egui::accesskit::Role::CheckBox).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    h.get_by_role(egui::accesskit::Role::CheckBox).click();
+    h.run();
     assert!(!h.state().preferences.auto_heal_wires);
     click(&mut h, "Cancel");
     assert!(h.state().preferences.auto_heal_wires);
 
     click(&mut h, "Preferences");
     click(&mut h, "Schematic");
-    click(&mut h, "Enabled");
+    h.get_by_role(egui::accesskit::Role::CheckBox).click();
+    h.run();
     click(&mut h, "Apply");
     click(&mut h, "Restore page defaults");
     assert!(h.state().preferences.auto_heal_wires);
@@ -813,8 +816,9 @@ fn schematic_cleanup_preferences_share_the_menu_setting() {
     h.get_by_role(egui::accesskit::Role::TextInput).type_text("smart routing");
     h.run();
     h.run();
-    h.get_by_label("Auto-heal wires");
-    click(&mut h, "Enabled");
+    assert_eq!(h.get_by_role(egui::accesskit::Role::CheckBox).accesskit_node().label().as_deref(), Some("Auto-heal wires"));
+    h.get_by_role(egui::accesskit::Role::CheckBox).click();
+    h.run();
     click(&mut h, "OK");
     assert!(!h.state().preferences.auto_heal_wires);
     assert_eq!(h.state().session.revision(), revision);
