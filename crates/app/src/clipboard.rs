@@ -37,6 +37,45 @@ pub(super) struct Options {
 }
 
 impl PcbApp {
+    /// Capture a delayed menu read before any text widget can receive its response. A modal,
+    /// new tool, stale opening or changed focus invalidates the original canvas authority.
+    pub(super) fn pending_clipboard_response(&mut self, ctx: &Context) {
+        if self.clipboard_request.is_none() {
+            return;
+        }
+        let text = ctx.input_mut(|input| {
+            let mut text = None;
+            input.events.retain(|event| {
+                if let Event::Paste(value) = event {
+                    text = Some(value.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            text
+        });
+        let Some(text) = text else { return };
+        let Some((source, special)) = self.clipboard_request.take() else { return };
+        if !self.views.active.accepts(source, &self.session)
+            || self.home
+            || !ctx.input(|i| i.focused)
+            || self.project_action_pending()
+            || self.views.active.definition.is_some()
+            || self.views.active.workspace != Workspace::Schematic
+            || !matches!(self.dialog, Dialog::None)
+            || self.parts.is_modal()
+            || egui::Popup::is_any_open(ctx)
+            || ctx.egui_wants_keyboard_input()
+            || self.views.active.schematic.tool.is_some()
+            || self.views.active.schematic.text_edit.is_some()
+        {
+            self.message = Some("The clipboard destination changed. Paste again in the current view.".into());
+            return;
+        }
+        self.receive_schematic_clipboard(text, special);
+    }
+
     /// Consume native Copy/Cut/Paste events only when the canvas owns input. Text editors and
     /// assistant fields keep their normal clipboard behavior; no app-local fallback masks OS data.
     pub(super) fn clipboard_shortcuts(&mut self, ctx: &Context, assistant_keys: bool) -> bool {
@@ -114,6 +153,9 @@ impl PcbApp {
     /// Publish only a successfully exported fragment. Cut uses the same engine transaction as MCP;
     /// failed cuts leave both the existing OS clipboard output and project unchanged.
     pub(super) fn copy_schematic_clipboard(&mut self, ctx: &Context, cut: bool) {
+        if self.views.active.schematic.clipboard.active() || self.views.active.schematic.tool.is_some() {
+            return;
+        }
         let Some(source) = self.views.active.input(&self.session) else {
             return;
         };
@@ -141,6 +183,7 @@ impl PcbApp {
     /// Request the platform clipboard for menu actions. Native keyboard paste arrives directly
     /// as Event::Paste; the browser menu explains the keyboard gesture required by its host.
     pub(super) fn request_schematic_clipboard(&mut self, ctx: &Context, special: bool) {
+        self.views.active.cancel_gesture();
         if let Some(source) = self.views.active.input(&self.session) {
             self.clipboard_request = Some((source, special));
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
@@ -153,6 +196,9 @@ impl PcbApp {
 
     /// Duplicate shares the portable placement path while preserving the person's system clipboard.
     pub(super) fn duplicate_schematic_clipboard(&mut self) {
+        if self.views.active.schematic.clipboard.active() || self.views.active.schematic.tool.is_some() {
+            return;
+        }
         let result = self.views.active.snapshot(&self.session).ok_or_else(|| "No schematic is open.".to_owned()).and_then(|project| {
             Fragment::capture(&project, &self.views.active.schematic.selection).and_then(|f| f.to_text()).map_err(|e| e.to_string())
         });
@@ -165,6 +211,10 @@ impl PcbApp {
     /// Decode clipboard text once, before entering a local preview; malformed data never creates
     /// a tool or modifies the project. Special paste shows reference and named-net choices.
     fn receive_schematic_clipboard(&mut self, text: String, special: bool) {
+        if text.is_empty() {
+            self.message = Some("The clipboard contains no text.".into());
+            return;
+        }
         let Some(source) = self.views.active.input(&self.session) else {
             return;
         };
@@ -180,6 +230,15 @@ impl PcbApp {
                 self.message = None;
             }
             Err(error) => self.message = Some(error.to_string()),
+        }
+    }
+
+    /// Paste forms stay in their initiating host so Apply validates the same view and a
+    /// cursor preview never needs to cross an unrelated window's focus epoch.
+    pub(super) fn paste_options_host(&self) -> Option<crate::editor_layout::HostId> {
+        match &self.dialog {
+            Dialog::PasteOptions(draft) => self.views.owner(draft.placement.source.view()),
+            _ => None,
         }
     }
 
@@ -235,7 +294,10 @@ impl PcbApp {
             self.views.active.schematic.clipboard.paste = None;
             return false;
         }
-        if ui.input(|i| !i.focused || i.events.iter().any(|event| matches!(event, Event::WindowFocused(false)))) {
+        if !input_enabled
+            || ui.ctx().egui_wants_keyboard_input()
+            || ui.input(|i| !i.focused || i.events.iter().any(|event| matches!(event, Event::WindowFocused(false))))
+        {
             self.views.active.schematic.clipboard.paste = None;
             return false;
         }

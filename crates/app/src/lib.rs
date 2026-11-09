@@ -2149,6 +2149,7 @@ impl PcbApp {
         self.views.sync(&self.session);
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
+        self.pending_clipboard_response(&ctx);
         if self.views.active.definition.is_some() && !(main && self.home) {
             self.library_frame(ui, integrated_titlebar);
             self.editor_drag_cursor(&ctx);
@@ -2205,7 +2206,7 @@ impl PcbApp {
             let _ = workspace;
         });
         self.integrated_titlebar = integrated;
-        let dialog_host = self.arrangement_dialog_host().unwrap_or(self.views.main);
+        let dialog_host = self.arrangement_dialog_host().or_else(|| self.paste_options_host()).unwrap_or(self.views.main);
         if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
         } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {

@@ -998,15 +998,10 @@ impl WgpuWinitRunning<'_> {
                         egui_winit.egui_input_mut().events.push(egui::Event::Copy);
                     }
                     ActionRequested::Paste => {
-                        if let Some(contents) = egui_winit.clipboard_text() {
-                            let contents = contents.replace("\r\n", "\n");
-                            if !contents.is_empty() {
-                                egui_winit
-                                    .egui_input_mut()
-                                    .events
-                                    .push(egui::Event::Paste(contents));
-                            }
-                        }
+                        // Empty/unsupported data is still a completed read. Hosts must be able
+                        // to retire captured menu destinations without guessing a timeout.
+                        let contents = egui_winit.clipboard_text().unwrap_or_default().replace("\r\n", "\n");
+                        egui_winit.egui_input_mut().events.push(egui::Event::Paste(contents));
                     }
                 }
             }

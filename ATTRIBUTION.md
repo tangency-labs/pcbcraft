@@ -863,3 +863,8 @@ engine codecs and Craft controls. Clipboard exchange uses eframe/egui's already
 qualified system clipboard events and output; no new dependency, external EDA
 implementation, artwork, library data or saved-project format is introduced.
 Regression circuits are built through shared native commands.
+
+The existing MIT/Apache-2.0 eframe 0.36.2 patch additionally reports empty native
+and browser clipboard reads as completed paste events. The change and upstream
+revision are recorded in `vendor/eframe/PATCH.md`; original upstream notices
+remain intact. No new dependency or clipboard implementation is introduced.

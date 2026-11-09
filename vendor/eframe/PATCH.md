@@ -53,3 +53,14 @@ rootless redraw/quit path, last-driver removal and arrangement restoration with 
 application tests cover modal cancellation, failed saves, outstanding file jobs
 and stale view addresses. Resource creation failure retains the native root when
 no immediate child exists; the public request documents this precondition.
+
+## Clipboard read completion
+
+The native WGPU and Glow menu `RequestPaste` handlers and browser paste-event
+handler also publish `Event::Paste("")` when a clipboard read has no supported
+text. PCBcraft uses this completion to retire the captured canvas destination;
+otherwise an abandoned Paste Options read can affect a later paste. Nonempty
+text and ordinary text-widget editing keep the existing event path. No extra
+clipboard backend, polling, timeout, thread or platform API is introduced.
+Empty/error reads, stale delayed responses and modal text ownership are covered
+by application regressions. Reassess this change when updating eframe.

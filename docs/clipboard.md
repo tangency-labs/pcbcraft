@@ -57,8 +57,10 @@ separate import/source boundary remains in force.
 Browser keyboard copy/paste uses browser clipboard events. Browser menu paste
 arms the destination, then asks for **Ctrl+V** (or **⌘V**) because the browser
 host does not implement the desktop RequestPaste operation. Native menu paste
-requests the operating-system clipboard directly. Clipboard formats remain
-versioned independently of saved projects.
+requests the operating-system clipboard directly. Empty or unsupported text
+reads clear the pending request. Paste Options stays in its initiating window,
+and delayed canvas reads cannot insert native payloads into a newly opened text
+field. Clipboard formats remain versioned independently of saved projects.
 
 ## Portable contract and commands
 

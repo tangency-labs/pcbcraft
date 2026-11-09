@@ -177,3 +177,76 @@ fn late_clipboard_reads_do_not_retarget_after_a_competing_edit() {
     assert!(!h.state().views.active.schematic.clipboard.active());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// A visible paste ghost does not grant Cut authority over the retained source selection.
+#[test]
+fn cut_and_duplicate_ignore_source_selection_during_preview() {
+    let mut h = source();
+    let text = copied_text(&mut h);
+    h.event(Event::Paste(text));
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    h.event(Event::Cut);
+    h.run();
+    h.state_mut().duplicate_schematic_clipboard();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert!(h.state().views.active.schematic.clipboard.active());
+}
+
+/// Native menu reads belong to the initiating canvas, even if a text dialog opens before delivery.
+#[test]
+fn pending_canvas_read_cannot_paste_native_json_into_a_dialog() {
+    let mut h = source();
+    let text = copied_text(&mut h);
+    h.run();
+    let ctx = h.ctx.clone();
+    h.state_mut().request_schematic_clipboard(&ctx, false);
+    h.state_mut().dialog = Dialog::Name { command: "project.rename", text: "Keep this draft".into(), error: None, focused: false };
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    h.event(Event::Paste(text));
+    h.run();
+    assert!(matches!(&h.state().dialog, Dialog::Name { text, .. } if text == "Keep this draft"));
+    assert!(h.state().clipboard_request.is_none());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    assert!(!h.state().views.active.schematic.clipboard.active());
+}
+
+/// An empty platform result retires its options request, without marking a later direct paste.
+#[test]
+fn empty_clipboard_completion_clears_pending_options() {
+    let mut h = source();
+    let text = copied_text(&mut h);
+    h.run();
+    let ctx = h.ctx.clone();
+    h.state_mut().request_schematic_clipboard(&ctx, true);
+    h.event(Event::Paste(String::new()));
+    h.run();
+    assert!(h.state().clipboard_request.is_none());
+    assert!(matches!(h.state().dialog, Dialog::None));
+    h.event(Event::Paste(text));
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(h.state().views.active.schematic.clipboard.active());
+}
+
+/// A detached initiating pane keeps its own Paste Options form and placement authority.
+#[test]
+fn paste_options_are_hosted_in_the_initiating_window() {
+    let mut h = source();
+    let text = copied_text(&mut h);
+    let source = h.state().views.active.id();
+    let host = h.state_mut().views.open_window(source).unwrap();
+    h.state_mut().bind_editor_host(host);
+    h.state_mut().receive_schematic_clipboard(text, true);
+    assert_eq!(h.state().paste_options_host(), Some(host));
+    let origin = h.state().views.active.id();
+    let main = h.state().views.main;
+    h.state_mut().bind_editor_host(main);
+    assert_ne!(h.state().views.active.id(), origin);
+    h.state_mut().bind_editor_host(host);
+    h.run();
+    click(&mut h, "Paste");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(h.state().views.view(origin).unwrap().schematic.clipboard.active());
+}
