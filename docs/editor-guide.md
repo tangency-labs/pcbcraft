@@ -468,6 +468,14 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 
 ## PCB layout
 
+The **Layout** tab groups the board tools as **Place** (Footprint), **Outline** (Line,
+Rectangle), **Route** (Track, followed by the Active layer, Track width and Via pad /
+drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (Reveal in its
+menu) and **Design** (Sync updates the PCB from the schematic; Setup opens Board setup).
+Tools that are not built yet, such as Via, Zone, Pair, Tune, Align, Rules, DRC, Measure,
+Flip view, Outputs and Refill zones, appear disabled in their group's menu and say
+"planned". The ribbon scrolls sideways when the window is too narrow for every group.
+
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;
 Shift adds and Ctrl/Command toggles. Escape cancels the box, and Delete removes
@@ -494,14 +502,14 @@ stages physical text height, stroke width and pad clearance alongside the layer
 and stackup settings. Apply commits them in one undoable board change; Cancel
 discards the draft. Defaults are 1 mm, 0.15 mm and 0.25 mm respectively; lengths accept mil/mm
 input and save with the project. **Assign Footprint…** in a schematic symbol's
-context menu, or **Footprints** in the PCB Layout ribbon, opens package selection
+context menu, or **Layout → Place → Footprint** in PCB layout, opens package selection
 and explicit terminal-to-pad mapping. Assigning pins the package without placing
 it. In PCB layout, **Place on board** places an assigned component at unit-aware
 X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
-registration, arcs, slots and routing remain planned.
+registration, arcs and slots remain planned.
 
-**Layout → Board → Setup** and **Layers → Board setup…** share a revision-bound
+**Layout → Design → Setup** and **Layers → Board setup…** share a revision-bound
 Craft settings form, including on a board with no saved stackup. The first opening
 shows a complete editable two-layer 1.6 mm FR-4/1 oz draft; nothing changes until Apply.
 Existing setups retain their own dimensions and materials. Board editor layers provides names and optional membership;
@@ -519,7 +527,7 @@ retain physical surface identities and resolve existing front/all-copper binding
 occupied drawings and authored stratum data are protected against removal.
 
 Left-click footprints to select them, then press **Delete** to remove only their
-board placements. **Layout → Placement menu → Delete** provides the same action. Components, schematic wiring and physical
+board placements. **Layout → Modify menu → Delete** provides the same action. Components, schematic wiring and physical
 package assignments are retained for re-placement, and undo restores the original
 placements. Active drawing tools and movement previews keep keyboard ownership.
 
@@ -543,7 +551,7 @@ menus and dialogs keep their normal keys; switching layers cancels an unfinished
 Board Outline gesture or route. The keys are also listed in Keyboard Shortcuts.
 
 For a board boundary, select **Board Outline** in the selector or Layers card and
-use **Layout → Draw → Line** or **Rectangle**. Line accepts successive clicked
+use **Layout → Outline → Line** or **Rectangle**. Line accepts successive clicked
 vertices, closes when you click the first vertex, and finishes an open path with
 Enter. Rectangle uses two opposite corners. Both snap to the grid and nearby edge
 vertices, and Esc cancels unfinished geometry before exiting the tool. After
@@ -561,8 +569,8 @@ To route copper, select a copper layer such as **Top** and press **X** or use
 track end on the same layer finishes the route, as do a double-click and Enter.
 Press **V** while routing to drop a through via at the pointer and continue on the
 other side: front copper leads to back, any other layer to front, and the view's
-active layer follows. **Via diameter** and **Via drill** sit beside the width field
-(0.6 mm and 0.3 mm by default). Backspace removes the last via, returning to the
+active layer follows. The **Via pad / drill** field beside the width field sets the
+pad diameter and drill (0.6 mm and 0.3 mm by default). Backspace removes the last via, returning to the
 previous layer, or else the last vertex. Esc or right-click drops the unfinished
 route, and a second Esc exits the tool. The whole route is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect

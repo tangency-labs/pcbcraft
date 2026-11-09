@@ -4,7 +4,7 @@ The engine stores project-local material definitions and their use in a uniform
 rigid stackup. `pcb.set_board_setup` validates and adopts the complete candidate
 with the caller's `expected_revision`, so construction, material references and
 dimensions change in one undo step. The command is shared by GUI and MCP.
-**Layout → Board → Setup** or **Layers → Board setup…** opens the Craft settings
+**Layout → Design → Setup** or **Layers → Board setup…** opens the Craft settings
 form with Board editor layers, Physical stackup, Materials, Silkscreen and Profiles pages.
 
 Copper count accepts every even number from 2 through 64, including initial setup
