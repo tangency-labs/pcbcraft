@@ -1,5 +1,5 @@
 //! Validated native source snapshots and a disposable catalog, independent of project history.
-use super::{parse_manifest, parse_symbol, saved_copy, starter};
+use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -9,8 +9,8 @@ use std::{
     sync::Arc,
 };
 
-/// Maximum source registrations in one session, excluding the embedded starter library.
-pub const MAX_SOURCES: usize = 16;
+/// Maximum loaded source registrations in one session, including bundled native libraries.
+pub const MAX_SOURCES: usize = 18;
 /// Maximum files in a source, including its manifest.
 pub const MAX_FILES: usize = 256;
 /// Maximum UTF-8 bytes in one native file.
@@ -28,9 +28,27 @@ pub const LIST: &str = "library.list_sources";
 /// Search the latest unambiguous revision of symbols and footprints across sources.
 pub const SEARCH: &str = "library.search";
 
-/// Hash a validated symbol's complete pinned content, including portable license attribution.
-/// Placement compares this with the search/preview content so a refreshed source cannot substitute
-/// different geometry while leaving the electrical project revision unchanged.
+/// Accept missing legacy attribution only when every definition field otherwise matches.
+/// Complete source definitions still compare their full content, including provenance.
+pub(crate) fn matches_pinned(pinned: &SymbolDefinition, selected: &SymbolDefinition) -> bool {
+    if pinned == selected {
+        return true;
+    }
+    if pinned.provenance.is_some() {
+        return false;
+    }
+    let body = |symbol: &SymbolDefinition| {
+        serde_json::to_value(saved_copy(symbol)).map(|mut value| {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("provenance");
+            }
+            value
+        })
+    };
+    body(pinned).ok().zip(body(selected).ok()).is_some_and(|(a, b)| a == b)
+}
+
+/// Hash all definition data and portable attribution, regardless of its delivery adapter.
 pub fn symbol_digest(symbol: &SymbolDefinition) -> Result<String, String> {
     serde_json::to_value(saved_copy(symbol)).map(|value| format!("{:x}", Sha256::digest(value.to_string().as_bytes()))).map_err(|e| e.to_string())
 }
@@ -137,7 +155,7 @@ impl Item {
     pub fn inspect(&self) -> Value {
         json!({"key":self.key,"name":self.name,"license":self.license,"file":self.file,
             "digest":format!("{:x}",Sha256::digest(self.canonical.to_string().as_bytes())),
-            "format":match self.key.kind {Kind::Symbol=>super::SYMBOL_FORMAT,Kind::Footprint=>"pcbcraft-footprint/1"}})
+            "format":match self.key.kind {Kind::Symbol=>self.symbol().map(|s|s.format()).unwrap_or(super::SYMBOL_FORMAT),Kind::Footprint=>"pcbcraft-footprint/1"}})
     }
     /// Return symbol geometry for preview or validated placement; footprints return None.
     pub fn symbol(&self) -> Option<Arc<SymbolDefinition>> {
@@ -191,9 +209,6 @@ impl NativeSource {
         check_documents(documents)?;
         let manifest =
             parse_manifest(documents.get("library.json").ok_or("library.json: missing manifest")?).map_err(|e| format!("library.json: {e}"))?;
-        if manifest.id == "starter" {
-            return Err("The starter library identity is reserved for the embedded source".into());
-        }
         let mut source = Self { library: manifest.id, name: manifest.name, license: manifest.license, items: Vec::new(), problems: Vec::new() };
         for (path, text) in documents.iter().filter(|(path, _)| path.as_str() != "library.json") {
             match source.parse_item(path, text) {
@@ -333,6 +348,33 @@ pub struct Catalog {
     conflicts: BTreeSet<Key>,
 }
 impl Catalog {
+    /// Install embedded native documents through the ordinary source validator and conflict index.
+    /// Broken bundled manifests remain visible as unavailable registrations rather than hiding
+    /// another library. This adapter has no project or history ownership.
+    pub fn bundled() -> Self {
+        let mut catalog = Self::default();
+        for (id, documents) in super::bundled_documents() {
+            let source = NativeSource::load(&documents).unwrap_or_else(|error| NativeSource {
+                library: id.into(),
+                name: id.into(),
+                license: String::new(),
+                items: Vec::new(),
+                problems: vec![error],
+            });
+            // Embedded registrations are bounded by this repository's delivery adapter.
+            catalog.sources.insert(format!("bundled-{id}"), Arc::new(source));
+        }
+        catalog.rebuild_conflicts();
+        catalog.generation = 0;
+        catalog
+    }
+    /// Resolve the latest unambiguous native symbol through the same index as an exact revision.
+    pub fn latest_symbol(&self, library: &str, id: &str) -> Option<Arc<SymbolDefinition>> {
+        self.search("", Some(Kind::Symbol))
+            .into_iter()
+            .find(|(_, item)| item.key.library == library && item.key.id == id)
+            .and_then(|(_, item)| item.symbol())
+    }
     /// A session-local load/removal generation for rejecting delayed background source results.
     pub fn generation(&self) -> u64 {
         self.generation
@@ -340,11 +382,11 @@ impl Catalog {
     /// Atomically replace a source snapshot. Reusing an immutable revision with changed content
     /// quarantines it rather than silently replacing old geometry. Removing then re-adding is explicit.
     pub fn install(&mut self, id: &str, source: Arc<NativeSource>) -> Result<(), String> {
-        if !crate::board::definition::valid_id(id) || id == "builtin" {
+        if !crate::board::definition::valid_id(id) {
             return Err("Invalid or reserved source ID".into());
         }
         if !self.sources.contains_key(id) && self.sources.len() >= MAX_SOURCES {
-            return Err("At most 16 native sources may be loaded".into());
+            return Err("At most 18 native sources may be loaded".into());
         }
         let mut changed = self.changed.get(id).cloned().unwrap_or_default();
         if let Some(previous) = self.sources.get(id) {
@@ -436,9 +478,7 @@ impl Catalog {
     /// List sources with validation and conflict messages; filenames identify invalid items.
     pub fn inspect(&self) -> Value {
         let conflicts = &self.conflicts;
-        let mut sources = vec![
-            json!({"source":"builtin","library":starter().id,"name":starter().name,"license":starter().license,"problems":starter().problems(),"symbols":starter().symbols().len(),"footprints":crate::board::definition::STARTER_IDS.len()}),
-        ];
+        let mut sources = Vec::new();
         sources.extend(self.sources.iter().map(|(id,source)| {
             let mut problems = source.problems.clone();
             for item in &source.items {
@@ -493,7 +533,7 @@ impl Session {
                     .map(|kind| serde_json::from_value::<Kind>(kind.clone()))
                     .transpose()
                     .map_err(|e| CommandError::InvalidParams(e.to_string()))?;
-                let mut items: Vec<_> = self
+                let items: Vec<_> = self
                     .libraries
                     .search(&query, kind)
                     .into_iter()
@@ -503,29 +543,6 @@ impl Session {
                         value
                     })
                     .collect();
-                if kind != Some(Kind::Footprint) {
-                    for symbol in starter().symbols().iter().filter(|symbol| {
-                        query.is_empty()
-                            || symbol.name.to_lowercase().contains(&query.to_lowercase())
-                            || symbol.id.contains(&query.to_lowercase())
-                            || symbol.library.contains(&query)
-                            || symbol.reference_prefix().eq_ignore_ascii_case(&query)
-                    }) {
-                        items.push(json!({"source":"builtin","key":{"library":symbol.library,"kind":"symbol","id":symbol.id,"revision":symbol.revision()},"name":symbol.name,"license":starter().license,"format":super::SYMBOL_FORMAT}));
-                    }
-                }
-                if kind != Some(Kind::Symbol) {
-                    for footprint in
-                        crate::board::definition::STARTER_IDS.into_iter().filter_map(crate::board::definition::starter).filter(|footprint| {
-                            query.is_empty()
-                                || footprint.name.to_lowercase().contains(&query.to_lowercase())
-                                || footprint.id.contains(&query.to_lowercase())
-                                || footprint.library.contains(&query)
-                        })
-                    {
-                        items.push(json!({"source":"builtin","key":{"library":footprint.library,"kind":"footprint","id":footprint.id,"revision":footprint.revision},"name":footprint.name,"license":footprint.license,"format":footprint.format}));
-                    }
-                }
                 Ok(json!(items))
             }
             _ => Err(CommandError::Unknown(id.into())),

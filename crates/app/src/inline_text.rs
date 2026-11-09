@@ -25,7 +25,7 @@ pub(super) struct Edit {
 }
 
 impl PcbApp {
-    /// Resolve a visible field or power name from its captured view, without changing selection,
+    /// Resolve a visible component field or label name from its captured view, without changing selection,
     /// appearance, geometry or history. Missing/stale targets cannot start an editor.
     pub(super) fn begin_inline_text(&mut self, source: ViewInput, target: Target) {
         if !self.views.active.accepts(source, &self.session) {

@@ -60,15 +60,18 @@ first **Save** asks for a project folder, and the project takes that folder's na
 ## Name nets and place power symbols
 
 Choose **Capture → Ground** to start placing GND directly. Press **P** to open
-the **Parts Catalog** at its Power collection. Choose GND, VCC, **VCC (bar)** or
-another drawing, edit its net name in the preview
+the **Parts Catalog** at its Power library. Choose GND, VCC, **VCC (bar)** or
+another drawing, edit its **Value** in the preview
 if needed, then choose **Place** and click a pin, wire or grid point for its
 anchor, or drag the chosen power entry directly onto the sheet. **L** opens a local label form; **Ctrl+L** opens a global label form,
 where **Scope** selects either scope. **R** rotates a placement preview and
 **Esc** cancels it. Local names join within a sheet, while global labels and
-power rails join matching names across sheets. Hover a label and press **E** to
-edit, **M** to move, or **Delete** to remove it. Moving a power marker retains its
-wire contacts even when it was placed onto an existing wire; Undo reverses the complete edit.
+power rails join matching names across sheets. Power symbols use the same
+properties and field tools as other components; their Value supplies the net
+name. Hover a symbol and press **E** to edit, **G** to move with wires attached,
+**M** to disconnect and move, or **Delete** to remove it. Held dragging also
+retains wire contacts, including contacts made by placing onto an existing wire;
+Undo reverses the complete edit. Local/global labels retain their label properties.
 See [named nets](net-labels.md) for contact rules and current limits.
 
 **VCC (bar)** uses the flat-bar drawing; **VCC** keeps the arrow. Both default to
@@ -85,7 +88,9 @@ the same `VCC` net name, which can be changed before placement.
    it picks the symbol under the pointer. Click to place it elsewhere, or **Esc**
    to cancel. Right-click → **Disconnect and Move** performs the same action. A replacement placed at the old pins reconnects
    to the preserved wire ends.
-2. Press **A** to open the **Parts Catalog** and focus search. Select a library,
+2. Press **A** to open the **Parts Catalog** and focus search. The bundled
+   **Default** and **Power** libraries load through the same native source path
+   as added libraries. Select a library,
    search for a capacitor and click the result to inspect its preview. Choose
    **Place**, then click the canvas to place it. **R** rotates the placement
    preview and **Esc** cancels it. **Repeat placement** keeps placing copies with

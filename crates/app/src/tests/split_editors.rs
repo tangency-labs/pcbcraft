@@ -348,7 +348,7 @@ fn parts_drag_cannot_place_into_an_inactive_pane() {
     focus_tab(&mut h, 1);
     h.key_press(Key::A);
     h.run();
-    h.get_by_role(egui::accesskit::Role::TextInput).type_text("cap");
+    h.get_by_label("Search parts").type_text("cap");
     h.run();
     assert!(view(&h, 1).schematic.tool.is_none(), "Typing in search must not start a canvas tool");
     click(&mut h, "Capacitor");

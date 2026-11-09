@@ -132,6 +132,10 @@ pub struct SymbolDefinition {
     pub name: String,
     /// The library's revision of this definition, pinned by each component.
     pub(crate) revision: u32,
+    pub(crate) format_version: u8,
+    /// Versioned electrical semantics and instance defaults; independent of library identity.
+    pub behavior: Option<crate::library::Behavior>,
+    pub defaults: Option<crate::library::Defaults>,
     pub(crate) reference_prefix: String,
     pub(crate) value: String,
     /// The library-defined identity of the supported unit.
@@ -143,6 +147,18 @@ pub struct SymbolDefinition {
 }
 
 impl SymbolDefinition {
+    /// The globally named terminal, if explicitly declared by this definition.
+    pub fn power_terminal(&self) -> Option<&str> {
+        self.behavior.as_ref().map(|behavior| match behavior {
+            crate::library::Behavior::Power { terminal } => terminal.as_str(),
+        })
+    }
+
+    /// Native schema retained when pinning or exporting an unchanged definition.
+    pub fn format(&self) -> &'static str {
+        if self.format_version == 2 { crate::library::SYMBOL_FORMAT_V2 } else { crate::library::SYMBOL_FORMAT }
+    }
+
     /// Resolve raw drawing plus integrated pin graphics without changing native serialization.
     pub fn graphics(&self) -> Vec<Shape> {
         self.drawing
@@ -204,11 +220,6 @@ impl SymbolDefinition {
             })
             .collect()
     }
-}
-
-/// Resolve an exact definition ID in the starter library without falling back to another symbol.
-pub(crate) fn library_symbol(id: &str) -> Option<Arc<SymbolDefinition>> {
-    crate::library::starter().symbol(id).cloned()
 }
 
 /// Turn an offset from a symbol's center by quarter turns counterclockwise as seen on the
@@ -301,6 +312,20 @@ pub struct SymbolPlacement {
 }
 
 impl SymbolPlacement {
+    /// A drawing-only template has no persistent identity and must never be inserted into a
+    /// project. The shared placement command allocates real component and unit identities.
+    pub fn preview(definition: Arc<SymbolDefinition>, turns: u8, field_layout: fields::Layouts) -> Self {
+        Self {
+            unit: definition.unit.clone(),
+            definition,
+            ordinal: 0,
+            component: 0,
+            position: Point { x_nm: 0, y_nm: 0 },
+            field_layout,
+            rotation: turns % 4,
+        }
+    }
+
     /// Quarter turns counterclockwise, 0 to 3.
     pub fn turns(&self) -> u8 {
         self.rotation

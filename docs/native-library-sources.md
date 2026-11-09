@@ -38,9 +38,11 @@ and footprints and filter by kind. Sources and the catalog appear side by side
 on wide windows and as **Sources** / **Catalog** tabs on compact windows, with
 independent scrolling and a fixed Close action. A bad item reports its filename
 and validation error without hiding other valid items; an invalid manifest prevents the source
-from loading. The built-in `starter` library identity is reserved.
+from loading. Default (`starter`) and Power are bundled native sources loaded
+through the same parser and catalog. Their identities can also be loaded from
+equivalent folders/bundles; conflicting content at one revision is quarantined.
 
-The source loader accepts at most 16 external registrations, 256 files per
+The source loader accepts at most 18 registrations including the bundled libraries, 256 files per
 source, 1 MiB per file and 8 MiB of decoded UTF-8 content per source. Bundles are
 also bounded to 16 MiB before decoding. Folder reads reject symlinks, special
 files and nested item directories. Other root files, such as a library's license
@@ -77,7 +79,7 @@ engine to read a path.
 
 Use `execute` with normal inspection enabled to receive these results;
 `inspect: false` intentionally returns only the unchanged project revision.
-For an external `schematic.place_symbol`, pass `library`, `definition`,
+For an explicit-library `schematic.place_symbol`, pass `library`, `definition`,
 `definition_revision` and `definition_digest` from search, plus the usual sheet,
 coordinates and `expected_revision`. Placement checks both project revision and
 the exact definition content, so a source refresh during a preview cannot
