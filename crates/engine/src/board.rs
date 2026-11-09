@@ -219,6 +219,8 @@ pub(crate) struct Board {
     pub(crate) silkscreen: Option<silkscreen::Settings>,
     /// Copper segments in stable ID order; empty boards keep their earlier saved format.
     pub(crate) tracks: Vec<track::Track>,
+    /// Through vias in stable ID order, saved beside tracks.
+    pub(crate) vias: Vec<track::Via>,
     pub(crate) definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,
     footprints: Vec<Footprint>,
     by_component: BTreeMap<u64, usize>,
