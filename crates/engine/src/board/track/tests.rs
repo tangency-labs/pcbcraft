@@ -607,3 +607,22 @@ fn track_width_and_via_size_edits_are_checked() {
     assert!(error.contains("would connect nets"), "{error}");
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
 }
+
+/// Routed copper takes the net of the pads it reaches; floating copper has none.
+#[test]
+fn copper_nets_follow_the_pads_they_reach() {
+    let mut s = routed_fixture();
+    let line = view(&s).ratsnest().unwrap().lines[0].clone();
+    let front = copper_layers(&s)[0];
+    let (a, b) = (line.from.position, line.to.position);
+    let y = a.y_nm.max(b.y_nm) + 2_000_000;
+    route(&mut s, front, &[a, Point { x_nm: a.x_nm, y_nm: y }, Point { x_nm: b.x_nm, y_nm: y }, b]).unwrap();
+    route(&mut s, front, &[Point { x_nm: 0, y_nm: 30_000_000 }, Point { x_nm: 2_000_000, y_nm: 30_000_000 }]).unwrap();
+    let net = view(&s).footprints().flat_map(|f| f.pads).find(|p| p.center == a).unwrap().net.unwrap();
+    let nets = view(&s).copper_nets();
+    let routed: Vec<_> = view(&s).tracks().iter().filter(|t| t.start.y_nm != 30_000_000).map(|t| t.id).collect();
+    assert_eq!(routed.len(), 3);
+    assert!(routed.iter().all(|id| nets.get(id) == Some(&net)), "{nets:?}");
+    let floating = view(&s).tracks().iter().find(|t| t.start.y_nm == 30_000_000).unwrap().id;
+    assert!(!nets.contains_key(&floating));
+}

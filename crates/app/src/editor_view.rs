@@ -178,6 +178,10 @@ pub(super) struct BoardState {
     pub(super) rotate_requested: u16,
     /// F: flip the hovered or selected footprint, or the footprint being moved, to the other side.
     pub(super) flip_requested: bool,
+    /// `: highlight the net under the pointer, or clear the highlight over empty space.
+    pub(super) net_highlight_requested: bool,
+    /// The net whose pads and copper are drawn highlighted in this view.
+    pub(super) highlight_net: Option<String>,
     pub(super) selection: std::collections::BTreeSet<String>,
     pub(super) hidden_layers: std::collections::BTreeSet<String>,
     pub(super) layer_defaults_applied: bool,

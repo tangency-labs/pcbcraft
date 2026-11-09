@@ -362,6 +362,12 @@ pub(super) fn show(
             highlighted.contains(&footprint.id),
         );
     }
+    if std::mem::take(&mut state.net_highlight_requested) {
+        state.highlight_net = response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers));
+    }
+    if let Some(net) = &state.highlight_net {
+        paint_net(&p, camera, rect, project, net);
+    }
     for (at, focused) in markers {
         let at = camera.screen(*at, rect);
         if rect.contains(at) {
@@ -525,6 +531,33 @@ fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egu
                 .then_some(footprint.id)
         })
         .collect()
+}
+
+/// The net under a screen point: a pad's net, else the derived net of a track or via there.
+fn net_under(pointer: egui::Pos2, camera: &Camera, rect: egui::Rect, view: BoardView<'_>, hidden: &BTreeSet<String>) -> Option<String> {
+    view.footprints()
+        .flat_map(|footprint| footprint.pads)
+        .find(|pad| pad.copper.is_some_and(|land| egui::Rect::from_points(&land.map(|corner| camera.screen(corner, rect))).contains(pointer)))
+        .and_then(|pad| pad.net)
+        .or_else(|| crate::board_tracks::copper_at(pointer, camera, rect, view, hidden).and_then(|id| view.copper_nets().remove(&id)))
+}
+
+/// Outline every pad, track and via on `net` in the highlight color.
+fn paint_net(p: &egui::Painter, camera: &Camera, rect: egui::Rect, view: BoardView<'_>, net: &str) {
+    let width = |nm: i64| (camera.screen(Point { x_nm: nm, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length();
+    for pad in view.footprints().flat_map(|footprint| footprint.pads).filter(|pad| pad.net.as_deref() == Some(net)) {
+        match pad.copper {
+            Some(land) => board::net_highlight(p, &land.map(|corner| camera.screen(corner, rect)), true, 2.),
+            None => board::net_highlight(p, &[camera.screen(pad.center, rect)], false, 6.),
+        }
+    }
+    let nets = view.copper_nets();
+    for track in view.tracks().iter().filter(|track| nets.get(&track.id).is_some_and(|n| n == net)) {
+        board::net_highlight(p, &[camera.screen(track.start, rect), camera.screen(track.end, rect)], false, width(track.width_nm) * 0.4);
+    }
+    for via in view.vias().iter().filter(|via| nets.get(&via.id).is_some_and(|n| n == net)) {
+        board::net_highlight(p, &[camera.screen(via.at, rect)], false, width(via.diameter_nm) / 2.);
+    }
 }
 
 /// Transform resolved pad offsets only for painting; pad identities and authored snapshots stay intact.

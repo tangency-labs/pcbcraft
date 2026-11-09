@@ -187,7 +187,7 @@ impl State {
 }
 
 /// The topmost visible via or track under a screen point.
-fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>) -> Option<Uuid> {
+pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>) -> Option<Uuid> {
     view.vias().iter().rev().find(|via| hit_via(pointer, camera, rect, via)).map(|via| via.id).or_else(|| {
         view.tracks()
             .iter()

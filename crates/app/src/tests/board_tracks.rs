@@ -812,3 +812,45 @@ fn page_keys_place_vias_mid_route() {
     assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()), "outside a route PgDn only changes layer");
     assert_eq!(vias(&h).len(), 2);
 }
+
+/// ` over a pad highlights its net, over routed copper the net that copper carries, and over
+/// empty space clears the highlight; nothing is edited.
+#[test]
+fn backtick_highlights_the_net_under_the_pointer() {
+    let mut h = routable();
+    let line = airwires(&h)[0].clone();
+    let (a, b) = (line.from.position, line.to.position);
+    let net =
+        h.state().session.project().unwrap().boards().next().unwrap().footprints().flat_map(|f| f.pads).find(|p| p.center == a).unwrap().net.unwrap();
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    let path = [a, Point { x_nm: a.x_nm, y_nm: -2_540_000 }, Point { x_nm: b.x_nm, y_nm: -2_540_000 }, b];
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    h.run();
+    let revision = h.state().session.revision();
+    h.hover_at(at(&h, a));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net.as_deref(), Some(net.as_str()));
+    assert!(h.query_by_label_contains(&format!("Net {net} highlighted")).is_some());
+    let highlight = pcbcraft_chrome::Tokens::get().board_highlight;
+    let outlined = h.output().shapes.iter().filter(|shape| match &shape.shape {
+        egui::Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(highlight),
+        _ => false,
+    });
+    assert!(outlined.count() >= 2, "both pads and the route are outlined");
+    h.key_press(Key::Escape);
+    h.run();
+    h.hover_at(at(&h, Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: -2_540_000 }));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net.as_deref(), Some(net.as_str()), "the track carries the net");
+    h.hover_at(at(&h, Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: 1_270_000 }));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, None);
+    assert_eq!(h.state().session.revision(), revision);
+}
