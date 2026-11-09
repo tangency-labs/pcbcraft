@@ -1020,7 +1020,7 @@ fn footprint_deletion_uses_selected_placements_and_shared_undo() {
         click(&mut h, "Cancel");
         let revision = h.state().session.revision();
         if ribbon {
-            click(&mut h, "Placement menu");
+            click(&mut h, "Modify menu");
             click(&mut h, "Delete");
         } else {
             h.key_press(Key::Delete);
@@ -1073,7 +1073,9 @@ fn footprint_delete_menu_accepts_pointer_clicks() {
         assert_eq!(h.state().views.active.board.selection.len(), 1);
         let revision = h.state().session.revision();
         assert!(h.query_by_label("Delete selected footprints").is_none());
-        let menu = h.get_by_label("Placement menu").rect();
+        h.get_by_label("Modify menu").scroll_to_me();
+        h.run();
+        let menu = h.get_by_label("Modify menu").rect();
         click_canvas_at(&mut h, menu.center());
         let action = h.get_by_label("Delete").rect();
         click_canvas_at(&mut h, action.center());

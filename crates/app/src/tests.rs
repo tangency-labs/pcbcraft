@@ -103,8 +103,11 @@ pub(super) fn dual_led_copy() -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, root.join("project.pc"))
 }
 
-/// Click the named control and run the frame that handles the action.
+/// Scroll the named control into view, as a person would scroll the ribbon, then click it and run
+/// the frame that handles the action.
 pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    harness.get_by_label(label).scroll_to_me();
+    harness.run();
     harness.get_by_label(label).click();
     harness.run();
 }

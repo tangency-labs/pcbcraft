@@ -307,7 +307,7 @@ impedance calculations and manufacturing rules remain future work.
 
 Left-click a footprint to select it, then press **Delete** to remove its board
 placement. Multiple selected footprints are removed together. The **Layout →
-Placement menu → Delete** action does the same thing. Schematic components and physical
+Modify menu → Delete** action does the same thing. Schematic components and physical
 package assignments stay available; **Place on board** can place the assigned
 package again. Undo restores the original placement IDs and geometry.
 
@@ -366,7 +366,7 @@ map terminal 1 to pad 1 and terminal 2 to pad 2, then choose **Assign** and
 **Close**. This pins the package without creating a PCB or placement; folder and
 archive saves retain it offline. Creating your first board later adopts these
 choices for Update PCB. In PCB layout,
-open **Layout → Components → Footprints**, select the component, enter X/Y and
+open **Layout → Place → Footprint**, select the component, enter X/Y and
 choose **Place on board**. Assignment and placement are separate undo steps;
 save/reopen retains the package and mapping offline. The chooser also supports
 assigning an unassigned component directly from PCB layout. On a board with
@@ -376,7 +376,7 @@ next reviewed update. See the
 mapping constraints and source limits.
 
 To forward a captured schematic, choose **Capture → PCB → Update PCB**; from PCB
-layout use **Layout → Schematic → Update PCB**. **Create board** explicitly adds
+layout use **Layout → Design → Sync**. **Create board** explicitly adds
 the first PCB when needed. Existing footprints without recorded accepted state
 first require **Use current state**, which adopts today's schematic, packages and
 connections as the starting point rather than reconstructing earlier history.
@@ -396,7 +396,7 @@ and place later. **Copy report** includes all message categories.
 adoption remain separate edits. External changes or another client's preview
 require **Review again**; a reopened/replaced project requires a fresh dialog.
 
-In **Layers → Board**, select **Board Outline**, then choose **Layout → Draw → Line**
+In **Layers → Board**, select **Board Outline**, then choose **Layout → Outline → Line**
 or **Rectangle**. Click successive vertices for a line path; click its first vertex
 to close it, or press **Enter** to finish an open path. Rectangle uses two opposite
 corner clicks. Points snap to the current grid and nearby existing edge vertices.

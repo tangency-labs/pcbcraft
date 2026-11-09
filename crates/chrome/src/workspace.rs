@@ -72,6 +72,19 @@ pub enum ToolIcon {
     SplitView,
     EditorWindow,
     Settings,
+    /// PCB layout glyphs, drawn natively: a package, copper routing and board-level actions.
+    Footprint,
+    Track,
+    Via,
+    Zone,
+    Pair,
+    Tune,
+    Align,
+    Drc,
+    Measure,
+    FlipView,
+    Outputs,
+    Refill,
 }
 
 /// The glyph at the start of a Browser row: a container or one of the ribbon's own glyphs.
@@ -1254,6 +1267,83 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
         ToolIcon::EditorWindow => {
             line(&[(12.0, 20.0), (8.0, 20.0), (8.0, 54.0), (44.0, 54.0), (44.0, 50.0)], stroke(4.0, ink));
             line(&[(20.0, 10.0), (56.0, 10.0), (56.0, 44.0), (20.0, 44.0), (20.0, 10.0)], stroke(4.0, accent));
+        }
+        ToolIcon::Footprint => {
+            line(&[(18.0, 18.0), (46.0, 18.0), (46.0, 46.0), (18.0, 46.0), (18.0, 18.0)], stroke(4.0, ink));
+            for offset in [24.0, 32.0, 40.0] {
+                line(&[(8.0, offset), (16.0, offset)], stroke(3.5, accent));
+                line(&[(48.0, offset), (56.0, offset)], stroke(3.5, accent));
+                line(&[(offset, 8.0), (offset, 16.0)], stroke(3.5, accent));
+                line(&[(offset, 48.0), (offset, 56.0)], stroke(3.5, accent));
+            }
+        }
+        ToolIcon::Track => {
+            line(&[(8.0, 48.0), (26.0, 48.0), (46.0, 28.0), (56.0, 28.0)], stroke(6.0, ink));
+            p.circle_filled(at(8.0, 48.0), 5.0 * size / 64.0, accent);
+            p.circle_filled(at(56.0, 28.0), 5.0 * size / 64.0, accent);
+        }
+        ToolIcon::Via => {
+            p.circle_filled(at(32.0, 32.0), 20.0 * size / 64.0, accent);
+            p.circle(at(32.0, 32.0), 9.0 * size / 64.0, t.panel, stroke(3.0, ink));
+        }
+        ToolIcon::Zone => {
+            line(&[(10.0, 14.0), (44.0, 14.0), (54.0, 26.0), (54.0, 52.0), (10.0, 52.0), (10.0, 14.0)], stroke(4.0, ink));
+            for x in [18.0, 28.0, 38.0] {
+                line(&[(x, 46.0), (x + 12.0, 22.0)], stroke(3.0, accent));
+            }
+        }
+        ToolIcon::Pair => {
+            line(&[(8.0, 42.0), (24.0, 42.0), (40.0, 26.0), (56.0, 26.0)], stroke(4.0, ink));
+            line(&[(8.0, 52.0), (28.0, 52.0), (44.0, 36.0), (56.0, 36.0)], stroke(4.0, accent));
+        }
+        ToolIcon::Tune => {
+            line(
+                &[
+                    (6.0, 44.0),
+                    (14.0, 44.0),
+                    (14.0, 20.0),
+                    (24.0, 20.0),
+                    (24.0, 44.0),
+                    (34.0, 44.0),
+                    (34.0, 20.0),
+                    (44.0, 20.0),
+                    (44.0, 44.0),
+                    (58.0, 44.0),
+                ],
+                stroke(4.0, ink),
+            );
+            p.circle_filled(at(6.0, 44.0), 4.0 * size / 64.0, accent);
+            p.circle_filled(at(58.0, 44.0), 4.0 * size / 64.0, accent);
+        }
+        ToolIcon::Align => {
+            line(&[(12.0, 8.0), (12.0, 56.0)], stroke(4.0, accent));
+            for (y, length) in [(18.0, 38.0), (32.0, 26.0), (46.0, 32.0)] {
+                p.rect_filled(Rect::from_min_max(at(16.0, y - 4.0), at(16.0 + length, y + 4.0)), (size / 32.0) as u8, ink);
+            }
+        }
+        ToolIcon::Drc => {
+            line(&[(10.0, 10.0), (54.0, 10.0), (54.0, 54.0), (10.0, 54.0), (10.0, 10.0)], stroke(4.0, ink));
+            line(&[(20.0, 32.0), (29.0, 42.0), (46.0, 22.0)], stroke(5.0, accent));
+        }
+        ToolIcon::Measure => {
+            line(&[(6.0, 26.0), (58.0, 26.0), (58.0, 40.0), (6.0, 40.0), (6.0, 26.0)], stroke(3.5, ink));
+            for (index, x) in [14.0, 22.0, 30.0, 38.0, 46.0].into_iter().enumerate() {
+                line(&[(x, 26.0), (x, if index % 2 == 0 { 35.0 } else { 31.0 })], stroke(3.0, accent));
+            }
+        }
+        ToolIcon::FlipView => {
+            line(&[(32.0, 6.0), (32.0, 58.0)], stroke(3.0, ink));
+            line(&[(26.0, 16.0), (8.0, 46.0), (26.0, 46.0), (26.0, 16.0)], stroke(4.0, ink));
+            line(&[(38.0, 16.0), (56.0, 46.0), (38.0, 46.0), (38.0, 16.0)], stroke(4.0, accent));
+        }
+        ToolIcon::Outputs => {
+            line(&[(14.0, 6.0), (40.0, 6.0), (50.0, 16.0), (50.0, 58.0), (14.0, 58.0), (14.0, 6.0)], stroke(4.0, ink));
+            line(&[(32.0, 20.0), (32.0, 46.0)], stroke(4.0, accent));
+            line(&[(22.0, 36.0), (32.0, 46.0), (42.0, 36.0)], stroke(4.0, accent));
+        }
+        ToolIcon::Refill => {
+            line(&[(10.0, 14.0), (44.0, 14.0), (54.0, 26.0), (54.0, 52.0), (10.0, 52.0), (10.0, 14.0)], stroke(4.0, ink));
+            p.rect_filled(Rect::from_min_max(at(18.0, 22.0), at(46.0, 44.0)), (size / 32.0) as u8, accent);
         }
     }
 }
