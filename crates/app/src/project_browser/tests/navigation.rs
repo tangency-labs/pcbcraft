@@ -46,15 +46,15 @@ fn common_browser_navigates_both_workspaces_without_document_edits() {
         click(&mut h, "Board Board");
         assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
         assert_eq!(h.state().views.active.camera.saved_state(), camera);
-        click(&mut h, "Footprint R1  1k");
+        click(&mut h, "Footprint R1  R");
         assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
         crate::tests::open_browser_row(&mut h, "Board Board", "Open in PCB layout");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         h.get_by_label("Sheets");
         h.get_by_label("Main");
         h.get_by_label("Boards");
-        assert_eq!(h.get_by_label("Footprint R1  1k").rect().height(), sheet_height);
-        click(&mut h, "Footprint R1  1k");
+        assert_eq!(h.get_by_label("Footprint R1  R").rect().height(), sheet_height);
+        click(&mut h, "Footprint R1  R");
         let board_selection = h.state().views.active.board.selection.clone();
         assert_eq!(board_selection.len(), 1);
         h.get_by_label("generic-through-hole-2");
@@ -62,17 +62,17 @@ fn common_browser_navigates_both_workspaces_without_document_edits() {
         click(&mut h, "Expand Main");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         click(&mut h, "Expand Symbols");
-        click(&mut h, "R2  1k");
+        click(&mut h, "R2  R");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
-        crate::tests::open_browser_row(&mut h, "R2  1k", "Show in Schematic");
+        crate::tests::open_browser_row(&mut h, "R2  R", "Show in Schematic");
         assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
         assert_eq!(h.state().views.active.schematic.selection.single_symbol(), Some("symbol-3"));
-        assert_eq!(h.get_by_label("R1  1k").rect().height(), sheet_height);
+        assert_eq!(h.get_by_label("R1  R").rect().height(), sheet_height);
         // A footprint row opens another workspace only through an explicit action.
         click(&mut h, "Expand Board");
-        click(&mut h, "Footprint R1  1k");
+        click(&mut h, "Footprint R1  R");
         assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
-        crate::tests::open_browser_row(&mut h, "Footprint R1  1k", "Show in PCB layout");
+        crate::tests::open_browser_row(&mut h, "Footprint R1  R", "Show in PCB layout");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         assert_eq!(h.state().views.active.board.selection, board_selection);
         assert_eq!(h.state().session.inspect(), before);
@@ -88,9 +88,9 @@ fn browser_folding_and_visibility_are_consistent_on_the_board() {
     crate::tests::open_browser_row(&mut h, "Board Board", "Open in PCB layout");
     let before = h.state().session.inspect();
     click(&mut h, "Collapse Footprints");
-    assert!(h.query_by_label("Footprint R1  1k").is_none());
+    assert!(h.query_by_label("Footprint R1  R").is_none());
     click(&mut h, "Expand Footprints");
-    h.get_by_label("Footprint R1  1k");
+    h.get_by_label("Footprint R1  R");
     click(&mut h, "Collapse Browser");
     assert!(h.query_by_label("Main").is_none());
     click(&mut h, "Expand Browser");
@@ -123,7 +123,7 @@ fn browser_ribbon_toggle_can_restore_visibility_from_either_workspace() {
         click(&mut h, "Toggle Browser");
         assert!(h.state().browser.open);
         h.get_by_label("Main");
-        h.get_by_label("Footprint R1  1k");
+        h.get_by_label("Footprint R1  R");
         click(&mut h, "Toggle Browser");
         assert!(!h.state().browser.open);
         h.get_by_label("Collapse Layers");
@@ -146,9 +146,9 @@ fn first_footprint_pick_centers_in_the_destination_uncovered_canvas() {
     for width in [1400.0, 700.0] {
         let mut h = project_harness(width);
         click(&mut h, "Expand Board");
-        click(&mut h, "Footprint R1  1k");
+        click(&mut h, "Footprint R1  R");
         assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
-        crate::tests::open_browser_row(&mut h, "Footprint R1  1k", "Show in PCB layout");
+        crate::tests::open_browser_row(&mut h, "Footprint R1  R", "Show in PCB layout");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         let center = h.state().views.active.camera.center();
         assert!((center.x_nm - 127_000_000).abs() < 100);

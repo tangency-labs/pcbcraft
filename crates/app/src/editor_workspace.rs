@@ -154,6 +154,12 @@ impl EditorViews {
         if self.active.id() == id { Some(&mut self.active) } else { self.rest.get_mut(&id) }
     }
 
+    /// Inline drafts own text input until accepted or cancelled, including in a native host.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn editing_text(&self) -> bool {
+        self.active.schematic.text_edit.is_some() || self.rest.values().any(|view| view.schematic.text_edit.is_some())
+    }
+
     /// Visit every view, including hidden panes, for shared-project invalidation and preferences.
     pub(super) fn all_mut(&mut self) -> impl Iterator<Item = &mut EditorView> {
         std::iter::once(&mut self.active).chain(self.rest.values_mut())
@@ -999,6 +1005,7 @@ impl PcbApp {
                                     self.preferences.auto_heal_wires,
                                     &view.schematic.wire_draft,
                                     &label,
+                                    None,
                                 );
                             }
                         });

@@ -10,6 +10,9 @@ pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
+const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
+const POWER_TEXT_FORMAT: &str = "pcbcraft-sheet/5";
+const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
 const PROJECT_FORMAT: &str = "pcbcraft-project/6";
 const WATERMARK_PROJECT_FORMAT: &str = "pcbcraft-project/7";
 const PREVIOUS_PROJECT_FORMAT: &str = "pcbcraft-project/5";
@@ -112,11 +115,14 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    if !matches!(project.format.as_str(), PROJECT_FORMAT | PREVIOUS_PROJECT_FORMAT | WATERMARK_PROJECT_FORMAT) {
+    if !matches!(project.format.as_str(), PROJECT_FORMAT | PREVIOUS_PROJECT_FORMAT | WATERMARK_PROJECT_FORMAT | FIELDS_PROJECT_FORMAT) {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
-    if (project.format == WATERMARK_PROJECT_FORMAT) != project.numeric_id_high_water.is_some() {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7"));
+    if project.format != FIELDS_PROJECT_FORMAT && project.components.iter().any(|c| c.metadata.is_some()) {
+        return Err("component metadata requires project format 11".into());
+    }
+    if matches!(project.format.as_str(), WATERMARK_PROJECT_FORMAT | FIELDS_PROJECT_FORMAT) != project.numeric_id_high_water.is_some() {
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7 or 11"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -136,8 +142,18 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     for reference in &project.sheets {
         let mut sheet: SheetDocument = parse(documents, &reference.file)?;
         match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some(), sheet.net_labels.is_some()) {
-            (SHEET_FORMAT, false, false, false) | (HIERARCHY_FORMAT, true, true, false) | (NAMED_FORMAT, true, true, true) => {}
+            (SHEET_FORMAT, false, false, false)
+            | (HIERARCHY_FORMAT, true, true, false)
+            | (NAMED_FORMAT, true, true, true)
+            | (FIELDS_SHEET_FORMAT, true, true, true)
+            | (POWER_TEXT_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
+        }
+        if !matches!(sheet.format.as_str(), FIELDS_SHEET_FORMAT | POWER_TEXT_FORMAT) && sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
+            return Err(format!("{}: field appearance requires sheet format 4", reference.file));
+        }
+        if sheet.format != POWER_TEXT_FORMAT && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some())) {
+            return Err(format!("{}: net-name appearance requires sheet format 5", reference.file));
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
         let mut named = sheet.net_labels.take().unwrap_or_default();
@@ -191,7 +207,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT) || sheet.id != reference.id {
+        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT | FIELDS_SHEET_FORMAT | POWER_TEXT_FORMAT)
+            || sheet.id != reference.id
+        {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
         }
         let symbols: BTreeSet<_> = sheet.symbols.iter().map(|s| s.id).collect();
@@ -483,6 +501,11 @@ impl DocumentsEncoder {
                             file: format!("sheets/{}.json", sheet.sheet_id),
                         })
                         .collect::<Vec<_>>();
+                    let has_metadata = p.components.values().any(|c| !c.metadata.is_empty());
+                    let format = if has_metadata { FIELDS_PROJECT_FORMAT } else { format };
+                    if has_metadata && p.numeric_id_high_water.is_none() {
+                        return Err("component metadata requires an adopted numeric ID watermark".into());
+                    }
                     write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n  \"name\": {},\n", p.id, json(&p.name)?,)
                         .map_err(|e| e.to_string())?;
                     if let Some(high_water) = p.numeric_id_high_water {
@@ -505,6 +528,7 @@ impl DocumentsEncoder {
                                 reference_number: c.reference_number,
                                 reference: c.reference.as_str().into(),
                                 value: c.value.as_str().into(),
+                                metadata: (!c.metadata.is_empty()).then(|| c.metadata.clone()),
                             },
                         )?;
                         self.definitions
@@ -557,6 +581,7 @@ impl DocumentsEncoder {
                                 x_nm: s.position.x_nm,
                                 y_nm: s.position.y_nm,
                                 rotation: u16::from(s.rotation) * 90,
+                                field_layout: (!s.field_layout.is_empty()).then(|| s.field_layout.clone()),
                             },
                         )?;
                         self.cursor += 1;
@@ -803,10 +828,17 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
 
 /// Write the bounded sheet header and return its first incremental record phase. Flat
 /// sheets retain version 1 and bypass hierarchy lists; named anchors add a bounded phase
-/// before those lists in version 3.
+/// before those lists in version 3. Explicit text appearance uses version 4 and retains all
+/// three hierarchy/named arrays, including when empty.
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
-    let format = if !sheet.net_labels.is_empty() {
+    let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
+    let text = sheet.net_labels.iter().any(|l| l.text.is_some());
+    let format = if text {
+        POWER_TEXT_FORMAT
+    } else if fields {
+        FIELDS_SHEET_FORMAT
+    } else if !sheet.net_labels.is_empty() {
         NAMED_FORMAT
     } else if hierarchy {
         HIERARCHY_FORMAT
@@ -814,7 +846,7 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
         SHEET_FORMAT
     };
     write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
-    if !sheet.net_labels.is_empty() {
+    if text || fields || !sheet.net_labels.is_empty() {
         bytes.extend_from_slice(b"  \"net_labels\": [\n");
         Ok(12)
     } else if hierarchy {

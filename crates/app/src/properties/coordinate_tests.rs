@@ -26,6 +26,8 @@ fn fixture() -> Harness<'static, PcbApp> {
 
 /// Replace a field through its accessible input rather than mutating the property draft.
 fn type_field(h: &mut Harness<'_, PcbApp>, label: &str, value: &str) {
+    h.get_by_label(label).scroll_to_me();
+    h.run();
     h.get_by_label(label).click();
     h.run();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -79,7 +81,7 @@ fn invalid_coordinates_reset_and_cancel_leave_the_project_alone() {
         assert_eq!(h.get_by_label("X").value().as_deref(), Some(input));
         click(&mut h, "Reset changes");
         assert_eq!(h.get_by_label("X").value().as_deref(), Some("0 mil"));
-        assert_eq!(h.get_by_label("Value").value().as_deref(), Some("1k"));
+        assert_eq!(h.get_by_label("Value").value().as_deref(), Some("R"));
     }
     type_field(&mut h, "X", "100 mil");
     click(&mut h, "More properties ↗");

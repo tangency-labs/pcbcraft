@@ -39,7 +39,10 @@ them. Revision 2 shortens the default leads while keeping the pins on the grid:
 resistor endpoints are 5.08 mm from center, capacitor endpoints 2.54 mm, and LED
 and connector endpoints 3.81 mm. The original `*-v1.json` files retain the former
 6.35 mm endpoints. Changing a drawing or pin position requires a new revision
-so reopening an older project cannot silently move its connections.
+so reopening an older project cannot silently move its connections. Resistor and
+capacitor revision 3 retain revision 2 geometry but use neutral `R` and `C` values
+for new generic placements. The `*-v2.json` copies preserve the former `1k` and
+`100nF` defaults for pinned revisions and migration.
 
 ## Symbol format `pcbcraft-symbol/1`
 

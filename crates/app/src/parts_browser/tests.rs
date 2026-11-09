@@ -95,6 +95,63 @@ fn power_uses_catalog_and_custom_net_names() {
     assert!(matches!(h.state().views.active.schematic.tool,Some(crate::Tool::NetLabel{ref label,..}) if label.name=="+3V3_ANALOG"));
 }
 
+/// The flat-bar VCC is a distinct catalog choice but still names the VCC electrical net.
+/// Both catalog presentations preserve its style/name through placement, editing and reopen.
+#[test]
+fn flat_bar_vcc_is_an_additional_power_choice() {
+    use pcbcraft_engine::persistence::{decode_documents, encode_documents};
+    for (width, compact) in [(1400., false), (700., false), (1400., true)] {
+        let mut h = editor(width);
+        click(&mut h, "Cancel");
+        if compact {
+            h.state_mut().parts.mode = Mode::Compact;
+        }
+        h.key_press(Key::P);
+        h.run();
+        let before = h.state().session.inspect();
+        h.get_by_label("VCC (bar)").scroll_to_me();
+        h.run();
+        click(&mut h, "VCC (bar)");
+        assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("VCC"), "width={width}, compact={compact}");
+        assert_eq!(h.state().parts.selected, Some(super::Key::Power("vcc-bar")));
+        h.get_by_label("VCC").scroll_to_me();
+        h.run();
+        click(&mut h, "VCC");
+        assert_eq!(h.state().parts.selected, Some(super::Key::Power("vcc")));
+        h.get_by_label("VCC (bar)").scroll_to_me();
+        h.run();
+        click(&mut h, "VCC (bar)");
+        assert_eq!(h.state().session.inspect(), before);
+        click(&mut h, "Place");
+        assert!(
+            matches!(&h.state().views.active.schematic.tool,Some(crate::Tool::NetLabel {label,..}) if label.style==Style::PowerBar && label.name=="VCC")
+        );
+        h.get_by_label("Schematic canvas").click();
+        h.run();
+        let project = h.state().session.project().unwrap();
+        assert_eq!((project.net_labels()[0].style, project.net_labels()[0].name.as_str()), (Style::PowerBar, "VCC"));
+        let documents = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+        let ctx = h.ctx.clone();
+        h.state_mut().parts.close(&ctx);
+        h.run();
+        h.key_press(Key::E);
+        h.run();
+        assert!(matches!(h.state().dialog, crate::Dialog::NetLabel(_)));
+        assert_eq!(h.get_by_label("Net name").value().as_deref(), Some("VCC"));
+        h.get_by_label("Net name").click();
+        h.run();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.get_by_label("Net name").type_text("VCC_ANALOG");
+        h.run();
+        click(&mut h, "Apply");
+        let label = &h.state().session.project().unwrap().net_labels()[0];
+        assert_eq!((label.style, label.name.as_str()), (Style::PowerBar, "VCC_ANALOG"));
+        click(&mut h, "Undo");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), documents);
+    }
+}
+
 /// Compact hosts keep library selection and both result/preview pages inside the form.
 /// Neither a closed chooser nor its legacy arrangement data reserves canvas space.
 #[test]
@@ -140,7 +197,7 @@ fn search_preserves_original_starter_order_and_native_identity() {
     assert!(matches("zzz").is_empty());
     assert_eq!(matches("j").len(), 2);
     let catalog = library::sources::Catalog::default();
-    assert_eq!(entries("", &catalog).iter().filter(|e| e.in_collection(&Collection::Power)).count(), 8);
+    assert_eq!(entries("", &catalog).iter().filter(|e| e.in_collection(&Collection::Power)).count(), 9);
 }
 
 /// Registered libraries appear as selectable collections. If a chosen source is removed,

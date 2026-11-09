@@ -839,7 +839,9 @@ mod live {
     /// Name the view's unfinished gesture, if any.
     fn tool_name(tool: &Tool) -> &'static str {
         match tool {
+            Tool::Field { .. } => "move_symbol_field",
             Tool::NetLabel { .. } => "net_label",
+            Tool::NetLabelText { .. } => "move_net_name",
             Tool::SheetGesture { .. } => "sheet_geometry",
             Tool::Hierarchy { .. } => "hierarchy",
             Tool::PlaceSymbol { .. } => "place_symbol",
@@ -853,6 +855,7 @@ mod live {
 
     /// The editor's windows, visible views, panels and settings, with the IDs window commands
     /// take. Parked views of a collapsed split are not listed; they return when it reopens.
+    /// Report inline text editing, dialogs and file operations that can hold live commands.
     pub(crate) fn inspect_editor(app: &PcbApp) -> Value {
         let windows: Vec<Value> = app
             .views
@@ -925,6 +928,7 @@ mod live {
             "unsaved": app.files.dirty(&app.session),
             "file_operation": app.files.busy(),
             "dialog_open": !matches!(app.dialog, Dialog::None),
+            "text_editing": app.views.editing_text(),
             "home": app.home,
             "workspace": app.workspace_key(),
             "message": app.message,

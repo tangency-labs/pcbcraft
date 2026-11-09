@@ -11,17 +11,19 @@ use pcbcraft_engine::{
 };
 use serde_json::json;
 use std::sync::Arc;
+pub(crate) mod fields;
 
 #[derive(Debug)]
 pub(super) struct State {
     draft: Option<Edit>,
-    collapsed: bool,
+    pub(super) collapsed: bool,
+    pub(super) net_draft: Option<crate::net_labels::Edit>,
     pub(super) rect: Rect,
 }
 
 impl Default for State {
     fn default() -> Self {
-        Self { draft: None, collapsed: false, rect: Rect::NOTHING }
+        Self { draft: None, collapsed: false, net_draft: None, rect: Rect::NOTHING }
     }
 }
 
@@ -34,6 +36,11 @@ pub(super) struct Edit {
     definition: Arc<SymbolDefinition>,
     reference: String,
     value: String,
+    metadata: pcbcraft_engine::schematic::fields::Metadata,
+    original_metadata: pcbcraft_engine::schematic::fields::Metadata,
+    original_layout: pcbcraft_engine::schematic::fields::Layouts,
+    appearance: std::collections::BTreeMap<String, fields::Appearance>,
+    appearance_field: String,
     rotation: u16,
     x: String,
     y: String,
@@ -53,11 +60,20 @@ enum Tab {
     Library,
 }
 
+/// Definition actions leave the property draft only after its source and pending edits are checked.
+#[derive(Clone, Copy)]
+enum LibraryAction {
+    EditCopy,
+    Sources,
+}
+
 impl Edit {
     /// Keep pending changes distinguishable from a view-only inspection.
     fn changed(&self) -> bool {
         (&self.reference, &self.value, self.rotation) != (&self.original.0, &self.original.1, self.original.2)
             || self.position() != Ok(self.original_position)
+            || self.metadata != self.original_metadata
+            || self.layouts().as_ref() != Ok(&self.original_layout)
     }
 
     /// Parse both axes before submitting any field, naming invalid coordinates in the error.
@@ -77,6 +93,9 @@ impl Edit {
                 if let Ok(nm) = units::parse_length(text, self.units) {
                     *text = units::edit_label(nm, unit);
                 }
+            }
+            for draft in self.appearance.values_mut() {
+                draft.set_units(self.units, unit);
             }
             self.units = unit;
         }
@@ -116,6 +135,10 @@ impl PcbApp {
             component: component.id(),
             definition: symbol.definition.clone(),
             original: (reference.clone(), value.clone(), rotation),
+            metadata: component.metadata.clone(),
+            original_metadata: component.metadata.clone(),
+            original_layout: symbol.field_layout.clone(),
+            appearance: fields::appearances(&component.metadata, &symbol.field_layout, units),
             reference,
             value,
             rotation,
@@ -124,6 +147,7 @@ impl PcbApp {
             units,
             original_position: symbol.position,
             tab: Tab::General,
+            appearance_field: "reference".into(),
             error: None,
             focused: false,
         })
@@ -135,6 +159,14 @@ impl PcbApp {
         if !self.properties_open || (area.width() < 600.0 && self.parts.open) {
             self.views.active.schematic.properties.rect = Rect::NOTHING;
             return Rect::NOTHING;
+        }
+        if self.views.active.schematic.selection.single_net_label().is_some() {
+            self.views.active.schematic.properties.draft = None;
+            if let Some(rect) = self.net_label_inspector(ui, canvas, area) {
+                return rect;
+            }
+        } else {
+            self.views.active.schematic.properties.net_draft = None;
         }
         let width = pcbcraft_chrome::workspace::panels::card_width(canvas, true);
         let Some(current) = self.read_property_edit() else {
@@ -226,7 +258,7 @@ impl PcbApp {
             }
         }
         if more {
-            self.dialog = Dialog::EditFields(edit.clone());
+            self.dialog = Dialog::EditFields(Box::new(edit.clone()));
         }
         if choose {
             self.begin_footprint_assignment(Some(edit.component.clone()));
@@ -254,7 +286,9 @@ impl PcbApp {
             return Err("Selection changed; reopen properties to continue.".into());
         }
         let position = edit.position()?;
+        let layouts = edit.layouts()?;
         let mut params = json!({"symbol":edit.symbol,"reference":edit.reference,"value":edit.value,"rotation":edit.rotation,
+            "metadata":edit.metadata,"field_layout":layouts,
             "x_nm":position.x_nm,"y_nm":position.y_nm,"auto_heal":self.preferences.auto_heal_wires,"expected_revision":edit.source.revision});
         if let Some(crate::editor_view::DocumentTarget::Sheet(sheet)) = self.views.active.target() {
             params["sheet"] = json!(sheet.id());
@@ -266,83 +300,93 @@ impl PcbApp {
         Ok(())
     }
 
-    /// Present the expanded form using Next's component/placement grouping and existing Craft
+    /// Present component, placement and library actions using the shared Preferences form
     /// chrome. Definition authoring and package choice have explicit actions rather than raw fields.
     pub(super) fn symbol_properties_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
         edit.set_units(self.preferences.units);
         let mut apply = false;
-        let mut cancel = false;
         let mut choose = false;
+        let mut library_action = None;
         let can_choose = !edit.changed();
         let title = format!("{} · Symbol properties", edit.original.0);
         let footprint = self.package_label(&edit.component);
-        let closing = shell::scrolling_dialog_width(ctx, "edit_fields", &title, 760.0, |ui| {
-            ui.label(shell::dim(&edit.definition.name));
-            ui.horizontal_wrapped(|ui| {
-                for (tab, label) in [(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")] {
-                    ui.selectable_value(&mut edit.tab, tab, label);
-                }
-            });
-            ui.separator();
-            match edit.tab {
-                Tab::General => {
-                    let mut position_apply = false;
-                    chrome::columns(
-                        ui,
-                        |ui| {
-                            chrome::section(ui, "Component");
-                            let field = chrome::text(ui, "Reference", &mut edit.reference);
-                            if !edit.focused {
-                                field.request_focus();
-                                edit.focused = true;
-                            }
-                            let value = chrome::text(ui, "Value", &mut edit.value);
-                            apply |= (field.lost_focus() || value.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            chrome::field(ui, "Footprint", |ui| {
-                                choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).clicked();
+        let action = pcbcraft_chrome::catalog::property_form(ctx, "edit_fields", &title, 760.0, "OK", |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Frame::new().inner_margin(pcbcraft_chrome::Tokens::get().space_16).show(ui, |ui| {
+                    ui.label(shell::dim(&edit.definition.name));
+                    chrome::tabs(ui, &mut edit.tab, &[(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")]);
+                    ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
+                    match edit.tab {
+                        Tab::General => {
+                            chrome::group(ui, "Component fields", |ui| {
+                                apply |= edit.metadata_fields(ui);
+                                choose = chrome::field_action(ui, "Footprint", &footprint, can_choose).clicked();
+                                egui::CollapsingHeader::new("Text appearance").show(ui, |ui| edit.field_appearance(ui));
                             });
-                        },
-                        |ui| {
-                            chrome::section(ui, "Placement");
-                            chrome::field(ui, "Unit", |ui| {
-                                ui.label(edit.definition.unit_id());
+                            ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
+                            let mut position_apply = false;
+                            chrome::split(ui, |ui, column| {
+                                if column == 0 {
+                                    chrome::group(ui, "Placement", |ui| {
+                                        chrome::field(ui, "Unit", |ui| {
+                                            ui.label(edit.definition.unit_id());
+                                        });
+                                        chrome::rotation(ui, &mut edit.rotation);
+                                        position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
+                                    });
+                                } else {
+                                    chrome::group(ui, "Attributes", |ui| edit.attributes(ui));
+                                }
                             });
-                            chrome::rotation(ui, &mut edit.rotation);
-                            position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
-                        },
-                    );
-                    apply |= position_apply;
-                }
-                Tab::Terminals => {
-                    egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
-                        ui.strong("Terminal");
-                        ui.strong("Name");
-                        ui.strong("Electrical type");
-                        ui.end_row();
-                        for pin in edit.definition.pins() {
-                            ui.label(&pin.number);
-                            ui.label(pin.name.as_deref().unwrap_or("—"));
-                            ui.label(format!("{:?}", pin.electrical_type));
-                            ui.end_row();
+                            apply |= position_apply;
                         }
-                    });
-                }
-                Tab::Library => {
-                    chrome::section(ui, "Pinned symbol");
-                    ui.label(format!("{} / {}", edit.definition.library, edit.definition.id));
-                    ui.label(format!("Revision {}", edit.definition.revision()));
-                    ui.label("Project copy");
-                }
-            }
-            if let Some(error) = &edit.error {
-                ui.label(shell::error(error));
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                apply |= ui.button("OK").clicked();
-                cancel = ui.button("Cancel").clicked();
+                        Tab::Terminals => {
+                            egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
+                                ui.strong("Terminal");
+                                ui.strong("Name");
+                                ui.strong("Electrical type");
+                                ui.end_row();
+                                for pin in edit.definition.pins() {
+                                    ui.label(&pin.number);
+                                    ui.label(pin.name.as_deref().unwrap_or("—"));
+                                    ui.label(format!("{:?}", pin.electrical_type));
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                        Tab::Library => {
+                            chrome::group(ui, "Pinned symbol", |ui| {
+                                chrome::field(ui, "Library", |ui| {
+                                    ui.label(&edit.definition.library);
+                                });
+                                chrome::field(ui, "Symbol", |ui| {
+                                    ui.label(&edit.definition.id);
+                                });
+                                chrome::field(ui, "Revision", |ui| {
+                                    ui.label(edit.definition.revision().to_string());
+                                });
+                            });
+                            chrome::group(ui, "Library actions", |ui| {
+                                let pending = "Apply or cancel pending property changes before opening library actions.";
+                                if ui.add_enabled(can_choose, egui::Button::new("Edit symbol copy…")).on_disabled_hover_text(pending).clicked() {
+                                    library_action = Some(LibraryAction::EditCopy);
+                                }
+                                if ui.add_enabled(can_choose, egui::Button::new("Manage libraries…")).on_disabled_hover_text(pending).clicked() {
+                                    library_action = Some(LibraryAction::Sources);
+                                }
+                                ui.label(shell::dim(
+                                    "Definition edits open as an independent copy. Updating or replacing the placed symbol is not implemented yet.",
+                                ));
+                            });
+                        }
+                    }
+                    if let Some(error) = &edit.error {
+                        ui.label(shell::error(error));
+                    }
+                });
             });
         });
+        apply |= action.primary;
         if apply {
             if !self.views.active.accepts(edit.source, &self.session) {
                 self.message = Some("View or project changed; reopen the symbol fields to continue editing.".into());
@@ -350,22 +394,40 @@ impl PcbApp {
             }
             if let Err(error) = self.apply_property_edit(&edit) {
                 edit.error = Some(error);
-                self.dialog = Dialog::EditFields(edit);
+                self.dialog = Dialog::EditFields(Box::new(edit));
             }
         } else if choose {
             self.begin_footprint_assignment(Some(edit.component));
-        } else if closing || cancel {
+        } else if let Some(library_action) = library_action {
+            if !self.views.active.accepts(edit.source, &self.session) || edit.changed() {
+                edit.error = Some("View or project changed; reopen symbol properties to continue.".into());
+                self.dialog = Dialog::EditFields(Box::new(edit));
+            } else {
+                match library_action {
+                    LibraryAction::EditCopy => {
+                        self.select(pcbcraft_engine::selection::Selection::one_symbol(edit.symbol.clone()));
+                        if let Err(error) = self.fork_library_selection(pcbcraft_engine::authoring::Kind::Symbol) {
+                            edit.error = Some(error);
+                            self.dialog = Dialog::EditFields(Box::new(edit));
+                        }
+                    }
+                    LibraryAction::Sources => self.dialog = Dialog::LibrarySources,
+                }
+            }
+        } else if action.close {
             if let Some(view) = self.views.view_mut(edit.source.view()) {
                 view.schematic.properties.draft = None;
             }
         } else {
-            self.dialog = Dialog::EditFields(edit);
+            self.dialog = Dialog::EditFields(Box::new(edit));
         }
     }
 }
 
 #[cfg(test)]
 mod coordinate_tests;
+#[cfg(test)]
+mod field_tests;
 
 #[cfg(test)]
 mod tests {
@@ -390,6 +452,8 @@ mod tests {
         h.run();
         click(&mut h, "More properties ↗");
         assert_eq!(h.get_by_label("Value").value().as_deref(), Some("4.7k"));
+        h.get_by_label("Rotation").scroll_to_me();
+        h.run();
         click(&mut h, "Rotation");
         click(&mut h, "90°");
         let revision = h.state().session.revision();

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+pub(crate) mod fields;
 mod selection;
 #[cfg(not(target_arch = "wasm32"))]
 mod thumbnail;
@@ -27,6 +28,16 @@ use pcbcraft_engine::{
 /// The active canvas interaction, bound to the revision at which it began.
 #[derive(Clone, Debug)]
 pub(crate) enum Tool {
+    Field {
+        drag: fields::Drag,
+        revision: u64,
+    },
+    /// The power marker and its electrical contact stay fixed while its name is positioned.
+    NetLabelText {
+        label: pcbcraft_engine::net_labels::Label,
+        revision: u64,
+        drag: Option<Vec2>,
+    },
     NetLabel {
         label: pcbcraft_engine::net_labels::Label,
         revision: u64,
@@ -79,7 +90,9 @@ impl Tool {
     /// Return the revision used to reject stale canvas actions.
     pub(crate) fn revision(&self) -> u64 {
         match self {
-            Self::NetLabel { revision, .. }
+            Self::Field { revision, .. }
+            | Self::NetLabel { revision, .. }
+            | Self::NetLabelText { revision, .. }
             | Self::SheetGesture { revision, .. }
             | Self::Hierarchy { revision, .. }
             | Self::PlaceSymbol { revision, .. }
@@ -94,11 +107,17 @@ impl Tool {
 
 /// A placement, selection, move, edit or cancellation requested through the canvas.
 pub(crate) enum Click {
+    GrabField(fields::Drag),
+    RotateField(fields::Drag),
+    EditField(fields::Drag),
+    FinishField(Option<pcbcraft_engine::schematic::fields::Layouts>),
     NetLabelCommit(pcbcraft_engine::net_labels::Label),
     NetLabelAction(pcbcraft_engine::net_labels::Label, crate::net_labels::Action),
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
     NetLabelRotate,
+    NetLabelTextDrag(pcbcraft_engine::net_labels::Label, Vec2),
+    NetLabelTextRotate,
     GrabSheetGesture(Box<crate::hierarchy::Drag>),
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
     SelectSheetSymbol(u64),
@@ -147,7 +166,7 @@ pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, re
     let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP);
     let center = rect.center() - bounds.center().to_vec2() * step;
-    paint_symbol(painter, definition, center, step, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color), None);
+    paint_symbol(painter, definition, center, step, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color));
 }
 
 /// What a wire's context menu asks for.
@@ -198,7 +217,8 @@ pub(crate) enum SymbolAction {
 /// Return `None` for a preview without a valid click, an inactive tool, or
 /// blocked or dragged canvas input when the wire menu did not cancel.
 ///
-/// With no tool, a primary click selects one wire leg or an item, or clears
+/// With no tool, double-click a body for properties or visible text for an in-place editor.
+/// A primary click selects one wire leg or an item, or clears
 /// selection on empty canvas. Shift/Ctrl combine those hits with the previous selection. A secondary click selects the symbol under it and opens its menu; a row
 /// picked there returns `Click::Edit`. A secondary click on a wire selects it and opens Slice, Break, Delete Segment and Delete Wire for the leg under the click, returning `Click::WireEdit`
 /// bound to `revision`. `selected_leg` limits blue ink and Delete to one leg; `whole_wire_drag`
@@ -232,6 +252,7 @@ pub(crate) fn show(
     auto_heal: bool,
     draft: &Draft,
     label: &str,
+    editing: Option<&crate::inline_text::Target>,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
@@ -240,7 +261,9 @@ pub(crate) fn show(
     let moving = matches!(
         tool,
         Some(
-            Tool::NetLabel { drag: Some(_), .. }
+            Tool::Field { .. }
+                | Tool::NetLabel { drag: Some(_), .. }
+                | Tool::NetLabelText { .. }
                 | Tool::SheetGesture { .. }
                 | Tool::Move { .. }
                 | Tool::MoveItems { .. }
@@ -250,6 +273,16 @@ pub(crate) fn show(
     );
     camera.navigate(&response, rect, project, input_enabled && !moving, navigation);
 
+    let field_destination = if let Some(Tool::Field { drag, .. }) = &tool {
+        ui.input(|i| i.pointer.hover_pos()).and_then(|p| fields::destination(project, camera, rect, drag, p))
+    } else {
+        None
+    };
+    let field_preview = if let (Some(Tool::Field { drag, .. }), Some(layouts)) = (&tool, &field_destination) {
+        fields::preview(project, &drag.symbol, layouts.clone())
+    } else {
+        None
+    };
     let group_delta = match &tool {
         Some(Tool::MoveItems { origin, .. }) => response.interact_pointer_pos().map(|pointer| {
             let point = camera.snap(pointer, rect);
@@ -326,7 +359,13 @@ pub(crate) fn show(
     } else {
         None
     };
-    let project = net_label_preview.as_ref().or(sheet_preview.as_ref()).or(hierarchy_preview.as_ref()).or(group_preview.as_ref()).unwrap_or(project);
+    let project = field_preview
+        .as_ref()
+        .or(net_label_preview.as_ref())
+        .or(sheet_preview.as_ref())
+        .or(hierarchy_preview.as_ref())
+        .or(group_preview.as_ref())
+        .unwrap_or(project);
     let painter = ui.painter_at(rect);
     let tokens = Tokens::get();
     let screen = |point| camera.screen(point, rect);
@@ -358,8 +397,6 @@ pub(crate) fn show(
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
         let center = screen(position);
         if visible.contains(center) {
-            let reference = (unit_step >= theme::SCHEMATIC_MIN_GRID_SPACING).then(|| project.reference(symbol));
-            let label = reference.as_deref().map(|reference| (reference, project.value(symbol)));
             let color = if selected.symbols.contains(&symbol.id()) {
                 tokens.accent
             } else if highlighted.symbols.contains(&symbol.id()) {
@@ -367,11 +404,12 @@ pub(crate) fn show(
             } else {
                 tokens.text
             };
-            paint_symbol(&painter, &symbol.definition, center, unit_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color), label);
+            paint_symbol(&painter, &symbol.definition, center, unit_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
         }
     }
 
-    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected);
+    fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols, editing);
+    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, input_enabled.then_some(filters), editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
@@ -413,7 +451,7 @@ pub(crate) fn show(
     {
         let point = camera.snap(pointer, rect);
         if valid_position(point) {
-            paint_symbol(&painter, &drag.definition, screen(point), unit_step, 0, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
+            paint_symbol(&painter, &drag.definition, screen(point), unit_step, 0, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
@@ -433,6 +471,15 @@ pub(crate) fn show(
     }
     // Handle active rectangles before context menus: a secondary drag consumes its release.
     let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
+    if matches!(tool, Some(Tool::Field { .. })) {
+        if lost_focus || response.secondary_clicked() {
+            return Some(Click::FinishField(None));
+        }
+        if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+            return Some(Click::FinishField(field_destination.filter(|_| input_enabled && response.contains_pointer())));
+        }
+        return None;
+    }
     if let Some(Tool::BoxSelect { drag, .. }) = &tool {
         if lost_focus {
             return Some(Click::SelectItems(drag.base.clone()));
@@ -475,6 +522,15 @@ pub(crate) fn show(
     {
         let right = response.drag_started_by(egui::PointerButton::Secondary);
         let modifiers = ui.input(|i| i.modifiers);
+        if !right
+            && !modifiers.shift
+            && !modifiers.ctrl
+            && !modifiers.command
+            && filters.symbols
+            && let Some(field) = fields::at(ui, project, camera, rect, origin)
+        {
+            return Some(Click::GrabField(field));
+        }
         // A plain drag on the one selected wire reshapes it instead of moving it whole.
         if !right
             && !whole_wire_drag
@@ -583,8 +639,12 @@ pub(crate) fn show(
         && !ui.ctx().egui_wants_keyboard_input()
         && !ui.input(|input| input.modifiers.shift || input.modifiers.ctrl || input.modifiers.command)
         && let Some(pointer) = response.hover_pos()
+        && (!filters.symbols || fields::at(ui, project, camera, rect, pointer).is_none())
         && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
         && let Some(point) = anchor.position(project)
+        && (!filters.symbols
+            || symbol_at(project, camera, rect, pointer).is_none()
+            || camera.screen(point, rect).distance(pointer) <= theme::SCHEMATIC_PIN_RADIUS.min(camera.unit_step() / 2.))
     {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         pcbcraft_chrome::cursor::wire(&painter, screen(point), true);
@@ -599,14 +659,43 @@ pub(crate) fn show(
     {
         return Some(Click::GrabReshape(drag));
     }
+    // Field editing and body properties precede click-to-wire for enabled symbols.
+    // Explicit placement/wiring tools retain their own double click.
+    if tool.is_none()
+        && response.double_clicked_by(egui::PointerButton::Primary)
+        && filters.symbols
+        && !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command)
+    {
+        let pointer = response.interact_pointer_pos()?;
+        if let Some(field) = fields::at(ui, project, camera, rect, pointer) {
+            return Some(Click::EditField(field));
+        }
+        if let Some((symbol, _)) = symbol_at(project, camera, rect, pointer) {
+            return Some(Click::Edit(SymbolAction::EditFields, symbol.id()));
+        }
+    }
     if tool.is_none() && response.clicked_by(egui::PointerButton::Primary) {
         let pointer = response.interact_pointer_pos()?;
+        if filters.symbols
+            && let Some(field) = fields::at(ui, project, camera, rect, pointer)
+        {
+            let modifiers = ui.input(|i| i.modifiers);
+            return Some(Click::SelectItems(selected.combine(
+                &Selection::one_symbol(field.symbol),
+                modifiers.shift,
+                modifiers.ctrl || modifiers.command,
+            )));
+        }
         let hit = selection::at(ui, project, camera, rect, pointer, filters);
         let modifiers = ui.input(|i| i.modifiers);
         if !modifiers.shift
             && !modifiers.ctrl
             && !modifiers.command
             && let Some(anchor) = wires::node_at(project, camera, rect, pointer, draft, revision)
+            && (hit.single_symbol().is_none()
+                || anchor
+                    .position(project)
+                    .is_some_and(|at| camera.screen(at, rect).distance(pointer) <= theme::SCHEMATIC_PIN_RADIUS.min(camera.unit_step() / 2.)))
         {
             return Some(Click::StartWire(anchor));
         }
@@ -625,7 +714,9 @@ pub(crate) fn show(
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
-        Tool::NetLabel { .. }
+        Tool::Field { .. }
+        | Tool::NetLabel { .. }
+        | Tool::NetLabelText { .. }
         | Tool::SheetGesture { .. }
         | Tool::Hierarchy { .. }
         | Tool::Move { .. }
@@ -722,7 +813,7 @@ fn placement_preview(
     if !valid_position(point) {
         return None;
     }
-    paint_symbol(painter, definition, screen(point), camera.unit_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent), None);
+    paint_symbol(painter, definition, screen(point), camera.unit_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
     response.on_hover_cursor(egui::CursorIcon::Crosshair).clicked_by(egui::PointerButton::Primary).then_some(point)
 }
 
@@ -793,10 +884,9 @@ fn body(definition: &SymbolDefinition, turns: u8) -> Rect {
 }
 
 /// Draw the symbol's library strokes around its center, with one grid step of `step` points,
-/// turned with the symbol. With a label, the reference goes above the drawing and the value
-/// below it, or both beside an upright part.
-/// Horizontal labels follow the rotated drawing's upper and lower clearance, including LED arrows.
-fn paint_symbol(painter: &Painter, definition: &SymbolDefinition, center: Pos2, step: f32, turns: u8, stroke: Stroke, label: Option<(&str, &str)>) {
+/// turned with the symbol.
+/// Component fields are drawn separately so their layout never changes the body or pins.
+fn paint_symbol(painter: &Painter, definition: &SymbolDefinition, center: Pos2, step: f32, turns: u8, stroke: Stroke) {
     let color = stroke.color;
     let xy = |point: &Point| {
         let (x, y) = grid(*point);
@@ -841,24 +931,6 @@ fn paint_symbol(painter: &Painter, definition: &SymbolDefinition, center: Pos2, 
                     painter.text(xy(at), text_anchor(*align, turns), text, font, color);
                 }
             }
-        }
-    }
-    if let Some((reference, value)) = label {
-        // Text clears the turned drawing by a little under half a grid step.
-        let drawing = drawing_bounds(definition);
-        let bounds = if drawing.is_positive() { turn_rect(drawing, turns) } else { Rect::from_center_size(Pos2::ZERO, vec2(2.0, 2.0)) };
-        let t = Tokens::get();
-        let font = FontId::proportional(t.font_button);
-        if turns % 2 == 1 {
-            // Upright parts carry their text at the side, as KiCad places it.
-            let side = center + vec2((step * (bounds.max.x + 0.4)).max(t.space_12), step * bounds.center().y);
-            painter.text(side - vec2(0.0, t.space_2), Align2::LEFT_BOTTOM, reference, font.clone(), color);
-            painter.text(side + vec2(0.0, t.space_2), Align2::LEFT_TOP, value, font, color);
-        } else {
-            let above = (step * (0.4 - bounds.min.y)).max(t.space_12);
-            let below = (step * (bounds.max.y + 0.4)).max(t.space_12);
-            painter.text(center - vec2(0.0, above), Align2::CENTER_BOTTOM, reference, font.clone(), color);
-            painter.text(center + vec2(0.0, below), Align2::CENTER_TOP, value, font, color);
         }
     }
 }

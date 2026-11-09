@@ -2,6 +2,7 @@
 
 pub(crate) mod wiring;
 
+pub mod fields;
 pub mod pins;
 pub use pins::{PinAppearance, PinOrientation, PinStyle};
 
@@ -230,6 +231,7 @@ pub struct Component {
     pub(crate) reference_number: usize,
     pub(crate) reference: String,
     pub(crate) value: String,
+    pub metadata: fields::Metadata,
 }
 
 impl Component {
@@ -251,7 +253,7 @@ impl Component {
     /// Publish component-owned fields independently of schematic placement geometry.
     pub(crate) fn inspect(&self) -> Value {
         json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
-            "reference": self.reference, "value": self.value})
+            "reference": self.reference, "value": self.value, "metadata": self.metadata})
     }
 }
 
@@ -292,6 +294,8 @@ pub struct SymbolPlacement {
     pub(crate) component: u64,
     pub unit: String,
     pub position: Point,
+    /// Per-instance field appearance, independent of the drawing and pin geometry.
+    pub field_layout: fields::Layouts,
     /// Quarter turns counterclockwise, 0 to 3.
     pub(crate) rotation: u8,
 }
@@ -354,6 +358,7 @@ impl SymbolPlacement {
             "x_nm": self.position.x_nm,
             "y_nm": self.position.y_nm,
             "pins": pins,
+            "field_layout": self.field_layout,
         })
     }
 }
