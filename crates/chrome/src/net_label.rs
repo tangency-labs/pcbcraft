@@ -24,17 +24,28 @@ pub struct Text {
     pub show_name: bool,
 }
 
+/// Exact name geometry is independent of the electrical anchor and glyph bounds.
+pub struct NameInk {
+    pub anchor: Pos2,
+    pub bounds: Rect,
+}
+
+struct Ink {
+    bounds: Rect,
+    name: Option<NameInk>,
+}
+
 /// Paint an upright name and quarter-turned anchor glyph. Return the complete ink/anchor
 /// bounds so pointer hit testing follows the actual text at every interface scale and zoom.
 /// Connected anchors omit their open-pin ring; callers resolve actual local contact.
 #[allow(clippy::too_many_arguments)]
 pub fn paint(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, color: Color32, connected: bool) -> Rect {
-    draw(painter, at, name, style, rotation, step, color, true, connected, None)
+    draw(painter, at, name, style, rotation, step, color, true, connected, None).bounds
 }
 
 /// Measure the same glyph and text without adding shapes to the scene.
 pub fn bounds(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32) -> Rect {
-    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false, None)
+    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false, None).bounds
 }
 
 /// Paint an anchor and its independently configured name without changing contact geometry.
@@ -50,13 +61,20 @@ pub fn paint_with_text(
     connected: bool,
     text: Option<&Text>,
 ) -> Rect {
-    draw(painter, at, name, style, rotation, step, color, true, connected, text)
+    draw(painter, at, name, style, rotation, step, color, true, connected, text).bounds
 }
 
 /// Measure exactly the text/glyph ink painted by `paint_with_text` for picking and selection.
 #[allow(clippy::too_many_arguments)]
 pub fn bounds_with_text(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, text: Option<&Text>) -> Rect {
-    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false, text)
+    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false, text).bounds
+}
+
+/// Measure only the visible net name using the exact painter layout, including manual offsets,
+/// alignment and rotation. Hidden names return None and cannot acquire independent text input.
+#[allow(clippy::too_many_arguments)]
+pub fn name_ink(painter: &Painter, at: Pos2, name: &str, style: Style, rotation: u16, step: f32, text: Option<&Text>) -> Option<NameInk> {
+    draw(painter, at, name, style, rotation, step, Tokens::get().text, false, false, text).name
 }
 
 /// Keep text measurement and painted geometry aligned for hit testing.
@@ -72,7 +90,8 @@ fn draw(
     paint: bool,
     connected: bool,
     text: Option<&Text>,
-) -> Rect {
+) -> Ink {
+    let mut name_ink = None;
     let scale = (step / 10.0).max(0.4);
     let transform = |v: Vec2| {
         let v = match rotation {
@@ -144,7 +163,9 @@ fn draw(
         } else if matches!(style, Style::Global) {
             shape = shape.with_angle_and_anchor(-(rotation as f32).to_radians(), Align2::CENTER_CENTER);
         }
-        bounds = bounds.union(shape.visual_bounding_rect());
+        let name_bounds = shape.visual_bounding_rect();
+        bounds = bounds.union(name_bounds);
+        name_ink = Some(NameInk { anchor: label_at, bounds: name_bounds });
         if paint {
             painter.add(shape);
         }
@@ -153,5 +174,5 @@ fn draw(
     if paint && !connected {
         painter.circle_stroke(at, 2.0, stroke);
     }
-    bounds.expand(3.)
+    Ink { bounds: bounds.expand(3.), name: name_ink }
 }

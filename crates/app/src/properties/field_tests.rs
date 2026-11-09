@@ -142,7 +142,7 @@ fn component_fields_and_attributes_edit_through_the_expanded_form() {
     type_field(&mut h, "Datasheet", "https://example.com/part.pdf");
     click(&mut h, "Add field");
     type_field(&mut h, "Field name", "Supplier code");
-    type_field(&mut h, "Field value", "XYZ-789");
+    type_field(&mut h, "Supplier code", "XYZ-789");
     click(&mut h, "Do not populate");
     click(&mut h, "Exclude from bill of materials");
     let revision = h.state().session.revision();
@@ -477,16 +477,28 @@ fn field_links_and_datasheet_shortcut_open_without_editing_the_project() {
         h.output().platform_output.commands.iter().any(|c| matches!(c,egui::OutputCommand::OpenUrl(url) if url.url=="https://example.com/data.pdf"))
     );
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
-    click(&mut h, "Add field");
+    click(&mut h, "Add link");
+    assert!(h.get_by_label("Open Link 1 link").accesskit_node().is_disabled());
     type_field(&mut h, "Field name", "Documentation");
-    type_field(&mut h, "Field value", "https://example.com/guide");
-    h.get_by_label("Open Field value link").click();
+    type_field(&mut h, "Documentation", "https://example.com/guide");
+    h.get_by_label("Open Documentation link").click();
     h.step();
     assert!(
         h.output().platform_output.commands.iter().any(|c| matches!(c,egui::OutputCommand::OpenUrl(url) if url.url=="https://example.com/guide"))
     );
+    click(&mut h, "Add link");
+    type_field(&mut h, "Link 1", "https://example.com/supplier");
+    h.get_by_label("Open Link 1 link").click();
+    h.step();
+    assert!(
+        h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::OpenUrl(url) if url.url=="https://example.com/supplier"))
+    );
     click(&mut h, "OK");
     let saved = h.state().session.snapshot().unwrap();
+    let metadata = &saved.component(&saved.symbols()[0]).unwrap().metadata;
+    assert_eq!(metadata.fields.values().filter(|field| pcbcraft_chrome::properties::web_link(&field.value).is_some()).count(), 3);
+    let docs = encode_documents(saved.clone()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
     for hovered in [true, false] {
         let pointer = if hovered { text_center(&h, "R1") } else { h.get_by_label("Schematic canvas").rect().left_bottom() - egui::vec2(-30., 30.) };
         h.hover_at(pointer);
@@ -510,4 +522,70 @@ fn field_links_and_datasheet_shortcut_open_without_editing_the_project() {
     click(&mut h, "OK");
     assert!(datasheet_urls(&mut h).is_empty());
     assert!(h.state().message.as_ref().is_some_and(|m| m.contains("datasheet link")));
+}
+
+/// The main form shares Preferences sections, aligns the footprint action with field values
+/// and keeps placement/attribute headings level while stacking them in a narrow host.
+#[test]
+fn property_sections_and_value_columns_stay_aligned() {
+    for size in [egui::vec2(1440., 1000.), egui::vec2(600., 850.)] {
+        let mut h = fixture();
+        h.set_size(size);
+        h.state_mut().select(Selection::one_symbol("symbol-2".into()));
+        h.key_press(Key::E);
+        h.run();
+        let reference = h.get_by_label("Reference").rect();
+        let footprint = h.get_by_label("Choose footprint…").rect();
+        assert!((reference.left() - footprint.left()).abs() < 1.);
+        assert!((reference.right() - footprint.right()).abs() < 1.);
+        let placement = h.get_by_label("PLACEMENT").rect();
+        let attributes = h.get_by_label("ATTRIBUTES").rect();
+        if size.x > 1000. {
+            assert!((placement.top() - attributes.top()).abs() < 1.);
+        } else {
+            assert!(attributes.top() > placement.top());
+        }
+    }
+}
+
+/// Property actions open the existing library-source manager or an independent symbol copy.
+/// Unapplied edits disable those exits, and stale forms cannot fork another selected definition.
+#[test]
+fn library_property_actions_keep_pinned_geometry_and_pending_edits_safe() {
+    let mut h = fixture();
+    h.state_mut().select(Selection::one_symbol("symbol-2".into()));
+    let before = h.state().session.snapshot().unwrap();
+    h.key_press(Key::E);
+    h.run();
+    type_field(&mut h, "Value", "pending");
+    click(&mut h, "Library");
+    for label in ["Edit symbol copy…", "Manage libraries…"] {
+        assert!(h.get_by_label(label).accesskit_node().is_disabled());
+    }
+    click(&mut h, "Cancel");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.key_press(Key::E);
+    h.run();
+    click(&mut h, "Library");
+    click(&mut h, "Manage libraries…");
+    assert!(matches!(h.state().dialog, Dialog::LibrarySources));
+    click(&mut h, "Close Library sources");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.key_press(Key::E);
+    h.run();
+    click(&mut h, "Library");
+    h.state_mut().session.apply("project.rename", &json!({"name":"Concurrent"})).unwrap();
+    h.run();
+    click(&mut h, "Edit symbol copy…");
+    assert!(h.state().library_editors.active_kind().is_none());
+    assert!(matches!(h.state().dialog, Dialog::EditFields(_)));
+    click(&mut h, "Cancel");
+    h.key_press(Key::E);
+    h.run();
+    click(&mut h, "Library");
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, "Edit symbol copy…");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().library_editors.active_kind(), Some(pcbcraft_engine::authoring::Kind::Symbol));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }

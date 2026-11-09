@@ -253,7 +253,9 @@ reference, value, field visibility, datasheet, description, manufacturer,
 manufacturer part number and named custom fields;
 these belong to the selected component without changing its library definition.
 HTTP(S) values have an open-link control beside the input, including custom fields.
-**D** opens the saved datasheet for the hovered component (including its text),
+**Add link** creates an additional named field for documentation, supplier pages or
+other web URLs. Each link opens independently, while **D** opens the saved
+datasheet for the hovered component (including its text),
 or the single selected component when the pointer is elsewhere. Opening a link
 changes neither the project nor undo history; text entry, dialogs and active tools
 retain their keyboard input. Local document paths remain plain field values.
@@ -272,8 +274,10 @@ restores automatic placement and default appearance for that field.
 The attributes beside placement record population and output/simulation exclusions.
 Board
 exclusion prevents placement; remove an existing footprint before excluding
-its component. BOM, position-file and simulation flags are retained intent for
-those not-yet-implemented consumers, rather than generated results.
+its component. BOM and simulation flags are retained intent for their future consumers.
+**Exclude from pick-and-place files** records omission from assembly position exports
+(reference, coordinates, orientation and board side); PCBcraft retains the flag,
+but does not yet generate those files.
 
 **Reset changes** discards the compact draft, and **Cancel** discards the
 expanded draft. Attached wires follow coordinate changes through the same contact
@@ -289,14 +293,20 @@ the library, results and preview stack in the scrolling body while **Assign** an
 **Close** remain visible. Browsing does not change the component; choose each
 terminal-to-pad connection or use **Match numbers** when their identifiers agree,
 then **Assign**. Source/license details remain available beneath the preview.
-Library-definition authoring remains separate from changing
-an instance's properties.
+The **Library** tab shows the pinned source/revision and opens **Manage libraries**
+or **Edit symbol copy**. Copy editing opens an independent definition document;
+it does not update the placed symbol. Updating a placed symbol from a library
+revision or replacing it with another symbol is not implemented. Apply or cancel
+pending field changes before using these actions.
 
 Power and ground markers also appear in the selection Properties card. Edit their
 net name, choose Ground, Power arrow or Power bar, and change position/rotation
 there or through **More properties**, **E**, double-click or **Properties…** in the
 context menu. Their text appearance controls size, visibility and a separate
-local offset while preserving the electrical anchor. Changing the net name changes
+local offset while preserving the electrical anchor. Drag a visible power/ground
+name to move only its text; **M** picks up that name and **R** rotates it when hovered
+or while dragging. Double-click its text to open the name and text controls directly.
+Dragging the glyph still moves the whole marker and its attached wires. Changing the net name changes
 the connected global net; changing only its text appearance leaves the wiring in place.
 
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,

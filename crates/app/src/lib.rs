@@ -1107,6 +1107,7 @@ impl PcbApp {
                             dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
                         }
                         Tool::NetLabel { .. } => dim("Place net label · R to rotate · Esc to cancel"),
+                        Tool::NetLabelText { .. } => dim("Move net name · R to rotate · Esc to cancel"),
                         Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
@@ -1303,11 +1304,20 @@ impl PcbApp {
                     self.set_field_layout(&drag.symbol, layouts, revision);
                 }
             }
-            (Some(Tool::NetLabel { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
-            (Some(Tool::NetLabel { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
+            (Some(Tool::NetLabel { .. } | Tool::NetLabelText { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
+            (Some(Tool::NetLabel { .. } | Tool::NetLabelText { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
             (Some(Tool::NetLabel { mut label, revision, drag }), Click::NetLabelRotate) => {
                 label.rotation = (label.rotation + 90) % 360;
                 self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision, drag });
+            }
+            (Some(Tool::NetLabelText { mut label, revision, drag }), Click::NetLabelTextRotate) => {
+                let text = label.text.get_or_insert_default();
+                text.rotation = (text.rotation + 90) % 360;
+                self.views.active.schematic.tool = Some(Tool::NetLabelText { label, revision, drag });
+            }
+            (None, Click::NetLabelTextDrag(label, offset)) => {
+                self.select(Selection::one_net_label(label.id));
+                self.views.active.schematic.tool = Some(Tool::NetLabelText { label, revision: source.revision, drag: Some(offset) });
             }
             (None, Click::NetLabelDrag(label, offset)) => {
                 self.select(Selection::one_net_label(label.id));

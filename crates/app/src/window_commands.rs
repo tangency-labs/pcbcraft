@@ -841,6 +841,7 @@ mod live {
         match tool {
             Tool::Field { .. } => "move_symbol_field",
             Tool::NetLabel { .. } => "net_label",
+            Tool::NetLabelText { .. } => "move_net_name",
             Tool::SheetGesture { .. } => "sheet_geometry",
             Tool::Hierarchy { .. } => "hierarchy",
             Tool::PlaceSymbol { .. } => "place_symbol",

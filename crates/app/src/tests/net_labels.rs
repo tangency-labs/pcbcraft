@@ -342,7 +342,7 @@ fn power_placement_reaches_pins_between_grid_points() {
 #[test]
 fn dragging_power_ink_and_anchor_moves_once_and_preserves_attached_wire() {
     for rotation in [0, 90, 180, 270] {
-        for grab in [egui::vec2(0., 0.), egui::vec2(5., 17.), egui::vec2(0., 32.)] {
+        for grab in [egui::vec2(0., 0.), egui::vec2(5., 17.)] {
             let mut h = editor(1400.);
             let rev = h.state().session.revision();
             h.state_mut().run(engine::ADD, &json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0,"rotation":rotation,"expected_revision":rev}));
@@ -400,7 +400,7 @@ fn interrupted_power_drags_never_commit_or_repeat() {
         h.state_mut().run(engine::ADD, &json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0,"expected_revision":rev}));
         h.state_mut().parts.set_repeat(true);
         h.run();
-        let start = at(&h, Point { x_nm: 0, y_nm: 0 }) + egui::vec2(0., 32.);
+        let start = at(&h, Point { x_nm: 0, y_nm: 0 }) + egui::vec2(0., 17.) * (h.state().views.active.camera.unit_step() / 10.);
         let to = start + egui::vec2(100., 60.);
         h.drag_at(start);
         h.run();
@@ -466,4 +466,278 @@ fn power_contacts_hide_open_markers_and_restore_them_when_detached() {
     click(&mut h, "Undo");
     assert!(!square(&h, origin));
     assert!(!ring(&h, origin));
+}
+
+/// A wired power marker exercises the same shared commands used by GUI and MCP clients.
+fn wired_power(style: &str, rotation: u16) -> Harness<'static, PcbApp> {
+    let mut h = editor(1400.);
+    let rev = h.state().session.revision();
+    h.state_mut()
+        .session
+        .apply(engine::ADD, &json!({"name":"GND","style":style,"x_nm":0,"y_nm":0,"rotation":rotation,"expected_revision":rev}))
+        .unwrap();
+    let rev = h.state().session.revision();
+    h.state_mut().session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":25_400_000,"y_nm":0,"expected_revision":rev})).unwrap();
+    let project = h.state().session.project().unwrap();
+    let label = project.net_labels()[0].object_id();
+    let symbol = project.symbols()[0].id();
+    let rev = h.state().session.revision();
+    h.state_mut()
+        .session
+        .apply(
+            pcbcraft_engine::DRAW_WIRE,
+            &json!({"from":{"symbol":symbol,"terminal":"1"},"to":{"net_label":label},"bends":[],"expected_revision":rev}),
+        )
+        .unwrap();
+    h.run();
+    h
+}
+
+/// Locate actual painted name ink in the requested view, including turned/manual text.
+fn power_name(h: &Harness<'_, PcbApp>, canvas: &str, name: &str) -> egui::Pos2 {
+    let rect = h.get_by_label(canvas).rect();
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == name && rect.contains(text.visual_bounding_rect().center()) => {
+                Some(text.visual_bounding_rect().center())
+            }
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// Two complete clicks use a realistic interval rather than the harness's slow default frames.
+fn double_click_name(h: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
+    h.hover_at(point);
+    h.run();
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.input_mut().time = Some(h.ctx.input(|i| i.time) + 0.03);
+            h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+    }
+    h.input_mut().time = None;
+    h.run();
+}
+
+/// Compare actual terminal membership and net names rather than an internal graph-cache pointer.
+fn assert_power_connectivity(before: &pcbcraft_engine::Project, after: &pcbcraft_engine::Project) {
+    let old = before.connectivity();
+    let new = after.connectivity();
+    for terminal in before.symbols().iter().flat_map(|symbol| symbol.terminals()) {
+        assert_eq!(old.net_for(terminal), new.net_for(terminal));
+        assert_eq!(old.net_index_for(terminal).map(|net| old.net_name(net)), new.net_index_for(terminal).map(|net| new.net_name(net)));
+    }
+}
+
+/// Dragging a power name moves only its text at every symbol orientation and zoom. Attached
+/// terminals, wire paths, net identity and the glyph stay fixed; the layout survives save/undo.
+#[test]
+fn power_names_drag_independently_of_their_electrical_anchors() {
+    for style in ["ground", "power", "power_bar"] {
+        for rotation in [0, 90, 180, 270] {
+            for zoom in [1., 3.] {
+                let mut h = wired_power(style, rotation);
+                h.state_mut().views.active.camera.set_zoom(zoom);
+                h.run();
+                let before = h.state().session.snapshot().unwrap();
+                let label = before.net_labels()[0].clone();
+                let rev = h.state().session.revision();
+                let canvas = h.get_by_label("Schematic canvas").rect();
+                let ink = pcbcraft_chrome::net_label::name_ink(
+                    &h.ctx.debug_painter(),
+                    at(&h, label.at),
+                    &label.name,
+                    crate::net_labels::visual(label.style),
+                    label.rotation,
+                    h.state().views.active.camera.unit_step(),
+                    None,
+                )
+                .unwrap();
+                let start = power_name(&h, "Schematic canvas", "GND");
+                let delta = egui::vec2(81.28, 60.96);
+                let expected = h.state().views.active.camera.snap(ink.anchor + delta, canvas);
+                h.drag_at(start);
+                h.run();
+                h.hover_at(start + delta);
+                h.run();
+                assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::NetLabelText { drag: Some(_), .. })), "{style} {rotation} {zoom}");
+                assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+                h.drop_at(start + delta);
+                h.run();
+                let after = h.state().session.snapshot().unwrap();
+                let moved = &after.net_labels()[0];
+                assert_eq!(h.state().session.revision(), rev + 1);
+                assert_eq!((&moved.name, moved.style, moved.at, moved.rotation), (&label.name, label.style, label.at, label.rotation));
+                let offset = moved.text.as_ref().unwrap().offset.unwrap();
+                let world = match rotation {
+                    90 => Point { x_nm: offset.y_nm, y_nm: -offset.x_nm },
+                    180 => Point { x_nm: -offset.x_nm, y_nm: -offset.y_nm },
+                    270 => Point { x_nm: -offset.y_nm, y_nm: offset.x_nm },
+                    _ => offset,
+                };
+                assert_eq!(Point { x_nm: label.at.x_nm + world.x_nm, y_nm: label.at.y_nm + world.y_nm }, expected);
+                assert_eq!(after.symbols()[0].pins(), before.symbols()[0].pins());
+                assert_eq!(after.wire_path(&after.wires()[0]), before.wire_path(&before.wires()[0]));
+                assert_power_connectivity(&before, &after);
+                let saved = encode_documents(after.clone()).unwrap();
+                assert_eq!(encode_documents(pcbcraft_engine::persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
+                click(&mut h, "Undo");
+                assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+                click(&mut h, "Redo");
+                assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+            }
+        }
+    }
+}
+
+/// A double click on GND opens the editable name and text controls directly. Renaming changes
+/// the real net name, while cancelling leaves the complete snapshot and connection unchanged.
+#[test]
+fn double_clicking_power_text_opens_its_name_and_appearance() {
+    for style in ["ground", "power", "power_bar"] {
+        let mut h = wired_power(style, 0);
+        let before = h.state().session.snapshot().unwrap();
+        let point = power_name(&h, "Schematic canvas", "GND");
+        double_click_name(&mut h, point);
+        assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
+        h.get_by_label("Text height");
+        name(&mut h, "GNDA");
+        click(&mut h, "Cancel");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        double_click_name(&mut h, point);
+        name(&mut h, "GNDA");
+        click(&mut h, "Apply");
+        let project = h.state().session.project().unwrap();
+        let label = &project.net_labels()[0];
+        assert_eq!(label.name, "GNDA");
+        assert_eq!(label.at, before.net_labels()[0].at);
+        assert_eq!(project.wire_path(&project.wires()[0]), before.wire_path(&before.wires()[0]));
+        let terminal = project.symbols()[0].terminals()[0];
+        let net = project.connectivity().net_index_for(terminal).unwrap();
+        assert_eq!(project.connectivity().net_name(net), "GNDA");
+        click(&mut h, "Undo");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// Hover R and keyboard pickup address the name; rotating during a drag remains a preview and
+/// commits with its final offset in one history entry. Glyph orientation never follows text R.
+#[test]
+fn power_name_rotation_and_keyboard_move_preserve_the_glyph() {
+    let mut h = wired_power("ground", 90);
+    let before = h.state().session.snapshot().unwrap();
+    let point = power_name(&h, "Schematic canvas", "GND");
+    h.hover_at(point);
+    h.run();
+    h.key_press(Key::R);
+    h.run();
+    let rotated = h.state().session.snapshot().unwrap();
+    assert_eq!(rotated.net_labels()[0].rotation, 90);
+    assert_eq!(rotated.net_labels()[0].text.as_ref().unwrap().rotation, 90);
+    assert_eq!(rotated.net_labels()[0].at, before.net_labels()[0].at);
+    click(&mut h, "Undo");
+    let start = power_name(&h, "Schematic canvas", "GND");
+    h.drag_at(start);
+    h.run();
+    let end = start + egui::vec2(70., 50.);
+    h.hover_at(end);
+    h.run();
+    h.key_press(Key::R);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.drop_at(end);
+    h.run();
+    let moved = h.state().session.snapshot().unwrap();
+    assert_eq!(moved.net_labels()[0].rotation, 90);
+    assert_eq!(moved.net_labels()[0].text.as_ref().unwrap().rotation, 90);
+    assert_eq!(moved.net_labels()[0].at, before.net_labels()[0].at);
+    assert_power_connectivity(&before, &moved);
+    click(&mut h, "Undo");
+    let point = power_name(&h, "Schematic canvas", "GND");
+    h.hover_at(point);
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::NetLabelText { drag: None, .. })));
+    let end = point + egui::vec2(80., -50.);
+    click_canvas_at(&mut h, end);
+    assert_eq!(h.state().session.project().unwrap().net_labels()[0].at, before.net_labels()[0].at);
+    click(&mut h, "Undo");
+    let point = power_name(&h, "Schematic canvas", "GND");
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    click(&mut h, "Move text");
+    assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::NetLabelText { drag: None, .. })));
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Name drags and text-property actions follow the addressed split pane's camera and source.
+#[test]
+fn power_name_drag_belongs_to_the_focused_split_pane() {
+    let mut h = wired_power("ground", 0);
+    h.set_size(egui::vec2(1600., 1000.));
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    let before = h.state().session.snapshot().unwrap();
+    let start = power_name(&h, "Schematic canvas 2", "GND");
+    h.drag_at(start);
+    h.run();
+    h.hover_at(start + egui::vec2(60., 40.));
+    h.run();
+    assert_eq!(h.state().views.active.id(), ViewId(1));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.drop_at(start + egui::vec2(60., 40.));
+    h.run();
+    let after = h.state().session.snapshot().unwrap();
+    assert_eq!(after.net_labels()[0].at, before.net_labels()[0].at);
+    assert!(after.net_labels()[0].text.as_ref().unwrap().offset.is_some());
+    assert_power_connectivity(&before, &after);
+    click(&mut h, "Undo");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    let point = power_name(&h, "Schematic canvas 2", "GND");
+    double_click_name(&mut h, point);
+    name(&mut h, "GNDA");
+    click(&mut h, "Apply");
+    assert_eq!(h.state().session.project().unwrap().net_labels()[0].name, "GNDA");
+}
+
+/// Power-name previews belong to their source view/revision and are discarded on cancellation,
+/// focus loss, out-of-canvas release, disabled power picking or a concurrent edit.
+#[test]
+fn interrupted_power_name_drags_leave_the_document_unchanged() {
+    for mode in ["escape", "focus", "outside", "filter", "stale"] {
+        let mut h = wired_power("ground", 0);
+        let start = power_name(&h, "Schematic canvas", "GND");
+        let end = start + egui::vec2(80., 50.);
+        h.drag_at(start);
+        h.run();
+        h.hover_at(end);
+        h.run();
+        h.key_press(Key::R);
+        h.run();
+        let mut release = end;
+        match mode {
+            "escape" => h.key_press(Key::Escape),
+            "focus" => h.event(egui::Event::WindowFocused(false)),
+            "outside" => release = egui::pos2(2., 2.),
+            "filter" => h.state_mut().views.active.filters.symbols = false,
+            _ => h.state_mut().run("project.rename", &json!({"name":"Concurrent"})),
+        }
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        h.drop_at(release);
+        h.run();
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()), "{mode}");
+        let label = &h.state().session.project().unwrap().net_labels()[0];
+        assert_eq!(label.at, Point { x_nm: 0, y_nm: 0 });
+        assert!(label.text.is_none());
+    }
 }

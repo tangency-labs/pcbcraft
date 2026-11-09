@@ -83,7 +83,7 @@ fn form_body(
 ) -> FormAction {
     let t = Tokens::get();
     let mut action = FormAction::default();
-    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_lg);
+    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(if libraries { t.radius_lg } else { t.radius_md });
     let modal = egui::Modal::new(id.into()).frame(frame).show(ctx, |ui| {
         if !active {
             ui.disable();
@@ -91,7 +91,8 @@ fn form_body(
         let width = width.min((ctx.content_rect().width() - 2. * t.space_16).max(0.));
         ui.set_width(width);
         ui.spacing_mut().item_spacing = vec2(0., 0.);
-        let (header, header_response) = ui.allocate_exact_size(vec2(width, t.form_header_height + t.space_8), Sense::hover());
+        let (header, header_response) =
+            ui.allocate_exact_size(vec2(width, t.form_header_height + if libraries { t.space_8 } else { 0. }), Sense::hover());
         header_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, title));
         if libraries {
             MenuIcon::Open.paint_sized(ui.painter(), header.left_center() + vec2(t.space_24, 0.), t.space_16, t, true);
@@ -100,7 +101,7 @@ fn form_body(
             header.left_center() + vec2(if libraries { 2. * t.space_24 } else { t.space_24 }, 0.),
             egui::Align2::LEFT_CENTER,
             title,
-            fonts::interface_heading(ui, t.font_intro),
+            fonts::interface_heading(ui, if libraries { t.font_intro } else { t.font_button }),
             t.text,
         );
         let close = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.), vec2(t.control_height, t.control_height));
@@ -126,7 +127,16 @@ fn form_body(
         child.spacing_mut().item_spacing = vec2(t.space_8, t.space_8);
         add(&mut child);
         let (footer, _) = ui.allocate_exact_size(vec2(width, t.form_footer_height), Sense::hover());
-        ui.painter().rect_filled(footer, egui::CornerRadius { nw: 0, ne: 0, sw: t.radius_lg, se: t.radius_lg }, t.dialog_footer);
+        ui.painter().rect_filled(
+            footer,
+            egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: if libraries { t.radius_lg } else { t.radius_md },
+                se: if libraries { t.radius_lg } else { t.radius_md },
+            },
+            t.dialog_footer,
+        );
         rule(ui, footer.top(), footer.x_range());
         let inner = footer.shrink2(vec2(t.space_16, t.space_8));
         ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)), |ui| {
@@ -149,12 +159,7 @@ fn form_body(
 
 /// Consistent action surfaces match the library source manager and Preferences.
 pub fn button(label: &str, primary: bool) -> egui::Button<'_> {
-    let t = Tokens::get();
-    egui::Button::new(RichText::new(label).size(t.font_label).color(if primary { t.form_primary } else { t.text }))
-        .fill(if primary { t.selected_bg } else { t.dialog_body })
-        .stroke(Stroke::new(1., if primary { t.form_primary } else { t.border }))
-        .corner_radius(t.control_radius)
-        .min_size(vec2(80., t.control_height))
+    crate::settings::action_button(label, primary)
 }
 /// Draw a shared divider without introducing a second border palette.
 fn rule(ui: &Ui, y: f32, x: egui::emath::Rangef) {

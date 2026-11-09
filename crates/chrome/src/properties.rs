@@ -127,6 +127,10 @@ pub fn split(ui: &mut Ui, mut section: impl FnMut(&mut Ui, usize)) {
         ui.columns(2, |columns| {
             section(&mut columns[0], 0);
             section(&mut columns[1], 1);
+            let height = columns.iter().map(|column| column.min_rect().height()).fold(0., f32::max);
+            for column in columns {
+                column.set_min_height(height);
+            }
         });
     } else {
         section(ui, 0);
@@ -158,6 +162,29 @@ pub fn footprint_preview(ui: &mut Ui, label: &str) -> (egui::Rect, egui::Respons
 /// cannot move the canvas's navigation target. The body scrolls in short windows.
 pub fn inspector_body(ui: &mut Ui) {
     ui.set_min_height(300.0_f32.min(ui.available_height()));
+}
+
+/// Property sections reuse Preferences rather than introducing a separate raised-card style.
+pub fn group<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    crate::settings::form_section(ui, title, add)
+}
+
+/// Keep an action such as Footprint in the same value column as the editable component fields.
+pub fn field_action(ui: &mut Ui, name: &str, action: &str, enabled: bool) -> egui::Response {
+    let t = Tokens::get();
+    let width = ui.available_width();
+    let label_width = field_label_width(width);
+    ui.horizontal(|ui| {
+        field_name(ui, name, label_width, false);
+        ui.add_enabled(
+            enabled,
+            egui::Button::new(action)
+                .right_text(())
+                .truncate()
+                .min_size(vec2((width - label_width - 3. * t.space_8 - 2. * t.space_24).max(40.), t.control_height)),
+        )
+    })
+    .inner
 }
 
 /// A raised property group establishes hierarchy without adding a separate page or dialog.
@@ -203,8 +230,8 @@ fn field_name(ui: &mut Ui, name: &str, width: f32, header: bool) -> egui::Respon
 
 /// Editable field rows use a fixed left-aligned name column and the same eye toggle as layers.
 /// The accessible input/toggle names do not depend on the displayed icon or column headings.
-/// Web values expose an open-link action; `link` also reserves a disabled action for empty URLs.
-pub fn field_row(ui: &mut Ui, name: &str, value: &mut String, visible: Option<&mut bool>, link: bool) -> egui::Response {
+/// Web values expose an open-link action; `link` names an explicit link action even when its URL is empty.
+pub fn field_row(ui: &mut Ui, name: &str, value: &mut String, visible: Option<&mut bool>, link: Option<&str>) -> egui::Response {
     let t = Tokens::get();
     let width = ui.available_width();
     let label_width = field_label_width(width);
@@ -212,8 +239,8 @@ pub fn field_row(ui: &mut Ui, name: &str, value: &mut String, visible: Option<&m
         let label = field_name(ui, name, label_width, false);
         let response = ui.add(input(value).desired_width((width - label_width - 3. * t.space_8 - 2. * t.space_24).max(40.))).labelled_by(label.id);
         let url = web_link(value);
-        if url.is_some() || link {
-            let label = format!("Open {name} link");
+        if url.is_some() || link.is_some() {
+            let label = format!("Open {} link", link.unwrap_or(name));
             if crate::menu::quick_action(ui, crate::menu::MenuIcon::ExternalLink, &label, "", url.is_some()).clicked()
                 && let Some(url) = url
             {
@@ -236,7 +263,7 @@ pub fn field_row(ui: &mut Ui, name: &str, value: &mut String, visible: Option<&m
 
 /// Long metadata names wrap within the compact column instead of pushing inputs off-screen.
 fn field_label_width(width: f32) -> f32 {
-    if width >= 600. { 160. } else { 96. }
+    if width >= 600. { Tokens::get().form_label_width * 2. + Tokens::get().space_8 } else { 112. }
 }
 
 /// Property navigation uses a quiet underline instead of another row of filled buttons.

@@ -762,3 +762,12 @@ Independent field rotation and the D datasheet action follow the user's requeste
 interaction, implemented through the existing native field-layout command and
 eframe/egui host URL output respectively. No external shortcut implementation or
 source-derived behavior was used.
+
+Power/ground name picking, independent text previews and related property actions
+are original PCBcraft code using the existing saved net-name appearance and shared
+revision-checked commands. Property form sections and footer actions now reuse the
+already attributed Preferences chrome. Additional link fields reuse native component
+metadata, and the Library tab opens existing source-manager/copy-authoring workflows;
+no definition-replacement behavior, new dependency, native format or external asset
+was introduced. The pick-and-place flag description was checked against the published
+KiCad Schematic Editor manual linked above, consulted 8-Nov-2026.

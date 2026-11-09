@@ -13,12 +13,17 @@ use pcbcraft_engine::{
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod text;
+
 /// Canvas and toolbar actions share one typed routing path.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Action {
     Properties,
+    TextProperties,
     Move,
+    MoveText,
     Rotate,
+    RotateText,
     Delete,
 }
 
@@ -34,6 +39,7 @@ pub(super) struct Edit {
     y: String,
     units: pcbcraft_chrome::units::Unit,
     appearance: crate::properties::fields::Appearance,
+    reveal_text: bool,
 }
 
 impl Edit {
@@ -42,7 +48,7 @@ impl Edit {
         let x = pcbcraft_chrome::units::edit_label(label.at.x_nm, units);
         let y = pcbcraft_chrome::units::edit_label(label.at.y_nm, units);
         let appearance = crate::properties::fields::Appearance::new(label.text.clone().unwrap_or_default(), units);
-        Self { source, sheet, label, error: None, focused: false, x, y, units, appearance }
+        Self { source, sheet, label, error: None, focused: false, x, y, units, appearance, reveal_text: false }
     }
 
     /// Parse both axes and text together so invalid appearance cannot partially rename a net.
@@ -173,7 +179,9 @@ pub(super) fn hovered(project: &Project, camera: &Camera, ctx: &egui::Context, a
     })
 }
 
-/// Paint committed labels and the pointer-bound preview. Inputs below use the same ink bounds.
+/// Paint committed labels and pointer previews using the same geometry as picking. Name hover
+/// outlines follow the owning view's input/filter state and do not change electrical selection.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     ui: &Ui,
     rect: Rect,
@@ -182,10 +190,17 @@ pub(super) fn paint(
     tool: Option<&Tool>,
     pointer: Option<Point>,
     selected: &pcbcraft_engine::selection::Selection,
+    picking: Option<crate::selection_filters::Filters>,
 ) {
     let painter = ui.painter_at(rect);
     let attached = attached(project);
+    let text_preview = if let Some(Tool::NetLabelText { label, drag, .. }) = tool {
+        ui.input(|i| i.pointer.hover_pos()).and_then(|p| text::destination(camera, rect, label, drag.unwrap_or_default(), p))
+    } else {
+        None
+    };
     let moving = match tool {
+        Some(Tool::NetLabelText { .. }) => text_preview.as_ref(),
         Some(Tool::NetLabel { label, .. }) => Some(label),
         _ => None,
     };
@@ -201,9 +216,18 @@ pub(super) fn paint(
             attached.contains(&label.id),
             visual_text(label, camera.unit_step()).as_ref(),
         );
+        if tool.is_none()
+            && ui.is_enabled()
+            && picking.is_some_and(|filters| filters.allows_net_label(label.style))
+            && let Some(ink) = text::ink(ui, camera, rect, label)
+            && ui.rect_contains_pointer(ink.bounds)
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            ui.painter_at(rect).rect_stroke(ink.bounds.expand(2.), 2., egui::Stroke::new(1., Tokens::get().accent), egui::StrokeKind::Outside);
+        }
     }
     if let Some(label) = moving
-        && let Some(at) = pointer
+        && let Some(at) = text_preview.as_ref().map(|label| label.at).or(pointer)
     {
         chrome::paint_with_text(
             &painter,
@@ -235,6 +259,9 @@ pub(super) fn input(
     placement: Option<Point>,
     filters: crate::selection_filters::Filters,
 ) -> Option<Option<Click>> {
+    if let Some(Tool::NetLabelText { label, drag, .. }) = tool {
+        return Some(text::input(ui, response, rect, camera, label, *drag, enabled, filters));
+    }
     if let Some(Tool::NetLabel { label, drag, .. }) = tool {
         if !enabled || ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))) {
             return Some(Some(Click::NetLabelCancel));
@@ -279,6 +306,9 @@ pub(super) fn input(
             project.net_labels().iter().rev().find(|label| filters.allows_net_label(label.style) && bounds(ui, camera, rect, label).contains(origin))
     {
         if selection.len() <= 1 || !selection.net_labels.contains(&label.object_id()) {
+            if let Some(ink) = text::ink(ui, camera, rect, label).filter(|ink| ink.bounds.contains(origin)) {
+                return Some(Some(Click::NetLabelTextDrag(label.clone(), ink.anchor - origin)));
+            }
             return Some(Some(Click::NetLabelDrag(label.clone(), camera.screen(label.at, rect) - origin)));
         }
         return None;
@@ -293,21 +323,28 @@ pub(super) fn input(
             project.net_labels().iter().rev().find(|label| filters.allows_net_label(label.style) && bounds(ui, camera, rect, label).contains(p))
         })
         .cloned();
+    let name_hovered = hit.as_ref().is_some_and(|label| {
+        text::ink(ui, camera, rect, label)
+            .is_some_and(|ink| response.hover_pos().or_else(|| response.interact_pointer_pos()).is_some_and(|p| ink.bounds.contains(p)))
+    });
     let menu_id = response.id.with("named_anchor_context");
     if response.secondary_clicked() {
         ui.data_mut(|data| match &hit {
             Some(label) => {
-                data.insert_temp(menu_id, label.id);
+                data.insert_temp(menu_id, (label.id, name_hovered));
             }
-            None => data.remove::<u64>(menu_id),
+            None => data.remove::<(u64, bool)>(menu_id),
         });
     }
-    if let Some(id) = ui.data(|data| data.get_temp::<u64>(menu_id))
+    if let Some((id, name_hovered)) = ui.data(|data| data.get_temp::<(u64, bool)>(menu_id))
         && let Some(label) = project.net_labels().iter().find(|label| label.id == id && filters.allows_net_label(label.style))
         && let Some(menu) = pcbcraft_chrome::menu::context(response, |ui| {
-            for (name, action) in
-                [("Properties…", Action::Properties), ("Move", Action::Move), ("Rotate", Action::Rotate), ("Delete Net Label", Action::Delete)]
-            {
+            for (name, action) in [
+                ("Properties…", if name_hovered { Action::TextProperties } else { Action::Properties }),
+                (if name_hovered { "Move text" } else { "Move" }, if name_hovered { Action::MoveText } else { Action::Move }),
+                (if name_hovered { "Rotate text" } else { "Rotate" }, if name_hovered { Action::RotateText } else { Action::Rotate }),
+                ("Delete Net Label", Action::Delete),
+            ] {
                 if MenuItem::new(name).show(ui) {
                     return Some(Click::NetLabelAction(label.clone(), action));
                 }
@@ -325,9 +362,9 @@ pub(super) fn input(
         selection.single_net_label().and_then(|id| project.net_labels().iter().find(|l| l.id == id && filters.allows_net_label(l.style)).cloned())
     })?;
     for (key, action) in [
-        (Key::E, Action::Properties),
-        (Key::M, Action::Move),
-        (Key::R, Action::Rotate),
+        (Key::E, if name_hovered { Action::TextProperties } else { Action::Properties }),
+        (Key::M, if name_hovered { Action::MoveText } else { Action::Move }),
+        (Key::R, if name_hovered { Action::RotateText } else { Action::Rotate }),
         (Key::Delete, Action::Delete),
         (Key::Backspace, Action::Delete),
     ] {
@@ -336,7 +373,7 @@ pub(super) fn input(
         }
     }
     if hovered && response.double_clicked() {
-        return Some(Some(Click::NetLabelAction(label, Action::Properties)));
+        return Some(Some(Click::NetLabelAction(label, if name_hovered { Action::TextProperties } else { Action::Properties })));
     }
     // Keep the anchor available to click-to-wire; clicking ink selects only this marker.
     if hovered && response.clicked() && response.hover_pos().is_some_and(|p| camera.screen(label.at, rect).distance(p) > 6.) {
@@ -388,14 +425,22 @@ impl PcbApp {
     /// Apply only view-authorized actions; property edits and previews retain the source revision.
     pub(super) fn net_label_action(&mut self, source: ViewInput, mut label: Label, action: Action) {
         match action {
-            Action::Properties => {
+            Action::Properties | Action::TextProperties => {
                 let Some(project) = self.views.active.snapshot(&self.session) else {
                     return;
                 };
                 self.views.active.schematic.tool = None;
-                self.dialog = Dialog::NetLabel(Box::new(Edit::new(source, project.sheet_target(), label, self.preferences.units)));
+                let mut edit = Edit::new(source, project.sheet_target(), label, self.preferences.units);
+                edit.reveal_text = matches!(action, Action::TextProperties);
+                self.dialog = Dialog::NetLabel(Box::new(edit));
             }
             Action::Move => self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None }),
+            Action::MoveText => self.views.active.schematic.tool = Some(Tool::NetLabelText { label, revision: source.revision, drag: None }),
+            Action::RotateText => {
+                let text = label.text.get_or_insert_default();
+                text.rotation = (text.rotation + 90) % 360;
+                self.commit_net_label(source, label);
+            }
             Action::Rotate => {
                 label.rotation = (label.rotation + 90) % 360;
                 self.commit_net_label(source, label);
@@ -641,7 +686,8 @@ fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
     } else {
         false
     };
-    egui::CollapsingHeader::new("Text appearance").show(ui, |ui| {
+    let open = std::mem::take(&mut edit.reveal_text).then_some(true);
+    egui::CollapsingHeader::new("Text appearance").open(open).show(ui, |ui| {
         if edit.appearance.controls(ui, true) {
             edit.appearance = crate::properties::fields::Appearance::new(Default::default(), edit.units);
         }

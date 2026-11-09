@@ -32,6 +32,12 @@ pub(crate) enum Tool {
         drag: fields::Drag,
         revision: u64,
     },
+    /// The power marker and its electrical contact stay fixed while its name is positioned.
+    NetLabelText {
+        label: pcbcraft_engine::net_labels::Label,
+        revision: u64,
+        drag: Option<Vec2>,
+    },
     NetLabel {
         label: pcbcraft_engine::net_labels::Label,
         revision: u64,
@@ -86,6 +92,7 @@ impl Tool {
         match self {
             Self::Field { revision, .. }
             | Self::NetLabel { revision, .. }
+            | Self::NetLabelText { revision, .. }
             | Self::SheetGesture { revision, .. }
             | Self::Hierarchy { revision, .. }
             | Self::PlaceSymbol { revision, .. }
@@ -108,6 +115,8 @@ pub(crate) enum Click {
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
     NetLabelRotate,
+    NetLabelTextDrag(pcbcraft_engine::net_labels::Label, Vec2),
+    NetLabelTextRotate,
     GrabSheetGesture(Box<crate::hierarchy::Drag>),
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
     SelectSheetSymbol(u64),
@@ -252,6 +261,7 @@ pub(crate) fn show(
         Some(
             Tool::Field { .. }
                 | Tool::NetLabel { drag: Some(_), .. }
+                | Tool::NetLabelText { .. }
                 | Tool::SheetGesture { .. }
                 | Tool::Move { .. }
                 | Tool::MoveItems { .. }
@@ -397,7 +407,7 @@ pub(crate) fn show(
     }
 
     fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols);
-    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected);
+    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, input_enabled.then_some(filters));
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
@@ -702,6 +712,7 @@ pub(crate) fn show(
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
         Tool::Field { .. }
         | Tool::NetLabel { .. }
+        | Tool::NetLabelText { .. }
         | Tool::SheetGesture { .. }
         | Tool::Hierarchy { .. }
         | Tool::Move { .. }

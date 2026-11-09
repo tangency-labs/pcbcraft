@@ -130,16 +130,16 @@ impl Edit {
     /// Standard optional fields remain absent until authored; custom fields have independent IDs.
     pub(super) fn metadata_fields(&mut self, ui: &mut Ui) -> bool {
         chrome::field_header(ui);
-        let reference = row(ui, "Reference", &mut self.reference, self.appearance.get_mut("reference"), false);
+        let reference = row(ui, "Reference", &mut self.reference, self.appearance.get_mut("reference"), None);
         if !self.focused {
             reference.request_focus();
             self.focused = true;
         }
-        let value = row(ui, "Value", &mut self.value, self.appearance.get_mut("value"), false);
+        let value = row(ui, "Value", &mut self.value, self.appearance.get_mut("value"), None);
         let enter = (reference.lost_focus() || value.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
         for (id, name) in fields::STANDARD {
             let mut value = self.metadata.fields.get(id).map(|f| f.value.clone()).unwrap_or_default();
-            if row(ui, name, &mut value, self.appearance.get_mut(id), id == "datasheet").changed() {
+            if row(ui, name, &mut value, self.appearance.get_mut(id), (id == "datasheet").then_some(name)).changed() {
                 if value.is_empty() {
                     self.metadata.fields.remove(id);
                     self.appearance.remove(id);
@@ -162,7 +162,7 @@ impl Edit {
             ui.push_id(id, |ui| {
                 ui.separator();
                 chrome::text(ui, "Field name", &mut field.name);
-                row(ui, "Field value", &mut field.value, self.appearance.get_mut(id), false);
+                row(ui, &field.name, &mut field.value, self.appearance.get_mut(id), Some(&field.name));
                 if ui.button("Remove field").clicked() {
                     remove = Some(id.clone());
                 }
@@ -172,7 +172,17 @@ impl Edit {
             self.metadata.fields.remove(&id);
             self.appearance.remove(&id);
         }
-        if ui.add_enabled(self.metadata.fields.len() < 64, egui::Button::new("Add field")).clicked() {
+        let mut added = None;
+        ui.horizontal(|ui| {
+            let enabled = self.metadata.fields.len() < 64;
+            if ui.add_enabled(enabled, egui::Button::new("Add field")).clicked() {
+                added = Some("Field");
+            }
+            if ui.add_enabled(enabled, egui::Button::new("Add link")).clicked() {
+                added = Some("Link");
+            }
+        });
+        if let Some(kind) = added {
             let id = match fields::new_id() {
                 Ok(id) => id,
                 Err(error) => {
@@ -180,8 +190,10 @@ impl Edit {
                     return false;
                 }
             };
-            let name =
-                (1..=65).map(|n| format!("Field {n}")).find(|name| !self.metadata.fields.values().any(|f| f.name == *name)).unwrap_or_default();
+            let name = (1..=65)
+                .map(|n| format!("{kind} {n}"))
+                .find(|name| !self.metadata.fields.values().any(|f| f.name.eq_ignore_ascii_case(name)))
+                .unwrap_or_default();
             self.metadata.fields.insert(id.clone(), Field { name, value: String::new() });
             self.appearance.insert(id, Appearance::new(Layout { visible: false, ..Layout::default() }, self.units));
         }
@@ -225,11 +237,12 @@ impl Edit {
         ui.checkbox(&mut a.exclude_from_bom, "Exclude from bill of materials");
         ui.checkbox(&mut a.exclude_from_board, "Exclude from board");
         ui.checkbox(&mut a.exclude_from_simulation, "Exclude from simulation");
-        ui.checkbox(&mut a.exclude_from_position_files, "Exclude from position files");
+        ui.checkbox(&mut a.exclude_from_position_files, "Exclude from pick-and-place files")
+            .on_hover_text("Omit from assembly position exports. PCBcraft stores this setting; export generation is not implemented yet.");
     }
 }
 
 /// Field content and visibility share a row so routine editing does not require another page.
-fn row(ui: &mut Ui, name: &str, value: &mut String, appearance: Option<&mut Appearance>, link: bool) -> egui::Response {
+fn row(ui: &mut Ui, name: &str, value: &mut String, appearance: Option<&mut Appearance>, link: Option<&str>) -> egui::Response {
     chrome::field_row(ui, name, value, appearance.map(|appearance| &mut appearance.layout.visible), link)
 }

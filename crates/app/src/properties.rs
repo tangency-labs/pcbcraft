@@ -60,6 +60,13 @@ enum Tab {
     Library,
 }
 
+/// Definition actions leave the property draft only after its source and pending edits are checked.
+#[derive(Clone, Copy)]
+enum LibraryAction {
+    EditCopy,
+    Sources,
+}
+
 impl Edit {
     /// Keep pending changes distinguishable from a view-only inspection.
     fn changed(&self) -> bool {
@@ -293,12 +300,13 @@ impl PcbApp {
         Ok(())
     }
 
-    /// Present the expanded form using Next's component/placement grouping and existing Craft
+    /// Present component, placement and library actions using the shared Preferences form
     /// chrome. Definition authoring and package choice have explicit actions rather than raw fields.
     pub(super) fn symbol_properties_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
         edit.set_units(self.preferences.units);
         let mut apply = false;
         let mut choose = false;
+        let mut library_action = None;
         let can_choose = !edit.changed();
         let title = format!("{} · Symbol properties", edit.original.0);
         let footprint = self.package_label(&edit.component);
@@ -310,18 +318,16 @@ impl PcbApp {
                     ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
                     match edit.tab {
                         Tab::General => {
-                            chrome::card(ui, "Component fields", |ui| {
+                            chrome::group(ui, "Component fields", |ui| {
                                 apply |= edit.metadata_fields(ui);
-                                chrome::field(ui, "Footprint", |ui| {
-                                    choose = ui.add_enabled(can_choose, egui::Button::new(&footprint).truncate()).clicked();
-                                });
+                                choose = chrome::field_action(ui, "Footprint", &footprint, can_choose).clicked();
                                 egui::CollapsingHeader::new("Text appearance").show(ui, |ui| edit.field_appearance(ui));
                             });
                             ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
                             let mut position_apply = false;
                             chrome::split(ui, |ui, column| {
                                 if column == 0 {
-                                    chrome::card(ui, "Placement", |ui| {
+                                    chrome::group(ui, "Placement", |ui| {
                                         chrome::field(ui, "Unit", |ui| {
                                             ui.label(edit.definition.unit_id());
                                         });
@@ -329,7 +335,7 @@ impl PcbApp {
                                         position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
                                     });
                                 } else {
-                                    chrome::card(ui, "Attributes", |ui| edit.attributes(ui));
+                                    chrome::group(ui, "Attributes", |ui| edit.attributes(ui));
                                 }
                             });
                             apply |= position_apply;
@@ -349,10 +355,29 @@ impl PcbApp {
                             });
                         }
                         Tab::Library => {
-                            chrome::section(ui, "Pinned symbol");
-                            ui.label(format!("{} / {}", edit.definition.library, edit.definition.id));
-                            ui.label(format!("Revision {}", edit.definition.revision()));
-                            ui.label("Project copy");
+                            chrome::group(ui, "Pinned symbol", |ui| {
+                                chrome::field(ui, "Library", |ui| {
+                                    ui.label(&edit.definition.library);
+                                });
+                                chrome::field(ui, "Symbol", |ui| {
+                                    ui.label(&edit.definition.id);
+                                });
+                                chrome::field(ui, "Revision", |ui| {
+                                    ui.label(edit.definition.revision().to_string());
+                                });
+                            });
+                            chrome::group(ui, "Library actions", |ui| {
+                                let pending = "Apply or cancel pending property changes before opening library actions.";
+                                if ui.add_enabled(can_choose, egui::Button::new("Edit symbol copy…")).on_disabled_hover_text(pending).clicked() {
+                                    library_action = Some(LibraryAction::EditCopy);
+                                }
+                                if ui.add_enabled(can_choose, egui::Button::new("Manage libraries…")).on_disabled_hover_text(pending).clicked() {
+                                    library_action = Some(LibraryAction::Sources);
+                                }
+                                ui.label(shell::dim(
+                                    "Definition edits open as an independent copy. Updating or replacing the placed symbol is not implemented yet.",
+                                ));
+                            });
                         }
                     }
                     if let Some(error) = &edit.error {
@@ -373,6 +398,22 @@ impl PcbApp {
             }
         } else if choose {
             self.begin_footprint_assignment(Some(edit.component));
+        } else if let Some(library_action) = library_action {
+            if !self.views.active.accepts(edit.source, &self.session) || edit.changed() {
+                edit.error = Some("View or project changed; reopen symbol properties to continue.".into());
+                self.dialog = Dialog::EditFields(Box::new(edit));
+            } else {
+                match library_action {
+                    LibraryAction::EditCopy => {
+                        self.select(pcbcraft_engine::selection::Selection::one_symbol(edit.symbol.clone()));
+                        if let Err(error) = self.fork_library_selection(pcbcraft_engine::authoring::Kind::Symbol) {
+                            edit.error = Some(error);
+                            self.dialog = Dialog::EditFields(Box::new(edit));
+                        }
+                    }
+                    LibraryAction::Sources => self.dialog = Dialog::LibrarySources,
+                }
+            }
         } else if action.close {
             if let Some(view) = self.views.view_mut(edit.source.view()) {
                 view.schematic.properties.draft = None;
