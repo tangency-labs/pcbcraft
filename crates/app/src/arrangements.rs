@@ -165,7 +165,7 @@ impl PcbApp {
         if self.arrangement_unavailable().is_some() {
             return;
         }
-        let project = self.session.project().map(|project| project.board_target().project.to_string());
+        let project = self.session.project().map(|project| project.id().to_string());
         if self.arrangements.project != project || self.arrangements.opening != self.session.history_root_revision() {
             return;
         }
@@ -197,7 +197,7 @@ impl PcbApp {
     /// arrangement collection to its new location while retaining the original record and
     /// preserving any unsupported or invalid record already associated with the destination.
     pub(super) fn sync_arrangements(&mut self, ctx: &egui::Context) {
-        let Some(project) = self.session.project().map(|project| project.board_target().project.to_string()) else {
+        let Some(project) = self.session.project().map(|project| project.id().to_string()) else {
             return;
         };
         let key = self.files.arrangement_location(&self.session).map(|location| format!("{project}:{location}"));
@@ -291,7 +291,7 @@ impl PcbApp {
             || self.arrangements.opening != opening
             || self.arrangements.active() != active
             || self.session.history_root_revision() != opening
-            || self.session.project().is_none_or(|current| current.board_target().project.to_string() != project)
+            || self.session.project().is_none_or(|current| current.id().to_string() != project)
         {
             return;
         }

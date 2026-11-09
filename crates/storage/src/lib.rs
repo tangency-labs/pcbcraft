@@ -65,7 +65,7 @@ fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persisten
     let bytes = read_bytes(File::open(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     if Encoding::detect(&bytes) == Encoding::Json {
         let header: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if matches!(header["format"].as_str(), Some("pcbcraft-project/5" | "pcbcraft-project/6" | "pcbcraft-project/7")) {
+        if matches!(header["format"].as_str(), Some("pcbcraft-project/5" | "pcbcraft-project/6" | "pcbcraft-project/7" | "pcbcraft-project/9")) {
             if name != ENTRY_POINT {
                 return Err("A split project's entry point must be named project.pc.".to_owned());
             }
@@ -95,6 +95,35 @@ mod tests {
             )
             .unwrap();
         session.snapshot().unwrap()
+    }
+
+    /// Folder publication adds/removes only the managed physical file as creation is redone/undone.
+    #[test]
+    fn schematic_only_folder_can_create_undo_and_reopen_its_board() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("optional-board");
+        let mut session = Session::default();
+        session.apply("project.new", &serde_json::json!({})).unwrap();
+        let empty = encode_documents(session.snapshot().unwrap()).unwrap();
+        save(&root, None, &empty, &mut |_| Ok(())).unwrap();
+        fs::write(root.join("README.md"), b"User notes").unwrap();
+        assert!(!root.join("board.json").exists());
+        assert!(open(&root.join(ENTRY_POINT)).unwrap().board_target().is_none());
+        session.apply("pcb.create_board", &serde_json::json!({"expected_revision":session.revision()})).unwrap();
+        let target = session.project().unwrap().board_target().unwrap();
+        let created = encode_documents(session.snapshot().unwrap()).unwrap();
+        save(&root, Some(&empty), &created, &mut |_| Ok(())).unwrap();
+        assert!(root.join("board.json").exists());
+        assert_eq!(open(&root).unwrap().board_target(), Some(target));
+        assert_eq!(preview(&root.join(ENTRY_POINT)).unwrap().board_target(), Some(target));
+        session.apply("edit.undo", &serde_json::json!({})).unwrap();
+        let undone = encode_documents(session.snapshot().unwrap()).unwrap();
+        save(&root, Some(&created), &undone, &mut |_| Ok(())).unwrap();
+        assert!(!root.join("board.json").exists());
+        assert!(open(&root).unwrap().board_target().is_none());
+        assert_eq!(fs::read(root.join("README.md")).unwrap(), b"User notes");
+        session.apply("edit.redo", &serde_json::json!({})).unwrap();
+        assert_eq!(session.project().unwrap().board_target(), Some(target));
     }
 
     /// Capture every name and file byte so previews cannot silently create locks or recover data.

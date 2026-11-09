@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(session.inspect(), snapshot);
         let bytes = persistence::encode(session.snapshot().unwrap()).unwrap();
         let stored: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(stored["format"], "pcbcraft-project/8");
+        assert_eq!(stored["format"], "pcbcraft-project/10");
         for (path, value) in [
             ("/format", json!("pcbcraft-project/2")),
             ("/sheet/wires/0/from/junction", json!(99)),

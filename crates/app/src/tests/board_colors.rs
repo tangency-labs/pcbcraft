@@ -6,7 +6,7 @@ use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, per
 fn board<'a>() -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
-    h.state_mut().run("project.new", &json!({}));
+    h.state_mut().run("project.new", &json!({"create_board":true}));
     let revision = h.state().session.revision();
     h.state_mut().run(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":revision}));
     for (index, definition) in ["resistor-0402", "header-1x02-254"].into_iter().enumerate() {
@@ -204,7 +204,7 @@ fn shared_colors_survive_renaming_and_do_not_leak_to_other_boards() {
             .as_array()
             .is_some_and(|colors| colors.iter().any(|color| color["layer"] == top && color["color"] == "#23B482"))
     }));
-    h.state_mut().session.apply("project.new", &json!({})).unwrap();
+    h.state_mut().session.apply("project.new", &json!({"create_board":true})).unwrap();
     let revision = h.state().session.revision();
     h.state_mut().run(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
     h.run();

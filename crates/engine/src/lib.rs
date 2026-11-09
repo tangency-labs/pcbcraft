@@ -57,6 +57,7 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    CreateBoard,
     NetLabelStyle,
     NetLabelId,
     LibrarySource,
@@ -110,6 +111,7 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::CreateBoard => json!({"type":"boolean"}),
             Self::DefinitionRevision => json!({"type":"integer","minimum":1,"maximum":u32::MAX}),
             Self::LibraryDigest => json!({"type":"string","pattern":"^[0-9a-f]{64}$"}),
             Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -189,6 +191,8 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::CreateBoard if value.is_boolean() => Ok(()),
+            Self::CreateBoard => Err("must be a boolean"),
             Self::DefinitionRevision if value.as_u64().is_some_and(|n| n > 0 && n <= u32::MAX as u64) => Ok(()),
             Self::DefinitionRevision => Err("must be a positive 32-bit native definition revision"),
             Self::LibraryDigest
@@ -531,7 +535,21 @@ const CATALOG: &[Command] = &[
         id: "project.new",
         title: "New Project",
         summary: "Start a new empty project, named Untitled unless a name is given, replacing the open one. Undoable.",
-        params: &[NEW_NAME],
+        params: &[
+            NEW_NAME,
+            Param {
+                name: "create_board",
+                kind: ParamKind::CreateBoard,
+                required: false,
+                summary: "Explicitly create the first PCB along with this project; defaults to schematic-only.",
+            },
+        ],
+    },
+    Command {
+        id: board::identity::CREATE_BOARD,
+        title: "Create Board",
+        summary: "Create the first physical board in a schematic-only project. Undoable.",
+        params: &[NEW_NAME, EXPECTED_REVISION],
     },
     Command {
         id: sheets::CREATE_SHEET,
@@ -1041,6 +1059,10 @@ pub struct Project {
 }
 
 impl Project {
+    /// Stable project identity, available even when no physical board exists.
+    pub fn id(&self) -> uuid::Uuid {
+        self.id
+    }
     /// The board's validated layer catalog and uniform rigid stackup, if explicitly initialized.
     /// Legacy projects retain an unspecified setup until a supported initialization is requested.
     pub fn board_setup(&self) -> Option<&board::setup::BoardSetup> {
@@ -1151,14 +1173,16 @@ impl Project {
 
     /// Find the placed board pad for a terminal on any sheet, if a footprint is assigned.
     pub fn pad_for_terminal(&self, terminal: Terminal) -> Option<Pad> {
+        let board = self.board_target()?;
         self.board
             .pad_for(self.all_symbols().find(|symbol| symbol.ordinal == terminal.symbol)?.component, terminal.number())
-            .map(|pad| pad.on_board(self.board_target().board))
+            .map(|pad| pad.on_board(board.board))
     }
 
     /// Locate a mapped physical pad in board coordinates.
     pub fn pad_position(&self, pad: Pad) -> Option<Point> {
-        if pad.board.is_some_and(|id| id != self.board_target().board) {
+        let board = self.board_target()?;
+        if pad.board.is_some_and(|id| id != board.board) {
             return None;
         }
         self.board.pad_position(pad)
@@ -1166,7 +1190,8 @@ impl Project {
 
     /// Find the schematic terminal corresponding to a placed board pad.
     pub fn terminal_for_pad(&self, pad: Pad) -> Option<Terminal> {
-        if pad.board.is_some_and(|id| id != self.board_target().board) {
+        let board = self.board_target()?;
+        if pad.board.is_some_and(|id| id != board.board) {
             return None;
         }
         let (component, pin) = self.board.component_pin_for(pad)?;
@@ -1261,6 +1286,12 @@ impl Session {
     /// at execution. Setup edits require existing setup. Sheet creation stops at the sheet limit
     /// and deletion retains one sheet. Unknown IDs are unavailable.
     pub fn available(&self, id: &str) -> bool {
+        if id == board::identity::CREATE_BOARD {
+            return self.project.as_ref().is_some_and(|project| project.board_target().is_none());
+        }
+        if id.starts_with("pcb.") && !self.project.as_ref().is_some_and(|project| project.board_target().is_some()) {
+            return false;
+        }
         match id {
             library::sources::LOAD | library::sources::REMOVE | library::sources::LIST | library::sources::SEARCH => true,
             "project.new" => true,
@@ -1339,7 +1370,7 @@ impl Session {
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
             if !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || p.board.drawings.is_some() || !p.board.footprints().is_empty() {
-                inspected["board"] = json!({"id":p.board_target().board, "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
+                inspected["board"] = json!({"id":p.board_target().map(|target|target.board), "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
                 inspected["board"]["assignments"] = json!(p.footprint_assignments());
                 inspected["board"]["silkscreen"] = json!(p.board.silkscreen.unwrap_or_default());
                 inspected["board"]["outline"] = json!(p.board.outline);
@@ -1458,7 +1489,7 @@ impl Session {
                 sheet_index: 0,
                 components: Arc::default(),
                 units: Arc::default(),
-                board: Arc::default(),
+                board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
                 named_graph: Arc::default(),
                 upgraded_from: None,
             }),
@@ -1470,6 +1501,7 @@ impl Session {
                     self.change(project);
                 }
             }
+            board::identity::CREATE_BOARD => self.create_board(params)?,
             sheets::CREATE_SHEET | sheets::RENAME_SHEET | sheets::DELETE_SHEET => self.edit_sheet(id, params)?,
             net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD
@@ -1840,6 +1872,23 @@ impl Session {
     /// content changes, adopting it for legacy allocations/retirements. New edits clear redo;
     /// revisions advance past every live ID allocated by a compound wire edit.
     fn change(&mut self, mut project: Project) {
+        // Materialize the legacy board address on the first physical edit, preserving
+        // untouched files and keeping the prior representation available to Undo.
+        if self
+            .project
+            .as_ref()
+            .is_some_and(|previous| previous.id == project.id && !Arc::ptr_eq(&previous.board, &project.board) && previous.board != project.board)
+            && matches!(project.board.ownership, board::identity::Ownership::Legacy)
+            && let Some(target) = project.board_target()
+        {
+            let registration = board::identity::Registration { id: target.board, name: "Board".into(), file: "board.json".into() };
+            // Old files allowed the typed board UUID to equal a sheet UUID. Keep
+            // their compatibility encoding rather than rename IDs or save an invalid registry.
+            if !registration.id_collides(&project) {
+                Arc::make_mut(&mut project.board).ownership = board::identity::Ownership::Explicit(Some(registration));
+                project.numeric_id_high_water = Some(project.allocation_high_water());
+            }
+        }
         // Named anchors can attach to moving geometry and join other sheets.
         if project.has_named_nets() || self.project.as_ref().is_some_and(|p| p.has_named_nets()) {
             project.named_graph = Arc::default();

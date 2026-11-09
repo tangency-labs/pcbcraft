@@ -17,6 +17,7 @@ egui = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { version = "=1.29.0", features = ["serde"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-agents = { path = "../craft-agents" }

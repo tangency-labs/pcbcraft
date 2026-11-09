@@ -16,7 +16,7 @@ fn apply(s: &mut Session, command: &str, mut params: Value) {
 /// Initialize the ordinary four-layer preset; no project documents are hand-authored.
 fn session() -> Session {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":4}));
     s
 }

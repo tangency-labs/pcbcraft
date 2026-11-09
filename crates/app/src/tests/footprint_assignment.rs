@@ -7,7 +7,7 @@ use pcbcraft_engine::{
 /// Start with a generic resistor, keeping native IDs from inspection rather than view ordering.
 fn component_harness() -> Harness<'static, PcbApp> {
     let mut h = harness();
-    h.state_mut().session.apply("project.new", &json!({})).unwrap();
+    h.state_mut().session.apply("project.new", &json!({"create_board":true})).unwrap();
     h.state_mut().session.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":1})).unwrap();
     h.run();
     h
@@ -36,7 +36,15 @@ fn schematic_assignment_then_board_placement_survives_offline_reopen() {
     choose_resistor(&mut h);
     click(&mut h, "Assign");
     assert!(
-        h.state().session.project().unwrap().board_view(h.state().session.project().unwrap().board_target()).unwrap().footprints().next().is_none()
+        h.state()
+            .session
+            .project()
+            .unwrap()
+            .board_view(h.state().session.project().unwrap().board_target().unwrap())
+            .unwrap()
+            .footprints()
+            .next()
+            .is_none()
     );
     h.get_by_label("Assigned · not placed");
     click(&mut h, "Close");
@@ -90,7 +98,7 @@ fn short_window_can_scroll_to_placement_and_close() {
     click(&mut h, "Assign");
     click(&mut h, "Close");
     let app = h.state_mut();
-    let target = app.session.project().unwrap().board_target();
+    let target = app.session.project().unwrap().board_target().unwrap();
     app.views.active.open_document(crate::editor_view::DocumentTarget::Board(target), &app.session);
     h.set_size(egui::vec2(420.0, 320.0));
     h.state_mut().begin_footprint_assignment(None);

@@ -98,6 +98,8 @@ fn board_setup_survives_unit_switching_without_an_electrical_edit() {
 
     let mut h = wired_project();
     let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
     h.state_mut().run(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
     let mut setup = h.state().session.inspect()["project"]["board"]["setup"].clone();
     let thickness = parse_length("100 mil", Unit::Mm).unwrap();

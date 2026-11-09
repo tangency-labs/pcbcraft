@@ -6,7 +6,7 @@ use super::*;
 /// Build through commands so both projects can deliberately contain the same local symbol ID.
 fn session() -> Session {
     let mut session = Session::default();
-    session.apply("project.new", &json!({"name": "view test"})).unwrap();
+    session.apply("project.new", &json!({"name": "view test", "create_board":true})).unwrap();
     session.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": session.revision()})).unwrap();
     session
 }
@@ -80,7 +80,7 @@ fn replacement_and_reopening_reset_the_view_without_editing_the_project() {
     assert!(!view.sync(&session));
 
     let mut replacement = Session::default();
-    replacement.apply("project.new", &json!({"name": "view test"})).unwrap();
+    replacement.apply("project.new", &json!({"name": "view test", "create_board":true})).unwrap();
     replacement.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": replacement.revision()})).unwrap();
     assert_eq!(replacement.project().unwrap().symbols()[0].id(), "symbol-2");
     assert_ne!(replacement.project().unwrap().sheet_target(), target);
@@ -119,7 +119,7 @@ fn replacement_keeps_an_explicit_foreign_board_unavailable() {
     assert_eq!(view.saved_state(&session).unwrap(), saved);
     view.switch(Workspace::Board, &session);
     assert!(!view.unavailable());
-    assert_eq!(view.target(), Some(DocumentTarget::Board(session.project().unwrap().board_target())));
+    assert_eq!(view.target(), Some(DocumentTarget::Board(session.project().unwrap().board_target().unwrap())));
     assert!(!view.accepts(old_input, &session));
     assert_eq!(encode(session.snapshot().unwrap()).unwrap(), bytes);
 }
@@ -129,7 +129,7 @@ fn replacement_keeps_an_explicit_foreign_board_unavailable() {
 #[test]
 fn board_sync_defaults_only_an_omitted_target() {
     let session = session();
-    let target = session.project().unwrap().board_target();
+    let target = session.project().unwrap().board_target().unwrap();
     let mut view = EditorView::new(ViewId(7));
     view.workspace = Workspace::Board;
     assert!(view.sync(&session));

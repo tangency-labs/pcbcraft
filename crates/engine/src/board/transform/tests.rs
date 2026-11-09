@@ -9,7 +9,7 @@ use serde_json::json;
 #[test]
 fn transforms_are_atomic_revision_checked_and_persistent() {
     let mut session = Session::default();
-    session.apply("project.new", &json!({})).unwrap();
+    session.apply("project.new", &json!({"create_board":true,})).unwrap();
     session.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":1})).unwrap();
     session
         .apply(
@@ -19,7 +19,7 @@ fn transforms_are_atomic_revision_checked_and_persistent() {
         .unwrap();
     let original = session.inspect();
     let original_bytes = encode_documents(session.snapshot().unwrap()).unwrap();
-    let board = session.project().unwrap().board_target();
+    let board = session.project().unwrap().board_target().unwrap();
     let transform = json!({"board":board.board,"footprint":"footprint-3","x_nm":2_540_000,"y_nm":-1_270_000,"rotation":90,"expected_revision":3});
     session.apply(SET_FOOTPRINT_TRANSFORM, &transform).unwrap();
     let changed = session.inspect();
@@ -66,7 +66,7 @@ fn transforms_are_atomic_revision_checked_and_persistent() {
 #[test]
 fn rotated_board_format_preserves_setup_and_rejects_invalid_orientation() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":1})).unwrap();
     s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":2})).unwrap();
     let symbol = s.inspect()["project"]["schematic"]["symbols"][0]["id"].clone();
@@ -86,7 +86,7 @@ fn rotated_board_format_preserves_setup_and_rejects_invalid_orientation() {
         let bytes = encode_documents(s.snapshot().unwrap()).unwrap();
         let restored = decode_documents(&bytes).unwrap();
         if rotation == 45 {
-            let footprint = restored.board_view(restored.board_target()).unwrap().footprints().next().unwrap();
+            let footprint = restored.board_view(restored.board_target().unwrap()).unwrap().footprints().next().unwrap();
             assert_eq!(footprint.pads[0].center, crate::schematic::Point { x_nm: -3_438_026, y_nm: 2_168_026 });
         }
         assert_eq!(encode_documents(restored.clone()).unwrap(), bytes);
@@ -120,7 +120,7 @@ fn rotated_board_format_preserves_setup_and_rejects_invalid_orientation() {
 fn deleting_placements_is_atomic_and_preserves_components_and_packages() {
     use crate::{DELETE_FOOTPRINTS, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL};
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     for (i, definition) in ["resistor-0402", "header-1x02-254", "generic-through-hole-2"].into_iter().enumerate() {
         s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":i as i64*20_000_000,"y_nm":0,"expected_revision":s.revision()})).unwrap();
         let symbol = s.project().unwrap().symbols().last().unwrap().id();
@@ -136,7 +136,7 @@ fn deleting_placements_is_atomic_and_preserves_components_and_packages() {
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
     let footprints = original["project"]["board"]["footprints"].as_array().unwrap();
     let ids: Vec<_> = footprints.iter().map(|f| f["id"].clone()).collect();
-    let board = s.project().unwrap().board_target().board;
+    let board = s.project().unwrap().board_target().unwrap().board;
     let revision = s.revision();
     for invalid in [json!([]), json!([ids[0], ids[0]]), json!([ids[0], "footprint-999999"]), json!(["footprint-01"]), json!([null])] {
         assert!(s.apply(DELETE_FOOTPRINTS, &json!({"footprints":invalid,"expected_revision":revision})).is_err());

@@ -8,7 +8,7 @@ use pcbcraft_engine::{persistence::encode_documents, schematic::Point};
 fn board_harness<'a>() -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400.0, 900.0));
-    resistor_at_origin(&mut h);
+    resistor_with_board_at_origin(&mut h);
     let app = h.state_mut();
     app.browser.open = false;
     app.run(
@@ -134,7 +134,7 @@ fn mixed_follow_uses_destination_geometry_and_keeps_zoom() {
 fn board_browser_properties_and_layers_share_stable_addresses() {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
-    resistor_at_origin(&mut h);
+    resistor_with_board_at_origin(&mut h);
     let app = h.state_mut();
     app.run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":2}));
     app.run(
@@ -566,7 +566,7 @@ fn live_footprint_transform_shares_editor_history_and_invalidates_drafts() {
     assert!(h.state().views.active.board.draft.is_some());
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
-    let board = h.state().session.project().unwrap().board_target();
+    let board = h.state().session.project().unwrap().board_target().unwrap();
     let ctx = h.ctx.clone();
     let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,"params":{
         "board":board.board,"footprint":"footprint-3","x_nm":2_540_000,"y_nm":1_270_000,"rotation":270,"expected_revision":revision
@@ -656,7 +656,7 @@ fn opening_another_project_from_pcb_layout_binds_its_board() {
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
         assert!(!h.state().views.active.unavailable());
         assert!(h.query_by_label("This document is unavailable. Choose a workspace to replace this view.").is_none());
-        let target = h.state().session.project().unwrap().board_target();
+        let target = h.state().session.project().unwrap().board_target().unwrap();
         assert_eq!(h.state().views.active.board.target, Some(target));
         assert!(!h.state().views.active.accepts(before, &h.state().session));
         assert!(!h.state().files.dirty(&h.state().session));
@@ -700,7 +700,7 @@ fn failed_project_open_preserves_current_pcb_binding() {
 fn smd_pads_render_physical_geometry_and_respect_layer_visibility() {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
-    resistor_at_origin(&mut h);
+    resistor_with_board_at_origin(&mut h);
     let revision = h.state().session.revision();
     h.state_mut().run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":revision}));
     let revision = h.state().session.revision();
@@ -812,7 +812,7 @@ fn physical_demo_labels_drills_and_detail_visibility() {
         h.output().shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Circle(c) if c.fill == Tokens::get().board_canvas)).count(),
         2
     );
-    let target = h.state().session.project().unwrap().board_target();
+    let target = h.state().session.project().unwrap().board_target().unwrap();
     let setup = h.state().session.project().unwrap().board_view(target).unwrap().setup().unwrap();
     let top = setup.layers().iter().find(|l| l.purpose == LayerPurpose::Copper && l.side == Some(Side::Front)).unwrap().id.to_string();
     let bottom = setup.layers().iter().find(|l| l.purpose == LayerPurpose::Copper && l.side == Some(Side::Back)).unwrap().id.to_string();
@@ -983,7 +983,7 @@ fn live_footprint_deletion_shares_history_and_rejects_stale_requests() {
     let mut h = editable_board();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
-    let board = h.state().session.project().unwrap().board_target().board;
+    let board = h.state().session.project().unwrap().board_target().unwrap().board;
     let footprint = h.state().session.inspect()["project"]["board"]["footprints"][0]["id"].clone();
     let ctx = h.ctx.clone();
     let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::DELETE_FOOTPRINTS,"params":{"board":board,"footprints":[footprint],"expected_revision":revision}}});
@@ -1027,7 +1027,7 @@ fn click_then_delete_removes_footprint_without_using_the_ribbon() {
         for definition in ["generic-through-hole-2", "resistor-0402"] {
             let mut h = harness();
             h.set_size(egui::vec2(1400., 900.));
-            resistor_at_origin(&mut h);
+            resistor_with_board_at_origin(&mut h);
             if configured {
                 let revision = h.state().session.revision();
                 h.state_mut().run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
@@ -1199,7 +1199,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
         .run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"resolve_existing_footprints":true,"expected_revision":revision}));
     h.run();
     let project = h.state().session.project().unwrap();
-    let target = project.board_target();
+    let target = project.board_target().unwrap();
     let layers = project.board_view(target).unwrap().layers().into_iter().map(|layer| layer.id.to_string()).collect::<Vec<_>>();
     h.state_mut().views.active.board.hidden_layers = layers.into_iter().collect();
     h.run();

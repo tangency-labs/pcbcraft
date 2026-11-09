@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 /// Build through public commands with a real, addressed two-layer board.
 fn session() -> Session {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
     s
 }
@@ -41,7 +41,7 @@ fn smd_geometry_and_three_terminal_mappings_are_pinned_and_persistent() {
     let header = symbol(&mut s, "connector");
     assign(&mut s, &header, "header-1x02-254", json!({"1":"1","2":"2"}));
     let snapshot = s.snapshot().unwrap();
-    let board = snapshot.board_view(snapshot.board_target()).unwrap();
+    let board = snapshot.board_view(snapshot.board_target().unwrap()).unwrap();
     let resistor = board.footprints().find(|f| f.id == rfp).unwrap();
     assert_eq!(resistor.pads.len(), 2);
     let copper = resistor.pads[0].copper.unwrap();
@@ -73,7 +73,7 @@ fn smd_geometry_and_three_terminal_mappings_are_pinned_and_persistent() {
     s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":rfp,"x_nm":2_000_000,"y_nm":1_000_000,"rotation":90,"expected_revision":s.revision()}))
         .unwrap();
     let changed = s.snapshot().unwrap();
-    let rotated = changed.board_view(changed.board_target()).unwrap().footprints().find(|f| f.id == rfp).unwrap();
+    let rotated = changed.board_view(changed.board_target().unwrap()).unwrap().footprints().find(|f| f.id == rfp).unwrap();
     assert_eq!(rotated.pads[0].center, Point { x_nm: 2_000_000, y_nm: 1_525_000 });
     assert_eq!(s.inspect()["project"]["schematic"], schematic);
     s.apply("edit.undo", &json!({})).unwrap();
@@ -99,7 +99,7 @@ fn pinned_custom_footprints_reopen_without_a_catalog_source() {
     board["footprints"][0]["definition"] = json!("custom-resistor");
     docs.insert("board.json".into(), serde_json::to_vec_pretty(&board).unwrap());
     let reopened = decode_documents(&docs).unwrap();
-    let footprint = reopened.board_view(reopened.board_target()).unwrap().footprints().next().unwrap();
+    let footprint = reopened.board_view(reopened.board_target().unwrap()).unwrap().footprints().next().unwrap();
     let copper = footprint.pads[0].copper.unwrap();
     assert_eq!(copper[1].x_nm - copper[0].x_nm, 900_000);
     let canonical = encode_documents(reopened.clone()).unwrap();
@@ -194,7 +194,7 @@ fn physical_footprints_on_multiple_sheets_share_the_board_without_aliasing_nets(
         s.apply(PLACE_FOOTPRINT,&json!({"sheet":target.sheet,"symbol":symbols[0],"definition":"resistor-0402","mapping":{"1":"2","2":"1"},"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     }
     let snapshot = s.snapshot().unwrap();
-    let target = snapshot.board_target();
+    let target = snapshot.board_target().unwrap();
     for (sheet, _) in &sheets {
         let projected = snapshot.for_sheet(*sheet).unwrap();
         let footprints: Vec<_> = projected.board_view(target).unwrap().footprints().collect();

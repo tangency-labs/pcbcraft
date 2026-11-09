@@ -176,7 +176,8 @@ impl Session {
     pub(crate) fn edit_board_drawing(&mut self, command: &str, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        let view = project.board_view(project.board_target()).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
+        let target = project.resolve_board(None)?;
+        let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
         let mut data = project.board.drawings.clone().unwrap_or_else(|| {
             let items = view.drawings();
             let layers = view

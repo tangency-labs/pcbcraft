@@ -11,7 +11,11 @@ use pcbcraft_engine::{persistence::encode_documents, selection::Selection};
 fn fixture(board: bool) -> Harness<'static, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
-    resistor_at_origin(&mut h);
+    if board {
+        resistor_with_board_at_origin(&mut h);
+    } else {
+        resistor_at_origin(&mut h);
+    }
     h.state_mut().properties_open = true;
     h.state_mut().views.active.filters_open = true;
     h.state_mut().select(Selection::one_symbol("symbol-2".into()));

@@ -411,12 +411,15 @@ impl PcbApp {
     /// board in the focused pane. A failed command preserves Home and the existing view target.
     fn start_new_project_in(&mut self, workspace: Workspace) {
         self.checkpoint_arrangements();
-        self.run("project.new", &Value::Null);
+        let params = if workspace == Workspace::Board { serde_json::json!({"create_board":true}) } else { Value::Null };
+        self.run("project.new", &params);
         if self.message.is_none() {
             if let Some(project) = self.session.project() {
                 let target = match workspace {
                     Workspace::Schematic => editor_view::DocumentTarget::Sheet(project.sheet_target()),
-                    Workspace::Board => editor_view::DocumentTarget::Board(project.board_target()),
+                    Workspace::Board => project
+                        .board_target()
+                        .map_or_else(|| editor_view::DocumentTarget::BoardWorkspace(project.id()), editor_view::DocumentTarget::Board),
                 };
                 self.views.active.open_document(target, &self.session);
             }
@@ -1096,7 +1099,8 @@ impl PcbApp {
                 if let Some(message) = message {
                     ui.label(shell::error(message));
                 } else if self.views.active.workspace == Workspace::Board {
-                    ui.label(dim(board_status.as_deref().unwrap_or("Board")));
+                    let empty = self.session.project().is_some_and(|project| project.board_target().is_none());
+                    ui.label(dim(board_status.as_deref().unwrap_or(if empty { "No board" } else { "Board" })));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {

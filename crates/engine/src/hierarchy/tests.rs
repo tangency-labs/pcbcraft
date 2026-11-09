@@ -10,7 +10,7 @@ fn apply(s: &mut Session, command: &str, mut params: Value) {
 #[test]
 fn hierarchy_connects_explicit_interfaces_and_round_trips() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let parent = s.project().unwrap().sheet_target();
     apply(&mut s, CREATE_CHILD, json!({"name":"Power","x_nm":0,"y_nm":0}));
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
@@ -71,7 +71,7 @@ fn hierarchy_connects_explicit_interfaces_and_round_trips() {
 #[test]
 fn rejected_hierarchy_edits_keep_the_exact_snapshot() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let main = s.project().unwrap().sheet_target();
     apply(&mut s, CREATE_CHILD, json!({"name":"Child","x_nm":0,"y_nm":0}));
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
@@ -106,7 +106,7 @@ fn rejected_hierarchy_edits_keep_the_exact_snapshot() {
 #[test]
 fn stable_slots_and_child_deletion_preserve_other_documents() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let main = s.project().unwrap().sheet_target();
     apply(&mut s, CREATE_CHILD, json!({"name":"Child","x_nm":0,"y_nm":0}));
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
@@ -145,7 +145,7 @@ fn stable_slots_and_child_deletion_preserve_other_documents() {
 #[test]
 fn sibling_names_remain_separate_and_malformed_hierarchy_is_refused() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let main = s.project().unwrap().sheet_target();
     for name in ["One", "Two"] {
         apply(&mut s, CREATE_CHILD, json!({"sheet":main.id(),"name":name,"x_nm":0,"y_nm":0}));
@@ -189,7 +189,7 @@ fn sibling_names_remain_separate_and_malformed_hierarchy_is_refused() {
 #[test]
 fn resize_sheet_is_atomic_persistent_and_preserves_pin_identity() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     let parent = s.project().unwrap().sheet_target();
     apply(&mut s, CREATE_CHILD, json!({"name":"Child","x_nm":0,"y_nm":0}));
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
@@ -251,7 +251,7 @@ fn resize_sheet_is_atomic_persistent_and_preserves_pin_identity() {
 fn hierarchy_and_physical_footprints_round_trip_together() {
     use crate::persistence::{decode_documents, encode_documents};
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
     let symbol = s.project().unwrap().symbols()[0].id();
     apply(&mut s, crate::PLACE_FOOTPRINT, json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":0,"y_nm":0}));
@@ -261,7 +261,7 @@ fn hierarchy_and_physical_footprints_round_trip_together() {
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     assert!(saved.keys().any(|path| path.starts_with("library/footprints/starter/resistor-0402.r")));
     let reopened = decode_documents(&saved).unwrap();
-    assert_eq!(reopened.board_view(reopened.board_target()).unwrap().footprints().count(), 1);
+    assert_eq!(reopened.board_view(reopened.board_target().unwrap()).unwrap().footprints().count(), 1);
     assert_eq!(reopened.for_sheet(child).unwrap().hierarchical_labels()[0].name, "ENABLE");
     assert_eq!(encode_documents(reopened).unwrap(), saved);
 }

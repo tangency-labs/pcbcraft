@@ -6,7 +6,7 @@ use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, persistence::encode_documents};
 fn board<'a>() -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
-    h.state_mut().run("project.new", &json!({}));
+    h.state_mut().run("project.new", &json!({"create_board":true}));
     let revision = h.state().session.revision();
     h.state_mut().run(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
     h.run();

@@ -5,7 +5,7 @@ use serde_json::json;
 /// Two components with an authored wire and a footprint exercise every dependent collection.
 fn fixture() -> Session {
     let mut s = Session::default();
-    s.apply("project.new", &json!({"name":"Group edits"})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,"name":"Group edits"})).unwrap();
     for x in [0, 20 * GRID_NM] {
         s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":x,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     }

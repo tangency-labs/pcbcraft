@@ -57,7 +57,7 @@ impl Action {
     fn open_label(&self) -> Option<&'static str> {
         match self {
             Self::OpenDocument(DocumentTarget::Sheet(_)) => Some("Open in Schematic"),
-            Self::OpenDocument(DocumentTarget::Board(_)) => Some("Open in PCB layout"),
+            Self::OpenDocument(DocumentTarget::Board(_) | DocumentTarget::BoardWorkspace(_)) => Some("Open in PCB layout"),
             Self::Schematic { .. } => Some("Show in Schematic"),
             Self::Footprint { .. } => Some("Show in PCB layout"),
             Self::ManageSheet { .. } => None,

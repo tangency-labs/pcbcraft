@@ -22,6 +22,7 @@ mod grid_spacing;
 mod hierarchy;
 mod multiple_sheets;
 mod net_labels;
+mod optional_board;
 mod panel_docking;
 #[cfg(not(target_arch = "wasm32"))]
 mod recent_projects;
@@ -378,8 +379,8 @@ fn home_new_pcb_opens_an_empty_board_and_preserves_the_unsaved_decision() {
     assert!(!app.home);
     assert_eq!(app.views.active.workspace, Workspace::Board);
     let first = app.session.snapshot().unwrap();
-    assert_eq!(app.views.active.board.target, Some(first.board_target()));
-    assert_eq!(first.board_view(first.board_target()).unwrap().footprints().count(), 0);
+    assert_eq!(app.views.active.board.target, Some(first.board_target().unwrap()));
+    assert_eq!(first.board_view(first.board_target().unwrap()).unwrap().footprints().count(), 0);
     assert_eq!(app.session.revision(), 1, "workspace selection adds no document edit");
     h.get_by_label("PCB canvas");
 
@@ -393,7 +394,7 @@ fn home_new_pcb_opens_an_empty_board_and_preserves_the_unsaved_decision() {
     click(&mut h, "Don't Save");
     let second = h.state().session.snapshot().unwrap();
     assert!(!second.same_document(&first));
-    assert_eq!(h.state().views.active.board.target, Some(second.board_target()));
+    assert_eq!(h.state().views.active.board.target, Some(second.board_target().unwrap()));
     h.get_by_label("PCB canvas");
 
     open_home(&mut h);
@@ -1292,6 +1293,19 @@ pub(super) fn resistor_at_origin(harness: &mut Harness<'_, PcbApp>) {
     new_project(harness);
     let revision = harness.state().session().revision();
     harness.state_mut().session.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": revision})).unwrap();
+    harness.run();
+}
+
+/// Build the physical-board fixture through the explicit New PCB path, then return to Capture.
+/// Schematic-only fixtures continue to use `resistor_at_origin`.
+pub(super) fn resistor_with_board_at_origin(harness: &mut Harness<'_, PcbApp>) {
+    harness.state_mut().start_new_project_in(Workspace::Board);
+    {
+        let app = harness.state_mut();
+        app.views.active.switch(Workspace::Schematic, &app.session);
+        let revision = app.session.revision();
+        app.session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":revision})).unwrap();
+    }
     harness.run();
 }
 

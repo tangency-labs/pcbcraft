@@ -7,7 +7,7 @@ use crate::{
 /// Start with an unassigned component; callers must explicitly choose every terminal mapping.
 fn fixture() -> Session {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":1})).unwrap();
     s
 }
@@ -144,7 +144,7 @@ fn unavailable_source_is_not_needed_for_pinned_assignment_or_placement() {
 #[test]
 fn child_sheet_assignment_round_trips_and_deletes_with_its_component() {
     let mut s = Session::default();
-    s.apply("project.new", &json!({})).unwrap();
+    s.apply("project.new", &json!({"create_board":true,})).unwrap();
     s.apply(crate::hierarchy::CREATE_CHILD, &json!({"name":"Child","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
     s.apply(
@@ -213,7 +213,7 @@ fn alphanumeric_pad_ids_roundtrip_through_assignment_and_board_views() {
     s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
     s.apply(PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":2_540_000,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     let snapshot = s.snapshot().unwrap();
-    let target = snapshot.board_target();
+    let target = snapshot.board_target().unwrap();
     let f = snapshot.board_view(target).unwrap().footprints().next().unwrap();
     assert_eq!(f.pads.iter().map(|p| p.number.as_str()).collect::<Vec<_>>(), ["A1", "B_2"]);
     assert!(f.pads.iter().all(|p| p.copper.is_some()));

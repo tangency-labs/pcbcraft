@@ -10,6 +10,7 @@ use std::{
 pub mod assignment;
 pub mod definition;
 pub mod drawing;
+pub mod identity;
 pub mod materials;
 pub mod outline;
 pub mod setup;
@@ -52,7 +53,7 @@ impl Pad {
 
 /// A placement links a component to one immutable definition and an explicit terminal-to-pad map.
 /// Legacy records retain their original two-pad vocabulary and byte encoding.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Footprint {
     pub(crate) id: u64,
@@ -166,13 +167,13 @@ impl Footprint {
     }
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
-        let mut value = json!({"id":format!("footprint-{}",self.id),"board":project.board_target().board,
+        let mut value = json!({"id":format!("footprint-{}",self.id),"board":project.board_target().map(|target|target.board),
             "component":format!("component-{}",self.component),"definition":self.definition,"definition_revision":self.definition_revision,
             "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,
             "pins":project.board.pad_numbers(self).into_iter().filter_map(|pad| {
                 let point=self.pad_position(pad,&project.board)?;
                 let (_,pin)=self.component_pin(pad)?;
-                let mut record=json!({"pad":Pad{board:Some(project.board_target().board),footprint:self.id,number:pad}.inspect(),
+                let mut record=json!({"pad":Pad{board:project.board_target().map(|target|target.board),footprint:self.id,number:pad}.inspect(),
                     "terminal":project.component_terminal(self.component,pin).map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
                 if let Some(definition)=project.board.definition_for(self).and_then(|definition|definition.pads.iter().find(|item|item.number==pad.as_str())) {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),definition.copper));
@@ -197,8 +198,9 @@ pub(crate) fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
 }
 
 /// Board-local placements and immutable definitions, indexed independently from view state.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Board {
+    pub(crate) ownership: identity::Ownership,
     pub(crate) assignments: BTreeMap<u64, assignment::Assignment>,
     pub(crate) outline: Option<outline::Outline>,
     pub(crate) drawings: Option<drawing::Drawings>,

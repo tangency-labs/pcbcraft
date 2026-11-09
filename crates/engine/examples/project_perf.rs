@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Generate a repeatable arrangement of pins and wires without importing a schematic.
 fn fixture() -> Result<Session, Box<dyn std::error::Error>> {
     let mut session = Session::default();
-    session.apply("project.new", &json!({"name": "Performance fixture"}))?;
+    session.apply("project.new", &json!({"create_board":true,"name": "Performance fixture"}))?;
     for index in 0..SYMBOLS {
         session.apply(
             PLACE_SYMBOL,

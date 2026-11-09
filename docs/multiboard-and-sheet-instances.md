@@ -53,13 +53,13 @@ Intended behavior is distinguished from current capabilities below.
 
 | Concern | Current implementation | Direction for multiboard work |
 | --- | --- | --- |
-| Boards | One physical board in `board.json`; typed targets expose a stable compatibility board ID | Persist an ordered board registry and independent board records |
+| Boards | Zero or one explicitly addressed board; legacy files retain their compatibility ID; see the [single-board codec](single-board-storage.md) | Persist an ordered board registry and independent board records |
 | Sheets | Shared sheet documents with stable IDs; each child has at most one parent; repeated instances and cycles are refused | Distinguish a sheet definition from each occurrence in the hierarchy |
-| Components | Project-owned logical components with one implicit board owner | Stable logical instances with optional board association; distinguish schematic-only and assigned/unplaced states |
+| Components | Project-owned logical components; the optional board owns the whole supported capture scope | Stable logical instances with optional board association; distinguish schematic-only and assigned/unplaced states |
 | Board setup | One setup on the sole board; the dialog already captures a board target | Independent layers, stackup, materials and output settings for each board |
 | Named connections | Global, power and ground names resolve across the current project | Resolve globals within the board; resolve ordinary local names within the sheet occurrence |
 | Cross-probing | Identity-based correspondence with board addresses; reveal across sheets is still planned | Include sheet occurrence and circuit-use context and navigate to the exact physical instance |
-| Storage | `project.pc`, `sheets/`, `board.json` and pinned libraries | Shared sheet definitions plus a folder for each board; explicit associated-file policies |
+| Storage | `project.pc`, `sheets/`, optional root `board.json` and pinned libraries | Shared sheet definitions plus a folder for each board; explicit associated-file policies |
 
 The [representation plan](pcb-representation.md#board-addresses-and-multiboard-migration),
 [storage contract](native-project-storage.md),

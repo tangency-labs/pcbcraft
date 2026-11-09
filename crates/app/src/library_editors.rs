@@ -413,7 +413,7 @@ impl PcbApp {
                 if selected.len() != 1 {
                     return Err("Select one footprint to edit a copy.".into());
                 }
-                let board = project.board_view(project.board_target()).ok_or("Open a physical board first.")?;
+                let board = project.board_target().and_then(|target| project.board_view(target)).ok_or("Open a physical board first.")?;
                 let footprint =
                     board.footprints().find(|footprint| selected.contains(&footprint.id)).ok_or("Selected footprint no longer exists.")?;
                 let assignment = project

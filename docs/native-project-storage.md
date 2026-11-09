@@ -7,7 +7,9 @@ create separate schematic and board sessions.
 The [multiboard and sheet instance design](multiboard-and-sheet-instances.md)
 and its [storage contract](multiboard-storage.md) describe board folders,
 instances and associated-file ownership. The current encodings below do not
-accept that new layout until the codec migration lands.
+accept that new layout until the codec migration lands. The bounded
+[optional single-board codec](single-board-storage.md) adds explicit zero-or-one
+ownership while retaining the root board path.
 
 ## File encodings and save behavior
 
@@ -28,7 +30,7 @@ or removed by a save. Other unknown files in managed subdirectories are refused.
 my-board/
   project.pc
   sheets/<sheet-uuid>.json
-  board.json
+  board.json                    # only when a physical board exists
   library/symbols/<library>/<symbol>.r<revision>.json
   library/footprints/<library>/<footprint>.r<revision>.json
   assets/                       # reserved for future asset references
@@ -50,7 +52,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.pc` | `pcbcraft-project/6` or `/7` | Project UUID, name, ordered sheet list and shared components; version 7 adds the numeric allocation watermark |
+| `project.pc` | `pcbcraft-project/6`, `/7` or `/9` | Project UUID, name, ordered sheet list and shared components; version 7 adds the numeric allocation watermark; version 9 adds explicit zero-or-one board registration |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1`, `/2` or `/3` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors |
 | `board.json` | `pcbcraft-board/1` through `/9` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
@@ -75,8 +77,10 @@ Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
 intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
 Legacy snapshots retain version 6 until numeric allocation or retirement adopts
-the version-7 watermark. New projects start at version 7. Sheet encodings remain
-sheet/1 for ordinary sheets, sheet/2 for
+the version-7 watermark, or an eligible physical edit persists the version-9
+board registration with that same compatibility ID. New projects start at version 9
+with no physical board, unless New PCB explicitly requests one. Sheet encodings
+remain sheet/1 for ordinary sheets, sheet/2 for
 sheets with hierarchy records and sheet/3 for sheets with named anchors, retaining existing board encodings. An unchanged save preserves original version-5 document bytes, and
 editing another document preserves an unaffected entry point. Adding or renaming
 a sheet writes the version-6 entry point. Legacy single-file encoding refuses
@@ -288,12 +292,14 @@ change to save. Nonallocating edits do not advance it merely because the revisio
 changed, and unchanged reopen/save remains stable.
 
 Older snapshots omit the watermark and preserve their encoding through ordinary
-nonallocating edits. Their first numeric allocation or retirement adopts a
+nonallocating schematic edits. Their first numeric allocation or retirement adopts a
 watermark covering both prior and resulting retained IDs. Previously deleted IDs
 absent from legacy data cannot be recovered; non-reuse begins with adoption.
 The retained single-document encoder uses `pcbcraft-project/8` when a watermark
-is present, while unadopted snapshots retain format 4. Formats 7 and 8 require
-the field and older versions reject it, including explicit null values. This is
+is present on legacy ownership, or format 10 for explicit optional ownership;
+unadopted snapshots retain format 4. Formats 7–10 require the field and earlier
+versions reject it, including explicit null values. Physical registration migration
+also adopts the watermark. This is
 not a distributed allocator for concurrent branch additions, nor a reservation
 of IDs from discarded unsaved histories.
 A component without a placed unit is still refused.

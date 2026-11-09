@@ -117,13 +117,18 @@ impl Project {
     /// Enumerate available boards in document order. The legacy representation has one board;
     /// callers should retain its target rather than infer identity from list position or name.
     pub fn boards(&self) -> impl Iterator<Item = BoardView<'_>> {
-        std::iter::once(BoardView { project: self, target: self.board_target() })
+        self.board_target().map(|target| BoardView { project: self, target }).into_iter()
     }
 
-    /// Compatibility default for single-board callers. Additional-board support must replace
-    /// implicit resolution with a unique-board check, never silently pick the first board.
-    pub fn board_target(&self) -> BoardTarget {
-        BoardTarget { project: self.id, board: legacy_board_id(self.id) }
+    /// Resolve the sole registered board, retaining legacy compatibility identity on old files.
+    /// Schematic-only projects return no target and never synthesize a physical owner.
+    pub fn board_target(&self) -> Option<BoardTarget> {
+        let board = match &self.board.ownership {
+            super::identity::Ownership::Legacy => legacy_board_id(self.id),
+            super::identity::Ownership::Explicit(Some(registration)) => registration.id,
+            super::identity::Ownership::Explicit(None) => return None,
+        };
+        Some(BoardTarget { project: self.id, board })
     }
 
     /// Resolve exactly this board in this project; unknown or foreign targets never fall back.
@@ -133,7 +138,7 @@ impl Project {
 
     /// Validate an explicit board ID, retaining the legacy single-board default on omission.
     pub fn resolve_board(&self, id: Option<&str>) -> Result<BoardTarget, crate::CommandError> {
-        let default = self.board_target();
+        let default = self.board_target().ok_or_else(|| crate::CommandError::Unavailable("no physical board exists; create a board first".into()))?;
         match id {
             None => Ok(default),
             Some(id) if id == default.board.to_string() => Ok(default),
@@ -147,9 +152,12 @@ impl<'a> BoardView<'a> {
     pub(crate) fn project(self) -> &'a Project {
         self.project
     }
-    /// Display name of the legacy board; identity never depends on this label.
+    /// Display name of the addressed board; identity never depends on this label.
     pub fn name(self) -> &'a str {
-        "Board"
+        match &self.project.board.ownership {
+            super::identity::Ownership::Explicit(Some(registration)) => &registration.name,
+            _ => "Board",
+        }
     }
 
     /// The addressed physical board's setup, including local layers and material definitions.
@@ -370,8 +378,8 @@ mod tests {
     #[test]
     fn board_addresses_and_correspondence_survive_edits_and_storage() {
         let mut session = Session::default();
-        session.apply("project.new", &json!({})).unwrap();
-        let target = session.project().unwrap().board_target();
+        session.apply("project.new", &json!({"create_board":true,})).unwrap();
+        let target = session.project().unwrap().board_target().unwrap();
         session.apply(crate::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":1})).unwrap();
         let selected = Selection::one_symbol("symbol-2".into());
         assert!(session.project().unwrap().board_view(target).unwrap().footprints_for_selection(&selected).is_empty());
@@ -381,7 +389,7 @@ mod tests {
         let snapshot = session.snapshot().unwrap();
         let bytes = encode_documents(snapshot.clone()).unwrap();
         let restored = decode_documents(&bytes).unwrap();
-        assert_eq!(restored.board_target(), target);
+        assert_eq!(restored.board_target(), Some(target));
         assert_eq!(encode_documents(restored.clone()).unwrap(), bytes);
         let board = restored.board_view(target).unwrap();
         let ids = board.footprints_for_selection(&selected);
@@ -403,9 +411,9 @@ mod tests {
             assert!(session.apply(command, &params).unwrap_err().to_string().contains("unknown board"));
             assert_eq!(session.inspect(), before);
         }
-        session.apply("project.new", &json!({})).unwrap();
+        session.apply("project.new", &json!({"create_board":true,})).unwrap();
         let other = session.project().unwrap();
-        assert_ne!(other.board_target(), target);
+        assert_ne!(other.board_target(), Some(target));
         assert!(other.board_view(target).is_none());
         assert!(other.terminal_for_pad(pad).is_none());
         assert!(other.pad_position(pad).is_none());
@@ -421,7 +429,7 @@ mod tests {
         use crate::{INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP};
         for configured in [false, true] {
             let mut session = Session::default();
-            session.apply("project.new", &json!({})).unwrap();
+            session.apply("project.new", &json!({"create_board":true,})).unwrap();
             if configured {
                 session.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":session.revision()})).unwrap();
             }

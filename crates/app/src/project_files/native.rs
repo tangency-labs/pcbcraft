@@ -86,7 +86,7 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
     let bytes = read(&path).map_err(|error| format!("Could not read project: {error}"))?;
     if Encoding::detect(&bytes) == Encoding::Json {
         let header: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-        if matches!(header["format"].as_str(), Some("pcbcraft-project/5" | "pcbcraft-project/6" | "pcbcraft-project/7")) {
+        if matches!(header["format"].as_str(), Some("pcbcraft-project/5" | "pcbcraft-project/6" | "pcbcraft-project/7" | "pcbcraft-project/9")) {
             if path.file_name().is_none_or(|name| name != ENTRY_POINT) {
                 return Err("A split project's entry point must be named project.pc.".to_owned());
             }

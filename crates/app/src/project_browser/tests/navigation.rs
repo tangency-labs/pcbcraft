@@ -6,6 +6,7 @@ use std::sync::Arc;
 /// The original connected schematic, with a board placement created through the engine.
 fn project_harness(width: f32) -> Harness<'static, PcbApp> {
     let mut app = wired_app();
+    app.run("pcb.create_board", &json!({"expected_revision":app.session.revision()}));
     let revision = app.session.revision();
     app.run(
         PLACE_FOOTPRINT,
@@ -168,7 +169,7 @@ fn stale_browser_actions_leave_navigation_and_selection_alone() {
     for interrupted in 0..3 {
         let mut h = project_harness(1400.0);
         let project = h.state().session.project().unwrap();
-        let board = project.board_target();
+        let board = project.board_target().unwrap();
         let footprint = project.board_view(board).unwrap().footprints().next().unwrap();
         let action = Action::Footprint { board, id: footprint.id, at: footprint.position };
         let ctx = h.ctx.clone();

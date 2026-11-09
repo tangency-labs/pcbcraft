@@ -227,6 +227,8 @@ fn live_sheet_navigation_and_selection_validate_the_document_address() {
 fn reopened_arrangement_keeps_sheet_targets_and_board_return_navigation() {
     let mut h = sheet_harness(1400.0);
     let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
     h.state_mut().run(CREATE_SHEET, &json!({"name":"Power","expected_revision":revision}));
     h.run();
     let power = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;

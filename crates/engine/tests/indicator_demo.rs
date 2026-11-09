@@ -91,7 +91,7 @@ fn named_nets(project: &Project) -> Option<BTreeSet<Vec<String>>> {
 #[test]
 fn demo_packages_have_pinned_geometry_and_correct_polarity_mapping() {
     let project = decode_packed(ARCHIVE).unwrap().project;
-    let board = project.board_view(project.board_target()).unwrap();
+    let board = project.board_view(project.board_target().unwrap()).unwrap();
     let expected = [
         ("J1", "header-1x02-254", 2),
         ("R1", "resistor-0402", 2),

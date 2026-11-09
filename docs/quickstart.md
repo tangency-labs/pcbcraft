@@ -50,7 +50,10 @@ Open [the local app](http://127.0.0.1:8781) and upload
 archive, because uploading `project.pc` alone does not include its companion
 documents. To begin an empty design on either platform, choose **New Schematic**
 or **New PCB** on Home. Each opens an **Untitled** project in the chosen workspace,
-with an empty sheet and board. The compact cards wrap as the window narrows.
+with an empty sheet. **New Schematic** starts without a physical board; **New PCB**
+creates its one board explicitly. Opening the PCB workspace from a schematic-only
+project shows **Create board**; merely switching workspaces does not create it.
+The compact cards wrap as the window narrows.
 On the desktop, the
 first **Save** asks for a project folder, and the project takes that folder's name.
 
@@ -190,7 +193,7 @@ the saved project restores the last active arrangement. Selecting a sheet in
 Browser or a workspace changes what the focused pane shows, without adding tabs,
 switching arrangements or moving views elsewhere. A single view has no lower tab
 strip; split panes each show one document header whose **×** closes the pane.
-The engine supports up to 64 sheets and one legacy board. Right-click
+The engine supports up to 64 sheets and zero or one physical board. Right-click
 **Sheets** in the Browser and choose **New Sheet…**, or use
 **Manage → Sheets → New sheet**; sheet rows also offer
 **Rename Sheet…** and **Delete Sheet…**. Creating a sheet opens it in that pane.

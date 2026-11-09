@@ -306,7 +306,7 @@ mod tests {
         }
         assert!(Appearance::from_storage(Some("x".repeat(1_048_577))).colors.is_empty());
         let mut session = pcbcraft_engine::Session::default();
-        session.apply("project.new", &serde_json::json!({})).unwrap();
+        session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
         session
             .apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &serde_json::json!({"copper_layers":2,"expected_revision":session.revision()}))
             .unwrap();
