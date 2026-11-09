@@ -173,6 +173,10 @@ pub(super) fn show(
     if route.consumed {
         state.drawing.selected = None;
     }
+    // A via moved the route to another copper layer; follow it without cancelling the route.
+    if let Some(layer) = route.switch_layer {
+        state.active_layer = Some(layer);
+    }
     if edge.consumed {
         state.tracks.selected.clear();
     }
@@ -351,6 +355,7 @@ pub(super) fn show(
     if project.footprints().next().is_none()
         && project.drawings().is_empty()
         && project.tracks().is_empty()
+        && project.vias().is_empty()
         && state.drawing.tool.is_none()
         && !state.tracks.busy()
         && state.placement.is_none()

@@ -181,6 +181,96 @@ fn routing_requires_a_visible_copper_layer() {
     assert!(tracks(&h).is_empty());
 }
 
+fn vias(h: &Harness<'_, PcbApp>) -> Vec<pcbcraft_engine::board::track::Via> {
+    h.state().session.project().unwrap().boards().next().unwrap().vias().to_vec()
+}
+
+/// The copper layer ID with this name.
+fn layer_named(h: &Harness<'_, PcbApp>, name: &str) -> String {
+    let project = h.state().session.project().unwrap();
+    let board = project.boards().next().unwrap();
+    board.layers().into_iter().find(|layer| layer.name == name).unwrap().id.to_string()
+}
+
+/// Press V with the pointer over a board point, as when dropping a via mid-route.
+fn via_at(h: &mut Harness<'_, PcbApp>, point: Point) {
+    let pos = at(h, point);
+    h.hover_at(pos);
+    h.run();
+    h.key_press(Key::V);
+    h.run();
+}
+
+/// V drops a via at the pointer and continues on the other copper layer; the view's active
+/// layer follows. A second V comes back up, and finishing on the pad commits tracks on both
+/// layers with both vias in one undoable command that clears the airwire.
+#[test]
+fn v_places_vias_and_switches_layers_mid_route() {
+    let mut h = routable();
+    let (top, bottom) = (layer_named(&h, "Top"), layer_named(&h, "Bottom"));
+    let line = airwires(&h)[0].clone();
+    let (a, b) = (line.from.position, line.to.position);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, a);
+    click_route(&mut h, Point { x_nm: a.x_nm, y_nm: -2_540_000 });
+    via_at(&mut h, Point { x_nm: a.x_nm, y_nm: -2_540_000 });
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()), "the view follows the via");
+    click_route(&mut h, Point { x_nm: b.x_nm, y_nm: -2_540_000 });
+    via_at(&mut h, Point { x_nm: b.x_nm, y_nm: -2_540_000 });
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    assert_eq!(h.state().session.revision(), revision, "nothing is authored before the route finishes");
+    click_route(&mut h, b);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_eq!(vias(&h).len(), 2);
+    let routed = tracks(&h);
+    assert!(routed.iter().any(|track| track.layer.to_string() == bottom), "the crossing runs on the bottom");
+    assert!(routed.iter().any(|track| track.layer.to_string() == top));
+    assert!(airwires(&h).is_empty(), "vias carry the connection between layers");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Backspace right after a via removes it and returns to the previous layer, before removing
+/// any vertex. A click on a via selects it, and Delete removes only that via.
+#[test]
+fn backspace_undoes_a_via_and_vias_select_and_delete() {
+    let mut h = routable();
+    let (top, bottom) = (layer_named(&h, "Top"), layer_named(&h, "Bottom"));
+    h.key_press(Key::X);
+    h.run();
+    let start = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
+    let corner = Point { x_nm: 5_080_000, y_nm: 2_540_000 };
+    click_route(&mut h, start);
+    via_at(&mut h, corner);
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()));
+    h.key_press(Key::Backspace);
+    h.run();
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()), "Backspace removed the via");
+    via_at(&mut h, corner);
+    click_route(&mut h, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(vias(&h).len(), 1);
+    assert_eq!(tracks(&h).len(), 2);
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().views.active.board.tracks.tool);
+    let via = vias(&h)[0].clone();
+    let pos = at(&h, via.at);
+    click_canvas_at(&mut h, pos);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([via.id]));
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(vias(&h).is_empty());
+    assert_eq!(tracks(&h).len(), 2, "deleting the via keeps its tracks");
+}
+
 /// Delete pressed while track input is disabled is dropped, not replayed later. A box-selection
 /// drag disables track input but keeps the track selection: Delete during the drag, then release,
 /// must leave the track in place on the frames after.

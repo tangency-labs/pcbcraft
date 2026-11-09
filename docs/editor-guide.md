@@ -570,14 +570,20 @@ To route copper, select a copper layer such as **Top** and press **X** or use
 (0.25 mm by default). Click a pad or a grid point to start; each click adds a run with one
 45° bend, and **/** flips whether the diagonal comes first. Clicking a pad or a
 track end on the same layer finishes the route, as do a double-click and Enter.
-Backspace removes the last vertex, Esc or right-click drops the unfinished route,
-and a second Esc exits the tool. The whole route is one Undo step. When copper
+Press **V** while routing to drop a through via at the pointer and continue on the
+other side: front copper leads to back, any other layer to front, and the view's
+active layer follows. **Via diameter** and **Via drill** sit beside the width field
+(0.6 mm and 0.3 mm by default). Backspace removes the last via, returning to the
+previous layer, or else the last vertex. Esc or right-click drops the unfinished
+route, and a second Esc exits the tool. The whole route is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
-Without a tool, click a track to select it (Shift adds, Ctrl or ⌘ toggles) and press
-Delete to remove it; the **Tracks** selection filter turns track picking off. Tracks
-stay on their layer, so a back-side track does not reach front-only SMD pads. Vias,
-dragging tracks, and clearance or DRC checks are not implemented yet.
+Without a tool, click a track or via to select it (Shift adds, Ctrl or ⌘ toggles) and
+press Delete to remove it; deleting a via keeps its tracks. The **Tracks** selection
+filter turns track picking off. Tracks stay on their layer, so a back-side track does
+not reach front-only SMD pads, while a via joins copper on every layer. Dragging
+tracks, standalone vias, blind or buried vias, and clearance or DRC checks are not
+implemented yet. PgUp and PgDn still change layer by cancelling the route.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

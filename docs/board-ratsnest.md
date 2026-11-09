@@ -24,7 +24,9 @@ including separate endpoint identities at coincident coordinates. Copper tracks
 join pads into islands: a pad and a track connect when they share a copper layer
 and the track's copper overlaps the land, either with an end on the land or with its
 centerline within half its width of a land edge; two tracks on one layer connect when
-their copper overlaps. The chain then skips consecutive endpoints whose islands are already joined, so a net
+their copper overlaps. A through via connects, on every layer, to the tracks, vias and
+pad lands its round pad overlaps. The chain then skips consecutive endpoints whose
+islands are already joined, so a net
 shows one line per island beyond the first and none once fully routed. Sorting costs
 O(T log T) over the accepted terminals rather than constructing every endpoint
 pair. This approximation is deterministic and can be refined independently; it

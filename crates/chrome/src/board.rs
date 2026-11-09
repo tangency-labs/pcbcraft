@@ -48,6 +48,18 @@ pub fn track(p: &Painter, ends: [Pos2; 2], width: f32, color: Color32, selected:
     }
 }
 
+/// Paint a through via: a round pad of `radius` with its drill hole, never smaller than a dot.
+/// Selection draws an accent ring; a preview is translucent accent copper.
+pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: bool, preview: bool) {
+    let t = Tokens::get();
+    let radius = radius.max(2.);
+    if selected {
+        p.circle_filled(center, radius + 1.5, t.accent);
+    }
+    p.circle_filled(center, radius, if preview { t.accent.gamma_multiply(0.6) } else { t.board_through });
+    p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), t.board_canvas);
+}
+
 /// Distinguish the snapped drawing target from authored vertices without changing its position.
 pub fn drawing_target(p: &Painter, point: Pos2) {
     p.circle_stroke(point, 5., Stroke::new(1., Tokens::get().accent));
