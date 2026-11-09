@@ -43,6 +43,8 @@ pub(super) struct State {
     draft: Option<Draft>,
     edit: Option<Edit>,
     layer: Option<String>,
+    /// Geometry submitted this frame, painted until the next pass sees the engine's result.
+    committed: Option<Drawing>,
 }
 
 /// A captured document transaction is dispatched only after the canvas releases its borrows.
@@ -146,6 +148,7 @@ pub(super) fn interact(
     selectable: bool,
 ) -> Interaction {
     let mut out = Interaction::default();
+    state.committed = None;
     let rect = response.rect;
     let all = view.drawings();
     let drawings: Vec<_> = all.into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())).collect();
@@ -283,6 +286,7 @@ pub(super) fn interact(
                     pcbcraft_engine::SET_DRAWING,
                     json!({"drawing":candidate.id,"points":candidate.points,"closed":candidate.closed}),
                 ));
+                state.committed = Some(candidate);
             }
             state.edit = None;
         } else if edit.drag && !ui.input(|input| input.pointer.primary_down()) {
@@ -312,6 +316,8 @@ pub(super) fn paint(
     for mut drawing in view.drawings().into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())) {
         if let Some(edit) = state.edit.as_ref().filter(|edit| edit.drawing.id == drawing.id) {
             drawing = edit.drawing.clone();
+        } else if let Some(committed) = state.committed.as_ref().filter(|committed| committed.id == drawing.id) {
+            drawing = committed.clone();
         }
         let selected = state.selected.as_ref() == Some(&drawing.id.to_string());
         pcbcraft_chrome::board::drawing(
