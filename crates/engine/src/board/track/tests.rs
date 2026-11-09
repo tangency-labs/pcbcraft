@@ -352,3 +352,53 @@ fn an_empty_tracks_field_is_rejected_before_format_12() {
     assert!(decode_documents(&with_empty).is_err());
     assert!(decode_documents(&saved).is_ok());
 }
+
+/// A thin track that crosses a pad off-center, with neither end on it, still overlaps its copper:
+/// running from one net's pad across another net's pad 0.2 mm from its center is refused as a
+/// short. Edge distance also decides the grazing and clear cases.
+#[test]
+fn a_track_crossing_a_pad_off_center_touches_it() {
+    let mut s = routed_fixture();
+    let front = copper_layers(&s)[0];
+    let (a, b) = {
+        let f = view(&s).footprints().find(|f| f.pads.iter().all(|p| p.net.is_some()) && f.pads[0].net != f.pads[1].net).unwrap();
+        (f.pads[0].center, f.pads[1].center)
+    };
+    // From inside pad `b`, 0.2 mm off its center line, straight across pad `a` and 1 mm beyond it.
+    let offset = 200_000;
+    let start = Point { x_nm: b.x_nm, y_nm: b.y_nm + offset };
+    let beyond = Point { x_nm: a.x_nm + (a.x_nm - b.x_nm).signum() * 1_000_000, y_nm: a.y_nm + offset };
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let error = s
+        .apply(ADD_TRACKS, &json!({"layer":front,"width_nm":100_000,"points":[start, beyond],"expected_revision":s.revision()}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("would connect nets"), "an off-center crossing is a short: {error}");
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+
+    let square =
+        [Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 600_000, y_nm: 0 }, Point { x_nm: 600_000, y_nm: 600_000 }, Point { x_nm: 0, y_nm: 600_000 }];
+    let crossing = Track {
+        id: Uuid::from_u128(1),
+        layer: front,
+        width_nm: 100_000,
+        start: Point { x_nm: -1_000_000, y_nm: 500_000 },
+        end: Point { x_nm: 2_000_000, y_nm: 500_000 },
+    };
+    assert!(touches_land(&crossing, &square), "crossing near an edge");
+    let grazing = Track { start: Point { x_nm: -1_000_000, y_nm: 640_000 }, end: Point { x_nm: 2_000_000, y_nm: 640_000 }, ..crossing.clone() };
+    assert!(touches_land(&grazing, &square), "copper within half the width of an edge");
+    let clear = Track { start: Point { x_nm: -1_000_000, y_nm: 700_000 }, end: Point { x_nm: 2_000_000, y_nm: 700_000 }, ..crossing };
+    assert!(!touches_land(&clear, &square), "copper clear of the land");
+}
+
+/// A via whose center sits just off a land still overlaps it when an edge is within its radius,
+/// even though the land's center is farther away than the radius.
+#[test]
+fn a_via_overlapping_a_land_edge_touches_it() {
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let land = [p(0, 0), p(600_000, 0), p(600_000, 600_000), p(0, 600_000)];
+    assert!(via_touches_land(p(300_000, 300_000), 300_000., &land), "centered");
+    assert!(via_touches_land(p(800_000, 300_000), 300_000., &land), "center 0.2 mm off the edge, radius 0.3 mm");
+    assert!(!via_touches_land(p(1_000_000, 300_000), 300_000., &land), "clear of the land");
+}

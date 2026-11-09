@@ -227,7 +227,7 @@ fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<u
         let node = lands.len() + tracks.len() + v;
         let radius = via.diameter_nm as f64 / 2.;
         for (l, land) in lands.iter().enumerate() {
-            if !land.layers.is_empty() && (inside(via.at, &land.corners) || point_distance(center(&land.corners), via.at, via.at) <= radius) {
+            if !land.layers.is_empty() && via_touches_land(via.at, radius, &land.corners) {
                 join(&mut parent, node, l);
             }
         }
@@ -264,17 +264,20 @@ fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<u
     (copper, members)
 }
 
-/// Whether a track's copper reaches a convex pad land: an end inside it, or the land's center
-/// within half the track width of the centerline. Corners arrive in boundary order.
+/// Whether a track's copper overlaps a convex pad land: an end inside it, or the centerline
+/// within half the track width of any land edge. A centerline crossing an edge has distance
+/// zero, so a track passing over the land off-center counts. Corners arrive in boundary order.
 fn touches_land(track: &Track, corners: &[Point; 4]) -> bool {
+    let half = track.width_nm as f64 / 2.;
     inside(track.start, corners)
         || inside(track.end, corners)
-        || point_distance(center(corners), track.start, track.end) <= track.width_nm as f64 / 2.
+        || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| segment_distance(track.start, track.end, *a, *b) <= half)
 }
 
-/// The center of a land's four corners.
-fn center(corners: &[Point; 4]) -> Point {
-    Point { x_nm: corners.iter().map(|p| p.x_nm).sum::<i64>() / 4, y_nm: corners.iter().map(|p| p.y_nm).sum::<i64>() / 4 }
+/// Whether a via's round pad overlaps a convex land: its center inside the land, or within its
+/// radius of any land edge. Corners arrive in boundary order.
+fn via_touches_land(at: Point, radius: f64, corners: &[Point; 4]) -> bool {
+    inside(at, corners) || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| point_distance(at, *a, *b) <= radius)
 }
 
 /// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.
