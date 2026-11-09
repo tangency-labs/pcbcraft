@@ -546,6 +546,7 @@ impl PcbApp {
                 {
                     self.views.active.schematic.tool = Some(Tool::Move {
                         symbol: symbol.clone(),
+                        turns: 0,
                         offset: egui::Vec2::ZERO,
                         revision,
                         disconnect: matches!(action, SymbolAction::DisconnectMove),
@@ -1143,9 +1144,9 @@ impl PcbApp {
                         Tool::NetLabelText { .. } => dim("Move net name · R to rotate · Esc to cancel"),
                         Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
-                        Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · Esc to cancel"),
-                        Tool::Move { pickup: true, .. } => dim("Grab symbol · Click to place · Esc cancel"),
-                        Tool::Move { .. } => dim("Move symbol · Esc to cancel"),
+                        Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · R rotate · Esc cancel"),
+                        Tool::Move { pickup: true, .. } => dim("Grab symbol · R rotate · Click to place · Esc cancel"),
+                        Tool::Move { .. } => dim("Move symbol · R rotate · Esc cancel"),
                         Tool::MoveItems { .. } => dim("Move selection · Esc to cancel"),
                         Tool::Reshape { drag, .. } if drag.pickup => dim("Grab wire · Click to place · Esc cancel"),
                         Tool::Reshape { .. } => dim("Reshape wire · Esc to cancel"),
@@ -1203,7 +1204,8 @@ impl PcbApp {
     /// without a selection, the hovered symbol for disconnected movement. G picks up the hovered
     /// symbol with its wires attached, or a wire handle. Pickup stays view-only until a click commits it.
     /// Cancel clears only the local preview, and an unfinished tool cannot be replaced by a queued shortcut.
-    /// R targets hovered field text before its body; D opens a component's saved datasheet
+    /// R rotates an active symbol/field preview, otherwise targeting hovered text before its body.
+    /// D opens a component's saved datasheet
     /// through the host without publishing an engineering edit.
     fn canvas(&mut self, ui: &mut Ui) {
         let snapshot = self.views.active.snapshot(&self.session);
@@ -1458,7 +1460,8 @@ impl PcbApp {
             }
             (None | Some(Tool::Wire { start: None, .. }), Click::Grab(symbol, offset, pickup)) => {
                 self.select(Selection::one_symbol(symbol.id()));
-                self.views.active.schematic.tool = Some(Tool::Move { symbol, offset, revision: self.session.revision(), disconnect: false, pickup });
+                self.views.active.schematic.tool =
+                    Some(Tool::Move { symbol, turns: 0, offset, revision: self.session.revision(), disconnect: false, pickup });
             }
             (None, Click::StartBox(drag)) => {
                 self.views.active.schematic.tool = Some(Tool::BoxSelect { drag, revision: self.session.revision() });
@@ -1531,13 +1534,14 @@ impl PcbApp {
                 self.select(Selection::one_symbol(symbol));
                 self.edit_selected(action);
             }
-            (Some(Tool::Move { symbol, revision, disconnect, .. }), Click::FinishMove(position)) => {
+            (Some(Tool::Move { symbol, turns, revision, disconnect, .. }), Click::FinishMove(position)) => {
                 self.views.active.schematic.tool = None;
                 if let Some(point) = position {
                     self.run(
                         MOVE_SYMBOL,
                         &json!({
                             "symbol": symbol.id(), "x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "disconnect":disconnect,
+                            "rotation": u16::from((symbol.turns() + turns) % 4) * 90,
                         }),
                     );
                 }
@@ -1763,11 +1767,16 @@ impl PcbApp {
             if self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::D)) {
                 self.views.active.schematic.datasheet_requested = true;
             }
-            if !hierarchy_hovered && pressed(&ROTATE) {
+            if (!hierarchy_hovered
+                || matches!(self.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. } | Tool::Move { .. } | Tool::Field { .. })))
+                && pressed(&ROTATE)
+            {
                 if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.schematic.tool {
                     *turns = (*turns + 1) % 4;
                 } else if let Some(Tool::Field { drag, .. }) = &mut self.views.active.schematic.tool {
                     drag.rotation = (drag.rotation + 90) % 360;
+                } else if let Some(Tool::Move { turns, .. }) = &mut self.views.active.schematic.tool {
+                    *turns = (*turns + 1) % 4;
                 } else if self.views.active.schematic.tool.is_none() {
                     self.views.active.schematic.rotate_requested = true;
                 }

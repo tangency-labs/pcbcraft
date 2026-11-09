@@ -33,6 +33,10 @@ accepted unplaced parts to explicit placement. Stale or replaced previews requir
 re-review; legacy current-state adoption and board creation remain separate
 explicit edits.
 
+Symbol Grab/Move previews support R rotation, with movement and orientation committed
+together as one undo step and discarded together on cancellation.
+Power/ground movement retains touching wire contacts regardless of placement order,
+with connected previews and shared undo; fixed pins stay in place.
 Schematic part/power placement repeats by default for new settings, including catalog
 drag/drop with custom power-net names, and completed wires leave the tool ready for another route. Canvas context menus provide the
 supported drawing, selection and view actions, with spacing choices in a Grid submenu.

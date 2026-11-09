@@ -146,6 +146,220 @@ fn symbol_grab_keeps_its_wires_and_commits_without_a_held_button() {
     }
 }
 
+/// Shared wired-symbol fixture leaves only the real canvas available for pickup gestures.
+fn wired_editor() -> Harness<'static, PcbApp> {
+    let mut h = harness();
+    h.set_size(egui::vec2(1400., 900.));
+    h.state_mut().browser.open = false;
+    h.state_mut().properties_open = false;
+    h.run();
+    wiring_project(&mut h);
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        CONNECT_PINS,
+        &json!({"from":{"symbol":"symbol-2","terminal":"2"},"to":{"symbol":"symbol-3","terminal":"1"},"expected_revision":revision}),
+    );
+    h.run();
+    h
+}
+
+/// R changes only the picked-up pose until placement. G and held movement retain wires;
+/// M leaves their original routes in place. Move+rotation undo together as one edit.
+#[test]
+fn grabbed_symbols_rotate_before_placement_with_one_undo_step() {
+    for mode in ["grab", "move", "held"] {
+        let mut h = wired_editor();
+        // Start rotated so a quarter turn proves relative orientation rather than a reset to 90°.
+        let revision = h.state().session.revision();
+        h.state_mut().run(ROTATE_SYMBOL, &json!({"symbol":"symbol-2","expected_revision":revision}));
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        let origin = before.symbols()[0].position;
+        let from = screen(&h, origin);
+        h.hover_at(from);
+        h.run();
+        if mode == "held" {
+            h.drag_at(from);
+            h.run();
+            h.hover_at(from + egui::vec2(10., 0.));
+            h.run();
+        } else {
+            h.key_press(if mode == "grab" { Key::G } else { Key::M });
+            h.run();
+        }
+        let target = Point { y_nm: origin.y_nm + 8 * GRID_NM, ..origin };
+        let to = screen(&h, target);
+        h.hover_at(to);
+        h.run();
+        h.key_press(Key::R);
+        h.run();
+        assert!(matches!(&h.state().views.active.schematic.tool, Some(Tool::Move {symbol,turns,..}) if (symbol.turns() + turns) % 4 == 2), "{mode}");
+        assert_eq!(h.state().session.revision(), revision);
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        let preview = before.transformed_symbol(&before.symbols()[0].id(), target, Some(2), mode == "move", revision, true).unwrap();
+        for wire in preview.wires() {
+            let points: Vec<_> = preview.wire_path(wire).into_iter().map(|point| screen(&h, point)).collect();
+            assert!(
+                h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Path(path) if path.points == points)),
+                "{mode}: the painted wire must reach the rotated preview pin"
+            );
+        }
+        if mode == "held" {
+            h.drop_at(to);
+            h.run();
+        } else {
+            click_canvas_at(&mut h, to);
+        }
+        assert_eq!(h.state().message, None, "{mode}");
+        let after = h.state().session.snapshot().unwrap();
+        assert_eq!((after.symbols()[0].position, after.symbols()[0].turns()), (target, 2), "{mode}");
+        assert!(h.state().views.active.schematic.tool.is_none());
+        if mode == "move" {
+            assert_eq!(
+                before.wires().iter().map(|wire| before.wire_path(wire)).collect::<Vec<_>>(),
+                after.wires().iter().map(|wire| after.wire_path(wire)).collect::<Vec<_>>()
+            );
+            assert!(after.wires().iter().all(|wire| wire.terminals().iter().all(|pin| !before.symbols()[0].terminals().contains(pin))));
+        } else {
+            assert!(before.same_connectivity(&after));
+            assert_eq!(
+                before.wires().iter().map(|wire| wire.endpoints()).collect::<Vec<_>>(),
+                after.wires().iter().map(|wire| wire.endpoints()).collect::<Vec<_>>()
+            );
+        }
+        click(&mut h, "Undo");
+        assert_same_content(&before, &h.state().session.snapshot().unwrap());
+        click(&mut h, "Redo");
+        assert_same_content(&after, &h.state().session.snapshot().unwrap());
+    }
+}
+
+/// A full turn at the original position is a no-op in either pickup mode. R on an active
+/// symbol preview takes priority over an unrelated named marker under the pointer.
+#[test]
+fn pickup_rotation_wraps_and_owns_the_shortcut_over_net_labels() {
+    for disconnect in [false, true] {
+        let mut h = wired_editor();
+        let origin = h.state().session.project().unwrap().symbols()[0].position;
+        let from = screen(&h, origin);
+        h.hover_at(from);
+        h.run();
+        h.key_press(if disconnect { Key::M } else { Key::G });
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        for _ in 0..4 {
+            h.key_press(Key::R);
+            h.run();
+        }
+        assert!(matches!(&h.state().views.active.schematic.tool, Some(Tool::Move {symbol,turns,..}) if (symbol.turns() + turns) % 4 == 0));
+        click_canvas_at(&mut h, from);
+        assert_eq!(h.state().session.revision(), revision);
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+    let mut h = wired_editor();
+    let revision = h.state().session.revision();
+    h.state_mut()
+        .run(pcbcraft_engine::net_labels::ADD, &json!({"name":"TARGET","style":"local","x_nm":0,"y_nm":10*GRID_NM,"expected_revision":revision}));
+    h.run();
+    assert_eq!(h.state().message, None);
+    let before = h.state().session.snapshot().unwrap();
+    h.hover_at(screen(&h, before.symbols()[0].position));
+    h.run();
+    h.key_press(Key::G);
+    h.run();
+    let label = &before.net_labels()[0];
+    let to = screen(&h, label.at) + egui::vec2(10., 0.);
+    h.hover_at(to);
+    h.run();
+    assert!(crate::net_labels::hovered(&before, &h.state().views.active.camera, &h.ctx, to, h.state().views.active.filters));
+    h.key_press(Key::R);
+    h.run();
+    assert!(matches!(&h.state().views.active.schematic.tool, Some(Tool::Move {symbol,turns,..}) if (symbol.turns() + turns) % 4 == 1));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Cancel/focus loss, release over a panel and intervening revisions discard both parts of
+/// a rotated pickup without publishing an early turn or disconnection.
+#[test]
+fn rotated_pickups_cancel_without_changing_symbol_or_wiring() {
+    for disconnect in [false, true] {
+        for mode in ["escape", "right", "focus", "stale", "panel"] {
+            let mut h = wired_editor();
+            let before = h.state().session.snapshot().unwrap();
+            h.hover_at(screen(&h, before.symbols()[0].position));
+            h.run();
+            h.key_press(if disconnect { Key::M } else { Key::G });
+            h.run();
+            h.hover_at(screen(&h, Point { y_nm: before.symbols()[0].position.y_nm + 8 * GRID_NM, ..before.symbols()[0].position }));
+            h.run();
+            h.key_press(Key::R);
+            h.run();
+            match mode {
+                "escape" => h.key_press(Key::Escape),
+                "right" => {
+                    let to = h.ctx.input(|i| i.pointer.hover_pos()).unwrap();
+                    right_click(&mut h, to);
+                }
+                "focus" => h.event(egui::Event::WindowFocused(false)),
+                "panel" => {
+                    click(&mut h, "View");
+                }
+                _ => {
+                    h.state_mut().run("project.rename", &json!({"name":"Concurrent"}));
+                }
+            }
+            h.run();
+            if mode == "panel" {
+                // A toolbar click cannot commit the pose; Escape can still discard it.
+                assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+                h.key_press(Key::Escape);
+                h.run();
+            }
+            assert!(h.state().views.active.schematic.tool.is_none(), "{disconnect} {mode}");
+            let after = h.state().session.snapshot().unwrap();
+            assert_eq!(after.symbols()[0].position, before.symbols()[0].position);
+            assert_eq!(after.symbols()[0].turns(), before.symbols()[0].turns());
+            assert_eq!(
+                after.wires().iter().map(|wire| after.wire_path(wire)).collect::<Vec<_>>(),
+                before.wires().iter().map(|wire| before.wire_path(wire)).collect::<Vec<_>>()
+            );
+            if mode != "stale" {
+                assert!(Arc::ptr_eq(&before, &after));
+            }
+        }
+    }
+}
+
+/// Live MCP uses the same compound move command as a completed pickup, including stale
+/// rejection and the editor's single Undo restoring position, orientation and connections.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn live_move_rotation_shares_the_pickup_transaction() {
+    use crate::live_control::LiveEditor;
+    use pcbcraft_mcp::live::call_editor;
+    let mut h = wired_editor();
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    let origin = before.symbols()[0].position;
+    let ctx = h.ctx.clone();
+    let request = json!({"method":"engine.execute","params":{"command":MOVE_SYMBOL,"params":{
+        "symbol":before.symbols()[0].id(),"x_nm":origin.x_nm,"y_nm":origin.y_nm+8*GRID_NM,"rotation":90,"expected_revision":revision
+    }}});
+    let result = call_editor(&mut LiveEditor { app: h.state_mut(), ctx: &ctx }, &request);
+    assert!(result.is_ok(), "{result:?}");
+    h.run();
+    let after = h.state().session.snapshot().unwrap();
+    assert_eq!(after.symbols()[0].turns(), 1);
+    assert_eq!(after.symbols()[0].position.y_nm, origin.y_nm + 8 * GRID_NM);
+    assert!(before.same_connectivity(&after));
+    assert!(call_editor(&mut LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).is_err());
+    assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+    click(&mut h, "Undo");
+    assert_same_content(&before, &h.state().session.snapshot().unwrap());
+}
+
 /// Several routes ending on one junction share one movable handle, retaining that identity
 /// and each opposite endpoint while their end legs adjust together.
 #[test]

@@ -13,6 +13,7 @@ use std::{
 
 mod detach;
 mod loops;
+mod named_move;
 mod tails;
 
 /// Normalize one orthogonal draft using the same retrace and self-loop cleanup as committed
@@ -784,17 +785,41 @@ impl Project {
     /// Preview a symbol move together with pin contact and local wire healing.
     /// With automatic cleanup disabled, exact pin contact still connects without normalization.
     pub fn moved_symbol(&self, symbol: &str, to: Point, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
+        self.transformed_symbol(symbol, to, None, false, revision, auto_heal)
+    }
+
+    /// Preview one symbol's move and optional orientation together. Rotation is in quarter
+    /// turns (0..=3); None preserves it. Disconnection leaves old routes in place. Invalid
+    /// bounds, orientation or contacts fail atomically, and an unchanged pose is a no-op.
+    pub fn transformed_symbol(
+        &self,
+        symbol: &str,
+        to: Point,
+        rotation: Option<u8>,
+        disconnect: bool,
+        revision: u64,
+        auto_heal: bool,
+    ) -> Result<Project, CommandError> {
         let index = super::parse_id(symbol, "symbol-")
             .and_then(|id| self.symbol_index(id))
             .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".into()))?;
         if !valid_point(&to) {
             return Err(CommandError::InvalidParams("symbol exceeds schematic bounds".into()));
         }
-        if self.symbols[index].position == to {
+        let rotation = rotation.unwrap_or(self.symbols[index].rotation);
+        if rotation > 3 {
+            return Err(CommandError::InvalidParams("symbol orientation must be 0 through 3 quarter turns".into()));
+        }
+        if self.symbols[index].position == to && self.symbols[index].rotation == rotation {
             return Ok(self.clone());
         }
+        if disconnect {
+            return self.transformed_symbol_disconnected(index, to, rotation, revision, auto_heal);
+        }
         let mut next = self.clone();
-        Arc::make_mut(&mut next.sheet_mut().symbols)[index].position = to;
+        let symbol = &mut Arc::make_mut(&mut next.sheet_mut().symbols)[index];
+        symbol.position = to;
+        symbol.rotation = rotation;
         next.healed(self, revision, auto_heal)
     }
 }

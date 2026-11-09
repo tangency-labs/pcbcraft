@@ -1,6 +1,8 @@
 use super::*;
 use crate::schematic::GRID_NM as G;
 
+mod drag;
+
 /// Exercise catalog validation and revision checks for every authored test operation.
 fn apply(s: &mut Session, command: &str, mut params: Value) {
     params["expected_revision"] = json!(s.revision());

@@ -5,6 +5,8 @@ use pcbcraft_engine::{
     schematic::Point,
 };
 
+mod connected_drag;
+
 /// Exercise the real editor with room for labels; panel state changes only test presentation.
 fn editor(width: f32) -> Harness<'static, PcbApp> {
     let mut h = harness();

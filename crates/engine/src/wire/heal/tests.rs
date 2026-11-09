@@ -6,6 +6,7 @@ mod detach;
 mod named_contacts;
 mod redraws;
 mod segment_slides;
+mod symbol_transform;
 
 /// Build a model point in the fixture's schematic grid units.
 fn p(x: i64, y: i64) -> Point {

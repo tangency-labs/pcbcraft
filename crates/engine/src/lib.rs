@@ -71,6 +71,7 @@ enum ParamKind {
     DefinitionRevision,
     AutoHeal,
     Disconnect,
+    KeepConnected,
     Junctions,
     Name,
     /// Free text for a symbol's reference or value. Its length and characters are checked by the command.
@@ -141,7 +142,7 @@ impl ParamKind {
             Self::BoardId | Self::SheetId => json!({"type":"string", "format":"uuid"}),
             Self::CopperLayers => json!({"type":"integer", "minimum":2,"maximum":64,"multipleOf":2}),
             Self::AutoHeal => json!({"type":"boolean","default":true}),
-            Self::Disconnect => json!({"type":"boolean","default":false}),
+            Self::Disconnect | Self::KeepConnected => json!({"type":"boolean","default":false}),
             Self::Junctions => json!({"type":"array","maxItems":2,"uniqueItems":true,"items":Self::JunctionId.schema()}),
             Self::Selection => json!({"type":"object", "properties": {
                 "symbols": {"type":"array", "maxItems":MAX_SYMBOLS, "uniqueItems":true, "items":Self::SymbolId.schema()},
@@ -258,7 +259,7 @@ impl ParamKind {
             Self::BoardId | Self::SheetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
             Self::BoardSetup | Self::SilkscreenSettings if value.is_object() => Ok(()),
             Self::CopperLayers if value.as_u64().is_some_and(|n| (2..=64).contains(&n) && n.is_multiple_of(2)) => Ok(()),
-            Self::AutoHeal | Self::Disconnect if value.is_boolean() => Ok(()),
+            Self::AutoHeal | Self::Disconnect | Self::KeepConnected if value.is_boolean() => Ok(()),
             Self::Junctions
                 if value.as_array().is_some_and(|ends| {
                     ends.len() <= 2 && ends.iter().all(|end| Self::JunctionId.validate(end).is_ok()) && (ends.len() < 2 || ends[0] != ends[1])
@@ -311,7 +312,7 @@ impl ParamKind {
             Self::BoardId => Err("must identify a board by UUID"),
             Self::BoardSetup | Self::SilkscreenSettings => Err("must contain a settings object"),
             Self::CopperLayers => Err("must select an even copper-layer count from 2 through 64"),
-            Self::AutoHeal | Self::Disconnect => Err("must be a boolean"),
+            Self::AutoHeal | Self::Disconnect | Self::KeepConnected => Err("must be a boolean"),
             Self::Junctions => Err("must contain at most two distinct junction IDs"),
             Self::FootprintDefinition => Err("must identify an available built-in footprint"),
             Self::FootprintMapping => Err("must map terminal IDs to pad IDs of 1 to 8 letters, digits, +, - or _"),
@@ -425,7 +426,7 @@ pub const HEAL_WIRES: &str = "schematic.heal_wires";
 pub const BREAK_WIRE: &str = "schematic.break_wire";
 /// Remove one straight leg of a wire, leaving the rest of its route with free ends.
 pub const DELETE_WIRE_SEGMENT: &str = "schematic.delete_wire_segment";
-/// Move a symbol, optionally disconnecting it while preserving its old wire paths.
+/// Move and optionally orient a symbol, retaining connections or preserving its old wire paths.
 pub const MOVE_SYMBOL: &str = "schematic.move_symbol";
 /// Turn a symbol a quarter turn counterclockwise.
 pub const ROTATE_SYMBOL: &str = "schematic.rotate_symbol";
@@ -553,7 +554,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: net_labels::SET,
         title: "Edit Net Label",
-        summary: "Rename, move, rotate or change the scope/style of an existing named anchor. Undoable.",
+        summary: "Edit a named anchor's properties or position. With keep_connected, carry touching wires independent of placement order. One undo step.",
         params: &[
             NET_OBJECT,
             NET_NAME,
@@ -561,6 +562,13 @@ const CATALOG: &[Command] = &[
             ANCHOR_X,
             ANCHOR_Y,
             NET_ROTATION,
+            Param {
+                name: "keep_connected",
+                required: false,
+                kind: ParamKind::KeepConnected,
+                summary: "Carry touching wires when moving the anchor, independent of placement order; default false",
+            },
+            AUTO_HEAL,
             Param {
                 name: "text",
                 required: false,
@@ -804,11 +812,17 @@ const CATALOG: &[Command] = &[
     Command {
         id: MOVE_SYMBOL,
         title: "Move Symbol",
-        summary: "Move a symbol, retaining attached wires by default. With disconnect, leave its wiring in place. Exact destination contacts still connect. Undoable.",
+        summary: "Move and optionally rotate a symbol, retaining attached wires by default. With disconnect, leave its wiring in place. Exact destination contacts still connect. One undo step.",
         params: &[
             Param { required: true, name: "symbol", summary: "Placed symbol ID from project inspection", kind: ParamKind::SymbolId },
             SYMBOL_X,
             SYMBOL_Y,
+            Param {
+                required: false,
+                name: "rotation",
+                summary: "Counterclockwise degrees; omitted preserves the current orientation",
+                kind: ParamKind::Rotation,
+            },
             EXPECTED_REVISION,
             AUTO_HEAL,
             Param {
@@ -1798,6 +1812,7 @@ impl Session {
 
     /// Move a placement as one undo step, retaining connections by default. With `disconnect`,
     /// leave old routes at their original coordinates; destination contacts still connect.
+    /// Optional rotation is absolute degrees and commits with movement in that same undo step.
     fn move_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1807,12 +1822,16 @@ impl Session {
             .and_then(|id| project.symbol_index(id))
             .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
-        if project.symbols[index].position != position {
-            let next = if params["disconnect"].as_bool().unwrap_or(false) {
-                project.moved_symbol_disconnected(&project.symbols[index].id(), position, self.revision(), wire::auto_heal(params))?
-            } else {
-                project.moved_symbol(&project.symbols[index].id(), position, self.revision(), wire::auto_heal(params))?
-            };
+        let rotation = params["rotation"].as_u64().map(|degrees| (degrees / 90) as u8).unwrap_or(project.symbols[index].rotation);
+        if project.symbols[index].position != position || project.symbols[index].rotation != rotation {
+            let next = project.transformed_symbol(
+                &project.symbols[index].id(),
+                position,
+                Some(rotation),
+                params["disconnect"].as_bool().unwrap_or(false),
+                self.revision(),
+                wire::auto_heal(params),
+            )?;
             self.change(next);
         }
         Ok(())

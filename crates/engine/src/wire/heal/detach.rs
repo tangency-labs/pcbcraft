@@ -69,15 +69,19 @@ impl Project {
     /// the same bounded allocator; invalid geometry fails without changing the snapshot.
     /// Moving to the same position is a no-op. Exact contacts at the destination still join.
     pub fn moved_symbol_disconnected(&self, symbol: &str, to: Point, revision: u64, auto_heal: bool) -> Result<Project, CommandError> {
-        let index = super::super::parse_id(symbol, "symbol-")
-            .and_then(|id| self.symbol_index(id))
-            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".into()))?;
-        if !valid_point(&to) {
-            return Err(CommandError::InvalidParams("symbol exceeds schematic bounds".into()));
-        }
-        if self.symbols[index].position == to {
-            return Ok(self.clone());
-        }
+        self.transformed_symbol(symbol, to, None, true, revision, auto_heal)
+    }
+
+    /// Detach the validated symbol's old pin contacts before applying its new pose, so
+    /// preview and commit leave the original wire paths fixed even when only rotating.
+    pub(super) fn transformed_symbol_disconnected(
+        &self,
+        index: usize,
+        to: Point,
+        rotation: u8,
+        revision: u64,
+        auto_heal: bool,
+    ) -> Result<Project, CommandError> {
         let mut edit = Edit::new(self, revision);
         let mut replacements = BTreeMap::new();
         for pin in self.symbols[index].terminals() {
@@ -98,7 +102,9 @@ impl Project {
         edit.project.sheet_mut().connectivity = Arc::default();
         let detached = edit.project;
         let mut moved = detached.clone();
-        Arc::make_mut(&mut moved.sheet_mut().symbols)[index].position = to;
+        let symbol = &mut Arc::make_mut(&mut moved.sheet_mut().symbols)[index];
+        symbol.position = to;
+        symbol.rotation = rotation;
         moved.healed(&detached, revision, auto_heal)
     }
 }
