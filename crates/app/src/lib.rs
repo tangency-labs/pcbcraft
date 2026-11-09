@@ -1507,15 +1507,23 @@ impl PcbApp {
                 }
             }
             (None, Click::DeleteItems) => self.delete_selection(),
-            (_, Click::Drop(PartDrag { definition, source: drag_source }, point)) => {
+            (_, Click::Drop(PartDrag { placement, source: drag_source }, point)) => {
                 if !self.views.active.accepts(drag_source, &self.session) {
                     return;
                 }
                 let revision = drag_source.revision;
                 self.views.active.schematic.tool = None;
-                self.place_catalog_symbol(&definition, json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
-                if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
-                    self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
+                match placement {
+                    parts_browser::Placement::Symbol(definition) => {
+                        self.place_catalog_symbol(&definition, json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
+                        if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
+                            self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
+                        }
+                    }
+                    parts_browser::Placement::Power(mut label) => {
+                        label.at = point;
+                        self.commit_net_label(drag_source, label);
+                    }
                 }
             }
             (None, Click::WireEdit(action, leg)) => self.edit_wire(action, &leg),
