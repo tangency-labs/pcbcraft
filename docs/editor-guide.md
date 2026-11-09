@@ -591,7 +591,8 @@ To route copper, select a copper layer such as **Top** and press **X** or use
 track end on the same layer finishes the route, as do a double-click and Enter.
 Press **V** while routing to drop a through via at the pointer and continue on the
 other side: front copper leads to back, any other layer to front, and the view's
-active layer follows. The **Via pad / drill** field beside the width field sets the
+active layer follows. While routing, **PgUp** and **PgDn** do the same but go to front or
+back copper, adding nothing when the route is already there. The **Via pad / drill** field beside the width field sets the
 pad diameter and drill (0.6 mm and 0.3 mm by default). Backspace removes the last via, returning to the
 previous layer, or else the last vertex. Esc or right-click drops the unfinished
 route, and a second Esc exits the tool. The whole route is one Undo step. When copper
@@ -662,7 +663,7 @@ another net's pad is refused, leaving the board unchanged. The **Tracks** select
 filter turns track picking off. Tracks stay on their layer, so a back-side track does
 not reach front-only SMD pads, while a via joins copper on every layer. Reshaping a
 route by dragging one segment and blind or buried vias are not implemented yet.
-Routing does not check clearance; run **Inspect → DRC** for that. PgUp and PgDn still change layer by cancelling the route.
+Routing does not check clearance; run **Inspect → DRC** for that.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

@@ -1695,6 +1695,22 @@ impl PcbApp {
                     None
                 }
             });
+            // Mid-route, PgUp and PgDn drop a via and continue on front or back copper, as in
+            // KiCad, instead of changing layer by abandoning the route.
+            let routing = self.views.view(view).is_some_and(|state| state.board.tracks.routing());
+            let layer_direction = match layer_direction {
+                Some(side @ ("front" | "back")) if routing => {
+                    if let Some(state) = self.views.view_mut(view) {
+                        state.board.tracks.via_side_requested = Some(if side == "front" {
+                            pcbcraft_engine::board::setup::Side::Front
+                        } else {
+                            pcbcraft_engine::board::setup::Side::Back
+                        });
+                    }
+                    None
+                }
+                other => other,
+            };
             if let Some(direction) = layer_direction {
                 let _ = self.navigate_board_layer(view, direction);
             }
@@ -2343,6 +2359,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));
     list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));
+    list.push(("PCB layout", "Via to front or back copper while routing", "PgUp / PgDn".to_owned()));
     list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
     list.push(("PCB layout", "Remove last track vertex", "Backspace".to_owned()));
     list.push(("PCB layout", "Next layer", "+".to_owned()));

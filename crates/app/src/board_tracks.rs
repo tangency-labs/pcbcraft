@@ -83,6 +83,8 @@ pub(super) struct State {
     pub(super) backspace_requested: bool,
     pub(super) posture_requested: bool,
     pub(super) via_requested: bool,
+    /// PgUp/PgDn mid-route: drop a via and continue on that side's copper.
+    pub(super) via_side_requested: Option<Side>,
     /// M with copper selected and no footprint selected: move the selected tracks and vias.
     pub(super) move_requested: bool,
     /// U: select every track and via joined by copper to the hovered or selected copper.
@@ -110,6 +112,7 @@ impl Default for State {
             backspace_requested: false,
             posture_requested: false,
             via_requested: false,
+            via_side_requested: None,
             move_requested: false,
             connected_requested: false,
             moving: None,
@@ -153,6 +156,7 @@ impl State {
         self.backspace_requested = false;
         self.posture_requested = false;
         self.via_requested = false;
+        self.via_side_requested = None;
         self.move_requested = false;
         self.connected_requested = false;
         self.moving = None;
@@ -167,6 +171,10 @@ impl State {
             return true;
         }
         !std::mem::take(&mut self.selected).is_empty()
+    }
+    /// Whether a route is in progress, so layer keys should place a via instead.
+    pub(super) fn routing(&self) -> bool {
+        self.draft.is_some()
     }
     /// Whether a tool or an unfinished route owns canvas input.
     pub(super) fn busy(&self) -> bool {
@@ -242,6 +250,16 @@ fn paired_layer(view: BoardView<'_>, layer: &str, hidden: &BTreeSet<String>) -> 
     let target = if current.side == Some(Side::Front) { side(Side::Back) } else { side(Side::Front) }?;
     let id = target.id.to_string();
     (id != layer && !hidden.contains(&id)).then_some(id)
+}
+
+/// The visible copper layer on one side of the board, if the setup has one.
+fn side_layer(view: BoardView<'_>, side: Side, hidden: &BTreeSet<String>) -> Option<String> {
+    view.setup()?
+        .layers()
+        .iter()
+        .find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(side))
+        .map(|layer| layer.id.to_string())
+        .filter(|id| !hidden.contains(id))
 }
 
 /// Snap to a pad center, track end or via when the pointer is over or near it, otherwise to this
@@ -374,6 +392,7 @@ pub(super) fn interact(
     let backspace = std::mem::take(&mut state.backspace_requested);
     let finish = std::mem::take(&mut state.finish_requested);
     let via = std::mem::take(&mut state.via_requested);
+    let via_side = state.via_side_requested.take();
     let move_copper = std::mem::take(&mut state.move_requested);
     let select_connected = std::mem::take(&mut state.connected_requested);
     state.committed_move = None;
@@ -449,10 +468,11 @@ pub(super) fn interact(
                 }
             }
         }
-        if via
+        if (via || via_side.is_some())
             && let Some(pointer) = pointer
             && let Some(draft) = &mut state.draft
-            && let Some(next) = paired_layer(view, &draft.layer, hidden)
+            && let Some(next) = via_side.map_or_else(|| paired_layer(view, &draft.layer, hidden), |side| side_layer(view, side, hidden))
+            && next != draft.layer
         {
             let (at, _) = snapped(pointer, camera, rect, view, &draft.layer);
             let path = extended(&draft.points, at, state.diagonal_first);
