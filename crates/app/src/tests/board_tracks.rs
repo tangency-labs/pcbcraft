@@ -507,3 +507,32 @@ fn mixed_via_sizes_are_read_only_in_properties() {
     h.run();
     assert!(h.query_by_label("Selected via pad").is_some() && h.query_by_label("Mixed").is_none());
 }
+
+/// Right-click cancels a copper move without editing, and the ribbon's Move starts one when only
+/// copper is selected, anchoring on the selection.
+#[test]
+fn right_click_cancels_and_ribbon_starts_copper_moves() {
+    let mut h = routable();
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let middle = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, middle);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]));
+    let revision = h.state().session.revision();
+    h.hover_at(middle);
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    assert!(h.state().views.active.board.tracks.busy());
+    h.event(egui::Event::PointerButton { pos: middle, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: middle, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(!h.state().views.active.board.tracks.busy(), "right-click ended the move");
+    let elsewhere = at(&h, Point { x_nm: 6_350_000, y_nm: 1_270_000 });
+    click_canvas_at(&mut h, elsewhere);
+    assert_eq!(h.state().session.revision(), revision, "the next click does not commit a cancelled move");
+
+    click_canvas_at(&mut h, middle);
+    assert!(!h.get_by_label("Move footprint").accesskit_node().is_disabled(), "Move is offered for selected copper");
+    click(&mut h, "Move footprint");
+    assert!(h.state().views.active.board.tracks.busy(), "the ribbon started a copper move");
+}

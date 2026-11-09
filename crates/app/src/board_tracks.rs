@@ -411,7 +411,8 @@ pub(super) fn interact(
     }
     let Some(source) = source.filter(|_| enabled) else { return out };
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) && state.busy() {
-        if state.draft.take().is_none() {
+        // Right-click ends the innermost gesture: a route or a copper move, else the tool.
+        if state.draft.take().is_none() && state.moving.take().is_none() {
             state.tool = false;
             state.via_tool = false;
         }
