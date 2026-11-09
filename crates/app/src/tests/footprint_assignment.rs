@@ -78,6 +78,8 @@ fn footprint_assignment_invalid_cancel_and_stale_dialog_preserve_state() {
     h.state_mut().begin_footprint_assignment(None);
     h.run();
     click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "Terminal 1");
+    click(&mut h, "Pad 2");
     click(&mut h, "Assign");
     assert!(matches!(h.state().dialog, Dialog::Footprint(_)));
     assert!(
@@ -252,6 +254,9 @@ fn browsing_another_package_cannot_silently_place_or_replace_the_saved_assignmen
     h.run();
     click(&mut h, "starter / Resistor 0603 (1608 metric) · r4");
     assert!(h.get_by_label("Place on board").accesskit_node().is_disabled());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    click(&mut h, "Terminal 1");
+    click(&mut h, "Pad 2");
     click(&mut h, "Assign");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     click(&mut h, "Close");

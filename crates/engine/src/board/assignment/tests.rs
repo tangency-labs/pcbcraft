@@ -248,3 +248,158 @@ fn mapping_capacity_and_numeric_looking_pad_names_are_preserved() {
     assert_eq!(a.inspect()["pad"], "01");
     assert_eq!(b.inspect()["pad"], "1");
 }
+
+/// Build three pinned parts with one existing placement and an accepted update baseline.
+fn group_fixture() -> (Session, Vec<String>) {
+    let mut session = fixture();
+    let mut components = Vec::new();
+    for index in 0..3 {
+        if index > 0 {
+            session.apply(PLACE_RESISTOR, &json!({"x_nm":index*10_000_000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        }
+        let component = session.project().unwrap().components().last().unwrap().id();
+        let mut params = choice(&session);
+        params["component"] = json!(component);
+        session.apply(ASSIGN_FOOTPRINT, &params).unwrap();
+        components.push(component);
+    }
+    session
+        .apply(
+            PLACE_ASSIGNED_FOOTPRINT,
+            &json!({"component":components[0],"x_nm":-50_000_000,"y_nm":25_000_000,"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    session.apply(crate::INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
+    (session, components)
+}
+
+/// A group preview is disposable, predicts actual geometry and leaves an unrelated plan token
+/// intact. Commit places every new part together; one Undo preserves the pre-existing placement.
+#[test]
+fn group_placement_preview_commit_history_and_offline_geometry_agree() {
+    let (mut session, components) = group_fixture();
+    session.apply(crate::PREVIEW_UPDATE, &json!({"expected_revision":session.revision()})).unwrap();
+    let token = session.cached_board_update().unwrap().plan_token;
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let params = json!({"components":components[1..],"x_nm":10_000_000,"y_nm":-5_000_000,"rotation":90,"expected_revision":revision});
+    let preview = session.preview_footprint_placement(&params).unwrap();
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert_eq!(session.cached_board_update().unwrap().plan_token, token);
+    let existing = session.inspect()["project"]["board"]["footprints"][0].clone();
+    session.apply(PLACE_ASSIGNED_FOOTPRINTS, &params).unwrap();
+    assert!(session.revision() > revision);
+    assert!(session.revision() >= preview.highest_id());
+    assert_eq!(session.inspect()["project"]["board"]["footprints"][0], existing);
+    let poses =
+        |project: &Project| project.boards().next().unwrap().footprints().map(|f| (f.id, f.component, f.position, f.rotation)).collect::<Vec<_>>();
+    assert_eq!(poses(&preview), poses(session.project().unwrap()));
+    assert_eq!(poses(&preview).len(), 3);
+    assert_ne!(poses(&preview)[1].2, poses(&preview)[2].2);
+    let accepted = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&accepted).unwrap()).unwrap(), accepted);
+    session.apply("edit.undo", &json!({})).unwrap();
+    crate::assert_same_content(&before, &session.snapshot().unwrap());
+    session.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), accepted);
+}
+
+/// Duplicate, unknown, placed, foreign, out-of-range and stale inputs reject the whole group,
+/// including a valid first component. No preview or rejected commit reserves IDs or history.
+#[test]
+fn group_placement_invalid_requests_never_partially_place_or_consume_ids() {
+    let (mut session, components) = group_fixture();
+    let before = session.snapshot().unwrap();
+    let params = json!({"components":components[1..],"x_nm":0,"y_nm":0,"expected_revision":session.revision()});
+    for (field, value) in [
+        ("components", json!([])),
+        ("components", json!([components[1], components[1]])),
+        ("components", json!([components[1], components[0]])),
+        ("components", json!([components[1], "component-999999"])),
+        ("components", json!(["component-01"])),
+        ("components", json!([1])),
+        ("board", json!(uuid::Uuid::nil())),
+        ("rotation", json!(45)),
+        ("x_nm", json!(crate::MAX_CENTER_NM)),
+        ("expected_revision", json!(session.revision() - 1)),
+    ] {
+        let mut invalid = params.clone();
+        invalid[field] = value;
+        assert!(session.preview_footprint_placement(&invalid).is_err(), "{invalid}");
+        assert!(session.apply(PLACE_ASSIGNED_FOOTPRINTS, &invalid).is_err(), "{invalid}");
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    }
+    let candidate = session.preview_footprint_placement(&params).unwrap();
+    session.apply(PLACE_ASSIGNED_FOOTPRINTS, &params).unwrap();
+    assert_eq!(session.project().unwrap().highest_id(), candidate.highest_id());
+}
+
+/// Desired assignments cannot bypass reviewed update acceptance just because the canvas has
+/// a convenient group-placement command. The retained baseline remains the physical authority.
+#[test]
+fn group_placement_refuses_pending_package_choices() {
+    let (mut session, components) = group_fixture();
+    let mut change = choice(&session);
+    change["component"] = json!(components[1]);
+    change["mapping"] = json!({"1":"1","2":"2"});
+    session.apply(ASSIGN_FOOTPRINT, &change).unwrap();
+    let before = session.snapshot().unwrap();
+    let params = json!({"components":components[1..],"x_nm":0,"y_nm":0,"expected_revision":session.revision()});
+    assert!(session.preview_footprint_placement(&params).is_err());
+    assert!(session.apply(PLACE_ASSIGNED_FOOTPRINTS, &params).is_err());
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// Defaults are suggestions, not assignments: matching IDs cover named or unnamed terminals,
+/// incompatible/unknown inputs stay unresolved, and an exact saved custom map takes precedence.
+#[test]
+fn footprint_mapping_defaults_preserve_saved_choices_without_authoring_edits() {
+    let mut session = fixture();
+    let component = session.project().unwrap().components().next().unwrap().id();
+    let package = definition::starter("resistor-0402").unwrap();
+    let before = session.snapshot().unwrap();
+    assert_eq!(
+        session.project().unwrap().default_footprint_mapping(&component, &package),
+        Some(BTreeMap::from([("1".into(), "1".into()), ("2".into(), "2".into())]))
+    );
+    assert!(session.project().unwrap().default_footprint_mapping("component-999999", &package).is_none());
+    assert!(session.project().unwrap().default_footprint_mapping("component-01", &package).is_none());
+    assert!(session.project().unwrap().default_footprint_mapping(&component, &definition::starter("sot23").unwrap()).is_none());
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    let mut params = choice(&session);
+    params["component"] = json!(component);
+    session.apply(ASSIGN_FOOTPRINT, &params).unwrap();
+    assert_eq!(
+        session.project().unwrap().default_footprint_mapping(&component, &package),
+        Some(BTreeMap::from([("1".into(), "2".into()), ("2".into(), "1".into())]))
+    );
+}
+
+/// Exact catalog data accounts for the two supported starter LED symbol revisions' polarity;
+/// unrelated two-pad packages receive ordinary numeric defaults instead of being left empty.
+#[test]
+fn named_pin_defaults_use_revision_qualified_library_mappings() {
+    for revision in [1, 2] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":true})).unwrap();
+        session
+            .apply(
+                crate::PLACE_SYMBOL,
+                &json!({"definition":"led","definition_revision":revision,"x_nm":0,"y_nm":0,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+        let component = session.project().unwrap().components().next().unwrap().id();
+        let project = session.project().unwrap();
+        assert_eq!(project.components().next().unwrap().definition.revision(), revision);
+        assert_eq!(
+            project.default_footprint_mapping(&component, &definition::starter("led-0402").unwrap()),
+            Some(BTreeMap::from([("1".into(), "2".into()), ("2".into(), "1".into())]))
+        );
+        assert_eq!(
+            project.default_footprint_mapping(&component, &definition::starter("capacitor-0402").unwrap()),
+            Some(BTreeMap::from([("1".into(), "1".into()), ("2".into(), "2".into())]))
+        );
+        assert!(project.footprint_assignments().is_empty());
+    }
+}

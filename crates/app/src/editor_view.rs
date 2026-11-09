@@ -162,6 +162,7 @@ pub(super) struct BoardState {
     pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) draft: Option<crate::board_canvas::Draft>,
+    pub(super) placement: Option<crate::board_canvas::Placement>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     pub(super) move_requested: bool,
     pub(super) rotate_requested: u16,
@@ -561,6 +562,7 @@ impl EditorView {
     pub(super) fn cancel_gesture(&mut self) {
         self.board.drawing.cancel();
         self.board.draft = None;
+        self.board.placement = None;
         self.board.box_drag = None;
         self.board.move_requested = false;
         self.board.rotate_requested = 0;
@@ -660,6 +662,9 @@ impl EditorView {
         }
         if self.board.box_drag.as_ref().is_some_and(|drag| !self.accepts(drag.source, session)) {
             self.cancel_gesture();
+        }
+        if self.board.placement.as_ref().is_some_and(|placement| !self.accepts(placement.source, session)) {
+            self.board.placement = None;
         }
         if self.board.draft.as_ref().is_some_and(|draft| !self.accepts(draft.source, session)) {
             self.cancel_gesture();

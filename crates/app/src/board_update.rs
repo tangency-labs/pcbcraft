@@ -1,6 +1,6 @@
 //! Review one captured schematic-to-board change set without granting stale approval authority.
 use crate::{Dialog, PcbApp, ViewId, ViewInput, editor_view::DocumentTarget};
-use pcbcraft_chrome::{catalog, shell};
+use pcbcraft_chrome::{pcb_update as form, shell};
 use pcbcraft_engine::{
     APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE, Project,
     board::{
@@ -31,6 +31,9 @@ pub(super) struct Edit {
     phase: Phase,
     stale: bool,
     error: Option<String>,
+    place_new_footprints: bool,
+    filters: form::Filters,
+    report: Vec<(Option<u64>, form::Message)>,
 }
 
 #[derive(Default)]
@@ -42,8 +45,7 @@ enum Action {
     Review,
     Apply,
     Assign(u64),
-    Place(u64),
-    Close,
+    PlaceAll,
 }
 
 impl Edit {
@@ -87,6 +89,9 @@ impl PcbApp {
             phase: update_phase(project),
             stale: false,
             error: None,
+            place_new_footprints: true,
+            filters: form::Filters::default(),
+            report: Vec::new(),
         };
         if edit.phase == Phase::Review {
             edit.error = self.review_board_update(&mut edit).err();
@@ -116,6 +121,7 @@ impl PcbApp {
         let preview = self.session.cached_board_update().ok_or("The update preview is unavailable. Review again.")?;
         edit.plan = Some(preview.plan_token);
         edit.source = source;
+        edit.report = report_entries(&preview);
         edit.phase = Phase::Review;
         Ok(())
     }
@@ -141,6 +147,9 @@ impl PcbApp {
         if let Some(source) = self.views.view(edit.source.view()).and_then(|view| view.input(&self.session)) {
             edit.source = source;
         }
+        if edit.phase == Phase::Review {
+            edit.error = self.review_board_update(&mut edit).err();
+        }
         self.dialog = Dialog::BoardUpdate(edit);
     }
 
@@ -161,7 +170,19 @@ impl PcbApp {
         }
         let project = self.session.snapshot();
         let mut action = Action::None;
-        let closing = shell::scrolling_dialog_width(ctx, "board_update", "Update PCB from schematic", 760.0, |ui| {
+        let missing_legacy_package = project.as_ref().is_some_and(|project| {
+            let choices = Baseline::current_choices(project);
+            project.components().any(|component| {
+                component_number(&component.id()).is_some_and(|id| project.component_is_board_eligible(id) && !choices.contains_key(&id))
+            })
+        });
+        let (primary, enabled) = match edit.phase {
+            Phase::Create => ("Create board", context && source_current),
+            Phase::Initialize => ("Use current state", context && source_current && !missing_legacy_package),
+            _ => ("Update PCB", can_apply),
+        };
+        let has_report = matches!(edit.phase, Phase::Review | Phase::Applied) && context;
+        let response = form::form(ctx, primary, enabled, has_report, |ui| {
             if !context {
                 ui.label("The project or source pane changed. Close this review and open Update PCB again.");
             } else {
@@ -172,14 +193,10 @@ impl PcbApp {
                 }
                 match edit.phase {
                     Phase::Create => {
-                        ui.label("This project has no PCB. Creating its first board is a separate undoable edit.");
-                        if ui.add_enabled(source_current, catalog::button("Create board", true)).clicked() {
-                            action = Action::Create;
-                        }
+                        ui.label("Create a PCB for this schematic.");
                     }
                     Phase::Initialize => {
                         ui.label("Existing footprints have no recorded accepted state. Choosing “Use current state” records today's schematic, footprint choices and connections as its starting point; earlier accepted history is unavailable.");
-                        let mut missing = false;
                         if let Some(project) = project.as_ref() {
                             let choices = Baseline::current_choices(project);
                             for component in project.components() {
@@ -187,7 +204,6 @@ impl PcbApp {
                                     && project.component_is_board_eligible(id)
                                     && !choices.contains_key(&id)
                                 {
-                                    missing = true;
                                     let label = format!("Assign footprint to {}", component.reference());
                                     if ui.button(label).clicked() {
                                         action = Action::Assign(id);
@@ -195,13 +211,11 @@ impl PcbApp {
                                 }
                             }
                         }
-                        if ui.add_enabled(source_current && !missing, catalog::button("Use current state", true)).clicked() {
-                            action = Action::Initialize;
-                        }
                     }
                     Phase::Review => {
                         if let Some(preview) = preview.as_ref().filter(|_| current_plan) {
-                            draw_preview(ui, preview, &mut action);
+                            form::options(ui, &mut edit.place_new_footprints);
+                            draw_report(ui, &edit.report, &mut edit.filters, &mut action, preview.changes.is_noop());
                             if preview.changes.is_noop()
                                 && let Some(project) = project.as_ref()
                             {
@@ -212,7 +226,9 @@ impl PcbApp {
                         }
                     }
                     Phase::Applied => {
+                        ui.add_enabled_ui(false, |ui| form::options(ui, &mut edit.place_new_footprints));
                         ui.label("PCB updated.");
+                        draw_report(ui, &edit.report, &mut edit.filters, &mut action, true);
                         if source_current {
                             if let Some(project) = project.as_ref() {
                                 draw_unplaced(ui, project, &mut action);
@@ -229,20 +245,15 @@ impl PcbApp {
             if let Some(error) = &edit.error {
                 ui.label(shell::error(error));
             }
-            ui.separator();
-            ui.horizontal(|ui| {
-                let apply = edit.phase == Phase::Review
-                    && ui.push_id(edit.plan, |ui| ui.add_enabled(can_apply, catalog::button("Apply update", true)).clicked()).inner;
-                if apply {
-                    action = Action::Apply;
-                }
-                let close = if edit.phase == Phase::Applied || !context { "Close" } else { "Cancel" };
-                if ui.button(close).clicked() {
-                    action = Action::Close;
-                }
-            });
         });
-        if closing || matches!(action, Action::Close) {
+        if response.primary {
+            action = match edit.phase {
+                Phase::Create => Action::Create,
+                Phase::Initialize => Action::Initialize,
+                _ => Action::Apply,
+            };
+        }
+        if response.close {
             self.cancel_board_update_review(&mut edit);
             self.repaint_editors(ctx);
             return;
@@ -297,19 +308,17 @@ impl PcbApp {
                         edit.source = source;
                     }
                 }),
-            Action::Assign(component) | Action::Place(component) => {
+            Action::PlaceAll => {
                 self.cancel_board_update_review(&mut edit);
-                if matches!(action, Action::Place(_))
-                    && let Some(board) = edit.board
-                    && let Some(view) = self.views.view_mut(edit.source.view())
-                {
-                    edit.phase = Phase::Applied;
-                    view.open_document(DocumentTarget::Board(board), &self.session);
-                    edit.document = DocumentTarget::Board(board);
-                    if let Some(source) = view.input(&self.session) {
-                        edit.source = source;
-                    }
+                if let Err(error) = self.begin_updated_footprints(&edit, ctx) {
+                    edit.error = Some(error);
+                    self.dialog = Dialog::BoardUpdate(edit);
                 }
+                self.repaint_editors(ctx);
+                return;
+            }
+            Action::Assign(component) => {
+                self.cancel_board_update_review(&mut edit);
                 let previous = self.views.active.id();
                 self.views.bind(edit.source.view());
                 self.begin_footprint_assignment(Some(format!("component-{component}")));
@@ -326,7 +335,59 @@ impl PcbApp {
         self.views.sync(&self.session);
         self.repaint_editors(ctx);
         edit.error = result.err();
-        self.dialog = Dialog::BoardUpdate(edit);
+        if matches!(action, Action::Apply) && edit.error.is_none() && edit.place_new_footprints {
+            if let Err(error) = self.begin_updated_footprints(&edit, ctx) {
+                edit.error = Some(error);
+                self.dialog = Dialog::BoardUpdate(edit);
+            }
+        } else {
+            self.dialog = Dialog::BoardUpdate(edit);
+        }
+    }
+    /// Switch only the originating pane after successful acceptance and capture the remaining
+    /// accepted assignments for a disposable group placement. Cancelling placement retains them.
+    fn begin_updated_footprints(&mut self, edit: &Edit, ctx: &egui::Context) -> Result<(), String> {
+        let project = self.session.project().ok_or("No project is open.")?;
+        let components: Vec<_> = project
+            .footprint_assignments()
+            .into_iter()
+            .filter(|a| a["placed"] == false && a["pending_update"] != true && a["pending_removal"] != true)
+            .filter_map(|a| a["component"].as_str().map(str::to_owned))
+            .filter(|id| component_number(id).is_some_and(|id| project.component_is_board_eligible(id)))
+            .collect();
+        let board = edit.board.ok_or("The board is unavailable.")?;
+        let candidate = if components.is_empty() {
+            None
+        } else {
+            Some(
+                self.session
+                    .preview_footprint_placement(
+                        &json!({"board":board.board,"components":components,"x_nm":0,"y_nm":0,"expected_revision":self.session.revision()}),
+                    )
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let owner = self.views.owner(edit.source.view()).ok_or("The source pane is unavailable.")?;
+        let host = self.views.host;
+        self.bind_editor_host(owner);
+        self.activate_editor(ctx, edit.source.view());
+        let view = self.views.view_mut(edit.source.view()).ok_or("The source pane is unavailable.")?;
+        view.open_document(DocumentTarget::Board(board), &self.session);
+        if let Some(candidate) = candidate {
+            let source = view.input(&self.session).ok_or("The source pane is unavailable.")?;
+            view.board.placement = Some(crate::board_canvas::Placement {
+                source,
+                components,
+                candidate,
+                handoff: true,
+                position: pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 },
+                rotation: 0,
+            });
+        }
+        self.message = None;
+        self.bind_editor_host(host);
+        ctx.send_viewport_cmd_to(crate::editor_windows::viewport(owner), egui::ViewportCommand::Focus);
+        Ok(())
     }
 }
 
@@ -365,51 +426,96 @@ fn mapping_label(package: Option<&Package>) -> String {
     )
 }
 
-/// Present complete typed changes and blockers without creating a second mutable update plan.
-fn draw_preview(ui: &mut egui::Ui, preview: &BoardUpdatePreview<'_>, action: &mut Action) {
-    if preview.changes.is_noop() {
-        ui.label("PCB is up to date.");
-        return;
-    }
+/// Project typed changes into report text without creating another mutable update plan. Missing
+/// package rows carry canonical component IDs; report filters cannot change approval or mutations.
+fn report_entries(preview: &BoardUpdatePreview<'_>) -> Vec<(Option<u64>, form::Message)> {
+    let mut rows = Vec::new();
     for Blocker::MissingPackage { component } in &preview.changes.blockers {
-        if ui.button(format!("Assign footprint to {}", component_label(preview, *component))).clicked() {
-            *action = Action::Assign(*component);
-        }
+        let label = component_label(preview, *component);
+        rows.push((
+            Some(*component),
+            form::Message {
+                kind: form::Kind::Error,
+                text: format!("{label}: no footprint assigned."),
+                action: Some(format!("Assign footprint to {label}")),
+            },
+        ));
     }
     for change in &preview.changes.components {
-        let (component, kind) = match change {
-            ComponentChange::Added { component } => (*component, "Add"),
-            ComponentChange::Removed { component } => (*component, "Remove"),
-            ComponentChange::Definition { component } => (*component, "Change symbol"),
-            ComponentChange::Package { component } => (*component, "Replace footprint"),
-            ComponentChange::Mapping { component } => (*component, "Change pin mapping"),
+        let (id, verb) = match change {
+            ComponentChange::Added { component } => (*component, "Add footprint"),
+            ComponentChange::Removed { component } => (*component, "Remove footprint"),
+            ComponentChange::Definition { component } => (*component, "Update symbol definition for"),
+            ComponentChange::Package { component } => (*component, "Replace footprint for"),
+            ComponentChange::Mapping { component } => (*component, "Update pin mapping for"),
         };
-        ui.collapsing(format!("{kind} {}", component_label(preview, component)), |ui| {
-            let old = preview.accepted_component(component);
-            let new = preview.proposed_component(component);
-            ui.label(format!("Previous footprint: {}", old.map_or_else(|| "Not on PCB".into(), |part| package_label(part.package.as_ref()))));
-            ui.label(format!("Proposed footprint: {}", new.map_or_else(|| "Removed".into(), |part| package_label(part.package.as_ref()))));
-            ui.label(format!("Previous mapping: {}", old.map_or_else(|| "Not on PCB".into(), |part| mapping_label(part.package.as_ref()))));
-            ui.label(format!("Proposed mapping: {}", new.map_or_else(|| "Removed".into(), |part| mapping_label(part.package.as_ref()))));
+        let label = component_label(preview, id);
+        let old = preview.accepted_component(id);
+        let new = preview.proposed_component(id);
+        let package = new.or(old).and_then(|part| part.package.as_ref());
+        rows.push((None, form::Message { kind: form::Kind::Action, text: format!("{verb} {label}: {}.", package_label(package)), action: None }));
+        if matches!(change, ComponentChange::Removed { .. }) {
+            rows.push((None, form::Message { kind: form::Kind::Warning, text: format!("{label} will be removed from the PCB."), action: None }));
+        } else {
+            let mapping = new.and_then(|part| part.package.as_ref());
+            if mapping.is_some() {
+                rows.push((
+                    None,
+                    form::Message { kind: form::Kind::Info, text: format!("{label} pin mapping: {}.", mapping_label(mapping)), action: None },
+                ));
+            }
+            if let Some(old) = old {
+                rows.push((
+                    None,
+                    form::Message {
+                        kind: form::Kind::Info,
+                        text: format!(
+                            "Previous footprint for {label}: {}. Previous mapping: {}.",
+                            package_label(old.package.as_ref()),
+                            mapping_label(old.package.as_ref())
+                        ),
+                        action: None,
+                    },
+                ));
+            }
             if matches!(change, ComponentChange::Definition { .. }) {
                 let symbol =
                     |part: &pcbcraft_engine::board::update::ComponentState| format!("{} / {} · r{}", part.library, part.definition, part.revision);
-                ui.label(format!("Previous symbol: {}", old.map_or_else(|| "Not on PCB".into(), symbol)));
-                ui.label(format!("Proposed symbol: {}", new.map_or_else(|| "Removed".into(), symbol)));
+                rows.push((
+                    None,
+                    form::Message {
+                        kind: form::Kind::Info,
+                        text: format!(
+                            "{label} symbol: {} → {}.",
+                            old.map_or_else(|| "None".into(), symbol),
+                            new.map_or_else(|| "None".into(), symbol)
+                        ),
+                        action: None,
+                    },
+                ));
             }
-        });
-    }
-    if !preview.changes.removed_nets.is_empty() {
-        ui.strong("Previous connections");
-        for net in &preview.changes.removed_nets {
-            ui.label(net_label(preview, net));
         }
     }
-    if !preview.changes.added_nets.is_empty() {
-        ui.strong("Updated connections");
-        for net in &preview.changes.added_nets {
-            ui.label(net_label(preview, net));
+    for (nets, verb) in [(&preview.changes.removed_nets, "Remove previous connections"), (&preview.changes.added_nets, "Update connections")] {
+        for net in nets {
+            rows.push((None, form::Message { kind: form::Kind::Info, text: format!("{verb} — {}.", net_label(preview, net)), action: None }));
         }
+    }
+    if rows.is_empty() {
+        rows.push((None, form::Message { kind: form::Kind::Info, text: "PCB is up to date.".into(), action: None }));
+    }
+    rows
+}
+
+/// Keep report selection and clipboard export separate from domain changes and plan authority.
+fn draw_report(ui: &mut egui::Ui, rows: &[(Option<u64>, form::Message)], filters: &mut form::Filters, action: &mut Action, trailing_actions: bool) {
+    let messages: Vec<_> = rows.iter().map(|(_, message)| message).collect();
+    let selected = form::report(ui, &messages, filters, trailing_actions);
+    if let Some(component) = selected.row.and_then(|index| rows.get(index)).and_then(|row| row.0) {
+        *action = Action::Assign(component);
+    }
+    if selected.copy {
+        ui.ctx().copy_text(rows.iter().map(|(_, message)| message.text.as_str()).collect::<Vec<_>>().join("\n"));
     }
 }
 
@@ -440,14 +546,8 @@ fn draw_unplaced(ui: &mut egui::Ui, project: &Project, action: &mut Action) {
         ui.label("No unplaced footprints.");
         return;
     }
-    ui.strong(format!("Unplaced footprints ({})", unplaced.len()));
-    for assignment in unplaced {
-        if let Some(component) = assignment["component"].as_str()
-            && let Some(part) = project.components().find(|part| part.id() == component)
-            && let Some(id) = component_number(component)
-            && ui.button(format!("Place {}…", part.reference())).clicked()
-        {
-            *action = Action::Place(id);
-        }
+    ui.label(if unplaced.len() == 1 { "1 footprint ready to place".into() } else { format!("{} footprints ready to place", unplaced.len()) });
+    if ui.button("Place footprints").clicked() {
+        *action = Action::PlaceAll;
     }
 }

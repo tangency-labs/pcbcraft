@@ -323,20 +323,40 @@ impl PcbApp {
 
     /// Cancel old host input on actual native focus changes, never on repaint. A modal retains
     /// its captured view address until it is submitted or cancelled in the primary window.
+    /// An accepted PCB placement handoff can wait for its target host to receive focus; after
+    /// that initial handoff, losing focus cancels it normally.
     pub(super) fn editor_window_focus(&mut self, ctx: &Context) {
-        if !ctx.input(|input| input.focused) {
+        let focused = ctx.input(|input| input.focused);
+        // Only a just-accepted Update PCB handoff may wait for its originating native host.
+        // Once interactive, ordinary focus loss cancels it like every other canvas gesture.
+        let waiting = self
+            .views
+            .active
+            .board
+            .placement
+            .as_ref()
+            .is_some_and(|placement| placement.handoff && self.views.active.accepts(placement.source, &self.session));
+        let handoff = if waiting { self.views.active.board.placement.take() } else { None };
+        if !focused {
             self.views.active.cancel_gesture();
             self.cancel_library_host_gestures();
-            return;
-        }
-        let host = ctx.viewport_id();
-        if self.windows.focused != Some(host) {
-            if self.windows.focused.is_some() && self.windows.drag.is_none() && matches!(self.dialog, Dialog::None) {
-                self.views.suspend();
-                self.cancel_library_gestures();
-                egui::DragAndDrop::clear_payload(ctx);
+        } else {
+            let host = ctx.viewport_id();
+            if self.windows.focused != Some(host) {
+                if self.windows.focused.is_some() && self.windows.drag.is_none() && matches!(self.dialog, Dialog::None) {
+                    self.views.suspend();
+                    self.cancel_library_gestures();
+                    egui::DragAndDrop::clear_payload(ctx);
+                }
+                self.windows.focused = Some(host);
             }
-            self.windows.focused = Some(host);
+        }
+        if let Some(mut placement) = handoff
+            && let Some(source) = self.views.active.input(&self.session)
+        {
+            placement.source = source;
+            placement.handoff = !focused;
+            self.views.active.board.placement = Some(placement);
         }
     }
 

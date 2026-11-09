@@ -281,8 +281,8 @@ impl PcbApp {
                                     if pcbcraft_chrome::catalog::footprint_result(ui, &label, &definition.name, &detail, selected).clicked()
                                         && !selected
                                     {
+                                        edit.mapping = project.default_footprint_mapping(&edit.component, &definition).unwrap_or_default();
                                         edit.definition = Some(definition);
-                                        edit.mapping.clear();
                                         edit.camera = Default::default();
                                         edit.error = None;
                                         edit.reveal_error = false;
@@ -304,29 +304,42 @@ impl PcbApp {
                                 &format!("{} / {} · revision {}", definition.library, definition.id, definition.revision),
                             );
                             crate::library_preview::interactive_footprint(ui, definition, &mut edit.camera);
-                            ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
-                            form::card(ui, "Pin mapping", |ui| {
+                            form::group(ui, "Pin mapping", |ui| {
                                 if let Some(component) = project.components().find(|c| c.id() == edit.component) {
                                     ui.add_enabled_ui(editable, |ui| {
                                         let pins = component.definition.pins();
                                         let numbers: std::collections::BTreeSet<_> = pins.iter().map(|p| p.number.as_str()).collect();
                                         let pads: std::collections::BTreeSet<_> = definition.pads.iter().map(|p| p.number.as_str()).collect();
-                                        if ui.add_enabled(numbers == pads, egui::Button::new("Match numbers")).clicked() {
-                                            edit.mapping = numbers.into_iter().map(|id| (id.into(), id.into())).collect();
-                                        }
+                                        form::mapping_header(ui);
                                         for pin in pins {
                                             let mapped = edit.mapping.entry(pin.number.clone()).or_default();
                                             let options: Vec<_> = std::iter::once(("", "Choose pad".into()))
                                                 .chain(definition.pads.iter().map(|pad| (pad.number.as_str(), format!("Pad {}", pad.number))))
                                                 .collect();
-                                            form::choice(
+                                            form::mapping_choice(
                                                 ui,
-                                                &format!("Terminal {}", pin.number),
+                                                &pin.name.as_ref().filter(|name| *name != &pin.number).map_or_else(
+                                                    || format!("Terminal {}", pin.number),
+                                                    |name| format!("Terminal {} · {name}", pin.number),
+                                                ),
                                                 ui.id().with((&edit.component, &pin.number)),
                                                 mapped,
                                                 &options,
                                             );
                                         }
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(ui.available_width(), pcbcraft_chrome::Tokens::get().control_height),
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .add_enabled(numbers == pads, pcbcraft_chrome::settings::action_button("Match numbers", false))
+                                                    .on_hover_text("Replace all connections with matching terminal and pad numbers")
+                                                    .clicked()
+                                                {
+                                                    edit.mapping = numbers.into_iter().map(|id| (id.into(), id.into())).collect();
+                                                }
+                                            },
+                                        );
                                     });
                                 }
                             });
@@ -412,7 +425,9 @@ impl PcbApp {
                         self.views.select_board(std::collections::BTreeSet::from([footprint.id]), &self.session, self.preferences.selection_follow);
                     }
                     self.repaint_editors(ctx);
-                    if assign && let Some(source) = self.views.view(edit.source.view()).and_then(|v| v.input(&self.session)) {
+                    if assign && let Some(review) = edit.update_review.take() {
+                        self.resume_board_update(review);
+                    } else if assign && let Some(source) = self.views.view(edit.source.view()).and_then(|v| v.input(&self.session)) {
                         edit.source = source;
                         edit.error = None;
                         self.dialog = Dialog::Footprint(Box::new(edit));

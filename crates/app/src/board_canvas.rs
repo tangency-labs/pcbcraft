@@ -27,6 +27,19 @@ pub(super) struct Draft {
     drag: bool,
 }
 
+/// A captured group of accepted assignments has preview geometry but no live placements.
+/// The engine revalidates the same component set and revision when the canvas commits it.
+#[derive(Clone, Debug)]
+pub(super) struct Placement {
+    pub(super) source: ViewInput,
+    pub(super) components: Vec<String>,
+    pub(super) candidate: std::sync::Arc<pcbcraft_engine::Project>,
+    /// Await the originating native host's first focused frame without starting a gesture there.
+    pub(super) handoff: bool,
+    pub(super) position: Point,
+    pub(super) rotation: u16,
+}
+
 /// A disposable marquee captures its view/revision and starting selection until release.
 #[derive(Clone, Debug)]
 pub(super) struct BoxDrag {
@@ -44,6 +57,7 @@ pub(super) struct Interaction {
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) edit: Option<Draft>,
+    pub(super) placement: Option<Placement>,
 }
 
 /// Select footprints by click or directional marquee; preview one footprint transform at a time.
@@ -77,6 +91,8 @@ pub(super) fn show(
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     camera.navigate_board(&response, rect, project, enabled, navigation);
+    let placement_enabled = enabled;
+    let enabled = enabled && state.placement.is_none();
     let copper = project.setup().map(|setup| {
         setup
             .layers()
@@ -301,13 +317,104 @@ pub(super) fn show(
             state.box_drag = None;
         }
     }
-    if project.footprints().next().is_none() && project.drawings().is_empty() && state.drawing.tool.is_none() {
+    if project.footprints().next().is_none() && project.drawings().is_empty() && state.drawing.tool.is_none() && state.placement.is_none() {
         board::empty(&p, rect);
     }
-    if state.draft.is_some() {
+    out.placement = place_group(ui, &response, project, camera, state, source, appearance, placement_enabled, visible, color, rotation);
+    if state.draft.is_some() || state.placement.is_some() {
         response.on_hover_cursor(egui::CursorIcon::Grabbing);
     }
     out
+}
+
+/// Preview a new group using engine-resolved geometry. Until a click commits, cancellation,
+/// focus loss or stale input discards only presentation state, retaining assignments. Inert render
+/// passes retain the handoff but cannot commit it; opening a modal cancels gestures at the host.
+#[allow(clippy::too_many_arguments)]
+fn place_group(
+    ui: &mut Ui,
+    response: &egui::Response,
+    project: BoardView<'_>,
+    camera: &Camera,
+    state: &mut BoardState,
+    source: Option<ViewInput>,
+    appearance: &crate::board_appearance::Appearance,
+    enabled: bool,
+    visible: bool,
+    color: egui::Color32,
+    rotation: u16,
+) -> Option<Placement> {
+    let mut placement = state.placement.take()?;
+    if Some(placement.source) != source {
+        return None;
+    }
+    if placement.handoff && !ui.input(|input| input.focused) {
+        state.placement = Some(placement);
+        return None;
+    }
+    if ui.input(|i| {
+        i.pointer.button_pressed(PointerButton::Secondary) || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))
+    }) {
+        return None;
+    }
+    if !enabled {
+        state.placement = Some(placement);
+        return None;
+    }
+    placement.handoff = false;
+    placement.rotation = (placement.rotation + rotation) % 360;
+    if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()).filter(|p| response.rect.contains(*p)) {
+        placement.position = camera.snap(pointer, response.rect);
+    }
+    let transform = |point: Point| {
+        let (x, y) = rotate(point.x_nm, point.y_nm, (placement.rotation / 90) as u8);
+        Point { x_nm: placement.position.x_nm + x, y_nm: placement.position.y_nm + y }
+    };
+    if let Some(board) = placement.candidate.board_view(project.target) {
+        let components: BTreeSet<_> = placement.components.iter().map(String::as_str).collect();
+        let ids: BTreeSet<_> = board.footprints().filter(|f| components.contains(f.component.as_str())).map(|f| f.id).collect();
+        if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
+            && let Some(ratsnest) = board.ratsnest()
+        {
+            for line in ratsnest.lines.iter().filter(|line| ids.contains(&line.from.footprint) || ids.contains(&line.to.footprint)) {
+                let point = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {
+                    if ids.contains(&endpoint.footprint) { transform(endpoint.position) } else { endpoint.position }
+                };
+                pcbcraft_chrome::board::airwire(
+                    ui.painter(),
+                    camera.screen(point(&line.from), response.rect),
+                    camera.screen(point(&line.to), response.rect),
+                );
+            }
+        }
+        for mut footprint in board.footprints().filter(|f| ids.contains(&f.id)) {
+            for pad in &mut footprint.pads {
+                pad.center = transform(pad.center);
+                pad.copper = pad.copper.map(|p| p.map(transform));
+            }
+            for graphic in &mut footprint.graphics {
+                graphic.points = graphic.points.iter().copied().map(transform).collect();
+            }
+            footprint.position = transform(footprint.position);
+            footprint.rotation = placement.rotation;
+            let (pads, graphics) = drawing(&footprint, camera, response.rect, board, state, visible, appearance);
+            pcbcraft_chrome::board::footprint(
+                ui.painter(),
+                &pads,
+                &graphics,
+                if footprint.physical_reference { "" } else { footprint.reference },
+                camera.screen(footprint.position, response.rect),
+                color,
+                true,
+                false,
+            );
+        }
+    }
+    if response.clicked() && response.contains_pointer() {
+        return Some(placement);
+    }
+    state.placement = Some(placement);
+    None
 }
 
 /// Select only visible footprint bounds, sharing the exact geometry used for click picking.
