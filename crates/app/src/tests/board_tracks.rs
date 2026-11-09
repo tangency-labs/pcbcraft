@@ -605,12 +605,17 @@ fn flip_view_mirrors_drawing_and_picking_without_editing() {
     assert!(h.query_by_label("Bottom view").is_some(), "an error does not hide the mirrored orientation");
     h.state_mut().message = None;
     h.run();
+    // Flip back before selecting: selection changes the Properties card, which moves the
+    // uncovered canvas center that flipping reflects about.
+    click(&mut h, "View the board from below");
+    assert!(!h.state().views.active.camera.mirrored());
+    assert!((at(&h, left) - left_before).length() < 0.5, "flipping back restores the view");
+    click(&mut h, "View the board from below");
     let middle = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
     click_canvas_at(&mut h, middle);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "picking follows the mirror");
     click(&mut h, "View the board from below");
     assert!(!h.state().views.active.camera.mirrored());
-    assert!((at(&h, left) - left_before).length() < 0.5, "flipping back restores the view");
     let ctx = h.ctx.clone();
     let view = h.state().views.active.id().0;
     h.state_mut().run_window_command(&ctx, "view.set_board_flipped", &json!({"view":view,"flipped":true})).unwrap();
