@@ -47,7 +47,11 @@ impl Assignment {
     pub(crate) fn valid(&self, project: &Project) -> bool {
         let footprint = self.footprint(1, Point { x_nm: 0, y_nm: 0 });
         footprint.valid()
-            && project.components.get(&self.component).is_some_and(|component| project.board.mapping_valid(&footprint, &component.definition))
+            && if let Some(baseline) = &project.board.baseline {
+                baseline.validate_assignment(self)
+            } else {
+                project.components.get(&self.component).is_some_and(|component| project.board.mapping_valid(&footprint, &component.definition))
+            }
             && project
                 .board
                 .by_component
@@ -62,6 +66,9 @@ impl Assignment {
         value["component"] = json!(format!("component-{}", self.component));
         value["board"] = json!(project.board_target().map(|target| target.board));
         value["placed"] = json!(project.board.by_component.contains_key(&self.component));
+        if !project.components.contains_key(&self.component) {
+            value["pending_removal"] = json!(true);
+        }
         value
     }
 }
@@ -137,6 +144,11 @@ impl Session {
             mapping: super::parse_mapping(&params["mapping"]).ok_or_else(|| CommandError::InvalidParams("invalid terminal-to-pad mapping".into()))?,
         };
         let key = assignment.key();
+        if project.board.baseline.as_ref().is_some_and(|baseline| !baseline.validate_assignment(&assignment)) {
+            return Err(CommandError::Unavailable(
+                "New or changed package assignments require reviewed board update support in baseline mode.".into(),
+            ));
+        }
         let definition = project
             .board
             .definitions
@@ -158,8 +170,7 @@ impl Session {
             return Ok(());
         }
         Arc::make_mut(&mut next.board).assignments.insert(component, assignment);
-        let used: std::collections::BTreeSet<_> =
-            next.board.assignments.values().map(Assignment::key).chain(next.board.footprints().iter().filter_map(Footprint::key)).collect();
+        let used = next.board.used_package_keys();
         Arc::make_mut(&mut next.board).definitions.retain(|key, _| used.contains(key));
         self.change(next);
         Ok(())

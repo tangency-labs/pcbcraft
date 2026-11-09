@@ -111,6 +111,8 @@ pub struct FootprintView<'a> {
     pub pads: Vec<PadView>,
     pub graphics: Vec<GraphicView>,
     pub physical_reference: bool,
+    /// The accepted source was removed from the schematic; physical removal is pending.
+    pub pending_removal: bool,
 }
 
 impl Project {
@@ -187,13 +189,16 @@ impl<'a> BoardView<'a> {
     /// Resolve placements without assuming starter-definition geometry in a renderer.
     pub fn footprints(self) -> impl Iterator<Item = FootprintView<'a>> {
         self.project.board.footprints().iter().filter_map(move |footprint| {
-            let component = self.project.components.get(&footprint.component)?;
+            let component = self.project.components.get(&footprint.component);
+            let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
+            let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
+            let value = component.map(|component| component.value()).or_else(|| historical.map(|component| component.value.as_str()))?;
             Some(FootprintView {
                 board: self.target,
                 id: format!("footprint-{}", footprint.id),
-                component: component.id(),
-                reference: component.reference(),
-                value: component.value(),
+                component: format!("component-{}", footprint.component),
+                reference,
+                value,
                 definition: &footprint.definition,
                 position: Point { x_nm: footprint.x_nm, y_nm: footprint.y_nm },
                 rotation: footprint.rotation,
@@ -207,7 +212,11 @@ impl<'a> BoardView<'a> {
                         let definition = self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.as_str()));
                         let copper = definition.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
                         let terminal = footprint.component_pin(pad).and_then(|(component, pin)| self.project.component_terminal(component, pin));
-                        let net = terminal.and_then(|terminal| net_label(self.project, terminal));
+                        let net = if let Some(baseline) = &self.project.board.baseline {
+                            footprint.component_pin(pad).and_then(|(component, pin)| baseline.net_name(component, pin))
+                        } else {
+                            terminal.and_then(|terminal| net_label(self.project, terminal))
+                        };
                         Some(PadView {
                             number: pad.as_str().to_owned(),
                             center,
@@ -221,8 +230,9 @@ impl<'a> BoardView<'a> {
                         })
                     })
                     .collect(),
-                graphics: graphics(self.project, footprint, component.reference()),
+                graphics: graphics(self.project, footprint, reference),
                 physical_reference: self.project.board.definition_for(footprint).is_some_and(|d| d.reference.is_some()),
+                pending_removal: component.is_none(),
             })
         })
     }

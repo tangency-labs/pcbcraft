@@ -409,6 +409,7 @@ pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT};
+pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
 pub const SET_FOOTPRINT_TRANSFORM: &str = "pcb.set_footprint_transform";
 /// Remove board placements while retaining components and physical package assignments.
@@ -841,6 +842,12 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: INITIALIZE_UPDATE_BASELINE,
+        title: "Initialize Reviewed Board Updates",
+        summary: "Adopt current assigned packages and connectivity as an accepted board baseline. Later schematic removals retain their physical footprints pending reviewed update support.",
+        params: &[BOARD, EXPECTED_REVISION],
+    },
+    Command {
         id: SET_FOOTPRINT_TRANSFORM,
         title: "Move or Rotate Footprint",
         summary: "Set one footprint's center and counterclockwise orientation without changing its pad mapping. One undoable edit; unchanged values are a no-op.",
@@ -1090,6 +1097,15 @@ impl Project {
         self.components.get(&symbol.component)
     }
 
+    /// Retire one live component through the board's accepted-state policy. Last
+    /// visible shared fields become retained display metadata; package/terminal
+    /// and connection acceptance remain unchanged until a reviewed update.
+    pub(crate) fn retire_component(&mut self, id: u64) {
+        let component = Arc::make_mut(&mut self.components).remove(&id);
+        let display = component.as_ref().map(|component| (component.reference(), component.value()));
+        Arc::make_mut(&mut self.board).remove_component(id, display);
+    }
+
     /// Return the owning component's reference, or empty text for a foreign placement.
     pub fn reference(&self, symbol: &SymbolPlacement) -> String {
         self.component(symbol).map_or_else(String::new, |component| component.reference.clone())
@@ -1320,6 +1336,7 @@ impl Session {
             | SET_SYMBOL_FIELDS
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
+            | INITIALIZE_UPDATE_BASELINE
             | PLACE_ASSIGNED_FOOTPRINT
             | SET_FOOTPRINT_TRANSFORM
             | DELETE_FOOTPRINTS
@@ -1370,11 +1387,15 @@ impl Session {
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
-            if !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || p.board.drawings.is_some() || !p.board.footprints().is_empty() {
+            if p.board.baseline.is_some() || !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || p.board.drawings.is_some() || !p.board.footprints().is_empty() {
                 inspected["board"] = json!({"id":p.board_target().map(|target|target.board), "footprints": p.board.footprints().iter().map(|footprint| footprint.inspect(p)).collect::<Vec<_>>()});
                 inspected["board"]["assignments"] = json!(p.footprint_assignments());
                 inspected["board"]["silkscreen"] = json!(p.board.silkscreen.unwrap_or_default());
                 inspected["board"]["outline"] = json!(p.board.outline);
+                if let Some(baseline) = &p.board.baseline {
+                    inspected["board"]["accepted_baseline"] = json!({"source":baseline.source,"component_count":baseline.components.len(),"net_count":baseline.nets.len()});
+                    inspected["board"]["pending_removals"] = json!(baseline.components.keys().filter(|id| !p.components.contains_key(id)).map(|id| format!("component-{id}")).collect::<Vec<_>>());
+                }
                 if !p.board.definitions.is_empty() {
                     inspected["board"]["definitions"] = json!(p.board.definitions.values().map(Arc::as_ref).collect::<Vec<_>>());
                 }
@@ -1428,6 +1449,7 @@ impl Session {
         if matches!(
             id,
             ASSIGN_FOOTPRINT
+                | INITIALIZE_UPDATE_BASELINE
                 | PLACE_ASSIGNED_FOOTPRINT
                 | PLACE_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
@@ -1458,6 +1480,7 @@ impl Session {
                 | SET_SYMBOL_FIELDS
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
+                | INITIALIZE_UPDATE_BASELINE
                 | PLACE_ASSIGNED_FOOTPRINT
                 | SET_FOOTPRINT_TRANSFORM
                 | DELETE_FOOTPRINTS
@@ -1563,6 +1586,7 @@ impl Session {
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
+            INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PLACE_ASSIGNED_FOOTPRINT => self.place_assigned_footprint(params)?,
             PLACE_FOOTPRINT => self.place_footprint(params)?,
             SET_FOOTPRINT_TRANSFORM => self.set_footprint_transform(params)?,
@@ -1689,8 +1713,9 @@ impl Session {
         Ok(())
     }
 
-    /// Remove a unit and its wires. Removing the last placed unit also removes its component
-    /// and footprint; undo restores the entire snapshot, including component fields.
+    /// Remove a unit and its wires. Removing the last unit retires its live component;
+    /// an enabled accepted baseline retains its physical footprint pending review.
+    /// Legacy mode removes that footprint immediately. Undo restores the full snapshot.
     fn delete_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1703,8 +1728,7 @@ impl Session {
         project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
         if !project.symbols.iter().any(|other| other.component == symbol.component) {
-            Arc::make_mut(&mut project.components).remove(&symbol.component);
-            Arc::make_mut(&mut project.board).remove_component(symbol.component);
+            project.retire_component(symbol.component);
         }
         project.sheet_mut().connectivity = Arc::default();
         self.change(project);

@@ -155,6 +155,8 @@ struct Sheet {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BoardRecords {
+    #[serde(default, deserialize_with = "present")]
+    baseline: Option<crate::board::update::Baseline>,
     footprints: Vec<Footprint>,
 }
 
@@ -270,6 +272,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
         });
     }
     let board = legacy.board.map(|board| BoardRecords {
+        baseline: None,
         footprints: board
             .footprints
             .into_iter()
@@ -440,6 +443,7 @@ impl Encoder {
             return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
         }
         if !project.board.assignments.is_empty()
+            || project.board.baseline.is_some()
             || project.board.silkscreen.is_some()
             || project.board.outline.is_some()
             || project.board.drawings.is_some()
@@ -448,7 +452,7 @@ impl Encoder {
             || project.board.footprints().iter().any(|f| f.rotation != 0)
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings or footprint rotation; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings or footprint rotation; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
@@ -645,6 +649,9 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.rotation != 0 || f.library.is_some())) {
         return Err("physical footprints and rotation require split board format 5 or 4 respectively".to_owned());
     }
+    if document.board.as_ref().is_some_and(|board| board.baseline.is_some()) {
+        return Err("accepted board baselines require split board format 10".into());
+    }
     validate_document(document, upgraded_from, BTreeMap::new())
 }
 
@@ -657,7 +664,8 @@ fn validate_document(
     validate_with_hierarchy(document, upgraded_from, definitions, &BTreeSet::new(), &BTreeSet::new())
 }
 
-/// Validate hierarchy anchors and pinned footprint definitions with one object-ID and wire validator.
+/// Validate hierarchy anchors, live objects and accepted historical package references
+/// with one object-ID and wire validator before adopting any project snapshot.
 fn validate_with_hierarchy(
     document: Document,
     upgraded_from: Option<u32>,
@@ -841,21 +849,32 @@ fn validate_with_hierarchy(
     let mut layout = Board::default();
     layout.definitions = definitions;
     if let Some(mut board) = board {
-        if board.footprints.len() > components.len() {
+        layout.baseline = board.baseline.take().map(Arc::new);
+        if let Some(baseline) = &layout.baseline {
+            baseline.validate()?;
+            if baseline.project != id {
+                return Err("accepted board baseline belongs to another project".into());
+            }
+        }
+        if board.footprints.len() > layout.baseline.as_ref().map_or(components.len(), |baseline| baseline.components.len()) {
             return Err("board has more footprints than schematic components".to_owned());
         }
         board.footprints.sort_unstable_by_key(|footprint| footprint.id);
         for footprint in board.footprints {
             validate_id(&mut ids, footprint.id)?;
-            match components.get(&footprint.component) {
-                None => return Err("footprint points to a missing component".to_owned()),
-                Some(component) if !layout.mapping_valid(&footprint, &component.definition) => {
-                    return Err(
+            if let Some(baseline) = &layout.baseline {
+                baseline.validate_footprint(&footprint)?;
+            } else {
+                match components.get(&footprint.component) {
+                    None => return Err("footprint points to a missing component".to_owned()),
+                    Some(component) if !layout.mapping_valid(&footprint, &component.definition) => {
+                        return Err(
                         "the two-pad footprint only fits symbols with exactly pins 1 and 2; physical footprint mappings must cover every terminal"
                             .to_owned(),
                     );
+                    }
+                    Some(_) => {}
                 }
-                Some(_) => {}
             }
             layout.append(footprint).map_err(str::to_owned)?;
         }

@@ -16,6 +16,7 @@ pub mod outline;
 pub mod setup;
 pub mod silkscreen;
 mod transform;
+pub mod update;
 pub mod view;
 
 pub(crate) const FOOTPRINT_DEFINITION: &str = "generic-through-hole-2";
@@ -184,6 +185,13 @@ impl Footprint {
             value["library"] = json!(library);
             value["mapping"] = json!(self.mapping);
         }
+        if let Some(baseline) = &project.board.baseline {
+            let pending_removal = !project.components.contains_key(&self.component);
+            if pending_removal {
+                value["accepted_component"] = json!(baseline.components.get(&self.component));
+            }
+            value["pending_removal"] = json!(pending_removal);
+        }
         value
     }
 }
@@ -201,6 +209,7 @@ pub(crate) fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Board {
     pub(crate) ownership: identity::Ownership,
+    pub(crate) baseline: Option<Arc<update::Baseline>>,
     pub(crate) assignments: BTreeMap<u64, assignment::Assignment>,
     pub(crate) outline: Option<outline::Outline>,
     pub(crate) drawings: Option<drawing::Drawings>,
@@ -253,21 +262,50 @@ impl Board {
         {
             return Err("invalid footprint definition, pad mapping, position, or ID");
         }
+        if self.baseline.as_ref().is_some_and(|baseline| baseline.validate_footprint(&footprint).is_err()) {
+            return Err("new or changed packages require a reviewed board update");
+        }
         self.by_component.insert(footprint.component, self.footprints.len());
         self.footprints.push(footprint);
         Ok(())
     }
-    /// Drop a deleted component's assignment, placement and unused definitions while retaining all
-    /// other placements, IDs and library revisions. Undo restores the previous board snapshot.
-    pub(crate) fn remove_component(&mut self, component: u64) {
+    /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
+    /// and their historical assets until a reviewed update; Undo restores either case.
+    pub(crate) fn remove_component(&mut self, component: u64, display: Option<(&str, &str)>) {
         let assigned = self.assignments.remove(&component).is_some();
+        let changed_display = display.filter(|(reference, value)| {
+            self.baseline
+                .as_ref()
+                .and_then(|baseline| baseline.components.get(&component))
+                .is_some_and(|historical| historical.reference != *reference || historical.value != *value)
+        });
+        if let Some((reference, value)) = changed_display
+            && let Some(baseline) = self.baseline.as_mut()
+            && let Some(historical) = Arc::make_mut(baseline).components.get_mut(&component)
+        {
+            historical.reference = reference.to_owned();
+            historical.value = value.to_owned();
+        }
+        if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
+            return;
+        }
         if self.by_component.remove(&component).is_some() || assigned {
             self.footprints.retain(|f| f.component != component);
             self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
-            let used: BTreeSet<_> =
-                self.footprints.iter().filter_map(Footprint::key).chain(self.assignments.values().map(assignment::Assignment::key)).collect();
+            let used = self.used_package_keys();
             self.definitions.retain(|key, _| used.contains(key));
         }
+    }
+
+    /// Keep live and accepted historical package assets through every save and
+    /// cleanup path; the baseline remains authoritative until reviewed Apply.
+    pub(crate) fn used_package_keys(&self) -> BTreeSet<definition::Key> {
+        self.footprints
+            .iter()
+            .filter_map(Footprint::key)
+            .chain(self.assignments.values().map(assignment::Assignment::key))
+            .chain(self.baseline.iter().flat_map(|baseline| baseline.package_keys()))
+            .collect()
     }
     /// Find a terminal's corresponding physical pad by the explicit component mapping.
     pub(crate) fn pad_for(&self, component: u64, pin: &str) -> Option<Pad> {
