@@ -8,6 +8,7 @@ use std::{
 };
 
 pub mod assignment;
+pub mod clipboard;
 pub mod definition;
 pub mod drawing;
 pub mod drc;

@@ -496,7 +496,7 @@ impl crate::Session {
 /// Hash the complete canonical pre-Apply native bundle, including prior accepted
 /// state. A fresh incarnation is attached only after hashing, so repeated previews
 /// of equal input have equal digests without recursively including their new ID.
-fn capture_source(project: &Project) -> Result<SourceCapture, crate::CommandError> {
+pub(crate) fn capture_source(project: &Project) -> Result<SourceCapture, crate::CommandError> {
     use sha2::{Digest, Sha256};
     let documents = crate::persistence::encode_documents(Arc::new(project.clone())).map_err(crate::CommandError::InvalidParams)?;
     let mut digest = Sha256::new();

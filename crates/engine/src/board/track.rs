@@ -62,7 +62,7 @@ pub struct Track {
 
 impl Track {
     /// Reject nil identities, out-of-range widths or coordinates, and zero-length segments.
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.id.is_nil()
             || self.layer.is_nil()
             || !(MIN_WIDTH_NM..=MAX_WIDTH_NM).contains(&self.width_nm)
@@ -90,7 +90,7 @@ pub struct Via {
 
 impl Via {
     /// Reject nil identities, out-of-range positions, and drills that do not fit inside the pad.
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.id.is_nil()
             || !crate::wire::valid_point(&self.at)
             || !(MIN_VIA_DRILL_NM..self.diameter_nm).contains(&self.drill_nm)
@@ -328,11 +328,20 @@ pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
 /// tracks or vias, if any. Islands without new copper are ignored, so a short made earlier by
 /// another edit (such as moving a footprint onto a track) does not block unrelated routes.
 fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> {
+    short_for_paste(project, added, &BTreeSet::new())
+}
+
+/// Apply the existing copper-contact approximation to newly pasted tracks/vias and footprint
+/// lands. Unrelated pre-existing islands remain outside this operation's short check.
+pub(crate) fn short_for_paste(project: &Project, added: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> Option<(String, String)> {
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
     let (tracks, vias) = (view.tracks(), view.vias());
     let (_, members) = islands(&lands, tracks, vias);
     let is_added = |node: usize| {
+        if let Some(land) = lands.get(node) {
+            return footprints.contains(&land.key.0);
+        }
         let index = node.checked_sub(lands.len());
         let track = index.and_then(|index| tracks.get(index)).map(|track| track.id);
         let via = index.and_then(|index| index.checked_sub(tracks.len())).and_then(|index| vias.get(index)).map(|via| via.id);
