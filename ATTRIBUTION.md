@@ -50,7 +50,7 @@ and position-menu interaction. It reuses the Craft frame, palette, typography
 and popup controls. Panel positions are presentation data; no project format,
 external dependency or artwork is added.
 
-## Board Edge drawings
+## Board Outline drawings
 
 The layer-addressed drawing model, commands, native board version 9 codec, canvas
 tools and ribbon glyphs are original PCBcraft work under MIT OR Apache-2.0.
@@ -59,6 +59,14 @@ board-boundary terminology was checked against the published [KiCad 10 PCB Edito
 manual](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html#board_outlines_edge_cuts),
 consulted November 7, 2026. No KiCad implementation, fixtures, icons or artwork
 were used.
+
+The subsequent Board Outline terminology update is original PCBcraft work over
+these existing tools and commands. Earlier default layer names remain saved as
+authored and display as Board Outline in the canvas controls; custom layer names
+remain unchanged. When that display mapping would give distinct layers the same
+label, the controls retain their saved names so each choice remains identifiable.
+No external source, asset, dependency or native-format change was introduced for
+this update.
 
 PCBcraft Next's original workspace documentation and the existing FigCraft exports
 `03-layout-top.png` and `pcb-workspace.png` were reviewed as visual references
@@ -824,3 +832,9 @@ heading, rule, control height and secondary action treatment. Its aligned
 symbol-terminal / footprint-pad columns and responsive dropdowns are original
 PCBcraft presentation code prompted by Travis's supplied chooser screenshot;
 no additional source, asset, dependency or electrical mapping change is used.
+
+Schematic-only package assignment and the bounded project/13 save extension are
+original PCBcraft code over the existing exact package/mapping contracts. They
+reuse this repository's already qualified pinned definitions and Craft chooser;
+no external implementation, data, dependency or asset was added. Board creation
+adopts existing package intent without creating physical placements.

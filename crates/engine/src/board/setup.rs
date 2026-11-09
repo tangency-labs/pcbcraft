@@ -379,7 +379,7 @@ impl BoardSetup {
     }
 
     /// Build an unapplied initial setup, retaining existing technical-layer identities so old
-    /// Board Edge drawings stay attached. The board and its history remain unchanged.
+    /// Board Outline drawings stay attached. The board and its history remain unchanged.
     pub(super) fn initial(board: &super::Board, copper_layers: u64) -> Result<Self, CommandError> {
         let mut setup = Self::preset(copper_layers)?;
         if let Some(data) = &board.drawings
@@ -433,7 +433,7 @@ impl BoardSetup {
                 layers.push(Layer { id: fresh_id()?, name: format!("{prefix} {name}"), purpose, side: Some(side) });
             }
         }
-        layers.push(Layer { id: fresh_id()?, name: "Board Edge".to_owned(), purpose: LayerPurpose::Outline, side: None });
+        layers.push(Layer { id: fresh_id()?, name: "Board Outline".to_owned(), purpose: LayerPurpose::Outline, side: None });
         Self::try_from(SetupRecords { materials: Vec::new(), layers, stackup: Stackup { id: fresh_id()?, strata } })
             .map_err(CommandError::InvalidParams)
     }

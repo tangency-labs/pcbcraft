@@ -12,6 +12,24 @@ pub const PLACE_ASSIGNED_FOOTPRINT: &str = "pcb.place_assigned_footprint";
 /// Place a captured group of accepted assignments together at one canvas anchor.
 pub const PLACE_ASSIGNED_FOOTPRINTS: &str = "pcb.place_assigned_footprints";
 
+/// Project-owned package intent before a physical board exists. Explicit board creation
+/// adopts these exact choices and pinned definitions; it never creates placements.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SchematicPackages {
+    pub assignments: BTreeMap<u64, Assignment>,
+    pub definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,
+}
+
+impl SchematicPackages {
+    /// Retire a deleted component's choice and any definition no remaining choice references.
+    pub(crate) fn remove_component(&mut self, component: u64) {
+        if self.assignments.remove(&component).is_some() {
+            let used: std::collections::BTreeSet<_> = self.assignments.values().map(Assignment::key).collect();
+            self.definitions.retain(|key, _| used.contains(key));
+        }
+    }
+}
+
 /// Persist component identity and immutable package identity separately from board geometry.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,7 +68,9 @@ impl Assignment {
         let footprint = self.footprint(1, Point { x_nm: 0, y_nm: 0 });
         let logical = project.components.get(&self.component).map_or_else(
             || project.board.baseline.as_ref().is_some_and(|baseline| baseline.validate_assignment(self)),
-            |component| project.board.mapping_valid(&footprint, &component.definition),
+            |component| {
+                project.assignment_definition(&self.key()).is_some_and(|definition| mapping_covers(&self.mapping, &component.definition, definition))
+            },
         );
         footprint.valid()
             && logical
@@ -113,10 +133,22 @@ fn mapping_covers(
 }
 
 impl Project {
+    /// Desired package choices belong to the schematic project until explicitly adopted by
+    /// its first board. Accepted placements and their baseline remain board-local.
+    pub(crate) fn package_assignments(&self) -> &BTreeMap<u64, Assignment> {
+        if self.board_target().is_some() { &self.board.assignments } else { &self.schematic_packages.assignments }
+    }
+
+    /// Resolve pinned package intent independently of whether a physical board exists.
+    pub(crate) fn assignment_definition(&self, key: &definition::Key) -> Option<&Arc<definition::FootprintDefinition>> {
+        self.schematic_packages.definitions.get(key).or_else(|| self.board.definitions.get(key))
+    }
+
     /// List built-in and project-pinned physical packages by immutable identity. Old pinned
     /// revisions remain selectable offline; conflicting current-source content is never adopted.
     pub fn footprint_catalog(&self) -> Vec<Arc<definition::FootprintDefinition>> {
         let mut items = self.board.definitions.clone();
+        items.extend(self.schematic_packages.definitions.clone());
         for id in definition::STARTER_IDS {
             if let Some(item) = definition::starter(id) {
                 items.entry(item.key()).or_insert(item);
@@ -138,7 +170,7 @@ impl Project {
         let symbol = &self.components.get(&id)?.definition;
         let key = footprint.key();
         let saved =
-            self.board.assignments.get(&id).filter(|assignment| assignment.key() == key).map(|assignment| &assignment.mapping).or_else(|| {
+            self.package_assignments().get(&id).filter(|assignment| assignment.key() == key).map(|assignment| &assignment.mapping).or_else(|| {
                 self.board
                     .footprints()
                     .iter()
@@ -182,7 +214,7 @@ impl Project {
     /// Report explicit choices and physical legacy placements as assignments without migrating
     /// their saved bytes. Marker-only legacy placements remain outside the physical catalog.
     pub fn footprint_assignments(&self) -> Vec<Value> {
-        let mut assignments = self.board.assignments.clone();
+        let mut assignments = self.package_assignments().clone();
         for f in self.board.footprints() {
             if let (Some(library), Some(mapping)) = (&f.library, &f.mapping) {
                 assignments.entry(f.component).or_insert_with(|| Assignment {
@@ -208,8 +240,9 @@ fn component_id(params: &Value, project: &Project) -> Result<u64, CommandError> 
 }
 
 impl Session {
-    /// Validate identity and complete mappings before pinning intent. Baseline mode
-    /// stages desired choices independently of accepted geometry; legacy placed
+    /// Validate identity and complete mappings before pinning intent. Store project-owned
+    /// choices without a board, or stage desired choices independently of accepted geometry
+    /// under an existing baseline. Legacy placed
     /// changes remain refused, and identical choices create no history.
     pub(crate) fn assign_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -224,14 +257,16 @@ impl Session {
         };
         let key = assignment.key();
         let definition = project
-            .board
-            .definitions
-            .get(&key)
+            .assignment_definition(&key)
             .cloned()
             .or_else(|| definition::starter(&assignment.definition).filter(|d| d.key() == key))
             .ok_or_else(|| CommandError::InvalidParams("unavailable footprint identity/revision".into()))?;
         let mut next = project.clone();
-        Arc::make_mut(&mut next.board).definitions.insert(key, definition);
+        if project.board_target().is_some() {
+            Arc::make_mut(&mut next.board).definitions.insert(key, definition);
+        } else {
+            Arc::make_mut(&mut next.schematic_packages).definitions.insert(key, definition);
+        }
         if !assignment.valid(&next) {
             let message = if next.board.baseline.is_none() && next.board.by_component.contains_key(&component) {
                 "Changing a placed package or mapping requires a reviewed board update."
@@ -240,8 +275,8 @@ impl Session {
             };
             return Err(CommandError::InvalidParams(message.into()));
         }
-        if next.board.assignments.get(&component) == Some(&assignment)
-            || (!next.board.assignments.contains_key(&component)
+        if next.package_assignments().get(&component) == Some(&assignment)
+            || (!next.package_assignments().contains_key(&component)
                 && next
                     .board
                     .footprints()
@@ -250,9 +285,16 @@ impl Session {
         {
             return Ok(());
         }
-        Arc::make_mut(&mut next.board).assignments.insert(component, assignment);
-        let used = next.board.used_package_keys();
-        Arc::make_mut(&mut next.board).definitions.retain(|key, _| used.contains(key));
+        if next.board_target().is_some() {
+            Arc::make_mut(&mut next.board).assignments.insert(component, assignment);
+            let used = next.board.used_package_keys();
+            Arc::make_mut(&mut next.board).definitions.retain(|key, _| used.contains(key));
+        } else {
+            let packages = Arc::make_mut(&mut next.schematic_packages);
+            packages.assignments.insert(component, assignment);
+            let used: std::collections::BTreeSet<_> = packages.assignments.values().map(Assignment::key).collect();
+            packages.definitions.retain(|key, _| used.contains(key));
+        }
         if next.board.baseline.is_some() {
             if next.numeric_id_high_water.is_some() {
                 next.numeric_id_high_water = Some(next.allocation_high_water());

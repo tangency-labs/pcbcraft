@@ -77,6 +77,12 @@ sheets, hierarchy, component metadata, field appearance and physical board
 features that need split documents.
 Older formats reject registration fields rather than silently discarding them.
 
+Schematic-only footprint choices use the bounded
+[project/13 extension](native-project-storage.md#schematic-only-package-choices).
+They belong to the project until explicit first-board creation adopts them, with
+no change to board registration or per-board folder layout. Assigning a package
+does not create a board, and physical placement remains unavailable until one exists.
+
 An empty PCB workspace is user-local presentation state addressed by project ID.
 It has no BoardTarget and grants no physical editing authority. A view of a
 specific board that becomes unavailable does not silently bind another document.

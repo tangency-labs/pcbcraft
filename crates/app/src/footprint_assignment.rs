@@ -83,13 +83,10 @@ impl Edit {
 impl PcbApp {
     /// Capture the originating view/project/revision. A schematic action supplies its component;
     /// the PCB entry point offers all project components, including those not yet placed.
+    /// Package selection needs no board; placement requires an existing physical target.
     pub(super) fn begin_footprint_assignment(&mut self, component: Option<String>) {
         let Some(source) = self.views.active.input(&self.session) else { return };
         let Some(project) = self.session.project() else { return };
-        if project.board_target().is_none() {
-            self.message = Some("Create a board before assigning footprints.".into());
-            return;
-        }
         let component_browser = component.is_none();
         let Some(component) = component.or_else(|| project.components().next().map(|c| c.id())) else { return };
         let mut edit = Edit {
@@ -140,11 +137,13 @@ impl PcbApp {
         let editable =
             !placed || project.board_target().and_then(|target| project.board_view(target)).is_some_and(|board| !board.needs_update_initialization());
         let place_allowed = edit.update_review.as_ref().is_none_or(|review| review.allows_placement());
-        let placement = (place_allowed && self.views.active.workspace == Workspace::Board && assigned.is_some() && !placed).then(|| {
-            edit.matches_assignment(&project)
-                && !excluded
-                && assigned.as_ref().is_some_and(|assignment| assignment["pending_update"] != true && assignment["pending_removal"] != true)
-        });
+        let placement =
+            (place_allowed && project.board_target().is_some() && self.views.active.workspace == Workspace::Board && assigned.is_some() && !placed)
+                .then(|| {
+                    edit.matches_assignment(&project)
+                        && !excluded
+                        && assigned.as_ref().is_some_and(|assignment| assignment["pending_update"] != true && assignment["pending_removal"] != true)
+                });
         let action = pcbcraft_chrome::catalog::footprint_form(ctx, editable && edit.definition.is_some(), placement, |ui| {
             let wide = ui.available_width() >= 900.;
             pcbcraft_chrome::catalog::footprint_panes(ui, |ui, region| {
@@ -384,8 +383,14 @@ impl PcbApp {
             return;
         }
         if assign || place {
-            let Some(board) = project.board_target() else { return };
-            let mut params = json!({"board": board.board,"component":edit.component,"expected_revision":edit.source.revision});
+            let mut params = json!({"component":edit.component,"expected_revision":edit.source.revision});
+            if let Some(board) = project.board_target() {
+                params["board"] = json!(board.board);
+            } else if place {
+                edit.fail("Create a board before placing footprints.");
+                self.dialog = Dialog::Footprint(Box::new(edit));
+                return;
+            }
             let command = if assign {
                 let Some(d) = &edit.definition else { return };
                 params["library"] = json!(d.library);

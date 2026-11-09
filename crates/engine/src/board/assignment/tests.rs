@@ -1,4 +1,5 @@
 use super::*;
+mod schematic_only;
 use crate::{
     PLACE_RESISTOR,
     persistence::{decode_documents, decode_packed, encode_documents, encode_packed},

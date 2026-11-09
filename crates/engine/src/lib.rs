@@ -935,9 +935,14 @@ const CATALOG: &[Command] = &[
     Command {
         id: ASSIGN_FOOTPRINT,
         title: "Assign Footprint",
-        summary: "Pin an exact physical package and explicit terminal mapping without placing it. Changing a placed package requires a reviewed update.",
+        summary: "Pin an exact package and terminal mapping, even before a board exists. No physical placement is created. Changing a placed package requires a reviewed update.",
         params: &[
-            BOARD,
+            Param {
+                required: false,
+                name: "board",
+                summary: "Existing board UUID; omit for schematic-only package choices",
+                kind: ParamKind::BoardId,
+            },
             Param { required: true, name: "component", summary: "Stable component ID from project inspection", kind: ParamKind::Text },
             Param { required: true, name: "library", summary: "Exact footprint library identity", kind: ParamKind::Text },
             Param { required: true, name: "definition", summary: "Exact physical footprint identity", kind: ParamKind::Text },
@@ -1127,12 +1132,12 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[3],
     Command {
         id: ADD_DRAWING,
-        title: "Draw Board Edge",
-        summary: "Add one open or closed graphic on a Board Edge layer, with one undo step.",
+        title: "Draw Board Outline",
+        summary: "Add one open or closed graphic on a Board Outline layer, with one undo step.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
-            Param { name: "layer", required: true, summary: "Board Edge layer UUID from inspection", kind: ParamKind::DrawingId },
+            Param { name: "layer", required: true, summary: "Board Outline layer UUID from inspection", kind: ParamKind::DrawingId },
             Param { name: "points", required: true, summary: "Ordered vertices in integer nanometers", kind: ParamKind::DrawingPoints },
             Param { name: "closed", required: true, summary: "Join the last vertex to the first", kind: ParamKind::Closed },
         ],
@@ -1244,6 +1249,8 @@ pub struct Project {
     components: Arc<BTreeMap<u64, Component>>,
     /// Derived index of each placed component unit to its symbol ID.
     units: Arc<BTreeMap<(u64, String), u64>>,
+    /// Unplaced package choices are project-owned while no physical board exists.
+    schematic_packages: Arc<board::assignment::SchematicPackages>,
     board: Arc<Board>,
     /// Project-wide name resolution shared by all immutable sheet projections.
     named_graph: Arc<OnceLock<Connectivity>>,
@@ -1294,6 +1301,7 @@ impl Project {
     /// and connection acceptance remain unchanged until a reviewed update.
     pub(crate) fn retire_component(&mut self, id: u64) {
         let component = Arc::make_mut(&mut self.components).remove(&id);
+        Arc::make_mut(&mut self.schematic_packages).remove_component(id);
         let display = component.as_ref().map(|component| (component.reference(), component.value()));
         Arc::make_mut(&mut self.board).remove_component(id, display);
     }
@@ -1499,12 +1507,13 @@ impl Session {
     /// Whether the command can run now, for greying out a menu item. Setup initialization
     /// requires an unconfigured board; populated boards require explicit pad-resolution consent
     /// at execution. Setup edits require existing setup. Sheet creation stops at the sheet limit
-    /// and deletion retains one sheet. Unknown IDs are unavailable.
+    /// and deletion retains one sheet. Package assignment needs only a project; physical
+    /// placement and setup still need a board. Unknown IDs are unavailable.
     pub fn available(&self, id: &str) -> bool {
         if id == board::identity::CREATE_BOARD {
             return self.project.as_ref().is_some_and(|project| project.board_target().is_none());
         }
-        if id.starts_with("pcb.") && !self.project.as_ref().is_some_and(|project| project.board_target().is_some()) {
+        if id.starts_with("pcb.") && id != ASSIGN_FOOTPRINT && !self.project.as_ref().is_some_and(|project| project.board_target().is_some()) {
             return false;
         }
         match id {
@@ -1578,7 +1587,9 @@ impl Session {
     /// display names, relative document paths and per-sheet schematic inspection. The legacy
     /// top-level schematic is populated only for a single-sheet project. Sheet entries include
     /// their parent UUID; project `netlist` follows the complete parent/child electrical graph.
-    /// Physical assignments report their placed/unplaced status; `footprint_catalog` lists exact
+    /// Project `footprint_assignments` include schematic-only choices with a null board and
+    /// placed/unplaced status. Existing board assignments remain projected under `board`.
+    /// `footprint_catalog` lists exact
     /// available revisions with pad identities and provenance, without duplicating drawing data.
     /// A configured board also reports setup and laminate thickness (null when unspecified).
     pub fn inspect(&self) -> Value {
@@ -1589,6 +1600,7 @@ impl Session {
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
+                "footprint_assignments": p.footprint_assignments(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
             if p.board.baseline.is_some() || !p.board.assignments.is_empty() || p.board.setup.is_some() || p.board.silkscreen.is_some() || p.board.outline.is_some() || p.board.drawings.is_some() || !p.board.footprints().is_empty() {
@@ -1659,10 +1671,12 @@ impl Session {
     fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
+        if id == ASSIGN_FOOTPRINT && params.get("board").is_some() {
+            self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
+        }
         if matches!(
             id,
-            ASSIGN_FOOTPRINT
-                | INITIALIZE_UPDATE_BASELINE
+            INITIALIZE_UPDATE_BASELINE
                 | PREVIEW_UPDATE
                 | APPLY_UPDATE
                 | PLACE_ASSIGNED_FOOTPRINT
@@ -1735,6 +1749,7 @@ impl Session {
                 sheet_index: 0,
                 components: Arc::default(),
                 units: Arc::default(),
+                schematic_packages: Arc::default(),
                 board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
                 named_graph: Arc::default(),
                 upgraded_from: None,

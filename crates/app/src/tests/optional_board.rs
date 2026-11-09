@@ -61,16 +61,86 @@ fn empty_board_view_roundtrips_its_presentation_and_keeps_window_controls() {
     assert!(!restored.unavailable());
 }
 
-/// The package chooser requires a real board and cannot create one as a side effect.
+/// A package can be assigned, saved and reopened entirely in capture, then adopted by an
+/// explicitly created board and placed through Update PCB with its custom mapping intact.
 #[test]
 fn footprint_chooser_does_not_create_a_board_for_schematic_only_parts() {
     let mut h = harness();
+    h.set_size(egui::vec2(1400., 1000.));
     resistor_at_origin(&mut h);
+    let component = h.state().session.project().unwrap().components().next().unwrap().id();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-    h.state_mut().begin_footprint_assignment(Some("component-1".into()));
-    assert!(matches!(h.state().dialog, Dialog::None));
-    assert_eq!(h.state().message.as_deref(), Some("Create a board before assigning footprints."));
+    h.state_mut().begin_footprint_assignment(Some(component.clone()));
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::Footprint(_)));
+    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    assert!(h.query_by_label("Place on board").is_none());
+    click(&mut h, "Close");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    h.state_mut().begin_footprint_assignment(Some(component.clone()));
+    h.run();
+    click(&mut h, "starter / Resistor 0402 (1005 metric) · r4");
+    click(&mut h, "Terminal 1");
+    click(&mut h, "Pad 2");
+    click(&mut h, "Terminal 2");
+    click(&mut h, "Pad 1");
+    click(&mut h, "Assign");
+    assert!(h.state().session.project().unwrap().board_target().is_none());
+    assert_eq!(h.state().session.inspect()["project"]["footprint_assignments"][0]["mapping"], json!({"1":"2","2":"1"}));
+    click(&mut h, "Close");
+    let saved = pcbcraft_engine::persistence::encode_packed(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().session.open_snapshot(pcbcraft_engine::persistence::decode_packed(&saved).unwrap().project);
+    h.run();
+    assert!(!encode_documents(h.state().session.snapshot().unwrap()).unwrap().contains_key("board.json"));
+    h.state_mut().begin_footprint_assignment(Some(component));
+    h.run();
+    let revision = h.state().session.revision();
+    click(&mut h, "Assign");
+    assert_eq!(h.state().session.revision(), revision, "Reopening preserves the saved choice without another edit");
+    click(&mut h, "Close");
+    let view = h.state().views.active.id();
+    h.state_mut().begin_board_update(view).unwrap();
+    h.run();
+    click(&mut h, "Create board");
+    assert!(h.state().session.project().unwrap().board_target().is_some());
+    assert!(!h.get_by_label("Update PCB").accesskit_node().is_disabled());
+    click(&mut h, "Update PCB");
+    assert!(h.state().views.active.board.placement.is_some());
+    assert!(matches!(h.state().dialog, Dialog::None));
+    let point = h.get_by_label("PCB canvas").rect().center();
+    click_canvas_at(&mut h, point);
+    assert_eq!(h.state().session.inspect()["project"]["board"]["footprints"][0]["mapping"], json!({"1":"2","2":"1"}));
+}
+
+/// Live assignment uses the same boardless command path and GUI undo; modal ownership and
+/// the absence of a physical placement target remain enforced.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn live_boardless_assignment_shares_history_and_cannot_place() {
+    let mut h = harness();
+    resistor_at_origin(&mut h);
+    let before = h.state().session.snapshot().unwrap();
+    let component = h.state().session.project().unwrap().components().next().unwrap().id();
+    let request = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::ASSIGN_FOOTPRINT,"params":{
+        "component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,
+        "mapping":{"1":"1","2":"2"},"expected_revision":h.state().session.revision()}}});
+    let ctx = h.ctx.clone();
+    h.state_mut().begin_footprint_assignment(Some(component.clone()));
+    h.run();
+    assert!(pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).is_err());
+    click(&mut h, "Close");
+    pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &request).unwrap();
+    h.run();
+    assert!(h.state().session.project().unwrap().board_target().is_none());
+    assert_eq!(h.state().session.project().unwrap().footprint_assignments().len(), 1);
+    let assigned = h.state().session.snapshot().unwrap();
+    let place = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINT,"params":{
+        "component":component,"x_nm":0,"y_nm":0,"expected_revision":h.state().session.revision()}}});
+    assert!(pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx }, &place).is_err());
+    assert!(Arc::ptr_eq(&assigned, &h.state().session.snapshot().unwrap()));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    crate::tests::assert_same_content(&before, &h.state().session.snapshot().unwrap());
 }
 
 /// A press cannot follow project replacement or reopen, even when the release arrives at the same location.

@@ -92,6 +92,7 @@ fn open_with(path: &Path, folder: fn(&Path) -> Result<pcbcraft_engine::persisten
                     | "pcbcraft-project/9"
                     | "pcbcraft-project/11"
                     | "pcbcraft-project/12"
+                    | "pcbcraft-project/13"
             )
         ) {
             if name != ENTRY_POINT {

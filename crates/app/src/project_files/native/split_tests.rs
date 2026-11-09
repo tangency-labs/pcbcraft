@@ -42,6 +42,50 @@ fn complete(files: &mut ProjectFiles, session: &mut Session, result: Result<Outc
     files.poll(session, &egui::Context::default())
 }
 
+/// Desktop, shared CLI/preview and archive readers recognize schematic package intent.
+/// Folder saves can create and undo a board without losing pinned assets or user-owned files.
+#[test]
+fn schematic_package_choices_open_and_save_through_native_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    apply(&mut s, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+    let component = s.project().unwrap().components().next().unwrap().id();
+    apply(
+        &mut s,
+        pcbcraft_engine::ASSIGN_FOOTPRINT,
+        json!({"component":component,"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"}}),
+    );
+    let snapshot = s.snapshot().unwrap();
+    let documents = encode_documents(snapshot.clone()).unwrap();
+    let root = dir.path().join("schematic-packages");
+    let archive = dir.path().join("schematic-packages.pc.zip");
+    folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
+    fs::write(root.join("README.md"), b"User notes").unwrap();
+    fs::write(&archive, encode_packed(snapshot).unwrap()).unwrap();
+    for path in [&root, &root.join(ENTRY_POINT), &archive] {
+        assert_eq!(encode_documents(folder::open(path).unwrap()).unwrap(), documents);
+        assert_eq!(encode_documents(folder::preview(path).unwrap()).unwrap(), documents);
+        let loaded = load(path).unwrap();
+        assert!(loaded.snapshot.board_target().is_none());
+        assert_eq!(loaded.snapshot.footprint_assignments()[0]["mapping"], json!({"1":"2","2":"1"}));
+        assert_eq!(encode_documents(loaded.snapshot.clone()).unwrap(), documents);
+        save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
+        assert_eq!(encode_documents(load(path).unwrap().snapshot).unwrap(), documents);
+    }
+    assert!(!root.join("board.json").exists());
+    apply(&mut s, "pcb.create_board", json!({}));
+    let created = encode_documents(s.snapshot().unwrap()).unwrap();
+    folder::save(&root, Some(&documents), &created, &mut |_| Ok(())).unwrap();
+    assert!(load(&root.join(ENTRY_POINT)).unwrap().snapshot.board_target().is_some());
+    s.apply("edit.undo", &json!({})).unwrap();
+    let undone = encode_documents(s.snapshot().unwrap()).unwrap();
+    folder::save(&root, Some(&created), &undone, &mut |_| Ok(())).unwrap();
+    assert!(!root.join("board.json").exists());
+    assert_eq!(encode_documents(load(&root.join(ENTRY_POINT)).unwrap().snapshot).unwrap(), documents);
+    assert_eq!(fs::read(root.join("README.md")).unwrap(), b"User notes");
+}
+
 /// Both desktop and CLI readers recognize legacy metadata format 11 and explicit-owner
 /// format 12 through a folder, its entry
 /// point or a packed archive, preserving the allocation watermark and unchanged saved bytes.

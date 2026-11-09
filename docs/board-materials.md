@@ -14,7 +14,7 @@ supplies it when Apply is chosen after showing the changed pad-span behavior.
 Occupied drawing layers cannot be removed. Reductions that would discard authored
 thickness/construction data are refused until those fields are cleared deliberately.
 Unused optional technical layers can be removed or added, while this editor retains
-copper, Board Edge and courtyard layers. Per-view visibility remains separate.
+copper, Board Outline and courtyard layers. Per-view visibility remains separate.
 
 The first setup draft proposes a two-layer, 1.6 mm FR-4 board with nominal
 1 oz (35 µm) copper on both faces and a 1.53 mm dielectric core. These are editable

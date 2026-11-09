@@ -177,7 +177,8 @@ offer an explicit restructuring path rather than silently changing ownership.
 
 A new project starts schematic-only, with an empty board registry. Capture flat
 or hierarchical sheets and instantiate components without creating a Board,
-physical folder, footprint assignment, outline or stackup. Create board is an
+physical folder, placed footprint, outline or stackup. Package selection and pin
+mapping can be authored before choosing a physical board. Create board is an
 explicit action from the Browser or empty PCB workspace; merely opening that
 workspace does not create a document. New circuit instances retain stable IDs
 and a valid schematic owner while no board exists.

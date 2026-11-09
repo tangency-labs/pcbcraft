@@ -57,7 +57,7 @@ fn airwires(h: &Harness<'_, PcbApp>) -> Vec<[egui::Pos2; 2]> {
 fn ratsnest_projects_accepted_pad_centers_and_recomputes_after_move_and_undo() {
     let mut h = board(true);
     assert_eq!(airwires(&h).len(), 1);
-    h.get_by_label("Board Edge · 1 airwire");
+    h.get_by_label("Board Outline · 1 airwire");
     let wire_index = h.output().shapes.iter().position(|shape| matches!(&shape.shape, egui::Shape::LineSegment { stroke, .. } if stroke.width == 1. && stroke.color == Tokens::get().board_ink.gamma_multiply(0.55))).unwrap();
     let pad_index =
         h.output().shapes.iter().position(|shape| matches!(&shape.shape, egui::Shape::Path(path) if path.fill == Tokens::get().board_front)).unwrap();
@@ -88,7 +88,7 @@ fn ratsnest_projects_accepted_pad_centers_and_recomputes_after_move_and_undo() {
     h.run();
     assert!(airwires(&h).is_empty());
     assert_eq!(h.state().views.active.board.ratsnest_cache.as_ref().unwrap().1.missing.len(), 1);
-    h.get_by_label("Board Edge · 0 airwires · 1 missing endpoint");
+    h.get_by_label("Board Outline · 0 airwires · 1 missing endpoint");
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     let after_undo = h.state().views.active.board.ratsnest_cache.as_ref().unwrap().1.clone();
