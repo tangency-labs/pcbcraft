@@ -789,6 +789,11 @@ fn optional_board_creation_is_discoverable_revision_checked_and_undoable() {
 #[test]
 fn accepted_baseline_retains_deleted_source_footprints_through_mcp() {
     let mut server = server();
+    for command in [pcbcraft_engine::DELETE_SYMBOL, pcbcraft_engine::DELETE_ITEMS, pcbcraft_engine::sheets::DELETE_SHEET] {
+        let described = body(&call(&mut server, "describe_command", json!({"command":command})));
+        let summary = described["summary"].as_str().unwrap();
+        assert!(summary.contains("accepted baseline") && summary.contains("pending review") && summary.contains("otherwise"), "{described}");
+    }
     let execute = |server: &mut Server, command: &str, params: Value| {
         let result = call(server, "execute", json!({"command":command,"params":params}));
         assert_ne!(result["isError"], true, "{result}");
