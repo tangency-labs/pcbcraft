@@ -570,7 +570,8 @@ color patch. **+** and **−** cycle through the picker order, wrapping through
 technical and hidden layers without changing visibility. **PgUp** selects front
 copper and **PgDn** selects back copper when that side exists. Text fields,
 menus and dialogs keep their normal keys; switching layers cancels an unfinished
-Board Outline gesture or route. The keys are also listed in Keyboard Shortcuts.
+Board Outline gesture or route, except that PgUp and PgDn during a route place a via and
+keep routing on that side. The keys are also listed in Keyboard Shortcuts.
 
 For a board boundary, select **Board Outline** in the selector or Layers card and
 use **Layout → Outline → Line** or **Rectangle**. Line accepts successive clicked
