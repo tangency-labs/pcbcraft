@@ -10,7 +10,7 @@ const WIDTH: f32 = 260.0;
 const HEIGHT: f32 = 490.0;
 const COMPACT_HEIGHT: f32 = 340.0;
 const HEADER_HEIGHT: f32 = 26.0;
-const MIN_DOCK_HEIGHT: f32 = 240.0;
+const MIN_DOCK_HEIGHT: f32 = 340.0;
 const SNAP_DISTANCE: f32 = 44.0;
 
 /// Anchoring a card to an edge still overlays the canvas; it never reserves a side panel.

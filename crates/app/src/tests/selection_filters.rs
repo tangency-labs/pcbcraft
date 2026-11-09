@@ -316,9 +316,9 @@ fn filter_checkboxes_support_keyboard_activation() {
 /// Named anchors follow their visible category, clear disabled selection and previews, and
 /// ignore hover edit shortcuts without altering the electrical document.
 #[test]
-fn named_labels_and_power_symbols_follow_their_selection_categories() {
+fn named_labels_follow_the_label_selection_category() {
     use pcbcraft_engine::net_labels::{self as engine, Style};
-    for style in [Style::Local, Style::Global, Style::Power, Style::PowerBar, Style::Ground] {
+    for style in [Style::Local, Style::Global] {
         let mut h = fixture();
         let id = h.state().views.active.id();
         let revision = h.state().session.revision();
@@ -327,7 +327,7 @@ fn named_labels_and_power_symbols_follow_their_selection_categories() {
         assert!(h.state().message.is_none(), "{:?}", h.state().message);
         let label = h.state().session.project().unwrap().net_labels()[0].clone();
         let before = document(&h);
-        let symbols = matches!(style, Style::Power | Style::PowerBar | Style::Ground);
+        let symbols = false;
         let category = if symbols { "symbols" } else { "labels" };
         let other = if symbols { "labels" } else { "symbols" };
         h.state_mut().select(pcbcraft_engine::selection::Selection::one_net_label(label.id));

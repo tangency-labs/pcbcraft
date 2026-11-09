@@ -19,7 +19,8 @@ impl Edit {
         for &id in ends {
             let source = WireEndpoint::Junction(id);
             let point = self.project.endpoint_position(source).ok_or_else(|| CommandError::InvalidParams("free end no longer exists".into()))?;
-            let named = self.project.net_labels().iter().any(|label| label.at == point);
+            let named =
+                self.project.net_labels().iter().any(|label| label.at == point) || self.project.power_terminals().any(|(_, _, at)| at == point);
             let mut found = None;
             for wire in self.project.wires.iter().filter(|wire| !excluded.contains(&wire.ordinal)) {
                 let path = self.project.wire_path(wire);

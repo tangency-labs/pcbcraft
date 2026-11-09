@@ -154,7 +154,26 @@ impl Edit {
             .cloned()
             .collect();
         for symbol in moved {
-            let pins: Vec<_> = symbol.terminals().into_iter().map(WireEndpoint::Terminal).zip(symbol.pins()).collect();
+            let named = self
+                .project
+                .power_terminals()
+                .find(|(end, _, _)| matches!(end, WireEndpoint::Terminal(pin) if pin.symbol == symbol.ordinal))
+                .map(|(end, _, at)| (end, at));
+            if let Some((end, at)) = named
+                && before.endpoint_position(end).is_none()
+            {
+                self.capture_named_contact(end, at)?;
+            }
+            // An explicit naming role joins every exact contact in the named graph, including
+            // branches/crossings. Capture those routes only when it moves, just as legacy labels
+            // did, rather than choosing an arbitrary wire during placement.
+            let pins: Vec<_> = symbol
+                .terminals()
+                .into_iter()
+                .map(WireEndpoint::Terminal)
+                .zip(symbol.pins())
+                .filter(|(end, _)| !self.project.power_terminals().any(|(named, _, _)| named == *end))
+                .collect();
             let contacts = pins.iter().map(|(_, point)| self.contact(*point, symbol.ordinal)).collect::<Result<Vec<_>, _>>()?;
             if pins.len() == 2 && pins[0].1 != pins[1].1 {
                 let spans: Vec<_> = self
@@ -213,7 +232,10 @@ impl Edit {
             .map(|(pin, _)| WireEndpoint::Terminal(pin))
             .chain(self.project.hierarchy_endpoints().filter(|(_, at)| *at == point).map(|(end, _)| end))
             .collect();
-        let named = pins.iter().copied().find(|pin| matches!(pin, WireEndpoint::NetLabel(_)));
+        let named = pins
+            .iter()
+            .copied()
+            .find(|pin| matches!(pin, WireEndpoint::NetLabel(_)) || self.project.power_terminals().any(|(end, _, _)| end == *pin));
         if named.is_none() && pins.len() > 1 {
             return Err(CommandError::InvalidParams("wire drop meets coincident component pins".into()));
         }
@@ -222,7 +244,7 @@ impl Edit {
         {
             return Ok(Some(preferred));
         }
-        let mut physical = pins.iter().copied().filter(|pin| !matches!(pin, WireEndpoint::NetLabel(_)));
+        let mut physical = pins.iter().copied().filter(|pin| Some(*pin) != named);
         let first = physical.next();
         Ok(if physical.next().is_some() { named } else { first.or(named) })
     }
@@ -249,14 +271,9 @@ impl Edit {
         }
         let protected =
             degree.into_iter().filter_map(|(end, count)| (count != 2 || !matches!(end, WireEndpoint::Junction(_))).then_some(end)).collect();
-        Self {
-            project: project.clone(),
-            next: highest.saturating_add(1),
-            budget: 200_000,
-            protected,
-            preferred: BTreeSet::new(),
-            touched: BTreeSet::new(),
-        }
+        let mut project = project.clone();
+        project.named_graph = Arc::default();
+        Self { project, next: highest.saturating_add(1), budget: 200_000, protected, preferred: BTreeSet::new(), touched: BTreeSet::new() }
     }
 
     /// Bound pair scans independently of the number of successful splits and merges.
@@ -816,11 +833,29 @@ impl Project {
         if disconnect {
             return self.transformed_symbol_disconnected(index, to, rotation, revision, auto_heal);
         }
-        let mut next = self.clone();
-        let symbol = &mut Arc::make_mut(&mut next.sheet_mut().symbols)[index];
+        let mut edit = Edit::new(self, revision);
+        let contact = self.power_terminals().find(|(end, _, from)| {
+            let WireEndpoint::Terminal(pin) = end else { return false };
+            if pin.symbol != self.symbols[index].ordinal {
+                return false;
+            }
+            let definition = &self.symbols[index].definition;
+            definition.pin_index(pin.number()).is_some_and(|i| definition.pin_positions(to, rotation)[i] != *from)
+        });
+        let captured = match contact {
+            Some((end, _, from)) => Some((end, from, edit.capture_named_contact(end, from)?)),
+            None => None,
+        };
+        let symbol = &mut Arc::make_mut(&mut edit.project.sheet_mut().symbols)[index];
         symbol.position = to;
         symbol.rotation = rotation;
-        next.healed(self, revision, auto_heal)
+        if let Some((end, from, fixed)) = captured {
+            let at = edit.project.endpoint_position(end).ok_or_else(|| CommandError::InvalidParams("missing named terminal".into()))?;
+            edit.retain_fixed_contacts(end, from, at, fixed)?;
+        }
+        edit.project.named_graph = Arc::default();
+        let moved = edit.finish(auto_heal)?;
+        moved.healed(self, revision, auto_heal)
     }
 }
 

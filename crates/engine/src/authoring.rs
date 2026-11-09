@@ -25,6 +25,14 @@ pub enum Kind {
     Footprint,
 }
 
+/// Optional definition metadata uses the same authoring transaction as name and Value edits.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolSettings {
+    pub behavior: Option<library::Behavior>,
+    pub defaults: Option<library::Defaults>,
+}
+
 /// Primitive identity survives renumbering; terminal/pad numbers remain electrical metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -170,6 +178,10 @@ pub struct Item {
     pub source: String,
     pub reference_prefix: String,
     pub default_value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<library::Behavior>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<library::Defaults>,
     pub unit: String,
     pub reference_font: Option<String>,
     /// Read-only provenance from a forked footprint, independent of its editable source summary.
@@ -217,15 +229,47 @@ fn unique_objects<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<B
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
-    Insert { primitive: Primitive },
-    Replace { object: u64, primitive: Primitive },
-    ReplaceMany { primitives: BTreeMap<u64, Primitive> },
-    Delete { objects: Vec<u64> },
-    Transform { objects: Vec<u64>, transform: crate::library_graphics::Transform },
-    Duplicate { objects: Vec<u64>, offset: Point },
-    Paste { primitives: Vec<Primitive>, offset: Point },
-    Array { objects: Vec<u64>, columns: u16, rows: u16, column_step: Point, row_step: Point },
-    Metadata { name: String, license: String, source: String, reference_prefix: String, default_value: String },
+    Insert {
+        primitive: Primitive,
+    },
+    Replace {
+        object: u64,
+        primitive: Primitive,
+    },
+    ReplaceMany {
+        primitives: BTreeMap<u64, Primitive>,
+    },
+    Delete {
+        objects: Vec<u64>,
+    },
+    Transform {
+        objects: Vec<u64>,
+        transform: crate::library_graphics::Transform,
+    },
+    Duplicate {
+        objects: Vec<u64>,
+        offset: Point,
+    },
+    Paste {
+        primitives: Vec<Primitive>,
+        offset: Point,
+    },
+    Array {
+        objects: Vec<u64>,
+        columns: u16,
+        rows: u16,
+        column_step: Point,
+        row_step: Point,
+    },
+    Metadata {
+        name: String,
+        license: String,
+        source: String,
+        reference_prefix: String,
+        default_value: String,
+        #[serde(default)]
+        symbol_settings: Option<SymbolSettings>,
+    },
     Undo,
     Redo,
 }
@@ -264,6 +308,8 @@ impl Item {
             source: "Original user-authored definition".into(),
             reference_prefix: "U".into(),
             default_value: "Custom part".into(),
+            behavior: None,
+            defaults: None,
             unit: "main".into(),
             reference_font: None,
             original_source: None,
@@ -342,12 +388,16 @@ impl Item {
                 .ok()
                 .is_some_and(|value| serde_json::to_value(library::saved_copy(original)).ok() == Some(value))
         });
-        if !known_original {
-            item.license = "Not recorded".into();
-        }
+        item.license = definition
+            .provenance
+            .as_ref()
+            .map(|p| p.license.clone())
+            .unwrap_or_else(|| if known_original { item.license.clone() } else { "Not recorded".into() });
         item.reference_prefix = definition.reference_prefix().into();
         item.default_value = definition.default_value().into();
         item.unit = definition.unit_id().into();
+        item.behavior = definition.behavior.clone();
+        item.defaults = definition.defaults.clone();
         let mut consumed = std::collections::BTreeSet::new();
         for pin in definition.pins() {
             item.objects.insert(
@@ -439,8 +489,14 @@ impl Item {
                     _ => return Err("A symbol cannot contain footprint primitives.".into()),
                 });
             }
-            let value = json!({"format":library::SYMBOL_FORMAT,"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+            let mut value = json!({"format":if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":[{"id":self.unit,"drawing":drawing,"pins":pins}]});
+            if let Some(behavior) = &self.behavior {
+                value["behavior"] = json!(behavior);
+            }
+            if let Some(defaults) = &self.defaults {
+                value["defaults"] = json!(defaults);
+            }
             if draft {
                 library::read_saved_draft(value.clone())?;
             } else {
@@ -669,12 +725,19 @@ impl Session {
                             }
                         }
                     }
-                    Action::Metadata { name, license, source, reference_prefix, default_value } => {
+                    Action::Metadata { name, license, source, reference_prefix, default_value, symbol_settings } => {
                         next.name = name;
                         next.license = license;
                         next.source = source;
                         next.reference_prefix = reference_prefix;
                         next.default_value = default_value;
+                        if let Some(settings) = symbol_settings {
+                            if next.kind != Kind::Symbol {
+                                return Err("Symbol settings require a symbol document.".into());
+                            }
+                            next.behavior = settings.behavior;
+                            next.defaults = settings.defaults;
+                        }
                     }
                     Action::Undo | Action::Redo => return Err("History operation cannot be nested.".into()),
                 }

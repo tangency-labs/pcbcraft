@@ -26,10 +26,10 @@ fn label(s: &mut Session, sheet: SheetTarget, pin: Terminal, name: &str, style: 
     s.project().unwrap().for_sheet(sheet).unwrap().net_labels().last().unwrap().object_id()
 }
 
-/// Local names merge only on their own sheet; global/power names bridge sheets and also
+/// Local names merge only on their own sheet; global names bridge sheets and also
 /// join same-name locals within a sheet. Case and rail names remain electrically distinct.
 #[test]
-fn scope_power_and_case_are_resolved_before_sheet_projection() {
+fn scope_and_case_are_resolved_before_sheet_projection() {
     let mut s = session();
     let main = s.project().unwrap().sheet_target();
     apply(&mut s, sheets::CREATE_SHEET, json!({"name":"Child"}));
@@ -39,7 +39,7 @@ fn scope_power_and_case_are_resolved_before_sheet_projection() {
     let c = resistor(&mut s, child, 0);
     label(&mut s, main, a, "GND", "local");
     label(&mut s, main, b, "GND", "local");
-    let remote = label(&mut s, child, c, "GND", "ground");
+    let remote = label(&mut s, child, c, "GND", "global");
     assert_eq!(s.project().unwrap().electrical_connectivity().net_for(a).unwrap(), &[a, b]);
     let first = s.project().unwrap().for_sheet(main).unwrap().net_labels()[0].clone();
     apply(&mut s, SET, json!({"sheet":main.id(),"id":first.object_id(),"name":"GND","style":"global","x_nm":first.at.x_nm,"y_nm":first.at.y_nm}));
@@ -49,38 +49,43 @@ fn scope_power_and_case_are_resolved_before_sheet_projection() {
     assert_eq!(local.connectivity().net_for(c).unwrap(), &[c]);
     assert_eq!(local.connectivity().net_name(0), "GND");
     let at = local.net_labels()[0].at;
-    apply(&mut s, SET, json!({"sheet":child.id(),"id":remote,"name":"gnd","style":"ground","x_nm":at.x_nm,"y_nm":at.y_nm}));
+    apply(&mut s, SET, json!({"sheet":child.id(),"id":remote,"name":"gnd","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm}));
     assert_eq!(s.project().unwrap().electrical_connectivity().net_for(a).unwrap(), &[a, b]);
-    apply(&mut s, SET, json!({"sheet":child.id(),"id":remote,"name":"+3V3","style":"power","x_nm":at.x_nm,"y_nm":at.y_nm}));
+    apply(&mut s, SET, json!({"sheet":child.id(),"id":remote,"name":"+3V3","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm}));
     assert_eq!(s.project().unwrap().electrical_connectivity().net_for(c).unwrap(), &[c]);
     s.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(s.project().unwrap().for_sheet(child).unwrap().net_labels()[0].name, "gnd");
 }
 
-/// A flat-bar marker joins the same global VCC net as an existing arrow in another sheet.
-/// The codec retains both distinct drawings and byte-stable documents, with shared undo/redo.
+/// Native arrow and bar symbols join by their declared terminal role across sheets, and
+/// pinning retains their distinct drawings without any power-marker annotation records.
 #[test]
-fn power_bar_keeps_its_drawing_and_global_name() {
+fn native_power_drawings_share_global_values_across_sheets() {
     let mut s = session();
     let main = s.project().unwrap().sheet_target();
     apply(&mut s, sheets::CREATE_SHEET, json!({"name":"Supply"}));
     let other = s.project().unwrap().sheets().nth(1).unwrap().target;
     let a = resistor(&mut s, main, 0);
     let b = resistor(&mut s, other, 0);
-    label(&mut s, main, a, "VCC", "power");
-    let before = s.snapshot().unwrap();
-    label(&mut s, other, b, "VCC", "power_bar");
-    assert_eq!(s.project().unwrap().electrical_connectivity().net_for(a).unwrap(), &[a, b]);
-    let documents = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
-    let reopened = persistence::decode_documents(&documents).unwrap();
-    assert_eq!(reopened.for_sheet(main).unwrap().net_labels()[0].style, Style::Power);
-    assert_eq!(reopened.for_sheet(other).unwrap().net_labels()[0].style, Style::PowerBar);
-    assert_eq!(persistence::encode_documents(reopened).unwrap(), documents);
-    s.apply("edit.undo", &Value::Null).unwrap();
-    crate::assert_same_content(&before, &s.snapshot().unwrap());
-    s.apply("edit.redo", &Value::Null).unwrap();
-    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), documents);
-    assert!(crate::command(ADD).unwrap().to_json()["params"]["properties"]["style"]["enum"].as_array().unwrap().contains(&json!("power_bar")));
+    for (sheet, pin, id) in [(main, a, "vcc"), (other, b, "vcc-bar")] {
+        let at = s.project().unwrap().for_sheet(sheet).unwrap().terminal_position(pin).unwrap();
+        let d = s.libraries().latest_symbol("power", id).unwrap();
+        apply(
+            &mut s,
+            PLACE_SYMBOL,
+            json!({"sheet":sheet.id(),"library":"power","definition":id,"definition_revision":d.revision(),"definition_digest":library::sources::symbol_digest(&d).unwrap(),"x_nm":at.x_nm,"y_nm":at.y_nm}),
+        );
+    }
+    let p = s.snapshot().unwrap();
+    let g = p.electrical_connectivity();
+    assert_eq!(g.net_index_for(a), g.net_index_for(b));
+    assert_eq!(g.net_name(g.net_index_for(a).unwrap()), "VCC");
+    assert!(p.sheets().all(|sheet| p.for_sheet(sheet.target).unwrap().net_labels().is_empty()));
+    let docs = persistence::encode_documents(p).unwrap();
+    let reopened = persistence::decode_documents(&docs).unwrap();
+    assert_eq!(reopened.for_sheet(main).unwrap().symbols()[1].definition.id, "vcc");
+    assert_eq!(reopened.for_sheet(other).unwrap().symbols()[1].definition.id, "vcc-bar");
+    assert_eq!(persistence::encode_documents(reopened).unwrap(), docs);
 }
 
 /// A label at a wire interior names that explicit route; ordinary geometric crossings remain
@@ -91,8 +96,8 @@ fn wire_contacts_and_moving_pins_rebuild_named_connectivity() {
     let sheet = s.project().unwrap().sheet_target();
     let a = resistor(&mut s, sheet, 0);
     let b = resistor(&mut s, sheet, 20 * G);
-    label(&mut s, sheet, a, "VCC", "power");
-    label(&mut s, sheet, b, "VCC", "power");
+    label(&mut s, sheet, a, "VCC", "global");
+    label(&mut s, sheet, b, "VCC", "global");
     let old = s.snapshot().unwrap();
     assert_eq!(old.connectivity().net_for(a).unwrap(), &[a, b]);
     apply(&mut s, MOVE_SYMBOL, json!({"symbol":a.inspect()["symbol"],"x_nm":0,"y_nm":4*G}));
@@ -123,7 +128,7 @@ fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
     apply(&mut s, sheets::CREATE_SHEET, json!({"name":"Second"}));
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
     let before = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
-    apply(&mut s, ADD, json!({"sheet":main.id(),"name":"GND","style":"ground","x_nm":0,"y_nm":0,"rotation":90}));
+    apply(&mut s, ADD, json!({"sheet":main.id(),"name":"GND","style":"global","x_nm":0,"y_nm":0,"rotation":90}));
     let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let path = format!("sheets/{}.json", main.id());
     assert_eq!(docs.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["project.pc", &path]);
@@ -134,7 +139,7 @@ fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
     assert_eq!(persistence::encode_documents(persistence::decode_packed(&packed).unwrap().project).unwrap(), docs);
     assert!(persistence::encode(reopened).is_err());
     let label = s.project().unwrap().net_labels()[0].clone();
-    apply(&mut s, SET, json!({"sheet":main.id(),"id":label.object_id(),"name":"GND","style":"ground","x_nm":G,"y_nm":0,"rotation":180}));
+    apply(&mut s, SET, json!({"sheet":main.id(),"id":label.object_id(),"name":"GND","style":"global","x_nm":G,"y_nm":0,"rotation":180}));
     let moved = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let old = String::from_utf8(docs[&path].clone()).unwrap();
     let new = String::from_utf8(moved[&path].clone()).unwrap();
@@ -147,11 +152,11 @@ fn storage_roundtrip_and_small_diffs_preserve_old_documents() {
 #[test]
 fn invalid_edits_and_documents_are_atomic() {
     let mut s = session();
-    apply(&mut s, ADD, json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0}));
+    apply(&mut s, ADD, json!({"name":"GND","style":"global","x_nm":0,"y_nm":0}));
     let label = s.project().unwrap().net_labels()[0].clone();
     let before = s.snapshot().unwrap();
     let revision = s.revision();
-    let good = json!({"id":label.object_id(),"name":"GND","style":"ground","x_nm":0,"y_nm":0,"expected_revision":revision});
+    let good = json!({"id":label.object_id(),"name":"GND","style":"global","x_nm":0,"y_nm":0,"expected_revision":revision});
     s.apply(SET, &good).unwrap();
     assert_eq!(s.revision(), revision);
     for patch in [
@@ -194,7 +199,7 @@ fn label_sheet(s: &Session) -> uuid::Uuid {
 #[test]
 fn direct_endpoint_draw_delete_and_history() {
     let mut s = session();
-    apply(&mut s, ADD, json!({"name":"+3V3","style":"power","x_nm":0,"y_nm":0}));
+    apply(&mut s, ADD, json!({"name":"+3V3","style":"global","x_nm":0,"y_nm":0}));
     let label = s.project().unwrap().net_labels()[0].clone();
     apply(&mut s, DRAW_WIRE, json!({"from":{"net_label":label.object_id()},"to":{"x_nm":10*G,"y_nm":0},"bends":[]}));
     let before = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
@@ -210,14 +215,14 @@ fn direct_endpoint_draw_delete_and_history() {
 /// Net-name appearance changes neither the electrical anchor nor attached routes, and is
 /// preserved by later edits that omit text. Older sheet versions cannot discard it on load.
 #[test]
-fn power_text_appearance_is_persistent_atomic_and_separate_from_wiring() {
+fn label_text_appearance_is_persistent_atomic_and_separate_from_wiring() {
     let mut s = session();
-    apply(&mut s, ADD, json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0}));
+    apply(&mut s, ADD, json!({"name":"GND","style":"global","x_nm":0,"y_nm":0}));
     let label = s.project().unwrap().net_labels()[0].clone();
     apply(&mut s, DRAW_WIRE, json!({"from":{"net_label":label.object_id()},"to":{"x_nm":10*G,"y_nm":0},"bends":[]}));
     let before = s.snapshot().unwrap();
     let text = schematic::fields::Layout { offset: Some(Point { x_nm: 2 * G, y_nm: 4 * G }), height_nm: 2_000_000, ..Default::default() };
-    apply(&mut s, SET, json!({"id":label.object_id(),"name":"GND","style":"ground","x_nm":0,"y_nm":0,"text":text}));
+    apply(&mut s, SET, json!({"id":label.object_id(),"name":"GND","style":"global","x_nm":0,"y_nm":0,"text":text}));
     let after = s.snapshot().unwrap();
     assert_eq!(before.inspect_schematic()["netlist"], after.inspect_schematic()["netlist"]);
     assert_eq!(before.wire_path(&before.wires()[0]), after.wire_path(&after.wires()[0]));
@@ -234,12 +239,15 @@ fn power_text_appearance_is_persistent_atomic_and_separate_from_wiring() {
     for invalid in [json!(null), json!({"height_nm":-1}), json!(schematic::fields::Layout { height_nm: -1, ..Default::default() })] {
         let revision = s.revision();
         assert!(
-            s.apply(SET, &json!({"id":label.object_id(),"name":"BAD","style":"power","x_nm":G,"y_nm":G,"text":invalid,"expected_revision":revision}))
-                .is_err()
+            s.apply(
+                SET,
+                &json!({"id":label.object_id(),"name":"BAD","style":"global","x_nm":G,"y_nm":G,"text":invalid,"expected_revision":revision})
+            )
+            .is_err()
         );
         assert!(Arc::ptr_eq(&after, &s.snapshot().unwrap()));
     }
-    apply(&mut s, SET, json!({"id":label.object_id(),"name":"GND","style":"power_bar","x_nm":0,"y_nm":0}));
+    apply(&mut s, SET, json!({"id":label.object_id(),"name":"GND","style":"local","x_nm":0,"y_nm":0}));
     assert_eq!(s.project().unwrap().net_labels()[0].text, Some(text));
     s.apply("edit.undo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&after, &s.snapshot().unwrap()));
@@ -257,7 +265,7 @@ fn remote_alias_bridge_merges_local_groups_and_preserves_names() {
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
     let a = resistor(&mut s, main, 0);
     let b = resistor(&mut s, main, 20 * G);
-    label(&mut s, main, a, "VCC", "power");
+    label(&mut s, main, a, "VCC", "global");
     label(&mut s, main, b, "+3V3", "global");
     for (name, x) in [("VCC", 0), ("+3V3", 10 * G)] {
         apply(&mut s, ADD, json!({"sheet":child.id(),"name":name,"style":"global","x_nm":x,"y_nm":0}));
@@ -305,11 +313,11 @@ fn codec_rejects_missing_arrays_foreign_endpoints_and_colliding_ids() {
     let mut s = session();
     let main = s.project().unwrap().sheet_target();
     let a = resistor(&mut s, main, 0);
-    let id = label(&mut s, main, a, "GND", "ground");
+    let id = label(&mut s, main, a, "GND", "global");
     apply(&mut s, DRAW_WIRE, json!({"from":{"net_label":id},"to":{"x_nm":-10*G,"y_nm":0},"bends":[]}));
     apply(&mut s, sheets::CREATE_SHEET, json!({"name":"Other"}));
     let child = s.project().unwrap().sheets().nth(1).unwrap().target;
-    apply(&mut s, ADD, json!({"sheet":child.id(),"name":"VCC","style":"power","x_nm":0,"y_nm":0}));
+    apply(&mut s, ADD, json!({"sheet":child.id(),"name":"VCC","style":"global","x_nm":0,"y_nm":0}));
     let remote = s.project().unwrap().for_sheet(child).unwrap().net_labels()[0].id;
     let docs = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
     let path = format!("sheets/{}.json", main.id());
@@ -335,7 +343,7 @@ fn codec_rejects_missing_arrays_foreign_endpoints_and_colliding_ids() {
 #[test]
 fn marker_preview_moves_attached_wire_without_committing() {
     let mut s = session();
-    apply(&mut s, ADD, json!({"name":"GND","style":"ground","x_nm":0,"y_nm":0}));
+    apply(&mut s, ADD, json!({"name":"GND","style":"global","x_nm":0,"y_nm":0}));
     let label = s.project().unwrap().net_labels()[0].clone();
     apply(&mut s, DRAW_WIRE, json!({"from":{"net_label":label.object_id()},"to":{"x_nm":10*G,"y_nm":0},"bends":[]}));
     let p = s.snapshot().unwrap();
@@ -362,4 +370,18 @@ fn labels_contact_repeated_points_on_unhealed_routes() {
     let graph = s.project().unwrap().connectivity();
     assert_eq!(graph.nets.len(), 1);
     assert_eq!(graph.net_name(0), "LOOP");
+}
+
+/// Removed marker spellings are rejected by the public command and strict native decoder,
+/// so no caller can create an invisible or silently substituted power annotation.
+#[test]
+fn obsolete_power_marker_styles_are_refused_atomically() {
+    let mut s = session();
+    let before = s.snapshot().unwrap();
+    for style in ["power", "power_bar", "ground"] {
+        assert!(s.apply(ADD, &json!({"name":"RAIL","style":style,"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).is_err());
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        assert!(serde_json::from_value::<Label>(json!({"id":1,"name":"RAIL","style":style,"at":{"x_nm":0,"y_nm":0},"rotation":0})).is_err());
+    }
+    assert_eq!(crate::command(ADD).unwrap().to_json()["params"]["properties"]["style"]["enum"], json!(["local", "global"]));
 }

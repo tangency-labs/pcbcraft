@@ -148,7 +148,7 @@ fn group_move_accepts_a_displacement_across_both_coordinate_limits() {
 #[test]
 fn named_anchors_move_delete_and_undo_with_shared_selection() {
     let mut s = fixture();
-    for (style, x) in [("ground", 30), ("power", 40), ("local", 50), ("global", 60)] {
+    for (style, x) in [("global", 30), ("global", 40), ("local", 50), ("global", 60)] {
         s.apply(crate::net_labels::ADD, &json!({"name":format!("N{x}"),"style":style,"x_nm":x*GRID_NM,"y_nm":0,"expected_revision":s.revision()}))
             .unwrap();
     }

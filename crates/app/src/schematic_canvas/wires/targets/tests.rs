@@ -64,8 +64,13 @@ fn named_contact_is_unambiguous_and_occupied_routes_keep_selection_priority() {
     run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
     let pin = s.project().unwrap().symbols()[0].terminals()[0];
     let point = s.project().unwrap().terminal_position(pin).unwrap();
-    run(&mut s, pcbcraft_engine::net_labels::ADD, json!({"name":"GND","style":"ground","x_nm":point.x_nm,"y_nm":point.y_nm}));
-    let end = WireEndpoint::NetLabel(s.project().unwrap().net_labels()[0].id);
+    let definition = s.libraries().latest_symbol("power", "gnd").unwrap();
+    run(
+        &mut s,
+        PLACE_SYMBOL,
+        json!({"library":"power","definition":"gnd","definition_revision":definition.revision(),"definition_digest":pcbcraft_engine::library::sources::symbol_digest(&definition).unwrap(),"x_nm":point.x_nm,"y_nm":point.y_nm}),
+    );
+    let end = WireEndpoint::Terminal(s.project().unwrap().symbols()[1].terminals()[0]);
     let camera = Camera::default();
     let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 700.));
     let pos = camera.screen(point, rect);

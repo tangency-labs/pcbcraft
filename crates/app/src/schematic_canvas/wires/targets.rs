@@ -73,11 +73,16 @@ impl Targets {
                 }
             }
         }
-        for label in project.net_labels() {
-            if result.segments.iter().any(|segment| pcbcraft_engine::wire::path_contains_point(&[segment.from, segment.to], label.at)) {
-                // A marker touching a route is occupied even when that route's endpoint is
-                // a component pin or junction rather than the marker's own identity.
-                result.degree.entry(WireEndpoint::NetLabel(label.id)).or_insert(1);
+        let markers = project
+            .net_labels()
+            .iter()
+            .map(|label| (WireEndpoint::NetLabel(label.id), label.at))
+            .chain(project.power_terminals().map(|(end, _, at)| (end, at)));
+        for (end, at) in markers {
+            if result.segments.iter().any(|segment| pcbcraft_engine::wire::path_contains_point(&[segment.from, segment.to], at)) {
+                // Explicit naming contacts are occupied even when the route uses another
+                // terminal identity at the same physical point.
+                result.degree.entry(end).or_insert(1);
             }
         }
         result

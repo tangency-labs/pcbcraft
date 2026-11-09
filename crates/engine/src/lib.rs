@@ -28,7 +28,7 @@ use std::{
 };
 
 use schematic::{
-    Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, WireEndpoint, library_symbol,
+    Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, WireEndpoint,
     wiring::{Connectivity, MAX_WIRES},
 };
 use serde_json::{Map, Value, json};
@@ -45,7 +45,7 @@ const NET_STYLE: Param = Param {
     name: "style",
     kind: ParamKind::NetLabelStyle,
     required: true,
-    summary: "Local sheet label, global label, power arrow, power bar or ground symbol; power and ground have global scope.",
+    summary: "Local sheet label or global text label; power symbols use schematic.place_symbol.",
 };
 const NET_OBJECT: Param = Param { name: "id", kind: ParamKind::NetLabelId, required: true, summary: "Stable label ID from inspection." };
 const NET_ROTATION: Param =
@@ -150,7 +150,7 @@ impl ParamKind {
                 "wires": {"type":"array", "maxItems":MAX_WIRES, "uniqueItems":true, "items":Self::WireId.schema()},
                 "net_labels": {"type":"array", "maxItems":net_labels::MAX_LABELS, "uniqueItems":true, "items":Self::NetLabelId.schema()}
             }, "required":["symbols","wires"], "additionalProperties":false}),
-            Self::NetLabelStyle => json!({"type":"string","enum":["local","global","power","power_bar","ground"]}),
+            Self::NetLabelStyle => json!({"type":"string","enum":["local","global"]}),
             Self::NetLabelId => json!({"type":"string","pattern":"^net-label-[1-9][0-9]*$"}),
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
@@ -327,7 +327,7 @@ impl ParamKind {
             Self::FootprintIds => Err("must contain unique placed footprint IDs within the symbol limit"),
             Self::ResolveExistingFootprints => Err("must be a boolean"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
-            Self::NetLabelStyle => Err("must be local, global, power, power_bar or ground"),
+            Self::NetLabelStyle => Err("must be local or global"),
             Self::NetLabelId => Err("must identify a named net label"),
             Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),
@@ -541,7 +541,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: net_labels::ADD,
         title: "Place Net Label",
-        summary: "Place a local/global label or power/ground anchor. Matching names connect by scope; a label on a pin or wire connects at its anchor. Undoable.",
+        summary: "Place a local or global text label. Matching names connect by scope; a label on a pin or wire connects at its anchor. Undoable.",
         params: &[
             NET_NAME,
             NET_STYLE,
@@ -656,23 +656,24 @@ const CATALOG: &[Command] = &[
     Command {
         id: PLACE_SYMBOL,
         title: "Place Symbol",
-        summary: "Place a native symbol on the open schematic. External definitions require library, definition_revision and definition_digest from library.search. Undoable.",
+        summary: "Place a native symbol on the open schematic. Explicit library selections require library, definition_revision and definition_digest from library.search. Undoable.",
         params: &[
             Param { required: true, name: "definition", summary: "Native symbol item ID", kind: ParamKind::SymbolDefinition },
             Param {
                 required: false,
                 name: "definition_digest",
-                summary: "SHA-256 digest from library.search; required for external symbols",
+                summary: "SHA-256 digest from library.search; required for explicit library selections",
                 kind: ParamKind::LibraryDigest,
             },
             Param { required: false, name: "library", summary: "Native library ID; omit for the embedded starter", kind: ParamKind::LibrarySource },
             Param {
                 required: false,
                 name: "definition_revision",
-                summary: "Exact loaded symbol revision; required for external libraries",
+                summary: "Exact loaded symbol revision; required for explicit library selections",
                 kind: ParamKind::DefinitionRevision,
             },
             Param { required: false, name: "rotation", summary: "Counterclockwise degrees; defaults to 0", kind: ParamKind::Rotation },
+            Param { required: false, name: "value", summary: "Initial editable component Value; defaults to the definition", kind: ParamKind::Text },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,
@@ -1367,7 +1368,7 @@ impl Project {
 
 /// The open project and its history. Editor views share this authority; headless MCP owns a
 /// separate session. Window placement and navigation are not part of the project history.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Session {
     libraries: Arc<library::sources::Catalog>,
     project: Option<Arc<Project>>,
@@ -1380,6 +1381,21 @@ pub struct Session {
     history_root_revision: u64,
     /// One runtime-only review capability; never serialized or counted as an authored edit.
     update_plan: Option<board::update::CachedPlan>,
+}
+
+impl Default for Session {
+    /// Start with the bundled native sources; no project or authored history exists yet.
+    fn default() -> Self {
+        Self {
+            libraries: Arc::new(library::sources::Catalog::bundled()),
+            project: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            revision: 0,
+            history_root_revision: 0,
+            update_plan: None,
+        }
+    }
 }
 
 impl Session {
@@ -1714,34 +1730,33 @@ impl Session {
             | hierarchy::EDIT_LABEL
             | hierarchy::DELETE_LABEL => self.edit_hierarchy(id, params)?,
             PLACE_RESISTOR => {
-                let resistor =
-                    library_symbol("resistor").ok_or_else(|| CommandError::Unavailable("the starter library has no resistor symbol".to_owned()))?;
+                let resistor = self
+                    .libraries
+                    .latest_symbol("starter", "resistor")
+                    .ok_or_else(|| CommandError::Unavailable("the default library has no resistor symbol".to_owned()))?;
                 self.place_symbol(resistor, params)?;
             }
             PLACE_SYMBOL => {
                 let library = params["library"].as_str().unwrap_or("starter");
                 let id = params["definition"].as_str().unwrap_or_default();
                 let revision = params.get("definition_revision").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
-                let definition = if library == "starter" {
-                    match revision {
-                        Some(revision) => library::starter().symbol_revision(id, revision).cloned(),
-                        None => library_symbol(id),
-                    }
-                } else {
-                    if params.get("definition_revision").is_none() {
-                        return Err(CommandError::InvalidParams("`definition_revision` is required for external libraries".into()));
-                    }
-                    if params.get("definition_digest").is_none() {
-                        return Err(CommandError::InvalidParams("`definition_digest` is required for external libraries".into()));
-                    }
-                    revision.and_then(|revision| self.libraries.symbol(library, id, revision))
+                let legacy = params.get("library").is_none() && params.get("definition_digest").is_none();
+                if !legacy && revision.is_none() {
+                    return Err(CommandError::InvalidParams("`definition_revision` is required for explicit library selections".into()));
                 }
-                .ok_or_else(|| CommandError::InvalidParams("unknown symbol definition".to_owned()))?;
-                if (library != "starter" || params.get("definition_digest").is_some())
+                if !legacy && params.get("definition_digest").is_none() {
+                    return Err(CommandError::InvalidParams("`definition_digest` is required for explicit library selections".into()));
+                }
+                let definition = match revision {
+                    Some(revision) => self.libraries.symbol(library, id, revision),
+                    None => self.libraries.latest_symbol(library, id),
+                }
+                .ok_or_else(|| CommandError::InvalidParams("unknown symbol definition".into()))?;
+                if !legacy
                     && params["definition_digest"].as_str()
                         != Some(library::sources::symbol_digest(&definition).map_err(CommandError::InvalidParams)?.as_str())
                 {
-                    return Err(CommandError::InvalidParams("external symbol content changed; search the library again".into()));
+                    return Err(CommandError::InvalidParams("symbol content changed; search the library again".into()));
                 }
                 self.place_symbol(definition, params)?;
             }
@@ -1794,8 +1809,8 @@ impl Session {
     /// Add a symbol from validated parameters if the caller's revision is still current.
     /// Reserve above the allocation watermark and runtime revision so undo cannot recycle it.
     /// Exact wire contacts connect; a two-pin placement on a straight run inserts the part.
-    /// Explicit native selections reject conflicting pinned content. Legacy starter-only calls
-    /// retain their compatibility behavior of reusing the project's existing saved definition.
+    /// Explicit native selections reject conflicting pinned content. Legacy calls omitting
+    /// both library and digest retain the compatibility behavior of reusing saved definitions.
     fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -1807,7 +1822,10 @@ impl Session {
             (&saved.library, &saved.id, saved.revision()) == (&definition.library, &definition.id, definition.revision())
         };
         let definition = match project.components.values().map(|component| &component.definition).find(same) {
-            Some(saved) if (definition.library != "starter" || params.get("definition_digest").is_some()) && **saved != *definition => {
+            Some(saved)
+                if (params.get("library").is_some() || params.get("definition_digest").is_some())
+                    && !library::sources::matches_pinned(saved, &definition) =>
+            {
                 return Err(CommandError::InvalidParams("symbol identity/revision conflicts with its pinned project copy".into()));
             }
             Some(saved) => saved.clone(),
@@ -1829,14 +1847,18 @@ impl Session {
         if reference_number > MAX_REFERENCE_NUMBER {
             return Err(CommandError::Unavailable("no more reference numbers are available for this symbol type".to_owned()));
         }
+        if let Some(value) = params.get("value") {
+            schematic::check_value(value.as_str().unwrap_or_default()).map_err(CommandError::InvalidParams)?;
+        }
+        let defaults = definition.defaults.clone().unwrap_or_default();
         let ordinal = self.next_object_id()?;
         let component = Component {
             ordinal,
             definition: definition.clone(),
             reference_number,
             reference: format!("{}{reference_number}", definition.reference_prefix),
-            value: definition.default_value().to_owned(),
-            metadata: schematic::fields::Metadata::default(),
+            value: params["value"].as_str().unwrap_or(definition.default_value()).to_owned(),
+            metadata: defaults.metadata,
         };
         let mut project = project.clone();
         Arc::make_mut(&mut project.components).insert(ordinal, component);
@@ -1847,7 +1869,7 @@ impl Session {
             ordinal,
             component: ordinal,
             position: Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() },
-            field_layout: schematic::fields::Layouts::default(),
+            field_layout: defaults.field_layout,
             rotation: (params["rotation"].as_u64().unwrap_or_default() / 90) as u8,
         });
         project.sheet_mut().connectivity = Arc::default();

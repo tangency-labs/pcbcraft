@@ -1,0 +1,111 @@
+{
+  "format": "pcbcraft-symbol/2",
+  "id": "gnd",
+  "revision": 1,
+  "name": "GND",
+  "reference_prefix": "PWR",
+  "default_value": "GND",
+  "behavior": {
+    "type": "power",
+    "terminal": "1"
+  },
+  "defaults": {
+    "metadata": {
+      "fields": {},
+      "attributes": {
+        "do_not_populate": false,
+        "exclude_from_bom": true,
+        "exclude_from_board": true,
+        "exclude_from_simulation": false,
+        "exclude_from_position_files": true
+      }
+    },
+    "field_layout": {
+      "reference": {
+        "offset": null,
+        "visible": false,
+        "show_name": false,
+        "rotation": 0,
+        "align": "middle",
+        "height_nm": 1270000
+      },
+      "value": {
+        "offset": {
+          "x_nm": 0,
+          "y_nm": 4064000
+        },
+        "visible": true,
+        "show_name": false,
+        "rotation": 0,
+        "align": "middle",
+        "height_nm": 1270000
+      }
+    }
+  },
+  "terminals": [
+    {
+      "id": "1",
+      "electrical_type": "power_in"
+    }
+  ],
+  "units": [
+    {
+      "id": "main",
+      "drawing": [
+        {
+          "type": "line",
+          "from_nm": [
+            0,
+            0
+          ],
+          "to_nm": [
+            0,
+            1524000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            -1270000,
+            1524000
+          ],
+          "to_nm": [
+            1270000,
+            1524000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            -762000,
+            2159000
+          ],
+          "to_nm": [
+            762000,
+            2159000
+          ]
+        },
+        {
+          "type": "line",
+          "from_nm": [
+            -254000,
+            2794000
+          ],
+          "to_nm": [
+            254000,
+            2794000
+          ]
+        }
+      ],
+      "pins": [
+        {
+          "terminal": "1",
+          "at_nm": [
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}
