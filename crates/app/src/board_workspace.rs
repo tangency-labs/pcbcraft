@@ -184,8 +184,24 @@ impl PcbApp {
             active: false,
             toggle: false,
         }];
-        let place_planned = [planned(ToolIcon::Via, "Via", "Place vias (planned)"), planned(ToolIcon::Zone, "Zone", "Draw copper zones (planned)")];
-        if workspace::ribbon_group_with_menu(ui, "Place", &place, &place_planned) == Some(0) {
+        let place = [
+            place[0],
+            RibbonTool {
+                icon: ToolIcon::Via,
+                label: "Via",
+                description: "Place vias",
+                shortcut: "Ctrl+Shift+V",
+                enabled: enabled && self.can_place_via() && !editing,
+                active: self.views.active.board.tracks.via_tool,
+                toggle: false,
+            },
+        ];
+        let place_planned = [planned(ToolIcon::Zone, "Zone", "Draw copper zones (planned)")];
+        let picked = workspace::ribbon_group_with_menu(ui, "Place", &place, &place_planned);
+        if picked == Some(1) {
+            self.start_via();
+        }
+        if picked == Some(0) {
             let component = self
                 .session
                 .project()
@@ -374,6 +390,24 @@ impl PcbApp {
             .project()
             .and_then(|project| board.target.and_then(|target| project.board_view(target)))
             .is_some_and(|view| crate::board_tracks::can_route(view, board.active_layer.as_deref(), &board.hidden_layers))
+    }
+
+    /// Whether the focused board view's board has the two copper layers a through via needs.
+    fn can_place_via(&self) -> bool {
+        self.session
+            .project()
+            .and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target)))
+            .is_some_and(crate::board_tracks::can_place_via)
+    }
+
+    /// Arm Place › Via (Ctrl+Shift+V) in the focused board view when the board has two copper
+    /// layers and no footprint transform is in progress. Drawing and route tools are dropped first.
+    pub(super) fn start_via(&mut self) {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() || !self.can_place_via() {
+            return;
+        }
+        self.views.active.board.drawing.cancel();
+        self.views.active.board.tracks.start_via();
     }
 
     /// Arm the route tool (KiCad: X) in the focused board view when its active layer is visible

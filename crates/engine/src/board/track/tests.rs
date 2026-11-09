@@ -467,3 +467,45 @@ fn vias_use_board_format_13_and_format_12_stays_tracks_only() {
     no_vias.insert("board.json".into(), format!("{}{}", &text[..start], &text[end..]).into_bytes());
     assert!(decode_documents(&no_vias).is_err(), "format 13 requires vias");
 }
+
+fn place_via(session: &mut Session, at: Point) -> Result<u64, CommandError> {
+    session.apply(
+        ADD_VIA,
+        &json!({"at":at,"via_diameter_nm":DEFAULT_VIA_DIAMETER_NM,"via_drill_nm":DEFAULT_VIA_DRILL_NM,"expected_revision":session.revision()}),
+    )
+}
+
+/// A standalone via is one undoable edit that saves as format 13. A second via on the same spot,
+/// a via whose pad would join two nets' pads, an invalid size or a stale revision is refused.
+#[test]
+fn standalone_vias_place_undo_and_refuse_shorts() {
+    let mut s = routed_fixture();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let at = Point { x_nm: 0, y_nm: 20_000_000 };
+    let revision = s.revision();
+    place_via(&mut s, at).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(view(&s).vias().iter().map(|via| via.at).collect::<Vec<_>>(), vec![at]);
+    assert!(String::from_utf8(encode_documents(s.snapshot().unwrap()).unwrap()["board.json"].clone()).unwrap().contains("pcbcraft-board/13"));
+    let revision = s.revision();
+    assert!(place_via(&mut s, at).is_err(), "one via per position");
+    // A 0.6 mm pad between two 0402 lands 1.05 mm apart (0.45 mm gap) touches both.
+    let (a, b) = {
+        let f = view(&s).footprints().find(|f| f.pads.iter().all(|p| p.net.is_some()) && f.pads[0].net != f.pads[1].net).unwrap();
+        (f.pads[0].center, f.pads[1].center)
+    };
+    let between = Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: a.y_nm };
+    assert!(place_via(&mut s, between).unwrap_err().to_string().contains("would connect nets"));
+    assert!(
+        s.apply(
+            ADD_VIA,
+            &json!({"at":Point { x_nm: 9_000_000, y_nm: 20_000_000 },"via_diameter_nm":300_000,"via_drill_nm":300_000,"expected_revision":revision})
+        )
+        .is_err(),
+        "the drill must be smaller than the pad"
+    );
+    assert!(s.apply(ADD_VIA, &json!({"at":at,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision - 1})).is_err());
+    assert_eq!(s.revision(), revision);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}

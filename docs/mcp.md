@@ -158,7 +158,9 @@ one undo step. Optional `layer_changes`, a list of `{at, layer}` in increasing
 vertex order after the first, places a through via at `points[at]` and continues on
 that copper layer; a change at the last vertex ends the route on a via. Layer changes
 require `via_diameter_nm` and `via_drill_nm`, with the drill smaller than the pad.
-Deleting takes `tracks` and/or `vias`, unique UUIDs from `project.boards[].tracks`
+`pcb.add_via` places one standalone through via from `at`, `via_diameter_nm` and
+`via_drill_nm`, in one undo step, refusing a second via at the same position or a pad
+that would join two nets. Deleting takes `tracks` and/or `vias`, unique UUIDs from `project.boards[].tracks`
 and `.vias`; at least one item is required, and deleting a via keeps its tracks. A route is refused whole when a point is out of range,
 neighbors repeat, the layer is not copper in the board setup, or its copper would
 join pads on two different nets (the error names both). Only copper the new route
