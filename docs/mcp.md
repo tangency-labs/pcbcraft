@@ -74,7 +74,10 @@ with `schematic.move_symbol` and pass the ID as `symbol`, coordinates as integer
 `x_nm` and `y_nm`, and the inspected revision as `expected_revision`. Move R1 to
 `(0, 5_080_000)` and watch the attached wire follow it. Undo and redo in the
 editor, then inspect again to confirm the position. The edit stays unsaved
-until you save the project.
+until you save the project. The move command also accepts optional absolute
+`rotation` in degrees (0, 90, 180 or 270), applying movement and orientation in
+one undo step; omitting it preserves the current orientation. `disconnect: true`
+leaves the old wire paths in place while applying the new pose.
 
 `schematic.set_symbol_fields` applies reference, value and optional `rotation`,
 `x_nm` and `y_nm` together as one revision-checked undo step, matching the schematic

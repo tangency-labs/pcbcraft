@@ -76,6 +76,8 @@ pub(crate) enum Tool {
     },
     Move {
         symbol: SymbolPlacement,
+        /// Preview-only quarter turns relative to the symbol's starting orientation.
+        turns: u8,
         offset: Vec2,
         revision: u64,
         /// Leave old wires at the original pins instead of stretching them when true.
@@ -231,6 +233,8 @@ pub(crate) enum SymbolAction {
 /// a reshape completed by the next click. Other `selected` items use the accent colour. Both mouse buttons can start a box;
 /// direction chooses containment or crossing, and Shift/Ctrl add or toggle hits. Group moves
 /// preview the same bounded transformation used by the engine and commit only on valid release.
+/// Symbol move previews also include their pending quarter turns; painted wire contacts use
+/// that transformed snapshot, and cancellation discards both position and orientation.
 /// `grid_opacity` is the grid's strength in percent; it changes only how the grid is drawn, never
 /// where points snap. The camera's snap spacing sets both the drawn grid and every snapped point;
 /// pins and junctions are picked by distance, so they stay reachable at any spacing.
@@ -313,15 +317,8 @@ pub(crate) fn show(
         _ => None,
     };
     let group_preview = match (&tool, group_delta, reshape_target) {
-        (Some(Tool::Move { symbol, disconnect, .. }), _, _) => moved.as_ref().and_then(|(_, point)| {
-            {
-                if *disconnect {
-                    project.moved_symbol_disconnected(&symbol.id(), *point, revision, auto_heal)
-                } else {
-                    project.moved_symbol(&symbol.id(), *point, revision, auto_heal)
-                }
-            }
-            .ok()
+        (Some(Tool::Move { symbol, turns, disconnect, .. }), _, _) => moved.as_ref().and_then(|(_, point)| {
+            project.transformed_symbol(&symbol.id(), *point, Some((symbol.turns() + turns) % 4), *disconnect, revision, auto_heal).ok()
         }),
         (Some(Tool::MoveItems { items, .. }), Some(delta), _) => {
             items.moved(project, delta).and_then(|next| next.healed(project, revision, auto_heal)).ok()
@@ -362,7 +359,7 @@ pub(crate) fn show(
         None
     };
     let net_label_preview = if let (Some(Tool::NetLabel { label, .. }), Some(at)) = (&tool, label_position) {
-        project.preview_net_label(label.id, at, label.rotation).ok()
+        project.dragged_net_label(label.id, at, label.rotation, revision, auto_heal).ok()
     } else {
         None
     };
@@ -383,7 +380,10 @@ pub(crate) fn show(
     if let Some(leg) = selected_leg {
         whole_wires.remove(&leg.wire);
     }
-    wires::paint(&painter, rect, project, camera, moved.clone(), &whole_wires, &highlighted.wires);
+    // A transformed snapshot already contains the preview's pin positions and orientation.
+    // Overriding them with the captured starting symbol would draw wires to its old rotation.
+    let moved_wires = if group_preview.is_some() { None } else { moved.clone() };
+    wires::paint(&painter, rect, project, camera, moved_wires, &whole_wires, &highlighted.wires);
     if group_preview.is_some()
         && let Some(target) = reshape_target
         && !matches!(target, Anchor::Free(_))

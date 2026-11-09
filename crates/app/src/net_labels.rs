@@ -461,7 +461,8 @@ impl PcbApp {
         }
     }
     /// Commit one completed preview through the shared engine, which allocates new identities.
-    /// Engine failures remain visible in the app message without publishing partial state.
+    /// Existing marker moves retain touching wires independent of placement order. Text-only
+    /// edits leave the electrical anchor fixed, and failures publish no partial state.
     pub(super) fn commit_net_label(&mut self, source: ViewInput, label: Label) {
         let repeat = label.id == 0 && self.parts.repeats();
         let next = label.clone();
@@ -471,6 +472,7 @@ impl PcbApp {
         }
         if label.id != 0 {
             params["id"] = json!(label.object_id());
+            params["keep_connected"] = json!(true);
         }
         self.run(if label.id == 0 { engine::ADD } else { engine::SET }, &params);
         self.views.active.schematic.tool = None;
@@ -622,12 +624,13 @@ impl PcbApp {
         Some(rect)
     }
 
-    /// Submit complete marker properties atomically to the source sheet and revision.
+    /// Submit complete marker properties and retained contacts atomically to the source
+    /// sheet/revision, using the current automatic route-cleanup preference for moves.
     fn apply_label_edit(&mut self, edit: &Edit, label: Label) -> Result<(), String> {
         if !self.views.active.accepts(edit.source, &self.session) {
             return Err("View or project changed; reopen properties to continue.".into());
         }
-        let mut params = json!({"sheet":edit.sheet.id(),"id":label.object_id(),"name":label.name,"style":label.style,"x_nm":label.at.x_nm,"y_nm":label.at.y_nm,"rotation":label.rotation,"expected_revision":edit.source.revision});
+        let mut params = json!({"sheet":edit.sheet.id(),"id":label.object_id(),"name":label.name,"style":label.style,"x_nm":label.at.x_nm,"y_nm":label.at.y_nm,"rotation":label.rotation,"expected_revision":edit.source.revision,"keep_connected":true,"auto_heal":self.preferences.auto_heal_wires});
         if let Some(text) = label.text {
             params["text"] = json!(text);
         }

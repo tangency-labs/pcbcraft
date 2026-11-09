@@ -67,7 +67,8 @@ anchor, or drag the chosen power entry directly onto the sheet. **L** opens a lo
 where **Scope** selects either scope. **R** rotates a placement preview and
 **Esc** cancels it. Local names join within a sheet, while global labels and
 power rails join matching names across sheets. Hover a label and press **E** to
-edit, **M** to move, or **Delete** to remove it; Undo reverses each completed edit.
+edit, **M** to move, or **Delete** to remove it. Moving a power marker retains its
+wire contacts even when it was placed onto an existing wire; Undo reverses the complete edit.
 See [named nets](net-labels.md) for contact rules and current limits.
 
 **VCC (bar)** uses the flat-bar drawing; **VCC** keeps the arrow. Both default to
@@ -117,7 +118,10 @@ the same `VCC` net name, which can be changed before placement.
 4. Left-drag empty canvas or right-drag to select several objects. Left-to-right
    selects fully enclosed bodies/routes; right-to-left selects touched ones.
    **Shift** adds and **Ctrl** toggles hits. Drag a selected member to move the
-   group, or **Delete** to remove it. Each edit has one undo step.
+   group, or **Delete** to remove it. Hover a symbol and press **G** to pick it up
+   with attached wires, or **M** to leave its old wiring in place. Press **R** while
+   moving to rotate the preview, then click to finish; **Esc** cancels both changes.
+   Each edit has one undo step.
 5. Click a wire segment; only that segment turns blue, and **Delete** removes
    it. Use **Undo**, then drag the segment perpendicular to its direction to
    adjust alignment, or hover it and press **G**, then click to finish. Corner

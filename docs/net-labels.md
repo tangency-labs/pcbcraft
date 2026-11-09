@@ -35,8 +35,9 @@ these indicators return when that physical contact is released. It can
 also stand alone and serve as the endpoint of a later wire. Drawing with **W**
 uses that anchor like an ordinary pin. A label placed at a crossing connects the
 routes it contacts; crossing wires elsewhere still remain separate. Moving a
-marker away from a contacted pin or wire releases that geometric contact, while
-wires explicitly drawn to its endpoint follow the marker's identity.
+marker in the editor retains those contacts, whether the marker or the wire was
+placed first. Wire ends and branches follow it; touching wire interiors split at
+the old anchor, and fixed pins or other markers remain connected by a wire leg.
 
 Names are case-sensitive: GND and gnd are distinct. Local names connect only
 within their sheet, including matching hierarchical labels. Global labels,
@@ -59,7 +60,11 @@ work. Unnamed groups keep their existing view-local numbering.
 `rotation`, optional `text` and `expected_revision`. `style` is `local`, `global`, `power`,
 `power_bar` or `ground`; rotation defaults to zero and accepts 0, 90, 180 or 270 degrees.
 `schematic.set_net_label` takes the same properties plus the stable `id` from
-inspection. `text` is a physical net-name layout with visibility, show-name,
+inspection. Its optional `keep_connected: true` carries existing physical contacts
+when moving; omitted/false retains the earlier coordinate-edit behavior, where
+positional contacts are released and directly attached endpoints follow. The GUI
+requests connected movement. Optional `auto_heal` controls route cleanup for that
+movement and defaults on. `text` is a physical net-name layout with visibility, show-name,
 offset, height, alignment and rotation, using the same vocabulary as component
 field layouts. Omitting it on placement uses the style defaults; omitting it from
 `schematic.set_net_label` preserves the stored layout. The GUI exposes these

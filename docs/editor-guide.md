@@ -33,6 +33,8 @@ place the marker; **R** rotates the preview and **Esc** cancels it. Hover the
 marker's name or glyph for **E**, **M**, **R** and **Delete**, or use its context
 menu. Drag the drawing or name to move a marker directly; **M** picks it up for
 click-to-place movement. **E** opens properties, where **Apply** confirms changes.
+Moving a marker keeps its touching wires connected regardless of placement order;
+fixed component pins stay in place while the wire stretches to the moved anchor.
 
 Names are case-sensitive. Local labels join matching names on the same sheet;
 global labels and power/ground symbols join project-wide. A marker anchored
@@ -138,13 +140,14 @@ geometry.
 
 Hover a symbol and press **G**, or choose **Grab (keep connected)** from its context
 menu, to move it without holding a mouse button. Attached wires follow the symbol;
-click to finish, or use **Esc** or right-click to cancel. Ordinary symbol dragging
-keeps the same connected movement.
+press **R** to rotate the preview and click to finish, or use **Esc** or right-click
+to cancel. Ordinary symbol dragging keeps the same connected movement and supports **R**.
 
 Press **M** with a symbol selected, or hover a symbol with no selection, to pick
 it up while leaving its wiring in place. Click to place it elsewhere, or press
 **Esc** or right-click to cancel the preview. **Disconnect and Move** in the
-symbol's context menu performs the same action.
+symbol's context menu performs the same action. **R** also rotates this preview;
+movement and rotation commit together as one undo step, while cancellation changes neither.
 The move and disconnection share one undo step; placing a replacement at the vacated
 pins connects it to the preserved wire ends.
 

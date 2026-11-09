@@ -83,6 +83,7 @@ impl Project {
         label.rotation = rotation;
         next.validate_net_labels().map_err(CommandError::InvalidParams)?;
         next.sheet_mut().connectivity = Arc::default();
+        next.named_graph = Arc::default();
         Ok(next)
     }
 
@@ -193,6 +194,8 @@ impl Project {
 impl Session {
     /// Validate an isolated candidate before publishing one undoable edit. Unknown/foreign
     /// IDs and stale revisions leave state intact; unchanged properties do not advance history.
+    /// With keep_connected, moving captures the old marker's wire/pin contacts before updating
+    /// metadata, committing the connected geometry and properties in one undo step.
     pub(crate) fn edit_net_label(&mut self, command: &str, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let mut project = self.open_project()?.clone();
@@ -237,7 +240,12 @@ impl Session {
             };
             match index {
                 Some(index) if project.net_labels[index] == label => return Ok(()),
-                Some(index) => Arc::make_mut(&mut project.sheet_mut().net_labels)[index] = label,
+                Some(index) => {
+                    if params["keep_connected"].as_bool().unwrap_or(false) && project.net_labels[index].at != label.at {
+                        project = project.dragged_net_label(label.id, label.at, label.rotation, self.revision(), wire::auto_heal(params))?;
+                    }
+                    Arc::make_mut(&mut project.sheet_mut().net_labels)[index] = label;
+                }
                 None => Arc::make_mut(&mut project.sheet_mut().net_labels).push(label),
             }
             project.validate_net_labels().map_err(CommandError::InvalidParams)?;
