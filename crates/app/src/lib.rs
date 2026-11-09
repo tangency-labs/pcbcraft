@@ -15,6 +15,7 @@ mod board_canvas;
 mod board_drawing;
 mod board_panels;
 mod board_setup;
+mod board_tracks;
 mod board_update;
 mod board_workspace;
 mod canvas_camera;
@@ -1665,6 +1666,7 @@ impl PcbApp {
             }
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+                && !self.views.active.board.tracks.escape()
                 && !self.views.active.board.drawing.escape()
                 && self.views.active.board.draft.take().is_none()
                 && self.views.active.board.placement.take().is_none()
@@ -1673,11 +1675,22 @@ impl PcbApp {
                 self.views.select_board(Default::default(), &self.session, self.preferences.selection_follow);
             }
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
-                if self.views.active.board.drawing.selected.is_some() {
+                if !self.views.active.board.tracks.selected.is_empty() {
+                    self.views.active.board.tracks.delete_requested = true;
+                } else if self.views.active.board.drawing.selected.is_some() {
                     self.views.active.board.drawing.delete_requested = true;
                 } else {
                     self.delete_board_footprints(ctx, self.views.active.id());
                 }
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::X)) {
+                self.start_route();
+            }
+            if self.views.active.board.tracks.tool {
+                let tracks = &mut self.views.active.board.tracks;
+                tracks.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                tracks.backspace_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace));
+                tracks.posture_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Slash));
             }
             if self.views.active.board.drawing.tool == Some(board_drawing::Tool::Lines) {
                 self.views.active.board.drawing.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
@@ -2245,6 +2258,10 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
+    list.push(("PCB layout", "Route track", "X".to_owned()));
+    list.push(("PCB layout", "Flip track posture", "/".to_owned()));
+    list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));
+    list.push(("PCB layout", "Remove last track vertex", "Backspace".to_owned()));
     list.push(("PCB layout", "Next layer", "+".to_owned()));
     list.push(("PCB layout", "Previous layer", "−".to_owned()));
     list.push(("PCB layout", "Front copper layer", "PgUp".to_owned()));

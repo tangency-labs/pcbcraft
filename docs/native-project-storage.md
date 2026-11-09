@@ -54,7 +54,7 @@ does not confirm a durable write and does not clear the editor's dirty state.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11` or `/12` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, and version 12 combines metadata with explicit board registration |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/11` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry |
+| `board.json` | `pcbcraft-board/1` through `/12` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -290,6 +290,18 @@ layer references and bounded resources (512 drawings, 4096 total vertices and
 128 combined layers); records sort by UUID. Optional setup, silkscreen, assignments
 and placements retain their existing validation and identities. Empty technical
 metadata remains after deleting the last graphic, preserving layer addresses.
+
+Board format 12 adds a `tracks` array and may carry every earlier field, so routing
+a board never drops its baseline, pending intent, graphics or setup. Each record is
+one straight segment on its own line: a UUID `id`, a copper `layer` UUID from the
+setup, an integer `width_nm` from 10,000 to 10,000,000, and integer-nanometer
+`start` and `end` points that differ. Records sort by UUID, so adding or deleting a
+segment changes only its own line. The codec rejects duplicate IDs, non-copper or
+unknown layers, out-of-range widths and more than 4096 segments. Format 12 requires
+at least one track, and earlier formats reject a `tracks` field. Deleting the last
+track returns the board to the format its other data requires, with the same bytes
+as before the first route. Net membership is not stored; it is derived from copper
+geometry and the accepted nets. Legacy single-file export refuses tracks.
 
 The earlier local format 8 rectangle remains readable and byte-stable on no-op
 save. Its first actual geometry edit materializes a layer-addressed drawing in

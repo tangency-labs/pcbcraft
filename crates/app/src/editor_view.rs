@@ -161,6 +161,7 @@ pub(super) struct SchematicState {
 pub(super) struct BoardState {
     pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
     pub(super) drawing: crate::board_drawing::State,
+    pub(super) tracks: crate::board_tracks::State,
     pub(super) draft: Option<crate::board_canvas::Draft>,
     pub(super) placement: Option<crate::board_canvas::Placement>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
@@ -209,6 +210,7 @@ impl BoardState {
     /// nor saved files change, and unfinished drawing gestures expire.
     pub(super) fn set_layer_visibility(&mut self, layers: impl IntoIterator<Item = String>, active_only: bool) {
         self.drawing.cancel();
+        self.tracks.cancel();
         let ratsnest_hidden = self.hidden_layers.contains(RATSNEST_KEY);
         self.hidden_layers = layers.into_iter().filter(|id| active_only && self.active_layer.as_ref() != Some(id)).collect();
         if ratsnest_hidden {
@@ -228,6 +230,7 @@ impl BoardState {
                 self.hidden_layers.remove(id);
             } else {
                 self.drawing.cancel();
+                self.tracks.cancel();
                 self.hidden_layers.insert(id.to_owned());
             }
         }
@@ -561,6 +564,7 @@ impl EditorView {
     /// Drop unfinished gestures without altering selection or the document.
     pub(super) fn cancel_gesture(&mut self) {
         self.board.drawing.cancel();
+        self.board.tracks.cancel();
         self.board.draft = None;
         self.board.placement = None;
         self.board.box_drag = None;
