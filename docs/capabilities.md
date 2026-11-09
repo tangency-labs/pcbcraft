@@ -24,7 +24,8 @@ still needs to work before the first collaboration-ready preview.
 The engine [single-board update workflow](single-board-update.md) previews and
 atomically accepts footprint/package and connectivity changes through shared
 commands and headless/live MCP. Desired assignments and accepted geometry remain
-distinct across offline reopen; deleted schematic parts retain their footprints
+distinct across offline reopen; package choices can be assigned and saved before
+any board exists, then adopted by explicit first-board creation. Deleted schematic parts retain their footprints
 until acceptance. The [PCB ratsnest](board-ratsnest.md) displays only accepted
 logical connections, with per-view visibility, live MCP control and explicit
 unavailable endpoints. The Update PCB dialog reviews those typed changes from

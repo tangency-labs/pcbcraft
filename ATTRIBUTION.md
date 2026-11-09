@@ -824,3 +824,9 @@ heading, rule, control height and secondary action treatment. Its aligned
 symbol-terminal / footprint-pad columns and responsive dropdowns are original
 PCBcraft presentation code prompted by Travis's supplied chooser screenshot;
 no additional source, asset, dependency or electrical mapping change is used.
+
+Schematic-only package assignment and the bounded project/13 save extension are
+original PCBcraft code over the existing exact package/mapping contracts. They
+reuse this repository's already qualified pinned definitions and Craft chooser;
+no external implementation, data, dependency or asset was added. Board creation
+adopts existing package intent without creating physical placements.

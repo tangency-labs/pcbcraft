@@ -359,10 +359,13 @@ and **Materials** offers generic material families or custom definitions. **Prof
 imports or exports a portable `.pcsetup.json`; imported values stay in the draft until
 **Apply board setup**. General copper-clearance and routing rule editors remain planned.
 
-To choose a package for an unplaced component, right-click its schematic symbol
+You can assign footprints while the project is still schematic-only. To choose
+a package for an unplaced component, right-click its schematic symbol
 and choose **Assign Footprint…**. For a starter resistor, choose **Resistor 0402**,
 map terminal 1 to pad 1 and terminal 2 to pad 2, then choose **Assign** and
-**Close**. This pins the package without creating a board placement. In PCB layout,
+**Close**. This pins the package without creating a PCB or placement; folder and
+archive saves retain it offline. Creating your first board later adopts these
+choices for Update PCB. In PCB layout,
 open **Layout → Components → Footprints**, select the component, enter X/Y and
 choose **Place on board**. Assignment and placement are separate undo steps;
 save/reopen retains the package and mapping offline. The chooser also supports

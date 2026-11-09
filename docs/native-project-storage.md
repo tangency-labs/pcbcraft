@@ -48,11 +48,32 @@ phase also writes its bounded setup of at most 64 material revisions, 128 layers
 127 strata and 256 nested prepreg plies. A requested download
 does not confirm a durable write and does not clear the editor's dirty state.
 
+## Schematic-only package choices
+
+Split project format `pcbcraft-project/13` extends project/12's component and
+allocation vocabulary for schematic-only package intent. It requires `boards: []`,
+the numeric allocation watermark and a non-null, nonempty `footprint_choices`
+array after `components`. Each choice has the same stable component ID, exact
+library/item/revision and complete terminal-to-pad mapping as an unplaced board
+assignment. Full pinned footprint definitions use the existing library paths;
+there is still no `board.json`, physical target, placement, outline or stackup.
+Choices are ordered by component ID and written incrementally, one per record
+budget. Missing assets, duplicate or unknown components, incompatible maps,
+null/empty lists and simultaneous board ownership are refused before adoption.
+
+Older split formats reject this field. Untouched projects retain their existing
+encoding; deleting the last choice returns to the ordinary schematic-only
+project/9 or /12 vocabulary. Explicit first-board creation transfers choices
+and pinned definitions to the existing board/7-or-later assignment encoding in
+one undoable transaction. Undo restores project-owned choices. Existing board
+files keep their current encoding and behavior. Folder and packed saves carry
+these choices, while the diagnostic single-document writer refuses lossy export.
+
 ## Document ownership
 
 | File | Format | Contents |
 |---|---|---|
-| `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11` or `/12` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, and version 12 combines metadata with explicit board registration |
+| `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12` or `/13` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, and version 13 adds schematic-only package choices |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
 | `board.json` | `pcbcraft-board/1` through `/11` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Edge graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |

@@ -93,7 +93,8 @@ impl super::Board {
 }
 
 impl Session {
-    /// Register the first board atomically; a second creation is refused without mutation.
+    /// Register the first board and adopt schematic package choices atomically, without
+    /// creating placements. Undo restores the choices' project scope; a second creation is refused.
     pub(crate) fn create_board(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let mut project = self.open_project()?.clone();
@@ -103,6 +104,9 @@ impl Session {
         let name = if params.get("name").is_some() { crate::name_param(params)? } else { "Board".into() };
         let registration = Registration::new(name)?;
         registration.validate(&project).map_err(CommandError::InvalidParams)?;
+        let packages = std::mem::take(Arc::make_mut(&mut project.schematic_packages));
+        Arc::make_mut(&mut project.board).assignments = packages.assignments;
+        Arc::make_mut(&mut project.board).definitions = packages.definitions;
         Arc::make_mut(&mut project.board).ownership = Ownership::Explicit(Some(registration));
         self.change(project);
         Ok(())

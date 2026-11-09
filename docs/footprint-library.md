@@ -11,14 +11,17 @@ catalog or fetching its source URL.
 
 From a schematic symbol's context menu, choose **Assign Footprint…**. In PCB
 layout, **Layout → Components → Footprints** opens the same chooser for the
-project's components, including components not yet placed on the board. Search
-and choose a package, then explicitly choose a pad for each logical terminal.
+project's components, including components not yet placed on the board. A
+schematic-only project can assign packages before creating a PCB. Search
+and choose a package, then review the editable pad choices for each logical terminal.
 The chooser shows the library, item, revision, license and dimensional source.
 **Assign** validates a complete bijection and pins the exact definition and map;
 it creates no copper, placement ID or board coordinates. The schematic wiring
 and reference stay unchanged.
 
-Assignments survive folder/archive save and offline reopen. In the PCB chooser,
+Assignments survive folder/archive save and offline reopen without a board.
+Creating the first board explicitly adopts those exact pinned choices without
+placing them; Undo restores the schematic-only choices. In the PCB chooser,
 an assigned, unplaced component offers unit-aware X/Y fields and **Place on
 board**. Placement uses the pinned package, selects it and centers the PCB view.
 The canvas's M/drag and R controls then move and rotate it normally. Choosing a
@@ -30,10 +33,14 @@ its assignment before it can place; a stale form closes without changing data.
 `expected_revision`. `pcb.place_assigned_footprint` takes the board/component,
 `x_nm`, `y_nm` and revision, resolving solely from the project. Both use the same
 engine command catalog in GUI, live and headless MCP. `inspect_project` reports
-physical assignments with `placed` status and a compact `footprint_catalog` of
+`project.footprint_assignments` with `placed` status and a null `board` for
+schematic-only choices, and a compact `footprint_catalog` of
 available built-in/project-pinned revisions. Legacy physical placements report
 their effective assignment without changing saved bytes; marker-only legacy
 placements remain explicit compatibility data.
+Omit `board` when assigning before board creation. An explicit unknown board is
+refused, and placement still requires a physical board. Existing board inspection
+also retains its `board.assignments` projection.
 
 A placed package cannot be silently reassigned: after the board has an accepted
 state, **Assign** records a proposed package or mapping and **Update PCB from
