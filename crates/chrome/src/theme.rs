@@ -41,6 +41,8 @@ pub const WIRE_CURSOR_ARM: f32 = 12.0;
 pub const WIRE_CURSOR_GAP: f32 = 3.0;
 /// Radius of the ring around a snapped connection target, in logical points.
 pub const WIRE_CURSOR_TARGET_RADIUS: f32 = 7.0;
+/// Radius of the dot marking the snapped free point under the wiring crosshair, in logical points.
+pub const WIRE_CURSOR_SNAP_RADIUS: f32 = 2.0;
 /// Radius of the filled dot where three or more wires meet at a free point.
 pub const SCHEMATIC_JUNCTION_RADIUS: f32 = 2.5;
 /// Half the side of the open square on an unconnected wire end.

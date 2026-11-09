@@ -3,10 +3,12 @@
 use crate::{Tokens, theme};
 use egui::{Painter, Pos2, Stroke, vec2};
 
-/// Draw a plain wiring crosshair in the theme's wire color at the effective snapped position.
-/// A ring distinguishes an existing connection target from a free grid point. The canvas
-/// color under-stroke keeps the cursor readable over geometry in either theme.
-pub fn wire(painter: &Painter, at: Pos2, connected: bool) {
+/// Draw the wiring crosshair at the live `pointer` and mark `target`, where a click lands.
+/// The crosshair follows every pointer movement, so the cursor never waits for the next grid
+/// point. `connected` rings an existing connection target at `target`. Otherwise a small dot marks
+/// the snapped free point, and it sits in the crosshair gap when the two coincide. The canvas
+/// color under-stroke keeps both readable over geometry in either theme.
+pub fn wire(painter: &Painter, pointer: Pos2, target: Pos2, connected: bool) {
     let t = Tokens::get();
     let arm = theme::WIRE_CURSOR_ARM;
     let gap = theme::WIRE_CURSOR_GAP;
@@ -17,10 +19,12 @@ pub fn wire(painter: &Painter, at: Pos2, connected: bool) {
             (vec2(0.0, -arm), vec2(0.0, -gap)),
             (vec2(0.0, gap), vec2(0.0, arm)),
         ] {
-            painter.line_segment([at + a, at + b], stroke);
+            painter.line_segment([pointer + a, pointer + b], stroke);
         }
     }
     if connected {
-        painter.circle_stroke(at, theme::WIRE_CURSOR_TARGET_RADIUS, Stroke::new(1.5, t.schematic_wire));
+        painter.circle_stroke(target, theme::WIRE_CURSOR_TARGET_RADIUS, Stroke::new(1.5, t.schematic_wire));
+    } else {
+        painter.circle(target, theme::WIRE_CURSOR_SNAP_RADIUS, t.schematic_wire, Stroke::new(1.0, t.canvas));
     }
 }

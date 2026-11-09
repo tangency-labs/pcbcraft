@@ -164,3 +164,55 @@ fn held_ctrl_keeps_wire_controls_available() {
     assert!(h.state().views.active.schematic.tool.is_none());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// Whether the wiring crosshair's right arm, in the wire color, starts beside `pointer`.
+fn crosshair_at(h: &Harness<'_, PcbApp>, pointer: Pos2) -> bool {
+    let arm = pointer + vec2(pcbcraft_chrome::theme::WIRE_CURSOR_GAP, 0.0);
+    h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+            if stroke.color == pcbcraft_chrome::Tokens::get().schematic_wire && points[0].distance(arm) < 0.001)
+    })
+}
+
+/// Whether the snapped free-point dot is painted at `at`.
+fn snap_dot_at(h: &Harness<'_, PcbApp>, at: Pos2) -> bool {
+    h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::Circle(circle)
+            if circle.radius == pcbcraft_chrome::theme::WIRE_CURSOR_SNAP_RADIUS && circle.center.distance(at) < 0.001)
+    })
+}
+
+/// Within one grid cell the crosshair follows every pointer move, before and during a wire,
+/// while the snap dot and the route preview stay on the grid point a click would use.
+#[test]
+fn the_wiring_crosshair_follows_the_pointer_between_grid_points() {
+    let mut h = harness();
+    h.state_mut().browser.open = false;
+    h.run();
+    click(&mut h, "Draw wire (W)");
+    let step = h.state().views.active.camera.snap_step();
+    let rect = h.get_by_label("Schematic canvas").rect();
+    let start = screen(&h, grid(-12, 12));
+    let end = screen(&h, grid(-4, 12));
+    for started in [false, true] {
+        if started {
+            h.hover_at(start);
+            h.run();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: start, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                h.run();
+            }
+            assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::Wire { start: Some(Anchor::Free(_)), .. })));
+        }
+        let snapped = h.state().views.active.camera.snap(end, rect);
+        for fraction in [0.1, 0.25, 0.4] {
+            let pointer = end + vec2(step * fraction, -step * fraction);
+            assert_eq!(h.state().views.active.camera.snap(pointer, rect), snapped);
+            h.hover_at(pointer);
+            h.run();
+            assert!(crosshair_at(&h, pointer), "the crosshair must track the pointer at {fraction} of a grid step");
+            assert!(snap_dot_at(&h, end), "the snap marker must stay on the grid point");
+            assert_eq!(started, preview_ends_at(&h, end));
+        }
+    }
+}
