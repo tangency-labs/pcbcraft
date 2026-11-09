@@ -87,7 +87,30 @@ fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_ch
     changed
 }
 
+/// Modify menu alignments: KiCad's names and the engine mode each runs.
+const ALIGNMENTS: [(&str, &str); 8] = [
+    ("Align to Left", "left"),
+    ("Align to Right", "right"),
+    ("Align to Top", "top"),
+    ("Align to Bottom", "bottom"),
+    ("Align to Vertical Center", "center_x"),
+    ("Align to Horizontal Center", "center_y"),
+    ("Distribute Horizontally", "distribute_x"),
+    ("Distribute Vertically", "distribute_y"),
+];
+
 impl PcbApp {
+    /// Align or distribute the focused view's selected footprints through the shared engine
+    /// command, as one undo step. Refusals, such as too few footprints, appear in the status bar.
+    pub(super) fn align_footprints(&mut self, mode: &str) {
+        let Some(target) = self.views.active.board.target else { return };
+        let params = serde_json::json!({
+            "board": target.board, "footprints": self.views.active.board.selection,
+            "mode": mode, "expected_revision": self.session.revision(),
+        });
+        self.run(pcbcraft_engine::ALIGN_FOOTPRINTS, &params);
+    }
+
     /// Present the requested document here, beside it, or directly in a native window. Target
     /// changes cancel old input and retain each workspace's camera without creating document edits.
     pub(super) fn open_workspace(&mut self, workspace: Workspace, placement: Placement, ctx: &egui::Context) {
@@ -314,12 +337,27 @@ impl PcbApp {
             active: false,
             toggle: false,
         };
-        match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &[delete, planned(ToolIcon::Align, "Align", "Align selected items (planned)")])
-        {
+        let count = self.views.active.board.selection.len();
+        let aligns: Vec<RibbonTool> = ALIGNMENTS
+            .iter()
+            .map(|(label, mode)| RibbonTool {
+                icon: ToolIcon::Align,
+                label,
+                description: label,
+                shortcut: "",
+                enabled: enabled && !editing && count >= if mode.starts_with("distribute") { 3 } else { 2 },
+                active: false,
+                toggle: false,
+            })
+            .collect();
+        let mut menu = vec![delete];
+        menu.extend(aligns);
+        match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &menu) {
             Some(0) => self.views.active.board.move_requested = true,
             Some(1) => self.views.active.board.rotate_requested = 90,
             Some(2) => self.views.active.board.flip_requested = true,
             Some(3) => self.delete_board_items(),
+            Some(index) if (4..4 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 4].1),
             _ => {}
         }
         workspace::ribbon_separator(ui);

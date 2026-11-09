@@ -172,3 +172,71 @@ fn deleting_placements_is_atomic_and_preserves_components_and_packages() {
         .unwrap();
     assert_eq!(s.project().unwrap().board.footprints().len(), 2);
 }
+
+/// Edge, center and distribute modes move boxes exactly; distribution keeps the outer items and
+/// leaves equal gaps.
+#[test]
+fn alignment_moves_boxes_to_shared_edges_and_equal_gaps() {
+    let boxes = [[0, 0, 10, 10], [30, 5, 34, 25], [12, -4, 20, 2]];
+    assert_eq!(super::alignment("left", &boxes), vec![(0, 0), (-30, 0), (-12, 0)]);
+    assert_eq!(super::alignment("right", &boxes), vec![(24, 0), (0, 0), (14, 0)]);
+    assert_eq!(super::alignment("top", &boxes), vec![(0, -4), (0, -9), (0, 0)]);
+    assert_eq!(super::alignment("bottom", &boxes), vec![(0, 15), (0, 0), (0, 23)]);
+    assert_eq!(super::alignment("center_x", &boxes), vec![(12, 0), (-15, 0), (1, 0)]);
+    let spread = super::alignment("distribute_x", &boxes);
+    let placed: Vec<_> = boxes.iter().zip(&spread).map(|(b, (dx, _))| [b[0] + dx, b[2] + dx]).collect();
+    assert_eq!(placed, vec![[0, 10], [30, 34], [16, 24]], "gaps of 6: 34 of span minus 22 of sizes, in two gaps");
+}
+
+/// The command aligns real footprints in one undoable edit, is a no-op when already aligned,
+/// and refuses too few, repeated or unknown footprints and unknown modes.
+#[test]
+fn align_footprints_is_one_checked_edit() {
+    use crate::board::track::tests::{routed_fixture, view};
+    use crate::persistence::encode_documents;
+    let mut s = routed_fixture();
+    let ids: Vec<String> = view(&s).footprints().map(|f| f.id.clone()).collect();
+    assert_eq!(ids.len(), 3);
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let nudge = |s: &mut Session, dx: i64, dy: i64| {
+        let (id, at, rotation) = view(s).footprints().next().map(|f| (f.id.clone(), f.position, f.rotation)).unwrap();
+        s.apply(
+            SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":id,"x_nm":at.x_nm + dx,"y_nm":at.y_nm + dy,"rotation":rotation,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+    };
+    nudge(&mut s, 0, 3_000_000);
+    let revision = s.revision();
+    s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":ids,"mode":"top","expected_revision":revision})).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    let tops: Vec<_> = view(&s).footprints().map(|f| super::bounds(&f)[1]).collect();
+    assert!(tops.windows(2).all(|pair| pair[0] == pair[1]), "{tops:?}");
+    s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":ids,"mode":"top","expected_revision":s.revision()})).unwrap();
+    assert_eq!(s.revision(), revision + 1, "already aligned is not an edit");
+    // The fixture is evenly spaced, so nudge one footprint before distributing.
+    nudge(&mut s, 3_000_000, 0);
+    let nudged_revision = s.revision();
+    s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":ids,"mode":"distribute_x","expected_revision":s.revision()})).unwrap();
+    assert_eq!(s.revision(), nudged_revision + 1, "distributing is one edit");
+    let mut spans: Vec<_> = view(&s).footprints().map(|f| super::bounds(&f)).map(|b| (b[0], b[2])).collect();
+    spans.sort();
+    assert_eq!(spans[1].0 - spans[0].1, spans[2].0 - spans[1].1, "equal gaps: {spans:?}");
+    let revision = s.revision();
+    for params in [
+        json!({"footprints":[ids[0]],"mode":"left"}),
+        json!({"footprints":[ids[0], ids[1]],"mode":"distribute_y"}),
+        json!({"footprints":[ids[0], ids[0]],"mode":"left"}),
+        json!({"footprints":[ids[0], "footprint-999"],"mode":"left"}),
+        json!({"footprints":[ids[0], ids[1]],"mode":"sideways"}),
+    ] {
+        let mut params = params;
+        params["expected_revision"] = json!(revision);
+        assert!(s.apply(super::ALIGN_FOOTPRINTS, &params).is_err(), "{params}");
+    }
+    assert_eq!(s.revision(), revision);
+    for _ in 0..4 {
+        s.apply("edit.undo", &json!({})).unwrap();
+    }
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before, "each nudge and alignment is one undo step");
+}

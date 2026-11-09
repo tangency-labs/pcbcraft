@@ -120,6 +120,7 @@ enum ParamKind {
     TrackWidth,
     TrackIds,
     LayerChanges,
+    AlignMode,
     BoardSide,
     RuleLength,
     ViaDiameter,
@@ -171,6 +172,7 @@ impl ParamKind {
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
             Self::LayerChanges => board::track::layer_changes_schema(),
+            Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
@@ -356,6 +358,8 @@ impl ParamKind {
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
             Self::BoardSide => Err("must be front or back"),
+            Self::AlignMode if value.as_str().is_some_and(|mode| ALIGN_MODES.contains(&mode)) => Ok(()),
+            Self::AlignMode => Err("must be an alignment mode"),
             Self::LayerChanges => Err("must contain layer changes with a vertex index and a copper layer UUID"),
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
             Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
@@ -557,6 +561,7 @@ pub const SET_SYMBOL_FIELDS: &str = "schematic.set_symbol_fields";
 /// Assign a pinned generic footprint and record its physical pad mapping.
 pub const PLACE_FOOTPRINT: &str = "pcb.place_footprint";
 pub use board::assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINTS};
+pub use board::transform::{ALIGN_FOOTPRINTS, ALIGN_MODES};
 pub use board::update::INITIALIZE_BASELINE as INITIALIZE_UPDATE_BASELINE;
 pub use board::update::{APPLY_UPDATE, CANCEL_UPDATE, PREVIEW_UPDATE};
 /// Set a footprint's board-local position and counterclockwise whole-degree orientation atomically.
@@ -1503,6 +1508,17 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: ALIGN_FOOTPRINTS,
+        title: "Align Footprints",
+        summary: "Align two or more footprints by their bounds (left, right, top, bottom, center_x, center_y) or distribute three or more with equal gaps (distribute_x, distribute_y), in one undo step. Top is the smallest Y.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { required: true, name: "footprints", summary: "Unique placed footprint IDs from board inspection", kind: ParamKind::FootprintIds },
+            Param { required: true, name: "mode", summary: "How to align or distribute them", kind: ParamKind::AlignMode },
+        ],
+    },
+    Command {
         id: CHECK_DESIGN,
         title: "Check Design Rules",
         summary: "Check the board for clearance, track width, annular ring, unrouted connections, board outline and courtyard problems. Edits nothing; execute returns the report.",
@@ -1933,6 +1949,7 @@ impl Session {
             | ADD_DRAWING
             | SET_DRAWING
             | DELETE_DRAWING
+            | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
             | EXPORT_FABRICATION
             | ADD_TRACKS
@@ -2107,6 +2124,7 @@ impl Session {
                 | ADD_DRAWING
                 | SET_DRAWING
                 | DELETE_DRAWING
+                | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
                 | EXPORT_FABRICATION
                 | ADD_TRACKS
@@ -2282,6 +2300,7 @@ impl Session {
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
+            ALIGN_FOOTPRINTS => self.align_footprints(params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
