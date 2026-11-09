@@ -140,7 +140,8 @@ the same `VCC` net name, which can be changed before placement.
    until pulled clear, after which dropping back onto them reconnects normally. Moves and draws clean up overlapping
    runs, and **Heal** applies that cleanup to existing selected wires. Dropping
    a part with a pin exactly on a wire connects it; a two-pin part placed across
-   a straight run replaces the wire between its pins. **Auto-heal wires** in
+   a straight run replaces the wire between its pins. A filled dot marks a branch
+   connection; unrelated crossing wires have no dot. **Auto-heal wires** in
    **Preferences → Schematic** (also in the Modify menu) defaults on. Retracing a draft shortens the preview as you draw;
    Backspace restores the preceding clicked corner. Switch automatic healing off to keep detours and loops while
    drawing, then select a wire and use **Heal** for cleanup when desired.
