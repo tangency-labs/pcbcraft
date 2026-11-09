@@ -252,14 +252,15 @@ pub(super) fn show(
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
+    // A transform committed in this frame is painted at its new pose. The engine applies it after
+    // this pass, so painting the stored pose here would make the footprint spring back for a frame.
+    let shown = state.draft.clone().or_else(|| out.edit.clone());
+    let shown = shown.as_ref();
     let ratsnest = state.ratsnest(project, source);
     if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
         && let Some(ratsnest) = ratsnest
     {
-        let draft = state
-            .draft
-            .as_ref()
-            .and_then(|draft| footprints.iter().find(|footprint| footprint.id == draft.footprint).map(|footprint| (draft, footprint)));
+        let draft = shown.and_then(|draft| footprints.iter().find(|footprint| footprint.id == draft.footprint).map(|footprint| (draft, footprint)));
         for line in &ratsnest.lines {
             let at = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {
                 let point = match draft {
@@ -274,7 +275,7 @@ pub(super) fn show(
         }
     }
     for mut footprint in footprints {
-        if let Some(draft) = state.draft.as_ref().filter(|d| d.footprint == footprint.id) {
+        if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
         }
         let center = camera.screen(footprint.position, rect);
@@ -289,7 +290,7 @@ pub(super) fn show(
             if footprint.physical_reference { "" } else { footprint.reference },
             center,
             color,
-            state.selection.contains(&footprint.id) || state.draft.as_ref().is_some_and(|d| d.footprint == footprint.id),
+            state.selection.contains(&footprint.id) || shown.is_some_and(|d| d.footprint == footprint.id),
             highlighted.contains(&footprint.id),
         );
     }

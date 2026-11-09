@@ -264,6 +264,42 @@ fn lines_open_close_vertex_drag_and_stale_cancellation() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), concurrent);
 }
 
+/// Whether the most recent frame painted a Board Edge path through this screen point.
+fn painted_path_through(h: &Harness<'_, PcbApp>, point: egui::Pos2) -> bool {
+    h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::Path(path) if path.fill == egui::Color32::TRANSPARENT
+            && path.points.iter().any(|p| p.distance(point) < 0.5))
+    })
+}
+
+/// Releasing a vertex drag paints the reshaped edge in the commit frame, without springing back.
+#[test]
+fn committed_board_edge_reshape_never_paints_the_previous_shape() {
+    let mut h = board();
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        ADD_DRAWING,
+        &json!({"layer":layer,"points":[{"x_nm":0,"y_nm":0},{"x_nm":10_160_000,"y_nm":0}],"closed":false,"expected_revision":revision}),
+    );
+    h.run();
+    let a = at(&h, 10_160_000, 0);
+    let b = at(&h, 10_160_000, 5_080_000);
+    h.hover_at(a);
+    h.run();
+    h.drag_at(a);
+    h.run();
+    h.hover_at(b);
+    h.run();
+    assert!(painted_path_through(&h, b), "the drag previews the new vertex");
+    // Release alone: `drop_at` also queues PointerGone, and `step` would paint that later frame.
+    h.event(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.step();
+    assert_eq!(drawings(&h)[0].points[1], Point { x_nm: 10_160_000, y_nm: 5_080_000 }, "the release frame commits");
+    assert!(painted_path_through(&h, b), "the release frame paints the committed vertex");
+    assert!(!painted_path_through(&h, a), "the release frame does not paint the old vertex");
+}
+
 /// Hidden geometry cannot be selected, and hiding a layer cancels an in-progress vertex move.
 #[test]
 fn layer_visibility_is_view_only_and_cancels_editing() {

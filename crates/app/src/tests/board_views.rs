@@ -437,6 +437,69 @@ fn footprint_drag_rotation_and_undo_share_one_command() {
     assert_eq!(placement(&h), changed);
 }
 
+/// Screen positions of a painted text label in the most recent frame only.
+fn painted_text(h: &Harness<'_, PcbApp>, text: &str) -> Vec<egui::Pos2> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(shape) if shape.galley.job.text == text => Some(shape.pos),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The frame that commits a drop, a click-to-place move or a hover rotation already paints the
+/// footprint at its new pose. Painting the old pose first makes the part spring back for a frame.
+#[test]
+fn committed_footprint_transforms_never_paint_the_previous_pose() {
+    let mut h = editable_board();
+    let reference = h.state().session.inspect()["project"]["schematic"]["symbols"][0]["reference"].as_str().unwrap().to_owned();
+    let before = painted_text(&h, &reference);
+    assert_eq!(before.len(), 1, "{reference} is painted once");
+    let start = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+    let destination = board_point(&h, Point { x_nm: 7_620_000, y_nm: 5_080_000 });
+    h.hover_at(start);
+    h.run();
+    h.drag_at(start);
+    h.run();
+    h.hover_at(destination);
+    h.run();
+    let dragging = painted_text(&h, &reference);
+    // Release alone: `drop_at` also queues PointerGone, and `step` would paint that later frame.
+    h.event(egui::Event::PointerButton { pos: destination, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.step();
+    assert_eq!(placement(&h)["x_nm"], 7_620_000, "the release frame commits the move");
+    assert_eq!(painted_text(&h, &reference), dragging, "the release frame paints the dropped pose");
+    h.run();
+    assert_eq!(painted_text(&h, &reference), dragging);
+
+    let moved = painted_text(&h, &reference);
+    h.key_press(Key::M);
+    h.run();
+    let second = board_point(&h, Point { x_nm: -2_540_000, y_nm: 1_270_000 });
+    h.hover_at(second);
+    h.run();
+    let previewed = painted_text(&h, &reference);
+    assert_ne!(previewed, moved);
+    h.event(egui::Event::PointerButton { pos: second, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos: second, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.step();
+    assert_eq!(placement(&h)["x_nm"], -2_540_000, "the click frame commits the move");
+    assert_eq!(painted_text(&h, &reference), previewed, "the click frame paints the placed pose");
+
+    h.run();
+    let placed = painted_text(&h, &reference);
+    h.key_press(Key::R);
+    h.step();
+    assert_eq!(placement(&h)["rotation"], 90, "the key frame commits the rotation");
+    let rotated = painted_text(&h, &reference);
+    h.run();
+    assert_ne!(placed, painted_text(&h, &reference), "rotation moves the label");
+    assert_eq!(rotated, painted_text(&h, &reference), "the key frame paints the rotated pose");
+}
+
 /// Hover M and R use the same transform path as the ribbon, and four quarter turns close exactly.
 #[test]
 fn footprint_hotkeys_and_ribbon_preserve_exact_quarter_turns() {
