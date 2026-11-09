@@ -2,6 +2,21 @@
 
 PCBCraft's own code is MIT OR Apache-2.0. This file lists what came from elsewhere. Add to it in the same PR whenever you bring something in: source, revision, license, and what changed.
 
+## Component fields and text placement
+
+Component metadata, population/exclusion intent, per-unit field appearance and
+independent canvas text dragging are original PCBcraft work under MIT OR
+Apache-2.0, built on the existing shared property command, Craft controls and
+egui text painting. Travis Lowe's supplied Symbol Properties screenshot and
+reported behavior informed the scope. No KiCad implementation, library data,
+icons or artwork were used. Generic resistor/capacitor revision 3 changes only
+the original starter definitions' default values; revisions 1 and 2 remain
+available for existing projects. No dependency was added. The consolidated General form, shared fixed action footer,
+power-marker inspector and per-marker net-name appearance are original extensions
+of the same code, informed by Travis's usability feedback and supplied screenshots.
+Physical text sizing uses the existing camera and nanometre model; no external
+implementation or artwork was consulted for these fixes.
+
 ## Pane dragging between native windows
 
 The pane-header drag gesture, instance-local drop targets and explicit destination
@@ -100,6 +115,11 @@ L/Ctrl+L/P controls were checked against the published
 (Labels, Power symbols and Actions reference, consulted November 7, 2026).
 No KiCad implementation, symbol library data, icons or artwork was read or copied.
 This slice adds no third-party dependencies or bundled assets.
+
+The additional flat-bar power drawing, its catalog preset and the direct Ground
+ribbon action/glyph are original PCBcraft work using the same named-net model
+and Craft painters. The existing qualified Power ribbon icon informed the requested
+flat-bar treatment; no external source, artwork or dependency was added.
 
 ## Adapted from SolidCraft
 
@@ -728,3 +748,32 @@ consulted 7-Nov-2026. Only user-facing behavior informed this adaptation; no ven
 implementation, screenshots, icons, source-derived examples or library data were
 used. The preview reuses PCBcraft's already qualified Technical stroke-font data
 and its existing OFL notices. No dependency or external asset was added.
+
+The symbol-property presentation, independent field rotation, HTTP(S) field links,
+double-click input routing and footprint browser are original PCBcraft code built on the existing Craft chrome and native footprint
+painter. Library browsing, pin-count/text filtering and footprint-preview behavior
+were compared with the published [KiCad 10 Schematic Editor manual](https://docs.kicad.org/10.0/en/eeschema/eeschema.html),
+consulted 8-Nov-2026. Only documented user-facing behavior informed this work;
+no KiCad implementation, icons, artwork, library data or source-derived fixtures
+were used. The chooser uses existing qualified starter and project-pinned native
+definitions; no dependency or external asset was added.
+
+Independent field rotation and the D datasheet action follow the user's requested
+interaction, implemented through the existing native field-layout command and
+eframe/egui host URL output respectively. No external shortcut implementation or
+source-derived behavior was used.
+
+Power/ground name picking, independent text previews and related property actions
+are original PCBcraft code using the existing saved net-name appearance and shared
+revision-checked commands. Property form sections and footer actions now reuse the
+already attributed Preferences chrome. Additional link fields reuse native component
+metadata, and the Library tab opens existing source-manager/copy-authoring workflows;
+no definition-replacement behavior, new dependency, native format or external asset
+was introduced. The pick-and-place flag description was checked against the published
+KiCad Schematic Editor manual linked above, consulted 8-Nov-2026.
+
+
+The in-place schematic text editor is original PCBcraft code. Its canvas-local drafts
+use the existing symbol-field and named-net commands, with view/opening/revision checks
+and shared live-command input ownership. No external implementation, asset, dependency
+or native-format change was used for this interaction.

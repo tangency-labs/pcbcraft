@@ -11,6 +11,10 @@ Split project format `pcbcraft-project/9` extends the numeric-watermark format
 with a required non-null `boards` array. It contains zero or one registration;
 additional entries are refused. The existing project UUID, ordered sheets,
 components and required `numeric_id_high_water` retain their validation rules.
+Project/12 combines that same registry with the component metadata extension from
+legacy-ownership project/11. Project/9 rejects metadata, project/11 rejects a board
+registry, and project/12 requires both the registry and allocation watermark;
+none silently adopts fields from the other vocabulary.
 
 | Registration field | Rule |
 | --- | --- |
@@ -69,7 +73,8 @@ Packed projects use the same split documents and existing bounded container
 validation. The diagnostic single-document encoder uses
 `pcbcraft-project/10` for explicit optional ownership, with the same required
 watermark and registrations. It retains its existing restrictions on multiple
-sheets, hierarchy and physical board features that need split documents.
+sheets, hierarchy, component metadata, field appearance and physical board
+features that need split documents.
 Older formats reject registration fields rather than silently discarding them.
 
 An empty PCB workspace is user-local presentation state addressed by project ID.

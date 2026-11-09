@@ -32,7 +32,7 @@ fn live_property_coordinates_match_the_inspector() {
     payload(tool(&mut h, connection, "execute", json!({"command":"edit.undo","params":{}})));
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     let revision = h.state().session.revision();
-    let params = json!({"symbol":"symbol-2","reference":"R1","value":"1k","rotation":0,
+    let params = json!({"symbol":"symbol-2","reference":"R1","value":"R","rotation":0,
         "x_nm":1_000_000,"y_nm":-635_000,"expected_revision":revision});
     payload(tool(&mut h, connection, "execute", json!({"command":SET_SYMBOL_FIELDS,"params":params})));
     assert_eq!(h.state().session.revision(), revision + 1);

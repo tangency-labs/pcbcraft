@@ -11,6 +11,7 @@ struct Symbol {
     placement: SymbolPlacement,
     reference: String,
     value: String,
+    metadata: pcbcraft_engine::schematic::fields::Metadata,
 }
 
 /// Disposable geometry from a saved snapshot, with no session, selection, camera or undo state.
@@ -45,7 +46,17 @@ impl Thumbnail {
                 return None;
             }
             bounds = bounds.union(grid_bounds(&symbol.definition, symbol.turns()).translate(grid_pos(symbol.position).to_vec2()));
-            symbols.push(Symbol { placement: symbol.clone(), reference: project.reference(symbol), value: project.value(symbol).to_owned() });
+            let metadata = project.component(symbol)?.metadata.clone();
+            points += metadata.fields.values().map(|f| f.value.len()).sum::<usize>();
+            if points > MAX_POINTS {
+                return None;
+            }
+            symbols.push(Symbol {
+                placement: symbol.clone(),
+                reference: project.reference(symbol),
+                value: project.value(symbol).to_owned(),
+                metadata,
+            });
         }
         let mut wires = Vec::new();
         for wire in project.wires() {
@@ -118,7 +129,6 @@ impl Thumbnail {
         }
         for symbol in &self.symbols {
             let placement = &symbol.placement;
-            let label = (step >= theme::SCHEMATIC_MIN_GRID_SPACING).then_some((symbol.reference.as_str(), symbol.value.as_str()));
             paint_symbol(
                 &painter,
                 &placement.definition,
@@ -126,7 +136,14 @@ impl Thumbnail {
                 step,
                 placement.turns(),
                 Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.text),
-                label,
+            );
+            fields::paint_labels(
+                &painter,
+                placement,
+                fields::Content { reference: &symbol.reference, value: &symbol.value, metadata: &symbol.metadata },
+                screen(grid_pos(placement.position)),
+                step,
+                t.text,
             );
         }
     }
@@ -157,5 +174,37 @@ mod tests {
         assert!(!preview.is_empty());
         assert!(preview.bounds.is_finite());
         assert_eq!(preview.blocks[0].1, "Child");
+    }
+
+    /// Home previews use saved visibility and optional field content rather than reconstructing
+    /// reference/value labels from the library's automatic layout.
+    #[test]
+    fn thumbnail_respects_saved_field_visibility_and_metadata() {
+        use pcbcraft_engine::schematic::fields::{Field, Layout, Metadata};
+        let project = pcbcraft_engine::persistence::decode(include_bytes!("../../tests/fixtures/two-resistors.pc")).unwrap();
+        let mut session = Session::default();
+        session.open_snapshot(project);
+        let mut metadata = Metadata::default();
+        metadata.fields.insert("manufacturer".into(), Field { name: "Manufacturer".into(), value: "ACME".into() });
+        session.apply(pcbcraft_engine::SET_SYMBOL_FIELDS, &json!({"symbol":"symbol-2","reference":"R1","value":"1k","metadata":metadata,
+            "field_layout":{"reference":Layout{visible:false,..Layout::default()},"manufacturer":Layout{offset:Some(Point{x_nm:0,y_nm:5_080_000}),..Layout::default()}},"expected_revision":session.revision()})).unwrap();
+        let preview = Thumbnail::new(session.project().unwrap()).unwrap();
+        let ctx = egui::Context::default();
+        pcbcraft_chrome::fonts::install(&ctx);
+        ctx.begin_pass(egui::RawInput::default());
+        preview.paint(&ctx.layer_painter(egui::LayerId::background()), Rect::from_min_size(Pos2::ZERO, vec2(1200., 800.)));
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        let text: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(!text.contains(&"R1"));
+        assert!(text.contains(&"R2"));
+        assert!(text.contains(&"ACME"));
     }
 }

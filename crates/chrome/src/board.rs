@@ -333,9 +333,15 @@ pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], he
 /// Its toggle semantics remain available to keyboard and assistive-technology users.
 /// Returns a click intent; the caller changes visibility through its shared state handler.
 pub fn layer_visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::Response {
+    visibility(ui, &format!("layer {name}"), visible)
+}
+
+/// Shared eye toggle for authored field visibility and canvas layers, with explicit accessibility.
+/// `name` identifies the object, such as "layer F.Cu" or "Reference", without an action prefix.
+pub fn visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::Response {
     let t = Tokens::get();
     let (rect, response) = ui.allocate_exact_size(vec2(t.space_24, t.space_24), egui::Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, format!("Show layer {name}")));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, format!("Show {name}")));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if response.hovered() || response.has_focus() {
@@ -351,7 +357,7 @@ pub fn layer_visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::R
             p.line_segment([at(4., 17.), at(18., 5.)], Stroke::new(1.0, ink));
         }
     }
-    response.on_hover_text(format!("{} layer {name}", if visible { "Hide" } else { "Show" }))
+    response.on_hover_text(format!("{} {name}", if visible { "Hide" } else { "Show" }))
 }
 
 /// Technical layer keys use existing theme roles, with board-edge ink distinct from details.

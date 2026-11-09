@@ -146,6 +146,9 @@ pub(super) struct SchematicState {
     pub(super) tool: Option<Tool>,
     pub(super) wire_draft: Draft,
     pub(super) rotate_requested: bool,
+    pub(super) edit_requested: bool,
+    pub(super) text_edit: Option<crate::inline_text::Edit>,
+    pub(super) datasheet_requested: bool,
     pub(super) move_requested: bool,
 }
 
@@ -528,6 +531,9 @@ impl EditorView {
         self.schematic.tool = None;
         self.schematic.wire_draft = Draft::default();
         self.schematic.rotate_requested = false;
+        self.schematic.edit_requested = false;
+        self.schematic.text_edit = None;
+        self.schematic.datasheet_requested = false;
         self.schematic.move_requested = false;
     }
 

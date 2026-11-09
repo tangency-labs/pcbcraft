@@ -238,13 +238,16 @@ impl Editor for LiveEditor<'_> {
         &mut self.app.session
     }
 
-    /// Hold commands while a dialog, file operation or project close owns the editor, as the
+    /// Hold commands while an inline edit, dialog, file operation or project close owns the editor, as the
     /// GUI disables its controls. Catalog mode/panel commands can use its own modal controls,
     /// including closing the catalog through the same panel command that opened it.
     /// New Project waits for unsaved changes to be saved or
     /// discarded in the editor, which is where the GUI asks.
     fn refusal(&self, command: &str) -> Option<String> {
         let app = &*self.app;
+        if app.views.editing_text() {
+            return Some(format!("Finish the current text edit before running `{command}`"));
+        }
         if !matches!(app.dialog, Dialog::None) || app.files.busy() || app.project_action_pending() {
             return Some(format!("Finish the current dialog or file operation in the editor before running `{command}`"));
         }

@@ -37,7 +37,7 @@ pub(super) fn tab_slot(name: &str) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Symbol,
-    Power,
+    Ground,
     HierarchicalLabel,
     Text,
     NewSheet,
@@ -92,7 +92,7 @@ const CAPTURE: &[Group] = &[
         title: "Place",
         tools: &[
             tool(Action::Symbol, "Symbol", Icon::Symbol, "Add symbol (A)", "A"),
-            tool(Action::Power, "Power", Icon::Power, "Place power or ground (P)", "P"),
+            tool(Action::Ground, "Ground", Icon::Ground, "Place ground", ""),
             tool(Action::Text, "Text", Icon::Text, "Text placement is not available yet.", "T"),
         ],
         extras: &[],
@@ -174,7 +174,7 @@ impl Action {
     fn implemented(self) -> bool {
         matches!(
             self,
-            Self::Power
+            Self::Ground
                 | Self::Label
                 | Self::Symbol
                 | Self::Sources
@@ -250,6 +250,8 @@ impl Action {
     fn active(self, app: &PcbApp) -> bool {
         match self {
             Self::Symbol => matches!(app.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
+            Self::Ground => matches!(&app.views.active.schematic.tool, Some(Tool::NetLabel { label, .. })
+                if label.id == 0 && label.style == pcbcraft_engine::net_labels::Style::Ground),
             Self::HierarchicalLabel => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, .. })),
             Self::Subsheet => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Sheet, .. })),
             Self::Wire => matches!(app.views.active.schematic.tool, Some(Tool::Wire { .. })),
@@ -313,7 +315,7 @@ impl PcbApp {
                 self.message = self.fork_library_selection(kind).err();
             }
             Action::Symbol => self.parts.focus_search(),
-            Action::Power => self.parts.focus_power(),
+            Action::Ground => self.begin_ground(ctx),
             Action::Label => self.begin_net_label(pcbcraft_engine::net_labels::Style::Local),
             Action::HierarchicalLabel => self.begin_hierarchy(crate::hierarchy::Kind::Label),
             Action::Subsheet => self.begin_hierarchy(crate::hierarchy::Kind::Sheet),

@@ -1,16 +1,25 @@
 # Named nets and power symbols
 
 Use **L** for a local label or **Ctrl+L** (⌘L on macOS) for a global label.
-Their form has a net name, scope and rotation. **P** or **Capture → Power** opens
+Their form has a net name, scope and rotation. **Capture → Ground** starts placing
+GND directly, with no catalog or property form. **P** opens
 the **Parts Catalog** with the Power collection selected. Choose a drawing such
-as GND, VCC, +3V3, +5V, +12V, VDD, VSS or GNDA; its preview has an editable net
+as GND, VCC, VCC (bar), +3V3, +5V, +12V, VDD, VSS or GNDA; its preview has an editable net
 name, so supplies do not depend on a fixed list of rail names.
+
+**VCC** keeps the arrow-shaped supply drawing, while **VCC (bar)** uses a flat
+horizontal bar. Both default to the electrical name `VCC`; the descriptive
+catalog name does not create a separate net. Each drawing retains its style when
+its net name is edited.
 
 Choose **Place**, then click to place the anchor. **R** turns its preview
 counterclockwise in quarter turns, and **Esc** or right-click cancels. Hover a
 placed marker and use **E** for properties, **M** to pick it up, **R** to rotate or
-**Delete** to remove it. Drag its drawing or name to move it directly, releasing
-to finish; Escape or releasing outside the canvas cancels the preview. Its context menu offers the same actions; **Apply**
+**Delete** to remove it. Drag an ordinary label or a power symbol's drawing to move
+the anchor, releasing to finish; Escape or releasing outside the canvas cancels
+the preview. A power/ground name moves independently when dragged, and **R** over
+its text rotates only the name. Double-click the name or hover it and press **E**
+to edit in place, with **Enter** to apply and **Esc** to cancel. Its context menu offers the same actions; **Apply**
 confirms property changes. Each completed placement, move, property change or
 deletion is one shared undo step. Cancelled previews and forms leave project data
 unchanged; stale forms cannot replace newer work.
@@ -46,10 +55,15 @@ work. Unnamed groups keep their existing view-local numbering.
 ## Shared commands
 
 `schematic.place_net_label` takes `name`, `style`, `x_nm`, `y_nm`, optional
-`rotation` and `expected_revision`. `style` is `local`, `global`, `power` or
-`ground`; rotation defaults to zero and accepts 0, 90, 180 or 270 degrees.
+`rotation`, optional `text` and `expected_revision`. `style` is `local`, `global`, `power`,
+`power_bar` or `ground`; rotation defaults to zero and accepts 0, 90, 180 or 270 degrees.
 `schematic.set_net_label` takes the same properties plus the stable `id` from
-inspection. `schematic.delete_net_label` takes `id` and `expected_revision`.
+inspection. `text` is a physical net-name layout with visibility, show-name,
+offset, height, alignment and rotation, using the same vocabulary as component
+field layouts. Omitting it on placement uses the style defaults; omitting it from
+`schematic.set_net_label` preserves the stored layout. The GUI exposes these
+appearance controls for power and ground symbols. `schematic.delete_net_label`
+takes `id` and `expected_revision`.
 Supply the `sheet` UUID when more than one sheet exists. The live editor and
 headless MCP expose the same command schemas and transactions as the GUI.
 
@@ -66,10 +80,12 @@ unrelated contacted wires remain. Undo restores the complete edit.
 Each sheet supports 256 named anchors and names up to 200 characters, without
 surrounding whitespace or control characters. Folder and `.pc.zip` saves retain
 names, scope, placement, rotation and endpoint identities in
-[sheet format 3](native-project-storage.md#named-net-records). Existing unnamed
+[sheet format 3 or later](native-project-storage.md#named-net-records). Explicit
+net-name text appearance requires sheet format 5; format 3 rejects it rather
+than discarding it. Existing unnamed
 projects retain their previous sheet encodings; legacy single-file export
 refuses named anchors rather than silently discarding them.
 
 Custom power drawings, library-authored power-symbol definitions, electrical
-rules checks, configurable label fields/formatting, inter-sheet reference lists
-and box/group editing of labels remain outside this slice.
+rules checks, additional ordinary-label fields/formatting and inter-sheet reference
+lists remain outside this slice.
