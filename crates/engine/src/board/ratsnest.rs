@@ -1,8 +1,9 @@
 //! Accepted-connectivity display geometry, independent of the proposed schematic.
 //!
-//! Each net uses a lexicographically spatially sorted spanning chain. This bounded
-//! O(T log T) approximation is a display aid, not a minimum spanning tree, router,
-//! copper-connectivity calculation or fabrication-readiness check.
+//! Each net uses a lexicographically spatially sorted spanning chain. Terminals already
+//! joined by copper tracks share an island, and the chain skips pairs whose islands are
+//! already joined, so a fully routed net shows no airwires. This bounded approximation is a
+//! display aid, not a minimum spanning tree, router, clearance or fabrication-readiness check.
 
 use super::{
     Pad,
@@ -70,7 +71,8 @@ impl BoardView<'_> {
 
     /// Resolve accepted connectivity only. A board without a baseline has no ratsnest;
     /// pending schematic edits never alter these connections before reviewed acceptance.
-    /// Every resolvable net forms a spatial chain with exactly N-1 display edges.
+    /// Every resolvable net forms a spatial chain with one display edge per copper island
+    /// beyond the first: N-1 edges with no tracks, none once copper joins every terminal.
     /// Unplaced or unmapped terminals are reported separately, without phantom endpoints.
     pub fn ratsnest(self) -> Option<Ratsnest> {
         let board = &self.project().board;
@@ -83,6 +85,7 @@ impl BoardView<'_> {
             net_count: baseline.nets.len(),
             terminal_count: 0,
         };
+        let copper = if board.tracks.is_empty() { super::track::Copper::default() } else { self.copper() };
         for (net, state) in baseline.nets.iter().enumerate() {
             let mut endpoints = Vec::with_capacity(state.terminals.len());
             result.terminal_count += state.terminals.len();
@@ -109,11 +112,29 @@ impl BoardView<'_> {
                     &b.terminal.terminal,
                 ))
             });
-            result.lines.extend(endpoints.windows(2).map(|pair| Airwire { net, from: pair[0].clone(), to: pair[1].clone() }));
+            // Untracked terminals get their own island past every copper island index.
+            let mut islands: Vec<usize> = endpoints
+                .iter()
+                .enumerate()
+                .map(|(index, endpoint)| {
+                    copper.pads.get(&(endpoint.footprint.clone(), endpoint.pad.number.as_str().to_owned())).copied().unwrap_or(usize::MAX - index)
+                })
+                .collect();
+            for (index, pair) in endpoints.windows(2).enumerate() {
+                let (a, b) = (islands[index], islands[index + 1]);
+                if a != b {
+                    result.lines.push(Airwire { net, from: pair[0].clone(), to: pair[1].clone() });
+                    for island in &mut islands {
+                        if *island == b {
+                            *island = a;
+                        }
+                    }
+                }
+            }
         }
         Some(result)
     }
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

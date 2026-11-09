@@ -29,6 +29,25 @@ pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, selected: bool, pre
     }
 }
 
+/// Paint one copper track segment at its physical width with round ends, never thinner than a
+/// hairline. Selection draws an accent outline; a preview is translucent accent copper.
+pub fn track(p: &Painter, ends: [Pos2; 2], width: f32, color: Color32, selected: bool, preview: bool) {
+    let t = Tokens::get();
+    let width = width.max(1.);
+    let fill = if preview { t.accent.gamma_multiply(0.6) } else { color };
+    if selected {
+        let outline = Stroke::new(width + 3., t.accent);
+        p.line_segment(ends, outline);
+        for end in ends {
+            p.circle_filled(end, outline.width / 2., t.accent);
+        }
+    }
+    p.line_segment(ends, Stroke::new(width, fill));
+    for end in ends {
+        p.circle_filled(end, width / 2., fill);
+    }
+}
+
 /// Distinguish the snapped drawing target from authored vertices without changing its position.
 pub fn drawing_target(p: &Painter, point: Pos2) {
     p.circle_stroke(point, 5., Stroke::new(1., Tokens::get().accent));

@@ -486,6 +486,8 @@ impl EditorViews {
         if !selection.is_empty() {
             self.active.board.drawing.cancel();
             self.active.board.drawing.selected = None;
+            self.active.board.tracks.cancel();
+            self.active.board.tracks.selected.clear();
         }
         self.active.board.selection = if self.active.filters.footprints { selection } else { Default::default() };
         self.selection_changed(session, policy);

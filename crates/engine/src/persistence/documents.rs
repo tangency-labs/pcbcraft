@@ -33,6 +33,7 @@ const OUTLINE_BOARD_FORMAT: &str = "pcbcraft-board/8";
 const DRAWING_BOARD_FORMAT: &str = "pcbcraft-board/9";
 const BASELINE_BOARD_FORMAT: &str = "pcbcraft-board/10";
 const INTENT_BOARD_FORMAT: &str = "pcbcraft-board/11";
+const TRACK_BOARD_FORMAT: &str = "pcbcraft-board/12";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -93,6 +94,8 @@ struct BoardDocument {
     outline: Option<crate::board::outline::Outline>,
     #[serde(default, deserialize_with = "present")]
     graphics: Option<crate::board::drawing::Drawings>,
+    #[serde(default, deserialize_with = "present")]
+    tracks: Option<Vec<crate::board::track::Track>>,
     footprints: Vec<Footprint>,
 }
 
@@ -292,13 +295,19 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             assignments: None,
             outline: None,
             graphics: None,
+            tracks: None,
             baseline: None,
             footprints: vec![],
         }
     };
 
-    if matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
-        return Err("board.json: accepted baselines require board format 10 or 11".into());
+    let tracked = board.format == TRACK_BOARD_FORMAT;
+    // Compare presence, not just contents: earlier formats reject even an empty `tracks` field.
+    if tracked != board.tracks.is_some() || board.tracks.as_ref().is_some_and(Vec::is_empty) {
+        return Err("board.json: tracks require board format 12, which requires at least one track".into());
+    }
+    if !tracked && matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
+        return Err("board.json: accepted baselines require board format 10, 11 or 12".into());
     }
     if let Some(baseline) = &board.baseline {
         baseline.validate()?;
@@ -321,7 +330,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let pending_intent = board.baseline.as_ref().is_some_and(|baseline| {
         board.assignments.iter().flatten().any(|assignment| eligible.contains(&assignment.component) && !baseline.validate_assignment(assignment))
     });
-    if (board.format == INTENT_BOARD_FORMAT) != pending_intent {
+    if !tracked && (board.format == INTENT_BOARD_FORMAT) != pending_intent {
         return Err("board.json: pending desired packages require board format 11".into());
     }
     if board.format != ROTATED_BOARD_FORMAT
@@ -332,6 +341,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         && board.format != DRAWING_BOARD_FORMAT
         && board.format != BASELINE_BOARD_FORMAT
         && board.format != INTENT_BOARD_FORMAT
+        && !tracked
         && board.footprints.iter().any(|f| f.rotation != 0)
     {
         return Err("board.json: footprint rotation requires board format 4".to_owned());
@@ -343,13 +353,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         && board.format != DRAWING_BOARD_FORMAT
         && board.format != BASELINE_BOARD_FORMAT
         && board.format != INTENT_BOARD_FORMAT
+        && !tracked
         && board.footprints.iter().any(|f| f.library.is_some())
     {
         return Err("board.json: pinned physical footprints require board format 5".into());
     }
     if !matches!(
         board.format.as_str(),
-        ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT
+        ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT | TRACK_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
@@ -357,23 +368,25 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if (board.format == ASSIGNED_BOARD_FORMAT && board.assignments.is_none())
         || (!matches!(
             board.format.as_str(),
-            ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT
+            ASSIGNED_BOARD_FORMAT | OUTLINE_BOARD_FORMAT | DRAWING_BOARD_FORMAT | BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT | TRACK_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
         return Err("board.json: nonempty assignments require board format 7".into());
     }
-    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT)
+    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT | TRACK_BOARD_FORMAT)
         && (board.format == OUTLINE_BOARD_FORMAT) != board.outline.is_some()
     {
         return Err("board.json: an outline requires board format 8".into());
     }
-    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT)
+    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT | TRACK_BOARD_FORMAT)
         && (board.format == DRAWING_BOARD_FORMAT) != board.graphics.is_some()
     {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
+        (TRACK_BOARD_FORMAT, None) => None,
+        (TRACK_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (INTENT_BOARD_FORMAT, None) => None,
         (INTENT_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (BASELINE_BOARD_FORMAT, None) => None,
@@ -503,6 +516,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if let Some(mut graphics) = board.graphics {
         graphics.validate(project_data).map_err(|error| format!("board.json: {error}"))?;
         Arc::make_mut(&mut project_data.board).drawings = Some(graphics);
+    }
+    if let Some(mut tracks) = board.tracks {
+        crate::board::track::validate(project_data, &mut tracks).map_err(|error| format!("board.json: {error}"))?;
+        Arc::make_mut(&mut project_data.board).tracks = tracks;
     }
     validate_watermark(&project)?;
     Ok(project)
@@ -893,8 +910,9 @@ impl DocumentsEncoder {
 
 /// Keep legacy bytes until newer authored data requires a newer format. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
-/// version 9, explicitly enabled accepted baselines version 10, and pending
-/// desired package choices version 11.
+/// version 9, explicitly enabled accepted baselines version 10, pending
+/// desired package choices version 11, and copper tracks version 12. Version 12 is a
+/// superset: it may carry any earlier field, so tracks never drop baseline or intent data.
 fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let board = &project.board;
     let setup = board.setup.as_ref();
@@ -904,7 +922,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
     if let Some(setup) = setup {
-        let format = if board.has_pending_package_intent(project) {
+        let format = if !board.tracks.is_empty() {
+            TRACK_BOARD_FORMAT
+        } else if board.has_pending_package_intent(project) {
             INTENT_BOARD_FORMAT
         } else if board.baseline.is_some() {
             BASELINE_BOARD_FORMAT
@@ -946,7 +966,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if board.has_pending_package_intent(project) {
+        let format = if !board.tracks.is_empty() {
+            TRACK_BOARD_FORMAT
+        } else if board.has_pending_package_intent(project) {
             INTENT_BOARD_FORMAT
         } else if board.baseline.is_some() {
             BASELINE_BOARD_FORMAT
@@ -996,6 +1018,14 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
             record(bytes, &mut first, item)?;
         }
         bytes.extend_from_slice(b"    ]\n  },\n");
+    }
+    if !board.tracks.is_empty() {
+        bytes.extend_from_slice(b"  \"tracks\": [\n");
+        let mut first = true;
+        for track in &board.tracks {
+            record(bytes, &mut first, track)?;
+        }
+        bytes.extend_from_slice(b"  ],\n");
     }
     bytes.extend_from_slice(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" });
     Ok(())

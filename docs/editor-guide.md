@@ -549,7 +549,7 @@ color patch. **+** and **−** cycle through the picker order, wrapping through
 technical and hidden layers without changing visibility. **PgUp** selects front
 copper and **PgDn** selects back copper when that side exists. Text fields,
 menus and dialogs keep their normal keys; switching layers cancels an unfinished
-Board Outline gesture. The keys are also listed in Keyboard Shortcuts.
+Board Outline gesture or route. The keys are also listed in Keyboard Shortcuts.
 
 For a board boundary, select **Board Outline** in the selector or Layers card and
 use **Layout → Draw → Line** or **Rectangle**. Line accepts successive clicked
@@ -562,6 +562,20 @@ Undo; Fit and layer visibility include the edge geometry. A Board Outline layer 
 available independently of copper setup, including on older populated boards.
 Open paths remain valid editing state; no closure, clearance or manufacturing
 validation is implemented yet.
+
+To route copper, select a copper layer such as **Top** and press **X** or use
+**Layout → Route → Track**. Set **Track width** beside it in the display units
+(0.25 mm by default). Click a pad or a grid point to start; each click adds a run with one
+45° bend, and **/** flips whether the diagonal comes first. Clicking a pad or a
+track end on the same layer finishes the route, as do a double-click and Enter.
+Backspace removes the last vertex, Esc or right-click drops the unfinished route,
+and a second Esc exits the tool. The whole route is one Undo step. When copper
+joins two terminals of a net, their airwire disappears. A route that would connect
+pads on two different nets is refused with a message, leaving the board unchanged.
+Without a tool, click a track to select it (Shift adds, Ctrl or ⌘ toggles) and press
+Delete to remove it; the **Tracks** selection filter turns track picking off. Tracks
+stay on their layer, so a back-side track does not reach front-only SMD pads. Vias,
+dragging tracks, and clearance or DRC checks are not implemented yet.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

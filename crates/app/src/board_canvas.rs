@@ -55,6 +55,7 @@ pub(super) struct BoxDrag {
 #[derive(Default)]
 pub(super) struct Interaction {
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
+    pub(super) track_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) edit: Option<Draft>,
     pub(super) placement: Option<Placement>,
@@ -130,7 +131,27 @@ pub(super) fn show(
         && visible
         && state.drawing.tool.is_none()
         && state.drawing.source().is_none()
+        && !state.tracks.busy()
         && ui.input(|i| i.pointer.press_origin()).and_then(hit).is_some();
+    // The route tool owns its clicks; without it, a plain click on a track selects that track
+    // unless a footprint lies under the pointer.
+    let route = crate::board_tracks::interact(
+        ui,
+        &response,
+        camera,
+        project,
+        &mut state.tracks,
+        state.active_layer.as_deref(),
+        &state.hidden_layers,
+        source,
+        enabled
+            && state.draft.is_none()
+            && state.box_drag.is_none()
+            && !footprint_drag
+            && state.drawing.tool.is_none()
+            && state.drawing.source().is_none(),
+        hovered.is_some() || !filters.tracks,
+    );
     let edge = crate::board_drawing::interact(
         ui,
         &response,
@@ -140,14 +161,20 @@ pub(super) fn show(
         state.active_layer.as_deref(),
         &state.hidden_layers,
         source,
-        enabled && state.draft.is_none() && state.box_drag.is_none() && !footprint_drag,
+        enabled && state.draft.is_none() && state.box_drag.is_none() && !footprint_drag && !route.consumed && !state.tracks.busy(),
         state.move_requested,
         filters.graphics,
     );
-    let enabled = enabled && !edge.consumed;
-    let mut out = Interaction { drawing_edit: edge.command, ..Interaction::default() };
-    if edge.consumed && !state.selection.is_empty() {
+    let enabled = enabled && !edge.consumed && !route.consumed;
+    let mut out = Interaction { drawing_edit: edge.command, track_edit: route.command, ..Interaction::default() };
+    if (edge.consumed || route.consumed) && !state.selection.is_empty() {
         out.selection = Some(BTreeSet::new());
+    }
+    if route.consumed {
+        state.drawing.selected = None;
+    }
+    if edge.consumed {
+        state.tracks.selected.clear();
     }
     if !enabled || state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source) {
         state.draft = None;
@@ -165,6 +192,7 @@ pub(super) fn show(
         && state.draft.is_none()
         && state.drawing.tool.is_none()
         && state.drawing.source().is_none()
+        && !state.tracks.busy()
         && let Some(source) = source
         && let Some(start) = ui.input(|i| i.pointer.press_origin())
         && (response.drag_started_by(PointerButton::Secondary) || (response.drag_started_by(PointerButton::Primary) && hit(start).is_none()))
@@ -252,6 +280,7 @@ pub(super) fn show(
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
+    crate::board_tracks::paint(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref(), &state.hidden_layers, appearance);
     // A transform committed in this frame is painted at its new pose. The engine applies it after
     // this pass, so painting the stored pose here would make the footprint spring back for a frame.
     let shown = state.draft.clone().or_else(|| out.edit.clone());
@@ -318,7 +347,14 @@ pub(super) fn show(
             state.box_drag = None;
         }
     }
-    if project.footprints().next().is_none() && project.drawings().is_empty() && state.drawing.tool.is_none() && state.placement.is_none() {
+    crate::board_tracks::paint_draft(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref());
+    if project.footprints().next().is_none()
+        && project.drawings().is_empty()
+        && project.tracks().is_empty()
+        && state.drawing.tool.is_none()
+        && !state.tracks.busy()
+        && state.placement.is_none()
+    {
         board::empty(&p, rect);
     }
     out.placement = place_group(ui, &response, project, camera, state, source, appearance, placement_enabled, visible, color, rotation);

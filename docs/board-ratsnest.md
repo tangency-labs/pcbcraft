@@ -20,10 +20,16 @@ not change accepted membership before Apply.
 For each accepted net, the current display approximation sorts available endpoints
 by world X, world Y, component ID and terminal token, then joins consecutive
 endpoints into a spanning chain. There are N−1 lines for N available endpoints,
-including separate endpoint identities at coincident coordinates. Sorting costs
+including separate endpoint identities at coincident coordinates. Copper tracks
+join pads into islands: a pad and a track connect when they share a copper layer
+and the track's copper overlaps the land, either with an end on the land or with its
+centerline within half its width of a land edge; two tracks on one layer connect when
+their copper overlaps. The chain then skips consecutive endpoints whose islands are already joined, so a net
+shows one line per island beyond the first and none once fully routed. Sorting costs
 O(T log T) over the accepted terminals rather than constructing every endpoint
 pair. This approximation is deterministic and can be refined independently; it
-is neither a minimum spanning tree nor a routing or copper-connectivity result.
+is neither a minimum spanning tree nor a clearance or DRC result. Move previews
+keep the committed copper islands until the move is applied.
 Airwire counts do not establish fabrication readiness.
 
 Unplaced terminals, missing mappings and unavailable physical pads are reported

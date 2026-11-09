@@ -148,8 +148,22 @@ transactions as canvas Board Outline editing. Each takes `board` and
 identities at `project.boards[].layers` and `.drawings`. Paths contain 2–256
 vertices (at least three when closed), without a repeated closing vertex. Only
 Board Outline layers accept these graphics in this slice. Open paths are allowed,
-without a manufacturing or clearance claim. Live `view.set_layer` uses the same
-Layers handler for `active` and `visible` changes on an addressed view; those
+without a manufacturing or clearance claim.
+
+`pcb.add_tracks` and `pcb.delete_tracks` use the same transactions as the PCB
+route tool. Each takes `board` and `expected_revision`. Routing also takes a copper
+`layer` UUID from `project.boards[].layers`, `width_nm` (10,000 to 10,000,000) and
+2–256 ordered `points`; each neighboring pair becomes one straight segment, all in
+one undo step. Deleting takes `tracks`, unique segment UUIDs from
+`project.boards[].tracks`. A route is refused whole when a point is out of range,
+neighbors repeat, the layer is not copper in the board setup, or its copper would
+join pads on two different nets (the error names both). Only copper the new route
+touches is checked, so a short left by an earlier edit does not block unrelated routes.
+Copper connects where it overlaps on a shared layer, and the board ratsnest drops
+airwires between terminals already joined by tracks. This is not a clearance or DRC
+check.
+
+Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.
 `view.set_layer_visibility` takes `view` and `mode` (`all` or `active`) through the
 same handler as Show all / Isolate active. Isolation reveals the active layer,

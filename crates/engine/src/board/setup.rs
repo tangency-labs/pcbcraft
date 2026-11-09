@@ -526,7 +526,7 @@ impl Session {
 
     /// Validate the entire candidate before one atomic edit. Renames and thickness/material
     /// edits preserve identity. Populated topology changes require explicit consent and compatible
-    /// surviving layer roles/surface IDs; occupied drawing-layer removals are always rejected.
+    /// surviving layer roles/surface IDs; occupied drawing-layer and track-layer removals are always rejected.
     /// Catalog reordering alone is a no-op and does not advance revision or clear redo.
     /// Existing pinned material revisions cannot be rewritten; use a new revision and explicit references.
     /// Optional silkscreen settings join the same validated edit, retaining no-op history semantics.
@@ -569,6 +569,7 @@ impl Session {
             if let Some(mut data) = project.board.drawings.clone() {
                 data.validate(&project).map_err(CommandError::InvalidParams)?;
             }
+            crate::board::track::validate(&project, &mut project.board.tracks.clone()).map_err(CommandError::InvalidParams)?;
             self.change(project);
         }
         Ok(())

@@ -16,12 +16,13 @@ pub(super) struct Filters {
     pub sheets: bool,
     pub labels: bool,
     pub footprints: bool,
+    pub tracks: bool,
     pub graphics: bool,
 }
 
 impl Default for Filters {
     fn default() -> Self {
-        Self { symbols: true, wires: true, sheets: true, labels: true, footprints: true, graphics: true }
+        Self { symbols: true, wires: true, sheets: true, labels: true, footprints: true, tracks: true, graphics: true }
     }
 }
 
@@ -76,7 +77,7 @@ impl Filters {
             Workspace::Board => vec![
                 row("footprints", "Footprints", self.footprints),
                 planned("pads", "Pads"),
-                planned("tracks", "Tracks"),
+                row("tracks", "Tracks", self.tracks),
                 planned("vias", "Vias"),
                 planned("zones", "Zones"),
                 planned("text", "Text"),
@@ -100,6 +101,7 @@ impl PcbApp {
                 (Workspace::Schematic, "sheets") => &mut next.sheets,
                 (Workspace::Schematic, "labels") => &mut next.labels,
                 (Workspace::Board, "footprints") => &mut next.footprints,
+                (Workspace::Board, "tracks") => &mut next.tracks,
                 (Workspace::Board, "graphics") => &mut next.graphics,
                 (_, "view" | "collapsed" | "open") => continue,
                 _ => return Err(format!("Selection filter `{key}` is unavailable in this workspace")),
@@ -123,6 +125,9 @@ impl PcbApp {
             }
             if !next.footprints {
                 view.board.selection.clear();
+            }
+            if !next.tracks {
+                view.board.tracks.selected.clear();
             }
             if !next.graphics {
                 view.board.drawing.selected = None;

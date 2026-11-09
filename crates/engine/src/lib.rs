@@ -19,6 +19,7 @@ pub mod selection;
 pub mod sheets;
 pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
+pub use board::track::{ADD_TRACKS, DELETE_TRACKS};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -103,6 +104,9 @@ enum ParamKind {
     SilkscreenSettings,
     DrawingPoints,
     DrawingId,
+    TrackPath,
+    TrackWidth,
+    TrackIds,
     Closed,
     BoardId,
     SheetId,
@@ -130,6 +134,11 @@ impl ParamKind {
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint"]}),
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
+            Self::TrackPath => board::track::path_schema(),
+            Self::TrackWidth => json!({"type":"integer","minimum":board::track::MIN_WIDTH_NM,"maximum":board::track::MAX_WIDTH_NM}),
+            Self::TrackIds => {
+                json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"uniqueItems":true,"items":{"type":"string","format":"uuid"}})
+            }
             Self::Closed => json!({"type":"boolean"}),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
@@ -248,6 +257,26 @@ impl ParamKind {
             }
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
             Self::Closed if value.is_boolean() => Ok(()),
+            Self::TrackPath
+                if value
+                    .as_array()
+                    .is_some_and(|v| (2..=board::track::MAX_PATH_POINTS).contains(&v.len()) && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
+            {
+                Ok(())
+            }
+            Self::TrackWidth if value.as_i64().is_some_and(|n| (board::track::MIN_WIDTH_NM..=board::track::MAX_WIDTH_NM).contains(&n)) => Ok(()),
+            Self::TrackIds
+                if value.as_array().is_some_and(|ids| {
+                    (1..=board::track::MAX_TRACKS).contains(&ids.len())
+                        && ids.iter().all(|id| Self::DrawingId.validate(id).is_ok())
+                        && ids.iter().filter_map(Value::as_str).collect::<std::collections::BTreeSet<_>>().len() == ids.len()
+                }) =>
+            {
+                Ok(())
+            }
+            Self::TrackPath => Err("must contain 2–256 bounded vertices"),
+            Self::TrackWidth => Err("must be a track width from 10000 to 10000000 nanometers"),
+            Self::TrackIds => Err("must contain unique non-nil track UUIDs"),
             Self::DrawingPoints => Err("must contain 2–256 bounded vertices"),
             Self::DrawingId => Err("must identify a drawing or layer by non-nil UUID"),
             Self::Closed => Err("must be a boolean"),
@@ -1135,6 +1164,33 @@ const CATALOG: &[Command] = &[
             Param { name: "drawing", required: true, summary: "Drawing UUID from inspection", kind: ParamKind::DrawingId },
         ],
     },
+    Command {
+        id: ADD_TRACKS,
+        title: "Route Track",
+        summary: "Add a path of straight copper segments on one copper layer, in one undo step. Refused if its copper would join two different nets.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "layer", required: true, summary: "Copper layer UUID from board inspection", kind: ParamKind::DrawingId },
+            Param { name: "width_nm", required: true, summary: "Track width in integer nanometers", kind: ParamKind::TrackWidth },
+            Param {
+                name: "points",
+                required: true,
+                summary: "Ordered path vertices in integer nanometers; each neighbor pair becomes one segment",
+                kind: ParamKind::TrackPath,
+            },
+        ],
+    },
+    Command {
+        id: DELETE_TRACKS,
+        title: "Delete Tracks",
+        summary: "Remove addressed track segments, leaving footprints and other copper unchanged. One undo step.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "tracks", required: true, summary: "Unique track segment UUIDs from board inspection", kind: ParamKind::TrackIds },
+        ],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -1499,6 +1555,8 @@ impl Session {
             | ADD_DRAWING
             | SET_DRAWING
             | DELETE_DRAWING
+            | ADD_TRACKS
+            | DELETE_TRACKS
             | DRAW_WIRE
             | DELETE_WIRE
             | SLICE_WIRE
@@ -1538,7 +1596,7 @@ impl Session {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json", "layers":board.layers(), "drawings":board.drawings()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json", "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
@@ -1632,6 +1690,8 @@ impl Session {
                 | ADD_DRAWING
                 | SET_DRAWING
                 | DELETE_DRAWING
+                | ADD_TRACKS
+                | DELETE_TRACKS
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
@@ -1779,6 +1839,7 @@ impl Session {
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
+            ADD_TRACKS | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),

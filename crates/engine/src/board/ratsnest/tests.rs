@@ -4,7 +4,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 /// Author a connected three-component design through the shared production commands.
-fn fixture() -> Session {
+pub(crate) fn fixture() -> Session {
     let mut session = Session::default();
     session.apply("project.new", &json!({"create_board":true})).unwrap();
     for index in 0..3 {

@@ -23,6 +23,7 @@ impl PcbApp {
             || editor.board.box_drag.is_some()
             || editor.board.drawing.tool.is_some()
             || editor.board.drawing.source().is_some()
+            || editor.board.tracks.busy()
             || editor.board.selection.is_empty()
         {
             return;
@@ -89,6 +90,8 @@ impl PcbApp {
     /// The active-layer field uses the Layers card's view-local handler, without editing the project.
     /// Components › Footprints opens the package chooser for the selected footprint's component,
     /// or leaves the component unselected when no footprint is selected.
+    /// Route › Track (X) arms copper routing on a visible active copper layer; Track width sets
+    /// the next route's width, in the display units, for this view only without editing the project.
     pub(super) fn board_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let setup =
@@ -141,7 +144,8 @@ impl PcbApp {
                 && !self.views.active.board.selection.is_empty()
                 && !editing
                 && self.views.active.board.drawing.tool.is_none()
-                && self.views.active.board.drawing.source().is_none(),
+                && self.views.active.board.drawing.source().is_none()
+                && !self.views.active.board.tracks.busy(),
             active: false,
             toggle: false,
         };
@@ -227,7 +231,45 @@ impl PcbApp {
         if let Some(index) = workspace::ribbon_group(ui, "Draw", &drawing_tools) {
             let tool = if index == 0 { crate::board_drawing::Tool::Lines } else { crate::board_drawing::Tool::Rectangle };
             let layer = self.views.active.board.active_layer.clone();
+            self.views.active.board.tracks.cancel();
             self.views.active.board.drawing.start(tool, layer);
+        }
+        workspace::ribbon_separator(ui);
+        let route = RibbonTool {
+            icon: ToolIcon::Wire,
+            label: "Track",
+            description: "Route tracks on the active copper layer",
+            shortcut: "X",
+            enabled: enabled && self.can_route() && !editing,
+            active: self.views.active.board.tracks.tool,
+            toggle: false,
+        };
+        if workspace::ribbon_group(ui, "Route", &[route]).is_some() {
+            self.start_route();
+        }
+        // The width is shown and edited in the display units; the view keeps whole nanometers.
+        let unit = self.preferences.units;
+        let per_unit = match unit {
+            pcbcraft_chrome::units::Unit::Mm => pcbcraft_chrome::units::NM_PER_MM,
+            pcbcraft_chrome::units::Unit::Mil => pcbcraft_chrome::units::NM_PER_MIL,
+        } as f64;
+        let mut width = self.views.active.board.tracks.width_nm as f64 / per_unit;
+        let changed = workspace::ribbon_field(ui, "Track width", |ui| {
+            ui.add_enabled(
+                enabled,
+                egui::DragValue::new(&mut width)
+                    .range(
+                        pcbcraft_engine::board::track::MIN_WIDTH_NM as f64 / per_unit..=pcbcraft_engine::board::track::MAX_WIDTH_NM as f64 / per_unit,
+                    )
+                    .speed(if unit == pcbcraft_chrome::units::Unit::Mm { 0.01 } else { 0.5 })
+                    .max_decimals(3)
+                    .suffix(format!(" {}", unit.symbol())),
+            )
+            .changed()
+        });
+        if changed {
+            self.views.active.board.tracks.width_nm =
+                ((width * per_unit).round() as i64).clamp(pcbcraft_engine::board::track::MIN_WIDTH_NM, pcbcraft_engine::board::track::MAX_WIDTH_NM);
         }
         workspace::ribbon_separator(ui);
         let tools = [
@@ -247,6 +289,25 @@ impl PcbApp {
             Some(1) => self.views.reveal_highlight(self.views.active.id(), &self.session),
             _ => {}
         }
+    }
+
+    /// Whether the focused board view's active layer is a visible copper layer that can take tracks.
+    fn can_route(&self) -> bool {
+        let board = &self.views.active.board;
+        self.session
+            .project()
+            .and_then(|project| board.target.and_then(|target| project.board_view(target)))
+            .is_some_and(|view| crate::board_tracks::can_route(view, board.active_layer.as_deref(), &board.hidden_layers))
+    }
+
+    /// Arm the route tool (KiCad: X) in the focused board view when its active layer is visible
+    /// copper and no footprint transform is in progress. Drawing tools are dropped first.
+    pub(super) fn start_route(&mut self) {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() || !self.can_route() {
+            return;
+        }
+        self.views.active.board.drawing.cancel();
+        self.views.active.board.tracks.start();
     }
 
     /// Paint any addressed board pane, with input granted only to its focused view. The renderer
@@ -302,7 +363,7 @@ impl PcbApp {
                 })
             })
             .inner;
-        if (pick.selection.is_some() || pick.edit.is_some() || pick.drawing_edit.is_some() || pick.placement.is_some())
+        if (pick.selection.is_some() || pick.edit.is_some() || pick.drawing_edit.is_some() || pick.track_edit.is_some() || pick.placement.is_some())
             && enabled
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
@@ -310,6 +371,13 @@ impl PcbApp {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
             }
             if let Some(mut edit) = pick.drawing_edit
+                && self.views.active.accepts(edit.source, &self.session)
+                && let Some(target) = self.views.active.board.target
+            {
+                edit.params["board"] = serde_json::json!(target.board);
+                self.run(edit.id, &edit.params);
+            }
+            if let Some(mut edit) = pick.track_edit
                 && self.views.active.accepts(edit.source, &self.session)
                 && let Some(target) = self.views.active.board.target
             {
