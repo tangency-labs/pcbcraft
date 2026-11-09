@@ -565,6 +565,12 @@ mod live {
             ],
         },
         WindowCommand {
+            id: "view.set_ratsnest_visibility",
+            title: "Ratsnest Visibility",
+            summary: "Show or hide accepted logical connections in this PCB view, without changing project data or undo history.",
+            params: &[VIEW, Param { name: "visible", summary: "Show accepted connections", required: true, kind: Kind::Bool }],
+        },
+        WindowCommand {
             id: "view.set_layer_color",
             title: "Layer Color",
             summary: "Set or reset a board's personal layer color, through the same handler as its swatch. Shared by every view of that board, saved locally and excluded from project files/undo.",
@@ -908,6 +914,8 @@ mod live {
                     "board": (view.workspace == Workspace::Board).then(|| json!({
                         "selection": view.board.selection,
                         "hidden_layers": view.board.hidden_layers,
+                        "ratsnest_visible": view.board.target.and_then(|target| app.session.project().and_then(|project| project.board_view(target)))
+                            .filter(|board| board.has_accepted_connectivity()).map(|_| !view.board.hidden_layers.contains("ratsnest")),
                         "active_layer": view.board.active_layer,
                         "layer_colors": view.board.target.and_then(|target|app.session.project().and_then(|project|project.board_view(target)))
                             .map(|board|board.layers().iter().map(|layer|json!({"layer":layer.id,"color":crate::board_appearance::hex(app.board_appearance.color(board,layer)),"overridden":app.board_appearance.overridden(board.target,&layer.id.to_string())})).collect::<Vec<_>>()),
@@ -1149,6 +1157,23 @@ mod live {
                     }
                 }
                 ("view.navigate_layer", Some((view, _)), _) => self.navigate_board_layer(view, params["direction"].as_str().unwrap_or_default())?,
+                ("view.set_ratsnest_visibility", Some((view, _)), _) => {
+                    let state =
+                        self.views.view(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
+                    let board = state
+                        .board
+                        .target
+                        .and_then(|target| self.session.project().and_then(|project| project.board_view(target)))
+                        .ok_or("The view's board is unavailable")?;
+                    if !board.has_accepted_connectivity() {
+                        return Err("This board has no accepted connectivity".into());
+                    }
+                    self.views
+                        .view_mut(view)
+                        .ok_or("The addressed view closed")?
+                        .board
+                        .set_ratsnest_visibility(params["visible"].as_bool() == Some(true));
+                }
                 ("view.set_layer_color", Some((view, _)), _) => {
                     let rgb = params["color"].as_str().map(crate::board_appearance::parse_color).transpose()?;
                     self.set_layer_color(view, params["layer"].as_str().unwrap_or_default(), rgb)?;

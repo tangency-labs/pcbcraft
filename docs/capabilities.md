@@ -25,7 +25,9 @@ The engine [single-board update workflow](single-board-update.md) previews and
 atomically accepts footprint/package and connectivity changes through shared
 commands and headless/live MCP. Desired assignments and accepted geometry remain
 distinct across offline reopen; deleted schematic parts retain their footprints
-until acceptance. The native review UI, unplaced-part handoff and ratsnest remain
+until acceptance. The [PCB ratsnest](board-ratsnest.md) displays only accepted
+logical connections, with per-view visibility, live MCP control and explicit
+unavailable endpoints. The native review UI and unplaced-part handoff remain
 work under #55.
 
 Issue numbers above refer to the

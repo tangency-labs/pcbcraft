@@ -236,6 +236,27 @@ pub(super) fn show(
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
+    let ratsnest = state.ratsnest(project, source);
+    if !state.hidden_layers.contains("ratsnest")
+        && let Some(ratsnest) = ratsnest
+    {
+        let draft = state
+            .draft
+            .as_ref()
+            .and_then(|draft| footprints.iter().find(|footprint| footprint.id == draft.footprint).map(|footprint| (draft, footprint)));
+        for line in &ratsnest.lines {
+            let at = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {
+                let point = match draft {
+                    Some((draft, footprint)) if endpoint.footprint == footprint.id => {
+                        preview_point(endpoint.position, footprint.position, footprint.rotation, draft)
+                    }
+                    _ => endpoint.position,
+                };
+                camera.screen(point, rect)
+            };
+            board::airwire(&p, at(&line.from), at(&line.to));
+        }
+    }
     for mut footprint in footprints {
         if let Some(draft) = state.draft.as_ref().filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -305,11 +326,7 @@ fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egu
 
 /// Transform resolved pad offsets only for painting; pad identities and authored snapshots stay intact.
 fn preview(footprint: &mut FootprintView<'_>, draft: &Draft) {
-    let turns = ((draft.rotation + 360 - footprint.rotation) % 360 / 90) as u8;
-    let transform = |point: Point| {
-        let (x, y) = rotate(point.x_nm - footprint.position.x_nm, point.y_nm - footprint.position.y_nm, turns);
-        Point { x_nm: draft.position.x_nm.saturating_add(x), y_nm: draft.position.y_nm.saturating_add(y) }
-    };
+    let transform = |point| preview_point(point, footprint.position, footprint.rotation, draft);
     for pad in &mut footprint.pads {
         pad.center = transform(pad.center);
         pad.copper = pad.copper.map(|points| points.map(transform));
@@ -319,6 +336,13 @@ fn preview(footprint: &mut FootprintView<'_>, draft: &Draft) {
     }
     footprint.position = draft.position;
     footprint.rotation = draft.rotation;
+}
+
+/// Match the footprint's disposable move/quarter-turn preview without changing pad identity.
+fn preview_point(point: Point, origin: Point, rotation: u16, draft: &Draft) -> Point {
+    let turns = ((draft.rotation + 360 - rotation) % 360 / 90) as u8;
+    let (x, y) = rotate(point.x_nm - origin.x_nm, point.y_nm - origin.y_nm, turns);
+    Point { x_nm: draft.position.x_nm.saturating_add(x), y_nm: draft.position.y_nm.saturating_add(y) }
 }
 
 /// Project physical geometry without deriving dimensions or copper membership from UI state.

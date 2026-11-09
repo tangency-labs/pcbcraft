@@ -43,6 +43,7 @@ impl PcbApp {
         }
         let slots = crate::workspace_panels::areas(area, browser, &self.views.active.panels, [true, true, self.views.active.filters_open], false);
         let can_isolate = state.active_layer.is_some();
+        let mut ratsnest_visible = !state.hidden_layers.contains("ratsnest");
         let (layers, collapse) = self.views.active.panels[crate::workspace_panels::LAYERS].show_with_toolbar(
             ui,
             host.with("layers"),
@@ -57,6 +58,9 @@ impl PcbApp {
                 ui.horizontal(|ui| {
                     show_all = ui.small_button("Show all").clicked();
                     isolate = ui.add_enabled(can_isolate, egui::Button::new("Isolate active").small()).clicked();
+                    if target.has_accepted_connectivity() {
+                        pcbcraft_chrome::board::ratsnest_visibility(ui, &mut ratsnest_visible);
+                    }
                 });
             },
             |ui| {
@@ -66,6 +70,7 @@ impl PcbApp {
         if collapse {
             state.layers_collapsed = !state.layers_collapsed;
         }
+        state.set_ratsnest_visibility(ratsnest_visible);
         if show_all || isolate {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }

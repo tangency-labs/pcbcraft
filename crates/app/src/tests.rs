@@ -12,6 +12,7 @@ use super::*;
 mod board_colors;
 mod board_drawing;
 mod board_layers;
+mod board_ratsnest;
 mod board_views;
 #[cfg(not(target_arch = "wasm32"))]
 mod detached_editors;

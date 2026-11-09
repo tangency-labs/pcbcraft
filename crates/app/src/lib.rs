@@ -1075,7 +1075,7 @@ impl PcbApp {
         let mut unit = self.preferences.units;
         let pointer = self.pointer.filter(|_| grid_view.is_some());
         let units_shortcut = ui.ctx().format_shortcut(&SWITCH_UNITS);
-        let board_status = self
+        let mut board_status = self
             .session
             .project()
             .and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target)))
@@ -1092,6 +1092,22 @@ impl PcbApp {
                 };
                 format!("{tool}{name}{}", if hidden { " (hidden)" } else { "" })
             });
+        if let Some((input, ratsnest)) = &self.views.active.board.ratsnest_cache
+            && input.revision == self.session.revision()
+            && Some(ratsnest.board) == self.views.active.board.target
+        {
+            let missing = if ratsnest.missing.is_empty() {
+                String::new()
+            } else {
+                format!(" · {} missing endpoint{}", ratsnest.missing.len(), if ratsnest.missing.len() == 1 { "" } else { "s" })
+            };
+            board_status = Some(format!(
+                "{} · {} airwire{}{missing}",
+                board_status.as_deref().unwrap_or("Board"),
+                ratsnest.lines.len(),
+                if ratsnest.lines.len() == 1 { "" } else { "s" }
+            ));
+        }
         shell::status_bar(
             ui,
             |ui| {

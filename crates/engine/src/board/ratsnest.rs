@@ -1,0 +1,119 @@
+//! Accepted-connectivity display geometry, independent of the proposed schematic.
+//!
+//! Each net uses a lexicographically spatially sorted spanning chain. This bounded
+//! O(T log T) approximation is a display aid, not a minimum spanning tree, router,
+//! copper-connectivity calculation or fabrication-readiness check.
+
+use super::{
+    Pad,
+    update::SourceCapture,
+    view::{BoardTarget, BoardView},
+};
+use crate::schematic::Point;
+
+/// A logical terminal qualified by its project and physical board, including retained removals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalAddress {
+    pub board: BoardTarget,
+    pub component: u64,
+    pub terminal: String,
+}
+
+/// One accepted terminal resolved through its actual footprint's pin-to-pad mapping.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Endpoint {
+    pub terminal: TerminalAddress,
+    pub pad: Pad,
+    pub footprint: String,
+    pub position: Point,
+}
+
+/// An unavailable accepted terminal has no invented board coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingReason {
+    Unplaced,
+    MissingMapping,
+    MissingPad,
+}
+
+/// An unavailable terminal remains attributable even when its schematic source was removed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissingEndpoint {
+    pub terminal: TerminalAddress,
+    pub reason: MissingReason,
+}
+
+/// One edge of a deterministic display tree. `net` is an index within `source`, not a persisted ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Airwire {
+    pub net: usize,
+    pub from: Endpoint,
+    pub to: Endpoint,
+}
+
+/// Transient display geometry derived from accepted historical membership and current placement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ratsnest {
+    pub board: BoardTarget,
+    pub source: SourceCapture,
+    pub lines: Vec<Airwire>,
+    pub missing: Vec<MissingEndpoint>,
+    pub net_count: usize,
+    pub terminal_count: usize,
+}
+
+impl BoardView<'_> {
+    /// Whether this board has accepted historical inputs, independently of its net count.
+    pub fn has_accepted_connectivity(self) -> bool {
+        self.project().board.baseline.as_ref().is_some_and(|baseline| baseline.project == self.target.project && baseline.board == self.target.board)
+    }
+
+    /// Resolve accepted connectivity only. A board without a baseline has no ratsnest;
+    /// pending schematic edits never alter these connections before reviewed acceptance.
+    /// Every resolvable net forms a spatial chain with exactly N-1 display edges.
+    /// Unplaced or unmapped terminals are reported separately, without phantom endpoints.
+    pub fn ratsnest(self) -> Option<Ratsnest> {
+        let board = &self.project().board;
+        let baseline = board.baseline.as_ref().filter(|baseline| baseline.project == self.target.project && baseline.board == self.target.board)?;
+        let mut result = Ratsnest {
+            board: self.target,
+            source: baseline.source.clone(),
+            lines: Vec::new(),
+            missing: Vec::new(),
+            net_count: baseline.nets.len(),
+            terminal_count: 0,
+        };
+        for (net, state) in baseline.nets.iter().enumerate() {
+            let mut endpoints = Vec::with_capacity(state.terminals.len());
+            result.terminal_count += state.terminals.len();
+            for key in &state.terminals {
+                let terminal = TerminalAddress { board: self.target, component: key.component, terminal: key.terminal.clone() };
+                let resolution = (|| {
+                    let footprint =
+                        board.by_component.get(&key.component).and_then(|index| board.footprints.get(*index)).ok_or(MissingReason::Unplaced)?;
+                    let number = footprint.pad_for(&key.terminal).ok_or(MissingReason::MissingMapping)?;
+                    let position = footprint.pad_position(number, board).ok_or(MissingReason::MissingPad)?;
+                    let pad = Pad { board: Some(self.target.board), footprint: footprint.id, number };
+                    Ok((pad, format!("footprint-{}", footprint.id), position))
+                })();
+                match resolution {
+                    Ok((pad, footprint, position)) => endpoints.push(Endpoint { terminal, pad, footprint, position }),
+                    Err(reason) => result.missing.push(MissingEndpoint { terminal, reason }),
+                }
+            }
+            endpoints.sort_by(|a, b| {
+                (a.position.x_nm, a.position.y_nm, a.terminal.component, &a.terminal.terminal).cmp(&(
+                    b.position.x_nm,
+                    b.position.y_nm,
+                    b.terminal.component,
+                    &b.terminal.terminal,
+                ))
+            });
+            result.lines.extend(endpoints.windows(2).map(|pair| Airwire { net, from: pair[0].clone(), to: pair[1].clone() }));
+        }
+        Some(result)
+    }
+}
+
+#[cfg(test)]
+mod tests;

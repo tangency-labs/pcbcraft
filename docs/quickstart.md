@@ -507,3 +507,13 @@ a placed item, return to the project, select one symbol or footprint and use
 inside its editor. Forking and authoring leave the source and placed copies unchanged. Applying the resulting
 definition to a project is follow-up work; see the
 [editor notes](properties-and-library-editors.md#authoring-basics) for scope.
+
+## Inspect accepted board connections
+
+When a board has an accepted update baseline, the PCB canvas shows thin airwires
+between its mapped physical pads. **Layers → Ratsnest** hides or shows them for
+that view, and the status bar reports airwires and missing endpoints. Schematic
+changes affect those connections after a reviewed board update accepts them;
+footprint moves and rotations update the displayed geometry immediately. These
+lines show logical connections and do not establish routed copper or fabrication
+readiness; see [accepted board connections](board-ratsnest.md).
