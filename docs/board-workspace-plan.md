@@ -463,6 +463,8 @@ external library services, routing (#56), zones (#57), DRC (#58), manufacturing
 (#59), 3D and KiCad interchange are not gates for the initial board workspace.
 The project-local variant work in #28 remains part of library management but
 does not block the first original footprint fixture.
+The [PCB layout editing workflow](pcb-layout-workflow.md) records where routing,
+DRC and outputs stand and plans the remaining layout slices, including zones.
 
 The split host builds on the Browser, Parts and ribbon changes merged in
 [#62](https://github.com/tangency-labs/pcbcraft/pull/62), together with #63's Home
