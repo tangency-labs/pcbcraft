@@ -1766,6 +1766,7 @@ impl PcbApp {
                 self.start_measure();
             }
             self.views.active.board.tracks.connected_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::U));
+            self.views.active.board.tracks.drag_segment_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::D));
             if self.views.active.board.tracks.tool {
                 let tracks = &mut self.views.active.board.tracks;
                 tracks.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
@@ -2360,6 +2361,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
     list.push(("PCB layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
     list.push(("PCB layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB layout", "Drag a track segment, keeping it attached", "D".to_owned()));
     list.push(("PCB layout", "Highlight the net under the pointer", "`".to_owned()));
     list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));

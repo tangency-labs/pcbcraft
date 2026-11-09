@@ -23,7 +23,7 @@ pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
-pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, SET_TRACK_WIDTH, SET_VIA_SIZE};
+pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_TRACK_WIDTH, SET_VIA_SIZE};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -120,6 +120,7 @@ enum ParamKind {
     TrackWidth,
     TrackIds,
     LayerChanges,
+    TrackEnds,
     AlignMode,
     BoardSide,
     RuleLength,
@@ -172,6 +173,9 @@ impl ParamKind {
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
             Self::LayerChanges => board::track::layer_changes_schema(),
+            Self::TrackEnds => {
+                json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
+            }
             Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
@@ -358,6 +362,21 @@ impl ParamKind {
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
             Self::BoardSide => Err("must be front or back"),
+            Self::TrackEnds
+                if value.as_array().is_some_and(|items| {
+                    !items.is_empty()
+                        && items.len() <= board::track::MAX_TRACKS
+                        && items.iter().all(|item| {
+                            item.is_object()
+                                && Self::Point.validate(&item["start"]).is_ok()
+                                && Self::Point.validate(&item["end"]).is_ok()
+                                && Self::DrawingId.validate(&item["track"]).is_ok()
+                        })
+                }) =>
+            {
+                Ok(())
+            }
+            Self::TrackEnds => Err("must list tracks with a UUID and bounded start and end points"),
             Self::AlignMode if value.as_str().and_then(AlignMode::parse).is_some() => Ok(()),
             Self::AlignMode => Err("must be an alignment mode"),
             Self::LayerChanges => Err("must contain layer changes with a vertex index and a copper layer UUID"),
@@ -1480,6 +1499,16 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: RESHAPE_TRACKS,
+        title: "Reshape Tracks",
+        summary: "Set new start and end points for addressed track segments in one undo step, keeping layers and widths. Refused if a segment would collapse or reshaped copper would join two different nets.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "tracks", required: true, summary: "Each track UUID with its new start and end", kind: ParamKind::TrackEnds },
+        ],
+    },
+    Command {
         id: SET_TRACK_WIDTH,
         title: "Set Track Width",
         summary: "Give addressed track segments one width, in one undo step. Refused if wider copper would join two different nets.",
@@ -1955,6 +1984,7 @@ impl Session {
             | ADD_TRACKS
             | ADD_VIA
             | MOVE_TRACKS
+            | RESHAPE_TRACKS
             | SET_TRACK_WIDTH
             | SET_VIA_SIZE
             | DELETE_TRACKS
@@ -2130,6 +2160,7 @@ impl Session {
                 | ADD_TRACKS
                 | ADD_VIA
                 | MOVE_TRACKS
+                | RESHAPE_TRACKS
                 | SET_TRACK_WIDTH
                 | SET_VIA_SIZE
                 | DELETE_TRACKS
@@ -2305,7 +2336,7 @@ impl Session {
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
             }
-            ADD_TRACKS | ADD_VIA | MOVE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
+            ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),

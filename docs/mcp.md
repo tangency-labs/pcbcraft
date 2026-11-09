@@ -179,7 +179,9 @@ exportability without changing the project or revision.
 `pcb.add_via` places one standalone through via from `at`, `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad
 that would join two nets. `pcb.move_tracks` moves `tracks` and/or `vias` by `dx_nm` and
-`dy_nm`, keeping sizes and layers. `pcb.set_track_width` gives `tracks` one `width_nm`,
+`dy_nm`, keeping sizes and layers. `pcb.reshape_tracks` sets new `start` and `end` points for each listed `track` at once,
+keeping layers and widths; a collapsed segment is refused. `pcb.set_track_width` gives
+`tracks` one `width_nm`,
 and `pcb.set_via_size` gives `vias` one `via_diameter_nm` and `via_drill_nm`. Each is one
 undo step, checks shorts for the copper it changes, and is not an edit when nothing
 changes. Deleting takes `tracks` and/or `vias`, unique UUIDs from `project.boards[].tracks`
