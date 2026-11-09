@@ -22,6 +22,7 @@ pub mod sheets;
 pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
+pub use board::fabrication::EXPORT_FABRICATION;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, SET_TRACK_WIDTH, SET_VIA_SIZE};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
@@ -1524,6 +1525,12 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: EXPORT_FABRICATION,
+        title: "Generate Fabrication Outputs",
+        summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and an Excellon drill file. Edits nothing; execute returns every file's name and text.",
+        params: &[BOARD],
+    },
+    Command {
         id: DELETE_TRACKS,
         title: "Delete Tracks",
         summary: "Remove addressed track segments and vias, leaving footprints and other copper unchanged. One undo step.",
@@ -1917,6 +1924,7 @@ impl Session {
             | SET_DRAWING
             | DELETE_DRAWING
             | CHECK_DESIGN
+            | EXPORT_FABRICATION
             | ADD_TRACKS
             | ADD_VIA
             | MOVE_TRACKS
@@ -2041,6 +2049,9 @@ impl Session {
         if id == CHECK_DESIGN {
             return Ok(json!({"revision":self.revision,"design_check":self.check_design(params)?}));
         }
+        if id == EXPORT_FABRICATION {
+            return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
+        }
         Ok(self.inspect())
     }
 
@@ -2085,6 +2096,7 @@ impl Session {
                 | SET_DRAWING
                 | DELETE_DRAWING
                 | CHECK_DESIGN
+                | EXPORT_FABRICATION
                 | ADD_TRACKS
                 | ADD_VIA
                 | MOVE_TRACKS
@@ -2252,6 +2264,9 @@ impl Session {
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
+            EXPORT_FABRICATION => {
+                self.export_fabrication(params)?;
+            }
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),

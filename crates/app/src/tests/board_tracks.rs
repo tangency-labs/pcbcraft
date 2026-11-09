@@ -539,3 +539,29 @@ fn right_click_cancels_and_ribbon_starts_copper_moves() {
     click(&mut h, "Move footprint");
     assert!(h.state().views.active.board.tracks.busy(), "the ribbon started a copper move");
 }
+
+/// Design › Outputs explains a missing outline, then saves one deterministic archive of Gerber
+/// and drill files without editing the project.
+#[test]
+fn outputs_export_one_archive_of_fabrication_files() {
+    let mut h = routable();
+    click(&mut h, "Generate fabrication outputs");
+    assert!(h.state().message.as_deref().is_some_and(|m| m.contains("closed Board Outline")), "{:?}", h.state().message);
+    let outline = layer_named(&h, "Board Outline");
+    let revision = h.state().session.revision();
+    let p = |x: i64, y: i64| json!({"x_nm":x,"y_nm":y});
+    h.state_mut().run(
+        pcbcraft_engine::ADD_DRAWING,
+        &json!({"layer":outline,"points":[p(-5_000_000,-5_000_000),p(15_000_000,-5_000_000),p(15_000_000,5_000_000),p(-5_000_000,5_000_000)],"closed":true,"expected_revision":revision}),
+    );
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Generate fabrication outputs");
+    assert_eq!(h.state().message, None);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "exporting edits nothing");
+    let (name, bytes) = h.state().fabrication_exports.captured.clone().expect("an archive was handed to the save worker");
+    assert!(name.ends_with("-fabrication.zip"), "{name}");
+    let outputs = h.state().session.export_fabrication(&json!({})).unwrap();
+    assert!(outputs.iter().any(|o| o.name.ends_with("-Top.gbr")) && outputs.iter().any(|o| o.name.ends_with("-PTH.drl")));
+    assert_eq!(bytes, pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
+}

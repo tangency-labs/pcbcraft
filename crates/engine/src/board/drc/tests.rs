@@ -6,7 +6,7 @@ use crate::{
 use serde_json::json;
 
 /// Close a Board Outline rectangle around every fixture footprint, with room to spare.
-fn outline(s: &mut Session) {
+pub(crate) fn outline(s: &mut Session) {
     let layer = view(s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
     let p = |x: i64, y: i64| json!({"x_nm":x,"y_nm":y});
     s.apply(

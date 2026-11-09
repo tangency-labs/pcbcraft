@@ -75,6 +75,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                     id,
                     pcbcraft_engine::PREVIEW_UPDATE
                         | pcbcraft_engine::CHECK_DESIGN
+                        | pcbcraft_engine::EXPORT_FABRICATION
                         | pcbcraft_engine::clipboard::COPY
                         | pcbcraft_engine::clipboard::CUT
                         | pcbcraft_engine::board::clipboard::COPY

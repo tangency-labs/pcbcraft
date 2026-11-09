@@ -15,6 +15,7 @@ mod board_canvas;
 mod board_clipboard;
 mod board_drawing;
 mod board_drc;
+mod board_outputs;
 mod board_panels;
 mod board_setup;
 mod board_tracks;
@@ -224,6 +225,8 @@ pub struct PcbApp {
     preferences: Preferences,
     board_appearance: board_appearance::Appearance,
     board_profile_files: board_setup::profile_io::Files,
+    /// The one fabrication export that may be saving at a time.
+    fabrication_exports: board_outputs::Exports,
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
     browser: project_browser::ProjectBrowser,
@@ -2122,6 +2125,11 @@ impl PcbApp {
         self.library_editors.poll();
         self.adopt_opened_library(&ctx);
         self.sync_library_bindings();
+        match self.fabrication_exports.poll() {
+            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication outputs".into()),
+            Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
+            Some(Err(error)) => self.message = Some(error),
+        }
         if let Some(update) = self.files.poll(&mut self.session, &ctx) {
             match update {
                 project_files::Update::Opened => {

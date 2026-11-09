@@ -355,14 +355,27 @@ impl PcbApp {
             },
             RibbonTool { icon: ToolIcon::Settings, label: "Setup", description: "Board setup", shortcut: "", enabled, active: false, toggle: false },
         ];
+        let design = [
+            design[0],
+            design[1],
+            RibbonTool {
+                icon: ToolIcon::Outputs,
+                label: "Outputs",
+                description: "Generate fabrication outputs",
+                shortcut: "",
+                enabled: enabled && !self.fabrication_exports.busy(),
+                active: self.fabrication_exports.busy(),
+                toggle: false,
+            },
+        ];
         let design_planned = [
             planned(ToolIcon::FlipView, "Flip view", "View the board from below (planned)"),
-            planned(ToolIcon::Outputs, "Outputs", "Generate fabrication outputs (planned)"),
             planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)"),
         ];
         match workspace::ribbon_group_with_menu(ui, "Design", &design, &design_planned) {
             Some(0) => self.message = self.begin_board_update(self.views.active.id()).err(),
             Some(1) => self.begin_board_setup(self.views.active.id()),
+            Some(2) => self.export_fabrication(ui.ctx()),
             _ => {}
         }
     }
@@ -403,6 +416,23 @@ impl PcbApp {
             .project()
             .and_then(|project| board.target.and_then(|target| project.board_view(target)))
             .is_some_and(|view| crate::board_tracks::can_route(view, board.active_layer.as_deref(), &board.hidden_layers))
+    }
+
+    /// Generate the focused board's Gerber and drill files as one archive and save it off the
+    /// editor loop. A missing setup or outline, or an export already running, is reported in the
+    /// status bar; nothing in the project changes.
+    pub(super) fn export_fabrication(&mut self, ctx: &egui::Context) {
+        let Some(target) = self.views.active.board.target else { return };
+        let result = self
+            .session
+            .export_fabrication(&serde_json::json!({"board": target.board}))
+            .map_err(|error| error.to_string())
+            .and_then(|outputs| pcbcraft_engine::board::fabrication::zip(&outputs))
+            .and_then(|bytes| {
+                let name = crate::board_outputs::archive_name(self.session.project().map_or("board", |project| project.name.as_str()));
+                self.fabrication_exports.start(ctx, name, bytes)
+            });
+        self.message = result.err();
     }
 
     /// Run the design rules check for the focused board view with the default rules, opening its
