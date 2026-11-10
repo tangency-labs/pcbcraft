@@ -493,7 +493,11 @@ Left-drag empty canvas or right-drag to select footprints with the same Window/C
 box used in the schematic. Only visible footprint geometry contributes to selection;
 Shift adds and Ctrl/Command toggles. Escape cancels the box, and Delete removes
 the selected footprints in one undo step. Footprint moves, rotation and flips operate on one
-placement at a time. With two or more footprints selected, the **Modify** menu aligns them by their physical
+placement at a time. With nothing selected, Properties summarizes the board: the Board Outline's overall
+**Size** in the display units (or **No outline**), copper layers, footprints, tracks, vias
+and, once connections are accepted, the number still **Unrouted**.
+
+With two or more footprints selected, the **Modify** menu aligns them by their physical
 bounds (pads, courtyard and fabrication outlines, not silkscreen): **Align to Left**,
 **Right**, **Top** or **Bottom**, or **Align to Vertical Center** and **Horizontal Center**
 (the middle of the selection). With three or more, **Distribute Horizontally** or

@@ -605,12 +605,17 @@ fn flip_view_mirrors_drawing_and_picking_without_editing() {
     assert!(h.query_by_label("Bottom view").is_some(), "an error does not hide the mirrored orientation");
     h.state_mut().message = None;
     h.run();
+    // Flip back before selecting: selection changes the Properties card, which moves the
+    // uncovered canvas center that flipping reflects about.
+    click(&mut h, "View the board from below");
+    assert!(!h.state().views.active.camera.mirrored());
+    assert!((at(&h, left) - left_before).length() < 0.5, "flipping back restores the view");
+    click(&mut h, "View the board from below");
     let middle = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
     click_canvas_at(&mut h, middle);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "picking follows the mirror");
     click(&mut h, "View the board from below");
     assert!(!h.state().views.active.camera.mirrored());
-    assert!((at(&h, left) - left_before).length() < 0.5, "flipping back restores the view");
     let ctx = h.ctx.clone();
     let view = h.state().views.active.id().0;
     h.state_mut().run_window_command(&ctx, "view.set_board_flipped", &json!({"view":view,"flipped":true})).unwrap();
@@ -1088,6 +1093,44 @@ fn d_drags_a_segment_and_keeps_neighbors_attached() {
     let expected =
         std::collections::BTreeSet::from([key(p(1_270_000), up(3_810_000)), key(up(3_810_000), up(6_350_000)), key(up(6_350_000), p(8_890_000))]);
     assert_eq!(ends, expected, "the route stays connected");
+}
+
+/// With nothing selected, Properties summarizes the board: outline size, copper layers,
+/// footprints, tracks, vias and unrouted connections.
+#[test]
+fn properties_summarize_the_board_when_nothing_is_selected() {
+    let mut h = routable();
+    h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+    h.run();
+    assert!(h.query_by_label("No outline").is_some());
+    let outline = layer_named(&h, "Board Outline");
+    let revision = h.state().session.revision();
+    let p = |x: i64, y: i64| json!({"x_nm":x,"y_nm":y});
+    h.state_mut().run(
+        pcbcraft_engine::ADD_DRAWING,
+        &json!({"layer":outline,"points":[p(-5_000_000,-5_000_000),p(15_000_000,-5_000_000),p(15_000_000,5_000_000),p(-5_000_000,5_000_000)],"closed":true,"expected_revision":revision}),
+    );
+    add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    h.run();
+    // Each value sits in its own label's row: right of it and on the same line.
+    let in_row = |h: &Harness<'_, PcbApp>, label: &str, value: &str| {
+        h.query_all_by_label(label).any(|label| {
+            let row = label.rect();
+            h.query_all_by_label(value).any(|value| (value.rect().center().y - row.center().y).abs() < 2. && value.rect().left() > row.right())
+        })
+    };
+    for (label, value) in [("Size", "20 mm × 10 mm"), ("Copper layers", "2"), ("Footprints", "2"), ("Tracks", "1"), ("Vias", "0"), ("Unrouted", "1")]
+    {
+        assert!(in_row(&h, label, value), "{label} shows {value}");
+    }
+    let line = &airwires(&h)[0];
+    let (a, b) = (line.from.position, line.to.position);
+    let path = [a, Point { x_nm: a.x_nm, y_nm: -2_540_000 }, Point { x_nm: b.x_nm, y_nm: -2_540_000 }, b];
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    h.run();
+    assert!(in_row(&h, "Unrouted", "0"), "the next frame uses the new connectivity revision");
 }
 
 /// At a T-junction, D keeps the connection: a dragged end on the middle of another track holds

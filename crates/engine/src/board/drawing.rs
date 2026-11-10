@@ -78,6 +78,22 @@ impl BoardView<'_> {
         layers
     }
 
+    /// The Board Outline's bounding box as (min, max) corners, from every outline drawing, or
+    /// None when the board has no outline geometry.
+    pub fn outline_bounds(self) -> Option<(Point, Point)> {
+        let layers = self.layers();
+        let points: Vec<Point> = self
+            .drawings()
+            .into_iter()
+            .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
+            .flat_map(|drawing| drawing.points)
+            .collect();
+        let first = *points.first()?;
+        Some(points.iter().fold((first, first), |(min, max), p| {
+            (Point { x_nm: min.x_nm.min(p.x_nm), y_nm: min.y_nm.min(p.y_nm) }, Point { x_nm: max.x_nm.max(p.x_nm), y_nm: max.y_nm.max(p.y_nm) })
+        }))
+    }
+
     /// Resolve authored drawings and the earlier local rectangle preview without mutating a file.
     /// Editing that preview materializes ordinary layer geometry; untouched saves keep its bytes.
     pub fn drawings(self) -> Vec<Drawing> {
