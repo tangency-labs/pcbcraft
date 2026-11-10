@@ -460,7 +460,7 @@ fn quarter_turn_carries_an_off_center_track_end() {
     assert_eq!(s.revision(), revision + 1);
 }
 
-/// A nearby track end inside the pad's bounds but outside its rounded copper stays in place.
+/// A track near a rounded corner stays electrically separate before and after the footprint moves.
 #[test]
 fn moving_a_footprint_leaves_track_outside_rounded_copper_fixed() {
     use crate::board::track::tests::{copper_layers, routed_fixture, view};
@@ -469,7 +469,8 @@ fn moving_a_footprint_leaves_track_outside_rounded_copper_fixed() {
     let footprint = view(&s).footprints().next().unwrap();
     let id = footprint.id;
     let origin = footprint.position;
-    let pad = &footprint.pads[0];
+    let pad = footprint.pads.iter().find(|pad| pad.net.is_some()).unwrap();
+    let pad_key = (id.clone(), pad.number.clone());
     let start = Point { x_nm: pad.center.x_nm + 290_000, y_nm: pad.center.y_nm + 290_000 };
     let free = Point { x_nm: start.x_nm, y_nm: start.y_nm + 1_500_000 };
     let front = copper_layers(&s)[0];
@@ -479,6 +480,10 @@ fn moving_a_footprint_leaves_track_outside_rounded_copper_fixed() {
     )
     .unwrap();
     let before = view(&s).tracks().to_vec();
+    let track = before[0].id;
+    let copper = view(&s).copper();
+    assert_ne!(copper.pads[&pad_key], copper.tracks[&track], "the copper does not reach the rounded pad");
+    assert!(!view(&s).copper_nets().contains_key(&track));
     let position = Point { x_nm: origin.x_nm + 2_000_000, y_nm: origin.y_nm };
     assert!(view(&s).carried_tracks(&id, position, 0, false).is_empty());
     s.apply(
@@ -487,6 +492,9 @@ fn moving_a_footprint_leaves_track_outside_rounded_copper_fixed() {
     )
     .unwrap();
     assert_eq!(view(&s).tracks(), before);
+    let copper = view(&s).copper();
+    assert_ne!(copper.pads[&pad_key], copper.tracks[&track]);
+    assert!(!view(&s).copper_nets().contains_key(&track));
 }
 
 /// Direct pad overlap between different nets is refused on the same layer, even without routing.

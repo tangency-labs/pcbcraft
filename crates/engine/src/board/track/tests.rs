@@ -416,11 +416,13 @@ fn a_track_crossing_a_pad_off_center_touches_it() {
         start: Point { x_nm: -1_000_000, y_nm: 500_000 },
         end: Point { x_nm: 2_000_000, y_nm: 500_000 },
     };
-    assert!(touches_land(&crossing, &square), "crossing near an edge");
+    let pad = PadContour { core: square, radius: 0. };
+    let touches = |track: &Track| pad.overlaps_segment(track.start, track.end, track.width_nm as f64 / 2.);
+    assert!(touches(&crossing), "crossing near an edge");
     let grazing = Track { start: Point { x_nm: -1_000_000, y_nm: 640_000 }, end: Point { x_nm: 2_000_000, y_nm: 640_000 }, ..crossing.clone() };
-    assert!(touches_land(&grazing, &square), "copper within half the width of an edge");
+    assert!(touches(&grazing), "copper within half the width of an edge");
     let clear = Track { start: Point { x_nm: -1_000_000, y_nm: 700_000 }, end: Point { x_nm: 2_000_000, y_nm: 700_000 }, ..crossing };
-    assert!(!touches_land(&clear, &square), "copper clear of the land");
+    assert!(!touches(&clear), "copper clear of the land");
 }
 
 /// A via whose center sits just off a land still overlaps it when an edge is within its radius,
@@ -428,10 +430,11 @@ fn a_track_crossing_a_pad_off_center_touches_it() {
 #[test]
 fn a_via_overlapping_a_land_edge_touches_it() {
     let p = |x, y| Point { x_nm: x, y_nm: y };
-    let land = [p(0, 0), p(600_000, 0), p(600_000, 600_000), p(0, 600_000)];
-    assert!(via_touches_land(p(300_000, 300_000), 300_000., &land), "centered");
-    assert!(via_touches_land(p(800_000, 300_000), 300_000., &land), "center 0.2 mm off the edge, radius 0.3 mm");
-    assert!(!via_touches_land(p(1_000_000, 300_000), 300_000., &land), "clear of the land");
+    let pad = PadContour { core: [p(0, 0), p(600_000, 0), p(600_000, 600_000), p(0, 600_000)], radius: 0. };
+    let touches = |at| pad.overlaps_segment(at, at, 300_000.);
+    assert!(touches(p(300_000, 300_000)), "centered");
+    assert!(touches(p(800_000, 300_000)), "center 0.2 mm off the edge, radius 0.3 mm");
+    assert!(!touches(p(1_000_000, 300_000)), "clear of the land");
 }
 
 /// A track that crosses a pad with both ends outside its land joins that pad's copper island, and

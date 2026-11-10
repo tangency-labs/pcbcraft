@@ -316,12 +316,21 @@ pub(super) fn lands(view: BoardView<'_>) -> Vec<Land> {
 /// Union-find over lands, then tracks, then vias. Returns islands plus each island's member
 /// node indices, numbered in that order.
 pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
-    islands_with_contours(lands, tracks, vias, None)
+    build_islands(lands, tracks, vias, false)
 }
 
-/// Build islands using the existing connectivity bounds, or use the supplied contours to
-/// validate a footprint edit, including direct contact between pads.
-fn islands_with_contours(lands: &[Land], tracks: &[Track], vias: &[Via], contours: Option<&[PadContour]>) -> (Copper, Vec<Vec<usize>>) {
+/// Build islands from copper contours. Footprint edit validation also joins direct pad pairs.
+fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
+    let contours: Vec<_> = lands.iter().map(Land::contour).collect();
+    let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
+    let overlaps_pad = |i: usize, a: Point, b: Point, radius: f64| {
+        let [left, top, right, bottom] = bounds[i];
+        a.x_nm.min(b.x_nm) as f64 - radius <= right
+            && a.x_nm.max(b.x_nm) as f64 + radius >= left
+            && a.y_nm.min(b.y_nm) as f64 - radius <= bottom
+            && a.y_nm.max(b.y_nm) as f64 + radius >= top
+            && contours[i].overlaps_segment(a, b, radius)
+    };
     let mut parent: Vec<usize> = (0..lands.len() + tracks.len() + vias.len()).collect();
     fn find(parent: &mut [usize], mut node: usize) -> usize {
         while parent[node] != node {
@@ -336,18 +345,13 @@ fn islands_with_contours(lands: &[Land], tracks: &[Track], vias: &[Via], contour
             parent[a.max(b)] = a.min(b);
         }
     };
-    if let Some(contours) = contours {
-        for_each_pad_contact(lands, contours, |i, j| join(&mut parent, i, j));
+    if join_pad_pairs {
+        for_each_pad_contact(lands, &contours, &bounds, |i, j| join(&mut parent, i, j));
     }
     for (t, track) in tracks.iter().enumerate() {
         let node = lands.len() + t;
         for (l, land) in lands.iter().enumerate() {
-            if land.layers.contains(&track.layer)
-                && contours.map_or_else(
-                    || touches_land(track, &land.corners),
-                    |pads| pads[l].overlaps_segment(track.start, track.end, track.width_nm as f64 / 2.),
-                )
-            {
+            if land.layers.contains(&track.layer) && overlaps_pad(l, track.start, track.end, track.width_nm as f64 / 2.) {
                 join(&mut parent, node, l);
             }
         }
@@ -363,9 +367,7 @@ fn islands_with_contours(lands: &[Land], tracks: &[Track], vias: &[Via], contour
         let node = lands.len() + tracks.len() + v;
         let radius = via.diameter_nm as f64 / 2.;
         for (l, land) in lands.iter().enumerate() {
-            if !land.layers.is_empty()
-                && contours.map_or_else(|| via_touches_land(via.at, radius, &land.corners), |pads| pads[l].overlaps_segment(via.at, via.at, radius))
-            {
+            if !land.layers.is_empty() && overlaps_pad(l, via.at, via.at, radius) {
                 join(&mut parent, node, l);
             }
         }
@@ -403,8 +405,7 @@ fn islands_with_contours(lands: &[Land], tracks: &[Track], vias: &[Via], contour
 }
 
 /// Sweep overlapping pad bounds and visit each pair whose copper touches on a shared layer.
-fn for_each_pad_contact(lands: &[Land], contours: &[PadContour], mut visit: impl FnMut(usize, usize)) {
-    let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
+fn for_each_pad_contact(lands: &[Land], contours: &[PadContour], bounds: &[[f64; 4]], mut visit: impl FnMut(usize, usize)) {
     let mut order: Vec<_> = (0..lands.len()).collect();
     order.sort_by(|&a, &b| bounds[a][0].total_cmp(&bounds[b][0]));
     for (position, &i) in order.iter().enumerate() {
@@ -423,22 +424,6 @@ fn for_each_pad_contact(lands: &[Land], contours: &[PadContour], mut visit: impl
             }
         }
     }
-}
-
-/// Whether a track's copper overlaps a convex pad land: an end inside it, or the centerline
-/// within half the track width of any land edge. A centerline crossing an edge has distance
-/// zero, so a track passing over the land off-center counts. Corners arrive in boundary order.
-fn touches_land(track: &Track, corners: &[Point; 4]) -> bool {
-    let half = track.width_nm as f64 / 2.;
-    inside(track.start, corners)
-        || inside(track.end, corners)
-        || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| segment_distance(track.start, track.end, *a, *b) <= half)
-}
-
-/// Whether a via's round pad overlaps a convex land: its center inside the land, or within its
-/// radius of any land edge. Corners arrive in boundary order.
-fn via_touches_land(at: Point, radius: f64, corners: &[Point; 4]) -> bool {
-    inside(at, corners) || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| point_distance(at, *a, *b) <= radius)
 }
 
 /// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.
@@ -491,8 +476,7 @@ pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, f
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
     let (tracks, vias) = (view.tracks(), view.vias());
-    let contours = (!footprints.is_empty()).then(|| lands.iter().map(Land::contour).collect::<Vec<_>>());
-    let (_, members) = islands_with_contours(&lands, tracks, vias, contours.as_deref());
+    let (_, members) = build_islands(&lands, tracks, vias, !footprints.is_empty());
     let is_added = |node: usize| {
         if let Some(land) = lands.get(node) {
             return footprints.contains(&land.key.0);
