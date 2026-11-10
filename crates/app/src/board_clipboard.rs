@@ -315,6 +315,7 @@ impl PcbApp {
     /// Paint a disposable candidate through the independent PCB renderer; navigation remains local
     /// and only a primary placement click can request a real transaction. The host has already
     /// granted this ghost the current canvas input through board_clipboard_ready.
+    /// Authored DRC markers do not apply to this disposable candidate.
     pub(super) fn board_clipboard_canvas(&mut self, ui: &mut Ui, id: ViewId, label: &str) {
         let Some(project) = self.session.snapshot() else { return };
         let Some(view) = self.views.view_mut(id) else { return };
@@ -362,6 +363,7 @@ impl PcbApp {
             self.preferences.grid_opacity_percent,
             self.preferences.board_grid_style,
             label,
+            &[],
         );
         if pointer.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
