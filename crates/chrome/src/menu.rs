@@ -1,7 +1,7 @@
 //! Menus share one popup surface and one row painter, like SolidCraft's. What a row does stays with
 //! the caller.
 
-use egui::{CornerRadius, FontId, Frame, Margin, Response, RichText, Sense, Ui, pos2, vec2};
+use egui::{CornerRadius, FontId, Frame, Margin, Response, RichText, Sense, Ui, WidgetInfo, WidgetType, pos2, vec2};
 
 use crate::theme::Tokens;
 
@@ -174,8 +174,8 @@ impl<'a> MenuItem<'a> {
         self
     }
 
-    /// Make the row a toggle: the leading column shows a check mark while `checked`, in place
-    /// of any glyph, as PCBcraft Next's menus do.
+    /// Make the row a toggle. The leading column shows a check mark while `checked`, in place
+    /// of any glyph, and the checked state is available to assistive technology.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
         self
@@ -209,7 +209,7 @@ impl<'a> MenuItem<'a> {
     }
 
     /// Measure to content on the popup's sizing pass and fill the row on subsequent passes.
-    /// Truncate long labels before the shortcut and preserve the full accessible label.
+    /// Truncate long labels before the shortcut and expose the full label and any checked state.
     fn row(&self, ui: &mut Ui) -> Response {
         let t = Tokens::get();
         let leading = self.icon.is_some() || self.tool.is_some() || self.checked.is_some();
@@ -227,7 +227,10 @@ impl<'a> MenuItem<'a> {
         let enabled = self.enabled && ui.is_enabled();
         let sense = if enabled { Sense::click() } else { Sense::hover() };
         let (r, response) = ui.allocate_exact_size(vec2(width, height), sense);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, self.label));
+        response.widget_info(|| match self.checked {
+            Some(checked) => WidgetInfo::selected(WidgetType::Checkbox, enabled, checked, self.label),
+            None => WidgetInfo::labeled(WidgetType::Button, enabled, self.label),
+        });
         let hot = enabled && (response.hovered() || response.has_focus());
         let mut painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(r));
         if !enabled {
