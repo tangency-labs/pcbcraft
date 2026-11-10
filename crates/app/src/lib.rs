@@ -1093,6 +1093,7 @@ impl PcbApp {
     /// the focused view's grid spacing, which can be changed there. Home has no canvas, so it
     /// shows no grid. Density annotations follow the visible grid style, independently of snapping.
     /// PCB views report their active tool/layer and explicitly label a hidden active layer.
+    /// A mirrored board keeps its orientation label alongside action hints and errors.
     fn status(&mut self, ui: &mut Ui) {
         let name = self.session.project().map_or("No project open", |p| p.name.as_str()).to_owned();
         let message = self.message.clone();
@@ -1146,6 +1147,13 @@ impl PcbApp {
             ui,
             |ui| {
                 ui.label(dim(name));
+                if !self.home
+                    && self.views.active.workspace == Workspace::Board
+                    && self.views.active.board.target.is_some()
+                    && self.views.active.camera.mirrored()
+                {
+                    ui.label(dim("Bottom view"));
+                }
                 if let Some(message) = message {
                     ui.label(shell::error(message));
                 } else if self.views.active.board.clipboard.active() {
@@ -1155,9 +1163,6 @@ impl PcbApp {
                 } else if self.views.active.workspace == Workspace::Board {
                     let empty = self.session.project().is_some_and(|project| project.board_target().is_none());
                     ui.label(dim(board_status.as_deref().unwrap_or(if empty { "No board" } else { "Board" })));
-                    if !empty && self.views.active.camera.mirrored() {
-                        ui.label(dim("Bottom view"));
-                    }
                     if !empty {
                         ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
                     }

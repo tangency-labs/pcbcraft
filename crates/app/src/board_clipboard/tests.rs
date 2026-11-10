@@ -54,6 +54,40 @@ fn place(h: &mut Harness<'_, PcbApp>, x: i64, y: i64) {
     h.run();
 }
 
+/// Paste keeps orientation visible and rotates relative to the screen. Preview edits stay local,
+/// and committing either orientation produces one undoable transaction with the matching angle.
+#[test]
+fn paste_rotation_follows_the_screen_in_both_board_views() {
+    for flipped in [false, true] {
+        let mut h = board();
+        h.state_mut().views.active.camera.set_mirrored(flipped);
+        h.state_mut().duplicate_board_clipboard();
+        h.run();
+        click(&mut h, "Paste");
+        assert!(h.state().views.active.board.clipboard.active());
+        assert_eq!(h.query_by_label("Bottom view").is_some(), flipped);
+        let before = h.state().session.snapshot().unwrap();
+        h.key_press(Key::R);
+        h.run();
+        assert_eq!(h.state().views.active.board.clipboard.paste.as_ref().unwrap().options.items.quarter_turns, if flipped { 3 } else { 1 });
+        h.key_press_modifiers(Modifiers::SHIFT, Key::R);
+        h.run();
+        assert_eq!(h.state().views.active.board.clipboard.paste.as_ref().unwrap().options.items.quarter_turns, 0);
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        h.key_press(Key::R);
+        h.run();
+        place(&mut h, 10_160_000, 10_160_000);
+        assert_eq!(h.state().message, None);
+        let p = h.state().session.project().unwrap();
+        let b = p.board_view(h.state().views.active.board.target.unwrap()).unwrap();
+        let rotations: Vec<_> = b.footprints().map(|f| f.rotation).collect();
+        assert_eq!(rotations, vec![0, if flipped { 270 } else { 90 }]);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_same_content(&before, &h.state().session.snapshot().unwrap());
+    }
+}
+
 /// Independent instances receive self-contained pinned packages and explicit logical counterparts.
 #[test]
 fn independent_instance_paste_creates_linked_parts_in_one_undo_step() {

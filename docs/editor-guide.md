@@ -619,7 +619,9 @@ archive was published but its directory sync failed.
 right to left around the centered point, at the same zoom, and the status bar says
 **Bottom view**. Selection, routing and moves work as usual, mapped through the mirror;
 the board, its layers and its files are unchanged, and the button toggles back. Fit
-includes tracks and vias.
+includes tracks and vias. Rotation follows the screen: **R** and the Rotate button
+turn counterclockwise, and **Shift+R** turns clockwise, whether the view is flipped
+or not. This also applies to move, footprint placement and PCB paste previews.
 
 To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
 **Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,

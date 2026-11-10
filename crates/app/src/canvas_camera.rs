@@ -106,6 +106,13 @@ impl Camera {
         self.mirrored
     }
 
+    /// Convert a counterclockwise on-screen rotation in degrees into model rotation, normalized
+    /// to 0..360. Reflection reverses the model angle so user controls keep their visible direction.
+    pub(crate) fn model_rotation(&self, degrees: u16) -> u16 {
+        let degrees = degrees % 360;
+        if self.mirrored { (360 - degrees) % 360 } else { degrees }
+    }
+
     /// Show the board from below or above, keeping the same model point at the center of the
     /// uncovered canvas and the zoom unchanged. Only presentation and picking change.
     pub(crate) fn set_mirrored(&mut self, mirrored: bool) {

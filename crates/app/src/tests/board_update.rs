@@ -389,42 +389,53 @@ fn add_assigned_resistor(h: &mut Harness<'_, PcbApp>) {
     );
 }
 
-/// Group rotation/placement uses the predicted physical geometry, makes one history edit and
-/// preserves accepted assignments when cancelled before the canvas click.
+/// Group rotation follows the screen in either view, keeps orientation visible and uses the
+/// predicted physical geometry in one history edit. Cancellation preserves accepted assignments.
 #[test]
 fn group_cursor_rotation_commit_undo_and_cancel_share_one_placement_transaction() {
-    let mut h = fixture(true);
-    add_assigned_resistor(&mut h);
-    open(&mut h);
-    click(&mut h, "Update PCB");
-    let accepted = h.state().session.snapshot().unwrap();
-    assert_eq!(h.state().views.active.board.placement.as_ref().unwrap().components.len(), 2);
-    let canvas = h.get_by_label("PCB canvas").rect();
-    let pointer = canvas.center();
-    h.hover_at(pointer);
-    h.run();
-    h.key_press(Key::R);
-    h.run();
-    let group = h.state().views.active.board.placement.as_ref().unwrap();
-    assert_eq!(group.rotation, 90);
-    assert!(Arc::ptr_eq(&accepted, &h.state().session.snapshot().unwrap()));
-    let params = json!({"components":group.components,"x_nm":group.position.x_nm,"y_nm":group.position.y_nm,"rotation":group.rotation,"expected_revision":group.source.revision});
-    let predicted = h.state().session.preview_footprint_placement(&params).unwrap();
-    click_canvas_at(&mut h, pointer);
-    let poses = |project: &pcbcraft_engine::Project| {
-        project.boards().next().unwrap().footprints().map(|f| (f.component, f.position, f.rotation)).collect::<Vec<_>>()
-    };
-    assert_eq!(poses(&predicted), poses(h.state().session.project().unwrap()));
-    assert_eq!(poses(&predicted).len(), 2);
-    edit(&mut h, "edit.undo", json!({}));
-    super::assert_same_content(&accepted, &h.state().session.snapshot().unwrap());
-    open(&mut h);
-    click(&mut h, "Place footprints");
-    let before_cancel = h.state().session.snapshot().unwrap();
-    h.get_by_label("PCB canvas").click_secondary();
-    h.run();
-    assert!(h.state().views.active.board.placement.is_none());
-    assert!(Arc::ptr_eq(&before_cancel, &h.state().session.snapshot().unwrap()));
+    for flipped in [false, true] {
+        let mut h = fixture(true);
+        add_assigned_resistor(&mut h);
+        open(&mut h);
+        click(&mut h, "Update PCB");
+        h.state_mut().views.active.camera.set_mirrored(flipped);
+        h.run();
+        let accepted = h.state().session.snapshot().unwrap();
+        assert_eq!(h.state().views.active.board.placement.as_ref().unwrap().components.len(), 2);
+        let canvas = h.get_by_label("PCB canvas").rect();
+        let pointer = canvas.center();
+        h.hover_at(pointer);
+        h.run();
+        h.key_press(Key::R);
+        h.run();
+        assert_eq!(h.state().views.active.board.placement.as_ref().unwrap().rotation, if flipped { 270 } else { 90 });
+        h.key_press_modifiers(egui::Modifiers::SHIFT, Key::R);
+        h.run();
+        assert_eq!(h.state().views.active.board.placement.as_ref().unwrap().rotation, 0);
+        h.key_press(Key::R);
+        h.run();
+        let group = h.state().views.active.board.placement.as_ref().unwrap();
+        assert_eq!(group.rotation, if flipped { 270 } else { 90 });
+        assert_eq!(h.query_by_label("Bottom view").is_some(), flipped);
+        assert!(Arc::ptr_eq(&accepted, &h.state().session.snapshot().unwrap()));
+        let params = json!({"components":group.components,"x_nm":group.position.x_nm,"y_nm":group.position.y_nm,"rotation":group.rotation,"expected_revision":group.source.revision});
+        let predicted = h.state().session.preview_footprint_placement(&params).unwrap();
+        click_canvas_at(&mut h, pointer);
+        let poses = |project: &pcbcraft_engine::Project| {
+            project.boards().next().unwrap().footprints().map(|f| (f.component, f.position, f.rotation)).collect::<Vec<_>>()
+        };
+        assert_eq!(poses(&predicted), poses(h.state().session.project().unwrap()));
+        assert_eq!(poses(&predicted).len(), 2);
+        edit(&mut h, "edit.undo", json!({}));
+        super::assert_same_content(&accepted, &h.state().session.snapshot().unwrap());
+        open(&mut h);
+        click(&mut h, "Place footprints");
+        let before_cancel = h.state().session.snapshot().unwrap();
+        h.get_by_label("PCB canvas").click_secondary();
+        h.run();
+        assert!(h.state().views.active.board.placement.is_none());
+        assert!(Arc::ptr_eq(&before_cancel, &h.state().session.snapshot().unwrap()));
+    }
 }
 
 /// A long missing-package report at compact widths keeps its reason and primary action inside

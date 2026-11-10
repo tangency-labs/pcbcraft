@@ -599,6 +599,12 @@ fn flip_view_mirrors_drawing_and_picking_without_editing() {
     assert!(left_after.x > right_after.x, "model X now runs right to left");
     assert!(((right_before - left_before).length() - (left_after - right_after).length()).abs() < 0.01, "the zoom is unchanged");
     assert!(h.query_by_label_contains("Bottom view").is_some());
+    h.state_mut().message = Some("Test board error".into());
+    h.run();
+    assert!(h.query_by_label("Test board error").is_some());
+    assert!(h.query_by_label("Bottom view").is_some(), "an error does not hide the mirrored orientation");
+    h.state_mut().message = None;
+    h.run();
     let middle = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
     click_canvas_at(&mut h, middle);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "picking follows the mirror");
