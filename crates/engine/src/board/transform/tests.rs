@@ -425,3 +425,37 @@ fn flipping_through_hole_pad_mirrors_its_off_center_track_end() {
     assert_eq!(track.layer, front);
     assert_eq!(s.revision(), revision + 1);
 }
+
+/// A legal quarter-turn carries an off-center end on a rectangular pad and leaves the far end fixed.
+#[test]
+fn quarter_turn_carries_an_off_center_track_end() {
+    use crate::board::track::tests::{copper_layers, route, view};
+
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
+    s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let symbol = s.project().unwrap().symbols().first().unwrap().id();
+    let origin = Point { x_nm: 4_000_000, y_nm: 1_000_000 };
+    s.apply(
+        PLACE_FOOTPRINT,
+        &json!({"symbol":symbol,"definition":"resistor-0603","mapping":{"1":"1","2":"2"},
+            "x_nm":origin.x_nm,"y_nm":origin.y_nm,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let footprint = view(&s).footprints().next().unwrap();
+    let id = footprint.id;
+    let pad = footprint.pads.iter().find(|pad| pad.number == "1").unwrap();
+    let start = Point { x_nm: pad.center.x_nm + 180_000, y_nm: pad.center.y_nm + 100_000 };
+    let free = Point { x_nm: start.x_nm - 2_000_000, y_nm: start.y_nm };
+    let front = copper_layers(&s)[0];
+    route(&mut s, front, &[start, free]).unwrap();
+
+    let revision = s.revision();
+    s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":id,"x_nm":origin.x_nm,"y_nm":origin.y_nm,"rotation":90,"expected_revision":revision}))
+        .unwrap();
+    let track = &view(&s).tracks()[0];
+    assert_eq!(track.start, Point { x_nm: origin.x_nm + (start.y_nm - origin.y_nm), y_nm: origin.y_nm - (start.x_nm - origin.x_nm) });
+    assert_eq!(track.end, free);
+    assert_eq!(s.revision(), revision + 1);
+}
