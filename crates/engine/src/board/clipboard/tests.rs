@@ -489,3 +489,55 @@ fn cached_previews_move_without_reallocating_or_publishing() {
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     assert_eq!(s.revision(), revision);
 }
+
+/// PCB duplication cannot silently discard hierarchy-dependent connections between selected
+/// parts. A flat subset and already-carried global links remain valid export scopes.
+#[test]
+fn unsupported_internal_hierarchy_connections_refuse_copy_and_cut_without_loss() {
+    use crate::{hierarchy as h, schematic::WireEndpoint};
+    let mut s = fixture();
+    let root = s.project().unwrap().sheet_target();
+    s.apply(h::CREATE_CHILD, &json!({"sheet":root.id(),"name":"Child","x_nm":50*GRID_NM,"y_nm":50*GRID_NM,"expected_revision":s.revision()}))
+        .unwrap();
+    let child = s.project().unwrap().sheets().find(|p| p.name == "Child").unwrap().target;
+    s.apply(h::ADD_LABEL, &json!({"sheet":child.id(),"name":"LINK","direction":"input","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    s.apply(PLACE_SYMBOL, &json!({"sheet":child.id(),"definition":"resistor","x_nm":10*GRID_NM,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let p = s.project().unwrap().for_sheet(child).unwrap();
+    let component = p.symbols()[0].component;
+    let child_pin = p.symbols()[0].terminals()[0];
+    let label = p.labels[0].id;
+    let root_pin = s.project().unwrap().symbols()[0].terminals()[0];
+    for (sheet, from, to) in [
+        (root, WireEndpoint::Terminal(root_pin), WireEndpoint::SheetPin(label)),
+        (child, WireEndpoint::Terminal(child_pin), WireEndpoint::Label(label)),
+    ] {
+        let p = s.project().unwrap().for_sheet(sheet).unwrap();
+        let a = p.endpoint_position(from).unwrap();
+        let b = p.endpoint_position(to).unwrap();
+        let bends = if a.x_nm != b.x_nm && a.y_nm != b.y_nm { vec![Point { x_nm: a.x_nm, y_nm: b.y_nm }] } else { vec![] };
+        s.apply(
+            crate::DRAW_WIRE,
+            &json!({"sheet":sheet.id(),"from":from.inspect(),"to":to.inspect(),"bends":bends,"auto_heal":false,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+    }
+    s.apply(ASSIGN_FOOTPRINT,&json!({"component":format!("component-{component}"),"library":"starter","definition":"resistor-0402","definition_revision":4,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
+    let report = s.execute(crate::PREVIEW_UPDATE, &json!({"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::APPLY_UPDATE, &json!({"plan_token":report["board_update_preview"]["plan_token"],"expected_revision":s.revision()})).unwrap();
+    s.apply(
+        PLACE_ASSIGNED_FOOTPRINT,
+        &json!({"component":format!("component-{component}"),"x_nm":20_000_000,"y_nm":0,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let before = s.snapshot().unwrap();
+    for id in [COPY, CUT] {
+        let error = s.execute(id, &json!({"items":all(&s),"expected_revision":s.revision()})).unwrap_err();
+        assert!(error.to_string().contains("lose an internal connection"));
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
+    let flat = BoardSelection {
+        footprints: view(&s).footprints().filter(|f| f.component != format!("component-{component}")).map(|f| f.id).collect(),
+        ..Default::default()
+    };
+    assert_eq!(BoardFragment::capture(s.project().unwrap(), &flat, false).unwrap().counts().0, 2);
+}

@@ -20,6 +20,11 @@ pub const PASTE: &str = "schematic.paste";
 /// Maximum UTF-8 clipboard size, checked before JSON parsing.
 pub const MAX_BYTES: usize = 8 << 20;
 const FORMAT: &str = "pcbcraft-clipboard/1";
+const HIERARCHY_FORMAT: &str = "pcbcraft-clipboard/2";
+mod hierarchy;
+mod preview;
+pub(crate) use hierarchy::hierarchy_objects;
+pub use preview::SchematicPastePreview;
 
 /// Wire format uses the native codecs for definition qualification and whole-fragment validation.
 #[derive(Serialize, Deserialize)]
@@ -29,6 +34,10 @@ struct Envelope {
     kind: String,
     anchor: Point,
     documents: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root_sheet: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    cut_sheets: bool,
 }
 
 /// An immutable validated fragment, independent of the source session, view and library catalog.
@@ -36,17 +45,21 @@ struct Envelope {
 pub struct Fragment {
     pub(crate) project: Arc<Project>,
     anchor: Point,
+    cut_sheets: bool,
 }
 
-/// Options affect only newly created objects; reference collisions and invalid names reject the batch.
+/// Paste policy distinguishes independent duplication from explicit Cut relocation. Invalid
+/// references, names or ownership choices reject the whole batch.
 #[derive(Clone, Debug, Default)]
 pub struct PasteOptions {
     /// Keep copied references exactly, rejecting any collision; false allocates unused references.
     pub preserve_references: bool,
     /// Suffix for every copied net-label name and native power-symbol value.
     pub net_name_suffix: String,
-    /// Counterclockwise quarter turns about the fragment anchor.
+    /// Counterclockwise quarter turns about the anchor; hierarchical objects retain orientation.
     pub quarter_turns: u8,
+    /// Relocate eligible original child sheets after Cut, retaining their current logical content.
+    pub reuse_sheets: bool,
 }
 
 /// Convert errors from portable codecs into a rejected command with no state change.
@@ -83,7 +96,6 @@ impl Fragment {
         if items.is_empty() || &found != items {
             return Err(invalid("copy needs existing selected objects"));
         }
-        let mut fragment = project.clone();
         let mut sheet = crate::sheets::SchematicSheet::empty(project.sheet_target().id(), "Clipboard".into());
         sheet.symbols = Arc::new(project.symbols().iter().filter(|s| items.symbols.contains(&s.id())).cloned().collect());
         sheet.net_labels = Arc::new(project.net_labels().iter().filter(|l| items.net_labels.contains(&l.object_id())).cloned().collect());
@@ -115,8 +127,16 @@ impl Fragment {
             }
             Arc::make_mut(&mut sheet.wires).push(wire);
         }
-        let components: BTreeSet<_> = sheet.symbols.iter().map(|s| s.component).collect();
-        fragment.sheets = Arc::new(vec![sheet]);
+        Self::captured(project, vec![sheet], cursor, false)
+    }
+
+    /// Keep only captured sheets, their live components and exact package intent. This shared
+    /// boundary excludes board placements and unrelated project assets for flat/tree captures.
+    fn captured(project: &Project, sheets: Vec<crate::sheets::SchematicSheet>, cursor: u64, cut_sheets: bool) -> Result<Self, CommandError> {
+        let components: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.component)).collect();
+        let symbols: BTreeSet<_> = sheets.iter().flat_map(|s| s.symbols.iter().map(|s| s.ordinal)).collect();
+        let mut fragment = project.clone();
+        fragment.sheets = Arc::new(sheets);
         fragment.sheet_index = 0;
         Arc::make_mut(&mut fragment.components).retain(|id, _| components.contains(id));
         Arc::make_mut(&mut fragment.units).retain(|_, id| symbols.contains(id));
@@ -139,32 +159,46 @@ impl Fragment {
             .map(|s| s.position)
             .or_else(|| fragment.wires().first().and_then(|w| fragment.endpoint_position(w.endpoints()[0])))
             .or_else(|| fragment.net_labels().first().map(|l| l.at))
+            .or_else(|| fragment.hierarchical_labels().first().map(|l| l.at))
+            .or_else(|| fragment.sheet_symbols().first().map(|s| s.at))
             .ok_or_else(|| invalid("nothing to copy"))?;
-        Ok(Self { project: Arc::new(fragment), anchor })
+        Ok(Self { project: Arc::new(fragment), anchor, cut_sheets })
     }
 
-    /// Decode untrusted clipboard text through the native bounded codecs. Unsupported versions,
-    /// hierarchy, boards, empty fragments and unknown records fail before any edit or ID allocation.
+    /// Decode bounded native text: version 1 is flat; version 2 contains a closed hierarchy tree
+    /// or root interfaces. Unsupported versions, board owners, orphan scope and invalid records
+    /// fail before any destination edit or identity allocation.
     pub fn from_text(text: &str) -> Result<Self, CommandError> {
         if text.len() > MAX_BYTES {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft design fragment."))?;
-        if envelope.format != FORMAT || envelope.kind != "schematic" || !crate::wire::valid_point(&envelope.anchor) {
+        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT)
+            || envelope.kind != "schematic"
+            || !crate::wire::valid_point(&envelope.anchor)
+        {
             return Err(invalid("Unsupported clipboard format or editor kind."));
         }
         let documents = envelope.documents.into_iter().map(|(path, text)| (path, text.into_bytes())).collect();
         let project = crate::persistence::decode_documents(&documents).map_err(invalid)?;
-        if project.sheets.len() != 1
-            || project.board_target().is_some()
-            || !project.labels.is_empty()
-            || !project.subsheets.is_empty()
-            || project.symbols().is_empty() && project.wires().is_empty() && project.net_labels().is_empty()
-        {
-            return Err(invalid("clipboard must contain a flat, nonempty schematic fragment"));
-        }
-        Ok(Self { project, anchor: envelope.anchor })
+        let project = if envelope.format == HIERARCHY_FORMAT {
+            let root =
+                envelope.root_sheet.filter(|id| !id.is_nil()).ok_or_else(|| invalid("hierarchy clipboard needs an explicit root sheet UUID"))?;
+            Arc::new(
+                project
+                    .for_sheet(crate::SheetTarget { project: project.id(), sheet: root })
+                    .ok_or_else(|| invalid("clipboard root sheet is unavailable"))?,
+            )
+        } else {
+            if envelope.root_sheet.is_some() {
+                return Err(invalid("legacy flat clipboard cannot carry a hierarchy root"));
+            }
+            project
+        };
+        let fragment = Self { project, anchor: envelope.anchor, cut_sheets: envelope.cut_sheets };
+        fragment.validate_scope(envelope.format == HIERARCHY_FORMAT)?;
+        Ok(fragment)
     }
 
     /// Serialize just the fragment; no paths, credentials, unused definitions or source files travel.
@@ -174,8 +208,15 @@ impl Fragment {
             .into_iter()
             .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)).map_err(invalid))
             .collect::<Result<_, _>>()?;
-        let text =
-            serde_json::to_string(&Envelope { format: FORMAT.into(), kind: "schematic".into(), anchor: self.anchor, documents }).map_err(invalid)?;
+        let text = serde_json::to_string(&Envelope {
+            format: if self.has_hierarchy() { HIERARCHY_FORMAT } else { FORMAT }.into(),
+            kind: "schematic".into(),
+            anchor: self.anchor,
+            documents,
+            cut_sheets: self.cut_sheets,
+            root_sheet: self.has_hierarchy().then(|| self.project.sheet_target().id()),
+        })
+        .map_err(invalid)?;
         if text.len() > MAX_BYTES {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
@@ -189,12 +230,23 @@ impl Fragment {
 
     /// Counts shown in Paste Options without resolving source files or a library catalog.
     pub fn counts(&self) -> (usize, usize, usize) {
-        (self.project.symbols().len(), self.project.wires().len(), self.project.net_labels().len())
+        (
+            self.project.components.len(),
+            self.project.sheets.iter().map(|s| s.wires.len()).sum(),
+            self.project.sheets.iter().map(|s| s.net_labels.len()).sum(),
+        )
     }
 
     /// Build a cancellable placement candidate and its new selection. Copied connectivity remains
     /// separate from existing geometry except for explicitly retained named-net semantics.
     pub fn placed(&self, destination: &Project, at: Point, first_id: u64, options: &PasteOptions) -> Result<(Project, Selection), CommandError> {
+        if self.has_hierarchy() {
+            return self.placed_hierarchy(destination, at, first_id, options);
+        }
+        if options.reuse_sheets {
+            return Err(invalid("flat fragments have no child sheets to relocate"));
+        }
+
         if destination.components.len() + self.project.components.len() > crate::schematic::MAX_SYMBOLS
             || destination.sheets.iter().map(|s| s.wires.len()).sum::<usize>() + self.project.wires().len() > crate::schematic::wiring::MAX_WIRES
             || destination.sheets.iter().map(|s| s.net_labels.len()).sum::<usize>() + self.project.net_labels().len() > crate::net_labels::MAX_LABELS
@@ -337,25 +389,32 @@ impl Fragment {
         Arc::make_mut(&mut sheet.wires).extend(new_wires);
         sheet.connectivity = Arc::default();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
+        next.named_graph = Arc::default();
         Ok((next, selected))
     }
 }
 
 impl Session {
     /// Export a revision-bound selection through the same command used by GUI and MCP.
-    pub(crate) fn copy_schematic(&self, params: &Value) -> Result<String, CommandError> {
+    pub(crate) fn copy_schematic(&self, params: &Value, cut: bool) -> Result<String, CommandError> {
         crate::check_params(crate::command(COPY).ok_or_else(|| invalid("missing copy command"))?, params)?;
         self.check_revision(params)?;
         let project = self.open_project()?;
         let project =
             project.for_sheet(project.resolve_sheet(params.get("sheet").and_then(Value::as_str))?).ok_or_else(|| invalid("missing sheet"))?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| invalid("invalid selection"))?;
-        Fragment::capture(&project, &items)?.to_text()
+        let objects = hierarchy_objects(params.get("objects")).ok_or_else(|| invalid("invalid hierarchy object selection"))?;
+        Fragment::capture_with_hierarchy(&project, &items, &objects, cut)?.to_text()
     }
 
     /// Cut only selected objects. Unselected incident routes remain at their old coordinates with
     /// shared free endpoints, so moving a component through the clipboard cannot delete other wiring.
     pub(crate) fn cut_schematic(&mut self, params: &Value) -> Result<(), CommandError> {
+        let objects = hierarchy_objects(params.get("objects")).ok_or_else(|| invalid("invalid hierarchy object selection"))?;
+        if !objects.is_empty() {
+            return self.cut_schematic_hierarchy(params, &objects);
+        }
+
         self.check_revision(params)?;
         let items = Selection::parse(&params["items"]).ok_or_else(|| invalid("invalid selection"))?;
         let project = self.open_project()?;
@@ -414,6 +473,7 @@ impl Session {
             preserve_references: params["references"].as_str() == Some("preserve"),
             net_name_suffix: params["net_name_suffix"].as_str().unwrap_or_default().into(),
             quarter_turns: (params["rotation"].as_u64().unwrap_or(0) / 90) as u8,
+            reuse_sheets: params["reuse_sheets"].as_bool().unwrap_or(false),
         };
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let (next, _) = fragment.placed(self.open_project()?, at, self.next_object_id()?, &options)?;
@@ -432,3 +492,6 @@ pub(crate) fn validate_candidate(project: &Project) -> Result<(), CommandError> 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hierarchy_tests;
