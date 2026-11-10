@@ -813,7 +813,7 @@ fn page_keys_place_vias_mid_route() {
     assert_eq!(vias(&h).len(), 2);
 }
 
-/// ` over a pad highlights its net, over routed copper the net that copper carries, and over
+/// Backtick over a pad highlights its net, over routed copper the net that copper carries, and over
 /// empty space clears the highlight; nothing is edited.
 #[test]
 fn backtick_highlights_the_net_under_the_pointer() {
@@ -840,8 +840,11 @@ fn backtick_highlights_the_net_under_the_pointer() {
         _ => false,
     });
     assert!(outlined.count() >= 2, "both pads and the route are outlined");
-    h.key_press(Key::Escape);
+    h.hover_at(at(&h, Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: 1_270_000 }));
     h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, None, "clear the pad highlight before testing track picking");
     h.hover_at(at(&h, Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: -2_540_000 }));
     h.run();
     h.key_press(Key::Backtick);
@@ -865,4 +868,61 @@ fn a_vanished_highlight_net_clears() {
     h.run();
     assert_eq!(h.state().views.active.board.highlight_net, None);
     assert!(h.query_by_label_contains("Net NO SUCH NET highlighted").is_none());
+}
+
+/// Connectivity is shared across unchanged frames and navigation, refreshed after edits and undo,
+/// and never reused without input authority or across a project reopening.
+#[test]
+fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
+    /// Borrow a snapshot independently of the UI state so the cache can retain only derived data.
+    fn cached(h: &mut Harness<'_, PcbApp>) -> std::sync::Arc<std::collections::BTreeMap<uuid::Uuid, String>> {
+        let source = h.state().views.active.input(&h.state().session);
+        let project = h.state().session.snapshot().unwrap();
+        let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
+        h.state_mut().views.active.board.copper_nets(board, source)
+    }
+    let mut h = routable();
+    let line = airwires(&h)[0].clone();
+    let (a, b) = (line.from.position, line.to.position);
+    let path = [a, Point { x_nm: a.x_nm, y_nm: -2_540_000 }, Point { x_nm: b.x_nm, y_nm: -2_540_000 }, b];
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    h.run();
+    let saved = h.state().session.snapshot().unwrap();
+    let first = cached(&mut h);
+    assert_eq!(first.len(), tracks(&h).len());
+    assert!(!first.is_empty());
+    h.run();
+    assert!(std::sync::Arc::ptr_eq(&first, &cached(&mut h)));
+    h.state_mut().views.active.camera.center_on(a);
+    h.run();
+    assert!(std::sync::Arc::ptr_eq(&first, &cached(&mut h)), "navigation keeps the cache");
+
+    let ids: Vec<_> = tracks(&h).iter().map(|track| track.id).collect();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::DELETE_TRACKS, &json!({"tracks":ids,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    let edited = cached(&mut h);
+    assert!(!std::sync::Arc::ptr_eq(&first, &edited));
+    assert!(edited.is_empty(), "deleted copper cannot keep stale net assignments");
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    let undone = cached(&mut h);
+    assert_eq!(undone, first);
+    assert!(!std::sync::Arc::ptr_eq(&first, &undone), "undo has a new revision");
+
+    let project = h.state().session.snapshot().unwrap();
+    let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
+    let uncached = h.state_mut().views.active.board.copper_nets(board, None);
+    let another = h.state_mut().views.active.board.copper_nets(board, None);
+    assert_eq!(uncached, first);
+    assert!(!std::sync::Arc::ptr_eq(&uncached, &another), "missing authority never caches a preview");
+    let before_open = cached(&mut h);
+    h.state_mut().session.open_snapshot(saved);
+    h.run();
+    let reopened = cached(&mut h);
+    assert_eq!(reopened, first);
+    assert!(!std::sync::Arc::ptr_eq(&before_open, &reopened));
 }

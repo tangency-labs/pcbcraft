@@ -14,7 +14,7 @@ use pcbcraft_engine::{
     },
     schematic::{Point, rotate},
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A local transform draft retains its originating input authority until completion or cancellation.
 #[derive(Clone, Debug)]
@@ -78,6 +78,7 @@ pub(super) struct Interaction {
 /// Physical pad color/visibility follow engine-resolved copper membership; the active copper
 /// layer changes display priority for spanning lands without rebinding any geometry.
 /// Selection filters suppress picking and transform shortcuts, without hiding rendered geometry.
+/// Net highlighting shares derived connectivity keyed to the view's board/revision authority.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -362,11 +363,14 @@ pub(super) fn show(
             highlighted.contains(&footprint.id),
         );
     }
-    if std::mem::take(&mut state.net_highlight_requested) {
-        state.highlight_net = response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers));
-    }
-    if let Some(net) = &state.highlight_net {
-        paint_net(&p, camera, rect, project, net);
+    if state.net_highlight_requested || state.highlight_net.is_some() {
+        let nets = state.copper_nets(project, source);
+        if std::mem::take(&mut state.net_highlight_requested) {
+            state.highlight_net = response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &nets));
+        }
+        if let Some(net) = &state.highlight_net {
+            paint_net(&p, camera, rect, project, net, &nets);
+        }
     }
     for (at, focused) in markers {
         let at = camera.screen(*at, rect);
@@ -533,17 +537,24 @@ fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egu
         .collect()
 }
 
-/// The net under a screen point: a pad's net, else the derived net of a track or via there.
-fn net_under(pointer: egui::Pos2, camera: &Camera, rect: egui::Rect, view: BoardView<'_>, hidden: &BTreeSet<String>) -> Option<String> {
+/// The net under a screen point: a pad's net, else the cached net of a track or via there.
+fn net_under(
+    pointer: egui::Pos2,
+    camera: &Camera,
+    rect: egui::Rect,
+    view: BoardView<'_>,
+    hidden: &BTreeSet<String>,
+    nets: &BTreeMap<uuid::Uuid, String>,
+) -> Option<String> {
     view.footprints()
         .flat_map(|footprint| footprint.pads)
         .find(|pad| pad.copper.is_some_and(|land| egui::Rect::from_points(&land.map(|corner| camera.screen(corner, rect))).contains(pointer)))
         .and_then(|pad| pad.net)
-        .or_else(|| crate::board_tracks::copper_at(pointer, camera, rect, view, hidden).and_then(|id| view.copper_nets().remove(&id)))
+        .or_else(|| crate::board_tracks::copper_at(pointer, camera, rect, view, hidden).and_then(|id| nets.get(&id).cloned()))
 }
 
-/// Outline every pad, track and via on `net` in the highlight color.
-fn paint_net(p: &egui::Painter, camera: &Camera, rect: egui::Rect, view: BoardView<'_>, net: &str) {
+/// Outline every pad, track and via on `net`, reusing the view's cached copper assignments.
+fn paint_net(p: &egui::Painter, camera: &Camera, rect: egui::Rect, view: BoardView<'_>, net: &str, nets: &BTreeMap<uuid::Uuid, String>) {
     let width = |nm: i64| (camera.screen(Point { x_nm: nm, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length();
     for pad in view.footprints().flat_map(|footprint| footprint.pads).filter(|pad| pad.net.as_deref() == Some(net)) {
         match pad.copper {
@@ -551,7 +562,6 @@ fn paint_net(p: &egui::Painter, camera: &Camera, rect: egui::Rect, view: BoardVi
             None => board::net_highlight(p, &[camera.screen(pad.center, rect)], false, 6.),
         }
     }
-    let nets = view.copper_nets();
     for track in view.tracks().iter().filter(|track| nets.get(&track.id).is_some_and(|n| n == net)) {
         board::net_highlight(p, &[camera.screen(track.start, rect), camera.screen(track.end, rect)], false, width(track.width_nm) * 0.4);
     }
