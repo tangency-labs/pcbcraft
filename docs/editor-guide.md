@@ -497,7 +497,9 @@ placement at a time. With two or more footprints selected, the **Modify** menu a
 bounds (pads, courtyard and fabrication outlines, not silkscreen): **Align to Left**,
 **Right**, **Top** or **Bottom**, or **Align to Vertical Center** and **Horizontal Center**
 (the middle of the selection). With three or more, **Distribute Horizontally** or
-**Vertically** keeps the outermost parts and makes the gaps between them equal. Each is one
+**Vertically** keeps the physical outermost parts fixed and makes the gaps between
+them equal to nanometer precision. Overlapping selections are refused if distribution
+would move an outermost part or change the selection's span. Each is one
 undo step. With one footprint selected, Properties edits its **X**, **Y** and
 **Rotation** exactly (in the display units and whole degrees) and switches its **Side**
 between Top and Bottom; each change is one undo step through the same transform command

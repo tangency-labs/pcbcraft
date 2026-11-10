@@ -189,14 +189,65 @@ fn align_modes_round_trip_their_names() {
 #[test]
 fn alignment_moves_boxes_to_shared_edges_and_equal_gaps() {
     let boxes = [[0, 0, 10, 10], [30, 5, 34, 25], [12, -4, 20, 2]];
-    assert_eq!(super::alignment(super::AlignMode::Left, &boxes), vec![(0, 0), (-30, 0), (-12, 0)]);
-    assert_eq!(super::alignment(super::AlignMode::Right, &boxes), vec![(24, 0), (0, 0), (14, 0)]);
-    assert_eq!(super::alignment(super::AlignMode::Top, &boxes), vec![(0, -4), (0, -9), (0, 0)]);
-    assert_eq!(super::alignment(super::AlignMode::Bottom, &boxes), vec![(0, 15), (0, 0), (0, 23)]);
-    assert_eq!(super::alignment(super::AlignMode::CenterX, &boxes), vec![(12, 0), (-15, 0), (1, 0)]);
-    let spread = super::alignment(super::AlignMode::DistributeX, &boxes);
+    assert_eq!(super::alignment(super::AlignMode::Left, &boxes).unwrap(), vec![(0, 0), (-30, 0), (-12, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Right, &boxes).unwrap(), vec![(24, 0), (0, 0), (14, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Top, &boxes).unwrap(), vec![(0, -4), (0, -9), (0, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Bottom, &boxes).unwrap(), vec![(0, 15), (0, 0), (0, 23)]);
+    assert_eq!(super::alignment(super::AlignMode::CenterX, &boxes).unwrap(), vec![(12, 0), (-15, 0), (1, 0)]);
+    let spread = super::alignment(super::AlignMode::DistributeX, &boxes).unwrap();
     let placed: Vec<_> = boxes.iter().zip(&spread).map(|(b, (dx, _))| [b[0] + dx, b[2] + dx]).collect();
     assert_eq!(placed, vec![[0, 10], [30, 34], [16, 24]], "gaps of 6: 34 of span minus 22 of sizes, in two gaps");
+}
+
+/// Distribution anchors physical edges even when overlapping boxes have a different center order.
+#[test]
+fn distribution_keeps_physical_outer_edges_fixed() {
+    for spans in [[[0, 20], [1, 3], [30, 34]], [[0, 4], [10, 30], [27, 29]]] {
+        let boxes = spans.map(|[a, b]| [a, a, b, b]);
+        for (mode, axis) in [(super::AlignMode::DistributeX, 0), (super::AlignMode::DistributeY, 1)] {
+            let deltas = super::alignment(mode, &boxes).unwrap();
+            assert_eq!(deltas[0], (0, 0), "leading physical anchor: {mode:?}, {spans:?}");
+            let trailing = if spans[1][1] > spans[2][1] { 1 } else { 2 };
+            assert_eq!(deltas[trailing], (0, 0), "trailing physical anchor: {mode:?}, {spans:?}");
+            let mut placed: Vec<_> = boxes
+                .iter()
+                .zip(&deltas)
+                .map(|(b, (dx, dy))| {
+                    let delta = if axis == 0 { *dx } else { *dy };
+                    (b[axis] + delta, b[axis + 2] + delta)
+                })
+                .collect();
+            placed.sort();
+            assert_eq!(placed[0].0, spans[0][0]);
+            assert_eq!(placed.last().unwrap().1, spans[trailing][1]);
+            assert_eq!(placed[1].0 - placed[0].1, placed[2].0 - placed[1].1);
+        }
+    }
+}
+
+/// Infeasible overlap is refused rather than moving an outer anchor or expanding the span.
+#[test]
+fn distribution_refuses_overlap_that_cannot_preserve_its_span() {
+    let boxes = [[0, 0, 1, 1], [10, 10, 90, 90], [20, 20, 80, 80], [99, 99, 100, 100]];
+    for mode in [super::AlignMode::DistributeX, super::AlignMode::DistributeY] {
+        assert!(super::alignment(mode, &boxes).is_err());
+    }
+    use crate::board::track::tests::{routed_fixture, view};
+    let mut s = routed_fixture();
+    let footprints: Vec<_> = view(&s).footprints().collect();
+    let ids: Vec<_> = footprints.iter().map(|f| f.id.clone()).collect();
+    let origin = footprints[0].position;
+    s.apply(
+        SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":ids[1],"x_nm":origin.x_nm,"y_nm":origin.y_nm,"rotation":footprints[1].rotation,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let before = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let result = s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":ids,"mode":"distribute_x","expected_revision":revision}));
+    assert!(result.is_err(), "both footprints defining the left edge must remain fixed");
+    assert_eq!(s.revision(), revision);
+    assert_eq!(crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
 
 /// Center alignment rounds consistently across zero and does not move aligned mixed-width boxes
@@ -207,10 +258,10 @@ fn center_alignment_is_idempotent_across_zero() {
         let boxes = [[-3 + offset, -3 + offset, offset, offset], [offset, offset, 10 + offset, 10 + offset]];
         for (mode, axis) in [(super::AlignMode::CenterX, 0), (super::AlignMode::CenterY, 1)] {
             let moved: Vec<_> =
-                boxes.iter().zip(super::alignment(mode, &boxes)).map(|(b, (dx, dy))| [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]).collect();
+                boxes.iter().zip(super::alignment(mode, &boxes).unwrap()).map(|(b, (dx, dy))| [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]).collect();
             let centers: Vec<_> = moved.iter().map(|b| (b[axis] + b[axis + 2]).div_euclid(2)).collect();
             assert_eq!(centers, vec![3 + offset; 2], "{mode:?} at offset {offset}: {moved:?}");
-            assert_eq!(super::alignment(mode, &moved), vec![(0, 0); 2], "repeating {mode:?} must not create another edit");
+            assert_eq!(super::alignment(mode, &moved).unwrap(), vec![(0, 0); 2], "repeating {mode:?} must not create another edit");
         }
     }
 }

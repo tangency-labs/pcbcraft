@@ -86,11 +86,13 @@ fn bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
 /// Displacements that align or distribute `boxes` (min x, min y, max x, max y). Top is the
 /// smallest board Y. Centers align on the middle of the whole selection's bounds, rounding
 /// half-nanometer centers downward consistently across zero so repeating alignment is a no-op.
-/// Distribution keeps the outermost items and makes the gaps between neighbors' bounds equal.
-fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Vec<(i64, i64)> {
+/// Distribution requires at least three boxes, keeps the physical outermost items fixed and
+/// makes the gaps between neighbors' bounds equal to integer precision. An overlapping selection
+/// that cannot retain its outer anchors and original span in this order is refused.
+fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Result<Vec<(i64, i64)>, CommandError> {
     let min = |i: usize| boxes.iter().map(|b| b[i]).min().unwrap_or(0);
     let max = |i: usize| boxes.iter().map(|b| b[i]).max().unwrap_or(0);
-    match mode {
+    Ok(match mode {
         AlignMode::Left => boxes.iter().map(|b| (min(0) - b[0], 0)).collect(),
         AlignMode::Right => boxes.iter().map(|b| (max(2) - b[2], 0)).collect(),
         AlignMode::Top => boxes.iter().map(|b| (0, min(1) - b[1])).collect(),
@@ -98,24 +100,44 @@ fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Vec<(i64, i64)> {
         AlignMode::CenterX => boxes.iter().map(|b| ((min(0) + max(2)).div_euclid(2) - (b[0] + b[2]).div_euclid(2), 0)).collect(),
         AlignMode::CenterY => boxes.iter().map(|b| (0, (min(1) + max(3)).div_euclid(2) - (b[1] + b[3]).div_euclid(2))).collect(),
         AlignMode::DistributeX | AlignMode::DistributeY => {
+            if boxes.len() < 3 {
+                return Err(CommandError::InvalidParams("distribution needs at least three footprints".into()));
+            }
             let axis = if mode == AlignMode::DistributeX { 0 } else { 1 };
             let mut order: Vec<usize> = (0..boxes.len()).collect();
             order.sort_by_key(|&i| (boxes[i][axis] + boxes[i][axis + 2], i));
-            let span = boxes[order[order.len() - 1]][axis + 2] - boxes[order[0]][axis];
+            // Choose anchors by physical edges, even when overlapping boxes have a different
+            // center order. Ties stay deterministic in the caller's footprint order.
+            let leading = (0..boxes.len()).min_by_key(|&i| (boxes[i][axis], i)).unwrap_or(0);
+            let trailing = (0..boxes.len()).max_by_key(|&i| (boxes[i][axis + 2], i)).unwrap_or(0);
+            if leading != trailing {
+                order.retain(|&i| i != leading && i != trailing);
+                order.insert(0, leading);
+                order.push(trailing);
+            }
+            let (start_edge, end_edge) = (min(axis), max(axis + 2));
+            let span = end_edge - start_edge;
             let sizes: i64 = boxes.iter().map(|b| b[axis + 2] - b[axis]).sum();
             let (gaps, free) = ((order.len() - 1) as i64, span - sizes);
             let mut deltas = vec![(0, 0); boxes.len()];
             let mut before = 0;
             for (rank, &i) in order.iter().enumerate() {
-                // Exact integer spacing: the last item lands where it already is.
-                let start = boxes[order[0]][axis] + before + free * rank as i64 / gaps;
+                // Spread integer remainders across gaps; the final trailing edge stays exact.
+                let start = start_edge + before + free * rank as i64 / gaps;
+                let size = boxes[i][axis + 2] - boxes[i][axis];
                 let delta = start - boxes[i][axis];
+                let anchor = boxes[i][axis] == start_edge || boxes[i][axis + 2] == end_edge;
+                if (anchor && delta != 0) || start < start_edge || start + size > end_edge {
+                    return Err(CommandError::InvalidParams(
+                        "overlapping footprints cannot be distributed while keeping the outer footprints and span fixed".into(),
+                    ));
+                }
                 deltas[i] = if axis == 0 { (delta, 0) } else { (0, delta) };
-                before += boxes[i][axis + 2] - boxes[i][axis];
+                before += size;
             }
             deltas
         }
-    }
+    })
 }
 
 impl Session {
@@ -156,7 +178,8 @@ impl Session {
     /// Align (two or more) or distribute (three or more) the addressed footprints by their
     /// resolved bounds, moving only their origins. Unknown or repeated IDs, an unknown mode, too
     /// few footprints, or a result outside the coordinate range leave the board unchanged; an
-    /// alignment that moves nothing is not an edit.
+    /// alignment that moves nothing is not an edit. Overlapping distribution is refused when its
+    /// physical outer anchors or original span would change.
     pub(crate) fn align_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -182,7 +205,7 @@ impl Session {
             .map(|id| found.remove(&format!("footprint-{id}")))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| CommandError::InvalidParams("unknown footprint ID".into()))?;
-        let deltas = alignment(mode, &boxes);
+        let deltas = alignment(mode, &boxes)?;
         if deltas.iter().all(|delta| *delta == (0, 0)) {
             return Ok(());
         }
