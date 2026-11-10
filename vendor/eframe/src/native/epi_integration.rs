@@ -275,7 +275,7 @@ impl EpiIntegration {
                 .rev()
                 .find_map(|event| if let egui::Event::ModifiersChanged(modifiers) = event { Some(*modifiers) } else { None })
                 .unwrap_or_else(|| self.egui_ctx.input(|input| input.modifiers));
-            if canvas_shift_x(&event.logical_key, modifiers, self.egui_ctx.egui_wants_keyboard_input()) {
+            if canvas_shift_x(&event.logical_key, &event.physical_key, modifiers, self.egui_ctx.egui_wants_keyboard_input()) {
                 egui_winit.egui_input_mut().events.push(egui::Event::Key {
                     key: egui::Key::X,
                     physical_key: None,

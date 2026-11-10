@@ -37,6 +37,7 @@ struct Edit {
 pub(super) struct State {
     pub(super) tool: Option<Tool>,
     pub(super) selected: Option<String>,
+    selected_many: BTreeSet<uuid::Uuid>,
     pub(super) delete_requested: bool,
     pub(super) finish_requested: bool,
     pub(super) backspace_requested: bool,
@@ -61,11 +62,26 @@ pub(super) struct Interaction {
 }
 
 impl State {
+    /// Read explicit graphic selections, including older single-item callers.
+    pub(super) fn selection(&self) -> BTreeSet<uuid::Uuid> {
+        self.selected_many.iter().copied().chain(self.selected.as_ref().and_then(|id| id.parse().ok())).collect()
+    }
+    /// Replace all drawing editing targets; a single target also enables its existing inspector.
+    pub(super) fn select_many(&mut self, selected: BTreeSet<uuid::Uuid>) {
+        self.selected = if selected.len() == 1 { selected.first().map(ToString::to_string) } else { None };
+        self.selected_many = selected;
+    }
+    /// A click or competing category replaces a previous group rather than leaving hidden targets.
+    pub(super) fn select(&mut self, selected: Option<String>) {
+        self.selected_many.clear();
+        self.selected = selected;
+    }
+
     /// Arm a tool with no authored changes; the first canvas click captures its revision and layer.
     pub(super) fn start(&mut self, tool: Tool, layer: Option<String>) {
         self.cancel();
         self.tool = Some(tool);
-        self.selected = None;
+        self.select(None);
         self.layer = layer;
     }
     /// Drop all drawing gestures when focus, workspace, layer or project authority changes.
@@ -79,7 +95,12 @@ impl State {
     }
     /// Escape cancels unfinished geometry first, then exits a tool, then clears a drawing selection.
     pub(super) fn escape(&mut self) -> bool {
-        self.draft.take().is_some() || self.edit.take().is_some() || self.tool.take().is_some() || self.selected.take().is_some()
+        if self.draft.take().is_some() || self.edit.take().is_some() || self.tool.take().is_some() {
+            return true;
+        }
+        let had = !self.selection().is_empty();
+        self.select(None);
+        had
     }
     /// Return the original edit authority so synchronization can discard stale previews.
     pub(super) fn source(&self) -> Option<ViewInput> {
@@ -153,8 +174,9 @@ pub(super) fn interact(
     let all = view.drawings();
     let drawings: Vec<_> = all.into_iter().filter(|drawing| !hidden.contains(&drawing.layer.to_string())).collect();
     if state.selected.as_ref().is_some_and(|id| !drawings.iter().any(|drawing| drawing.id.to_string() == *id)) {
-        state.selected = None;
+        state.select(None);
     }
+    state.selected_many.retain(|id| drawings.iter().any(|drawing| drawing.id == *id));
     if state.edit.as_ref().is_some_and(|edit| hidden.contains(&edit.drawing.layer.to_string())) {
         state.cancel();
     }
@@ -248,7 +270,7 @@ pub(super) fn interact(
             if let Some(drawing) = drawing {
                 let vertex =
                     (!move_requested).then(|| drawing.points.iter().position(|point| camera.screen(*point, rect).distance(origin) <= 8.)).flatten();
-                state.selected = Some(drawing.id.to_string());
+                state.select(Some(drawing.id.to_string()));
                 state.edit = Some(Edit {
                     source,
                     drawing: drawing.clone(),
@@ -293,9 +315,10 @@ pub(super) fn interact(
             state.edit = None;
         }
     } else if response.clicked() {
-        state.selected = pointer
+        let selected = pointer
             .and_then(|pointer| drawings.iter().rev().find(|drawing| hit(pointer, camera, rect, drawing)))
             .map(|drawing| drawing.id.to_string());
+        state.select(selected);
         out.consumed = state.selected.is_some();
     }
     out
@@ -319,7 +342,7 @@ pub(super) fn paint(
         } else if let Some(committed) = state.committed.as_ref().filter(|committed| committed.id == drawing.id) {
             drawing = committed.clone();
         }
-        let selected = state.selected.as_ref() == Some(&drawing.id.to_string());
+        let selected = state.selected.as_ref() == Some(&drawing.id.to_string()) || state.selected_many.contains(&drawing.id);
         pcbcraft_chrome::board::drawing(
             &painter,
             drawing.points.iter().map(|point| camera.screen(*point, rect)).collect(),

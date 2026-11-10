@@ -45,9 +45,7 @@ pub(super) struct Placement {
 pub(super) struct BoxDrag {
     pub(super) source: ViewInput,
     start: egui::Pos2,
-    base: BTreeSet<String>,
-    /// Track and via selection when the box started, for Shift and Ctrl/Command.
-    track_base: BTreeSet<uuid::Uuid>,
+    base: pcbcraft_engine::board::clipboard::BoardSelection,
     add: bool,
     toggle: bool,
     button: PointerButton,
@@ -56,11 +54,11 @@ pub(super) struct BoxDrag {
 /// Selection and authored intent are handled after the renderer releases its view/session borrows.
 #[derive(Default)]
 pub(super) struct Interaction {
+    pub(super) clipboard: Option<crate::board_clipboard::Action>,
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
-    /// Track and via selection from a finished box, applied after any footprint selection.
-    pub(super) track_selection: Option<BTreeSet<uuid::Uuid>>,
     pub(super) selection: Option<BTreeSet<String>>,
+    pub(super) items: Option<pcbcraft_engine::board::clipboard::BoardSelection>,
     pub(super) edit: Option<Draft>,
     pub(super) placement: Option<Placement>,
 }
@@ -93,8 +91,12 @@ pub(super) fn show(
     label: &str,
     markers: &[(Point, bool)],
 ) -> Interaction {
+    let idle = !crate::board_clipboard::busy(state);
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
+    if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+        state.context_menu_allowed = idle;
+    }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     camera.navigate_board(&response, rect, project, enabled, navigation);
     let placement_enabled = enabled;
@@ -181,7 +183,7 @@ pub(super) fn show(
         out.selection = Some(BTreeSet::new());
     }
     if route.consumed {
-        state.drawing.selected = None;
+        state.drawing.select(None);
     }
     // A via moved the route to another copper layer; follow it without cancelling the route.
     if let Some(layer) = route.switch_layer {
@@ -217,8 +219,12 @@ pub(super) fn show(
         state.box_drag = Some(BoxDrag {
             source,
             start,
-            base: state.selection.clone(),
-            track_base: state.tracks.selected.clone(),
+            base: pcbcraft_engine::board::clipboard::BoardSelection {
+                footprints: state.selection.clone(),
+                drawings: state.drawing.selection(),
+                tracks: state.tracks.selected.iter().filter(|id| !project.vias().iter().any(|v| v.id == **id)).copied().collect(),
+                vias: state.tracks.selected.iter().filter(|id| project.vias().iter().any(|v| v.id == **id)).copied().collect(),
+            },
             add: modifiers.shift,
             toggle: modifiers.ctrl || modifiers.command,
             button: if response.drag_started_by(PointerButton::Secondary) { PointerButton::Secondary } else { PointerButton::Primary },
@@ -238,7 +244,7 @@ pub(super) fn show(
                 None
             };
             if let Some(footprint) = picked {
-                state.drawing.selected = None;
+                state.drawing.select(None);
                 out.selection = Some(BTreeSet::from([footprint.id.clone()]));
                 let anchor = if drag_start {
                     ui.input(|i| i.pointer.press_origin()).map(|p| camera.unsnapped(p, rect)).unwrap_or(footprint.position)
@@ -353,30 +359,12 @@ pub(super) fn show(
         let window = egui::Rect::from_two_pos(drag.start, pointer);
         let crossing = pointer.x < drag.start.x;
         debug_assert_eq!(hit_bounds.len(), project.footprints().count());
-        let hits: BTreeSet<_> = footprints_for_box(project, &hit_bounds, window, crossing, filters.footprints);
-        let copper = if filters.tracks {
-            crate::board_tracks::box_hits(window, crossing, camera, rect, project, &state.hidden_layers)
-        } else {
-            BTreeSet::new()
-        };
-        pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len() + copper.len());
+        let mut hits = geometry_for_box(project, camera, rect, state, filters, window, crossing);
+        hits.footprints = footprints_for_box(project, &hit_bounds, window, crossing, filters.footprints);
+        pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len());
         if ui.input(|i| i.pointer.button_released(drag.button)) {
             if enabled && response.contains_pointer() {
-                let mut selection = if drag.add || drag.toggle { drag.base.clone() } else { BTreeSet::new() };
-                for id in hits {
-                    if !drag.toggle || !selection.remove(&id) {
-                        selection.insert(id);
-                    }
-                }
-                let mut tracks = if drag.add || drag.toggle { drag.track_base.clone() } else { BTreeSet::new() };
-                for id in copper {
-                    if !drag.toggle || !tracks.remove(&id) {
-                        tracks.insert(id);
-                    }
-                }
-                state.drawing.selected = None;
-                out.selection = Some(selection);
-                out.track_selection = Some(tracks);
+                out.items = Some(combine_box(&drag.base, hits, drag.add, drag.toggle));
             }
             state.box_drag = None;
         } else if !ui.input(|i| i.pointer.button_down(drag.button)) {
@@ -395,6 +383,24 @@ pub(super) fn show(
         board::empty(&p, rect);
     }
     out.placement = place_group(ui, &response, project, camera, state, source, appearance, placement_enabled, visible, color, rotation);
+    if source.is_some() && idle && state.context_menu_allowed && !crate::board_clipboard::busy(state) {
+        response.context_menu(|ui| {
+            use crate::board_clipboard::Action;
+            use pcbcraft_chrome::menu::MenuItem;
+            let selected = !state.selection.is_empty() || !state.tracks.selected.is_empty() || !state.drawing.selection().is_empty();
+            out.clipboard = [
+                ("Copy", "Ctrl+C", Action::Copy, selected),
+                ("Cut", "Ctrl+X", Action::Cut, selected),
+                ("Paste", "Ctrl+V", Action::Paste, true),
+                ("Paste Options…", "Ctrl+Shift+V", Action::Options, true),
+                ("Duplicate", "Ctrl+D", Action::Duplicate, selected),
+                ("Delete", "Del", Action::Delete, selected),
+                ("Select all", "Ctrl+A", Action::SelectAll, true),
+            ]
+            .into_iter()
+            .find_map(|(label, key, action, available)| MenuItem::new(label).shortcut(key).enabled(available).show(ui).then_some(action));
+        });
+    }
     if state.draft.is_some() || state.placement.is_some() {
         response.on_hover_cursor(egui::CursorIcon::Grabbing);
     }
@@ -595,4 +601,149 @@ fn drawing(
         })
         .collect();
     (pads, graphics)
+}
+
+/// Clip an actual segment against a rectangle; an empty corner of a diagonal's bounds is not a hit.
+fn segment_in_box(a: egui::Pos2, b: egui::Pos2, window: egui::Rect) -> bool {
+    let (mut enter, mut leave) = (0_f32, 1_f32);
+    for (start, end, min, max) in [(a.x, b.x, window.left(), window.right()), (a.y, b.y, window.top(), window.bottom())] {
+        let delta = end - start;
+        if delta == 0. {
+            if start < min || start > max {
+                return false;
+            }
+        } else {
+            let (x, y) = ((min - start) / delta, (max - start) / delta);
+            enter = enter.max(x.min(y));
+            leave = leave.min(x.max(y));
+            if enter > leave {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Copper and outline marquee hits follow real strokes and via circles, respecting hidden layers
+/// and category filters. A containment box requires the complete object; crossing needs one contact.
+#[allow(clippy::too_many_arguments)]
+fn geometry_for_box(
+    project: BoardView<'_>,
+    camera: &Camera,
+    rect: egui::Rect,
+    state: &BoardState,
+    filters: crate::selection_filters::Filters,
+    window: egui::Rect,
+    crossing: bool,
+) -> pcbcraft_engine::board::clipboard::BoardSelection {
+    use pcbcraft_engine::board::clipboard::BoardSelection;
+    let radius = |nm| (camera.screen(Point { x_nm: nm, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length();
+    let stroke = |points: Vec<egui::Pos2>, closed: bool, width: f32| {
+        if crossing {
+            let expanded = window.expand(width / 2.);
+            let count = points.len().saturating_sub(usize::from(!closed));
+            points.iter().copied().zip(points.iter().copied().cycle().skip(1)).take(count).any(|(a, b)| segment_in_box(a, b, expanded))
+        } else {
+            let inset = window.shrink(width / 2.);
+            inset.is_positive() && points.iter().all(|p| inset.contains(*p))
+        }
+    };
+    let drawings = project
+        .drawings()
+        .into_iter()
+        .filter(|d| filters.graphics && !state.hidden_layers.contains(&d.layer.to_string()))
+        .filter(|d| stroke(d.points.iter().map(|p| camera.screen(*p, rect)).collect(), d.closed, 0.))
+        .map(|d| d.id)
+        .collect();
+    let tracks = project
+        .tracks()
+        .iter()
+        .filter(|t| filters.tracks && !state.hidden_layers.contains(&t.layer.to_string()))
+        .filter(|t| stroke(vec![camera.screen(t.start, rect), camera.screen(t.end, rect)], false, radius(t.width_nm)))
+        .map(|t| t.id)
+        .collect();
+    let visible_copper = project.layers().iter().any(|l| l.purpose == LayerPurpose::Copper && !state.hidden_layers.contains(&l.id.to_string()));
+    let vias = project
+        .vias()
+        .iter()
+        .filter(|_| filters.tracks && visible_copper)
+        .filter(|v| {
+            let center = camera.screen(v.at, rect);
+            let radius = radius(v.diameter_nm / 2);
+            if crossing {
+                window.clamp(center).distance(center) <= radius
+            } else {
+                window.contains_rect(egui::Rect::from_center_size(center, egui::Vec2::splat(radius * 2.)))
+            }
+        })
+        .map(|v| v.id)
+        .collect();
+    BoardSelection { drawings, tracks, vias, ..Default::default() }
+}
+
+/// Select every visible supported physical object through the same geometry/category policy as
+/// a marquee, without requiring a schematic camera or changing the project.
+pub(super) fn all_visible(
+    project: BoardView<'_>,
+    state: &BoardState,
+    filters: crate::selection_filters::Filters,
+    appearance: &crate::board_appearance::Appearance,
+) -> pcbcraft_engine::board::clipboard::BoardSelection {
+    let camera = Camera::default();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100., 100.));
+    let visible = project
+        .setup()
+        .is_none_or(|s| s.layers().iter().any(|l| l.purpose == LayerPurpose::Copper && !state.hidden_layers.contains(&l.id.to_string())));
+    let mut selected = geometry_for_box(project, &camera, rect, state, filters, egui::Rect::EVERYTHING, false);
+    if filters.footprints {
+        selected.footprints = project
+            .footprints()
+            .filter(|f| {
+                let (pads, graphics) = drawing(f, &camera, rect, project, state, visible, appearance);
+                !pads.is_empty() || !graphics.is_empty()
+            })
+            .map(|f| f.id)
+            .collect();
+    }
+    selected
+}
+
+/// Modifier boxes combine each category independently against the original mixed selection.
+fn combine_box(
+    base: &pcbcraft_engine::board::clipboard::BoardSelection,
+    hits: pcbcraft_engine::board::clipboard::BoardSelection,
+    add: bool,
+    toggle: bool,
+) -> pcbcraft_engine::board::clipboard::BoardSelection {
+    /// Combine one ordered category with toggle taking precedence over additive selection.
+    fn combine<T: Ord + Clone>(base: &BTreeSet<T>, hits: BTreeSet<T>, add: bool, toggle: bool) -> BTreeSet<T> {
+        let mut selection = if add || toggle { base.clone() } else { BTreeSet::new() };
+        for id in hits {
+            if !toggle || !selection.remove(&id) {
+                selection.insert(id);
+            }
+        }
+        selection
+    }
+    pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: combine(&base.footprints, hits.footprints, add, toggle),
+        drawings: combine(&base.drawings, hits.drawings, add, toggle),
+        tracks: combine(&base.tracks, hits.tracks, add, toggle),
+        vias: combine(&base.vias, hits.vias, add, toggle),
+    }
+}
+
+#[cfg(test)]
+mod clipboard_geometry_tests {
+    use super::*;
+    /// A diagonal crossing is a stroke hit only where the segment actually enters the window.
+    #[test]
+    fn diagonal_corner_and_exact_contact_are_distinct() {
+        let a = egui::pos2(0., 0.);
+        let b = egui::pos2(10., 10.);
+        assert!(!segment_in_box(a, b, egui::Rect::from_min_max(egui::pos2(0., 8.), egui::pos2(2., 10.))));
+        assert!(segment_in_box(a, b, egui::Rect::from_min_max(egui::pos2(4., 4.), egui::pos2(6., 6.))));
+        assert!(segment_in_box(a, b, egui::Rect::from_min_max(egui::pos2(10., 10.), egui::pos2(12., 12.))));
+        assert!(!segment_in_box(egui::pos2(0., 0.), egui::pos2(0., 10.), egui::Rect::from_min_max(egui::pos2(1., 0.), egui::pos2(2., 10.))));
+    }
 }

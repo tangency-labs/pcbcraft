@@ -62,22 +62,23 @@ impl PcbApp {
             || !ctx.input(|i| i.focused)
             || self.project_action_pending()
             || self.views.active.definition.is_some()
-            || self.views.active.workspace != Workspace::Schematic
             || !matches!(self.dialog, Dialog::None)
             || self.parts.is_modal()
             || egui::Popup::is_any_open(ctx)
             || ctx.egui_wants_keyboard_input()
+            || (self.views.active.workspace == Workspace::Board && crate::board_clipboard::busy(&self.views.active.board))
             || self.views.active.schematic.tool.is_some()
             || self.views.active.schematic.text_edit.is_some()
         {
             self.message = Some("The clipboard destination changed. Paste again in the current view.".into());
             return;
         }
-        self.receive_schematic_clipboard(text, special);
+        self.receive_clipboard(text, special);
     }
 
     /// Consume native Copy/Cut/Paste events only when the canvas owns input. Text editors and
     /// assistant fields keep their normal clipboard behavior; no app-local fallback masks OS data.
+    /// The board's standalone-via chord takes precedence over the generic Cut shortcut.
     pub(super) fn clipboard_shortcuts(&mut self, ctx: &Context, assistant_keys: bool) -> bool {
         if self.home
             || assistant_keys
@@ -86,9 +87,12 @@ impl PcbApp {
             || !matches!(self.dialog, Dialog::None)
             || egui::Popup::is_any_open(ctx)
             || self.parts.is_modal()
-            || self.views.active.workspace != Workspace::Schematic
         {
             return false;
+        }
+        if self.views.active.workspace == Workspace::Board && ctx.input_mut(|input| input.consume_shortcut(&crate::PLACE_VIA)) {
+            self.start_via();
+            return true;
         }
         let events = ctx.input_mut(|input| {
             let mut clipboard = Vec::new();
@@ -106,8 +110,8 @@ impl PcbApp {
         for event in events {
             handled = true;
             match event {
-                Event::Copy => self.copy_schematic_clipboard(ctx, false),
-                Event::Cut => self.copy_schematic_clipboard(ctx, true),
+                Event::Copy => self.copy_clipboard(ctx, false),
+                Event::Cut => self.copy_clipboard(ctx, true),
                 Event::Paste(text) => {
                     let request = self.clipboard_request.take();
                     if let Some((source, _)) = request
@@ -117,7 +121,7 @@ impl PcbApp {
                         continue;
                     }
                     let special = request.is_some_and(|(_, special)| special) || ctx.input(|i| i.modifiers.shift);
-                    self.receive_schematic_clipboard(text, special);
+                    self.receive_clipboard(text, special);
                 }
                 _ => {}
             }
@@ -141,13 +145,39 @@ impl PcbApp {
             }
         });
         match action {
-            Some(0) => self.copy_schematic_clipboard(ctx, false),
-            Some(1) => self.copy_schematic_clipboard(ctx, true),
-            Some(2 | 3) => self.request_schematic_clipboard(ctx, action == Some(3)),
-            Some(4) => self.duplicate_schematic_clipboard(),
+            Some(0) => self.copy_clipboard(ctx, false),
+            Some(1) => self.copy_clipboard(ctx, true),
+            Some(2 | 3) => self.request_clipboard(ctx, action == Some(3)),
+            Some(4) => self.duplicate_clipboard(),
             _ => {}
         }
         action.is_some()
+    }
+
+    /// Route portable payloads by the destination editor; neither editor depends on the other's widgets.
+    pub(super) fn receive_clipboard(&mut self, text: String, special: bool) {
+        if text.is_empty() {
+            self.message = Some("The clipboard contains no text.".into());
+            return;
+        }
+        match self.views.active.workspace {
+            Workspace::Schematic => self.receive_schematic_clipboard(text, special),
+            Workspace::Board => self.receive_board_clipboard(text, special),
+        }
+    }
+    /// Native platform events and menus share the same focused-editor copy/cut path.
+    pub(super) fn copy_clipboard(&mut self, ctx: &Context, cut: bool) {
+        match self.views.active.workspace {
+            Workspace::Schematic => self.copy_schematic_clipboard(ctx, cut),
+            Workspace::Board => self.copy_board_clipboard(ctx, cut),
+        }
+    }
+    /// Duplication uses the current editor's fragment path without touching OS clipboard text.
+    pub(super) fn duplicate_clipboard(&mut self) {
+        match self.views.active.workspace {
+            Workspace::Schematic => self.duplicate_schematic_clipboard(),
+            Workspace::Board => self.duplicate_board_clipboard(),
+        }
     }
 
     /// Publish only a successfully exported fragment. Cut uses the same engine transaction as MCP;
@@ -182,7 +212,7 @@ impl PcbApp {
 
     /// Request the platform clipboard for menu actions. Native keyboard paste arrives directly
     /// as Event::Paste; the browser menu explains the keyboard gesture required by its host.
-    pub(super) fn request_schematic_clipboard(&mut self, ctx: &Context, special: bool) {
+    pub(super) fn request_clipboard(&mut self, ctx: &Context, special: bool) {
         self.views.active.cancel_gesture();
         if let Some(source) = self.views.active.input(&self.session) {
             self.clipboard_request = Some((source, special));

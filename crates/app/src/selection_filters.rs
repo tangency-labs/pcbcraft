@@ -126,7 +126,7 @@ impl PcbApp {
                 view.board.tracks.selected.clear();
             }
             if !next.graphics {
-                view.board.drawing.selected = None;
+                view.board.drawing.select(None);
             }
         }
         if let Some(open) = open {

@@ -567,3 +567,17 @@ changes affect those connections after a reviewed board update accepts them;
 footprint moves and rotations update the displayed geometry immediately. These
 lines show logical connections and do not establish routed copper or fabrication
 readiness; see [accepted board connections](board-ratsnest.md).
+
+### Copying PCB groups
+
+Select a group with a directional marquee, or use Ctrl/Command+A for visible
+supported objects. Layout → Clipboard and the PCB context menu provide system
+Copy, Cut, Paste and Duplicate; keyboard shortcuts match the schematic. Copied
+footprints duplicate their schematic counterparts too, so PCB Paste Options
+shows the destination sheet and schematic anchor for each source circuit.
+Same-project Cut/Paste can reuse the original unplaced components. Review the
+[clipboard guide](clipboard.md) for layer mapping, named nets and relocation.
+
+Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
+non-Latin layouts, it uses physical X when the logical character has no key
+mapping; Windows Shift+Delete remains Cut.

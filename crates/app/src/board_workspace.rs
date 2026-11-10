@@ -88,31 +88,6 @@ fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_ch
 }
 
 impl PcbApp {
-    /// Delete only explicitly selected placements in the addressed focused view. Active tools
-    /// and previews keep ownership of input; schematic components and package choices remain.
-    pub(super) fn delete_board_footprints(&mut self, ctx: &egui::Context, view: ViewId) {
-        let Some(editor) = self.views.view(view).filter(|v| v.workspace == Workspace::Board && v.definition.is_none()) else { return };
-        if self.views.active.id() != view
-            || self.home
-            || !matches!(self.dialog, Dialog::None)
-            || self.files.busy()
-            || self.project_action_pending()
-            || editor.board.draft.is_some()
-            || editor.board.box_drag.is_some()
-            || editor.board.drawing.tool.is_some()
-            || editor.board.drawing.source().is_some()
-            || editor.board.tracks.busy()
-            || editor.board.selection.is_empty()
-        {
-            return;
-        }
-        let Some(source) = editor.input(&self.session) else { return };
-        let Some(target) = editor.board.target else { return };
-        let params = serde_json::json!({"board":target.board,"footprints":editor.board.selection,"expected_revision":source.revision});
-        self.run(pcbcraft_engine::DELETE_FOOTPRINTS, &params);
-        self.repaint_editors(ctx);
-    }
-
     /// Present the requested document here, beside it, or directly in a native window. Target
     /// changes cancel old input and retain each workspace's camera without creating document edits.
     pub(super) fn open_workspace(&mut self, workspace: Workspace, placement: Placement, ctx: &egui::Context) {
@@ -211,6 +186,35 @@ impl PcbApp {
             self.begin_footprint_assignment(component);
         }
         workspace::ribbon_separator(ui);
+        let idle = enabled && !crate::board_clipboard::busy(&self.views.active.board);
+        let selected_items = self.session.project().is_some_and(|p| !crate::board_clipboard::selection(&self.views.active.board, p).is_empty());
+        let clipboard_tools: Vec<_> = [
+            ("Copy", "Copy selected PCB items", "Ctrl+C", idle && selected_items),
+            ("Paste", "Paste from system clipboard", "Ctrl+V", enabled),
+            ("Cut", "Cut selected PCB items", "Ctrl+X", idle && selected_items),
+            ("Paste Options…", "Choose PCB paste options", "Ctrl+Shift+V", enabled),
+            ("Duplicate", "Duplicate selected PCB items", "Ctrl+D", idle && selected_items),
+        ]
+        .into_iter()
+        .map(|(label, description, shortcut, enabled)| RibbonTool {
+            icon: ToolIcon::Sheet,
+            label,
+            description,
+            shortcut,
+            enabled,
+            active: false,
+            toggle: false,
+        })
+        .collect();
+        match workspace::ribbon_group_with_menu(ui, "Clipboard", &clipboard_tools[..2], &clipboard_tools[2..]) {
+            Some(0) => self.copy_board_clipboard(ui.ctx(), false),
+            Some(1) => self.request_clipboard(ui.ctx(), false),
+            Some(2) => self.copy_board_clipboard(ui.ctx(), true),
+            Some(3) => self.request_clipboard(ui.ctx(), true),
+            Some(4) => self.duplicate_board_clipboard(),
+            _ => {}
+        }
+        workspace::ribbon_separator(ui);
 
         let can_draw =
             self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))).is_some_and(
@@ -294,14 +298,9 @@ impl PcbApp {
         let delete = RibbonTool {
             icon: ToolIcon::Delete,
             label: "Delete",
-            description: "Delete selected footprints",
+            description: "Delete selected PCB items",
             shortcut: "Delete",
-            enabled: enabled
-                && !self.views.active.board.selection.is_empty()
-                && !editing
-                && self.views.active.board.drawing.tool.is_none()
-                && self.views.active.board.drawing.source().is_none()
-                && !self.views.active.board.tracks.busy(),
+            enabled: idle && selected_items,
             active: false,
             toggle: false,
         };
@@ -309,7 +308,7 @@ impl PcbApp {
         {
             Some(0) => self.views.active.board.move_requested = true,
             Some(1) => self.views.active.board.rotate_requested = 90,
-            Some(2) => self.delete_board_footprints(ui.ctx(), self.views.active.id()),
+            Some(2) => self.delete_board_items(),
             _ => {}
         }
         workspace::ribbon_separator(ui);
@@ -454,8 +453,9 @@ impl PcbApp {
             && !self.home
             && self.views.active.id() == id
             && matches!(self.dialog, Dialog::None)
-            && !self.project_action_pending()
-            && !egui::Popup::is_any_open(ui.ctx());
+            && !self.project_action_pending();
+        let owner_enabled = enabled;
+        let enabled = enabled && !egui::Popup::is_any_open(ui.ctx());
         if self.session.project().is_some_and(|project| project.board_target().is_none())
             && self.views.view(id).is_some_and(|view| !view.unavailable())
         {
@@ -464,6 +464,12 @@ impl PcbApp {
         }
         let highlighted = self.views.board_highlight_for(id, &self.session);
         let label = if self.views.is_split() { format!("PCB canvas {}", id.0 + 1) } else { "PCB canvas".to_owned() };
+        if self.board_clipboard_ready(ui.ctx(), id, enabled)
+            && let Some(widget) = self.views.view(id).map(|v| v.widget_id())
+        {
+            ui.push_id(widget, |ui| shell::canvas(ui, |ui| self.board_clipboard_canvas(ui, id, &label)));
+            return;
+        }
         let Some(project) = self.session.project() else {
             return;
         };
@@ -500,20 +506,24 @@ impl PcbApp {
                 })
             })
             .inner;
-        if (pick.selection.is_some()
-            || pick.track_selection.is_some()
+        if (pick.clipboard.is_some()
+            || pick.items.is_some()
+            || pick.selection.is_some()
             || pick.edit.is_some()
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
-            && enabled
+            && (enabled || pick.clipboard.is_some() && owner_enabled)
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
+            if let Some(action) = pick.clipboard {
+                self.board_clipboard_action(ui.ctx(), action);
+            }
+            if let Some(items) = pick.items {
+                self.select_board_items(items);
+            }
             if let Some(selection) = pick.selection {
                 self.views.select_board(selection, &self.session, self.preferences.selection_follow);
-            }
-            if let Some(tracks) = pick.track_selection {
-                self.views.active.board.tracks.selected = tracks;
             }
             if let Some(mut edit) = pick.drawing_edit
                 && self.views.active.accepts(edit.source, &self.session)

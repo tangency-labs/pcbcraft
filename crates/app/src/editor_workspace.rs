@@ -485,7 +485,7 @@ impl EditorViews {
         }
         if !selection.is_empty() {
             self.active.board.drawing.cancel();
-            self.active.board.drawing.selected = None;
+            self.active.board.drawing.select(None);
             self.active.board.tracks.cancel();
             self.active.board.tracks.selected.clear();
         }

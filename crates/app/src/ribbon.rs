@@ -324,7 +324,7 @@ impl PcbApp {
         }
         match action {
             Action::Copy | Action::Cut => self.copy_schematic_clipboard(ctx, action == Action::Cut),
-            Action::Paste | Action::PasteOptions => self.request_schematic_clipboard(ctx, action == Action::PasteOptions),
+            Action::Paste | Action::PasteOptions => self.request_clipboard(ctx, action == Action::PasteOptions),
             Action::Duplicate => self.duplicate_schematic_clipboard(),
             Action::Sources => self.dialog = Dialog::LibrarySources,
             Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
