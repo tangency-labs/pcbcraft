@@ -1025,5 +1025,6 @@ fn pcb_clipboard_payloads_and_component_reuse_share_the_dispatcher() {
     }
     let state = body(&call(&mut server, "inspect_project", json!({})));
     assert_eq!(state["project"]["schematic"]["symbols"].as_array().unwrap().len(), 1);
+    assert_eq!(state["project"]["board"]["footprints"].as_array().unwrap().len(), 1);
     assert_eq!(state["project"]["board"]["footprints"][0]["x_nm"], 7_000_000);
 }
