@@ -328,11 +328,13 @@ pub(super) fn show(
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
-    crate::board_tracks::paint(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref(), &state.hidden_layers, appearance);
     // A transform committed in this frame is painted at its new pose. The engine applies it after
     // this pass, so painting the stored pose here would make the footprint spring back for a frame.
+    // Tracks on its pads are painted where the move carries them.
     let shown = state.draft.clone().or_else(|| out.edit.clone());
     let shown = shown.as_ref();
+    let carried = shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).unwrap_or_default();
+    crate::board_tracks::paint(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref(), &state.hidden_layers, appearance, &carried);
     let ratsnest = state.ratsnest(project, source);
     if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
         && let Some(ratsnest) = ratsnest

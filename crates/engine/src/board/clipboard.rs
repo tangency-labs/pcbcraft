@@ -797,7 +797,7 @@ impl BoardFragment {
             board.vias = vias;
         }
         let added = selected.tracks.union(&selected.vias).copied().collect();
-        if check_copper && let Some((a, b)) = super::track::short_for_paste(&next, &added, &selected.footprints) {
+        if check_copper && let Some((a, b)) = super::track::short_for_copper_edit(&next, &added, &selected.footprints) {
             return Err(invalid(format!("pasted copper would connect nets {a} and {b}")));
         }
         if !self.footprints.is_empty() {

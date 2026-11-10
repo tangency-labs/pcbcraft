@@ -318,3 +318,212 @@ fn align_footprints_is_one_checked_edit() {
     }
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before, "each nudge and alignment is one undo step");
 }
+
+/// Moving, aligning and rotating a footprint carry the track end on its pad, one undo step each,
+/// while the track's far end stays. A flip that takes the SMD pad off the track's layer releases
+/// the end instead, and a move that would put another net's pad on the track is refused.
+#[test]
+fn footprint_transforms_carry_attached_track_ends() {
+    use crate::board::track::tests::{copper_layers, route, routed_fixture, view};
+    let mut s = routed_fixture();
+    let front = copper_layers(&s)[0];
+    let line = view(&s).ratsnest().unwrap().lines[0].clone();
+    let (pad, owner) = (line.from.position, line.from.footprint.clone());
+    let number = view(&s).footprints().find(|f| f.id == owner).unwrap().pads.into_iter().find(|p| p.center == pad).unwrap().number;
+    let free = Point { x_nm: pad.x_nm, y_nm: pad.y_nm.max(line.to.position.y_nm) + 2_000_000 };
+    route(&mut s, front, &[pad, free]).unwrap();
+    let stub = view(&s).tracks()[0].id;
+    let ends = |s: &Session| view(s).tracks().iter().find(|t| t.id == stub).map(|t| (t.start, t.end)).unwrap();
+    let placed = |s: &Session| view(s).footprints().find(|f| f.id == owner).map(|f| (f.position, f.rotation)).unwrap();
+    let pad_center =
+        |s: &Session| view(s).footprints().find(|f| f.id == owner).unwrap().pads.into_iter().find(|p| p.number == number).unwrap().center;
+    let transform = |s: &mut Session, position: Point, rotation: u16, side: Option<&str>| {
+        let mut params = json!({"footprint":owner,"x_nm":position.x_nm,"y_nm":position.y_nm,"rotation":rotation,"expected_revision":s.revision()});
+        if let Some(side) = side {
+            params["side"] = json!(side);
+        }
+        s.apply(SET_FOOTPRINT_TRANSFORM, &params)
+    };
+    let shifted = |p: Point, dx: i64, dy: i64| Point { x_nm: p.x_nm + dx, y_nm: p.y_nm + dy };
+
+    let (origin, rotation) = placed(&s);
+    let revision = s.revision();
+    transform(&mut s, shifted(origin, 1_000_000, 1_000_000), rotation, None).unwrap();
+    assert_eq!(ends(&s), (shifted(pad, 1_000_000, 1_000_000), free), "the pad end follows the move");
+    assert_eq!(s.revision(), revision + 1, "the move and its track are one edit");
+
+    let other = view(&s).footprints().find(|f| f.id != owner).unwrap().id.clone();
+    s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":[owner, other],"mode":"top","expected_revision":s.revision()})).unwrap();
+    assert_eq!(ends(&s), (shifted(pad, 1_000_000, 0), free), "aligning carries the end too");
+    assert_eq!(s.revision(), revision + 2);
+
+    // A quarter turn swings the part's other pad, on another net, onto the stub.
+    let (origin, rotation) = placed(&s);
+    let error = transform(&mut s, origin, (rotation + 90) % 360, None).unwrap_err().to_string();
+    assert!(error.contains("would connect nets"), "{error}");
+    transform(&mut s, origin, (rotation + 180) % 360, None).unwrap();
+    assert_eq!(ends(&s), (pad_center(&s), free), "the end stays on the turned pad");
+
+    let before = ends(&s);
+    transform(&mut s, origin, (rotation + 180) % 360, Some("back")).unwrap();
+    assert_eq!(ends(&s), before, "a flip takes the SMD pad off the front, so the end stays");
+    s.apply("edit.undo", &json!({})).unwrap();
+
+    // Another net's pad landing on the stub's free end would short the nets.
+    let (victim, offset) = {
+        let net = view(&s).footprints().find(|f| f.id == owner).unwrap().pads.into_iter().find(|p| p.number == number).unwrap().net;
+        let f = view(&s).footprints().find(|f| f.id != owner && f.pads.iter().any(|p| p.net.is_some() && p.net != net)).unwrap();
+        let p = f.pads.iter().find(|p| p.net.is_some() && p.net != net).unwrap();
+        (f.id.clone(), (p.center.x_nm - f.position.x_nm, p.center.y_nm - f.position.y_nm, f.rotation))
+    };
+    let revision = s.revision();
+    let error = s
+        .apply(
+            SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":victim,"x_nm":free.x_nm - offset.0,"y_nm":free.y_nm - offset.1,"rotation":offset.2,"expected_revision":revision}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("would connect nets"), "{error}");
+    assert_eq!(s.revision(), revision, "the refused move changes nothing");
+}
+
+/// Flipping a plated pad mirrors an off-center track end on the same layer and leaves its far end fixed.
+#[test]
+fn flipping_through_hole_pad_mirrors_its_off_center_track_end() {
+    use crate::board::track::tests::{copper_layers, route, view};
+
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
+    s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let symbol = s.project().unwrap().symbols().first().unwrap().id();
+    let origin = Point { x_nm: 4_000_000, y_nm: 1_000_000 };
+    s.apply(
+        PLACE_FOOTPRINT,
+        &json!({"symbol":symbol,"definition":"header-1x02-254","mapping":{"1":"1","2":"2"},
+            "x_nm":origin.x_nm,"y_nm":origin.y_nm,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let footprint = view(&s).footprints().next().unwrap();
+    let id = footprint.id;
+    let pad = footprint.pads.iter().find(|pad| pad.number == "1").unwrap();
+    let start = Point { x_nm: pad.center.x_nm + 180_000, y_nm: pad.center.y_nm + 100_000 };
+    let free = Point { x_nm: start.x_nm, y_nm: start.y_nm + 2_000_000 };
+    let front = copper_layers(&s)[0];
+    route(&mut s, front, &[start, free]).unwrap();
+
+    let revision = s.revision();
+    s.apply(
+        SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":id,"x_nm":origin.x_nm,"y_nm":origin.y_nm,"rotation":0,"side":"back","expected_revision":revision}),
+    )
+    .unwrap();
+    let track = &view(&s).tracks()[0];
+    assert_eq!(track.start, Point { x_nm: 2 * origin.x_nm - start.x_nm, y_nm: start.y_nm });
+    assert_eq!(track.end, free);
+    assert_eq!(track.layer, front);
+    assert_eq!(s.revision(), revision + 1);
+}
+
+/// A legal quarter-turn carries an off-center end on a rectangular pad and leaves the far end fixed.
+#[test]
+fn quarter_turn_carries_an_off_center_track_end() {
+    use crate::board::track::tests::{copper_layers, route, view};
+
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
+    s.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let symbol = s.project().unwrap().symbols().first().unwrap().id();
+    let origin = Point { x_nm: 4_000_000, y_nm: 1_000_000 };
+    s.apply(
+        PLACE_FOOTPRINT,
+        &json!({"symbol":symbol,"definition":"resistor-0603","mapping":{"1":"1","2":"2"},
+            "x_nm":origin.x_nm,"y_nm":origin.y_nm,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let footprint = view(&s).footprints().next().unwrap();
+    let id = footprint.id;
+    let pad = footprint.pads.iter().find(|pad| pad.number == "1").unwrap();
+    let start = Point { x_nm: pad.center.x_nm + 180_000, y_nm: pad.center.y_nm + 100_000 };
+    let free = Point { x_nm: start.x_nm - 2_000_000, y_nm: start.y_nm };
+    let front = copper_layers(&s)[0];
+    route(&mut s, front, &[start, free]).unwrap();
+
+    let revision = s.revision();
+    s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":id,"x_nm":origin.x_nm,"y_nm":origin.y_nm,"rotation":90,"expected_revision":revision}))
+        .unwrap();
+    let track = &view(&s).tracks()[0];
+    assert_eq!(track.start, Point { x_nm: origin.x_nm + (start.y_nm - origin.y_nm), y_nm: origin.y_nm - (start.x_nm - origin.x_nm) });
+    assert_eq!(track.end, free);
+    assert_eq!(s.revision(), revision + 1);
+}
+
+/// A track near a rounded corner stays electrically separate before and after the footprint moves.
+#[test]
+fn moving_a_footprint_leaves_track_outside_rounded_copper_fixed() {
+    use crate::board::track::tests::{copper_layers, routed_fixture, view};
+
+    let mut s = routed_fixture();
+    let footprint = view(&s).footprints().next().unwrap();
+    let id = footprint.id;
+    let origin = footprint.position;
+    let pad = footprint.pads.iter().find(|pad| pad.net.is_some()).unwrap();
+    let pad_key = (id.clone(), pad.number.clone());
+    let start = Point { x_nm: pad.center.x_nm + 290_000, y_nm: pad.center.y_nm + 290_000 };
+    let free = Point { x_nm: start.x_nm, y_nm: start.y_nm + 1_500_000 };
+    let front = copper_layers(&s)[0];
+    s.apply(
+        crate::ADD_TRACKS,
+        &json!({"layer":front,"width_nm":super::super::track::MIN_WIDTH_NM,"points":[start,free],"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let before = view(&s).tracks().to_vec();
+    let track = before[0].id;
+    let copper = view(&s).copper();
+    assert_ne!(copper.pads[&pad_key], copper.tracks[&track], "the copper does not reach the rounded pad");
+    assert!(!view(&s).copper_nets().contains_key(&track));
+    let position = Point { x_nm: origin.x_nm + 2_000_000, y_nm: origin.y_nm };
+    assert!(view(&s).carried_tracks(&id, position, 0, false).is_empty());
+    s.apply(
+        SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":id,"x_nm":position.x_nm,"y_nm":position.y_nm,"rotation":0,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    assert_eq!(view(&s).tracks(), before);
+    let copper = view(&s).copper();
+    assert_ne!(copper.pads[&pad_key], copper.tracks[&track]);
+    assert!(!view(&s).copper_nets().contains_key(&track));
+}
+
+/// Direct pad overlap between different nets is refused on the same layer, even without routing.
+#[test]
+fn footprint_move_refuses_direct_pad_short_on_shared_copper() {
+    use crate::board::track::tests::{routed_fixture, view};
+
+    let mut s = routed_fixture();
+    let board = view(&s);
+    assert!(board.tracks().is_empty() && board.vias().is_empty());
+    let source = board.footprints().next().unwrap();
+    let pad = source.pads.iter().find(|p| p.net.is_some()).unwrap();
+    let target = board
+        .footprints()
+        .filter(|footprint| footprint.id != source.id)
+        .flat_map(|footprint| footprint.pads)
+        .find(|other| other.net.is_some() && other.net != pad.net)
+        .unwrap();
+    let x = source.position.x_nm + target.center.x_nm - pad.center.x_nm;
+    let y = source.position.y_nm + target.center.y_nm - pad.center.y_nm;
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let mut transform = json!({"footprint":source.id,"x_nm":x,"y_nm":y,"rotation":0,"expected_revision":revision});
+    let error = s.apply(SET_FOOTPRINT_TRANSFORM, &transform).unwrap_err().to_string();
+    assert!(error.contains("would connect nets"), "{error}");
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+
+    transform["side"] = json!("back");
+    s.apply(SET_FOOTPRINT_TRANSFORM, &transform).unwrap();
+    assert_eq!(s.revision(), revision + 1, "overlap across separate layers is allowed");
+}

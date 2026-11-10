@@ -176,10 +176,9 @@ impl Session {
     }
 
     /// Align (two or more) or distribute (three or more) the addressed footprints by their
-    /// resolved bounds, moving only their origins. Unknown or repeated IDs, an unknown mode, too
-    /// few footprints, or a result outside the coordinate range leave the board unchanged; an
-    /// alignment that moves nothing is not an edit. Overlapping distribution is refused when its
-    /// physical outer anchors or original span would change.
+    /// resolved bounds, carrying track ends on pads that move. Invalid input, a result outside
+    /// the coordinate range or a new short leaves the board unchanged. Distribution also
+    /// preserves its outer anchors and span. An alignment that moves nothing creates no edit.
     pub(crate) fn align_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -211,7 +210,12 @@ impl Session {
         }
         let mut next = project.clone();
         let board = Arc::make_mut(&mut next.board);
+        let mut moved_ids = std::collections::BTreeSet::new();
         for (id, (dx, dy)) in ids.iter().zip(deltas) {
+            if (dx, dy) == (0, 0) {
+                continue;
+            }
+            moved_ids.insert(format!("footprint-{id}"));
             let index =
                 board.footprints.binary_search_by_key(id, |f| f.id).map_err(|_| CommandError::InvalidParams("unknown footprint ID".into()))?;
             let footprint = &mut board.footprints[index];
@@ -221,13 +225,16 @@ impl Session {
                 return Err(CommandError::InvalidParams("the alignment would move a footprint outside the coordinate range".into()));
             }
         }
+        super::track::carry_copper(project, &mut next, &moved_ids)?;
         self.change(next);
         Ok(())
     }
 
     /// Validate revision, identity and transform before replacing a board snapshot. An optional
-    /// `side` (front or back) places the footprint on that side; omitted keeps its side. Mapping,
-    /// component identity and schematic geometry are retained; unchanged input creates no history.
+    /// `side` (front or back) places the footprint on that side; omitted keeps its side. Track
+    /// ends on its pads follow them (see `track::carry_copper`), and the edit is refused if the
+    /// moved pads or tracks would join two nets. Mapping, component identity and schematic
+    /// geometry are retained; unchanged input creates no history.
     pub(crate) fn set_footprint_transform(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -254,9 +261,10 @@ impl Session {
         if (current.x_nm, current.y_nm, current.rotation, current.bottom) == (footprint.x_nm, footprint.y_nm, footprint.rotation, footprint.bottom) {
             return Ok(());
         }
-        let mut project = project.clone();
-        Arc::make_mut(&mut project.board).footprints[index] = footprint;
-        self.change(project);
+        let mut next = project.clone();
+        Arc::make_mut(&mut next.board).footprints[index] = footprint;
+        super::track::carry_copper(project, &mut next, &std::collections::BTreeSet::from([format!("footprint-{}", current.id)]))?;
+        self.change(next);
         Ok(())
     }
 }

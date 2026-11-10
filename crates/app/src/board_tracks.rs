@@ -728,7 +728,8 @@ pub(super) fn interact(
 
 /// Paint visible tracks with round ends at their physical width, inactive copper first so the
 /// active layer reads on top, then vias above all copper. A route committed this frame is
-/// painted where it will land.
+/// painted where it will land, and `carried` tracks (stretched by a footprint move preview)
+/// are painted at their carried ends.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     ui: &Ui,
@@ -739,6 +740,7 @@ pub(super) fn paint(
     active: Option<&str>,
     hidden: &BTreeSet<String>,
     appearance: &crate::board_appearance::Appearance,
+    carried: &[Track],
 ) {
     let painter = ui.painter().with_clip_rect(rect);
     let layers = view.layers();
@@ -766,8 +768,9 @@ pub(super) fn paint(
         None => point,
     };
     // A segment drag in progress, or one just submitted, draws its tracks at their new ends.
-    let reshaped: Vec<(Uuid, Point, Point)> =
+    let mut reshaped: Vec<(Uuid, Point, Point)> =
         state.segment.as_ref().map_or_else(|| state.committed_ends.clone(), |drag| dragged_ends(view, drag.track, drag.offset));
+    reshaped.extend(carried.iter().map(|track| (track.id, track.start, track.end)));
     for track in tracks {
         let selected = state.selected.contains(&track.id);
         let (start, end) = reshaped

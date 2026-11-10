@@ -7,6 +7,7 @@
 //! overlaps, and a via joins whatever copper it overlaps on any layer. This is a bounded connectivity aid for the ratsnest and for
 //! refusing shorts between nets. It is not a clearance check, DRC or manufacturing validation.
 use super::{
+    definition::PadShape,
     setup::LayerPurpose,
     view::{BoardView, CopperLayers},
 };
@@ -159,12 +160,88 @@ pub struct Copper {
     pub vias: BTreeMap<Uuid, usize>,
 }
 
-/// A pad reduced to what connectivity needs: its land corners, layers and net label.
+/// Resolved pad geometry and net membership used by connectivity and footprint edits.
 pub(super) struct Land {
     pub(super) key: (String, String),
     pub(super) corners: [Point; 4],
     pub(super) layers: Vec<Uuid>,
     pub(super) net: Option<String>,
+    center: Point,
+    shape: PadShape,
+    corner_radius_nm: i64,
+}
+
+/// The pad's inner rectangle, segment or point, expanded by a round radius.
+struct PadContour {
+    core: [Point; 4],
+    radius: f64,
+}
+
+impl Land {
+    /// Derive the copper contour from resolved corners and pad shape in board nanometers.
+    fn contour(&self) -> PadContour {
+        if self.shape == PadShape::Rectangle {
+            return PadContour { core: self.corners, radius: 0. };
+        }
+        let c = &self.corners;
+        let (ux, uy) = ((c[1].x_nm - c[0].x_nm) as f64, (c[1].y_nm - c[0].y_nm) as f64);
+        let (vx, vy) = ((c[3].x_nm - c[0].x_nm) as f64, (c[3].y_nm - c[0].y_nm) as f64);
+        let (w, h) = (ux.hypot(uy), vx.hypot(vy));
+        let radius = match self.shape {
+            PadShape::Rectangle => 0.,
+            PadShape::RoundedRectangle => (self.corner_radius_nm as f64).min(w.min(h) / 2.),
+            PadShape::Circle | PadShape::Oval => w.min(h).round() / 2.,
+        };
+        let (x, y) = if self.shape == PadShape::RoundedRectangle {
+            ((c[0].x_nm as f64 + c[2].x_nm as f64) / 2., (c[0].y_nm as f64 + c[2].y_nm as f64) / 2.)
+        } else {
+            (self.center.x_nm as f64, self.center.y_nm as f64)
+        };
+        let (iw, ih) = match self.shape {
+            PadShape::Circle => (0., 0.),
+            PadShape::Oval => ((w.round() / 2. - radius).max(0.), (h.round() / 2. - radius).max(0.)),
+            _ => ((w / 2. - radius).max(0.), (h / 2. - radius).max(0.)),
+        };
+        let core = [(-iw, -ih), (iw, -ih), (iw, ih), (-iw, ih)].map(|(a, b)| Point {
+            x_nm: (x + a * ux / w.max(1.) + b * vx / h.max(1.)).round() as i64,
+            y_nm: (y + a * uy / w.max(1.) + b * vy / h.max(1.)).round() as i64,
+        });
+        PadContour { core, radius }
+    }
+}
+
+impl PadContour {
+    /// The four core edges, including degenerate edges for circles and ovals.
+    fn edges(&self) -> impl Iterator<Item = (Point, Point)> + '_ {
+        self.core.iter().copied().zip(self.core.iter().copied().cycle().skip(1))
+    }
+
+    /// Check containment in a core with area. Line and point cores are handled by edge distance.
+    fn contains_core(&self, p: Point) -> bool {
+        let [a, b, _, d] = self.core;
+        let area = (b.x_nm - a.x_nm) as i128 * (d.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (d.x_nm - a.x_nm) as i128;
+        area != 0 && inside(p, &self.core)
+    }
+
+    /// Test a round-ended segment against the pad, with a zero-length segment for an endpoint or via.
+    fn overlaps_segment(&self, start: Point, end: Point, radius: f64) -> bool {
+        self.contains_core(start) || self.contains_core(end) || self.edges().any(|(a, b)| segment_distance(start, end, a, b) <= self.radius + radius)
+    }
+
+    /// Test copper contact between two pads, including containment and rounded edges.
+    fn overlaps(&self, other: &Self) -> bool {
+        other.contains_core(self.core[0]) || other.edges().any(|(a, b)| self.overlaps_segment(a, b, other.radius))
+    }
+
+    /// Bounds for pruning pad contact candidates before testing their contours.
+    fn bounds(&self) -> [f64; 4] {
+        let mut bounds = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for p in self.core {
+            let (x, y) = (p.x_nm as f64, p.y_nm as f64);
+            bounds = [bounds[0].min(x - self.radius), bounds[1].min(y - self.radius), bounds[2].max(x + self.radius), bounds[3].max(y + self.radius)];
+        }
+        bounds
+    }
 }
 
 impl<'a> BoardView<'a> {
@@ -183,6 +260,22 @@ impl<'a> BoardView<'a> {
     /// no copper and stay isolated.
     pub fn copper(self) -> Copper {
         islands(&lands(self), self.tracks(), self.vias()).0
+    }
+
+    /// Where routed copper would go if footprint `id` took the given pose: the tracks whose ends
+    /// ride on its pads, with those ends moved as `pcb.set_footprint_transform` would move them.
+    /// For previews only; nothing is checked or edited, and an unknown ID carries nothing.
+    pub fn carried_tracks(self, id: &str, position: Point, rotation: u16, bottom: bool) -> Vec<Track> {
+        let Some(number) = crate::schematic::wiring::parse_id(id, "footprint-").filter(|_| !self.tracks().is_empty()) else {
+            return Vec::new();
+        };
+        let mut next = self.project().clone();
+        let board = std::sync::Arc::make_mut(&mut next.board);
+        let Ok(index) = board.footprints.binary_search_by_key(&number, |f| f.id) else { return Vec::new() };
+        let footprint = &mut board.footprints[index];
+        (footprint.x_nm, footprint.y_nm, footprint.rotation, footprint.bottom) = (position.x_nm, position.y_nm, rotation, bottom);
+        let Some(after) = next.board_view(self.target) else { return Vec::new() };
+        carry(self, after, &BTreeSet::from([id.to_owned()]))
     }
 
     /// The net each track and via carries: the net of the first pad in its copper island. Copper
@@ -206,7 +299,15 @@ pub(super) fn lands(view: BoardView<'_>) -> Vec<Land> {
             footprint.pads.into_iter().filter_map(move |pad| {
                 let corners = pad.copper?;
                 let Some(CopperLayers::Resolved { layers, .. }) = pad.copper_layers else { return None };
-                Some(Land { key: (id.clone(), pad.number), corners, layers, net: pad.net })
+                Some(Land {
+                    key: (id.clone(), pad.number),
+                    corners,
+                    layers,
+                    net: pad.net,
+                    center: pad.center,
+                    shape: pad.shape,
+                    corner_radius_nm: pad.corner_radius_nm,
+                })
             })
         })
         .collect()
@@ -215,6 +316,21 @@ pub(super) fn lands(view: BoardView<'_>) -> Vec<Land> {
 /// Union-find over lands, then tracks, then vias. Returns islands plus each island's member
 /// node indices, numbered in that order.
 pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
+    build_islands(lands, tracks, vias, false)
+}
+
+/// Build islands from copper contours. Footprint edit validation also joins direct pad pairs.
+fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
+    let contours: Vec<_> = lands.iter().map(Land::contour).collect();
+    let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
+    let overlaps_pad = |i: usize, a: Point, b: Point, radius: f64| {
+        let [left, top, right, bottom] = bounds[i];
+        a.x_nm.min(b.x_nm) as f64 - radius <= right
+            && a.x_nm.max(b.x_nm) as f64 + radius >= left
+            && a.y_nm.min(b.y_nm) as f64 - radius <= bottom
+            && a.y_nm.max(b.y_nm) as f64 + radius >= top
+            && contours[i].overlaps_segment(a, b, radius)
+    };
     let mut parent: Vec<usize> = (0..lands.len() + tracks.len() + vias.len()).collect();
     fn find(parent: &mut [usize], mut node: usize) -> usize {
         while parent[node] != node {
@@ -229,10 +345,13 @@ pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper
             parent[a.max(b)] = a.min(b);
         }
     };
+    if join_pad_pairs {
+        for_each_pad_contact(lands, &contours, &bounds, |i, j| join(&mut parent, i, j));
+    }
     for (t, track) in tracks.iter().enumerate() {
         let node = lands.len() + t;
         for (l, land) in lands.iter().enumerate() {
-            if land.layers.contains(&track.layer) && touches_land(track, &land.corners) {
+            if land.layers.contains(&track.layer) && overlaps_pad(l, track.start, track.end, track.width_nm as f64 / 2.) {
                 join(&mut parent, node, l);
             }
         }
@@ -248,7 +367,7 @@ pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper
         let node = lands.len() + tracks.len() + v;
         let radius = via.diameter_nm as f64 / 2.;
         for (l, land) in lands.iter().enumerate() {
-            if !land.layers.is_empty() && via_touches_land(via.at, radius, &land.corners) {
+            if !land.layers.is_empty() && overlaps_pad(l, via.at, via.at, radius) {
                 join(&mut parent, node, l);
             }
         }
@@ -285,20 +404,26 @@ pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper
     (copper, members)
 }
 
-/// Whether a track's copper overlaps a convex pad land: an end inside it, or the centerline
-/// within half the track width of any land edge. A centerline crossing an edge has distance
-/// zero, so a track passing over the land off-center counts. Corners arrive in boundary order.
-fn touches_land(track: &Track, corners: &[Point; 4]) -> bool {
-    let half = track.width_nm as f64 / 2.;
-    inside(track.start, corners)
-        || inside(track.end, corners)
-        || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| segment_distance(track.start, track.end, *a, *b) <= half)
-}
-
-/// Whether a via's round pad overlaps a convex land: its center inside the land, or within its
-/// radius of any land edge. Corners arrive in boundary order.
-fn via_touches_land(at: Point, radius: f64, corners: &[Point; 4]) -> bool {
-    inside(at, corners) || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| point_distance(at, *a, *b) <= radius)
+/// Sweep overlapping pad bounds and visit each pair whose copper touches on a shared layer.
+fn for_each_pad_contact(lands: &[Land], contours: &[PadContour], bounds: &[[f64; 4]], mut visit: impl FnMut(usize, usize)) {
+    let mut order: Vec<_> = (0..lands.len()).collect();
+    order.sort_by(|&a, &b| bounds[a][0].total_cmp(&bounds[b][0]));
+    for (position, &i) in order.iter().enumerate() {
+        let [_, top, right, bottom] = bounds[i];
+        for &j in &order[position + 1..] {
+            let [left, other_top, _, other_bottom] = bounds[j];
+            if left > right {
+                break;
+            }
+            if top <= other_bottom
+                && other_top <= bottom
+                && lands[i].layers.iter().any(|layer| lands[j].layers.contains(layer))
+                && contours[i].overlaps(&contours[j])
+            {
+                visit(i, j);
+            }
+        }
+    }
 }
 
 /// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.
@@ -338,19 +463,20 @@ pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
 }
 
 /// Name the first two distinct nets joined by an island that contains one of the `added`
-/// tracks or vias, if any. Islands without new copper are ignored, so a short made earlier by
-/// another edit (such as moving a footprint onto a track) does not block unrelated routes.
+/// tracks or vias, if any. Islands without new copper are ignored so pre-existing shorts
+/// do not block unrelated routes.
 fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> {
-    short_for_paste(project, added, &BTreeSet::new())
+    short_for_copper_edit(project, added, &BTreeSet::new())
 }
 
-/// Apply the existing copper-contact approximation to newly pasted tracks/vias and footprint
-/// lands. Unrelated pre-existing islands remain outside this operation's short check.
-pub(crate) fn short_for_paste(project: &Project, added: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> Option<(String, String)> {
+/// Check the islands touching edited tracks, vias or footprint lands for shorts.
+/// Footprint edits use pad contours and include direct pad contacts on a shared layer.
+/// Unrelated pre-existing islands remain outside the check.
+pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> Option<(String, String)> {
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
     let (tracks, vias) = (view.tracks(), view.vias());
-    let (_, members) = islands(&lands, tracks, vias);
+    let (_, members) = build_islands(&lands, tracks, vias, !footprints.is_empty());
     let is_added = |node: usize| {
         if let Some(land) = lands.get(node) {
             return footprints.contains(&land.key.0);
@@ -365,6 +491,91 @@ pub(crate) fn short_for_paste(project: &Project, added: &BTreeSet<Uuid>, footpri
         let first = nets.next()?;
         nets.find(|net| *net != first).map(|second| (first, second))
     })
+}
+
+/// Map `point` from one placement of a pad land to another, keeping its place relative to the
+/// land. The land's first corner and its two edges from there form the frame, so translation,
+/// rotation and mirroring all carry over.
+fn reframe(point: Point, from: &[Point; 4], to: &[Point; 4]) -> Point {
+    let axes = |c: &[Point; 4]| {
+        let o = (c[0].x_nm as f64, c[0].y_nm as f64);
+        (o, (c[1].x_nm as f64 - o.0, c[1].y_nm as f64 - o.1), (c[3].x_nm as f64 - o.0, c[3].y_nm as f64 - o.1))
+    };
+    let ((ox, oy), (ux, uy), (vx, vy)) = axes(from);
+    let det = ux * vy - uy * vx;
+    if det == 0. {
+        return point;
+    }
+    let (dx, dy) = (point.x_nm as f64 - ox, point.y_nm as f64 - oy);
+    let (u, v) = ((dx * vy - dy * vx) / det, (ux * dy - uy * dx) / det);
+    let ((ox, oy), (ux, uy), (vx, vy)) = axes(to);
+    Point { x_nm: (ox + u * ux + v * vx).round() as i64, y_nm: (oy + u * uy + v * vy).round() as i64 }
+}
+
+/// Tracks whose ends ride on pads of the `moved` footprints, by footprint ID, between `before`
+/// and `after` (the same board before and after those footprints moved). Each end that
+/// overlapped one of their pads on the track's layer keeps its place on that pad; the rest of
+/// the track stretches. An end whose pad no longer reaches the track's layer, such as an SMD
+/// pad flipped to the other side, stays where it was. Only tracks that change are returned.
+pub(super) fn carry(before: BoardView<'_>, after: BoardView<'_>, moved: &BTreeSet<String>) -> Vec<Track> {
+    let old: Vec<_> = lands(before)
+        .into_iter()
+        .filter(|land| moved.contains(&land.key.0))
+        .map(|land| {
+            let contour = land.contour();
+            (land, contour)
+        })
+        .collect();
+    if old.is_empty() {
+        return Vec::new();
+    }
+    let new: BTreeMap<(String, String), Land> =
+        lands(after).into_iter().filter(|land| moved.contains(&land.key.0)).map(|land| (land.key.clone(), land)).collect();
+    let follow = |end: Point, track: &Track| {
+        let half = track.width_nm as f64 / 2.;
+        let Some((land, _)) = old.iter().find(|(land, contour)| land.layers.contains(&track.layer) && contour.overlaps_segment(end, end, half))
+        else {
+            return end;
+        };
+        match new.get(&land.key) {
+            Some(moved) if moved.layers.contains(&track.layer) => reframe(end, &land.corners, &moved.corners),
+            _ => end,
+        }
+    };
+    before
+        .tracks()
+        .iter()
+        .filter_map(|track| {
+            let (start, end) = (follow(track.start, track), follow(track.end, track));
+            ((start, end) != (track.start, track.end)).then(|| Track { start, end, ..track.clone() })
+        })
+        .collect()
+}
+
+/// Bring routed copper along with the `moved` footprints (by footprint ID) of `next`, which
+/// differs from `before` only in their placements; see [`carry`]. Refuses the edit when a
+/// carried track would collapse or leave the coordinate range, or when the moved pads or the
+/// carried tracks would join two nets.
+pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSet<String>) -> Result<(), CommandError> {
+    let Some(target) = before.board_target() else { return Ok(()) };
+    let (Some(old), Some(new)) = (before.board_view(target), next.board_view(target)) else { return Ok(()) };
+    let carried = carry(old, new, moved);
+    for track in &carried {
+        track.validate().map_err(|_| CommandError::InvalidParams("this move would collapse or overextend an attached track".into()))?;
+    }
+    let added: BTreeSet<Uuid> = carried.iter().map(|track| track.id).collect();
+    if !carried.is_empty() {
+        let tracks = &mut std::sync::Arc::make_mut(&mut next.board).tracks;
+        for track in carried {
+            if let Ok(index) = tracks.binary_search_by_key(&track.id, |t| t.id) {
+                tracks[index] = track;
+            }
+        }
+    }
+    if let Some((a, b)) = short_for_copper_edit(next, &added, moved) {
+        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
+    }
+    Ok(())
 }
 
 /// Parse a JSON value into a typed parameter, reporting serde's message as invalid input.

@@ -5,6 +5,31 @@ use crate::{
 };
 use serde_json::json;
 
+/// Curved pads exclude their bounding corners and include copper within the track end's radius.
+#[test]
+fn pad_contours_test_contact_with_round_track_ends() {
+    for (shape, half_x, half_y, corner_radius_nm) in
+        [(PadShape::Circle, 300_000, 300_000, 0), (PadShape::Oval, 500_000, 300_000, 0), (PadShape::RoundedRectangle, 500_000, 300_000, 150_000)]
+    {
+        let corners = [(-half_x, -half_y), (half_x, -half_y), (half_x, half_y), (-half_x, half_y)].map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+        let land = Land {
+            key: ("footprint-1".into(), "1".into()),
+            corners,
+            layers: Vec::new(),
+            net: None,
+            center: Point { x_nm: 0, y_nm: 0 },
+            shape,
+            corner_radius_nm,
+        };
+        let contour = land.contour();
+        let corner = corners[2];
+        assert!(!contour.overlaps_segment(corner, corner, 5_000.), "{shape:?}");
+        let near_edge = Point { x_nm: 0, y_nm: half_y + 20_000 };
+        assert!(!contour.overlaps_segment(near_edge, near_edge, 19_000.), "{shape:?}");
+        assert!(contour.overlaps_segment(near_edge, near_edge, 20_000.), "{shape:?}");
+    }
+}
+
 /// Three placed 0402 resistors whose first terminals share the accepted net ACCEPTED and whose
 /// last two share a second net, on a two-layer board with an accepted baseline. Built through
 /// the shared production commands.
@@ -311,8 +336,8 @@ fn a_route_can_end_on_a_via() {
     assert_eq!(view(&s).vias().iter().map(|via| via.at).collect::<Vec<_>>(), vec![end]);
 }
 
-/// A short made by another edit, here moving a footprint onto a track of another net, refuses
-/// only routes that touch that island. Unrelated routes still succeed.
+/// A short already on the board, here a footprint sitting on a track of another net as an older
+/// board could hold, refuses only routes that touch that island. Unrelated routes still succeed.
 #[test]
 fn an_existing_short_blocks_only_routes_into_it() {
     let mut s = routed_fixture();
@@ -324,15 +349,21 @@ fn an_existing_short_blocks_only_routes_into_it() {
     let target = view(&s).footprints().filter(|f| f.id != id).flat_map(|f| f.pads).find(|p| p.net.is_some() && p.net != moved_net).unwrap().center;
     let stub_end = Point { x_nm: target.x_nm, y_nm: target.y_nm + 3_000_000 };
     route(&mut s, front, &[target, stub_end]).unwrap();
-    // Move the first footprint so its first pad lands on the stub's free end.
+    // Put the first footprint's first pad on the stub's free end. Moves now refuse that short,
+    // so the board is edited directly, as an older board could already hold it.
     let offset = (moved.x_nm - position.x_nm, moved.y_nm - position.y_nm);
-    s.apply(
+    let refused = s.apply(
         crate::SET_FOOTPRINT_TRANSFORM,
         &json!({"footprint":id,"x_nm":stub_end.x_nm - offset.0,"y_nm":stub_end.y_nm - offset.1,
             "rotation":rotation,"expected_revision":s.revision()}),
-    )
-    .unwrap();
-    assert!(short(s.project().unwrap(), &view(&s).tracks().iter().map(|t| t.id).collect()).is_some(), "the move created a short");
+    );
+    assert!(refused.unwrap_err().to_string().contains("would connect nets"), "the move itself is refused");
+    let mut next = s.project().unwrap().clone();
+    let number = crate::schematic::wiring::parse_id(&id, "footprint-").unwrap();
+    let footprint = std::sync::Arc::make_mut(&mut next.board).footprints.iter_mut().find(|f| f.id == number).unwrap();
+    (footprint.x_nm, footprint.y_nm) = (stub_end.x_nm - offset.0, stub_end.y_nm - offset.1);
+    s.change(next);
+    assert!(short(s.project().unwrap(), &view(&s).tracks().iter().map(|t| t.id).collect()).is_some(), "the legacy placement creates a short");
     route(&mut s, front, &[Point { x_nm: 0, y_nm: 30_000_000 }, Point { x_nm: 5_000_000, y_nm: 30_000_000 }])
         .expect("an unrelated route is not blamed for an existing short");
     let error = route(&mut s, front, &[stub_end, Point { x_nm: stub_end.x_nm + 2_000_000, y_nm: stub_end.y_nm }]).unwrap_err().to_string();
@@ -385,11 +416,13 @@ fn a_track_crossing_a_pad_off_center_touches_it() {
         start: Point { x_nm: -1_000_000, y_nm: 500_000 },
         end: Point { x_nm: 2_000_000, y_nm: 500_000 },
     };
-    assert!(touches_land(&crossing, &square), "crossing near an edge");
+    let pad = PadContour { core: square, radius: 0. };
+    let touches = |track: &Track| pad.overlaps_segment(track.start, track.end, track.width_nm as f64 / 2.);
+    assert!(touches(&crossing), "crossing near an edge");
     let grazing = Track { start: Point { x_nm: -1_000_000, y_nm: 640_000 }, end: Point { x_nm: 2_000_000, y_nm: 640_000 }, ..crossing.clone() };
-    assert!(touches_land(&grazing, &square), "copper within half the width of an edge");
+    assert!(touches(&grazing), "copper within half the width of an edge");
     let clear = Track { start: Point { x_nm: -1_000_000, y_nm: 700_000 }, end: Point { x_nm: 2_000_000, y_nm: 700_000 }, ..crossing };
-    assert!(!touches_land(&clear, &square), "copper clear of the land");
+    assert!(!touches(&clear), "copper clear of the land");
 }
 
 /// A via whose center sits just off a land still overlaps it when an edge is within its radius,
@@ -397,10 +430,11 @@ fn a_track_crossing_a_pad_off_center_touches_it() {
 #[test]
 fn a_via_overlapping_a_land_edge_touches_it() {
     let p = |x, y| Point { x_nm: x, y_nm: y };
-    let land = [p(0, 0), p(600_000, 0), p(600_000, 600_000), p(0, 600_000)];
-    assert!(via_touches_land(p(300_000, 300_000), 300_000., &land), "centered");
-    assert!(via_touches_land(p(800_000, 300_000), 300_000., &land), "center 0.2 mm off the edge, radius 0.3 mm");
-    assert!(!via_touches_land(p(1_000_000, 300_000), 300_000., &land), "clear of the land");
+    let pad = PadContour { core: [p(0, 0), p(600_000, 0), p(600_000, 600_000), p(0, 600_000)], radius: 0. };
+    let touches = |at| pad.overlaps_segment(at, at, 300_000.);
+    assert!(touches(p(300_000, 300_000)), "centered");
+    assert!(touches(p(800_000, 300_000)), "center 0.2 mm off the edge, radius 0.3 mm");
+    assert!(!touches(p(1_000_000, 300_000)), "clear of the land");
 }
 
 /// A track that crosses a pad with both ends outside its land joins that pad's copper island, and
