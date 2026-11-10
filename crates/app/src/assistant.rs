@@ -1573,6 +1573,16 @@ mod chat_tests {
         let body: Value = serde_json::from_str(&seen[1].1)?;
         assert_eq!(body["model"], "test-model");
         assert!(body["messages"].as_array().is_some_and(|messages| messages.iter().any(|message| message["content"] == "hi")), "{body}");
+
+        // Disconnecting removes the agent's working folder once the tools bridge has ended (#218;
+        // cargo puts `pcbcraft-cli` on PATH for tests when it is built, so the bridge runs then).
+        let workdir = harness.state().assistant.chat.workdir_path().ok_or("connected chats have a working folder")?;
+        harness.state_mut().assistant.chat.disconnect();
+        let deadline = Instant::now() + chat::WORKDIR_RELEASE_LIMIT;
+        while workdir.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!workdir.exists(), "{} was left behind", workdir.display());
         Ok(())
     }
 }

@@ -21,6 +21,12 @@ const MAX_ITEMS: usize = 400;
 const MAX_TEXT: usize = 64 * 1024;
 /// How long a held tool call waits for Allow or Deny before the chat declines it.
 const APPROVAL_WAIT: Duration = Duration::from_secs(acp::APPROVAL_WAIT_S);
+/// How long a closed chat keeps trying to remove the agent's working folder. Windows refuses
+/// while the agent or the tools bridge still runs in it, and ending them takes up to about three
+/// seconds (`craft_agents::process`), so this leaves room for that (#218).
+pub(super) const WORKDIR_RELEASE_LIMIT: Duration = Duration::from_secs(5);
+/// Pause between attempts to remove the agent's working folder.
+const WORKDIR_RETRY_PAUSE: Duration = Duration::from_millis(50);
 
 /// `text` cut to at most `max` bytes on a character boundary, and whether it was cut.
 fn capped(text: &str, max: usize) -> (&str, bool) {
@@ -188,6 +194,9 @@ impl Drop for Chat {
         if let Some(backend) = self.backend.as_mut() {
             backend.shutdown(false);
         }
+        if let Some(workdir) = self.workdir.take() {
+            let _ = release_workdir(workdir);
+        }
     }
 }
 
@@ -270,7 +279,11 @@ impl Chat {
                 self.token_dir = token_dir;
                 self.bridge_name = bridge_name;
             }
-            Err(error) => self.state = State::Failed(entry.problem_hint().unwrap_or(error)),
+            Err(error) => {
+                // A backend that failed after starting a process ends it in the background.
+                let _ = release_workdir(workdir);
+                self.state = State::Failed(entry.problem_hint().unwrap_or(error));
+            }
         }
     }
 
@@ -288,6 +301,12 @@ impl Chat {
         (port, token_file)
     }
 
+    /// The agent's working folder while connected, for tests that check it is removed.
+    #[cfg(test)]
+    pub(super) fn workdir_path(&self) -> Option<std::path::PathBuf> {
+        self.workdir.as_ref().map(|dir| dir.path().to_path_buf())
+    }
+
     /// Use an already started backend for `entry`. Tests attach a scripted one.
     pub(super) fn attach(&mut self, backend: Box<dyn ChatBackend>, entry: Entry) {
         self.backend = Some(backend);
@@ -302,7 +321,9 @@ impl Chat {
         }
         self.deny_all("The chat disconnected.");
         self.control = None;
-        self.workdir = None;
+        if let Some(workdir) = self.workdir.take() {
+            let _ = release_workdir(workdir);
+        }
         self.token_dir = None;
         self.bridge_name = None;
         self.turn_open = false;
@@ -739,6 +760,39 @@ fn restrict_to_user(path: &std::path::Path) -> std::io::Result<()> {
     }
 }
 
+/// Remove the agent's working folder `dir` and anything the agent left in it. The agent and the
+/// tools bridge are ended in the background, and on Windows the folder can't be removed while
+/// either still runs in it, so a folder that won't go yet is retried on a thread for up to
+/// [`WORKDIR_RELEASE_LIMIT`] and the window never waits (#218). Returns that thread, if one was
+/// started, for tests to wait on. A folder still held after the limit is left behind.
+fn release_workdir(dir: tempfile::TempDir) -> Option<std::thread::JoinHandle<()>> {
+    // Keep the path so a failed delete isn't forgotten, as dropping `TempDir` would do.
+    let path = dir.keep();
+    if remove_workdir(&path) {
+        return None;
+    }
+    std::thread::Builder::new()
+        .name("pcbcraft-agent-workdir".to_owned())
+        .spawn(move || {
+            let deadline = Instant::now() + WORKDIR_RELEASE_LIMIT;
+            while Instant::now() < deadline {
+                std::thread::sleep(WORKDIR_RETRY_PAUSE);
+                if remove_workdir(&path) {
+                    return;
+                }
+            }
+        })
+        .ok()
+}
+
+/// Delete `path` and what it holds; whether it is gone, counting a folder already gone.
+fn remove_workdir(path: &std::path::Path) -> bool {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => true,
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
 /// `pcbcraft-cli` beside the running app, or on PATH as a fallback when the app's folder can't
 /// be read. `None` when neither exists.
 fn cli_path() -> Option<std::path::PathBuf> {
@@ -750,6 +804,49 @@ fn cli_path() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows: open `path` so nobody can delete it, as a process running in the folder holds it.
+    #[cfg(windows)]
+    fn hold_open(path: &std::path::Path) -> Option<std::fs::File> {
+        use std::os::windows::fs::OpenOptionsExt;
+        /// Share reading and writing but not deleting.
+        const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
+        /// Needed to open a folder rather than a file.
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(SHARE_READ_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .map(Some)
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Elsewhere a process running in a folder never stops it being deleted, so nothing is held.
+    #[cfg(not(windows))]
+    fn hold_open(_: &std::path::Path) -> Option<std::fs::File> {
+        None
+    }
+
+    /// A working folder that can't be deleted yet is deleted, with what the agent left in it,
+    /// once whatever held it lets go. Guards #218: on Windows the tools bridge still ran in the
+    /// folder when the chat dropped it, the delete failed and an empty `pcbcraft-agent-*` folder
+    /// stayed behind after every chat.
+    #[test]
+    fn a_held_working_folder_is_removed_once_released() {
+        let dir = tempfile::Builder::new().prefix("pcbcraft-agent-").tempdir().unwrap_or_else(|error| panic!("{error}"));
+        let path = dir.path().to_path_buf();
+        std::fs::write(path.join("notes.txt"), "agent output").unwrap_or_else(|error| panic!("{error}"));
+        let holder = hold_open(&path);
+        let retry = release_workdir(dir);
+        assert_eq!(retry.is_some(), cfg!(windows), "only Windows refuses a held folder");
+        assert_eq!(path.exists(), cfg!(windows));
+        drop(holder);
+        if let Some(retry) = retry {
+            retry.join().unwrap_or_else(|_| panic!("the retry thread panicked"));
+        }
+        assert!(!path.exists(), "{} was left behind", path.display());
+    }
 
     /// Reading always runs; Edits holds files, project replacement and window closing; Ask holds
     /// every command; All and remembered answers run them.
