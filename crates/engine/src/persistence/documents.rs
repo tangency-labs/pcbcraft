@@ -35,6 +35,7 @@ const BASELINE_BOARD_FORMAT: &str = "pcbcraft-board/10";
 const INTENT_BOARD_FORMAT: &str = "pcbcraft-board/11";
 const TRACK_BOARD_FORMAT: &str = "pcbcraft-board/12";
 const VIA_BOARD_FORMAT: &str = "pcbcraft-board/13";
+const SIDE_BOARD_FORMAT: &str = "pcbcraft-board/14";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -305,18 +306,24 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     };
 
-    // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional.
-    // Both may carry every earlier field. Empty arrays are never written, so they are refused.
-    let via_format = board.format == VIA_BOARD_FORMAT;
-    let tracked = board.format == TRACK_BOARD_FORMAT || via_format;
+    // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
+    // format 14 adds bottom-side footprints, with tracks and vias optional. Each may carry every
+    // earlier field. Empty arrays are never written, so they are refused.
+    let sided = board.format == SIDE_BOARD_FORMAT;
+    let tracked = matches!(board.format.as_str(), TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT);
     if board.tracks.as_ref().is_some_and(Vec::is_empty) || board.vias.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
     }
-    if via_format != board.vias.is_some() {
-        return Err("board.json: vias require board format 13, which requires at least one via".into());
+    if (board.format == VIA_BOARD_FORMAT && board.vias.is_none())
+        || (board.vias.is_some() && !matches!(board.format.as_str(), VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT))
+    {
+        return Err("board.json: vias require board format 13 or 14, and format 13 requires at least one via".into());
     }
     if (board.format == TRACK_BOARD_FORMAT && board.tracks.is_none()) || (!tracked && board.tracks.is_some()) {
-        return Err("board.json: tracks require board format 12 or 13, and format 12 requires at least one track".into());
+        return Err("board.json: tracks require board format 12, 13 or 14, and format 12 requires at least one track".into());
+    }
+    if sided != board.footprints.iter().any(|footprint| footprint.bottom) {
+        return Err("board.json: bottom-side footprints require board format 14, which requires at least one".into());
     }
     if !tracked && matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
         return Err("board.json: accepted baselines require board format 10, 11 or 12".into());
@@ -379,6 +386,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | INTENT_BOARD_FORMAT
             | TRACK_BOARD_FORMAT
             | VIA_BOARD_FORMAT
+            | SIDE_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
@@ -393,22 +401,25 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | INTENT_BOARD_FORMAT
                 | TRACK_BOARD_FORMAT
                 | VIA_BOARD_FORMAT
+                | SIDE_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
         return Err("board.json: nonempty assignments require board format 7".into());
     }
-    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT | TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT)
+    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT | TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT)
         && (board.format == OUTLINE_BOARD_FORMAT) != board.outline.is_some()
     {
         return Err("board.json: an outline requires board format 8".into());
     }
-    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT | TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT)
+    if !matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT | TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT)
         && (board.format == DRAWING_BOARD_FORMAT) != board.graphics.is_some()
     {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
+        (SIDE_BOARD_FORMAT, None) => None,
+        (SIDE_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (VIA_BOARD_FORMAT, None) => None,
         (VIA_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (TRACK_BOARD_FORMAT, None) => None,
@@ -941,9 +952,10 @@ impl DocumentsEncoder {
 /// Keep legacy bytes until newer authored data requires a newer format. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
-/// desired package choices version 11, copper tracks version 12, and vias version 13.
-/// Versions 12 and 13 are supersets: each may carry any earlier field, so routing never drops
-/// baseline or intent data. Version 12 stays tracks-only so its released readers keep working.
+/// desired package choices version 11, copper tracks version 12, vias version 13, and
+/// bottom-side footprints version 14. Versions 12 to 14 are supersets: each may carry any
+/// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
+/// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
 fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let board = &project.board;
     let setup = board.setup.as_ref();
@@ -953,7 +965,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
     if let Some(setup) = setup {
-        let format = if !board.vias.is_empty() {
+        let format = if board.footprints().iter().any(|footprint| footprint.bottom) {
+            SIDE_BOARD_FORMAT
+        } else if !board.vias.is_empty() {
             VIA_BOARD_FORMAT
         } else if !board.tracks.is_empty() {
             TRACK_BOARD_FORMAT
@@ -999,7 +1013,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if !board.vias.is_empty() {
+        let format = if board.footprints().iter().any(|footprint| footprint.bottom) {
+            SIDE_BOARD_FORMAT
+        } else if !board.vias.is_empty() {
             VIA_BOARD_FORMAT
         } else if !board.tracks.is_empty() {
             TRACK_BOARD_FORMAT

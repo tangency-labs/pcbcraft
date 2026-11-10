@@ -18,6 +18,8 @@ pub mod materials;
 pub mod outline;
 pub mod ratsnest;
 pub mod setup;
+#[cfg(test)]
+mod side_tests;
 pub mod silkscreen;
 pub mod track;
 mod transform;
@@ -76,6 +78,10 @@ pub(crate) struct Footprint {
     pub(crate) y_nm: i64,
     #[serde(default, skip_serializing_if = "zero_rotation")]
     pub(crate) rotation: u16,
+    /// Placed on the bottom side: local X is mirrored before rotation, and component-side pads
+    /// and technical graphics use the back layers. Omitted for top-side placements.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) bottom: bool,
 }
 /// Preserve omitted orientation on legacy records.
 fn zero_rotation(rotation: &u16) -> bool {
@@ -100,6 +106,7 @@ impl Footprint {
             x_nm: position.x_nm,
             y_nm: position.y_nm,
             rotation: 0,
+            bottom: false,
         }
     }
     /// Validate placement vocabulary, bounded origin and whole-degree orientation; the board
@@ -151,10 +158,12 @@ impl Footprint {
             _ => None,
         }
     }
-    /// Transform a local point around the footprint origin. Quarter turns are exact; other
-    /// whole-degree rotations round local offsets to the nearest nanometer without accumulation.
+    /// Transform a local point around the footprint origin: mirror X for a bottom-side placement,
+    /// then rotate. Quarter turns are exact; other whole-degree rotations round local offsets to
+    /// the nearest nanometer without accumulation.
     pub(crate) fn point(&self, local: Point) -> Point {
-        let (x, y) = rotate(local.x_nm, local.y_nm, self.rotation);
+        let local_x = if self.bottom { -local.x_nm } else { local.x_nm };
+        let (x, y) = rotate(local_x, local.y_nm, self.rotation);
         Point { x_nm: self.x_nm + x, y_nm: self.y_nm + y }
     }
     /// Locate a real pad center from the pinned definition, or the legacy marker's known pitch.
@@ -175,14 +184,14 @@ impl Footprint {
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         let mut value = json!({"id":format!("footprint-{}",self.id),"board":project.board_target().map(|target|target.board),
             "component":format!("component-{}",self.component),"definition":self.definition,"definition_revision":self.definition_revision,
-            "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,
+            "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,"side":if self.bottom {"back"} else {"front"},
             "pins":project.board.pad_numbers(self).into_iter().filter_map(|pad| {
                 let point=self.pad_position(pad,&project.board)?;
                 let (_,pin)=self.component_pin(pad)?;
                 let mut record=json!({"pad":Pad{board:project.board_target().map(|target|target.board),footprint:self.id,number:pad}.inspect(),
                     "terminal":project.component_terminal(self.component,pin).map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
                 if let Some(definition)=project.board.definition_for(self).and_then(|definition|definition.pads.iter().find(|item|item.number==pad.as_str())) {
-                    record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),definition.copper));
+                    record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),definition.copper,self.bottom));
                 }
                 Some(record)
             }).collect::<Vec<_>>()});
@@ -201,8 +210,10 @@ impl Footprint {
     }
 }
 
-/// Rotate a bounded local footprint offset, with exact quarter turns and nearest-nanometer output.
-pub(crate) fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
+/// Rotate a bounded local footprint offset counterclockwise in board coordinates (positive Y
+/// points down). Whole-degree angles use nearest-nanometer output; quarter turns are exact.
+/// Shared by resolved footprint geometry and disposable editor previews.
+pub fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
     if degrees.is_multiple_of(90) {
         return crate::schematic::rotate(x, y, (degrees / 90) as u8);
     }

@@ -655,8 +655,8 @@ fn measure_reports_the_distance_between_snapped_points() {
     }
 }
 
-/// A ruler owns canvas input without changing an existing mixed selection. Delete, Cut and the
-/// shared delete action cannot mutate its footprints or copper until measurement is left.
+/// A ruler owns canvas input without changing an existing mixed selection. Delete, Cut, Flip and
+/// the shared delete action cannot mutate its footprints or copper until measurement is left.
 #[test]
 fn measure_preserves_mixed_selection_against_delete_and_cut() {
     let mut h = routable();
@@ -671,6 +671,8 @@ fn measure_preserves_mixed_selection_against_delete_and_cut() {
     h.run();
     h.event(egui::Event::Cut);
     h.run();
+    h.key_press(Key::F);
+    h.run();
     h.state_mut().delete_board_items();
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
@@ -681,4 +683,43 @@ fn measure_preserves_mixed_selection_against_delete_and_cut() {
     h.run();
     assert!(!h.state().views.active.board.measure.tool);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+/// F flips the hovered footprint to the bottom in one edit, Properties shows its side, the
+/// ribbon's Flip turns it back, and F during an M move flips the draft committed with the move.
+#[test]
+fn f_flips_footprints_between_sides() {
+    let mut h = routable();
+    let (id, position) = {
+        let project = h.state().session.project().unwrap();
+        let f = project.boards().next().unwrap().footprints().next().unwrap();
+        (f.id.clone(), f.position)
+    };
+    let bottom =
+        |h: &Harness<'_, PcbApp>| h.state().session.project().unwrap().boards().next().unwrap().footprints().find(|f| f.id == id).unwrap().bottom;
+    let revision = h.state().session.revision();
+    h.hover_at(at(&h, position));
+    h.run();
+    h.key_press(Key::F);
+    h.run();
+    assert!(bottom(&h), "F flipped the hovered footprint");
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let center = at(&h, position);
+    click_canvas_at(&mut h, center);
+    assert!(h.query_by_label("Bottom").is_some(), "Properties shows the side");
+    click(&mut h, "Flip footprint to the other side");
+    assert!(!bottom(&h), "the ribbon flips it back");
+    assert_eq!(h.state().session.revision(), revision + 2);
+
+    h.hover_at(at(&h, position));
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    h.key_press(Key::F);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision + 2, "a flipped draft is not an edit yet");
+    let target = at(&h, Point { x_nm: position.x_nm + 1_270_000, y_nm: position.y_nm });
+    click_canvas_at(&mut h, target);
+    assert_eq!(h.state().session.revision(), revision + 3, "the move and the flip are one edit");
+    assert!(bottom(&h));
 }

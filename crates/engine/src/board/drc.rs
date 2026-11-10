@@ -372,10 +372,10 @@ impl BoardView<'_> {
         }
     }
 
-    /// Report footprints whose courtyard bounds overlap. Courtyards are compared by their
-    /// axis-aligned bounds, so rotated or concave courtyards can be reported conservatively.
+    /// Report footprints on the same side whose courtyard bounds overlap. Courtyards are compared
+    /// by their axis-aligned bounds, so rotated or concave courtyards can be reported conservatively.
     fn check_courtyards(self, found: &mut Vec<Violation>) {
-        let courtyards: Vec<(String, [i64; 4])> = self
+        let courtyards: Vec<(String, bool, [i64; 4])> = self
             .footprints()
             .filter_map(|footprint| {
                 let points: Vec<_> = footprint
@@ -388,11 +388,11 @@ impl BoardView<'_> {
                 let bounds = points.iter().fold([first.x_nm, first.y_nm, first.x_nm, first.y_nm], |b, p| {
                     [b[0].min(p.x_nm), b[1].min(p.y_nm), b[2].max(p.x_nm), b[3].max(p.y_nm)]
                 });
-                Some((footprint.id, bounds))
+                Some((footprint.id, footprint.bottom, bounds))
             })
             .collect();
-        for (i, (a, ba)) in courtyards.iter().enumerate() {
-            for (b, bb) in &courtyards[i + 1..] {
+        for (i, (a, side_a, ba)) in courtyards.iter().enumerate() {
+            for (b, _, bb) in courtyards[i + 1..].iter().filter(|(_, side_b, _)| side_b == side_a) {
                 if ba[0] < bb[2] && bb[0] < ba[2] && ba[1] < bb[3] && bb[1] < ba[3] {
                     let at = Point { x_nm: (ba[0].max(bb[0]) + ba[2].min(bb[2])) / 2, y_nm: (ba[1].max(bb[1]) + ba[3].min(bb[3])) / 2 };
                     found.push(Violation {

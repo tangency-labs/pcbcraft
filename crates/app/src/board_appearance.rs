@@ -101,6 +101,7 @@ impl Appearance {
         &self,
         view: BoardView<'_>,
         purpose: LayerPurpose,
+        side: Side,
         active: Option<&str>,
         hidden: &BTreeSet<String>,
     ) -> Option<egui::Color32> {
@@ -114,9 +115,7 @@ impl Appearance {
         let layers: Vec<_> = view
             .layers()
             .into_iter()
-            .filter(|layer| {
-                layer.purpose == purpose && (layer.side == Some(Side::Front) || layer.side.is_none()) && !hidden.contains(&layer.id.to_string())
-            })
+            .filter(|layer| layer.purpose == purpose && (layer.side == Some(side) || layer.side.is_none()) && !hidden.contains(&layer.id.to_string()))
             .collect();
         let chosen = layers.iter().find(|layer| active == Some(layer.id.to_string().as_str())).or_else(|| layers.first())?;
         Some(self.color(view, chosen))

@@ -82,6 +82,7 @@ pub(super) fn busy(state: &BoardState) -> bool {
 fn authored_tool(state: &BoardState) -> bool {
     state.move_requested
         || state.rotate_requested != 0
+        || state.flip_requested
         || state.draft.is_some()
         || state.placement.is_some()
         || state.box_drag.is_some()

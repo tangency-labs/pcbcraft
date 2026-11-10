@@ -75,7 +75,7 @@ these choices, while the diagnostic single-document writer refuses lossy export.
 |---|---|---|
 | `project.pc` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12` or `/13` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, and version 13 adds schematic-only package choices |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/5` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance |
-| `board.json` | `pcbcraft-board/1` through `/13` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias |
+| `board.json` | `pcbcraft-board/1` through `/14` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | `pcbcraft-footprint/1` | One full pinned physical footprint copy, including provenance, land contours and optional circular plated drills |
 
@@ -327,7 +327,16 @@ spans every copper layer and needs a setup with at least two; a board holds at m
 array is omitted when empty, and formats before 12 reject both fields. Deleting the
 last via returns a board to format 12, and deleting the last track and via returns it
 to the format its other data requires, with the same bytes as before the first route.
-Net membership is not stored; it is derived from copper geometry and the accepted nets. Legacy single-file export refuses tracks and vias.
+Net membership is not stored; it is derived from copper geometry and the accepted nets.
+Legacy single-file export refuses tracks and vias.
+
+Board format 14 marks bottom-side footprints with `"bottom": true` on their placement
+records and is otherwise format 13, so tracks and vias stay optional. It requires at
+least one bottom-side footprint, and earlier formats reject the field; top-side records
+omit it. A bottom footprint mirrors its local X before rotation, and its surface pads
+and technical graphics use the back layers. Flipping the last footprint back to the top
+returns the board to the format its other data requires, with the same bytes as before.
+Legacy single-file export refuses bottom-side footprints.
 
 The earlier local format 8 rectangle remains readable and byte-stable on no-op
 save. Its first actual geometry edit materializes a layer-addressed drawing in

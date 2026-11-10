@@ -60,6 +60,7 @@ impl Assignment {
             x_nm: position.x_nm,
             y_nm: position.y_nm,
             rotation: 0,
+            bottom: false,
         }
     }
 

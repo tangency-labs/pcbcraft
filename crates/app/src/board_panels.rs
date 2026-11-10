@@ -95,6 +95,7 @@ impl PcbApp {
                         property(ui, "X", &units::label(footprint.position.x_nm, self.preferences.units));
                         property(ui, "Y", &units::label(footprint.position.y_nm, self.preferences.units));
                         property(ui, "Rotation", &format!("{}°", footprint.rotation));
+                        property(ui, "Side", if footprint.bottom { "Bottom" } else { "Top" });
                         property(
                             ui,
                             if footprint.pads.iter().any(|pad| pad.copper.is_some()) { "Pads" } else { "Pad centers" },

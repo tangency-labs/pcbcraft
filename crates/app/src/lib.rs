@@ -1656,6 +1656,7 @@ impl PcbApp {
         self.views.active.schematic.move_requested = false;
         self.views.active.board.move_requested = false;
         self.views.active.board.rotate_requested = 0;
+        self.views.active.board.flip_requested = false;
         if self.views.active.schematic.text_edit.is_some() {
             return;
         }
@@ -1758,6 +1759,7 @@ impl PcbApp {
                 self.views.active.board.drawing.backspace_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace));
             }
             self.views.active.board.move_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M));
+            self.views.active.board.flip_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F));
             self.views.active.board.rotate_requested = if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::R)) {
                 270
             } else if pressed(&ROTATE) {
@@ -2332,6 +2334,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Move footprint", "M or left drag".to_owned()));
     list.push(("PCB layout", "Rotate footprint counterclockwise", "R".to_owned()));
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
+    list.push(("PCB layout", "Flip footprint to the other side", "F".to_owned()));
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB layout", "Route track", "X".to_owned()));
     list.push(("PCB layout", "Place via", key(&PLACE_VIA)));

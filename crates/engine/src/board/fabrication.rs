@@ -1,13 +1,14 @@
 //! Fabrication outputs: Gerber X2 layers and an Excellon drill file, written from one board
 //! snapshot with deterministic content.
 //!
-//! Each copper layer, the top and bottom solder mask and paste, the top silkscreen and the
+//! Each copper layer, the top and bottom solder mask, paste and silkscreen, and the
 //! Board Outline get one Gerber file in millimeters with nanometer resolution (format 4.6).
 //! Plated holes (vias and through-hole pads) go in one Excellon file. Board Y grows downward on
 //! screen, so every output negates Y, giving the usual Y-up fabrication view seen from the top.
 //! Mask and paste openings follow the pad copper exactly; any expansion is left to the
-//! fabricator's process. Vias are tented (no mask opening). Arcs, zones and bottom-side
-//! footprints are not produced yet.
+//! fabricator's process. Vias are tented (no mask opening). Bottom-side footprints put their
+//! pads on back copper, mask and paste and their silkscreen on the bottom legend. Arcs and
+//! zones are not produced yet.
 use super::{
     definition::{GraphicPurpose, PadShape},
     setup::{LayerPurpose, Side, Stratum},
@@ -260,17 +261,19 @@ impl BoardView<'_> {
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Paste,{side}"), "Positive") });
         }
 
-        let mut silk = Gerber::new();
-        for footprint in self.footprints() {
-            for graphic in footprint.graphics.iter().filter(|graphic| graphic.purpose == GraphicPurpose::Silkscreen) {
-                let mut points = graphic.points.clone();
-                if graphic.closed && points.len() > 2 {
-                    points.push(points[0]);
+        for (side, position, label) in [(Side::Front, "Top", "Silkscreen_Top"), (Side::Back, "Bot", "Silkscreen_Bottom")] {
+            let mut silk = Gerber::new();
+            for footprint in self.footprints() {
+                for graphic in footprint.graphics.iter().filter(|graphic| graphic.purpose == GraphicPurpose::Silkscreen && graphic.side == side) {
+                    let mut points = graphic.points.clone();
+                    if graphic.closed && points.len() > 2 {
+                        points.push(points[0]);
+                    }
+                    silk.stroke(&points, graphic.stroke_nm.unwrap_or(DEFAULT_SILK_NM));
                 }
-                silk.stroke(&points, graphic.stroke_nm.unwrap_or(DEFAULT_SILK_NM));
             }
+            files.push(Output { name: format!("{base}-{label}.gbr"), contents: silk.finish(&format!("Legend,{position}"), "Positive") });
         }
-        files.push(Output { name: format!("{base}-Silkscreen_Top.gbr"), contents: silk.finish("Legend,Top", "Positive") });
 
         let mut profile = Gerber::new();
         for drawing in &outline {
