@@ -111,12 +111,14 @@ Instance values and manufacturer values mean different things:
 - **Specifications, on the manufacturer part.** What the product is rated for:
   10 kΩ, 50 V, ±1 %, X7R.
 
-A manufacturer part **meets** R1 when every requirement R1 sets is satisfied by
-the part's specification for that field, after unit conversion. A 50 V rating
-meets "at least 25 V". A specification that is unknown does not meet a
-requirement; it is reported as unknown, not assumed. Fields R1 leaves unset
-don't constrain the choice. A part may also fix values, such as a part that is
-only ever 0 Ω, and a fixed value can't be overridden on an instance.
+The component's effective requirements include the values set on the instance
+and any values fixed by its generic part. A fixed value is an exact requirement
+even when the instance leaves that field unset, and the instance cannot override
+it. A field with neither kind of value leaves the choice open.
+
+A manufacturer part **meets** R1 when its specifications satisfy all those
+requirements after unit conversion. A 50 V rating meets "at least 25 V". An
+unknown specification is reported as unknown and does not satisfy a requirement.
 
 These rules drive the rest of the generic workflow:
 
@@ -245,7 +247,7 @@ or saving unfinished work.
 | --- | --- | --- |
 | Schematic editing | Valid symbols | Category values |
 | Sending a component to the board | An exact footprint and a valid pin map | — |
-| Assembly BOM | Every chosen MPN meets its component's requirements and matches its part and package variant | MPNs and category values for fitted parts |
+| Assembly BOM | Every fitted component has a package variant with an exact footprint and a valid pin map. Every chosen MPN meets its component's requirements and matches its part and package variant. | MPNs and category values for fitted parts |
 | Final 3D render or mechanical export | — | An exact model for every fitted part |
 
 Unresolved requirements name the component, the field and the stage, in the same
@@ -267,13 +269,16 @@ their operators, canonical numeric values and explicit unit identifiers, selecte
 package references, and the manufacturer/MPN when present. Optional tolerance, voltage
 and power requirements remain typed fields. Consumers must not need to parse
 formatted Value text, comments or an MPN hidden in that text to recover them.
-Equivalent resistance inputs must therefore export equivalent requirements.
+The export includes fixed part values as exact requirements even when the
+instance leaves those fields unset. Equivalent resistance inputs therefore
+export equivalent requirements.
 
 The export carries known, unknown and untyped states and any validation failures
-explicitly. Assembly-ready output observes the completeness rules above; a draft
-or diagnostic export identifies unresolved rows instead of claiming they are
-ready. Exact encodings, assembly selection and row grouping belong to the export
-design, while the category and unit semantics are shared with search/comparison.
+explicitly. A direct assembly BOM export checks the same completeness rules,
+including package and pin-map validation, even if no board transfer ran. Draft
+and diagnostic exports identify unresolved rows. Exact encodings, assembly
+selection and row grouping belong to the export design, while the category and
+unit semantics are shared with search/comparison.
 
 Inventory connectors may use this same contract to compare a component's
 requirements with owned-part specifications. Unknown specifications do not count
@@ -542,6 +547,8 @@ These need their own documents and must respect the boundaries above:
   - Filter MPN candidates by R1's values. A candidate whose specified
     resistance differs is reported, not applied.
 - **Requirements vs specifications:**
+  - Leave R1's resistance unset on a part fixed at 0 Ω. A 10 kΩ MPN fails
+    matching, and inventory export includes the exact 0 Ω requirement.
   - Require "at least 25 V" on C1. A 50 V part meets it, a 16 V part doesn't,
     and a part with unknown voltage is reported as unknown.
   - Change C1 to "at least 63 V" after choosing the 50 V part. It is marked as
@@ -574,5 +581,7 @@ These need their own documents and must respect the boundaries above:
   explicit update.
 - **Completeness rules:** check board transfer and assembly-BOM requirements
   under a permissive profile and an MPN-required one, through GUI and MCP.
-  Unfinished work still opens and saves. A missing MPN is reported separately
-  from an invalid pin map.
+  Direct assembly BOM export under either profile reports a fitted component
+  with a missing package or invalid pin map even before board transfer. The
+  permissive profile allows a fitted component with a valid package and pin map
+  to have no MPN. Unfinished work still opens and saves.
