@@ -90,11 +90,6 @@ impl Appearance {
         });
         ui.button("Reset appearance").clicked()
     }
-
-    /// Comparing parsed physical drafts keeps implicit automatic appearance absent until changed.
-    pub(crate) fn changed(&self, unit: Unit) -> bool {
-        self.read(unit).as_ref() != Ok(&self.original)
-    }
 }
 
 /// Build editable appearance drafts without materializing absent automatic layouts in saves.

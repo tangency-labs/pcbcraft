@@ -28,7 +28,6 @@ pub(super) struct Content<'a> {
 }
 
 /// Paint read-only component text with the same layout as interactive canvas fields.
-#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(super) fn paint_labels(painter: &Painter, symbol: &SymbolPlacement, content: Content<'_>, center: Pos2, step: f32, color: egui::Color32) {
     for ink in ink(painter, symbol, content, center, step, color) {
         painter.add(ink.shape);

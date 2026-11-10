@@ -92,6 +92,28 @@ fn move_button_uses_the_symbol_move_workflow() {
     assert_eq!(h.state().session.inspect(), before);
 }
 
+/// A ribbon tool scrolled under the ribbon's left edge is still inside the window, but hidden.
+/// The ribbon reports its visible viewport, so the test `click` helper scrolls the tool back
+/// into view before clicking instead of clicking the hidden spot. The window width leaves the
+/// rectangle inside the window after scrolling past the working DRC tool to Setup.
+#[test]
+fn clicks_reach_a_tool_scrolled_under_the_ribbon_edge() {
+    const RECTANGLE: &str = "Draw rectangle on Board Outline";
+    let mut h = harness();
+    h.set_size(egui::vec2(1100., 700.));
+    resistor_with_board_at_origin(&mut h);
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    h.get_by_label("Board setup").scroll_to_me();
+    h.run();
+    let rect = h.get_by_label(RECTANGLE).rect();
+    assert!(h.ctx.content_rect().contains_rect(rect), "the tool stays inside the window: {rect:?}");
+    assert!(!crate::tests::fully_visible(&h, RECTANGLE), "the ribbon hides the tool: {rect:?}");
+    assert!(!h.get_by_label(RECTANGLE).accesskit_node().is_disabled());
+    click(&mut h, RECTANGLE);
+    assert_eq!(h.state().views.active.board.drawing.tool, Some(crate::board_drawing::Tool::Rectangle));
+}
+
 /// The PCB Layout tab follows the layout design's groups. Working tools are enabled buttons;
 /// tools that are not built yet are listed, disabled, in their group's menu. Setup and Sync reach
 /// the same forms as before, and nothing here edits the project.

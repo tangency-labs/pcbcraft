@@ -13,17 +13,13 @@ use pcbcraft_engine::{
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
-mod text;
-
 /// Canvas and toolbar actions share one typed routing path.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Action {
     Properties,
     EditText,
     Move,
-    MoveText,
     Rotate,
-    RotateText,
     Delete,
 }
 
@@ -38,7 +34,6 @@ pub(super) struct Edit {
     x: String,
     y: String,
     units: pcbcraft_chrome::units::Unit,
-    appearance: crate::properties::fields::Appearance,
 }
 
 impl Edit {
@@ -46,8 +41,7 @@ impl Edit {
     fn new(source: ViewInput, sheet: SheetTarget, label: Label, units: pcbcraft_chrome::units::Unit) -> Self {
         let x = pcbcraft_chrome::units::edit_label(label.at.x_nm, units);
         let y = pcbcraft_chrome::units::edit_label(label.at.y_nm, units);
-        let appearance = crate::properties::fields::Appearance::new(label.text.clone().unwrap_or_default(), units);
-        Self { source, sheet, label, error: None, focused: false, x, y, units, appearance }
+        Self { source, sheet, label, error: None, focused: false, x, y, units }
     }
 
     /// Parse both axes and text together so invalid appearance cannot partially rename a net.
@@ -57,9 +51,6 @@ impl Edit {
             x_nm: pcbcraft_chrome::units::parse_length(&self.x, self.units).map_err(|e| format!("X: {e}"))?,
             y_nm: pcbcraft_chrome::units::parse_length(&self.y, self.units).map_err(|e| format!("Y: {e}"))?,
         };
-        if label.text.is_some() || self.appearance.changed(self.units) {
-            label.text = Some(self.appearance.read(self.units)?);
-        }
         Ok(label)
     }
 }
@@ -95,9 +86,6 @@ pub(super) fn visual(style: Style) -> chrome::Style {
     match style {
         Style::Local => chrome::Style::Local,
         Style::Global => chrome::Style::Global,
-        Style::Power => chrome::Style::Power,
-        Style::PowerBar => chrome::Style::PowerBar,
-        Style::Ground => chrome::Style::Ground,
     }
 }
 
@@ -189,18 +177,11 @@ pub(super) fn paint(
     tool: Option<&Tool>,
     pointer: Option<Point>,
     selected: &pcbcraft_engine::selection::Selection,
-    picking: Option<crate::selection_filters::Filters>,
     editing: Option<&crate::inline_text::Target>,
 ) {
     let painter = ui.painter_at(rect);
     let attached = attached(project);
-    let text_preview = if let Some(Tool::NetLabelText { label, drag, .. }) = tool {
-        ui.input(|i| i.pointer.hover_pos()).and_then(|p| text::destination(camera, rect, label, drag.unwrap_or_default(), p))
-    } else {
-        None
-    };
     let moving = match tool {
-        Some(Tool::NetLabelText { .. }) => text_preview.as_ref(),
         Some(Tool::NetLabel { label, .. }) => Some(label),
         _ => None,
     };
@@ -222,18 +203,9 @@ pub(super) fn paint(
             attached.contains(&label.id),
             appearance.as_ref(),
         );
-        if tool.is_none()
-            && ui.is_enabled()
-            && picking.is_some_and(|filters| filters.allows_net_label(label.style))
-            && let Some(ink) = text::ink(ui, camera, rect, label)
-            && ui.rect_contains_pointer(ink.bounds)
-        {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            ui.painter_at(rect).rect_stroke(ink.bounds.expand(2.), 2., egui::Stroke::new(1., Tokens::get().accent), egui::StrokeKind::Outside);
-        }
     }
     if let Some(label) = moving
-        && let Some(at) = text_preview.as_ref().map(|label| label.at).or(pointer)
+        && let Some(at) = pointer
     {
         chrome::paint_with_text(
             &painter,
@@ -265,9 +237,6 @@ pub(super) fn input(
     placement: Option<Point>,
     filters: crate::selection_filters::Filters,
 ) -> Option<Option<Click>> {
-    if let Some(Tool::NetLabelText { label, drag, .. }) = tool {
-        return Some(text::input(ui, response, rect, camera, label, *drag, enabled, filters));
-    }
     if let Some(Tool::NetLabel { label, drag, .. }) = tool {
         if !enabled || ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(false)))) {
             return Some(Some(Click::NetLabelCancel));
@@ -312,9 +281,6 @@ pub(super) fn input(
             project.net_labels().iter().rev().find(|label| filters.allows_net_label(label.style) && bounds(ui, camera, rect, label).contains(origin))
     {
         if selection.len() <= 1 || !selection.net_labels.contains(&label.object_id()) {
-            if let Some(ink) = text::ink(ui, camera, rect, label).filter(|ink| ink.bounds.contains(origin)) {
-                return Some(Some(Click::NetLabelTextDrag(label.clone(), ink.anchor - origin)));
-            }
             return Some(Some(Click::NetLabelDrag(label.clone(), camera.screen(label.at, rect) - origin)));
         }
         return None;
@@ -332,31 +298,24 @@ pub(super) fn input(
             project.net_labels().iter().rev().find(|label| filters.allows_net_label(label.style) && bounds(ui, camera, rect, label).contains(p))
         })
         .cloned();
-    let name_hovered = hit.as_ref().is_some_and(|label| {
-        text::ink(ui, camera, rect, label)
-            .is_some_and(|ink| response.hover_pos().or_else(|| response.interact_pointer_pos()).is_some_and(|p| ink.bounds.contains(p)))
-    });
     let menu_id = response.id.with("named_anchor_context");
     if response.secondary_clicked() {
         ui.data_mut(|data| match &hit {
             Some(label) => {
-                data.insert_temp(menu_id, (label.id, name_hovered));
+                data.insert_temp(menu_id, label.id);
             }
-            None => data.remove::<(u64, bool)>(menu_id),
+            None => data.remove::<u64>(menu_id),
         });
     }
-    if let Some((id, name_hovered)) = ui.data(|data| data.get_temp::<(u64, bool)>(menu_id))
+    if let Some(id) = ui.data(|data| data.get_temp::<u64>(menu_id))
         && let Some(label) = project.net_labels().iter().find(|label| label.id == id && filters.allows_net_label(label.style))
         && let Some(menu) = pcbcraft_chrome::menu::context(response, |ui| {
-            if name_hovered && MenuItem::new("Edit text…").show(ui) {
+            if MenuItem::new("Edit text…").show(ui) {
                 return Some(Click::NetLabelAction(label.clone(), Action::EditText));
             }
-            for (name, action) in [
-                ("Properties…", Action::Properties),
-                (if name_hovered { "Move text" } else { "Move" }, if name_hovered { Action::MoveText } else { Action::Move }),
-                (if name_hovered { "Rotate text" } else { "Rotate" }, if name_hovered { Action::RotateText } else { Action::Rotate }),
-                ("Delete Net Label", Action::Delete),
-            ] {
+            for (name, action) in
+                [("Properties…", Action::Properties), ("Move", Action::Move), ("Rotate", Action::Rotate), ("Delete Net Label", Action::Delete)]
+            {
                 if MenuItem::new(name).show(ui) {
                     return Some(Click::NetLabelAction(label.clone(), action));
                 }
@@ -374,9 +333,9 @@ pub(super) fn input(
         selection.single_net_label().and_then(|id| project.net_labels().iter().find(|l| l.id == id && filters.allows_net_label(l.style)).cloned())
     })?;
     for (key, action) in [
-        (Key::E, if name_hovered { Action::EditText } else { Action::Properties }),
-        (Key::M, if name_hovered { Action::MoveText } else { Action::Move }),
-        (Key::R, if name_hovered { Action::RotateText } else { Action::Rotate }),
+        (Key::E, Action::Properties),
+        (Key::M, Action::Move),
+        (Key::R, Action::Rotate),
         (Key::Delete, Action::Delete),
         (Key::Backspace, Action::Delete),
     ] {
@@ -385,7 +344,7 @@ pub(super) fn input(
         }
     }
     if hovered && response.double_clicked() {
-        return Some(Some(Click::NetLabelAction(label, if name_hovered { Action::EditText } else { Action::Properties })));
+        return Some(Some(Click::NetLabelAction(label, Action::Properties)));
     }
     // Keep the anchor available to click-to-wire; clicking ink selects only this marker.
     if hovered && response.clicked() && response.hover_pos().is_some_and(|p| camera.screen(label.at, rect).distance(p) > 6.) {
@@ -403,12 +362,17 @@ impl PcbApp {
     /// Start a GND placement directly in the active schematic, without a chooser or property
     /// form. Only the canvas commit edits history; the preview keeps the current repeat mode.
     pub(super) fn begin_ground(&mut self, ctx: &egui::Context) {
-        let Some(source) = self.views.active.input(&self.session) else { return };
+        if self.views.active.input(&self.session).is_none() {
+            return;
+        }
+        let Some(definition) = self.session.libraries().latest_symbol("power", "gnd") else {
+            self.message = Some("The Ground library definition is unavailable; check Library Sources.".into());
+            return;
+        };
         self.parts.close(ctx);
         self.parts.release_focus(ctx);
         self.select(Default::default());
-        let label = Label { id: 0, name: "GND".into(), style: Style::Ground, at: Point { x_nm: 0, y_nm: 0 }, rotation: 0, text: None };
-        self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None });
+        self.begin_template(crate::parts_browser::Placement::new(definition));
     }
 
     /// Open a captured form. A new marker has ID zero until the engine allocates its identity.
@@ -417,21 +381,7 @@ impl PcbApp {
         let Some(source) = self.views.active.input(&self.session) else {
             return;
         };
-        let label = Label {
-            id: 0,
-            name: if style == Style::Ground {
-                "GND"
-            } else if matches!(style, Style::Power | Style::PowerBar) {
-                "VCC"
-            } else {
-                "SIGNAL"
-            }
-            .into(),
-            style,
-            at: Point { x_nm: 0, y_nm: 0 },
-            rotation: 0,
-            text: None,
-        };
+        let label = Label { id: 0, name: "SIGNAL".into(), style, at: Point { x_nm: 0, y_nm: 0 }, rotation: 0, text: None };
         self.net_label_action(source, label, Action::Properties);
     }
     /// Apply only view-authorized actions; property edits and previews retain the source revision.
@@ -447,12 +397,6 @@ impl PcbApp {
                 self.dialog = Dialog::NetLabel(Box::new(edit));
             }
             Action::Move => self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None }),
-            Action::MoveText => self.views.active.schematic.tool = Some(Tool::NetLabelText { label, revision: source.revision, drag: None }),
-            Action::RotateText => {
-                let text = label.text.get_or_insert_default();
-                text.rotation = (text.rotation + 90) % 360;
-                self.commit_net_label(source, label);
-            }
             Action::Rotate => {
                 label.rotation = (label.rotation + 90) % 360;
                 self.commit_net_label(source, label);
@@ -484,14 +428,7 @@ impl PcbApp {
     /// Cancel/stale forms never publish data, and engine errors stay visible beside the fields.
     pub(super) fn net_label_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
         edit.set_units(self.preferences.units);
-        let power = matches!(edit.label.style, Style::Power | Style::PowerBar | Style::Ground);
-        let title = if power {
-            "Power symbol properties"
-        } else if edit.label.id == 0 {
-            "Place net label"
-        } else {
-            "Net label properties"
-        };
+        let title = if edit.label.id == 0 { "Place net label" } else { "Net label properties" };
         let mut submit = false;
         let action = pcbcraft_chrome::catalog::property_form(
             ctx,
@@ -548,8 +485,7 @@ impl PcbApp {
         self.dialog = Dialog::NetLabel(Box::new(edit));
     }
 
-    /// The selection inspector exposes power/ground and ordinary net markers through the same
-    /// captured draft as their expanded form, without treating them as footprint components.
+    /// Text labels use the same captured property draft in the inspector and expanded form.
     pub(super) fn net_label_inspector(&mut self, ui: &mut Ui, canvas: Rect, area: Rect) -> Option<Rect> {
         let source = self.views.active.input(&self.session)?;
         let project = self.views.active.snapshot(&self.session)?;
@@ -581,11 +517,7 @@ impl PcbApp {
             width,
             |ui| {
                 pcbcraft_chrome::properties::inspector_body(ui);
-                pcbcraft_chrome::properties::identity(
-                    ui,
-                    &edit.label.name,
-                    if matches!(edit.label.style, Style::Power | Style::PowerBar | Style::Ground) { "Power symbol" } else { "Net label" },
-                );
+                pcbcraft_chrome::properties::identity(ui, &edit.label.name, "Net label");
                 if !enabled {
                     return;
                 }
@@ -652,13 +584,11 @@ impl Edit {
                 *value = pcbcraft_chrome::units::edit_label(nm, unit);
             }
         }
-        self.appearance.set_units(self.units, unit);
         self.units = unit;
     }
 }
 
-/// All named anchors expose name, style and placement; power/ground symbols additionally
-/// expose independent text appearance. Ordinary labels retain their style-specific text.
+/// Text-label properties edit name, scope and placement through the shared label command.
 fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
     use pcbcraft_chrome::properties as form;
     let name = form::text(ui, "Net name", &mut edit.label.name);
@@ -667,33 +597,9 @@ fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
         edit.focused = true;
     }
     let enter = name.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-    let power = matches!(edit.label.style, Style::Ground | Style::Power | Style::PowerBar);
-    let (key, choices) = if power {
-        (
-            match edit.label.style {
-                Style::Ground => "ground",
-                Style::Power => "power",
-                _ => "power_bar",
-            },
-            vec![("ground", "Ground".into()), ("power", "Power arrow".into()), ("power_bar", "Power bar".into())],
-        )
-    } else {
-        (if edit.label.style == Style::Global { "global" } else { "local" }, vec![("local", "Local".into()), ("global", "Global".into())])
-    };
-    let mut key = key.to_owned();
-    form::choice(ui, if power { "Symbol" } else { "Scope" }, ui.id().with("label_style"), &mut key, &choices);
-    edit.label.style = match key.as_str() {
-        "ground" => Style::Ground,
-        "power" => Style::Power,
-        "power_bar" => Style::PowerBar,
-        "global" => Style::Global,
-        _ => Style::Local,
-    };
-    if power {
-        form::field(ui, "Scope", |ui| {
-            ui.label("Global");
-        });
-    }
+    let mut key = if edit.label.style == Style::Global { "global" } else { "local" }.to_owned();
+    form::choice(ui, "Scope", ui.id().with("label_style"), &mut key, &[("local", "Local".into()), ("global", "Global".into())]);
+    edit.label.style = if key == "global" { Style::Global } else { Style::Local };
     form::rotation(ui, &mut edit.label.rotation);
     let position_enter = if edit.label.id != 0 {
         let x = form::text(ui, "X", &mut edit.x);
@@ -702,12 +608,5 @@ fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
     } else {
         false
     };
-    if power {
-        egui::CollapsingHeader::new("Text appearance").show(ui, |ui| {
-            if edit.appearance.controls(ui, true) {
-                edit.appearance = crate::properties::fields::Appearance::new(Default::default(), edit.units);
-            }
-        });
-    }
     enter || position_enter
 }

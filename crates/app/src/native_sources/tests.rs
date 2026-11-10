@@ -43,9 +43,9 @@ fn source_dialog_search_and_parts_placement_share_the_catalog() {
         assert!(matches!(h.state().dialog, Dialog::None), "dialog did not close at width {width}");
         h.key_press(egui::Key::A);
         h.run();
-        h.get_by_role(egui::accesskit::Role::TextInput).type_text("Workshop");
+        h.get_by_label("Search parts").type_text("Workshop");
         h.run();
-        click(&mut h, "Workshop resistor · workshop/resistor r2");
+        click(&mut h, "Workshop resistor");
         click(&mut h, "Place");
         click(&mut h, "Schematic canvas");
         assert_eq!(h.state().session.project().unwrap().symbols().len(), 1, "{:?}", h.state().message);
@@ -61,7 +61,7 @@ fn source_dialog_search_and_parts_placement_share_the_catalog() {
         assert_eq!(encode_documents(decode_documents(&pinned).unwrap()).unwrap(), pinned);
         h.key_press(egui::Key::A);
         h.run();
-        assert!(h.query_by_label("Workshop resistor · workshop/resistor r2").is_none());
+        assert!(h.query_by_label("Workshop resistor").is_none());
     }
 }
 
@@ -106,7 +106,7 @@ fn newer_source_command_invalidates_an_inflight_folder_result() {
     send.send(Ok(Some((Arc::new(NativeSource::load(&documents()).unwrap()), None)))).unwrap();
     manager.poll(&mut session, &egui::Context::default());
     assert!(manager.statuses["loading"].contains("changed during loading"));
-    assert_eq!(session.libraries().inspect().as_array().unwrap().len(), 2);
+    assert_eq!(session.libraries().inspect().as_array().unwrap().len(), 3);
     assert_eq!(session.libraries().search("Workshop", None)[0].0, "mcp");
 }
 

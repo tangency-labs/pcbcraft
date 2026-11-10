@@ -99,6 +99,7 @@ const ADD_POWER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
 const ADD_SHEET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::S);
 const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::H);
+const PLACE_VIA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
 /// KiCad's keys for the next and previous grid: N for finer, Shift+N for coarser.
@@ -386,7 +387,16 @@ impl PcbApp {
         }
         self.views.sync(&self.session);
         self.message = None;
-        self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
+        self.views.active.schematic.tool =
+            Some(Tool::PlaceSymbol { value: definition.default_value().to_owned(), definition, revision: self.session.revision(), turns: 0 });
+    }
+
+    /// Arm the ordinary placement tool with an instance Value captured by any catalog gesture.
+    fn begin_template(&mut self, placement: parts_browser::Placement) {
+        self.begin_placement(placement.definition);
+        if let Some(Tool::PlaceSymbol { value, .. }) = &mut self.views.active.schematic.tool {
+            *value = placement.value;
+        }
     }
 
     /// Start a fresh wire draft at the current revision, accepting empty space or existing endpoints.
@@ -1147,7 +1157,6 @@ impl PcbApp {
                             dim(if drag.corner.is_some() { "Resize sheet · Esc to cancel" } else { "Move sheet · Esc to cancel" })
                         }
                         Tool::NetLabel { .. } => dim("Place net label · R to rotate · Esc to cancel"),
-                        Tool::NetLabelText { .. } => dim("Move net name · R to rotate · Esc to cancel"),
                         Tool::Hierarchy { .. } => dim("Hierarchical sheet or label · Esc to cancel"),
                         Tool::PlaceSymbol { definition, .. } => dim(format!("Place {} · R rotate · Esc to cancel", definition.name)),
                         Tool::Move { disconnect: true, .. } => dim("Disconnect and move symbol · R rotate · Esc cancel"),
@@ -1380,20 +1389,11 @@ impl PcbApp {
                     self.set_field_layout(&drag.symbol, layouts, revision);
                 }
             }
-            (Some(Tool::NetLabel { .. } | Tool::NetLabelText { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
-            (Some(Tool::NetLabel { .. } | Tool::NetLabelText { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
+            (Some(Tool::NetLabel { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
+            (Some(Tool::NetLabel { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
             (Some(Tool::NetLabel { mut label, revision, drag }), Click::NetLabelRotate) => {
                 label.rotation = (label.rotation + 90) % 360;
                 self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision, drag });
-            }
-            (Some(Tool::NetLabelText { mut label, revision, drag }), Click::NetLabelTextRotate) => {
-                let text = label.text.get_or_insert_default();
-                text.rotation = (text.rotation + 90) % 360;
-                self.views.active.schematic.tool = Some(Tool::NetLabelText { label, revision, drag });
-            }
-            (None, Click::NetLabelTextDrag(label, offset)) => {
-                self.select(Selection::one_net_label(label.id));
-                self.views.active.schematic.tool = Some(Tool::NetLabelText { label, revision: source.revision, drag: Some(offset) });
             }
             (None, Click::NetLabelDrag(label, offset)) => {
                 self.select(Selection::one_net_label(label.id));
@@ -1425,14 +1425,14 @@ impl PcbApp {
             }
             (Some(Tool::Hierarchy { kind, id, .. }), Click::HierarchyPlace(at)) => self.hierarchy_place(source, kind, id, at),
             (None, Click::HierarchyAction(kind, id, action)) => self.hierarchy_action(source, kind, id, action),
-            (Some(Tool::PlaceSymbol { definition, revision, turns }), Click::Place(point)) => {
+            (Some(Tool::PlaceSymbol { definition, value, revision, turns }), Click::Place(point)) => {
                 self.views.active.schematic.tool = None;
                 self.place_catalog_symbol(
                     &definition,
-                    json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90}),
+                    json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90, "value":value}),
                 );
                 if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
-                    self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns });
+                    self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, value, revision: self.session.revision(), turns });
                 }
             }
             (Some(Tool::Wire { revision, start: None }), Click::WirePoint(anchor, _)) => {
@@ -1522,19 +1522,15 @@ impl PcbApp {
                 }
                 let revision = drag_source.revision;
                 self.views.active.schematic.tool = None;
-                match placement {
-                    parts_browser::Placement::Symbol(definition) => {
-                        self.place_catalog_symbol(&definition, json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision}));
-                        if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
-                            self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, revision: self.session.revision(), turns: 0 });
-                        }
-                    }
-                    parts_browser::Placement::Power(mut label) => {
-                        label.at = point;
-                        self.commit_net_label(drag_source, label);
-                    }
+                self.place_catalog_symbol(
+                    &placement.definition,
+                    json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "value":placement.value}),
+                );
+                if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
+                    self.begin_template(placement);
                 }
             }
+
             (None, Click::WireEdit(action, leg)) => self.edit_wire(action, &leg),
             (None, Click::Edit(action, symbol)) => {
                 self.select(Selection::one_symbol(symbol));
@@ -1689,7 +1685,7 @@ impl PcbApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::X)) {
                 self.start_route();
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::V)) {
+            if pressed(&PLACE_VIA) {
                 self.start_via();
             }
             self.views.active.board.tracks.connected_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::U));
@@ -2267,7 +2263,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB layout", "Route track", "X".to_owned()));
-    list.push(("PCB layout", "Place via", "Ctrl+Shift+V".to_owned()));
+    list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
     list.push(("PCB layout", "Select connected copper", "U".to_owned()));
     list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));

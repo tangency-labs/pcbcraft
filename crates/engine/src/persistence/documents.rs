@@ -13,7 +13,7 @@ pub const MAX_DOCUMENTS: usize = 4096;
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
-const POWER_TEXT_FORMAT: &str = "pcbcraft-sheet/5";
+const TEXT_LAYOUT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
 const PROJECT_FORMAT: &str = "pcbcraft-project/6";
 const WATERMARK_PROJECT_FORMAT: &str = "pcbcraft-project/7";
@@ -191,13 +191,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | (HIERARCHY_FORMAT, true, true, false)
             | (NAMED_FORMAT, true, true, true)
             | (FIELDS_SHEET_FORMAT, true, true, true)
-            | (POWER_TEXT_FORMAT, true, true, true) => {}
+            | (TEXT_LAYOUT_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
-        if !matches!(sheet.format.as_str(), FIELDS_SHEET_FORMAT | POWER_TEXT_FORMAT) && sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
+        if !matches!(sheet.format.as_str(), FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT) && sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
             return Err(format!("{}: field appearance requires sheet format 4", reference.file));
         }
-        if sheet.format != POWER_TEXT_FORMAT && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some())) {
+        if sheet.format != TEXT_LAYOUT_FORMAT && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some())) {
             return Err(format!("{}: net-name appearance requires sheet format 5", reference.file));
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
@@ -253,7 +253,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT | FIELDS_SHEET_FORMAT | POWER_TEXT_FORMAT)
+        if !matches!(sheet.format.as_str(), SHEET_FORMAT | HIERARCHY_FORMAT | NAMED_FORMAT | FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT)
             || sheet.id != reference.id
         {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
@@ -1120,7 +1120,7 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
     let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
     let text = sheet.net_labels.iter().any(|l| l.text.is_some());
     let format = if text {
-        POWER_TEXT_FORMAT
+        TEXT_LAYOUT_FORMAT
     } else if fields {
         FIELDS_SHEET_FORMAT
     } else if !sheet.net_labels.is_empty() {

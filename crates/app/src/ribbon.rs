@@ -252,8 +252,8 @@ impl Action {
     fn active(self, app: &PcbApp) -> bool {
         match self {
             Self::Symbol => matches!(app.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. })),
-            Self::Ground => matches!(&app.views.active.schematic.tool, Some(Tool::NetLabel { label, .. })
-                if label.id == 0 && label.style == pcbcraft_engine::net_labels::Style::Ground),
+            Self::Ground => matches!(&app.views.active.schematic.tool, Some(Tool::PlaceSymbol { definition, .. })
+                if definition.library == "power" && definition.id == "gnd"),
             Self::HierarchicalLabel => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Label, .. })),
             Self::Subsheet => matches!(app.views.active.schematic.tool, Some(Tool::Hierarchy { kind: crate::hierarchy::Kind::Sheet, .. })),
             Self::Wire => matches!(app.views.active.schematic.tool, Some(Tool::Wire { .. })),

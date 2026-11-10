@@ -13,7 +13,8 @@ so each later slice builds on the same terms.
 
 ## What exists today
 
-- **One built-in source.** The starter library in `libraries/starter` is embedded
+- **Bundled native libraries.** Default (`libraries/starter`) and Power
+  (`libraries/power`) are embedded
   at build time (see [symbol-library.md](symbol-library.md)). It holds symbols and a bounded set of original
   [SMD footprint definitions](footprint-library.md).
 - **Symbols are pinned into projects.** Each project keeps a full copy of every
@@ -72,7 +73,7 @@ symbol-only and footprint-only libraries are both ordinary libraries.
 
 | Source | Reads | Status |
 | --- | --- | --- |
-| Built-in starter | Embedded native library | Exists (symbols and starter SMD footprints) |
+| Bundled Default and Power | Native library documents through the shared source loader | Ordinary native symbols, with explicit power-terminal metadata; Default also supplies footprints |
 | Native folder | A folder with `library.json` | Proposed, [#92](https://github.com/tangency-labs/pcbcraft/issues/92) |
 | KiCad library | `.kicad_sym` files and `.pretty` footprint folders | Proposed below |
 | Vendor download | A zip of KiCad files from a part provider | Proposed below |
