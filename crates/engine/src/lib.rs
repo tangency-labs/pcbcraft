@@ -579,7 +579,7 @@ const CATALOG: &[Command] = &[
         title: "Paste",
         summary: "Paste a portable schematic fragment with fresh identities in one undo step.",
         params: &[
-            Param { name: "text", required: true, kind: ParamKind::ClipboardText, summary: "PCBcraft clipboard/1 UTF-8 envelope" },
+            Param { name: "text", required: true, kind: ParamKind::ClipboardText, summary: "pcbcraft-clipboard/1 UTF-8 envelope" },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,

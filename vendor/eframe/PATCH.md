@@ -4,8 +4,9 @@ This is eframe 0.36.2 from crates.io, upstream egui commit
 `49682f8baa058bf49e011035cfbd6e825f88a5ef`, with its MIT and Apache-2.0 notices.
 The package manifest retains registry dependency versions; no dependency is fetched
 from a moving Git branch. The local changes are in `src/epi.rs`,
-`src/native/epi_integration.rs` and `src/native/wgpu_integration.rs`, plus local
-license paths in `Cargo.toml`.
+`src/native/epi_integration.rs`, `src/native/wgpu_integration.rs`,
+`src/native/glow_integration.rs` and `src/web/events.rs`, plus local license
+paths in `Cargo.toml`.
 
 PCBcraft uses immediate viewports sharing one application/session. Upstream eframe
 ties its root viewport to a native window, and winit cannot hide that window on
@@ -22,7 +23,8 @@ immediate child. With no child it is ignored; normal root Close/CancelClose stil
 owns application shutdown. The retired root has no raw window handle. Root repaint
 requests are scheduled through an existing child's window; a root Visible(true)
 command recreates a fresh window for arrangement restoration. Deferred-only and
-Glow integrations are outside this patch's contract.
+Glow integrations are outside the root-window lifetime contract; the clipboard
+completion change below also applies to Glow.
 
 If an app removes its last child while requesting root Close, that child's native
 resources remain until the next app pass consumes the cancellable request.
@@ -41,10 +43,11 @@ and a deadline bounds event-driver failures. Windows and
 macOS use the same code path but require native qualification on those systems.
 
 Keep this dependency patch separate from document and workspace models. Reassess
-it when updating eframe, comparing these three files with the pinned upstream
-package and retaining the native regression. Remove it when upstream provides an
-equivalent native lifetime API. This is a local patch, not an upstream release or
-published fork.
+it when updating eframe, comparing all files listed above with the pinned upstream
+package, including the native `RequestPaste` and browser paste-event handlers,
+and retaining the native regression. Remove the root-window lifetime changes when
+upstream provides an equivalent native lifetime API. This is a local patch, not
+an upstream release or published fork.
 
 The failure-path review checks that no shared-state borrow is held while app or
 child callbacks run, stale native IDs stop routing after destruction, and texture
