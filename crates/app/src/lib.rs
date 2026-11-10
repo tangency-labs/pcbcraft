@@ -1684,6 +1684,7 @@ impl PcbApp {
             if pressed(&PLACE_VIA) {
                 self.start_via();
             }
+            self.views.active.board.tracks.connected_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::U));
             if self.views.active.board.tracks.tool {
                 let tracks = &mut self.views.active.board.tracks;
                 tracks.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
@@ -2259,6 +2260,8 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB layout", "Route track", "X".to_owned()));
     list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
+    list.push(("PCB layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));
     list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));
     list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));

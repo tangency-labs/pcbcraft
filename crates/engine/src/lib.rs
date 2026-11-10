@@ -19,7 +19,7 @@ pub mod selection;
 pub mod sheets;
 pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
-pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS};
+pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, SET_TRACK_WIDTH, SET_VIA_SIZE};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -1241,6 +1241,47 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: MOVE_TRACKS,
+        title: "Move Tracks",
+        summary: "Move addressed tracks and vias by one displacement, keeping sizes and layers, in one undo step. Refused if moved copper would join two different nets.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "tracks", required: false, summary: "Unique track segment UUIDs from board inspection", kind: ParamKind::TrackIds },
+            Param { name: "vias", required: false, summary: "Unique via UUIDs from board inspection", kind: ParamKind::TrackIds },
+            Param { name: "dx_nm", required: true, summary: "Horizontal displacement in integer nanometers", kind: ParamKind::Displacement },
+            Param { name: "dy_nm", required: true, summary: "Vertical displacement in integer nanometers", kind: ParamKind::Displacement },
+        ],
+    },
+    Command {
+        id: SET_TRACK_WIDTH,
+        title: "Set Track Width",
+        summary: "Give addressed track segments one width, in one undo step. Refused if wider copper would join two different nets.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "tracks", required: true, summary: "Unique track segment UUIDs from board inspection", kind: ParamKind::TrackIds },
+            Param { name: "width_nm", required: true, summary: "Track width in integer nanometers", kind: ParamKind::TrackWidth },
+        ],
+    },
+    Command {
+        id: SET_VIA_SIZE,
+        title: "Set Via Size",
+        summary: "Give addressed vias one pad diameter and drill, in one undo step. Refused if a larger pad would join two different nets.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "vias", required: true, summary: "Unique via UUIDs from board inspection", kind: ParamKind::TrackIds },
+            Param { name: "via_diameter_nm", required: true, summary: "Via pad diameter in integer nanometers", kind: ParamKind::ViaDiameter },
+            Param {
+                name: "via_drill_nm",
+                required: true,
+                summary: "Via drill diameter in integer nanometers, smaller than the pad",
+                kind: ParamKind::ViaDrill,
+            },
+        ],
+    },
+    Command {
         id: DELETE_TRACKS,
         title: "Delete Tracks",
         summary: "Remove addressed track segments and vias, leaving footprints and other copper unchanged. One undo step.",
@@ -1632,6 +1673,9 @@ impl Session {
             | DELETE_DRAWING
             | ADD_TRACKS
             | ADD_VIA
+            | MOVE_TRACKS
+            | SET_TRACK_WIDTH
+            | SET_VIA_SIZE
             | DELETE_TRACKS
             | DRAW_WIRE
             | DELETE_WIRE
@@ -1768,6 +1812,9 @@ impl Session {
                 | DELETE_DRAWING
                 | ADD_TRACKS
                 | ADD_VIA
+                | MOVE_TRACKS
+                | SET_TRACK_WIDTH
+                | SET_VIA_SIZE
                 | DELETE_TRACKS
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
@@ -1915,7 +1962,7 @@ impl Session {
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
-            ADD_TRACKS | ADD_VIA | DELETE_TRACKS => self.edit_tracks(id, params)?,
+            ADD_TRACKS | ADD_VIA | MOVE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),

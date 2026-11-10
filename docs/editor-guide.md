@@ -583,11 +583,21 @@ that would join pads on two different nets is refused, as is a second via on the
 spot. The tool needs a board setup with at least two copper layers.
 
 Without a tool, click a track or via to select it (Shift adds, Ctrl or ⌘ toggles) and
-press Delete to remove it; deleting a via keeps its tracks. The **Tracks** selection
+press Delete to remove it; deleting a via keeps its tracks. A selection box also picks
+tracks and vias, with the same Window/Crossing rules as footprints. **U** selects every
+track and via joined by copper to the one under the pointer, or to the current copper
+selection. With copper selected and no footprint selected, **M** (or **Layout → Modify → Move**)
+moves the selection
+with the pointer until the next click, and dragging a track or via moves it directly;
+both snap to the grid, Esc or right-click cancels, and each completed move is one undo
+step. Properties shows the selected tracks and vias, with editable **Width**, **Via
+pad** and **Via drill** fields in the display units; a value applies to every selected
+item when you release a drag or press Enter. A move or resize whose copper would reach
+another net's pad is refused, leaving the board unchanged. The **Tracks** selection
 filter turns track picking off. Tracks stay on their layer, so a back-side track does
-not reach front-only SMD pads, while a via joins copper on every layer. Dragging
-tracks, blind or buried vias, and clearance or DRC checks are not
-implemented yet. PgUp and PgDn still change layer by cancelling the route.
+not reach front-only SMD pads, while a via joins copper on every layer. Reshaping a
+route by dragging one segment, blind or buried vias, and clearance or DRC checks are
+not implemented yet. PgUp and PgDn still change layer by cancelling the route.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

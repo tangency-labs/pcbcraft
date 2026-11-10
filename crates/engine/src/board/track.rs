@@ -20,6 +20,12 @@ use uuid::Uuid;
 pub const ADD_TRACKS: &str = "pcb.add_tracks";
 /// Place one standalone through via, for stitching or to start a route, in one undo step.
 pub const ADD_VIA: &str = "pcb.add_via";
+/// Move addressed tracks and vias by one displacement, keeping their sizes and layers.
+pub const MOVE_TRACKS: &str = "pcb.move_tracks";
+/// Change the width of addressed track segments.
+pub const SET_TRACK_WIDTH: &str = "pcb.set_track_width";
+/// Change the pad diameter and drill of addressed vias.
+pub const SET_VIA_SIZE: &str = "pcb.set_via_size";
 /// Remove addressed track segments and vias without changing footprints or other copper.
 pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
 /// The width the PCB route tool starts with, 0.25 mm.
@@ -368,8 +374,10 @@ fn ids(params: &Value, name: &str, existing: impl Fn(&Uuid) -> bool) -> Result<B
 }
 
 impl Session {
-    /// Add one routed path, place one standalone via, or delete addressed tracks and vias
-    /// atomically. A standalone via may not sit exactly on another via. A path of N distinct
+    /// Add one routed path, place one standalone via, move or resize addressed tracks and vias,
+    /// or delete them, atomically. A standalone via may not sit exactly on another via. Moved
+    /// and resized items count as new copper for the short check, so an edit that makes them
+    /// touch another net's copper is refused whole. A no-op edit leaves history unchanged. A path of N distinct
     /// consecutive points becomes N-1 segments with one width, starting on `layer`. Each layer
     /// change places one via at a vertex after the first, in strictly increasing order, and later
     /// segments continue on its layer; a change at the last vertex ends the route on a via. The whole candidate is validated first: unknown layers or IDs,
@@ -445,6 +453,41 @@ impl Session {
             let id = crate::fresh_id()?;
             added.insert(id);
             vias.push(Via { id, at, diameter_nm: param(params, "via_diameter_nm")?, drill_nm: param(params, "via_drill_nm")? });
+        } else if command == MOVE_TRACKS {
+            let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+            let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+            let (dx, dy): (i64, i64) = (param(params, "dx_nm")?, param(params, "dy_nm")?);
+            if moved_tracks.is_empty() && moved_vias.is_empty() {
+                return Err(CommandError::InvalidParams("name at least one track or via to move".into()));
+            }
+            let shift = |point: Point| Point { x_nm: point.x_nm.saturating_add(dx), y_nm: point.y_nm.saturating_add(dy) };
+            for track in tracks.iter_mut().filter(|track| moved_tracks.contains(&track.id)) {
+                (track.start, track.end) = (shift(track.start), shift(track.end));
+            }
+            for via in vias.iter_mut().filter(|via| moved_vias.contains(&via.id)) {
+                via.at = shift(via.at);
+            }
+            added.extend(moved_tracks.into_iter().chain(moved_vias));
+        } else if command == SET_TRACK_WIDTH {
+            let changed = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+            if changed.is_empty() {
+                return Err(CommandError::InvalidParams("name at least one track".into()));
+            }
+            let width_nm: i64 = param(params, "width_nm")?;
+            for track in tracks.iter_mut().filter(|track| changed.contains(&track.id)) {
+                track.width_nm = width_nm;
+            }
+            added.extend(changed);
+        } else if command == SET_VIA_SIZE {
+            let changed = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+            if changed.is_empty() {
+                return Err(CommandError::InvalidParams("name at least one via".into()));
+            }
+            let (diameter_nm, drill_nm): (i64, i64) = (param(params, "via_diameter_nm")?, param(params, "via_drill_nm")?);
+            for via in vias.iter_mut().filter(|via| changed.contains(&via.id)) {
+                (via.diameter_nm, via.drill_nm) = (diameter_nm, drill_nm);
+            }
+            added.extend(changed);
         } else {
             let gone_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
             let gone_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
@@ -455,6 +498,9 @@ impl Session {
             vias.retain(|via| !gone_vias.contains(&via.id));
         }
         validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
+        if tracks == project.board.tracks && vias == project.board.vias {
+            return Ok(());
+        }
         let mut next = project.clone();
         let board = std::sync::Arc::make_mut(&mut next.board);
         board.tracks = tracks;
