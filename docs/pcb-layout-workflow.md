@@ -54,9 +54,9 @@ track, and the resulting short can go unreported.
 
 **Behavior.** While a footprint moves, rotates or flips, each track end on one of
 its pads follows the pad, and the rest of that track stretches. Vias stay put.
-Preserve contacts where a pad touches the interior of a track or where a branch
-joins the interior of a stretched track. Refuse the edit if it would break
-either contact.
+Preserve contacts where a pad touches the interior of a track, where a branch
+joins the interior of a stretched track, or where a pad overlaps a fixed via.
+Refuse the edit if it would break any of those contacts.
 The edit is refused, like a track edit, if the moved pads or stretched tracks
 would join two nets. One undo step covers the placement and the stretched
 tracks. If a flip changes a pad's copper layer, the attached track end is
@@ -73,6 +73,8 @@ way D segment drags show them now.
   edit is refused with the board unchanged.
 - Stretch a track with a branch attached between its endpoints: the branch
   stays connected, or the edit is refused with the board unchanged.
+- Move a pad with a via in it and no track end on the pad: the fixed via stays
+  connected, or the edit is refused with the board unchanged.
 - Move a footprint onto another net's track: refused, with the board unchanged.
 - Flip a routed SMD footprint: the end detaches and the airwire returns.
 - Align three routed footprints: one undo step.
@@ -127,7 +129,9 @@ up only when DRC runs.
   clearance.
 - A segment that would violate clearance against other-net copper stops at the
   last legal point. Clicking there commits the route up to that point.
-- A setting allows routing through anyway; the violation then shows up in DRC.
+- A setting allows clearance violations while copper on different nets stays
+  physically separate. DRC reports those violations, and the router still
+  refuses shorts.
 
 **Model and commands.** No format change. The engine exposes one clearance query
 that DRC, the router and later the zone fill all use. It reuses DRC's segment
