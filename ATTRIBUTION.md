@@ -910,3 +910,12 @@ and commands. The contract creates independent sheets, not repeated instances;
 native saved formats are unchanged. The PCB export topology guard compares only
 selected terminals and carried global names. Command-built tests introduce no
 external EDA source, source-derived fixture, artwork, data or dependency.
+
+## Hierarchical clipboard presentation
+
+The hierarchy context/keyboard actions, per-view cached ghost, explicit Paste
+Options and navigation/input separation are original PCBcraft work over the
+rooted engine contract and existing Craft controls. Regression fixtures use
+shared native commands; the native two-process harness uses eframe's existing
+clipboard path. No external EDA implementation, source-derived fixture, asset,
+dependency or native saved-format change was introduced.

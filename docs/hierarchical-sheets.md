@@ -45,3 +45,11 @@ directly attached to either. Deleting the child through the Browser also removes
 its placements and associated board footprints; its own children become roots.
 Each operation is atomic and undoable. Save/reopen preserves hierarchy and
 connectivity in folders and packed projects; see the [storage contract](native-project-storage.md#hierarchical-sheet-records).
+
+Copy, Cut and Duplicate are also available for sheet bodies and hovered interface
+labels. A body copy carries its complete child subtree; duplication makes new
+independent documents and components. Cut retains child documents for relocation
+and preserves unselected incident routes on both sides of an interface. See the
+[clipboard guide](clipboard.md#hierarchical-clipboard) for reuse, naming,
+versioned exchange and cancellation. These operations keep the existing
+single-parent model and do not introduce repeated sheet instances.

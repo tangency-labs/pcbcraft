@@ -540,7 +540,7 @@ fn content_bottom(project: &Project) -> i64 {
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
 impl PcbApp {
     /// Complete the already-presented, single-sheet native regression form through the same
     /// policy/preview/commit handlers exercised by canvas tests; no test mutates project fields.

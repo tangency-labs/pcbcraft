@@ -10,7 +10,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(target_os = "linux")]
 use winit::platform::wayland::EventLoopBuilderExtWayland as _;
+#[cfg(target_os = "windows")]
+use winit::platform::windows::EventLoopBuilderExtWindows as _;
 
 struct ClipboardLogger;
 impl log::Log for ClipboardLogger {
@@ -32,6 +35,7 @@ struct Peer {
     root: PathBuf,
     sender: bool,
     board: bool,
+    hierarchy: bool,
     frames: u64,
     requested: Option<u64>,
     started: Instant,
@@ -58,8 +62,13 @@ impl eframe::App for Peer {
                     self.app.select_all_board();
                     self.app.copy_board_clipboard(ui.ctx(), false);
                 } else {
-                    let id = self.app.session.project().unwrap().symbols()[0].id();
-                    self.app.select(pcbcraft_engine::selection::Selection::one_symbol(id));
+                    if self.hierarchy {
+                        self.app.select(Default::default());
+                        self.app.views.active.schematic.selected_sheet_symbol = Some(self.app.session.project().unwrap().sheet_symbols()[0].id);
+                    } else {
+                        let id = self.app.session.project().unwrap().symbols()[0].id();
+                        self.app.select(pcbcraft_engine::selection::Selection::one_symbol(id));
+                    }
                     self.app.copy_schematic_clipboard(ui.ctx(), false);
                 }
                 self.requested = Some(self.frames);
@@ -86,7 +95,11 @@ impl eframe::App for Peer {
                 false
             };
             if completed {
-                assert_eq!(self.app.session.project().unwrap().symbols().len(), 1);
+                assert_eq!(self.app.session.project().unwrap().components().count(), 1);
+                assert_eq!(self.app.session.project().unwrap().symbols().len(), usize::from(!self.hierarchy));
+                if self.hierarchy {
+                    assert_eq!(self.app.session.project().unwrap().sheets().len(), 3);
+                }
                 assert_eq!(self.app.session.project().unwrap().components().next().unwrap().reference(), "R1");
                 if self.board {
                     let p = self.app.session.project().unwrap();
@@ -117,22 +130,44 @@ fn native_clipboard_peer() -> eframe::Result {
     let _ = log::set_logger(&CLIPBOARD_LOGGER);
     log::set_max_level(log::LevelFilter::Trace);
     let sender = std::env::var("PCBCRAFT_CLIPBOARD_TEST_ROLE").unwrap() == "sender";
-    let board = std::env::var("PCBCRAFT_CLIPBOARD_TEST_EDITOR").is_ok_and(|s| s == "board");
+    let editor = std::env::var("PCBCRAFT_CLIPBOARD_TEST_EDITOR").unwrap_or_default();
+    let board = editor == "board";
+    let hierarchy = editor == "hierarchy";
     let passed = Arc::new(AtomicBool::new(false));
     let evidence = passed.clone();
     let mut app = PcbApp::default();
     app.session.apply("project.new", &json!({"name":if sender {"Clipboard sender"}else{"Clipboard receiver"},"create_board":board})).unwrap();
     if sender {
+        let root = app.session.project().unwrap().sheet_target();
+        let sheet = if hierarchy {
+            app.session
+                .apply(
+                    pcbcraft_engine::hierarchy::CREATE_CHILD,
+                    &json!({"name":"Child","x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}),
+                )
+                .unwrap();
+            let child = app.session.project().unwrap().sheets().find(|s| s.name == "Child").unwrap().target;
+            app.session.apply(pcbcraft_engine::hierarchy::CREATE_CHILD,&json!({"sheet":child.id(),"name":"Grandchild","x_nm":20*pcbcraft_engine::schematic::GRID_NM,"y_nm":0,"expected_revision":app.session.revision()})).unwrap();
+            child
+        } else {
+            root
+        };
         app.session
-            .apply(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}))
+            .apply(
+                pcbcraft_engine::PLACE_SYMBOL,
+                &json!({"sheet":sheet.id(),"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}),
+            )
             .unwrap();
         if board {
             app.session.apply(pcbcraft_engine::PLACE_FOOTPRINT, &json!({"symbol":"symbol-2","definition":"resistor-0402","mapping":{"1":"2","2":"1"},"x_nm":0,"y_nm":0,"expected_revision":app.session.revision()})).unwrap();
         }
-        let id = app.session.project().unwrap().symbols()[0].id();
         app.views.sync(&app.session);
-        app.select(pcbcraft_engine::selection::Selection::one_symbol(id));
+        if !hierarchy {
+            let id = app.session.project().unwrap().symbols()[0].id();
+            app.select(pcbcraft_engine::selection::Selection::one_symbol(id));
+        }
     }
+
     if board {
         app.views.sync(&app.session);
         let id = app.views.active.id();
@@ -151,26 +186,43 @@ fn native_clipboard_peer() -> eframe::Result {
         },
         Box::new(move |cc| {
             pcbcraft_chrome::fonts::install(&cc.egui_ctx);
-            Ok(Box::new(Peer { app, root: PathBuf::from(root), sender, board, frames: 0, requested: None, started: Instant::now(), passed }))
+            Ok(Box::new(Peer {
+                app,
+                root: PathBuf::from(root),
+                sender,
+                board,
+                hierarchy,
+                frames: 0,
+                requested: None,
+                started: Instant::now(),
+                passed,
+            }))
         }),
     )?;
     assert!(evidence.load(Ordering::SeqCst), "native clipboard peer closed before verification");
     Ok(())
 }
 
-/// Run on an isolated Wayland session: two real windows/processes exchange OS clipboard text.
-/// The sender must remain alive because Wayland clipboard ownership is tied to the native client.
+/// Run on an isolated interactive desktop: two real windows/processes exchange OS clipboard text.
+/// The sender remains alive for platforms such as Wayland that tie clipboard ownership to a client.
 #[test]
-#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated Wayland display"]
+#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated interactive desktop"]
 fn native_clipboard_between_processes() {
     exchange("schematic");
 }
 
 /// Exercise the same real OS boundary with linked PCB data between independent project instances.
 #[test]
-#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated Wayland display"]
+#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated interactive desktop"]
 fn native_board_clipboard_between_processes() {
     exchange("board");
+}
+
+/// The extended schematic envelope carries complete child documents across real OS processes.
+#[test]
+#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated interactive desktop"]
+fn native_hierarchy_clipboard_between_processes() {
+    exchange("hierarchy");
 }
 
 /// Launch and bound two native peers using the selected editor's actual clipboard path.

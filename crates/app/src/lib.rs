@@ -1156,7 +1156,11 @@ impl PcbApp {
                         ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
                     }
                 } else if self.views.active.schematic.clipboard.active() || self.views.active.board.clipboard.active() {
-                    ui.label(dim("Paste · Click to place · R rotate · Esc cancel"));
+                    ui.label(dim(if self.views.active.schematic.clipboard.can_rotate() {
+                        "Paste · Click to place · R rotate · Esc cancel"
+                    } else {
+                        "Paste · Click to place · Esc cancel"
+                    }));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {
@@ -1340,6 +1344,7 @@ impl PcbApp {
                             &highlight,
                             self.views.active.filters,
                             input_enabled,
+                            input_enabled,
                             self.preferences.navigation,
                             self.preferences.grid_opacity_percent,
                             self.preferences.auto_heal_wires,
@@ -1439,6 +1444,7 @@ impl PcbApp {
             }
             (Some(Tool::Hierarchy { kind, id, .. }), Click::HierarchyPlace(at)) => self.hierarchy_place(source, kind, id, at),
             (None, Click::HierarchyAction(kind, id, action)) => self.hierarchy_action(source, kind, id, action),
+            (None, Click::HierarchyClipboard(kind, id, action, ctx)) => self.hierarchy_clipboard_action(&ctx, kind, id, action),
             (Some(Tool::PlaceSymbol { definition, value, revision, turns }), Click::Place(point)) => {
                 self.views.active.schematic.tool = None;
                 self.place_catalog_symbol(

@@ -218,7 +218,11 @@ impl Action {
         let project = app.session.project().is_some();
         let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
         match self {
-            Self::Copy | Self::Cut | Self::Duplicate => project && schematic && !app.views.active.schematic.selection.is_empty(),
+            Self::Copy | Self::Cut | Self::Duplicate => {
+                project
+                    && schematic
+                    && (!app.views.active.schematic.selection.is_empty() || app.views.active.schematic.selected_sheet_symbol.is_some())
+            }
             Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
             Self::Sync => project && app.views.active.input(&app.session).is_some(),
