@@ -207,14 +207,15 @@ pub(super) fn can_place_via(view: BoardView<'_>) -> bool {
     view.setup().is_some_and(|setup| setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).count() >= 2)
 }
 
-/// Snap a via to the nearest pad center or track end on any copper layer within reach of the
-/// pointer, otherwise to this view's grid.
-fn via_target(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>) -> Point {
+/// Snap to the nearest pad center, track end or via on any copper layer within reach of the
+/// pointer, otherwise to this view's grid. Used to place vias and to measure.
+pub(super) fn copper_target(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>) -> Point {
     view.footprints()
         .flat_map(|footprint| footprint.pads)
         .filter(|pad| matches!(pad.copper_layers, Some(CopperLayers::Resolved { .. })))
         .map(|pad| pad.center)
         .chain(view.tracks().iter().flat_map(|track| [track.start, track.end]))
+        .chain(view.vias().iter().map(|via| via.at))
         .filter_map(|point| {
             let distance = camera.screen(point, rect).distance(pointer);
             (distance <= SNAP_PX).then_some((distance, point))
@@ -413,7 +414,7 @@ pub(super) fn interact(
         if response.clicked()
             && let Some(pointer) = pointer
         {
-            let at = via_target(pointer, camera, rect, view);
+            let at = copper_target(pointer, camera, rect, view);
             state.committed = Some(Committed {
                 width_nm: state.width_nm,
                 via_diameter_nm: state.via_diameter_nm,
@@ -654,7 +655,7 @@ pub(super) fn paint_draft(ui: &Ui, rect: Rect, camera: &Camera, view: BoardView<
     let painter = ui.painter().with_clip_rect(rect);
     let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|point| rect.contains(*point)) else { return };
     if state.via_tool {
-        let at = camera.screen(via_target(pointer, camera, rect, view), rect);
+        let at = camera.screen(copper_target(pointer, camera, rect, view), rect);
         pcbcraft_chrome::board::via(
             &painter,
             at,

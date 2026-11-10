@@ -74,11 +74,11 @@ pub(super) fn selection(state: &BoardState, project: &Project) -> BoardSelection
         vias: state.tracks.selected.intersection(&vias).copied().collect(),
     }
 }
-/// An authored tool or preview retains exclusive ownership of its source selection.
+/// A canvas tool or preview retains exclusive ownership of input and its source selection.
 pub(super) fn busy(state: &BoardState) -> bool {
     state.clipboard.active() || authored_tool(state)
 }
-/// Tools chosen from chrome supersede an existing clipboard preview before canvas input runs.
+/// Tools, including the view-only ruler, supersede a clipboard preview before canvas input runs.
 fn authored_tool(state: &BoardState) -> bool {
     state.move_requested
         || state.rotate_requested != 0
@@ -88,6 +88,7 @@ fn authored_tool(state: &BoardState) -> bool {
         || state.drawing.tool.is_some()
         || state.drawing.source().is_some()
         || state.tracks.busy()
+        || state.measure.busy()
 }
 
 impl PcbApp {
@@ -388,6 +389,7 @@ impl PcbApp {
             self.preferences.board_grid_style,
             label,
             &[],
+            self.preferences.units,
         );
         if pointer.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);

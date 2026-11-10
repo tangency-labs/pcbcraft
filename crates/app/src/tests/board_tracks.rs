@@ -618,3 +618,67 @@ fn flip_view_mirrors_drawing_and_picking_without_editing() {
     assert!(h.state_mut().run_window_command(&ctx, "view.set_board_flipped", &json!({"view":999,"flipped":true})).is_err());
     assert_eq!(h.state().session.revision(), revision, "flipping never edits the project");
 }
+
+/// Ctrl+Shift+M measures between snapped pad centers in either view without selecting or editing;
+/// Esc clears the ruler, then leaves the tool, while flipped orientation remains visible.
+#[test]
+fn measure_reports_the_distance_between_snapped_points() {
+    for flipped in [false, true] {
+        let mut h = routable();
+        h.state_mut().views.active.camera.set_mirrored(flipped);
+        h.run();
+        h.state_mut().preferences.units = pcbcraft_chrome::units::Unit::Mm;
+        let line = airwires(&h)[0].clone();
+        let (a, b) = (line.from.position, line.to.position);
+        let revision = h.state().session.revision();
+        h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::M);
+        h.run();
+        assert!(h.state().views.active.board.measure.tool);
+        assert_eq!(h.query_by_label("Bottom view").is_some(), flipped);
+        let near_a = at(&h, a) + egui::vec2(2., 1.);
+        click_canvas_at(&mut h, near_a);
+        h.run_steps(20);
+        let near_b = at(&h, b) + egui::vec2(-2., 1.);
+        click_canvas_at(&mut h, near_b);
+        h.run_steps(20);
+        let expected = crate::board_measure::label(a, b, pcbcraft_chrome::units::Unit::Mm);
+        let painted = h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == expected));
+        assert!(painted, "the ruler shows {expected}");
+        assert!(h.state().views.active.board.selection.is_empty() && h.state().views.active.board.tracks.selected.is_empty());
+        assert_eq!(h.state().session.revision(), revision, "measuring edits nothing");
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().views.active.board.measure.tool, "the first Esc clears the ruler");
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(!h.state().views.active.board.measure.tool);
+    }
+}
+
+/// A ruler owns canvas input without changing an existing mixed selection. Delete, Cut and the
+/// shared delete action cannot mutate its footprints or copper until measurement is left.
+#[test]
+fn measure_preserves_mixed_selection_against_delete_and_cut() {
+    let mut h = routable();
+    add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    h.state_mut().select_all_board();
+    h.run();
+    assert!(!h.state().views.active.board.selection.is_empty());
+    assert!(!h.state().views.active.board.tracks.selected.is_empty());
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Measure distance");
+    h.key_press(Key::Delete);
+    h.run();
+    h.event(egui::Event::Cut);
+    h.run();
+    h.state_mut().delete_board_items();
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    assert!(!h.state().views.active.board.selection.is_empty());
+    assert!(!h.state().views.active.board.tracks.selected.is_empty());
+    assert!(h.state().views.active.board.measure.tool);
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().views.active.board.measure.tool);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}

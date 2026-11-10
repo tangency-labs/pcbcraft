@@ -15,6 +15,7 @@ mod board_canvas;
 mod board_clipboard;
 mod board_drawing;
 mod board_drc;
+mod board_measure;
 mod board_outputs;
 mod board_panels;
 mod board_setup;
@@ -1163,6 +1164,9 @@ impl PcbApp {
                 } else if self.views.active.workspace == Workspace::Board {
                     let empty = self.session.project().is_some_and(|project| project.board_target().is_none());
                     ui.label(dim(board_status.as_deref().unwrap_or(if empty { "No board" } else { "Board" })));
+                    if self.views.active.board.measure.tool {
+                        ui.label(dim("Measure · Click a start point, then an end point · Esc clears"));
+                    }
                     if !empty {
                         ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
                     }
@@ -1711,7 +1715,8 @@ impl PcbApp {
         } else if !assistant_keys && !egui::Popup::is_any_open(ctx) && self.views.active.workspace == Workspace::Board {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
                 && (!board_clipboard::busy(&self.views.active.board)
-                    || (!self.views.active.board.tracks.escape()
+                    || (!self.views.active.board.measure.escape()
+                        && !self.views.active.board.tracks.escape()
                         && !self.views.active.board.drawing.escape()
                         && self.views.active.board.draft.take().is_none()
                         && self.views.active.board.placement.take().is_none()
@@ -1736,6 +1741,9 @@ impl PcbApp {
             }
             if pressed(&PLACE_VIA) {
                 self.start_via();
+            }
+            if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::M)) {
+                self.start_measure();
             }
             self.views.active.board.tracks.connected_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::U));
             if self.views.active.board.tracks.tool {
@@ -2327,6 +2335,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB layout", "Route track", "X".to_owned()));
     list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
+    list.push(("PCB layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
     list.push(("PCB layout", "Select connected copper", "U".to_owned()));
     list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));

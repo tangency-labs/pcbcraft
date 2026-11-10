@@ -91,6 +91,7 @@ pub(super) fn show(
     grid_style: pcbcraft_chrome::grid::Style,
     label: &str,
     markers: &[(Point, bool)],
+    unit: pcbcraft_chrome::units::Unit,
 ) -> Interaction {
     let idle = !crate::board_clipboard::busy(state);
     let rect = ui.available_rect_before_wrap();
@@ -102,6 +103,9 @@ pub(super) fn show(
     camera.navigate_board(&response, rect, project, enabled, navigation);
     let placement_enabled = enabled;
     let enabled = enabled && state.placement.is_none();
+    // The view-only ruler owns its clicks, so nothing else selects or edits while it is armed.
+    let measuring = crate::board_measure::interact(ui, &response, camera, project, &mut state.measure, enabled && state.draft.is_none());
+    let enabled = enabled && !measuring;
     let copper = project.setup().map(|setup| {
         setup
             .layers()
@@ -373,6 +377,7 @@ pub(super) fn show(
         }
     }
     crate::board_tracks::paint_draft(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref());
+    crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if project.footprints().next().is_none()
         && project.drawings().is_empty()
         && project.tracks().is_empty()

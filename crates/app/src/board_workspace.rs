@@ -246,6 +246,7 @@ impl PcbApp {
             let tool = if index == 0 { crate::board_drawing::Tool::Lines } else { crate::board_drawing::Tool::Rectangle };
             let layer = self.views.active.board.active_layer.clone();
             self.views.active.board.tracks.cancel();
+            self.views.active.board.measure.cancel();
             self.views.active.board.drawing.start(tool, layer);
         }
         workspace::ribbon_separator(ui);
@@ -334,11 +335,24 @@ impl PcbApp {
             },
             reveal[0],
         ];
-        let inspect_planned =
-            [planned(ToolIcon::Rules, "Rules", "Edit design rules (planned)"), planned(ToolIcon::Measure, "Measure", "Measure distance (planned)")];
+        let inspect = [
+            inspect[0],
+            RibbonTool {
+                icon: ToolIcon::Measure,
+                label: "Measure",
+                description: "Measure distance",
+                shortcut: "Ctrl+Shift+M",
+                enabled,
+                active: self.views.active.board.measure.tool,
+                toggle: false,
+            },
+            inspect[1],
+        ];
+        let inspect_planned = [planned(ToolIcon::Rules, "Rules", "Edit design rules (planned)")];
         match workspace::ribbon_group_with_menu(ui, "Inspect", &inspect, &inspect_planned) {
             Some(0) => self.run_drc(),
-            Some(1) => self.views.reveal_highlight(self.views.active.id(), &self.session),
+            Some(1) => self.start_measure(),
+            Some(2) => self.views.reveal_highlight(self.views.active.id(), &self.session),
             _ => {}
         }
         workspace::ribbon_separator(ui);
@@ -477,7 +491,18 @@ impl PcbApp {
             return;
         }
         self.views.active.board.drawing.cancel();
+        self.views.active.board.measure.cancel();
         self.views.active.board.tracks.start_via();
+    }
+
+    /// Arm Inspect › Measure (Ctrl+Shift+M) in the focused board view, dropping other tools.
+    /// Drops clipboard and placement previews without editing the project or selection.
+    pub(super) fn start_measure(&mut self) {
+        if self.views.active.workspace != Workspace::Board || self.views.active.board.draft.is_some() {
+            return;
+        }
+        self.views.active.cancel_gesture();
+        self.views.active.board.measure.start();
     }
 
     /// Arm the route tool (KiCad: X) in the focused board view when its active layer is visible
@@ -487,6 +512,7 @@ impl PcbApp {
             return;
         }
         self.views.active.board.drawing.cancel();
+        self.views.active.board.measure.cancel();
         self.views.active.board.tracks.start();
     }
 
@@ -548,6 +574,7 @@ impl PcbApp {
                         self.preferences.board_grid_style,
                         &label,
                         &markers,
+                        self.preferences.units,
                     )
                 })
             })
