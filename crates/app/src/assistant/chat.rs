@@ -764,13 +764,16 @@ fn restrict_to_user(path: &std::path::Path) -> std::io::Result<()> {
 /// tools bridge are ended in the background, and on Windows the folder can't be removed while
 /// either still runs in it, so a folder that won't go yet is retried on a thread for up to
 /// [`WORKDIR_RELEASE_LIMIT`] and the window never waits (#218). Returns that thread, if one was
-/// started, for tests to wait on. A folder still held after the limit is left behind.
+/// started, for tests to wait on. A folder still held after the limit, or one whose retry thread
+/// can't start, is left behind with a warning in the log.
 fn release_workdir(dir: tempfile::TempDir) -> Option<std::thread::JoinHandle<()>> {
     // Keep the path so a failed delete isn't forgotten, as dropping `TempDir` would do.
     let path = dir.keep();
     if remove_workdir(&path) {
         return None;
     }
+    // The log names the folder, so a leftover one can be traced to this.
+    let shown = path.display().to_string();
     std::thread::Builder::new()
         .name("pcbcraft-agent-workdir".to_owned())
         .spawn(move || {
@@ -781,7 +784,9 @@ fn release_workdir(dir: tempfile::TempDir) -> Option<std::thread::JoinHandle<()>
                     return;
                 }
             }
+            log::warn!("assistant: the agent's working folder {} is still in use, so it was left", path.display());
         })
+        .map_err(|error| log::warn!("assistant: could not retry removing the agent's working folder {shown}: {error}"))
         .ok()
 }
 
