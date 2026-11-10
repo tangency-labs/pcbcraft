@@ -99,6 +99,31 @@ fn cut_relocation_reuses_components_and_ghost_cannot_cut_the_source() {
     assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
 }
 
+/// The native via key event leaves selected footprints untouched; Shift+Delete's Cut event
+/// still removes physical placement through the clipboard without deleting logical components.
+#[test]
+fn via_chord_preserves_selection_while_shift_delete_cut_remains_available() {
+    for modifiers in [
+        Modifiers { ctrl: true, command: true, shift: true, ..Modifiers::NONE },
+        Modifiers { mac_cmd: true, command: true, shift: true, ..Modifiers::NONE },
+    ] {
+        let mut h = board();
+        let before = h.state().session.snapshot().unwrap();
+        h.key_press_modifiers(modifiers, Key::X);
+        h.run();
+        assert!(h.state().views.active.board.tracks.via_tool);
+        assert_eq!(counts(&h).0, 1);
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+    let mut h = board();
+    h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    let text = copy(&mut h, true);
+    assert_eq!(BoardFragment::from_text(&text).unwrap().counts().0, 1);
+    assert_eq!(counts(&h).0, 0);
+    assert!(!h.state().views.active.board.tracks.via_tool);
+    assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
+}
+
 /// Rotation belongs to the physical group; Escape, stale input and replacement openings discard it.
 #[test]
 fn board_previews_cancel_without_partial_mutation() {

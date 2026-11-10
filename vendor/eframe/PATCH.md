@@ -4,7 +4,7 @@ This is eframe 0.36.2 from crates.io, upstream egui commit
 `49682f8baa058bf49e011035cfbd6e825f88a5ef`, with its MIT and Apache-2.0 notices.
 The package manifest retains registry dependency versions; no dependency is fetched
 from a moving Git branch. The local changes are in `src/epi.rs`,
-`src/native/epi_integration.rs`, `src/native/wgpu_integration.rs`,
+`src/native/epi_integration.rs`, `src/native/canvas_shortcut.rs`, `src/native/wgpu_integration.rs`,
 `src/native/glow_integration.rs` and `src/web/events.rs`, plus local license
 paths in `Cargo.toml`.
 
@@ -73,6 +73,9 @@ by application regressions. Reassess this change when updating eframe.
 The local native input integration also preserves Command/Ctrl+Shift+X as a key
 event when no widget owns keyboard input. egui-winit 0.36.2 otherwise converts
 it to Cut and drops the key. Pending modifier events take precedence over the
-previous frame. Text widgets retain normal native clipboard handling. Plain V
-while routing is unchanged. The shortcut predicate has Windows/macOS modifier
-regression coverage. This original patch adds no dependency or external source.
+previous frame. Unmapped non-Latin characters fall back to physical X before
+Cut conversion, while mapped logical letters retain their layout meaning.
+Text widgets and Windows Shift+Delete retain native clipboard handling. Plain V
+while routing is unchanged. The shortcut predicate has Windows/macOS modifier,
+non-Latin fallback and text-focus regression coverage. This original patch adds
+no dependency or external source.

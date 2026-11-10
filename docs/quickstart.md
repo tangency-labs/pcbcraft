@@ -577,3 +577,7 @@ footprints duplicate their schematic counterparts too, so PCB Paste Options
 shows the destination sheet and schematic anchor for each source circuit.
 Same-project Cut/Paste can reuse the original unplaced components. Review the
 [clipboard guide](clipboard.md) for layer mapping, named nets and relocation.
+
+Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
+non-Latin layouts, it uses physical X when the logical character has no key
+mapping; Windows Shift+Delete remains Cut.
