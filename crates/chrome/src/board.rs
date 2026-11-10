@@ -77,6 +77,18 @@ pub fn measurement(p: &Painter, a: Pos2, b: Pos2, label: &str) {
     p.galley(rect.center() - galley.size() / 2., galley, t.text);
 }
 
+/// Outline highlighted net copper in the cross-probe highlight color, over the normal drawing.
+pub fn net_highlight(p: &Painter, points: &[Pos2], closed: bool, width: f32) {
+    let stroke = Stroke::new(width.max(2.), Tokens::get().board_highlight);
+    if points.len() == 1 {
+        p.circle_stroke(points[0], width.max(2.), stroke);
+    } else if closed {
+        p.add(egui::Shape::closed_line(points.to_vec(), stroke));
+    } else {
+        p.add(egui::Shape::line(points.to_vec(), stroke));
+    }
+}
+
 /// Mark a design rules finding: a small warning triangle in the error color, filled and ringed
 /// when it is the focused finding.
 pub fn drc_marker(p: &Painter, at: Pos2, focused: bool) {

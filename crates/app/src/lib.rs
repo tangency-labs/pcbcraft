@@ -1164,6 +1164,9 @@ impl PcbApp {
                 } else if self.views.active.workspace == Workspace::Board {
                     let empty = self.session.project().is_some_and(|project| project.board_target().is_none());
                     ui.label(dim(board_status.as_deref().unwrap_or(if empty { "No board" } else { "Board" })));
+                    if let Some(net) = &self.views.active.board.highlight_net {
+                        ui.label(dim(format!("Net {net} highlighted · ` over empty space clears")));
+                    }
                     if self.views.active.board.measure.tool {
                         ui.label(dim("Measure · Click a start point, then an end point · Esc clears"));
                     }
@@ -1776,6 +1779,7 @@ impl PcbApp {
             }
             self.views.active.board.move_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::M));
             self.views.active.board.flip_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F));
+            self.views.active.board.net_highlight_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backtick));
             self.views.active.board.rotate_requested = if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::R)) {
                 270
             } else if pressed(&ROTATE) {
@@ -2356,6 +2360,7 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
     list.push(("PCB layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
     list.push(("PCB layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB layout", "Highlight the net under the pointer", "`".to_owned()));
     list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));
     list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));

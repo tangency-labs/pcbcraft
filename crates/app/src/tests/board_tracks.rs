@@ -812,3 +812,209 @@ fn page_keys_place_vias_mid_route() {
     assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()), "outside a route PgDn only changes layer");
     assert_eq!(vias(&h).len(), 2);
 }
+
+/// Backtick over a pad highlights its net, over routed copper the net that copper carries, and over
+/// empty space clears the highlight; nothing is edited.
+#[test]
+fn backtick_highlights_the_net_under_the_pointer() {
+    let mut h = routable();
+    let line = airwires(&h)[0].clone();
+    let (a, b) = (line.from.position, line.to.position);
+    let net =
+        h.state().session.project().unwrap().boards().next().unwrap().footprints().flat_map(|f| f.pads).find(|p| p.center == a).unwrap().net.unwrap();
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    let path = [a, Point { x_nm: a.x_nm, y_nm: -2_540_000 }, Point { x_nm: b.x_nm, y_nm: -2_540_000 }, b];
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    h.run();
+    let revision = h.state().session.revision();
+    h.hover_at(at(&h, a));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net.as_deref(), Some(net.as_str()));
+    assert!(h.query_by_label_contains(&format!("Net {net} highlighted")).is_some());
+    let highlight = pcbcraft_chrome::Tokens::get().board_highlight;
+    let outlined = h.output().shapes.iter().filter(|shape| match &shape.shape {
+        egui::Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(highlight),
+        _ => false,
+    });
+    assert!(outlined.count() >= 2, "both pads and the route are outlined");
+    h.hover_at(at(&h, Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: 1_270_000 }));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, None, "clear the pad highlight before testing track picking");
+    h.hover_at(at(&h, Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: -2_540_000 }));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net.as_deref(), Some(net.as_str()), "the track carries the net");
+    h.hover_at(at(&h, Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: 1_270_000 }));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, None);
+    assert_eq!(h.state().session.revision(), revision);
+}
+
+/// Net overlays hide surface pads and tracks with their layers while retaining visible-layer
+/// copper and the ordinary renderer's layer-independent via policy.
+#[test]
+fn net_highlight_respects_copper_layer_visibility() {
+    let mut h = routable();
+    let line = airwires(&h)[0].clone();
+    let a = line.from.position;
+    let c = Point { x_nm: a.x_nm, y_nm: a.y_nm - 2_540_000 };
+    let d = Point { x_nm: line.to.position.x_nm, y_nm: c.y_nm };
+    let top = layer_named(&h, "Top");
+    let bottom = layer_named(&h, "Bottom");
+    for (layer, path) in [(&top, [a, c]), (&bottom, [c, d])] {
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    }
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_VIA, &json!({"at":c,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    h.hover_at(at(&h, a));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    let revision = h.state().session.revision();
+    let highlighted = h.state().views.active.board.highlight_net.clone();
+    assert!(highlighted.is_some());
+    let outlines = |h: &Harness<'_, PcbApp>| {
+        let highlight = pcbcraft_chrome::Tokens::get().board_highlight;
+        let canvas = h.get_by_label("PCB canvas").rect();
+        h.output().shapes.iter().filter(|shape| shape.clip_rect == canvas).fold((0, 0), |(paths, vias), shape| match &shape.shape {
+            egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(highlight) => (paths + 1, vias),
+            egui::Shape::Circle(circle) if circle.stroke.color == highlight => (paths, vias + 1),
+            _ => (paths, vias),
+        })
+    };
+    assert_eq!(outlines(&h), (4, 1), "two pads, both tracks and the via");
+    h.state_mut().views.active.board.set_layer(&top, false, Some(false));
+    h.run();
+    assert_eq!(outlines(&h), (1, 1), "only the bottom track and via remain visible");
+    h.state_mut().views.active.board.set_layer(&bottom, false, Some(false));
+    h.run();
+    assert_eq!(outlines(&h), (0, 1), "vias retain the normal renderer's policy even with all copper layers hidden");
+    h.state_mut().views.active.board.set_layer(&top, false, Some(true));
+    h.run();
+    assert_eq!(outlines(&h), (3, 1), "restoring Top restores its pads and track");
+    assert_eq!(h.state().views.active.board.highlight_net, highlighted);
+    assert_eq!(h.state().session.revision(), revision);
+}
+
+/// Backtick over a hidden surface pad clears the highlight; showing its layer makes it pickable.
+#[test]
+fn net_highlight_does_not_pick_hidden_pads() {
+    let mut h = routable();
+    let a = airwires(&h)[0].from.position;
+    let top = layer_named(&h, "Top");
+    h.hover_at(at(&h, a));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    let net = h.state().views.active.board.highlight_net.clone();
+    assert!(net.is_some());
+    h.state_mut().views.active.board.set_layer(&top, false, Some(false));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, None);
+    h.state_mut().views.active.board.set_layer(&top, false, Some(true));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, net);
+}
+
+/// Physical pads on an unconfigured board remain pickable without inventing layer identities.
+#[test]
+fn net_highlight_keeps_unconfigured_pads_pickable() {
+    let mut h = routable();
+    h.state_mut().run("edit.undo", &json!({})); // Accepted baseline.
+    h.state_mut().run("edit.undo", &json!({})); // Initial board setup.
+    h.run();
+    let board = h.state().session.project().unwrap().boards().next().unwrap();
+    assert!(board.setup().is_none());
+    let pad = board.footprints().flat_map(|f| f.pads).find(|pad| pad.net.is_some()).unwrap();
+    assert!(matches!(pad.copper_layers, Some(pcbcraft_engine::board::view::CopperLayers::Unconfigured { .. })));
+    assert!(pad.copper.is_some());
+    h.hover_at(at(&h, pad.center));
+    h.run();
+    h.key_press(Key::Backtick);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, pad.net);
+}
+
+/// A highlighted net that disappears from the board clears instead of staying named.
+#[test]
+fn a_vanished_highlight_net_clears() {
+    let mut h = routable();
+    h.state_mut().views.active.board.highlight_net = Some("NO SUCH NET".into());
+    let app = h.state_mut();
+    app.views.sync(&app.session);
+    h.run();
+    assert_eq!(h.state().views.active.board.highlight_net, None);
+    assert!(h.query_by_label_contains("Net NO SUCH NET highlighted").is_none());
+}
+
+/// Connectivity is shared across unchanged frames and navigation, refreshed after edits and undo,
+/// and never reused without input authority or across a project reopening.
+#[test]
+fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
+    /// Borrow a snapshot independently of the UI state so the cache can retain only derived data.
+    fn cached(h: &mut Harness<'_, PcbApp>) -> std::sync::Arc<std::collections::BTreeMap<uuid::Uuid, String>> {
+        let source = h.state().views.active.input(&h.state().session);
+        let project = h.state().session.snapshot().unwrap();
+        let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
+        h.state_mut().views.active.board.copper_nets(board, source)
+    }
+    let mut h = routable();
+    let line = airwires(&h)[0].clone();
+    let (a, b) = (line.from.position, line.to.position);
+    let path = [a, Point { x_nm: a.x_nm, y_nm: -2_540_000 }, Point { x_nm: b.x_nm, y_nm: -2_540_000 }, b];
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    h.run();
+    let saved = h.state().session.snapshot().unwrap();
+    let first = cached(&mut h);
+    assert_eq!(first.len(), tracks(&h).len());
+    assert!(!first.is_empty());
+    h.run();
+    assert!(std::sync::Arc::ptr_eq(&first, &cached(&mut h)));
+    h.state_mut().views.active.camera.center_on(a);
+    h.run();
+    assert!(std::sync::Arc::ptr_eq(&first, &cached(&mut h)), "navigation keeps the cache");
+
+    let ids: Vec<_> = tracks(&h).iter().map(|track| track.id).collect();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::DELETE_TRACKS, &json!({"tracks":ids,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    let edited = cached(&mut h);
+    assert!(!std::sync::Arc::ptr_eq(&first, &edited));
+    assert!(edited.is_empty(), "deleted copper cannot keep stale net assignments");
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    let undone = cached(&mut h);
+    assert_eq!(undone, first);
+    assert!(!std::sync::Arc::ptr_eq(&first, &undone), "undo has a new revision");
+
+    let project = h.state().session.snapshot().unwrap();
+    let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
+    let uncached = h.state_mut().views.active.board.copper_nets(board, None);
+    let another = h.state_mut().views.active.board.copper_nets(board, None);
+    assert_eq!(uncached, first);
+    assert!(!std::sync::Arc::ptr_eq(&uncached, &another), "missing authority never caches a preview");
+    let before_open = cached(&mut h);
+    h.state_mut().session.open_snapshot(saved);
+    h.run();
+    let reopened = cached(&mut h);
+    assert_eq!(reopened, first);
+    assert!(!std::sync::Arc::ptr_eq(&before_open, &reopened));
+}

@@ -5,6 +5,7 @@ use crate::{
     schematic_canvas::{Draft, LegTarget, Tool},
 };
 use pcbcraft_engine::{Session, SheetTarget, board::view::BoardTarget, selection::Selection};
+use std::{collections::BTreeMap, sync::Arc};
 
 #[cfg(test)]
 mod tests;
@@ -138,6 +139,14 @@ impl Binding {
     }
 }
 
+/// Derived copper assignments belong to one board and captured view/revision authority.
+#[derive(Debug)]
+pub(super) struct CopperNetsCache {
+    source: ViewInput,
+    target: BoardTarget,
+    nets: Arc<BTreeMap<uuid::Uuid, String>>,
+}
+
 /// Schematic interaction state is separate from board selection and input handling.
 #[derive(Debug, Default)]
 pub(super) struct SchematicState {
@@ -178,6 +187,12 @@ pub(super) struct BoardState {
     pub(super) rotate_requested: u16,
     /// F: flip the hovered or selected footprint, or the footprint being moved, to the other side.
     pub(super) flip_requested: bool,
+    /// `: highlight the net under the pointer, or clear the highlight over empty space.
+    pub(super) net_highlight_requested: bool,
+    /// The net whose pads and copper are drawn highlighted in this view.
+    pub(super) highlight_net: Option<String>,
+    /// Reuse derived copper connectivity while the addressed board and revision stay unchanged.
+    pub(super) copper_nets_cache: Option<CopperNetsCache>,
     pub(super) selection: std::collections::BTreeSet<String>,
     pub(super) hidden_layers: std::collections::BTreeSet<String>,
     pub(super) layer_defaults_applied: bool,
@@ -189,6 +204,24 @@ pub(super) struct BoardState {
 }
 
 impl BoardState {
+    /// Reuse connectivity for the same board and view/revision authority. Missing authority
+    /// recomputes without caching, so disposable previews cannot borrow another opening's data.
+    pub(super) fn copper_nets(
+        &mut self,
+        board: pcbcraft_engine::board::view::BoardView<'_>,
+        source: Option<ViewInput>,
+    ) -> Arc<BTreeMap<uuid::Uuid, String>> {
+        if let Some(cache) = &self.copper_nets_cache
+            && Some(cache.source) == source
+            && cache.target == board.target
+        {
+            return cache.nets.clone();
+        }
+        let nets = Arc::new(board.copper_nets());
+        self.copper_nets_cache = source.map(|source| CopperNetsCache { source, target: board.target, nets: nets.clone() });
+        nets
+    }
+
     /// Share revision-keyed accepted geometry between frames; navigation never invalidates it.
     /// Missing input authority is recomputed rather than reusing a possibly foreign opening.
     pub(super) fn ratsnest(
@@ -670,6 +703,16 @@ impl EditorView {
             self.binding = binding;
         }
         self.board.target = board_target;
+        // A highlighted net that no pad carries any more (after an edit, undo or rename) clears,
+        // so the status bar never names a net that nothing on the board shows.
+        if let Some(net) = &self.board.highlight_net
+            && !root
+                .as_ref()
+                .and_then(|p| board_target.and_then(|target| p.board_view(target)))
+                .is_some_and(|board| board.footprints().any(|footprint| footprint.pads.iter().any(|pad| pad.net.as_deref() == Some(net.as_str()))))
+        {
+            self.board.highlight_net = None;
+        }
         if !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new))
             || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet
         {
