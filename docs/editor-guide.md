@@ -492,7 +492,10 @@ Left-drag empty canvas or right-drag to select footprints with the same Window/C
 box used in the schematic. Only visible footprint geometry contributes to selection;
 Shift adds and Ctrl/Command toggles. Escape cancels the box, and Delete removes
 the selected footprints in one undo step. Footprint moves, rotation and flips operate on one
-placement at a time. **F** (or **Layout → Modify → Flip**) moves the hovered or selected
+placement at a time. With one footprint selected, Properties edits its **X**, **Y** and
+**Rotation** exactly (in the display units and whole degrees) and switches its **Side**
+between Top and Bottom; each change is one undo step through the same transform command
+as M, R and F, keeping the other values. **F** (or **Layout → Modify → Flip**) moves the hovered or selected
 footprint to the other side of the board in one undo step, and F during an M move flips the
 part being moved. A bottom-side footprint is mirrored as seen from the top, its surface pads
 use the back copper, mask and paste, and its silkscreen, courtyard and fabrication graphics
@@ -504,13 +507,13 @@ Browser builds support panes within one tab; native window actions are desktop
 only. The workspace tile can switch to PCB layout, open it beside
 the schematic or create a board window directly. Physical SMD placements render rounded rectangular copper pads, body outlines,
 courtyards and silkscreen, with component counterpart highlights, grouped Layers
-and read-only Properties. Legacy placements retain pad-center markers. The editor
+and Properties. Legacy placements retain pad-center markers. The editor
 supports up to 64 flat or hierarchical schematic sheets sharing one board. Existing footprints can be moved by left-dragging or by
 hovering/selecting one and pressing **M**, then clicking to place it. **R** rotates
 90° counterclockwise and **Shift+R** clockwise, including during a move. **Esc**
 or a right-click cancels a move; releasing a drag over a panel also cancels it.
 The Layout ribbon offers **Move** and **Rotate** for a single selection, and
-Properties reports the saved orientation. Moves snap the footprint origin to the
+Properties shows the saved position, rotation and side as editable fields. Moves snap the footprint origin to the
 view's grid, independently of grid visibility; each completed move and its
 preview rotations form one undo step. A conflicting edit, focus/workspace change
 or project reopen cancels the draft. The [starter footprints](footprint-library.md) include 0402/0603
