@@ -60,6 +60,20 @@ pub fn via(p: &Painter, center: Pos2, radius: f32, drill_radius: f32, selected: 
     p.circle_filled(center, drill_radius.clamp(0.5, radius - 0.5), t.board_canvas);
 }
 
+/// Mark a design rules finding: a small warning triangle in the error color, filled and ringed
+/// when it is the focused finding.
+pub fn drc_marker(p: &Painter, at: Pos2, focused: bool) {
+    let t = Tokens::get();
+    let size = if focused { 9. } else { 6. };
+    let points = vec![at + vec2(0., -size), at + vec2(size * 0.9, size * 0.6), at + vec2(-size * 0.9, size * 0.6)];
+    if focused {
+        p.circle_stroke(at, size * 1.6, Stroke::new(1.5, t.error));
+        p.add(egui::Shape::convex_polygon(points, t.error, Stroke::new(1., t.board_canvas)));
+    } else {
+        p.add(egui::Shape::closed_line(points, Stroke::new(1.5, t.error)));
+    }
+}
+
 /// Distinguish the snapped drawing target from authored vertices without changing its position.
 pub fn drawing_target(p: &Painter, point: Pos2) {
     p.circle_stroke(point, 5., Stroke::new(1., Tokens::get().accent));

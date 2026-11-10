@@ -162,6 +162,8 @@ pub(super) struct BoardState {
     pub(super) ratsnest_cache: Option<(ViewInput, std::sync::Arc<pcbcraft_engine::board::ratsnest::Ratsnest>)>,
     pub(super) drawing: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
+    /// The last design rules check run from this view, with its card and focused finding.
+    pub(super) drc: crate::board_drc::Drc,
     pub(super) draft: Option<crate::board_canvas::Draft>,
     pub(super) placement: Option<crate::board_canvas::Placement>,
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,

@@ -468,11 +468,11 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 
 ## PCB layout
 
-The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline** (Line,
-Rectangle), **Route** (Track, followed by the Active layer, Track width and Via pad /
-drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (Reveal in its
-menu) and **Design** (Sync updates the PCB from the schematic; Setup opens Board setup).
-Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules, DRC, Measure,
+The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline**
+(Line, Rectangle), **Route** (Track, followed by the Active layer, Track width and Via
+pad / drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (DRC,
+Reveal) and **Design** (Sync updates the PCB from the schematic; Setup opens Board
+setup). Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules, Measure,
 Flip view, Outputs and Refill zones, appear disabled in their group's menu and say
 "planned". The ribbon scrolls sideways when the window is too narrow for every group.
 
@@ -559,8 +559,8 @@ exiting, click an edge to select it, drag a vertex to reshape it, drag a segment
 or press M to move the drawing, and Delete to remove it. These edits share project
 Undo; Fit and layer visibility include the edge geometry. A Board Outline layer is
 available independently of copper setup, including on older populated boards.
-Open paths remain valid editing state; no closure, clearance or manufacturing
-validation is implemented yet.
+Open paths remain valid editing state while you draw; **Layout → Inspect → DRC**
+reports a missing closed outline and copper outside it or too close to its edge.
 
 To route copper, select a copper layer such as **Top** and press **X** or use
 **Layout → Route → Track**. Set **Track width** beside it in the display units
@@ -575,6 +575,17 @@ previous layer, or else the last vertex. Esc or right-click drops the unfinished
 route, and a second Esc exits the tool. The whole route is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
+**Layout → Inspect → DRC** checks the board without editing it and opens a DRC card
+listing each finding. It reports copper of different nets closer than the clearance
+(0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
+connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
+of its edge, and overlapping footprint courtyards. Copper joined by tracks or on the
+same net needs no clearance. Click a finding to center the view on its marker; the
+status bar shows the result, and an edit marks it out of date until **Run again**.
+These rule values are fixed defaults until net classes and board rules arrive (#77);
+zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
+not a manufacturing sign-off.
+
 To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
 **Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,
 snapping to a nearby pad center or track end on any copper layer, otherwise to the grid;
@@ -596,8 +607,8 @@ item when you release a drag or press Enter. A move or resize whose copper would
 another net's pad is refused, leaving the board unchanged. The **Tracks** selection
 filter turns track picking off. Tracks stay on their layer, so a back-side track does
 not reach front-only SMD pads, while a via joins copper on every layer. Reshaping a
-route by dragging one segment, blind or buried vias, and clearance or DRC checks are
-not implemented yet. PgUp and PgDn still change layer by cancelling the route.
+route by dragging one segment and blind or buried vias are not implemented yet.
+Routing does not check clearance; run **Inspect → DRC** for that. PgUp and PgDn still change layer by cancelling the route.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

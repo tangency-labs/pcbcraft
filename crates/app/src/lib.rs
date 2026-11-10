@@ -13,6 +13,7 @@ mod assistant;
 mod board_appearance;
 mod board_canvas;
 mod board_drawing;
+mod board_drc;
 mod board_panels;
 mod board_setup;
 mod board_tracks;
@@ -1142,6 +1143,9 @@ impl PcbApp {
                 } else if self.views.active.workspace == Workspace::Board {
                     let empty = self.session.project().is_some_and(|project| project.board_target().is_none());
                     ui.label(dim(board_status.as_deref().unwrap_or(if empty { "No board" } else { "Board" })));
+                    if !empty {
+                        ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
+                    }
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {

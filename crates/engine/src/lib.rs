@@ -19,6 +19,7 @@ pub mod selection;
 pub mod sheets;
 pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
+pub use board::drc::CHECK_DESIGN;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, SET_TRACK_WIDTH, SET_VIA_SIZE};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
@@ -108,6 +109,7 @@ enum ParamKind {
     TrackWidth,
     TrackIds,
     LayerChanges,
+    RuleLength,
     ViaDiameter,
     ViaDrill,
     Closed,
@@ -139,6 +141,7 @@ impl ParamKind {
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
             Self::LayerChanges => board::track::layer_changes_schema(),
+            Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
             Self::ViaDrill => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM,"maximum":board::track::MAX_VIA_DIAMETER_NM - 1}),
             Self::TrackWidth => json!({"type":"integer","minimum":board::track::MIN_WIDTH_NM,"maximum":board::track::MAX_WIDTH_NM}),
@@ -294,6 +297,8 @@ impl ParamKind {
             Self::ViaDrill if value.as_i64().is_some_and(|n| (board::track::MIN_VIA_DRILL_NM..board::track::MAX_VIA_DIAMETER_NM).contains(&n)) => {
                 Ok(())
             }
+            Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
+            Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::LayerChanges => Err("must contain layer changes with a vertex index and a copper layer UUID"),
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
             Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
@@ -1282,6 +1287,38 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: CHECK_DESIGN,
+        title: "Check Design Rules",
+        summary: "Check the board for clearance, track width, annular ring, unrouted connections, board outline and courtyard problems. Edits nothing; execute returns the report.",
+        params: &[
+            BOARD,
+            Param {
+                name: "clearance_nm",
+                required: false,
+                summary: "Copper clearance between different nets; default 200000 (0.2 mm)",
+                kind: ParamKind::RuleLength,
+            },
+            Param {
+                name: "min_track_width_nm",
+                required: false,
+                summary: "Narrowest allowed track; default 150000 (0.15 mm)",
+                kind: ParamKind::RuleLength,
+            },
+            Param {
+                name: "edge_clearance_nm",
+                required: false,
+                summary: "Copper to board edge clearance; default 300000 (0.3 mm)",
+                kind: ParamKind::RuleLength,
+            },
+            Param {
+                name: "min_annular_ring_nm",
+                required: false,
+                summary: "Smallest via annular ring; default 100000 (0.1 mm)",
+                kind: ParamKind::RuleLength,
+            },
+        ],
+    },
+    Command {
         id: DELETE_TRACKS,
         title: "Delete Tracks",
         summary: "Remove addressed track segments and vias, leaving footprints and other copper unchanged. One undo step.",
@@ -1671,6 +1708,7 @@ impl Session {
             | ADD_DRAWING
             | SET_DRAWING
             | DELETE_DRAWING
+            | CHECK_DESIGN
             | ADD_TRACKS
             | ADD_VIA
             | MOVE_TRACKS
@@ -1767,6 +1805,9 @@ impl Session {
         if id == PREVIEW_UPDATE {
             return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
         }
+        if id == CHECK_DESIGN {
+            return Ok(json!({"revision":self.revision,"design_check":self.check_design(params)?}));
+        }
         Ok(self.inspect())
     }
 
@@ -1810,6 +1851,7 @@ impl Session {
                 | ADD_DRAWING
                 | SET_DRAWING
                 | DELETE_DRAWING
+                | CHECK_DESIGN
                 | ADD_TRACKS
                 | ADD_VIA
                 | MOVE_TRACKS
@@ -1962,6 +2004,7 @@ impl Session {
             SET_BOARD_SETUP => self.set_board_setup(params)?,
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
+            CHECK_DESIGN => self.validate_design_check(params)?,
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),

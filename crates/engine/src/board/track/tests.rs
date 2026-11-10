@@ -8,7 +8,7 @@ use serde_json::json;
 /// Three placed 0402 resistors whose first terminals share the accepted net ACCEPTED and whose
 /// last two share a second net, on a two-layer board with an accepted baseline. Built through
 /// the shared production commands.
-fn routed_fixture() -> Session {
+pub(crate) fn routed_fixture() -> Session {
     let mut session = super::super::ratsnest::tests::fixture();
     let symbols: Vec<_> = session.project().unwrap().symbols.iter().map(|symbol| symbol.id()).collect();
     session
@@ -24,13 +24,13 @@ fn routed_fixture() -> Session {
     session
 }
 
-fn view(session: &Session) -> BoardView<'_> {
+pub(crate) fn view(session: &Session) -> BoardView<'_> {
     let project = session.project().unwrap();
     project.board_view(project.board_target().unwrap()).unwrap()
 }
 
 /// The front and back copper layer IDs, chosen by side rather than catalog position.
-fn copper_layers(session: &Session) -> Vec<Uuid> {
+pub(crate) fn copper_layers(session: &Session) -> Vec<Uuid> {
     use super::super::setup::Side;
     let layers = view(session).setup().unwrap().layers().to_vec();
     let side = |side| layers.iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(side)).unwrap().id;
@@ -43,7 +43,7 @@ fn detour(from: Point, to: Point) -> Vec<Point> {
     vec![from, Point { x_nm: from.x_nm, y_nm: y }, Point { x_nm: to.x_nm, y_nm: y }, to]
 }
 
-fn route(session: &mut Session, layer: Uuid, points: &[Point]) -> Result<u64, CommandError> {
+pub(crate) fn route(session: &mut Session, layer: Uuid, points: &[Point]) -> Result<u64, CommandError> {
     session.apply(ADD_TRACKS, &json!({"layer":layer,"width_nm":DEFAULT_WIDTH_NM,"points":points,"expected_revision":session.revision()}))
 }
 
@@ -198,7 +198,7 @@ fn connectivity_geometry_is_exact_at_boundaries() {
 }
 
 /// Add a route with layer changes and the default via size.
-fn route_with_vias(session: &mut Session, layer: Uuid, points: &[Point], changes: &[(usize, Uuid)]) -> Result<u64, CommandError> {
+pub(crate) fn route_with_vias(session: &mut Session, layer: Uuid, points: &[Point], changes: &[(usize, Uuid)]) -> Result<u64, CommandError> {
     let changes: Vec<_> = changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect();
     session.apply(
         ADD_TRACKS,

@@ -91,6 +91,7 @@ pub(super) fn show(
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
     label: &str,
+    markers: &[(Point, bool)],
 ) -> Interaction {
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
@@ -339,6 +340,12 @@ pub(super) fn show(
             state.selection.contains(&footprint.id) || shown.is_some_and(|d| d.footprint == footprint.id),
             highlighted.contains(&footprint.id),
         );
+    }
+    for (at, focused) in markers {
+        let at = camera.screen(*at, rect);
+        if rect.contains(at) {
+            board::drc_marker(&p, at, *focused);
+        }
     }
     if let Some(drag) = &state.box_drag
         && let Some(pointer) = ui.input(|i| i.pointer.interact_pos())
