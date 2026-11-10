@@ -988,6 +988,38 @@ fn design_check_report_survives_suppressed_project_inspection() {
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
 
+/// Fabrication files survive inspect:false through the shared dispatcher without changing the
+/// project, revision or history, alongside clipboard preparation and DRC report results.
+#[test]
+fn fabrication_files_survive_suppressed_project_inspection() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":setup.revision()})).unwrap();
+    let project = setup.project().unwrap();
+    let board = project.board_target().unwrap();
+    let layer = project
+        .board_view(board)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Outline)
+        .unwrap()
+        .id;
+    setup.apply(pcbcraft_engine::ADD_DRAWING, &json!({"board":board.board,"layer":layer,"closed":true,"points":[{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0},{"x_nm":10_000_000,"y_nm":10_000_000},{"x_nm":0,"y_nm":10_000_000}],"expected_revision":setup.revision()})).unwrap();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response =
+        call(&mut server, "execute", json!({"command":pcbcraft_engine::EXPORT_FABRICATION,"params":{"board":board.board},"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    let files = result["fabrication"]["files"].as_array().unwrap();
+    assert!(files.iter().any(|file| file["name"].as_str().unwrap().ends_with("-Outline.gbr")));
+    assert!(files.iter().any(|file| file["name"].as_str().unwrap().ends_with("-PTH.drl")));
+    assert_eq!(result["revision"], before["revision"]);
+    assert!(result.get("project").is_none());
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
 /// Board Copy/Cut return native payloads with inspect:false, and a same-project cut can relocate
 /// its existing logical component through the ordinary shared paste transaction.
 #[test]
