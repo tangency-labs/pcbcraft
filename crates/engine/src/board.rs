@@ -12,6 +12,7 @@ pub mod clipboard;
 pub mod definition;
 pub mod drawing;
 pub mod drc;
+pub mod fabrication;
 pub mod identity;
 pub mod materials;
 pub mod outline;

@@ -483,9 +483,10 @@ The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outli
 (Line, Rectangle), **Route** (Track, followed by the Active layer, Track width and Via
 pad / drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (DRC,
 Reveal) and **Design** (Sync updates the PCB from the schematic; Setup opens Board
-setup). Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules, Measure,
-Flip view, Outputs and Refill zones, appear disabled in their group's menu and say
-"planned". The ribbon scrolls sideways when the window is too narrow for every group.
+setup; Outputs saves fabrication files). Tools that are not built yet, such as Zone,
+Pair, Tune, Align, Rules, Measure, Flip view and Refill zones, appear disabled in
+their group's menu and say "planned". The ribbon scrolls sideways when the window is
+too narrow for every group.
 
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;
@@ -596,6 +597,23 @@ status bar shows the result, and an edit marks it out of date until **Run again*
 These rule values are fixed defaults until net classes and board rules arrive (#77);
 zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
 not a manufacturing sign-off.
+
+**Layout → Design → Outputs** saves one `<project>-fabrication.zip` with Gerber X2
+files for each copper layer, the top and bottom solder mask and paste, the top silkscreen
+and the Board Outline, plus an Excellon drill file for every plated hole (vias and
+through-hole pads). Coordinates are in millimeters with Y up, as seen from the top. Mask
+and paste openings match the pads exactly, leaving any expansion to the fabricator, and
+vias are tented. It needs a board setup and a closed Board Outline, says so otherwise,
+and never edits the project; the same board always produces the same archive. Run DRC
+first: outputs do not check the design.
+
+Copper filenames receive numeric suffixes when sanitized names collide with
+another output, including names that differ only in case. Fixed mask, paste,
+silkscreen and outline filenames retain their names. On Unix, replacement saves
+preserve the existing file's permission bits and new archives follow the process
+umask. The archive is flushed before replacement and its directory is flushed
+afterward on Unix. If that last flush fails, the error states that the complete
+archive was published but its directory sync failed.
 
 To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
 **Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,

@@ -22,6 +22,7 @@ pub mod sheets;
 pub mod wire;
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
+pub use board::fabrication::EXPORT_FABRICATION;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, SET_TRACK_WIDTH, SET_VIA_SIZE};
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
@@ -1524,6 +1525,12 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: EXPORT_FABRICATION,
+        title: "Generate Fabrication Outputs",
+        summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and an Excellon drill file. Edits nothing; execute returns every file's name and text.",
+        params: &[BOARD],
+    },
+    Command {
         id: DELETE_TRACKS,
         title: "Delete Tracks",
         summary: "Remove addressed track segments and vias, leaving footprints and other copper unchanged. One undo step.",
@@ -1917,6 +1924,7 @@ impl Session {
             | SET_DRAWING
             | DELETE_DRAWING
             | CHECK_DESIGN
+            | EXPORT_FABRICATION
             | ADD_TRACKS
             | ADD_VIA
             | MOVE_TRACKS
@@ -2011,6 +2019,7 @@ impl Session {
     /// Run a shared command. Document edits answer [`Self::inspect`]; library
     /// queries return catalog data and board-update preview returns its bounded
     /// review report. Queries never change authored project state or history.
+    /// Fabrication queries generate their file data once, after shared command validation.
     /// Failed commands leave the project intact.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
@@ -2033,6 +2042,10 @@ impl Session {
         }
         if id.starts_with("library.") {
             return self.library_command(id, params);
+        }
+        if id == EXPORT_FABRICATION {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
         self.apply(id, params)?;
         if id == PREVIEW_UPDATE {
@@ -2060,9 +2073,9 @@ impl Session {
         self.apply_inner(id, params)
     }
 
-    /// Dispatch validated commands inside one atomic sheet transaction or the project session.
-    /// External symbol placement names missing revision/digest guards before catalog resolution.
-    fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+    /// Check catalog parameters, board identity and availability without generating query data
+    /// or changing the session. State-specific setup diagnostics remain with their handlers.
+    fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
         if id == ASSIGN_FOOTPRINT && params.get("board").is_some() {
@@ -2085,6 +2098,7 @@ impl Session {
                 | SET_DRAWING
                 | DELETE_DRAWING
                 | CHECK_DESIGN
+                | EXPORT_FABRICATION
                 | ADD_TRACKS
                 | ADD_VIA
                 | MOVE_TRACKS
@@ -2139,6 +2153,13 @@ impl Session {
                 _ => format!("`{id}` can't run now"),
             }));
         }
+        Ok(())
+    }
+
+    /// Dispatch validated commands inside one atomic sheet transaction or the project session.
+    /// External symbol placement names missing revision/digest guards before catalog resolution.
+    fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        self.validate_project_command(id, params)?;
         match id {
             "project.new" => self.change(Project {
                 name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
@@ -2252,6 +2273,9 @@ impl Session {
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
+            EXPORT_FABRICATION => {
+                self.export_fabrication(params)?;
+            }
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
