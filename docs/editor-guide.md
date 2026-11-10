@@ -479,6 +479,14 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 
 ## PCB layout
 
+The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline**
+(Line, Rectangle), **Route** (Track, followed by the Active layer, Track width and Via
+pad / drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (DRC,
+Reveal) and **Design** (Sync updates the PCB from the schematic; Setup opens Board
+setup). Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules, Measure,
+Flip view, Outputs and Refill zones, appear disabled in their group's menu and say
+"planned". The ribbon scrolls sideways when the window is too narrow for every group.
+
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;
 Shift adds and Ctrl/Command toggles. Escape cancels the box, and Delete removes
@@ -505,14 +513,14 @@ stages physical text height, stroke width and pad clearance alongside the layer
 and stackup settings. Apply commits them in one undoable board change; Cancel
 discards the draft. Defaults are 1 mm, 0.15 mm and 0.25 mm respectively; lengths accept mil/mm
 input and save with the project. **Assign Footprint…** in a schematic symbol's
-context menu, or **Footprints** in the PCB Layout ribbon, opens package selection
+context menu, or **Layout → Place → Footprint** in PCB layout, opens package selection
 and explicit terminal-to-pad mapping. Assigning pins the package without placing
 it. In PCB layout, **Place on board** places an assigned component at unit-aware
 X/Y coordinates, as a separate undo step; it then uses the ordinary M/R tools.
 Changing an already placed package awaits reviewed board updates. Native-folder
-registration, arcs, slots and routing remain planned.
+registration, arcs and slots remain planned.
 
-**Layout → Board → Setup** and **Layers → Board setup…** share a revision-bound
+**Layout → Design → Setup** and **Layers → Board setup…** share a revision-bound
 Craft settings form, including on a board with no saved stackup. The first opening
 shows a complete editable two-layer 1.6 mm FR-4/1 oz draft; nothing changes until Apply.
 Existing setups retain their own dimensions and materials. Board editor layers provides names and optional membership;
@@ -530,7 +538,7 @@ retain physical surface identities and resolve existing front/all-copper binding
 occupied drawings and authored stratum data are protected against removal.
 
 Left-click footprints to select them, then press **Delete** to remove only their
-board placements. **Layout → Placement menu → Delete** provides the same action. Components, schematic wiring and physical
+board placements. **Layout → Modify menu → Delete** provides the same action. Components, schematic wiring and physical
 package assignments are retained for re-placement, and undo restores the original
 placements. Active drawing tools and movement previews keep keyboard ownership.
 
@@ -554,7 +562,7 @@ menus and dialogs keep their normal keys; switching layers cancels an unfinished
 Board Outline gesture or route. The keys are also listed in Keyboard Shortcuts.
 
 For a board boundary, select **Board Outline** in the selector or Layers card and
-use **Layout → Draw → Line** or **Rectangle**. Line accepts successive clicked
+use **Layout → Outline → Line** or **Rectangle**. Line accepts successive clicked
 vertices, closes when you click the first vertex, and finishes an open path with
 Enter. Rectangle uses two opposite corners. Both snap to the grid and nearby edge
 vertices, and Esc cancels unfinished geometry before exiting the tool. After
@@ -562,8 +570,8 @@ exiting, click an edge to select it, drag a vertex to reshape it, drag a segment
 or press M to move the drawing, and Delete to remove it. These edits share project
 Undo; Fit and layer visibility include the edge geometry. A Board Outline layer is
 available independently of copper setup, including on older populated boards.
-Open paths remain valid editing state; no closure, clearance or manufacturing
-validation is implemented yet.
+Open paths remain valid editing state while you draw; **Layout → Inspect → DRC**
+reports a missing closed outline and copper outside it or too close to its edge.
 
 To route copper, select a copper layer such as **Top** and press **X** or use
 **Layout → Route → Track**. Set **Track width** beside it in the display units
@@ -572,18 +580,46 @@ To route copper, select a copper layer such as **Top** and press **X** or use
 track end on the same layer finishes the route, as do a double-click and Enter.
 Press **V** while routing to drop a through via at the pointer and continue on the
 other side: front copper leads to back, any other layer to front, and the view's
-active layer follows. **Via diameter** and **Via drill** sit beside the width field
-(0.6 mm and 0.3 mm by default). Backspace removes the last via, returning to the
+active layer follows. The **Via pad / drill** field beside the width field sets the
+pad diameter and drill (0.6 mm and 0.3 mm by default). Backspace removes the last via, returning to the
 previous layer, or else the last vertex. Esc or right-click drops the unfinished
 route, and a second Esc exits the tool. The whole route is one Undo step. When copper
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
+**Layout → Inspect → DRC** checks the board without editing it and opens a DRC card
+listing each finding. It reports copper of different nets closer than the clearance
+(0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
+connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
+of its edge, and overlapping footprint courtyards. Copper joined by tracks or on the
+same net needs no clearance. Click a finding to center the view on its marker; the
+status bar shows the result, and an edit marks it out of date until **Run again**.
+These rule values are fixed defaults until net classes and board rules arrive (#77);
+zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
+not a manufacturing sign-off.
+
+To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
+**Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,
+snapping to a nearby pad center or track end on any copper layer, otherwise to the grid;
+the tool stays armed until Esc or right-click, and each via is its own undo step. A via
+that would join pads on two different nets is refused, as is a second via on the same
+spot. The tool needs a board setup with at least two copper layers.
+
 Without a tool, click a track or via to select it (Shift adds, Ctrl or ⌘ toggles) and
-press Delete to remove it; deleting a via keeps its tracks. The **Tracks** selection
+press Delete to remove it; deleting a via keeps its tracks. A selection box also picks
+tracks and vias, with the same Window/Crossing rules as footprints. **U** selects every
+track and via joined by copper to the one under the pointer, or to the current copper
+selection. With copper selected and no footprint selected, **M** (or **Layout → Modify → Move**)
+moves the selection
+with the pointer until the next click, and dragging a track or via moves it directly;
+both snap to the grid, Esc or right-click cancels, and each completed move is one undo
+step. Properties shows the selected tracks and vias, with editable **Width**, **Via
+pad** and **Via drill** fields in the display units; a value applies to every selected
+item when you release a drag or press Enter. A move or resize whose copper would reach
+another net's pad is refused, leaving the board unchanged. The **Tracks** selection
 filter turns track picking off. Tracks stay on their layer, so a back-side track does
-not reach front-only SMD pads, while a via joins copper on every layer. Dragging
-tracks, standalone vias, blind or buried vias, and clearance or DRC checks are not
-implemented yet. PgUp and PgDn still change layer by cancelling the route.
+not reach front-only SMD pads, while a via joins copper on every layer. Reshaping a
+route by dragging one segment and blind or buried vias are not implemented yet.
+Routing does not check clearance; run **Inspect → DRC** for that. PgUp and PgDn still change layer by cancelling the route.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

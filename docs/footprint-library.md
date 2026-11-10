@@ -10,7 +10,7 @@ catalog or fetching its source URL.
 ## Assigning and placing a package
 
 From a schematic symbol's context menu, choose **Assign Footprint…**. In PCB
-layout, **Layout → Components → Footprints** opens the same chooser for the
+layout, **Layout → Place → Footprint** opens the same chooser for the
 project's components, including components not yet placed on the board. A
 schematic-only project can assign packages before creating a PCB. Search
 and choose a package, then review the editable pad choices for each logical terminal.

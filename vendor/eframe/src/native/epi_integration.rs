@@ -12,6 +12,10 @@ use egui_winit::{EventResponse, WindowSettings};
 
 use crate::epi;
 
+#[path = "canvas_shortcut.rs"]
+mod canvas_shortcut;
+use canvas_shortcut::canvas_shift_x;
+
 #[cfg_attr(target_os = "ios", allow(dead_code, unused_variables, unused_mut))]
 pub fn viewport_builder(
     egui_zoom_factor: f32,
@@ -241,6 +245,8 @@ impl EpiIntegration {
         self.close
     }
 
+    /// Preserve Command/Ctrl+Shift+X for canvas shortcuts before native cut conversion.
+    /// Widgets owning keyboard input retain the native clipboard path.
     pub fn on_window_event(
         &mut self,
         window: &winit::window::Window,
@@ -260,6 +266,26 @@ impl EpiIntegration {
             self.can_drag_window = true;
         }
 
+        // Pending modifier events are newer than the last egui frame (including focus resets).
+        if let WindowEvent::KeyboardInput { event, .. } = event {
+            let modifiers = egui_winit
+                .egui_input_mut()
+                .events
+                .iter()
+                .rev()
+                .find_map(|event| if let egui::Event::ModifiersChanged(modifiers) = event { Some(*modifiers) } else { None })
+                .unwrap_or_else(|| self.egui_ctx.input(|input| input.modifiers));
+            if canvas_shift_x(&event.logical_key, modifiers, self.egui_ctx.egui_wants_keyboard_input()) {
+                egui_winit.egui_input_mut().events.push(egui::Event::Key {
+                    key: egui::Key::X,
+                    physical_key: None,
+                    pressed: event.state == ElementState::Pressed,
+                    repeat: event.repeat,
+                    modifiers,
+                });
+                return EventResponse { consumed: true, repaint: true };
+            }
+        }
         egui_winit.on_window_event(window, event)
     }
 

@@ -18,6 +18,14 @@ use uuid::Uuid;
 
 /// Add a routed path of straight track segments, with any vias where it changes layer, in one undo step.
 pub const ADD_TRACKS: &str = "pcb.add_tracks";
+/// Place one standalone through via, for stitching or to start a route, in one undo step.
+pub const ADD_VIA: &str = "pcb.add_via";
+/// Move addressed tracks and vias by one displacement, keeping their sizes and layers.
+pub const MOVE_TRACKS: &str = "pcb.move_tracks";
+/// Change the width of addressed track segments.
+pub const SET_TRACK_WIDTH: &str = "pcb.set_track_width";
+/// Change the pad diameter and drill of addressed vias.
+pub const SET_VIA_SIZE: &str = "pcb.set_via_size";
 /// Remove addressed track segments and vias without changing footprints or other copper.
 pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
 /// The width the PCB route tool starts with, 0.25 mm.
@@ -150,11 +158,11 @@ pub struct Copper {
 }
 
 /// A pad reduced to what connectivity needs: its land corners, layers and net label.
-struct Land {
-    key: (String, String),
-    corners: [Point; 4],
-    layers: Vec<Uuid>,
-    net: Option<String>,
+pub(super) struct Land {
+    pub(super) key: (String, String),
+    pub(super) corners: [Point; 4],
+    pub(super) layers: Vec<Uuid>,
+    pub(super) net: Option<String>,
 }
 
 impl<'a> BoardView<'a> {
@@ -178,7 +186,7 @@ impl<'a> BoardView<'a> {
 
 /// Resolve each physical pad's land, layers and net once per snapshot. Markers without
 /// physical copper and pads on an unconfigured board are omitted.
-fn lands(view: BoardView<'_>) -> Vec<Land> {
+pub(super) fn lands(view: BoardView<'_>) -> Vec<Land> {
     view.footprints()
         .flat_map(|footprint| {
             let id = footprint.id.clone();
@@ -193,7 +201,7 @@ fn lands(view: BoardView<'_>) -> Vec<Land> {
 
 /// Union-find over lands, then tracks, then vias. Returns islands plus each island's member
 /// node indices, numbered in that order.
-fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
+pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
     let mut parent: Vec<usize> = (0..lands.len() + tracks.len() + vias.len()).collect();
     fn find(parent: &mut [usize], mut node: usize) -> usize {
         while parent[node] != node {
@@ -281,7 +289,7 @@ fn via_touches_land(at: Point, radius: f64, corners: &[Point; 4]) -> bool {
 }
 
 /// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.
-fn inside(point: Point, corners: &[Point; 4]) -> bool {
+pub(super) fn inside(point: Point, corners: &[Point; 4]) -> bool {
     let mut sign = 0i8;
     for (a, b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
         let cross = (b.x_nm - a.x_nm) as i128 * (point.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (point.x_nm - a.x_nm) as i128;
@@ -297,7 +305,7 @@ fn inside(point: Point, corners: &[Point; 4]) -> bool {
 }
 
 /// Shortest distance between two closed segments in nanometers; zero when they cross.
-fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
+pub(super) fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
     let cross =
         |o: Point, p: Point, q: Point| (p.x_nm - o.x_nm) as i128 * (q.y_nm - o.y_nm) as i128 - (p.y_nm - o.y_nm) as i128 * (q.x_nm - o.x_nm) as i128;
     let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
@@ -308,7 +316,7 @@ fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
 }
 
 /// Distance from a point to a closed segment; a degenerate segment is a point.
-fn point_distance(p: Point, a: Point, b: Point) -> f64 {
+pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
     let (px, py, ax, ay, bx, by) = (p.x_nm as f64, p.y_nm as f64, a.x_nm as f64, a.y_nm as f64, b.x_nm as f64, b.y_nm as f64);
     let (dx, dy) = (bx - ax, by - ay);
     let length = dx * dx + dy * dy;
@@ -366,7 +374,10 @@ fn ids(params: &Value, name: &str, existing: impl Fn(&Uuid) -> bool) -> Result<B
 }
 
 impl Session {
-    /// Add one routed path or delete addressed tracks and vias atomically. A path of N distinct
+    /// Add one routed path, place one standalone via, move or resize addressed tracks and vias,
+    /// or delete them, atomically. A standalone via may not sit exactly on another via. Moved
+    /// and resized items count as new copper for the short check, so an edit that makes them
+    /// touch another net's copper is refused whole. A no-op edit leaves history unchanged. A path of N distinct
     /// consecutive points becomes N-1 segments with one width, starting on `layer`. Each layer
     /// change places one via at a vertex after the first, in strictly increasing order, and later
     /// segments continue on its layer; a change at the last vertex ends the route on a via. The whole candidate is validated first: unknown layers or IDs,
@@ -431,6 +442,52 @@ impl Session {
                 added.insert(id);
                 vias.push(Via { id, at: points[change.at], diameter_nm, drill_nm });
             }
+        } else if command == ADD_VIA {
+            let at: Point = param(params, "at")?;
+            if !crate::wire::valid_point(&at) {
+                return Err(CommandError::InvalidParams("the via position is out of range".into()));
+            }
+            if vias.iter().any(|via| via.at == at) {
+                return Err(CommandError::InvalidParams("a via already sits at this position".into()));
+            }
+            let id = crate::fresh_id()?;
+            added.insert(id);
+            vias.push(Via { id, at, diameter_nm: param(params, "via_diameter_nm")?, drill_nm: param(params, "via_drill_nm")? });
+        } else if command == MOVE_TRACKS {
+            let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+            let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+            let (dx, dy): (i64, i64) = (param(params, "dx_nm")?, param(params, "dy_nm")?);
+            if moved_tracks.is_empty() && moved_vias.is_empty() {
+                return Err(CommandError::InvalidParams("name at least one track or via to move".into()));
+            }
+            let shift = |point: Point| Point { x_nm: point.x_nm.saturating_add(dx), y_nm: point.y_nm.saturating_add(dy) };
+            for track in tracks.iter_mut().filter(|track| moved_tracks.contains(&track.id)) {
+                (track.start, track.end) = (shift(track.start), shift(track.end));
+            }
+            for via in vias.iter_mut().filter(|via| moved_vias.contains(&via.id)) {
+                via.at = shift(via.at);
+            }
+            added.extend(moved_tracks.into_iter().chain(moved_vias));
+        } else if command == SET_TRACK_WIDTH {
+            let changed = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+            if changed.is_empty() {
+                return Err(CommandError::InvalidParams("name at least one track".into()));
+            }
+            let width_nm: i64 = param(params, "width_nm")?;
+            for track in tracks.iter_mut().filter(|track| changed.contains(&track.id)) {
+                track.width_nm = width_nm;
+            }
+            added.extend(changed);
+        } else if command == SET_VIA_SIZE {
+            let changed = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+            if changed.is_empty() {
+                return Err(CommandError::InvalidParams("name at least one via".into()));
+            }
+            let (diameter_nm, drill_nm): (i64, i64) = (param(params, "via_diameter_nm")?, param(params, "via_drill_nm")?);
+            for via in vias.iter_mut().filter(|via| changed.contains(&via.id)) {
+                (via.diameter_nm, via.drill_nm) = (diameter_nm, drill_nm);
+            }
+            added.extend(changed);
         } else {
             let gone_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
             let gone_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
@@ -441,6 +498,9 @@ impl Session {
             vias.retain(|via| !gone_vias.contains(&via.id));
         }
         validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
+        if tracks == project.board.tracks && vias == project.board.vias {
+            return Ok(());
+        }
         let mut next = project.clone();
         let board = std::sync::Arc::make_mut(&mut next.board);
         board.tracks = tracks;
@@ -469,4 +529,4 @@ pub(crate) fn path_schema() -> Value {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

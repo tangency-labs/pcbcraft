@@ -13,6 +13,7 @@ mod assistant;
 mod board_appearance;
 mod board_canvas;
 mod board_drawing;
+mod board_drc;
 mod board_panels;
 mod board_setup;
 mod board_tracks;
@@ -99,6 +100,7 @@ const ADD_POWER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
 const ADD_SHEET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::S);
 const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::H);
+const PLACE_VIA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
 /// KiCad's keys for the next and previous grid: N for finer, Shift+N for coarser.
@@ -1144,6 +1146,9 @@ impl PcbApp {
                 } else if self.views.active.workspace == Workspace::Board {
                     let empty = self.session.project().is_some_and(|project| project.board_target().is_none());
                     ui.label(dim(board_status.as_deref().unwrap_or(if empty { "No board" } else { "Board" })));
+                    if !empty {
+                        ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
+                    }
                 } else if self.views.active.schematic.clipboard.active() {
                     ui.label(dim("Paste · Click to place · R rotate · Esc cancel"));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
@@ -1697,6 +1702,10 @@ impl PcbApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::X)) {
                 self.start_route();
             }
+            if pressed(&PLACE_VIA) {
+                self.start_via();
+            }
+            self.views.active.board.tracks.connected_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::U));
             if self.views.active.board.tracks.tool {
                 let tracks = &mut self.views.active.board.tracks;
                 tracks.finish_requested = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
@@ -2273,6 +2282,9 @@ fn shortcut_list(ctx: &egui::Context) -> Vec<(&'static str, &'static str, String
     list.push(("PCB layout", "Rotate footprint clockwise", "Shift+R".to_owned()));
     list.push(("PCB layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB layout", "Route track", "X".to_owned()));
+    list.push(("PCB layout", "Place via", key(&PLACE_VIA)));
+    list.push(("PCB layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB layout", "Move selected tracks and vias", "M or left drag".to_owned()));
     list.push(("PCB layout", "Flip track posture", "/".to_owned()));
     list.push(("PCB layout", "Place via and switch layer while routing", "V".to_owned()));
     list.push(("PCB layout", "Finish track", "Click a pad, double-click or Enter".to_owned()));

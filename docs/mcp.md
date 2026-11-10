@@ -158,14 +158,28 @@ one undo step. Optional `layer_changes`, a list of `{at, layer}` in increasing
 vertex order after the first, places a through via at `points[at]` and continues on
 that copper layer; a change at the last vertex ends the route on a via. Layer changes
 require `via_diameter_nm` and `via_drill_nm`, with the drill smaller than the pad.
-Deleting takes `tracks` and/or `vias`, unique UUIDs from `project.boards[].tracks`
+`pcb.check_design` checks the addressed board without editing it; `execute` returns
+`design_check` with the `rules` used, `violations` (each with a `kind`, `message`,
+representative `at` point and `items`), `counts` per kind and the `total`, listing at
+most 1000 findings. Optional `clearance_nm` (default 200000), `min_track_width_nm`
+(150000), `edge_clearance_nm` (300000) and `min_annular_ring_nm` (100000) override the
+defaults. Kinds are `clearance`, `track_width`, `annular_ring`, `unconnected`,
+`no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
+
+`pcb.add_via` places one standalone through via from `at`, `via_diameter_nm` and
+`via_drill_nm`, in one undo step, refusing a second via at the same position or a pad
+that would join two nets. `pcb.move_tracks` moves `tracks` and/or `vias` by `dx_nm` and
+`dy_nm`, keeping sizes and layers. `pcb.set_track_width` gives `tracks` one `width_nm`,
+and `pcb.set_via_size` gives `vias` one `via_diameter_nm` and `via_drill_nm`. Each is one
+undo step, checks shorts for the copper it changes, and is not an edit when nothing
+changes. Deleting takes `tracks` and/or `vias`, unique UUIDs from `project.boards[].tracks`
 and `.vias`; at least one item is required, and deleting a via keeps its tracks. A route is refused whole when a point is out of range,
 neighbors repeat, the layer is not copper in the board setup, or its copper would
 join pads on two different nets (the error names both). Only copper the new route
 touches is checked, so a short left by an earlier edit does not block unrelated routes.
 Copper connects where it overlaps on a shared layer, a via joins the copper it overlaps
 on every layer, and the board ratsnest drops airwires between terminals already joined
-by tracks. This is not a clearance or DRC check.
+by tracks. Routing does not check clearance; use `pcb.check_design` for that.
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.

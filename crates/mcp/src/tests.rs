@@ -972,3 +972,18 @@ fn clipboard_payloads_survive_suppressed_project_inspection() {
     assert_eq!(state["project"]["schematic"]["symbols"].as_array().unwrap().len(), 1);
     assert_eq!(state["project"]["schematic"]["symbols"][0]["x_nm"], 12_700_000);
 }
+
+/// Suppressing project inspection still returns the DRC report without changing the project,
+/// alongside the clipboard payload exceptions in the shared dispatcher.
+#[test]
+fn design_check_report_survives_suppressed_project_inspection() {
+    let mut server = server();
+    let created = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true}})));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::CHECK_DESIGN,"params":{"clearance_nm":250_000},"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["revision"], created["revision"]);
+    assert_eq!(result["design_check"]["rules"]["clearance_nm"], 250_000);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}

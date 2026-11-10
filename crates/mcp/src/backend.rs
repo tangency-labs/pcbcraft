@@ -71,7 +71,13 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                 return Err(needs_live_editor(&format!("`{id}`")));
             }
             if params["inspect"].as_bool() == Some(false)
-                && !matches!(id, pcbcraft_engine::PREVIEW_UPDATE | pcbcraft_engine::clipboard::COPY | pcbcraft_engine::clipboard::CUT)
+                && !matches!(
+                    id,
+                    pcbcraft_engine::PREVIEW_UPDATE
+                        | pcbcraft_engine::CHECK_DESIGN
+                        | pcbcraft_engine::clipboard::COPY
+                        | pcbcraft_engine::clipboard::CUT
+                )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())
             } else {

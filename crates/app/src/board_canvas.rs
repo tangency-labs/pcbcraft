@@ -46,6 +46,8 @@ pub(super) struct BoxDrag {
     pub(super) source: ViewInput,
     start: egui::Pos2,
     base: BTreeSet<String>,
+    /// Track and via selection when the box started, for Shift and Ctrl/Command.
+    track_base: BTreeSet<uuid::Uuid>,
     add: bool,
     toggle: bool,
     button: PointerButton,
@@ -56,6 +58,8 @@ pub(super) struct BoxDrag {
 pub(super) struct Interaction {
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
+    /// Track and via selection from a finished box, applied after any footprint selection.
+    pub(super) track_selection: Option<BTreeSet<uuid::Uuid>>,
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) edit: Option<Draft>,
     pub(super) placement: Option<Placement>,
@@ -87,6 +91,7 @@ pub(super) fn show(
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
     label: &str,
+    markers: &[(Point, bool)],
 ) -> Interaction {
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
@@ -133,8 +138,13 @@ pub(super) fn show(
         && state.drawing.source().is_none()
         && !state.tracks.busy()
         && ui.input(|i| i.pointer.press_origin()).and_then(hit).is_some();
+    // M moves selected copper when no footprint is selected; otherwise it stays a footprint move.
+    if state.move_requested && state.selection.is_empty() && !state.tracks.selected.is_empty() {
+        state.move_requested = false;
+        state.tracks.move_requested = true;
+    }
     // The route tool owns its clicks; without it, a plain click on a track selects that track
-    // unless a footprint lies under the pointer.
+    // unless a footprint lies under the pointer, and a drag on copper moves it.
     let route = crate::board_tracks::interact(
         ui,
         &response,
@@ -199,12 +209,16 @@ pub(super) fn show(
         && !state.tracks.busy()
         && let Some(source) = source
         && let Some(start) = ui.input(|i| i.pointer.press_origin())
-        && (response.drag_started_by(PointerButton::Secondary) || (response.drag_started_by(PointerButton::Primary) && hit(start).is_none()))
+        && (response.drag_started_by(PointerButton::Secondary)
+            || (response.drag_started_by(PointerButton::Primary)
+                && hit(start).is_none()
+                && !(filters.tracks && crate::board_tracks::copper_under(start, camera, rect, project, &state.hidden_layers))))
     {
         state.box_drag = Some(BoxDrag {
             source,
             start,
             base: state.selection.clone(),
+            track_base: state.tracks.selected.clone(),
             add: modifiers.shift,
             toggle: modifiers.ctrl || modifiers.command,
             button: if response.drag_started_by(PointerButton::Secondary) { PointerButton::Secondary } else { PointerButton::Primary },
@@ -327,6 +341,12 @@ pub(super) fn show(
             highlighted.contains(&footprint.id),
         );
     }
+    for (at, focused) in markers {
+        let at = camera.screen(*at, rect);
+        if rect.contains(at) {
+            board::drc_marker(&p, at, *focused);
+        }
+    }
     if let Some(drag) = &state.box_drag
         && let Some(pointer) = ui.input(|i| i.pointer.interact_pos())
     {
@@ -334,7 +354,12 @@ pub(super) fn show(
         let crossing = pointer.x < drag.start.x;
         debug_assert_eq!(hit_bounds.len(), project.footprints().count());
         let hits: BTreeSet<_> = footprints_for_box(project, &hit_bounds, window, crossing, filters.footprints);
-        pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len());
+        let copper = if filters.tracks {
+            crate::board_tracks::box_hits(window, crossing, camera, rect, project, &state.hidden_layers)
+        } else {
+            BTreeSet::new()
+        };
+        pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len() + copper.len());
         if ui.input(|i| i.pointer.button_released(drag.button)) {
             if enabled && response.contains_pointer() {
                 let mut selection = if drag.add || drag.toggle { drag.base.clone() } else { BTreeSet::new() };
@@ -343,8 +368,15 @@ pub(super) fn show(
                         selection.insert(id);
                     }
                 }
+                let mut tracks = if drag.add || drag.toggle { drag.track_base.clone() } else { BTreeSet::new() };
+                for id in copper {
+                    if !drag.toggle || !tracks.remove(&id) {
+                        tracks.insert(id);
+                    }
+                }
                 state.drawing.selected = None;
                 out.selection = Some(selection);
+                out.track_selection = Some(tracks);
             }
             state.box_drag = None;
         } else if !ui.input(|i| i.pointer.button_down(drag.button)) {

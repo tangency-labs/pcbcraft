@@ -103,10 +103,42 @@ pub(super) fn dual_led_copy() -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, root.join("project.pc"))
 }
 
-/// Click the named control and run the frame that handles the action.
+/// Click the named control and run the frame that handles the action. A control that is not
+/// fully visible, such as a tool past the end of a narrow ribbon or one scrolled under the
+/// ribbon's left edge, is first scrolled into view as a person would; fully visible controls are
+/// clicked at once, so no extra frame can change the UI.
 pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    if !fully_visible(harness, label) {
+        harness.get_by_label(label).scroll_to_me();
+        harness.run();
+    }
     harness.get_by_label(label).click();
     harness.run();
+}
+
+/// Whether the named control lies wholly inside the window and inside every enclosing container
+/// that clips its children. Scroll areas report their visible viewport through
+/// `pcbcraft_chrome::workspace::describe_scroll_viewport`; one that doesn't is judged by the
+/// window alone.
+pub(super) fn fully_visible(harness: &Harness<'_, PcbApp>, label: &str) -> bool {
+    let node = harness.get_by_label(label);
+    let rect = node.rect();
+    let ppp = f64::from(harness.ctx.pixels_per_point());
+    let mut ancestor = node.accesskit_node().parent();
+    let mut visible = harness.ctx.content_rect().contains_rect(rect);
+    while let Some(container) = ancestor {
+        if container.clips_children()
+            && let Some(bounds) = container.bounding_box()
+        {
+            let clip = egui::Rect::from_min_max(
+                egui::pos2((bounds.x0 / ppp) as f32, (bounds.y0 / ppp) as f32),
+                egui::pos2((bounds.x1 / ppp) as f32, (bounds.y1 / ppp) as f32),
+            );
+            visible &= clip.contains_rect(rect);
+        }
+        ancestor = container.parent();
+    }
+    visible
 }
 
 /// Open a Browser row through its explicit context action, retaining ordinary click semantics.
@@ -2072,3 +2104,7 @@ fn project_location_and_save_choices_fit_a_narrow_window() {
     click(&mut harness, "Cancel");
     assert!(!harness.state().files.busy());
 }
+
+// Compile the native integration predicate here so app tests exercise the shipped patch.
+#[path = "../../../vendor/eframe/src/native/canvas_shortcut.rs"]
+mod native_canvas_shortcut;

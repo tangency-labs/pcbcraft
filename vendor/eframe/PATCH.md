@@ -64,3 +64,12 @@ text and ordinary text-widget editing keep the existing event path. No extra
 clipboard backend, polling, timeout, thread or platform API is introduced.
 Empty/error reads, stale delayed responses and modal text ownership are covered
 by application regressions. Reassess this change when updating eframe.
+
+# Native canvas standalone-via shortcut
+
+The local native input integration also preserves Command/Ctrl+Shift+X as a key
+event when no widget owns keyboard input. egui-winit 0.36.2 otherwise converts
+it to Cut and drops the key. Pending modifier events take precedence over the
+previous frame. Text widgets retain normal native clipboard handling. Plain V
+while routing is unchanged. The shortcut predicate has Windows/macOS modifier
+regression coverage. This original patch adds no dependency or external source.

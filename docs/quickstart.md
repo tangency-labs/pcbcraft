@@ -145,7 +145,8 @@ the same `VCC` net name, which can be changed before placement.
    until pulled clear, after which dropping back onto them reconnects normally. Moves and draws clean up overlapping
    runs, and **Heal** applies that cleanup to existing selected wires. Dropping
    a part with a pin exactly on a wire connects it; a two-pin part placed across
-   a straight run replaces the wire between its pins. **Auto-heal wires** in
+   a straight run replaces the wire between its pins. A filled dot marks a branch
+   connection; unrelated crossing wires have no dot. **Auto-heal wires** in
    **Preferences → Schematic** (also in the Modify menu) defaults on. Retracing a draft shortens the preview as you draw;
    Backspace restores the preceding clicked corner. Switch automatic healing off to keep detours and loops while
    drawing, then select a wire and use **Heal** for cleanup when desired.
@@ -296,7 +297,7 @@ explicitly opens another workspace. The workspace picker remains available.
 In the board workspace, Properties shows its stored reference, value, definition
 and unit-aware coordinate readouts.
 
-Use **Layout → Board → Setup**, or **Board setup…** in Layers, to edit the board.
+Use **Layout → Design → Setup**, or **Board setup…** in Layers, to edit the board.
 Choose any even copper count from 2 through 64; 10- and 12-layer boards are included.
 **Board editor layers** edits names and unused optional layer membership.
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
@@ -317,7 +318,7 @@ impedance calculations and manufacturing rules remain future work.
 
 Left-click a footprint to select it, then press **Delete** to remove its board
 placement. Multiple selected footprints are removed together. The **Layout →
-Placement menu → Delete** action does the same thing. Schematic components and physical
+Modify menu → Delete** action does the same thing. Schematic components and physical
 package assignments stay available; **Place on board** can place the assigned
 package again. Undo restores the original placement IDs and geometry.
 
@@ -337,7 +338,7 @@ The selected ribbon layer and its menu rows show matching color patches.
 without changing visibility. Plated lands take the active visible copper color, while front-only surface
 pads stay on front copper. Colors are shared local settings for this board,
 separate from its geometry, saved engineering files and document undo.
-**Layout → Fit** fits the placements, and **Layout → Reveal** brings the current
+**Fit** in the ribbon header fits the placements, and **Layout → Inspect menu → Reveal** brings the current
 counterpart highlight into view without changing zoom. Switching back restores
 the schematic camera. These actions do not modify project data or undo history.
 
@@ -376,7 +377,7 @@ map terminal 1 to pad 1 and terminal 2 to pad 2, then choose **Assign** and
 **Close**. This pins the package without creating a PCB or placement; folder and
 archive saves retain it offline. Creating your first board later adopts these
 choices for Update PCB. In PCB layout,
-open **Layout → Components → Footprints**, select the component, enter X/Y and
+open **Layout → Place → Footprint**, select the component, enter X/Y and
 choose **Place on board**. Assignment and placement are separate undo steps;
 save/reopen retains the package and mapping offline. The chooser also supports
 assigning an unassigned component directly from PCB layout. On a board with
@@ -386,7 +387,7 @@ next reviewed update. See the
 mapping constraints and source limits.
 
 To forward a captured schematic, choose **Capture → PCB → Update PCB**; from PCB
-layout use **Layout → Schematic → Update PCB**. **Create board** explicitly adds
+layout use **Layout → Design → Sync**. **Create board** explicitly adds
 the first PCB when needed. Existing footprints without recorded accepted state
 first require **Use current state**, which adopts today's schematic, packages and
 connections as the starting point rather than reconstructing earlier history.
@@ -406,7 +407,7 @@ and place later. **Copy report** includes all message categories.
 adoption remain separate edits. External changes or another client's preview
 require **Review again**; a reopened/replaced project requires a fresh dialog.
 
-In **Layers → Board**, select **Board Outline**, then choose **Layout → Draw → Line**
+In **Layers → Board**, select **Board Outline**, then choose **Layout → Outline → Line**
 or **Rectangle**. Click successive vertices for a line path; click its first vertex
 to close it, or press **Enter** to finish an open path. Rectangle uses two opposite
 corner clicks. Points snap to the current grid and nearby existing edge vertices.

@@ -10,8 +10,8 @@ connections.
 
 ## Update dialog
 
-Open **Capture → PCB → Update PCB** from the schematic, or **Layout → Schematic →
-Update PCB** from the PCB workspace. Sheet and board Browser rows also offer
+Open **Capture → PCB → Update PCB** from the schematic, or **Layout → Design → Sync**
+from the PCB workspace. Sheet and board Browser rows also offer
 **Update PCB from schematic…** in their context menus. Live MCP can open this same
 dialog with `app.update_pcb`, addressing the originating `view`; approval still
 uses the engine commands below.
