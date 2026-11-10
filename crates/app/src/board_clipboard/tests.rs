@@ -88,6 +88,28 @@ fn paste_rotation_follows_the_screen_in_both_board_views() {
     }
 }
 
+/// Measure supersedes a clipboard preview without committing it, and its clicks cannot paste.
+/// Starting a route then returns canvas ownership to the authored tool.
+#[test]
+fn measure_supersedes_clipboard_preview_without_editing() {
+    let mut h = board();
+    h.state_mut().duplicate_board_clipboard();
+    h.run();
+    click(&mut h, "Paste");
+    assert!(h.state().views.active.board.clipboard.active());
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, "Measure distance");
+    assert!(!h.state().views.active.board.clipboard.active());
+    assert!(h.state().views.active.board.measure.tool);
+    place(&mut h, 10_160_000, 10_160_000);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.state_mut().start_route();
+    h.run();
+    assert!(!h.state().views.active.board.measure.tool);
+    assert!(h.state().views.active.board.tracks.tool);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
 /// Independent instances receive self-contained pinned packages and explicit logical counterparts.
 #[test]
 fn independent_instance_paste_creates_linked_parts_in_one_undo_step() {
