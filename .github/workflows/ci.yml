@@ -31,6 +31,8 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --all --check
+      - name: Test required review enforcement
+        run: python3 -B -m unittest discover -s scripts -p 'test_coderabbit_review_gate.py'
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
 

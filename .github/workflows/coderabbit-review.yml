@@ -1,0 +1,41 @@
+name: CodeRabbit review gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: PR number to recheck after a successful CodeRabbit retry
+        required: true
+        type: string
+      override_reason:
+        description: Optional deliberate override for this commit; recorded with your identity
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: write
+
+concurrency:
+  group: coderabbit-review-${{ github.event.pull_request.number || github.event.merge_group.head_sha || inputs.pull_request_number }}
+  cancel-in-progress: true
+
+jobs:
+  observe-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The job token can publish checks. Never execute a contributor's code here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Require completed CodeRabbit reviews
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/coderabbit-review-gate.py

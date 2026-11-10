@@ -105,6 +105,14 @@ exposure pauses.
 
 ## Verify and submit
 
+The [required CodeRabbit review gate](docs/review-gate.md) documents review
+enforcement, retries after a rate limit or failed review, and explicit maintainer
+overrides with a recorded reason. Its regression tests run in CI's `checks` job:
+
+```sh
+python3 -B -m unittest discover -s scripts -p 'test_coderabbit_review_gate.py'
+```
+
 Run the workspace checks before a commit, including for documentation changes:
 
 ```sh

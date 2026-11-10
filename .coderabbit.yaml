@@ -1,6 +1,10 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 inheritance: true
 reviews:
+  review_progress: true
+  auto_approvals:
+    enabled: true
+    allow_author_approval: false
   auto_review:
     enabled: true
     drafts: true
