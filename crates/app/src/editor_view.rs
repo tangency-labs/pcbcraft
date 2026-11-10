@@ -172,6 +172,7 @@ pub(super) struct BoardState {
     /// Only an idle secondary press may open a context menu on release; tool cancellation cannot.
     pub(super) context_menu_allowed: bool,
     pub(super) move_requested: bool,
+    /// Counterclockwise degrees on screen; the board camera converts this intent to model space.
     pub(super) rotate_requested: u16,
     pub(super) selection: std::collections::BTreeSet<String>,
     pub(super) hidden_layers: std::collections::BTreeSet<String>,

@@ -405,6 +405,53 @@ fn placement(h: &Harness<'_, PcbApp>) -> Value {
     h.state().session.inspect()["project"]["board"]["footprints"][0].clone()
 }
 
+/// Keyboard and ribbon rotation keep their screen direction in either orientation. Move previews
+/// use the same direction, remain unauthored until commit, and cancel without changing the board.
+#[test]
+fn footprint_rotation_follows_the_screen_in_both_board_views() {
+    for flipped in [false, true] {
+        let mut h = editable_board();
+        h.state_mut().views.active.camera.set_mirrored(flipped);
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+        click_canvas_at(&mut h, origin);
+        let pad_direction = |h: &Harness<'_, PcbApp>| {
+            let project = h.state().session.project().unwrap();
+            let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
+            let footprint = board.footprints().next().unwrap();
+            board_point(h, footprint.pads[0].center) - board_point(h, footprint.position)
+        };
+        let initial = pad_direction(&h);
+        h.key_press(Key::R);
+        h.run();
+        let rotated = pad_direction(&h);
+        assert!(initial.x * rotated.y - initial.y * rotated.x < 0., "R is counterclockwise on screen, flipped={flipped}");
+        assert_eq!(placement(&h)["rotation"], if flipped { 270 } else { 90 });
+        h.key_press_modifiers(Modifiers::SHIFT, Key::R);
+        h.run();
+        assert_eq!(placement(&h)["rotation"], 0, "Shift+R reverses R");
+        assert!((pad_direction(&h) - initial).length() < 0.01);
+        click(&mut h, "Rotate footprint counterclockwise");
+        assert_eq!(placement(&h)["rotation"], if flipped { 270 } else { 90 });
+        let before_move = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.hover_at(origin);
+        h.key_press(Key::M);
+        h.run();
+        h.key_press_modifiers(Modifiers::SHIFT, Key::R);
+        h.run();
+        assert_eq!(h.state().views.active.board.draft.as_ref().unwrap().rotation, 0);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before_move);
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(h.state().views.active.board.draft.is_none());
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before_move);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// Dragging and rotation stay local until release; both changes commit together and undo once.
 #[test]
 fn footprint_drag_rotation_and_undo_share_one_command() {

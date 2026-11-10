@@ -94,8 +94,8 @@ fn move_button_uses_the_symbol_move_workflow() {
 
 /// A ribbon tool scrolled under the ribbon's left edge is still inside the window, but hidden.
 /// The ribbon reports its visible viewport, so the test `click` helper scrolls the tool back
-/// into view before clicking instead of clicking the hidden spot. The window width leaves the
-/// rectangle inside the window after scrolling past the working DRC tool to Setup.
+/// into view before clicking instead of clicking the hidden spot. Size the window from the
+/// measured scroll displacement so adding another ribbon tool preserves this clipping case.
 #[test]
 fn clicks_reach_a_tool_scrolled_under_the_ribbon_edge() {
     const RECTANGLE: &str = "Draw rectangle on Board Outline";
@@ -104,6 +104,11 @@ fn clicks_reach_a_tool_scrolled_under_the_ribbon_edge() {
     resistor_with_board_at_origin(&mut h);
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
+    h.get_by_label("Board setup").scroll_to_me();
+    h.run();
+    let width = h.ctx.content_rect().width() + 20. - h.get_by_label(RECTANGLE).rect().left();
+    h.set_size(egui::vec2(width, 700.));
+    h.run();
     h.get_by_label("Board setup").scroll_to_me();
     h.run();
     let rect = h.get_by_label(RECTANGLE).rect();
@@ -136,7 +141,7 @@ fn pcb_layout_tab_groups_working_and_planned_tools() {
         ("Route", &["Pair", "Tune"]),
         ("Modify", &["Align"]),
         ("Inspect", &["Rules", "Measure"]),
-        ("Design", &["Flip view", "Refill zones"]),
+        ("Design", &["Refill zones"]),
     ] {
         click(&mut h, &format!("{group} menu"));
         for tool in planned {

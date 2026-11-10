@@ -368,14 +368,29 @@ impl PcbApp {
                 toggle: false,
             },
         ];
-        let design_planned = [
-            planned(ToolIcon::FlipView, "Flip view", "View the board from below (planned)"),
-            planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)"),
+        let design = [
+            design[0],
+            design[1],
+            design[2],
+            RibbonTool {
+                icon: ToolIcon::FlipView,
+                label: "Flip view",
+                description: "View the board from below",
+                shortcut: "",
+                enabled,
+                active: self.views.active.camera.mirrored(),
+                toggle: true,
+            },
         ];
+        let design_planned = [planned(ToolIcon::Refill, "Refill zones", "Refill copper zones (planned)")];
         match workspace::ribbon_group_with_menu(ui, "Design", &design, &design_planned) {
             Some(0) => self.message = self.begin_board_update(self.views.active.id()).err(),
             Some(1) => self.begin_board_setup(self.views.active.id()),
             Some(2) => self.export_fabrication(ui.ctx()),
+            Some(3) => {
+                let camera = &mut self.views.active.camera;
+                camera.set_mirrored(!camera.mirrored());
+            }
             _ => {}
         }
     }

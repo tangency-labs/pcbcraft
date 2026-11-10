@@ -192,6 +192,9 @@ by tracks. Routing does not check clearance; use `pcb.check_design` for that.
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.
+`view.set_board_flipped` takes `view` and `flipped` and shows that board view from below
+or above through the same handler as **Design → Flip view**, keeping the centered point
+and zoom; `inspect_editor` reports `board.flipped` per view. It changes no project data.
 `view.set_layer_visibility` takes `view` and `mode` (`all` or `active`) through the
 same handler as Show all / Isolate active. Isolation reveals the active layer,
 hides the others and cancels unfinished drawing in that view.

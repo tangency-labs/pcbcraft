@@ -67,8 +67,9 @@ pub(super) struct Interaction {
 /// Empty-space primary drags and secondary drags box-select visible footprint bounds; Shift adds
 /// and Ctrl/Command toggles against the captured selection. Invalid release cancels the box.
 /// Transform drags retain their grab offset; M moves the origin
-/// to the pointer. R rotates counterclockwise, including during a move. Only completion on the
-/// canvas emits an edit; secondary click, disabled input or stale authority discards the draft.
+/// to the pointer. R rotates counterclockwise on screen, including in a mirrored view or a move.
+/// Only completion on the canvas emits an edit; secondary click, disabled input or stale
+/// authority discards the draft.
 /// Footprint moves retain placement clicks over edges and win overlapping drag starts unless
 /// an explicit drawing tool or an existing drawing edit already owns the gesture.
 /// Physical pad color/visibility follow engine-resolved copper membership; the active copper
@@ -196,7 +197,7 @@ pub(super) fn show(
         state.draft = None;
     }
     let moving = std::mem::take(&mut state.move_requested);
-    let rotation = std::mem::take(&mut state.rotate_requested);
+    let rotation = camera.model_rotation(std::mem::take(&mut state.rotate_requested));
     let rotating = rotation != 0;
     let cancelled = enabled && ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary));
     if cancelled {

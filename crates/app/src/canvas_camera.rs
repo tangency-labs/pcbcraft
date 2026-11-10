@@ -46,6 +46,9 @@ pub(crate) struct Camera {
     /// Spacing of the points the pointer snaps to, in nanometres. It never changes the scale:
     /// drawing is always in [`GRID_NM`] units, so a new spacing leaves everything where it is.
     snap_nm: i64,
+    /// View the board from below: model X is drawn right-to-left. Only board views set this; it
+    /// changes presentation and picking, never the model, and is not saved with the arrangement.
+    mirrored: bool,
 }
 
 impl Default for Camera {
@@ -58,6 +61,7 @@ impl Default for Camera {
             center_requested: None,
             uncovered: None,
             snap_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
+            mirrored: false,
         }
     }
 }
@@ -75,7 +79,8 @@ impl Camera {
         // The runtime offset is f32; rounding at the navigation boundary must not invalidate
         // an otherwise valid snapshot when converted back to nanometres.
         let limit = (MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f64;
-        let center_nm = [self.offset.x, self.offset.y].map(|offset| (-f64::from(offset) / scale).clamp(-limit, limit));
+        let mut center_nm = [self.offset.x, self.offset.y].map(|offset| (-f64::from(offset) / scale).clamp(-limit, limit));
+        center_nm[0] *= self.sign() as f64;
         CameraState { zoom: self.zoom, center_nm, snap_nm: self.snap_nm }
     }
 
@@ -93,7 +98,33 @@ impl Camera {
     pub(crate) fn fork_navigation(&mut self) -> Self {
         self.fit_requested = false;
         self.center_requested = None;
-        Self { zoom: self.zoom, offset: self.offset, snap_nm: self.snap_nm, ..Self::default() }
+        Self { zoom: self.zoom, offset: self.offset, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() }
+    }
+
+    /// Whether this view shows the board from below.
+    pub(crate) fn mirrored(&self) -> bool {
+        self.mirrored
+    }
+
+    /// Convert a counterclockwise on-screen rotation in degrees into model rotation, normalized
+    /// to 0..360. Reflection reverses the model angle so user controls keep their visible direction.
+    pub(crate) fn model_rotation(&self, degrees: u16) -> u16 {
+        let degrees = degrees % 360;
+        if self.mirrored { (360 - degrees) % 360 } else { degrees }
+    }
+
+    /// Show the board from below or above, keeping the same model point at the center of the
+    /// uncovered canvas and the zoom unchanged. Only presentation and picking change.
+    pub(crate) fn set_mirrored(&mut self, mirrored: bool) {
+        if self.mirrored != mirrored {
+            self.mirrored = mirrored;
+            self.offset.x = 2.0 * self.uncovered_center().x - self.offset.x;
+        }
+    }
+
+    /// -1 when model X is drawn right-to-left, otherwise 1.
+    fn sign(&self) -> f32 {
+        if self.mirrored { -1.0 } else { 1.0 }
     }
 
     /// The snap spacing in nanometres.
@@ -192,7 +223,7 @@ impl Camera {
     pub(crate) fn center_on(&mut self, point: Point) {
         self.center_requested = None;
         let scale = self.unit_step() / GRID_NM as f32;
-        self.offset = self.uncovered_center() - vec2(point.x_nm as f32, point.y_nm as f32) * scale;
+        self.offset = self.uncovered_center() - vec2(self.sign() * point.x_nm as f32, point.y_nm as f32) * scale;
         self.fit_requested = false;
     }
 
@@ -208,7 +239,7 @@ impl Camera {
     pub(crate) fn center(&self) -> Point {
         let scale = self.unit_step() / GRID_NM as f32;
         let center = (self.uncovered_center() - self.offset) / scale;
-        Point { x_nm: center.x.round() as i64, y_nm: center.y.round() as i64 }
+        Point { x_nm: (self.sign() * center.x).round() as i64, y_nm: center.y.round() as i64 }
     }
 
     /// Zoom to `zoom` (clamped to the wheel's limits) about the uncovered canvas center, as a
@@ -229,7 +260,7 @@ impl Camera {
     /// Convert a model point to a point on the canvas.
     pub(crate) fn screen(&self, point: Point, rect: Rect) -> Pos2 {
         let scale = self.unit_step() / GRID_NM as f32;
-        rect.center() + self.offset + vec2(point.x_nm as f32, point.y_nm as f32) * scale
+        rect.center() + self.offset + vec2(self.sign() * point.x_nm as f32, point.y_nm as f32) * scale
     }
 
     /// Snap the pointer to the nearest multiple of the snap spacing in schematic coordinates,
@@ -250,7 +281,7 @@ impl Camera {
         let relative = pointer - rect.center() - self.offset;
         let nm_per_point = GRID_NM as f64 / f64::from(self.unit_step());
         let snap = |points: f32| (f64::from(points) * nm_per_point / spacing as f64).round() as i64 * spacing;
-        Point { x_nm: snap(relative.x), y_nm: snap(relative.y) }
+        Point { x_nm: snap(self.sign() * relative.x), y_nm: snap(relative.y) }
     }
 
     /// Apply navigation only when the canvas owns input, following the person's settings.
@@ -276,13 +307,16 @@ impl Camera {
         navigation: Navigation,
     ) {
         if std::mem::take(&mut self.fit_requested) {
-            *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
-            let bounds = project.footprints().flat_map(board_extent).chain(project.drawings().into_iter().flat_map(|drawing| drawing.points)).fold(
-                Rect::NOTHING,
-                |bounds, point| {
+            *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
+            let copper = project.tracks().iter().flat_map(|track| [track.start, track.end]).chain(project.vias().iter().map(|via| via.at));
+            let bounds = project
+                .footprints()
+                .flat_map(board_extent)
+                .chain(project.drawings().into_iter().flat_map(|drawing| drawing.points))
+                .chain(copper)
+                .fold(Rect::NOTHING, |bounds, point| {
                     bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
-                },
-            );
+                });
             self.fit_bounds(bounds, rect, MAX_ZOOM);
         }
         self.interact(response, rect, enabled, navigation);
@@ -300,7 +334,7 @@ impl Camera {
     ) {
         self.schematic_rect = Some(rect);
         if std::mem::take(&mut self.fit_requested) {
-            *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
+            *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
             let bounds = points.fold(Rect::NOTHING, |bounds, point| {
                 bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2()).expand(theme::SCHEMATIC_FIT_MARGIN))
             });
@@ -353,7 +387,7 @@ impl Camera {
     /// Center symbol and wire bounds, including free routes and a margin for labels, in the part
     /// of the canvas left uncovered by all visible floating cards.
     fn fit(&mut self, project: &Project, rect: Rect) {
-        *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, ..Self::default() };
+        *self = Self { uncovered: self.uncovered, snap_nm: self.snap_nm, mirrored: self.mirrored, ..Self::default() };
         let mut bounds = Rect::NOTHING;
         for symbol in project.symbols() {
             let center = self.screen(symbol.position, rect) - rect.center();
@@ -463,6 +497,26 @@ mod tests {
         camera.reveal_bounds(outside);
         assert_eq!(camera.offset, before);
         assert_eq!(camera.zoom, 2.0);
+    }
+
+    /// A mirrored camera draws model X right-to-left, maps the pointer back to the same model
+    /// point, keeps the centered point when toggled, and saves its center in model coordinates.
+    #[test]
+    fn mirroring_round_trips_points_and_keeps_the_center() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mut camera = Camera { zoom: 2.0, offset: vec2(-30.0, 14.0), snap_nm: 1, ..Camera::default() };
+        let point = Point { x_nm: 3_810_000, y_nm: -1_270_000 };
+        let center = camera.saved_state().center_nm;
+        let plain = camera.screen(point, rect);
+        camera.set_mirrored(true);
+        let mirrored = camera.screen(point, rect);
+        assert!((mirrored.y - plain.y).abs() < 0.01);
+        assert_ne!(mirrored.x, plain.x);
+        assert_eq!(camera.unsnapped(mirrored, rect), point);
+        let saved = camera.saved_state().center_nm;
+        assert!((saved[0] - center[0]).abs() < 1.0 && (saved[1] - center[1]).abs() < 1.0, "{saved:?} vs {center:?}");
+        camera.set_mirrored(false);
+        assert!((camera.screen(point, rect) - plain).length() < 0.01);
     }
 
     /// Snapping follows the chosen spacing without changing where model points are drawn.

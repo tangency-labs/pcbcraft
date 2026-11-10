@@ -483,10 +483,10 @@ The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outli
 (Line, Rectangle), **Route** (Track, followed by the Active layer, Track width and Via
 pad / drill fields), **Modify** (Move, Rotate; Delete in its menu), **Inspect** (DRC,
 Reveal) and **Design** (Sync updates the PCB from the schematic; Setup opens Board
-setup; Outputs saves fabrication files). Tools that are not built yet, such as Zone,
-Pair, Tune, Align, Rules, Measure, Flip view and Refill zones, appear disabled in
-their group's menu and say "planned". The ribbon scrolls sideways when the window is
-too narrow for every group.
+setup; Outputs saves fabrication files; Flip view shows the board from below). Tools
+that are not built yet, such as Zone, Pair, Tune, Align, Rules, Measure and Refill
+zones, appear disabled in their group's menu and say "planned". The ribbon scrolls
+sideways when the window is too narrow for every group.
 
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;
@@ -614,6 +614,14 @@ preserve the existing file's permission bits and new archives follow the process
 umask. The archive is flushed before replacement and its directory is flushed
 afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
+
+**Layout → Design → Flip view** shows the board from below in this view: model X runs
+right to left around the centered point, at the same zoom, and the status bar says
+**Bottom view**. Selection, routing and moves work as usual, mapped through the mirror;
+the board, its layers and its files are unchanged, and the button toggles back. Fit
+includes tracks and vias. Rotation follows the screen: **R** and the Rotate button
+turn counterclockwise, and **Shift+R** turns clockwise, whether the view is flipped
+or not. This also applies to move, footprint placement and PCB paste previews.
 
 To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
 **Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,

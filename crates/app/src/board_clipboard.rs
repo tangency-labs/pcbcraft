@@ -331,12 +331,21 @@ impl PcbApp {
     /// and only a primary placement click can request a real transaction. The host has already
     /// granted this ghost the current canvas input through board_clipboard_ready.
     /// Authored DRC markers do not apply to this disposable candidate.
+    /// R and Shift+R rotate counterclockwise and clockwise on screen, including mirrored views.
     pub(super) fn board_clipboard_canvas(&mut self, ui: &mut Ui, id: ViewId, label: &str) {
         let Some(project) = self.session.snapshot() else { return };
         let Some(view) = self.views.view_mut(id) else { return };
         let Some(mut placement) = view.board.clipboard.paste.clone() else { return };
-        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
-            placement.options.items.quarter_turns = (placement.options.items.quarter_turns + 1) % 4;
+        let rotation = if ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::R)) {
+            270
+        } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
+            90
+        } else {
+            0
+        };
+        if rotation != 0 {
+            let turns = (view.camera.model_rotation(rotation) / 90) as u8;
+            placement.options.items.quarter_turns = (placement.options.items.quarter_turns + turns) % 4;
             view.board.clipboard.paste = Some(placement.clone());
         }
         let rect = ui.available_rect_before_wrap();
