@@ -7,6 +7,7 @@
 //! overlaps, and a via joins whatever copper it overlaps on any layer. This is a bounded connectivity aid for the ratsnest and for
 //! refusing shorts between nets. It is not a clearance check, DRC or manufacturing validation.
 use super::{
+    definition::PadShape,
     setup::LayerPurpose,
     view::{BoardView, CopperLayers},
 };
@@ -159,12 +160,88 @@ pub struct Copper {
     pub vias: BTreeMap<Uuid, usize>,
 }
 
-/// A pad reduced to what connectivity needs: its land corners, layers and net label.
+/// Resolved pad geometry and net membership used by connectivity and footprint edits.
 pub(super) struct Land {
     pub(super) key: (String, String),
     pub(super) corners: [Point; 4],
     pub(super) layers: Vec<Uuid>,
     pub(super) net: Option<String>,
+    center: Point,
+    shape: PadShape,
+    corner_radius_nm: i64,
+}
+
+/// The pad's inner rectangle, segment or point, expanded by a round radius.
+struct PadContour {
+    core: [Point; 4],
+    radius: f64,
+}
+
+impl Land {
+    /// Derive the copper contour from resolved corners and pad shape in board nanometers.
+    fn contour(&self) -> PadContour {
+        if self.shape == PadShape::Rectangle {
+            return PadContour { core: self.corners, radius: 0. };
+        }
+        let c = &self.corners;
+        let (ux, uy) = ((c[1].x_nm - c[0].x_nm) as f64, (c[1].y_nm - c[0].y_nm) as f64);
+        let (vx, vy) = ((c[3].x_nm - c[0].x_nm) as f64, (c[3].y_nm - c[0].y_nm) as f64);
+        let (w, h) = (ux.hypot(uy), vx.hypot(vy));
+        let radius = match self.shape {
+            PadShape::Rectangle => 0.,
+            PadShape::RoundedRectangle => (self.corner_radius_nm as f64).min(w.min(h) / 2.),
+            PadShape::Circle | PadShape::Oval => w.min(h).round() / 2.,
+        };
+        let (x, y) = if self.shape == PadShape::RoundedRectangle {
+            ((c[0].x_nm as f64 + c[2].x_nm as f64) / 2., (c[0].y_nm as f64 + c[2].y_nm as f64) / 2.)
+        } else {
+            (self.center.x_nm as f64, self.center.y_nm as f64)
+        };
+        let (iw, ih) = match self.shape {
+            PadShape::Circle => (0., 0.),
+            PadShape::Oval => ((w.round() / 2. - radius).max(0.), (h.round() / 2. - radius).max(0.)),
+            _ => ((w / 2. - radius).max(0.), (h / 2. - radius).max(0.)),
+        };
+        let core = [(-iw, -ih), (iw, -ih), (iw, ih), (-iw, ih)].map(|(a, b)| Point {
+            x_nm: (x + a * ux / w.max(1.) + b * vx / h.max(1.)).round() as i64,
+            y_nm: (y + a * uy / w.max(1.) + b * vy / h.max(1.)).round() as i64,
+        });
+        PadContour { core, radius }
+    }
+}
+
+impl PadContour {
+    /// The four core edges, including degenerate edges for circles and ovals.
+    fn edges(&self) -> impl Iterator<Item = (Point, Point)> + '_ {
+        self.core.iter().copied().zip(self.core.iter().copied().cycle().skip(1))
+    }
+
+    /// Check containment in a core with area. Line and point cores are handled by edge distance.
+    fn contains_core(&self, p: Point) -> bool {
+        let [a, b, _, d] = self.core;
+        let area = (b.x_nm - a.x_nm) as i128 * (d.y_nm - a.y_nm) as i128 - (b.y_nm - a.y_nm) as i128 * (d.x_nm - a.x_nm) as i128;
+        area != 0 && inside(p, &self.core)
+    }
+
+    /// Test a round-ended segment against the pad, with a zero-length segment for an endpoint or via.
+    fn overlaps_segment(&self, start: Point, end: Point, radius: f64) -> bool {
+        self.contains_core(start) || self.contains_core(end) || self.edges().any(|(a, b)| segment_distance(start, end, a, b) <= self.radius + radius)
+    }
+
+    /// Test copper contact between two pads, including containment and rounded edges.
+    fn overlaps(&self, other: &Self) -> bool {
+        other.contains_core(self.core[0]) || other.edges().any(|(a, b)| self.overlaps_segment(a, b, other.radius))
+    }
+
+    /// Bounds for pruning pad contact candidates before testing their contours.
+    fn bounds(&self) -> [f64; 4] {
+        let mut bounds = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for p in self.core {
+            let (x, y) = (p.x_nm as f64, p.y_nm as f64);
+            bounds = [bounds[0].min(x - self.radius), bounds[1].min(y - self.radius), bounds[2].max(x + self.radius), bounds[3].max(y + self.radius)];
+        }
+        bounds
+    }
 }
 
 impl<'a> BoardView<'a> {
@@ -222,7 +299,15 @@ pub(super) fn lands(view: BoardView<'_>) -> Vec<Land> {
             footprint.pads.into_iter().filter_map(move |pad| {
                 let corners = pad.copper?;
                 let Some(CopperLayers::Resolved { layers, .. }) = pad.copper_layers else { return None };
-                Some(Land { key: (id.clone(), pad.number), corners, layers, net: pad.net })
+                Some(Land {
+                    key: (id.clone(), pad.number),
+                    corners,
+                    layers,
+                    net: pad.net,
+                    center: pad.center,
+                    shape: pad.shape,
+                    corner_radius_nm: pad.corner_radius_nm,
+                })
             })
         })
         .collect()
@@ -231,6 +316,12 @@ pub(super) fn lands(view: BoardView<'_>) -> Vec<Land> {
 /// Union-find over lands, then tracks, then vias. Returns islands plus each island's member
 /// node indices, numbered in that order.
 pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
+    islands_with_contours(lands, tracks, vias, None)
+}
+
+/// Build islands using the existing connectivity bounds, or use the supplied contours to
+/// validate a footprint edit, including direct contact between pads.
+fn islands_with_contours(lands: &[Land], tracks: &[Track], vias: &[Via], contours: Option<&[PadContour]>) -> (Copper, Vec<Vec<usize>>) {
     let mut parent: Vec<usize> = (0..lands.len() + tracks.len() + vias.len()).collect();
     fn find(parent: &mut [usize], mut node: usize) -> usize {
         while parent[node] != node {
@@ -245,10 +336,18 @@ pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper
             parent[a.max(b)] = a.min(b);
         }
     };
+    if let Some(contours) = contours {
+        for_each_pad_contact(lands, contours, |i, j| join(&mut parent, i, j));
+    }
     for (t, track) in tracks.iter().enumerate() {
         let node = lands.len() + t;
         for (l, land) in lands.iter().enumerate() {
-            if land.layers.contains(&track.layer) && touches_land(track, &land.corners) {
+            if land.layers.contains(&track.layer)
+                && contours.map_or_else(
+                    || touches_land(track, &land.corners),
+                    |pads| pads[l].overlaps_segment(track.start, track.end, track.width_nm as f64 / 2.),
+                )
+            {
                 join(&mut parent, node, l);
             }
         }
@@ -264,7 +363,9 @@ pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper
         let node = lands.len() + tracks.len() + v;
         let radius = via.diameter_nm as f64 / 2.;
         for (l, land) in lands.iter().enumerate() {
-            if !land.layers.is_empty() && via_touches_land(via.at, radius, &land.corners) {
+            if !land.layers.is_empty()
+                && contours.map_or_else(|| via_touches_land(via.at, radius, &land.corners), |pads| pads[l].overlaps_segment(via.at, via.at, radius))
+            {
                 join(&mut parent, node, l);
             }
         }
@@ -299,6 +400,29 @@ pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper
         }
     }
     (copper, members)
+}
+
+/// Sweep overlapping pad bounds and visit each pair whose copper touches on a shared layer.
+fn for_each_pad_contact(lands: &[Land], contours: &[PadContour], mut visit: impl FnMut(usize, usize)) {
+    let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
+    let mut order: Vec<_> = (0..lands.len()).collect();
+    order.sort_by(|&a, &b| bounds[a][0].total_cmp(&bounds[b][0]));
+    for (position, &i) in order.iter().enumerate() {
+        let [_, top, right, bottom] = bounds[i];
+        for &j in &order[position + 1..] {
+            let [left, other_top, _, other_bottom] = bounds[j];
+            if left > right {
+                break;
+            }
+            if top <= other_bottom
+                && other_top <= bottom
+                && lands[i].layers.iter().any(|layer| lands[j].layers.contains(layer))
+                && contours[i].overlaps(&contours[j])
+            {
+                visit(i, j);
+            }
+        }
+    }
 }
 
 /// Whether a track's copper overlaps a convex pad land: an end inside it, or the centerline
@@ -354,19 +478,21 @@ pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
 }
 
 /// Name the first two distinct nets joined by an island that contains one of the `added`
-/// tracks or vias, if any. Islands without new copper are ignored, so a short made earlier by
-/// another edit (such as moving a footprint onto a track) does not block unrelated routes.
+/// tracks or vias, if any. Islands without new copper are ignored so pre-existing shorts
+/// do not block unrelated routes.
 fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> {
     short_for_copper_edit(project, added, &BTreeSet::new())
 }
 
 /// Check the islands touching edited tracks, vias or footprint lands for shorts.
+/// Footprint edits use pad contours and include direct pad contacts on a shared layer.
 /// Unrelated pre-existing islands remain outside the check.
 pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> Option<(String, String)> {
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
     let (tracks, vias) = (view.tracks(), view.vias());
-    let (_, members) = islands(&lands, tracks, vias);
+    let contours = (!footprints.is_empty()).then(|| lands.iter().map(Land::contour).collect::<Vec<_>>());
+    let (_, members) = islands_with_contours(&lands, tracks, vias, contours.as_deref());
     let is_added = |node: usize| {
         if let Some(land) = lands.get(node) {
             return footprints.contains(&land.key.0);
@@ -381,11 +507,6 @@ pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, f
         let first = nets.next()?;
         nets.find(|net| *net != first).map(|second| (first, second))
     })
-}
-
-/// Whether a track end, `half` its width in radius, overlaps a convex pad land.
-fn end_on_land(end: Point, half: f64, corners: &[Point; 4]) -> bool {
-    inside(end, corners) || corners.iter().zip(corners.iter().cycle().skip(1)).any(|(a, b)| point_distance(end, *a, *b) <= half)
 }
 
 /// Map `point` from one placement of a pad land to another, keeping its place relative to the
@@ -413,7 +534,14 @@ fn reframe(point: Point, from: &[Point; 4], to: &[Point; 4]) -> Point {
 /// the track stretches. An end whose pad no longer reaches the track's layer, such as an SMD
 /// pad flipped to the other side, stays where it was. Only tracks that change are returned.
 pub(super) fn carry(before: BoardView<'_>, after: BoardView<'_>, moved: &BTreeSet<String>) -> Vec<Track> {
-    let old: Vec<Land> = lands(before).into_iter().filter(|land| moved.contains(&land.key.0)).collect();
+    let old: Vec<_> = lands(before)
+        .into_iter()
+        .filter(|land| moved.contains(&land.key.0))
+        .map(|land| {
+            let contour = land.contour();
+            (land, contour)
+        })
+        .collect();
     if old.is_empty() {
         return Vec::new();
     }
@@ -421,7 +549,8 @@ pub(super) fn carry(before: BoardView<'_>, after: BoardView<'_>, moved: &BTreeSe
         lands(after).into_iter().filter(|land| moved.contains(&land.key.0)).map(|land| (land.key.clone(), land)).collect();
     let follow = |end: Point, track: &Track| {
         let half = track.width_nm as f64 / 2.;
-        let Some(land) = old.iter().find(|land| land.layers.contains(&track.layer) && end_on_land(end, half, &land.corners)) else {
+        let Some((land, _)) = old.iter().find(|(land, contour)| land.layers.contains(&track.layer) && contour.overlaps_segment(end, end, half))
+        else {
             return end;
         };
         match new.get(&land.key) {

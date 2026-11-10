@@ -5,6 +5,31 @@ use crate::{
 };
 use serde_json::json;
 
+/// Curved pads exclude their bounding corners and include copper within the track end's radius.
+#[test]
+fn pad_contours_test_contact_with_round_track_ends() {
+    for (shape, half_x, half_y, corner_radius_nm) in
+        [(PadShape::Circle, 300_000, 300_000, 0), (PadShape::Oval, 500_000, 300_000, 0), (PadShape::RoundedRectangle, 500_000, 300_000, 150_000)]
+    {
+        let corners = [(-half_x, -half_y), (half_x, -half_y), (half_x, half_y), (-half_x, half_y)].map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+        let land = Land {
+            key: ("footprint-1".into(), "1".into()),
+            corners,
+            layers: Vec::new(),
+            net: None,
+            center: Point { x_nm: 0, y_nm: 0 },
+            shape,
+            corner_radius_nm,
+        };
+        let contour = land.contour();
+        let corner = corners[2];
+        assert!(!contour.overlaps_segment(corner, corner, 5_000.), "{shape:?}");
+        let near_edge = Point { x_nm: 0, y_nm: half_y + 20_000 };
+        assert!(!contour.overlaps_segment(near_edge, near_edge, 19_000.), "{shape:?}");
+        assert!(contour.overlaps_segment(near_edge, near_edge, 20_000.), "{shape:?}");
+    }
+}
+
 /// Three placed 0402 resistors whose first terminals share the accepted net ACCEPTED and whose
 /// last two share a second net, on a two-layer board with an accepted baseline. Built through
 /// the shared production commands.

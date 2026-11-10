@@ -459,3 +459,63 @@ fn quarter_turn_carries_an_off_center_track_end() {
     assert_eq!(track.end, free);
     assert_eq!(s.revision(), revision + 1);
 }
+
+/// A nearby track end inside the pad's bounds but outside its rounded copper stays in place.
+#[test]
+fn moving_a_footprint_leaves_track_outside_rounded_copper_fixed() {
+    use crate::board::track::tests::{copper_layers, routed_fixture, view};
+
+    let mut s = routed_fixture();
+    let footprint = view(&s).footprints().next().unwrap();
+    let id = footprint.id;
+    let origin = footprint.position;
+    let pad = &footprint.pads[0];
+    let start = Point { x_nm: pad.center.x_nm + 290_000, y_nm: pad.center.y_nm + 290_000 };
+    let free = Point { x_nm: start.x_nm, y_nm: start.y_nm + 1_500_000 };
+    let front = copper_layers(&s)[0];
+    s.apply(
+        crate::ADD_TRACKS,
+        &json!({"layer":front,"width_nm":super::super::track::MIN_WIDTH_NM,"points":[start,free],"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let before = view(&s).tracks().to_vec();
+    let position = Point { x_nm: origin.x_nm + 2_000_000, y_nm: origin.y_nm };
+    assert!(view(&s).carried_tracks(&id, position, 0, false).is_empty());
+    s.apply(
+        SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":id,"x_nm":position.x_nm,"y_nm":position.y_nm,"rotation":0,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    assert_eq!(view(&s).tracks(), before);
+}
+
+/// Direct pad overlap between different nets is refused on the same layer, even without routing.
+#[test]
+fn footprint_move_refuses_direct_pad_short_on_shared_copper() {
+    use crate::board::track::tests::{routed_fixture, view};
+
+    let mut s = routed_fixture();
+    let board = view(&s);
+    assert!(board.tracks().is_empty() && board.vias().is_empty());
+    let source = board.footprints().next().unwrap();
+    let pad = source.pads.iter().find(|p| p.net.is_some()).unwrap();
+    let target = board
+        .footprints()
+        .filter(|footprint| footprint.id != source.id)
+        .flat_map(|footprint| footprint.pads)
+        .find(|other| other.net.is_some() && other.net != pad.net)
+        .unwrap();
+    let x = source.position.x_nm + target.center.x_nm - pad.center.x_nm;
+    let y = source.position.y_nm + target.center.y_nm - pad.center.y_nm;
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let mut transform = json!({"footprint":source.id,"x_nm":x,"y_nm":y,"rotation":0,"expected_revision":revision});
+    let error = s.apply(SET_FOOTPRINT_TRANSFORM, &transform).unwrap_err().to_string();
+    assert!(error.contains("would connect nets"), "{error}");
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+
+    transform["side"] = json!("back");
+    s.apply(SET_FOOTPRINT_TRANSFORM, &transform).unwrap();
+    assert_eq!(s.revision(), revision + 1, "overlap across separate layers is allowed");
+}
