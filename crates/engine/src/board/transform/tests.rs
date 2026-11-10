@@ -172,3 +172,149 @@ fn deleting_placements_is_atomic_and_preserves_components_and_packages() {
         .unwrap();
     assert_eq!(s.project().unwrap().board.footprints().len(), 2);
 }
+
+/// Every mode round-trips through its MCP name, and only the distribute modes need three.
+#[test]
+fn align_modes_round_trip_their_names() {
+    for mode in super::AlignMode::ALL {
+        assert_eq!(super::AlignMode::parse(mode.name()), Some(mode));
+        assert_eq!(mode.minimum(), if mode.name().starts_with("distribute") { 3 } else { 2 });
+    }
+    assert_eq!(super::ALIGN_MODES.map(super::AlignMode::parse).map(Option::unwrap), super::AlignMode::ALL);
+    assert_eq!(super::AlignMode::parse("distribute"), None);
+}
+
+/// Edge, center and distribute modes move boxes exactly; distribution keeps the outer items and
+/// leaves equal gaps.
+#[test]
+fn alignment_moves_boxes_to_shared_edges_and_equal_gaps() {
+    let boxes = [[0, 0, 10, 10], [30, 5, 34, 25], [12, -4, 20, 2]];
+    assert_eq!(super::alignment(super::AlignMode::Left, &boxes).unwrap(), vec![(0, 0), (-30, 0), (-12, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Right, &boxes).unwrap(), vec![(24, 0), (0, 0), (14, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Top, &boxes).unwrap(), vec![(0, -4), (0, -9), (0, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Bottom, &boxes).unwrap(), vec![(0, 15), (0, 0), (0, 23)]);
+    assert_eq!(super::alignment(super::AlignMode::CenterX, &boxes).unwrap(), vec![(12, 0), (-15, 0), (1, 0)]);
+    let spread = super::alignment(super::AlignMode::DistributeX, &boxes).unwrap();
+    let placed: Vec<_> = boxes.iter().zip(&spread).map(|(b, (dx, _))| [b[0] + dx, b[2] + dx]).collect();
+    assert_eq!(placed, vec![[0, 10], [30, 34], [16, 24]], "gaps of 6: 34 of span minus 22 of sizes, in two gaps");
+}
+
+/// Distribution anchors physical edges even when overlapping boxes have a different center order.
+#[test]
+fn distribution_keeps_physical_outer_edges_fixed() {
+    for spans in [[[0, 20], [1, 3], [30, 34]], [[0, 4], [10, 30], [27, 29]]] {
+        let boxes = spans.map(|[a, b]| [a, a, b, b]);
+        for (mode, axis) in [(super::AlignMode::DistributeX, 0), (super::AlignMode::DistributeY, 1)] {
+            let deltas = super::alignment(mode, &boxes).unwrap();
+            assert_eq!(deltas[0], (0, 0), "leading physical anchor: {mode:?}, {spans:?}");
+            let trailing = if spans[1][1] > spans[2][1] { 1 } else { 2 };
+            assert_eq!(deltas[trailing], (0, 0), "trailing physical anchor: {mode:?}, {spans:?}");
+            let mut placed: Vec<_> = boxes
+                .iter()
+                .zip(&deltas)
+                .map(|(b, (dx, dy))| {
+                    let delta = if axis == 0 { *dx } else { *dy };
+                    (b[axis] + delta, b[axis + 2] + delta)
+                })
+                .collect();
+            placed.sort();
+            assert_eq!(placed[0].0, spans[0][0]);
+            assert_eq!(placed.last().unwrap().1, spans[trailing][1]);
+            assert_eq!(placed[1].0 - placed[0].1, placed[2].0 - placed[1].1);
+        }
+    }
+}
+
+/// Infeasible overlap is refused rather than moving an outer anchor or expanding the span.
+#[test]
+fn distribution_refuses_overlap_that_cannot_preserve_its_span() {
+    let boxes = [[0, 0, 1, 1], [10, 10, 90, 90], [20, 20, 80, 80], [99, 99, 100, 100]];
+    for mode in [super::AlignMode::DistributeX, super::AlignMode::DistributeY] {
+        assert!(super::alignment(mode, &boxes).is_err());
+    }
+    use crate::board::track::tests::{routed_fixture, view};
+    let mut s = routed_fixture();
+    let footprints: Vec<_> = view(&s).footprints().collect();
+    let ids: Vec<_> = footprints.iter().map(|f| f.id.clone()).collect();
+    let origin = footprints[0].position;
+    s.apply(
+        SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":ids[1],"x_nm":origin.x_nm,"y_nm":origin.y_nm,"rotation":footprints[1].rotation,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let before = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let result = s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":ids,"mode":"distribute_x","expected_revision":revision}));
+    assert!(result.is_err(), "both footprints defining the left edge must remain fixed");
+    assert_eq!(s.revision(), revision);
+    assert_eq!(crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
+}
+
+/// Center alignment rounds consistently across zero and does not move aligned mixed-width boxes
+/// on a second application, on either axis and at positive or negative positions.
+#[test]
+fn center_alignment_is_idempotent_across_zero() {
+    for offset in [-20, 0, 20] {
+        let boxes = [[-3 + offset, -3 + offset, offset, offset], [offset, offset, 10 + offset, 10 + offset]];
+        for (mode, axis) in [(super::AlignMode::CenterX, 0), (super::AlignMode::CenterY, 1)] {
+            let moved: Vec<_> =
+                boxes.iter().zip(super::alignment(mode, &boxes).unwrap()).map(|(b, (dx, dy))| [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]).collect();
+            let centers: Vec<_> = moved.iter().map(|b| (b[axis] + b[axis + 2]).div_euclid(2)).collect();
+            assert_eq!(centers, vec![3 + offset; 2], "{mode:?} at offset {offset}: {moved:?}");
+            assert_eq!(super::alignment(mode, &moved).unwrap(), vec![(0, 0); 2], "repeating {mode:?} must not create another edit");
+        }
+    }
+}
+
+/// The command aligns real footprints in one undoable edit, is a no-op when already aligned,
+/// and refuses too few, repeated or unknown footprints and unknown modes.
+#[test]
+fn align_footprints_is_one_checked_edit() {
+    use crate::board::track::tests::{routed_fixture, view};
+    use crate::persistence::encode_documents;
+    let mut s = routed_fixture();
+    let ids: Vec<String> = view(&s).footprints().map(|f| f.id.clone()).collect();
+    assert_eq!(ids.len(), 3);
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let nudge = |s: &mut Session, dx: i64, dy: i64| {
+        let (id, at, rotation) = view(s).footprints().next().map(|f| (f.id.clone(), f.position, f.rotation)).unwrap();
+        s.apply(
+            SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":id,"x_nm":at.x_nm + dx,"y_nm":at.y_nm + dy,"rotation":rotation,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+    };
+    nudge(&mut s, 0, 3_000_000);
+    let revision = s.revision();
+    s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":ids,"mode":"top","expected_revision":revision})).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    let tops: Vec<_> = view(&s).footprints().map(|f| super::bounds(&f)[1]).collect();
+    assert!(tops.windows(2).all(|pair| pair[0] == pair[1]), "{tops:?}");
+    s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":ids,"mode":"top","expected_revision":s.revision()})).unwrap();
+    assert_eq!(s.revision(), revision + 1, "already aligned is not an edit");
+    // The fixture is evenly spaced, so nudge one footprint before distributing.
+    nudge(&mut s, 3_000_000, 0);
+    let nudged_revision = s.revision();
+    s.apply(super::ALIGN_FOOTPRINTS, &json!({"footprints":ids,"mode":"distribute_x","expected_revision":s.revision()})).unwrap();
+    assert_eq!(s.revision(), nudged_revision + 1, "distributing is one edit");
+    let mut spans: Vec<_> = view(&s).footprints().map(|f| super::bounds(&f)).map(|b| (b[0], b[2])).collect();
+    spans.sort();
+    assert_eq!(spans[1].0 - spans[0].1, spans[2].0 - spans[1].1, "equal gaps: {spans:?}");
+    let revision = s.revision();
+    for params in [
+        json!({"footprints":[ids[0]],"mode":"left"}),
+        json!({"footprints":[ids[0], ids[1]],"mode":"distribute_y"}),
+        json!({"footprints":[ids[0], ids[0]],"mode":"left"}),
+        json!({"footprints":[ids[0], "footprint-999"],"mode":"left"}),
+        json!({"footprints":[ids[0], ids[1]],"mode":"sideways"}),
+    ] {
+        let mut params = params;
+        params["expected_revision"] = json!(revision);
+        assert!(s.apply(super::ALIGN_FOOTPRINTS, &params).is_err(), "{params}");
+    }
+    assert_eq!(s.revision(), revision);
+    for _ in 0..4 {
+        s.apply("edit.undo", &json!({})).unwrap();
+    }
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before, "each nudge and alignment is one undo step");
+}

@@ -22,7 +22,7 @@ pub mod setup;
 mod side_tests;
 pub mod silkscreen;
 pub mod track;
-mod transform;
+pub(crate) mod transform;
 pub mod update;
 pub mod view;
 

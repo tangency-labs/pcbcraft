@@ -1018,3 +1018,34 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
     assert_eq!(reopened, first);
     assert!(!std::sync::Arc::ptr_eq(&before_open, &reopened));
 }
+
+/// Modify › Align to Top aligns the selected footprints in one edit; Distribute needs three.
+#[test]
+fn modify_menu_aligns_selected_footprints() {
+    let mut h = routable();
+    let ids: std::collections::BTreeSet<String> =
+        h.state().session.project().unwrap().boards().next().unwrap().footprints().map(|f| f.id.clone()).collect();
+    assert_eq!(ids.len(), 2);
+    let first = ids.iter().next().unwrap().clone();
+    let (at, rotation) = {
+        let project = h.state().session.project().unwrap();
+        let f = project.boards().next().unwrap().footprints().find(|f| f.id == first).unwrap();
+        (f.position, f.rotation)
+    };
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":first,"x_nm":at.x_nm,"y_nm":at.y_nm + 2_540_000,"rotation":rotation,"expected_revision":revision}),
+    );
+    h.run();
+    h.state_mut().views.active.board.selection = ids.clone();
+    h.run();
+    let revision = h.state().session.revision();
+    click(&mut h, "Modify menu");
+    assert!(h.get_by_label("Distribute Horizontally").accesskit_node().is_disabled(), "distributing needs three footprints");
+    click(&mut h, "Align to Top");
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let ys: Vec<_> = h.state().session.project().unwrap().boards().next().unwrap().footprints().map(|f| f.position.y_nm).collect();
+    assert_eq!(ys[0], ys[1], "identical footprints aligned by their tops share a Y");
+}

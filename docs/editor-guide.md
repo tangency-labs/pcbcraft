@@ -481,18 +481,26 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 
 The **Layout** tab groups the board tools as **Place** (Footprint, Via), **Outline**
 (Line, Rectangle), **Route** (Track, followed by the Active layer, Track width and Via
-pad / drill fields), **Modify** (Move, Rotate, Flip; Delete in its menu), **Inspect**
-(DRC, Measure, Reveal) and **Design** (Sync updates the PCB from the schematic; Setup
-opens Board setup; Outputs saves fabrication files; Flip view shows the board from
-below). Tools that are not built yet, such as Zone, Pair, Tune, Align, Rules and
-Refill zones, appear disabled in their group's menu and say "planned". The ribbon
-scrolls sideways when the window is too narrow for every group.
+pad / drill fields), **Modify** (Move, Rotate, Flip; Delete and the align and
+distribute actions in its menu), **Inspect** (DRC, Measure, Reveal) and **Design**
+(Sync updates the PCB from the schematic; Setup opens Board setup; Outputs saves
+fabrication files; Flip view shows the board from below). Tools that are not built
+yet, such as Zone, Pair, Tune, Rules and Refill zones, appear disabled in their
+group's menu and say "planned". The ribbon scrolls sideways when the window is too
+narrow for every group.
 
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;
 Shift adds and Ctrl/Command toggles. Escape cancels the box, and Delete removes
 the selected footprints in one undo step. Footprint moves, rotation and flips operate on one
-placement at a time. With one footprint selected, Properties edits its **X**, **Y** and
+placement at a time. With two or more footprints selected, the **Modify** menu aligns them by their physical
+bounds (pads, courtyard and fabrication outlines, not silkscreen): **Align to Left**,
+**Right**, **Top** or **Bottom**, or **Align to Vertical Center** and **Horizontal Center**
+(the middle of the selection). With three or more, **Distribute Horizontally** or
+**Vertically** keeps the physical outermost parts fixed and makes the gaps between
+them equal to nanometer precision. Overlapping selections are refused if distribution
+would move an outermost part or change the selection's span. Each is one
+undo step. With one footprint selected, Properties edits its **X**, **Y** and
 **Rotation** exactly (in the display units and whole degrees) and switches its **Side**
 between Top and Bottom; each change is one undo step through the same transform command
 as M, R and F, keeping the other values. **F** (or **Layout → Modify → Flip**) moves the hovered or selected
