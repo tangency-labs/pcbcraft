@@ -679,9 +679,12 @@ pad** and **Via drill** fields in the display units; a value applies to every se
 item when you release a drag or press Enter. A move or resize whose copper would reach
 another net's pad is refused, leaving the board unchanged. The **Tracks** selection
 filter turns track picking off. Tracks stay on their layer, so a back-side track does
-not reach front-only SMD pads, while a via joins copper on every layer. Reshaping a
-route by dragging one segment and blind or buried vias are not implemented yet.
-Routing does not check clearance; run **Inspect → DRC** for that.
+not reach front-only SMD pads, while a via joins copper on every layer. With the pointer over a segment and no tool armed, **D** drags that segment with the
+pointer while segments touching it on the same layer stretch to stay attached. An end
+that meets the middle of another track holds there, so the segment pivots on that
+junction. A click commits them all as one undo step, and Esc or right-click cancels. Vias
+at its ends stay put. Blind or buried vias are not implemented yet. Routing does not check
+clearance; run **Inspect → DRC** for that.
 Live MCP reaches the transform command and these view, workspace and window
 controls too (see the [MCP guide](mcp.md#live-mcp-in-the-desktop-editor)). See the
 [board inspection walkthrough](quickstart.md#inspect-a-board-beside-its-schematic).

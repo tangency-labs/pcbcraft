@@ -1049,3 +1049,74 @@ fn modify_menu_aligns_selected_footprints() {
     let ys: Vec<_> = h.state().session.project().unwrap().boards().next().unwrap().footprints().map(|f| f.position.y_nm).collect();
     assert_eq!(ys[0], ys[1], "identical footprints aligned by their tops share a Y");
 }
+
+/// D drags the segment under the pointer while its neighbors stretch to stay attached; a click
+/// commits all of them as one edit, and Esc cancels a drag without editing.
+#[test]
+fn d_drags_a_segment_and_keeps_neighbors_attached() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let y = 2_540_000;
+    let p = |x: i64| Point { x_nm: x, y_nm: y };
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,"points":[p(1_270_000), p(3_810_000), p(6_350_000), p(8_890_000)],"expected_revision":revision}),
+    );
+    h.run();
+    let revision = h.state().session.revision();
+    h.hover_at(at(&h, p(5_080_000)));
+    h.run();
+    h.key_press(Key::D);
+    h.run();
+    assert!(h.state().views.active.board.tracks.busy());
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().views.active.board.tracks.busy());
+    h.hover_at(at(&h, p(5_080_000)));
+    h.run();
+    h.key_press(Key::D);
+    h.run();
+    let lifted = Point { x_nm: 5_080_000, y_nm: 1_270_000 };
+    let target = at(&h, lifted);
+    click_canvas_at(&mut h, target);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1, "one edit for the segment and its neighbors");
+    let up = |x: i64| Point { x_nm: x, y_nm: 1_270_000 };
+    let key = |a: Point, b: Point| (a.x_nm, a.y_nm, b.x_nm, b.y_nm);
+    let ends: std::collections::BTreeSet<_> = tracks(&h).iter().map(|t| key(t.start, t.end)).collect();
+    let expected =
+        std::collections::BTreeSet::from([key(p(1_270_000), up(3_810_000)), key(up(3_810_000), up(6_350_000)), key(up(6_350_000), p(8_890_000))]);
+    assert_eq!(ends, expected, "the route stays connected");
+}
+
+/// At a T-junction, D keeps the connection: a dragged end on the middle of another track holds
+/// there while the segment pivots, and a track ending along a dragged segment follows it.
+#[test]
+fn d_keeps_t_junctions_attached() {
+    let mut h = routable();
+    let mm = |x: i64, y: i64| Point { x_nm: x * 1_270_000, y_nm: y * 1_270_000 };
+    let bus = add_track(&mut h, mm(1, 2), mm(7, 2));
+    let stub = add_track(&mut h, mm(4, 2), mm(4, 4));
+    let drag = |h: &mut Harness<'_, PcbApp>, from: Point, to: Point| {
+        h.hover_at(at(h, from));
+        h.run();
+        h.key_press(Key::D);
+        h.run();
+        let target = at(h, to);
+        click_canvas_at(h, target);
+        assert_eq!(h.state().message, None);
+    };
+    let ends = |h: &Harness<'_, PcbApp>, id| tracks(h).into_iter().find(|t| t.id == id).map(|t| (t.start, t.end)).unwrap();
+
+    let revision = h.state().session.revision();
+    drag(&mut h, mm(4, 3), mm(5, 3));
+    assert_eq!(ends(&h, stub), (mm(4, 2), mm(5, 4)), "the end on the bus holds while the far end moves");
+    assert_eq!(ends(&h, bus), (mm(1, 2), mm(7, 2)), "the bus does not move");
+    assert_eq!(h.state().session.revision(), revision + 1);
+
+    drag(&mut h, mm(2, 2), mm(2, 1));
+    assert_eq!(ends(&h, bus), (mm(1, 1), mm(7, 1)));
+    assert_eq!(ends(&h, stub), (mm(4, 1), mm(5, 4)), "the stub's end follows the bus it meets");
+    assert_eq!(h.state().session.revision(), revision + 2);
+}

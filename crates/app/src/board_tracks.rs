@@ -67,6 +67,16 @@ struct MoveDraft {
     drag: bool,
 }
 
+/// D: one segment follows the pointer while segments touching its ends on the same layer
+/// stretch to stay attached, until a click commits the new ends.
+#[derive(Clone, Debug)]
+struct SegmentDrag {
+    source: ViewInput,
+    track: Uuid,
+    anchor: Point,
+    offset: (i64, i64),
+}
+
 /// Independent route tool, sizes and track/via selection for one board view, never saved in files.
 #[derive(Debug)]
 pub(super) struct State {
@@ -90,6 +100,11 @@ pub(super) struct State {
     /// U: select every track and via joined by copper to the hovered or selected copper.
     pub(super) connected_requested: bool,
     moving: Option<MoveDraft>,
+    /// D over a segment: drag it with its attached neighbors stretching.
+    pub(super) drag_segment_requested: bool,
+    segment: Option<SegmentDrag>,
+    /// New ends just submitted by a segment drag, painted until the engine applies them.
+    committed_ends: Vec<(Uuid, Point, Point)>,
     /// The displacement just submitted for the selection, painted until the engine applies it.
     committed_move: Option<(i64, i64)>,
     /// Leave each vertex on a 45° diagonal first, then run straight. Toggled with `/`.
@@ -116,6 +131,9 @@ impl Default for State {
             move_requested: false,
             connected_requested: false,
             moving: None,
+            drag_segment_requested: false,
+            segment: None,
+            committed_ends: Vec::new(),
             committed_move: None,
             diagonal_first: false,
             draft: None,
@@ -160,11 +178,13 @@ impl State {
         self.move_requested = false;
         self.connected_requested = false;
         self.moving = None;
+        self.drag_segment_requested = false;
+        self.segment = None;
     }
     /// Escape drops an unfinished route first, then exits the tool, then clears the selection.
     /// Returns false when there was nothing to escape.
     pub(super) fn escape(&mut self) -> bool {
-        if self.draft.take().is_some() || self.moving.take().is_some() {
+        if self.draft.take().is_some() || self.moving.take().is_some() || self.segment.take().is_some() {
             return true;
         }
         if std::mem::take(&mut self.tool) | std::mem::take(&mut self.via_tool) {
@@ -178,7 +198,7 @@ impl State {
     }
     /// Whether a tool or an unfinished route owns canvas input.
     pub(super) fn busy(&self) -> bool {
-        self.tool || self.via_tool || self.draft.is_some() || self.moving.is_some()
+        self.tool || self.via_tool || self.draft.is_some() || self.moving.is_some() || self.segment.is_some()
     }
     /// The displacement to paint selected copper with: a move in progress, or one just submitted.
     fn shift(&self) -> Option<(i64, i64)> {
@@ -201,6 +221,63 @@ pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardV
 /// Whether a press here would start a copper drag rather than a box selection.
 pub(super) fn copper_under(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>) -> bool {
     copper_at(pointer, camera, rect, view, hidden).is_some()
+}
+
+/// Where `p` projects onto `track`, as a fraction from its start (0) to its end (1), and how far
+/// it lies from that point in nanometers.
+fn projection(p: Point, track: &Track) -> (f64, f64) {
+    let (ax, ay, bx, by) = (track.start.x_nm as f64, track.start.y_nm as f64, track.end.x_nm as f64, track.end.y_nm as f64);
+    let (dx, dy, px, py) = (bx - ax, by - ay, p.x_nm as f64 - ax, p.y_nm as f64 - ay);
+    let length = dx * dx + dy * dy;
+    let t = if length > 0. { ((px * dx + py * dy) / length).clamp(0., 1.) } else { 0. };
+    (t, (px - t * dx).hypot(py - t * dy))
+}
+
+/// Whether `p`, on copper `width_nm` wide, overlaps `track`'s copper.
+fn touches(p: Point, width_nm: i64, track: &Track) -> bool {
+    projection(p, track).1 <= (width_nm + track.width_nm) as f64 / 2.
+}
+
+/// New ends for a segment drag of `track` by `offset`, listing only tracks that change.
+///
+/// The dragged segment moves by `offset`, except that an end meeting the middle of another
+/// track on its layer is held there, so the segment pivots and that junction stays attached.
+/// Every other track on the layer whose end touches the dragged segment, at one of its ends or
+/// along it, follows that point to the same place on the moved segment. Empty when nothing
+/// would move, such as when both ends are held.
+fn dragged_ends(view: BoardView<'_>, track: Uuid, offset: (i64, i64)) -> Vec<(Uuid, Point, Point)> {
+    let tracks = view.tracks();
+    let Some(dragged) = tracks.iter().find(|t| t.id == track) else { return Vec::new() };
+    let others: Vec<&Track> = tracks.iter().filter(|t| t.id != track && t.layer == dragged.layer).collect();
+    // Ends of other tracks that touch the dragged segment stretch with it rather than hold it.
+    let attached = |other: &Track| touches(other.start, other.width_nm, dragged) || touches(other.end, other.width_nm, dragged);
+    let held = |p: Point| others.iter().any(|other| !attached(other) && touches(p, dragged.width_nm, other));
+    let shift = |p: Point| if held(p) { (0, 0) } else { offset };
+    let (from, to) = (shift(dragged.start), shift(dragged.end));
+    if (from, to) == ((0, 0), (0, 0)) {
+        return Vec::new();
+    }
+    let add = |p: Point, (dx, dy): (i64, i64)| Point { x_nm: p.x_nm.saturating_add(dx), y_nm: p.y_nm.saturating_add(dy) };
+    // A point on the dragged segment moves by the blend of its ends' moves at its position.
+    let follow = |p: Point| {
+        let t = if p == dragged.start {
+            0.
+        } else if p == dragged.end {
+            1.
+        } else {
+            projection(p, dragged).0
+        };
+        let blend = |a: i64, b: i64| a + ((b - a) as f64 * t).round() as i64;
+        add(p, (blend(from.0, to.0), blend(from.1, to.1)))
+    };
+    let mut out = vec![(dragged.id, add(dragged.start, from), add(dragged.end, to))];
+    for other in others {
+        let ends = [other.start, other.end].map(|p| if touches(p, other.width_nm, dragged) { follow(p) } else { p });
+        if ends != [other.start, other.end] {
+            out.push((other.id, ends[0], ends[1]));
+        }
+    }
+    out
 }
 
 /// Every track and via sharing a copper island with any of `seeds`.
@@ -395,14 +472,19 @@ pub(super) fn interact(
     let via_side = state.via_side_requested.take();
     let move_copper = std::mem::take(&mut state.move_requested);
     let select_connected = std::mem::take(&mut state.connected_requested);
+    let drag_segment = std::mem::take(&mut state.drag_segment_requested);
     state.committed_move = None;
+    state.committed_ends.clear();
+    if !enabled || state.segment.as_ref().is_some_and(|segment| Some(segment.source) != source) {
+        state.segment = None;
+    }
     if !enabled || state.moving.as_ref().is_some_and(|moving| Some(moving.source) != source) {
         state.moving = None;
     }
     let Some(source) = source.filter(|_| enabled) else { return out };
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) && state.busy() {
-        // Right-click ends the innermost gesture: a route or a copper move, else the tool.
-        if state.draft.take().is_none() && state.moving.take().is_none() {
+        // Right-click ends the innermost gesture: a route, a copper move or a segment drag, else the tool.
+        if state.draft.take().is_none() && state.moving.take().is_none() && state.segment.take().is_none() {
             state.tool = false;
             state.via_tool = false;
         }
@@ -523,6 +605,39 @@ pub(super) fn interact(
             return out;
         }
     }
+    if drag_segment
+        && state.moving.is_none()
+        && state.segment.is_none()
+        && let Some(pointer) = pointer.filter(|_| !over_footprint)
+        && let Some(track) = copper_at(pointer, camera, rect, view, hidden).filter(|id| visible.iter().any(|track| track.id == *id))
+    {
+        state.selected = BTreeSet::from([track]);
+        state.segment = Some(SegmentDrag { source, track, anchor: camera.snap(pointer, rect), offset: (0, 0) });
+        out.consumed = true;
+        return out;
+    }
+    if let Some(segment) = &mut state.segment {
+        out.consumed = true;
+        if let Some(pointer) = pointer {
+            let at = camera.snap(pointer, rect);
+            segment.offset = (at.x_nm - segment.anchor.x_nm, at.y_nm - segment.anchor.y_nm);
+        }
+        if response.clicked() {
+            let segment = segment.clone();
+            state.segment = None;
+            let ends = dragged_ends(view, segment.track, segment.offset);
+            if !ends.is_empty() {
+                state.committed_ends = ends.clone();
+                let tracks: Vec<_> = ends.iter().map(|(id, start, end)| json!({"track":id,"start":start,"end":end})).collect();
+                out.command = Some(Command {
+                    source: segment.source,
+                    id: pcbcraft_engine::RESHAPE_TRACKS,
+                    params: json!({"tracks":tracks,"expected_revision":segment.source.revision}),
+                });
+            }
+        }
+        return out;
+    }
     if state.moving.is_none() && !state.selected.is_empty() && move_copper {
         // Without a pointer over the canvas (the ribbon was used), anchor on the selection itself.
         let anchor = pointer.map(|pointer| camera.snap(pointer, rect)).unwrap_or_else(|| {
@@ -639,9 +754,16 @@ pub(super) fn paint(
         Some((dx, dy)) => Point { x_nm: point.x_nm.saturating_add(dx), y_nm: point.y_nm.saturating_add(dy) },
         None => point,
     };
+    // A segment drag in progress, or one just submitted, draws its tracks at their new ends.
+    let reshaped: Vec<(Uuid, Point, Point)> =
+        state.segment.as_ref().map_or_else(|| state.committed_ends.clone(), |drag| dragged_ends(view, drag.track, drag.offset));
     for track in tracks {
         let selected = state.selected.contains(&track.id);
-        segment(&track.layer.to_string(), moved(track.start, selected), moved(track.end, selected), track.width_nm, selected);
+        let (start, end) = reshaped
+            .iter()
+            .find(|(id, _, _)| *id == track.id)
+            .map_or((moved(track.start, selected), moved(track.end, selected)), |(_, start, end)| (*start, *end));
+        segment(&track.layer.to_string(), start, end, track.width_nm, selected);
     }
     let via = |at: Point, diameter_nm: i64, drill_nm: i64, selected: bool, preview: bool| {
         pcbcraft_chrome::board::via(

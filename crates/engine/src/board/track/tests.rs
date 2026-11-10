@@ -626,3 +626,43 @@ fn copper_nets_follow_the_pads_they_reach() {
     let floating = view(&s).tracks().iter().find(|t| t.start.y_nm == 30_000_000).unwrap().id;
     assert!(!nets.contains_key(&floating));
 }
+
+/// Reshaping sets new ends for several segments in one edit, keeping layer and width; collapsed,
+/// repeated or unknown segments, and reshapes that short two nets, change nothing.
+#[test]
+fn reshaping_moves_segment_ends_in_one_checked_edit() {
+    let mut s = routed_fixture();
+    let front = copper_layers(&s)[0];
+    let y = 20_000_000;
+    let p = |x| Point { x_nm: x, y_nm: y };
+    route(&mut s, front, &[p(0), p(2_000_000), p(4_000_000), p(6_000_000)]).unwrap();
+    let find = |s: &Session, start: Point| view(s).tracks().iter().find(|t| t.start == start).unwrap().clone();
+    let (first, middle, last) = (find(&s, p(0)), find(&s, p(2_000_000)), find(&s, p(4_000_000)));
+    let lifted = |x| Point { x_nm: x, y_nm: y - 1_000_000 };
+    let revision = s.revision();
+    let reshape = json!([
+        {"track":first.id,"start":first.start,"end":lifted(2_000_000)},
+        {"track":middle.id,"start":lifted(2_000_000),"end":lifted(4_000_000)},
+        {"track":last.id,"start":lifted(4_000_000),"end":last.end},
+    ]);
+    s.apply(RESHAPE_TRACKS, &json!({"tracks":reshape,"expected_revision":revision})).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    let after = view(&s).tracks().iter().find(|t| t.id == middle.id).unwrap().clone();
+    assert_eq!((after.start, after.end, after.layer, after.width_nm), (lifted(2_000_000), lifted(4_000_000), middle.layer, middle.width_nm));
+    let revision = s.revision();
+    for tracks in [
+        json!([{"track":middle.id,"start":lifted(2_000_000),"end":lifted(2_000_000)}]),
+        json!([{"track":middle.id,"start":p(0),"end":p(1)},{"track":middle.id,"start":p(0),"end":p(2)}]),
+        json!([{"track":Uuid::from_u128(5),"start":p(0),"end":p(1)}]),
+    ] {
+        assert!(s.apply(RESHAPE_TRACKS, &json!({"tracks":tracks,"expected_revision":revision})).is_err(), "{tracks}");
+    }
+    let (a, b) = {
+        let f = view(&s).footprints().find(|f| f.pads.iter().all(|p| p.net.is_some()) && f.pads[0].net != f.pads[1].net).unwrap();
+        (f.pads[0].center, f.pads[1].center)
+    };
+    let error =
+        s.apply(RESHAPE_TRACKS, &json!({"tracks":[{"track":middle.id,"start":a,"end":b}],"expected_revision":revision})).unwrap_err().to_string();
+    assert!(error.contains("would connect nets"), "{error}");
+    assert_eq!(s.revision(), revision);
+}

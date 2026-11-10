@@ -22,6 +22,8 @@ pub const ADD_TRACKS: &str = "pcb.add_tracks";
 pub const ADD_VIA: &str = "pcb.add_via";
 /// Move addressed tracks and vias by one displacement, keeping their sizes and layers.
 pub const MOVE_TRACKS: &str = "pcb.move_tracks";
+/// Set new ends for addressed track segments at once, keeping their layers and widths.
+pub const RESHAPE_TRACKS: &str = "pcb.reshape_tracks";
 /// Change the width of addressed track segments.
 pub const SET_TRACK_WIDTH: &str = "pcb.set_track_width";
 /// Change the pad diameter and drill of addressed vias.
@@ -394,8 +396,9 @@ fn ids(params: &Value, name: &str, existing: impl Fn(&Uuid) -> bool) -> Result<B
 }
 
 impl Session {
-    /// Add one routed path, place one standalone via, move or resize addressed tracks and vias,
-    /// or delete them, atomically. A standalone via may not sit exactly on another via. Moved
+    /// Add one routed path, place one standalone via, move, reshape or resize addressed tracks and
+    /// vias, or delete them, atomically. Reshaping sets explicit ends and refuses a segment whose
+    /// ends would meet. A standalone via may not sit exactly on another via. Moved
     /// and resized items count as new copper for the short check, so an edit that makes them
     /// touch another net's copper is refused whole. A no-op edit leaves history unchanged. A path of N distinct
     /// consecutive points becomes N-1 segments with one width, starting on `layer`. Each layer
@@ -488,6 +491,25 @@ impl Session {
                 via.at = shift(via.at);
             }
             added.extend(moved_tracks.into_iter().chain(moved_vias));
+        } else if command == RESHAPE_TRACKS {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Ends {
+                track: Uuid,
+                start: Point,
+                end: Point,
+            }
+            let ends: Vec<Ends> = param(params, "tracks")?;
+            let unique: BTreeSet<_> = ends.iter().map(|ends| ends.track).collect();
+            if ends.is_empty() || unique.len() != ends.len() {
+                return Err(CommandError::InvalidParams("name each track to reshape once".into()));
+            }
+            for ends in &ends {
+                let track =
+                    tracks.iter_mut().find(|track| track.id == ends.track).ok_or_else(|| CommandError::InvalidParams("unknown track".into()))?;
+                (track.start, track.end) = (ends.start, ends.end);
+            }
+            added.extend(unique);
         } else if command == SET_TRACK_WIDTH {
             let changed = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
             if changed.is_empty() {
