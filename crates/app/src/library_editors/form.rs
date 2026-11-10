@@ -15,6 +15,9 @@ impl Draft {
     /// Capture the selected primitive or definition metadata with its document authority.
     pub(super) fn new(item: &Item, object: Option<u64>, revision: u64) -> Self {
         let mut value=object.and_then(|id|item.objects.get(&id)).and_then(|primitive|serde_json::to_value(primitive).ok()).unwrap_or_else(||json!({"operation":"metadata","name":item.name,"license":item.license,"source":item.source,"reference_prefix":item.reference_prefix,"default_value":item.default_value}));
+        if object.is_none() && item.kind == Kind::Symbol {
+            value["symbol_settings"] = json!({"behavior":item.behavior,"defaults":item.defaults});
+        }
         if let Some(pad) = value.get_mut("pad").and_then(Value::as_object_mut) {
             pad.entry("corner_radius_nm").or_insert(json!(0));
             pad.entry("drill_nm").or_insert(Value::Null);

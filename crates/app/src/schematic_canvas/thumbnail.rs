@@ -208,3 +208,49 @@ mod tests {
         assert!(text.contains(&"ACME"));
     }
 }
+
+#[cfg(test)]
+mod native_power_tests {
+    use super::*;
+    use pcbcraft_engine::{
+        PLACE_SYMBOL, Session,
+        persistence::{decode_documents, encode_documents},
+    };
+    use serde_json::json;
+
+    /// Recent previews render pinned native power bodies and Value fields through the same
+    /// symbol painter as other components, including when the source catalog is absent.
+    #[test]
+    fn saved_native_power_symbols_render_in_the_common_thumbnail_path() {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({})).unwrap();
+        for (id, x) in [("gnd", 0), ("vcc-bar", 8 * GRID_NM)] {
+            let d = s.libraries().latest_symbol("power", id).unwrap();
+            s.apply(PLACE_SYMBOL,&json!({"library":"power","definition":id,"definition_revision":d.revision(),"definition_digest":pcbcraft_engine::library::sources::symbol_digest(&d).unwrap(),"x_nm":x,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+        }
+        let docs = encode_documents(s.snapshot().unwrap()).unwrap();
+        let pinned = decode_documents(&docs).unwrap();
+        let preview = Thumbnail::new(&pinned).unwrap();
+        assert_eq!(preview.symbols.len(), 2);
+        assert!(pinned.net_labels().is_empty());
+        let ctx = egui::Context::default();
+        pcbcraft_chrome::fonts::install(&ctx);
+        ctx.begin_pass(egui::RawInput::default());
+        preview.paint(&ctx.layer_painter(egui::LayerId::background()), Rect::from_min_size(Pos2::ZERO, vec2(300., 180.)));
+        let mut out = ctx.end_pass();
+        out.textures_delta.clear();
+        let text: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.galley.text()),
+                _ => None,
+            })
+            .collect();
+        assert!(text.contains(&"GND"));
+        assert!(text.contains(&"VCC"));
+        assert!(!text.iter().any(|t| t.starts_with("PWR")));
+        assert_eq!(out.shapes.iter().filter(|s| matches!(s.shape, egui::Shape::LineSegment { .. })).count(), 6);
+        assert_eq!(encode_documents(pinned).unwrap(), docs);
+    }
+}

@@ -17,16 +17,57 @@ use serde_json::Value;
 
 use crate::schematic::{ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, TextAlign, check_value};
 
+#[cfg(test)]
+mod bundled_tests;
 pub mod sources;
 #[cfg(test)]
 use crate::schematic::PIN_OFFSET_NM;
 
+#[cfg(test)]
 mod starter_files {
-    include!(concat!(env!("OUT_DIR"), "/starter_library.rs"));
+    use std::sync::LazyLock;
+    pub const MANIFEST: &str = include_str!("../../../libraries/starter/library.json");
+    pub static SYMBOLS: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
+        super::bundled_files::LIBRARIES
+            .iter()
+            .find(|(id, _)| *id == "starter")
+            .into_iter()
+            .flat_map(|(_, files)| files.iter())
+            .filter_map(|(path, text)| path.strip_prefix("symbols/").map(|name| (name, *text)))
+            .collect()
+    });
+}
+
+mod bundled_files {
+    include!(concat!(env!("OUT_DIR"), "/bundled_libraries.rs"));
+}
+
+/// Embedded delivery only: each registration uses the same documents as a native folder.
+pub fn bundled_documents() -> impl Iterator<Item = (&'static str, sources::Documents)> {
+    bundled_files::LIBRARIES.iter().map(|(id, files)| (*id, files.iter().map(|(path, text)| ((*path).into(), (*text).into())).collect()))
 }
 
 /// The symbol file format this build reads.
 pub const SYMBOL_FORMAT: &str = "pcbcraft-symbol/1";
+/// Native definitions carrying explicit electrical semantics or instance defaults.
+pub const SYMBOL_FORMAT_V2: &str = "pcbcraft-symbol/2";
+
+/// Electrical roles survive copying and never follow from an item or library name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Behavior {
+    /// Name this terminal globally using the placed component's Value.
+    Power { terminal: String },
+}
+
+/// Initial fields and appearance for any native symbol; placed instances remain editable.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Defaults {
+    pub metadata: crate::schematic::fields::Metadata,
+    pub field_layout: crate::schematic::fields::Layouts,
+}
+
 /// The library manifest format this build reads.
 pub const LIBRARY_FORMAT: &str = "pcbcraft-library/1";
 
@@ -53,7 +94,12 @@ pub struct Library {
     problems: Vec<String>,
 }
 
-static STARTER: LazyLock<Library> = LazyLock::new(|| Library::load(starter_files::MANIFEST, starter_files::SYMBOLS));
+static STARTER: LazyLock<Library> = LazyLock::new(|| {
+    let files = bundled_files::LIBRARIES.iter().find(|(id, _)| *id == "starter").map(|(_, files)| *files).unwrap_or_default();
+    let manifest = files.iter().find(|(path, _)| *path == "library.json").map(|(_, text)| *text).unwrap_or_default();
+    let symbols: Vec<_> = files.iter().filter_map(|(path, text)| path.strip_prefix("symbols/").map(|path| (path, *text))).collect();
+    Library::load(manifest, &symbols)
+});
 
 /// The starter library shipped with PCBcraft.
 pub fn starter() -> &'static Library {
@@ -150,6 +196,10 @@ struct SymbolFile {
     name: String,
     reference_prefix: String,
     default_value: String,
+    #[serde(default)]
+    behavior: Option<Behavior>,
+    #[serde(default)]
+    defaults: Option<Defaults>,
     terminals: Vec<TerminalFile>,
     units: Vec<UnitFile>,
 }
@@ -193,7 +243,8 @@ struct PinFile {
 
 /// Parse and check one symbol file.
 ///
-/// The file must be [`SYMBOL_FORMAT`] with no unknown fields. Terminals, 1 to 128 of them, have
+/// The file must be [`SYMBOL_FORMAT`] or [`SYMBOL_FORMAT_V2`] with no unknown fields.
+/// Version 2 validates explicit electrical roles and instance defaults. Terminals, 1 to 128 of them, have
 /// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. This build places symbols with one unit
 /// that has exactly one pin per terminal. Pins sit on the 1.27 mm grid, at most 12.7 mm from the
 /// center on each axis and apart from each other. Drawings have at most 256 strokes within
@@ -211,7 +262,24 @@ fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
 
 /// Draft documents may temporarily have no pins; published symbols retain the strict minimum.
 fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, String> {
-    let file: SymbolFile = serde_json::from_value(versioned(value, SYMBOL_FORMAT, "symbol")?).map_err(|error| error.to_string())?;
+    let format_version = match value["format"].as_str() {
+        Some(SYMBOL_FORMAT) => 1,
+        Some(SYMBOL_FORMAT_V2) => 2,
+        _ => return Err("unsupported symbol format".into()),
+    };
+    if format_version == 1 && (value.get("behavior").is_some() || value.get("defaults").is_some()) {
+        return Err("electrical behavior and defaults require pcbcraft-symbol/2".into());
+    }
+    let file: SymbolFile = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    if let Some(defaults) = &file.defaults {
+        defaults.metadata.validate()?;
+        crate::schematic::fields::validate_layouts(&defaults.field_layout, &defaults.metadata)?;
+    }
+    if let Some(Behavior::Power { terminal }) = &file.behavior
+        && !file.terminals.iter().any(|pin| pin.id == *terminal)
+    {
+        return Err("power behavior must name an existing terminal".into());
+    }
     check_id(&file.id)?;
     if file.revision == 0 {
         return Err("`revision` must be 1 or more".to_owned());
@@ -270,6 +338,9 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
     }
     let drawing = unit.drawing.into_iter().map(shape).collect::<Result<Vec<_>, _>>()?;
     Ok(SymbolDefinition {
+        format_version,
+        behavior: file.behavior,
+        defaults: file.defaults,
         provenance: None,
         library: String::new(),
         id: file.id,
@@ -330,8 +401,9 @@ fn read_saved_mode(value: Value, draft: bool) -> Result<Arc<SymbolDefinition>, S
 /// stroke or pin changes one line. The JSON is the same as [`saved_copy`] serializes, and the
 /// output depends only on the definition, so an unchanged project saves without a diff.
 pub(crate) fn write_saved_copy(bytes: &mut Vec<u8>, definition: &SymbolDefinition) -> Result<(), String> {
-    let SavedSymbol { library, format, id, revision, name, reference_prefix, default_value, provenance, terminals, units } = saved_copy(definition);
-    let header = compact(&SavedHeader { library, format, id, revision, name, reference_prefix, default_value, provenance })?;
+    let SavedSymbol { library, format, id, revision, name, reference_prefix, default_value, provenance, behavior, defaults, terminals, units } =
+        saved_copy(definition);
+    let header = compact(&SavedHeader { library, format, id, revision, name, reference_prefix, default_value, provenance, behavior, defaults })?;
     // The header object stays open so the lists below continue it.
     let header = header.strip_suffix('}').unwrap_or(&header);
     let list = |bytes: &mut Vec<u8>, indent: &str, items: Vec<String>| {
@@ -373,6 +445,10 @@ struct SavedHeader<'a> {
     default_value: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<&'a sources::Provenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    behavior: Option<&'a Behavior>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    defaults: Option<&'a Defaults>,
 }
 
 /// The saved form of a symbol in a project: its library ID, then the same fields as its
@@ -380,9 +456,11 @@ struct SavedHeader<'a> {
 pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
     let point = |point: &Point| [point.x_nm, point.y_nm];
     SavedSymbol {
+        behavior: definition.behavior.as_ref(),
+        defaults: definition.defaults.as_ref(),
         provenance: definition.provenance.as_ref(),
         library: &definition.library,
-        format: SYMBOL_FORMAT,
+        format: definition.format(),
         id: &definition.id,
         revision: definition.revision,
         name: &definition.name,
@@ -427,6 +505,10 @@ pub(crate) struct SavedSymbol<'a> {
     default_value: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<&'a sources::Provenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    behavior: Option<&'a Behavior>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    defaults: Option<&'a Defaults>,
     terminals: Vec<SavedTerminal<'a>>,
     units: [SavedUnit<'a>; 1],
 }
@@ -584,7 +666,7 @@ mod tests {
     #[test]
     fn symbol_files_that_break_a_rule_are_refused() {
         assert!(parse_symbol(&resistor().to_string()).is_ok());
-        assert!(error(|file| file["format"] = json!("pcbcraft-symbol/2")).contains("unsupported symbol format"));
+        assert!(error(|file| file["format"] = json!("pcbcraft-symbol/99")).contains("unsupported symbol format"));
         assert!(error(|file| file["footprint"] = json!("0805")).contains("unknown field"), "symbols carry no footprint");
         assert!(error(|file| file["id"] = json!("Resistor")).contains("lowercase"));
         assert!(error(|file| file["revision"] = json!(0)).contains("revision"));

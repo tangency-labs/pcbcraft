@@ -7,10 +7,6 @@ use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2, vec2};
 pub enum Style {
     Local,
     Global,
-    Power,
-    /// Flat-bar supply glyph sharing the power arrow's anchor and upright net-name placement.
-    PowerBar,
-    Ground,
 }
 
 /// Optional net-name appearance uses physical screen offsets supplied by the editor.
@@ -121,24 +117,6 @@ fn draw(
                 line(pair[0], pair[1]);
             }
             vec2(width / 2. + 3., 0.)
-        }
-        Style::Power => {
-            line(Vec2::ZERO, vec2(0., -20.));
-            line(vec2(-7., -13.), vec2(0., -20.));
-            line(vec2(0., -20.), vec2(7., -13.));
-            vec2(0., -30.)
-        }
-        Style::PowerBar => {
-            line(Vec2::ZERO, vec2(0., -20.));
-            line(vec2(-10., -20.), vec2(10., -20.));
-            vec2(0., -30.)
-        }
-        Style::Ground => {
-            line(Vec2::ZERO, vec2(0., 12.));
-            for (y, width) in [(12., 10.), (17., 6.), (22., 2.)] {
-                line(vec2(-width, y), vec2(width, y));
-            }
-            vec2(0., 32.)
         }
     };
     if text.is_none_or(|text| text.visible) {

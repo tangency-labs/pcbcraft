@@ -3,7 +3,7 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Place a local/global label or power/ground marker.
+/// Place a local or global text label.
 pub const ADD: &str = "schematic.place_net_label";
 /// Change a named anchor's properties, orientation or position.
 pub const SET: &str = "schematic.set_net_label";
@@ -12,16 +12,12 @@ pub const DELETE: &str = "schematic.delete_net_label";
 /// Per-sheet limit independent of component and wire counts.
 pub const MAX_LABELS: usize = 256;
 
-/// Power and ground drawings have global-name semantics; local labels are sheet-scoped.
+/// Text labels are either sheet-scoped or global; power symbols use native definitions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Style {
     Local,
     Global,
-    Power,
-    /// A flat-bar supply marker, electrically equivalent to the arrow-shaped power marker.
-    PowerBar,
-    Ground,
 }
 impl Style {
     /// Whether matching names connect outside this sheet.
@@ -63,8 +59,21 @@ impl Label {
 impl Project {
     /// Whether any sheet contributes authored net names, including hierarchical interfaces.
     pub(crate) fn has_named_nets(&self) -> bool {
-        self.sheets.iter().any(|sheet| !sheet.net_labels.is_empty() || !sheet.labels.is_empty())
+        self.sheets.iter().any(|sheet| {
+            !sheet.net_labels.is_empty() || !sheet.labels.is_empty() || sheet.symbols.iter().any(|s| s.definition.power_terminal().is_some())
+        })
     }
+    /// Explicit definition roles name ordinary terminals from the owning component's Value.
+    /// Library IDs and drawings never participate in electrical interpretation.
+    pub fn power_terminals(&self) -> impl Iterator<Item = (WireEndpoint, &str, Point)> {
+        self.symbols().iter().filter_map(|symbol| {
+            let number = symbol.definition.power_terminal()?;
+            let index = symbol.definition.pin_index(number)?;
+            let component = self.component(symbol)?;
+            Some((WireEndpoint::Terminal(symbol.terminals()[index]), component.value(), symbol.pins()[index]))
+        })
+    }
+
     /// Named anchors on the addressed schematic sheet.
     pub fn net_labels(&self) -> &[Label] {
         &self.net_labels
@@ -161,25 +170,27 @@ impl Project {
             for block in project.sheet_symbols() {
                 links.extend(project.sheet_pins(block).map(|pin| [WireEndpoint::SheetPin(pin.label.id), WireEndpoint::Label(pin.label.id)]));
             }
-            for label in project.net_labels() {
-                let end = WireEndpoint::NetLabel(label.id);
+            let markers = project
+                .net_labels()
+                .iter()
+                .map(|label| (WireEndpoint::NetLabel(label.id), label.name.as_str(), label.at, label.style.global()))
+                .chain(project.power_terminals().map(|(end, name, at)| (end, name, at, true)));
+            for (end, name, at, global) in markers {
                 links.push([end, end]);
-                names.insert(end, (u8::from(!label.style.global()), label.name.clone()));
-                if let Some(previous) = local.insert(label.name.clone(), end) {
+                names.insert(end, (u8::from(!global), name.to_owned()));
+                if let Some(previous) = local.insert(name.to_owned(), end) {
                     links.push([previous, end]);
                 }
-                if label.style.global()
-                    && let Some(previous) = globals.insert(label.name.clone(), end)
-                {
+                if global && let Some(previous) = globals.insert(name.to_owned(), end) {
                     links.push([previous, end]);
                 }
                 // A label is an explicit contact marker. Ordinary coincident endpoints and
                 // wire crossings have no electrical effect away from these authored anchors.
-                if let Some(ends) = contacts.get(&(label.at.x_nm, label.at.y_nm)) {
+                if let Some(ends) = contacts.get(&(at.x_nm, at.y_nm)) {
                     links.extend(ends.iter().copied().filter(|other| *other != end).map(|other| [end, other]));
                 }
                 for (target, path) in &routes {
-                    if wire::path_contains_point(path, label.at) {
+                    if wire::path_contains_point(path, at) {
                         links.push([end, *target]);
                     }
                 }

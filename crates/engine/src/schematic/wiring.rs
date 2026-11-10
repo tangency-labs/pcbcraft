@@ -345,7 +345,13 @@ impl Connectivity {
     /// Derive deterministic names without storing a second persistent net identity.
     pub(crate) fn assign_names(&mut self, names: &BTreeMap<WireEndpoint, (u8, String)>) {
         for (index, ends) in self.interfaces.iter().enumerate() {
-            let sorted: BTreeSet<_> = ends.iter().filter_map(|end| names.get(end)).cloned().collect();
+            let sorted: BTreeSet<_> = ends
+                .iter()
+                .copied()
+                .chain(self.nets[index].iter().copied().map(WireEndpoint::Terminal))
+                .filter_map(|end| names.get(&end))
+                .cloned()
+                .collect();
             let mut seen = BTreeSet::new();
             self.names[index] = sorted.into_iter().map(|(_, name)| name).filter(|name| seen.insert(name.clone())).collect();
         }

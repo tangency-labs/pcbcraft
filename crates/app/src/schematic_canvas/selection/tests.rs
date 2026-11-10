@@ -234,15 +234,20 @@ fn focus_loss_cancels_uncommitted_gestures() {
 #[test]
 fn named_anchors_box_select_move_delete_and_filter() {
     let mut h = harness();
-    for (style, x) in [("ground", -15), ("power", -5), ("local", 5), ("global", 15)] {
+    for (style, x) in [("gnd", -15), ("vcc", -5), ("local", 5), ("global", 15)] {
         let revision = h.state().session.revision();
-        h.state_mut()
-            .session
-            .apply(
-                pcbcraft_engine::net_labels::ADD,
-                &json!({"name":"GND","style":style,"x_nm":x*GRID_NM,"y_nm":15*GRID_NM,"expected_revision":revision}),
-            )
-            .unwrap();
+        if matches!(style, "gnd" | "vcc") {
+            let d = h.state().session.libraries().latest_symbol("power", style).unwrap();
+            h.state_mut().session.apply(PLACE_SYMBOL,&json!({"library":"power","definition":style,"definition_revision":d.revision(),"definition_digest":pcbcraft_engine::library::sources::symbol_digest(&d).unwrap(),"x_nm":x*GRID_NM,"y_nm":15*GRID_NM,"expected_revision":revision})).unwrap();
+        } else {
+            h.state_mut()
+                .session
+                .apply(
+                    pcbcraft_engine::net_labels::ADD,
+                    &json!({"name":"GND","style":style,"x_nm":x*GRID_NM,"y_nm":15*GRID_NM,"expected_revision":revision}),
+                )
+                .unwrap();
+        }
     }
     h.run();
     let from = point(&h, -22, 10);
@@ -250,7 +255,7 @@ fn named_anchors_box_select_move_delete_and_filter() {
     start(&mut h, from, to, PointerButton::Primary, Modifiers::NONE);
     assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text()=="Window · 4 items")));
     release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
-    assert_eq!(h.state().views.active.schematic.selection.net_labels.len(), 4);
+    assert_eq!(h.state().views.active.schematic.selection.len(), 4);
     let glyph = point(&h, -15, 17);
     for (modifiers, count) in [(Modifiers::CTRL, 3), (Modifiers::COMMAND, 4)] {
         h.event(egui::Event::ModifiersChanged(modifiers));
@@ -261,7 +266,7 @@ fn named_anchors_box_select_move_delete_and_filter() {
         }
         h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
         h.run();
-        assert_eq!(h.state().views.active.schematic.selection.net_labels.len(), count);
+        assert_eq!(h.state().views.active.schematic.selection.len(), count);
     }
     let before = h.state().session.snapshot().unwrap();
     let revision = h.state().session.revision();
@@ -272,6 +277,14 @@ fn named_anchors_box_select_move_delete_and_filter() {
     assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::MoveItems { .. })));
     release(&mut h, to, PointerButton::Primary, Modifiers::NONE);
     assert_eq!(h.state().session.revision(), revision + 1);
+    for (old, new) in before
+        .symbols()
+        .iter()
+        .filter(|s| s.definition.library == "power")
+        .zip(h.state().session.project().unwrap().symbols().iter().filter(|s| s.definition.library == "power"))
+    {
+        assert_eq!(new.position, Point { x_nm: old.position.x_nm + 5 * GRID_NM, y_nm: old.position.y_nm + 4 * GRID_NM });
+    }
     for (old, new) in before.net_labels().iter().zip(h.state().session.project().unwrap().net_labels()) {
         assert_eq!(new.at, Point { x_nm: old.at.x_nm + 5 * GRID_NM, y_nm: old.at.y_nm + 4 * GRID_NM });
     }

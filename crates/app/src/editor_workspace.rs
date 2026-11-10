@@ -7,7 +7,7 @@ use pcbcraft_chrome::{editor, grid, shell, workspace};
 use pcbcraft_engine::{Session, selection::Selection};
 
 use crate::{
-    Dialog, EditorView, PcbApp, Tool, ViewId, ViewInput,
+    Dialog, EditorView, PcbApp, ViewId, ViewInput,
     editor_layout::{HostId, Layout, ViewHost},
     editor_view::{DocumentTarget, Workspace},
     preferences::SelectionFollow,
@@ -1073,10 +1073,7 @@ impl PcbApp {
         );
         if let Some(pick) = self.parts.show(ui, area, self.browser.rect(), source, self.session.libraries()) {
             match pick {
-                crate::parts_browser::Pick::Place(crate::parts_browser::Placement::Symbol(definition)) => self.begin_placement(definition),
-                crate::parts_browser::Pick::Place(crate::parts_browser::Placement::Power(label)) => {
-                    self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None })
-                }
+                crate::parts_browser::Pick::Place(placement) => self.begin_template(placement),
                 crate::parts_browser::Pick::Libraries => self.dialog = Dialog::LibrarySources,
                 crate::parts_browser::Pick::Stale => self.message = Some("View or project changed; reopen the Parts Catalog to continue.".into()),
             }

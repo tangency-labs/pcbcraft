@@ -53,8 +53,7 @@ impl Sources {
             .filter(|entries| {
                 entries.len() <= sources::MAX_SOURCES
                     && entries.iter().all(|r| {
-                        r.source != "builtin"
-                            && !r.source.is_empty()
+                        !r.source.is_empty()
                             && r.source.len() <= 64
                             && r.source.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
                             && !r.path.is_empty()
@@ -89,17 +88,7 @@ impl Sources {
     fn can_add(&self, session: &pcbcraft_engine::Session) -> bool {
         let mut ids: std::collections::BTreeSet<String> =
             self.registered.iter().map(|r| r.source.clone()).chain(self.statuses.keys().cloned()).collect();
-        ids.extend(
-            session
-                .libraries()
-                .inspect()
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|s| s["source"].as_str())
-                .filter(|id| *id != "builtin")
-                .map(str::to_owned),
-        );
+        ids.extend(session.libraries().inspect().as_array().into_iter().flatten().filter_map(|s| s["source"].as_str()).map(str::to_owned));
         self.job.is_none() && ids.len() < sources::MAX_SOURCES
     }
 
@@ -277,13 +266,8 @@ impl Sources {
 impl PcbApp {
     /// Bind a placement command to the exact definition shown by the preview, so source refresh
     /// or removal cannot substitute geometry while the project's revision remains unchanged.
-    /// Starter-only placement retains its legacy saved-copy resolution behavior.
     pub(super) fn place_catalog_symbol(&mut self, definition: &pcbcraft_engine::schematic::SymbolDefinition, mut params: serde_json::Value) {
         params["definition"] = json!(definition.id);
-        if definition.library == "starter" {
-            self.run(pcbcraft_engine::PLACE_SYMBOL, &params);
-            return;
-        }
         match sources::symbol_digest(definition) {
             Ok(digest) => {
                 params["library"] = json!(definition.library);
@@ -347,7 +331,7 @@ impl PcbApp {
                                 problems: &problems,
                                 symbols: data.and_then(|s| s["symbols"].as_u64()).unwrap_or_default(),
                                 footprints: data.and_then(|s| s["footprints"].as_u64()).unwrap_or_default(),
-                                builtin: id == "builtin",
+                                builtin: false,
                                 available: data.is_some_and(|s| s["available"] != false),
                                 loading: self.library_sources.job.as_ref().is_some_and(|job| job.source == *id),
                             };

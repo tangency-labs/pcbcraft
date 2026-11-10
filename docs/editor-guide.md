@@ -22,19 +22,17 @@ so recent projects are desktop-only. Home does not automatically reopen a projec
 
 ## Net labels and power symbols
 
-**Capture → Ground** starts a GND placement preview directly. **P** opens the
-**Parts Catalog** at its Power collection, with GND, VCC, VCC (bar), +3V3, +5V and
-other starter drawings. The two VCC choices have distinct drawings and default
-to the same electrical net name. Select one to preview it and
-edit its net name, then choose **Place**. **Capture → Net label** or **L** opens
-a local label form; **Ctrl+L** opens a global label form. The label form has
-aligned fields for net name, scope and rotation. Click the anchor position to
-place the marker; **R** rotates the preview and **Esc** cancels it. Hover the
-marker's name or glyph for **E**, **M**, **R** and **Delete**, or use its context
-menu. Drag the drawing or name to move a marker directly; **M** picks it up for
-click-to-place movement. **E** opens properties, where **Apply** confirms changes.
-Moving a marker keeps its touching wires connected regardless of placement order;
-fixed component pins stay in place while the wire stretches to the moved anchor.
+**Capture → Ground** starts an ordinary GND symbol placement. **P** opens the
+**Parts Catalog** at the Power library, including GND, VCC, VCC (bar), +3V3 and
++5V. The two VCC choices have different drawings and the same initial Value.
+Edit **Value** before placement to name the global rail. Power uses the same
+component properties, independent fields and G/M/R tools as other symbols;
+**G** keeps connections while **M** leaves existing wiring in place.
+
+**Capture → Net label** or **L** opens a local label form; **Ctrl+L** opens a
+global label form. Set its net name, scope and rotation, then choose its anchor.
+**R** rotates a placement preview and **Esc** cancels it. Power instances use
+ordinary component fields and terminal identities throughout the editor.
 
 Names are case-sensitive. Local labels join matching names on the same sheet;
 global labels and power/ground symbols join project-wide. A marker anchored
@@ -88,7 +86,7 @@ are also available beside the tabs; View contains their full controls.
 
 Choose **Capture → Symbol** or press **A** to open the **Parts Catalog** and
 focus search. The large form has library navigation, searchable results and a
-selected-part preview. **PCBcraft starter** contains the resistor, LED,
+selected-part preview. **Default** contains the resistor, LED,
 capacitor, two-pin connector, four-pin header and NPN transistor from
 [`libraries/starter`](../libraries/starter); registered sources appear as
 additional libraries. **Power** contains the built-in power and ground drawings.
@@ -329,16 +327,9 @@ it does not update the placed symbol. Updating a placed symbol from a library
 revision or replacing it with another symbol is not implemented. Apply or cancel
 pending field changes before using these actions.
 
-Power and ground markers also appear in the selection Properties card. Edit their
-net name, choose Ground, Power arrow or Power bar, and change position/rotation
-there or through **More properties**, **E**, double-click or **Properties…** in the
-context menu. Their text appearance controls size, visibility and a separate
-local offset while preserving the electrical anchor. Drag a visible power/ground
-name to move only its text; **M** picks up that name and **R** rotates it when hovered
-or while dragging. Double-click its text or press **E** over it to edit the net name
-in place; Enter applies and Escape cancels. Full appearance controls remain in Properties.
-Dragging the glyph still moves the whole marker and its attached wires. Changing the net name changes
-the connected global net; changing only its text appearance leaves the wiring in place.
+Power symbols use these same properties and independent fields. Value supplies
+the global net name, while drawing and terminal behavior belong to the pinned
+definition. There is no separate power-marker form or glyph-style selector.
 
 Press **R** over a symbol to rotate it, or select it first. With a symbol selected,
 **E** opens its expanded properties and **Delete** removes it with its wires.
@@ -585,7 +576,7 @@ route, and a second Esc exits the tool. The whole route is one Undo step. When c
 joins two terminals of a net, their airwire disappears. A route that would connect
 pads on two different nets is refused with a message, leaving the board unchanged.
 To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
-**Ctrl+Shift+V**. Each click places one through via with the current pad and drill,
+**Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,
 snapping to a nearby pad center or track end on any copper layer, otherwise to the grid;
 the tool stays armed until Esc or right-click, and each via is its own undo step. A via
 that would join pads on two different nets is refused, as is a second via on the same
@@ -634,3 +625,12 @@ Ordinary hand-zipped project folders open too, including those without a manifes
 The browser uploads archives and legacy files and downloads `.pc.zip` archives.
 The [native storage notes](native-project-storage.md) describe the formats,
 file safety and performance checks.
+
+### Bundled Power instances
+
+New Power catalog and Ground ribbon placements use the same component fields,
+properties, inline text and G/M/R tools as Default or registered library symbols.
+Value names the global rail; the definition declares which terminal names it.
+The catalog's Value input is available for every symbol, in both presentations.
+The former power-marker annotation styles are unsupported; there is no automatic
+migration of those old records.

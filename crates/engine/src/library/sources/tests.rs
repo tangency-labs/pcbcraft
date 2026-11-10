@@ -148,7 +148,7 @@ fn external_symbol_placement_names_missing_revision_and_digest_parameters() {
         missing.as_object_mut().unwrap().remove(name);
         let error = session.apply(crate::PLACE_SYMBOL, &missing).unwrap_err();
         assert!(
-            matches!(&error, crate::CommandError::InvalidParams(message) if message == &format!("`{name}` is required for external libraries")),
+            matches!(&error, crate::CommandError::InvalidParams(message) if message == &format!("`{name}` is required for explicit library selections")),
             "{error}"
         );
         assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));

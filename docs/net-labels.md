@@ -1,97 +1,72 @@
 # Named nets and power symbols
 
-Use **L** for a local label or **Ctrl+L** (⌘L on macOS) for a global label.
-Their form has a net name, scope and rotation. **Capture → Ground** starts placing
-GND directly, with no catalog or property form. **P** opens
-the **Parts Catalog** with the Power collection selected. Choose a drawing such
-as GND, VCC, VCC (bar), +3V3, +5V, +12V, VDD, VSS or GNDA; its preview has an editable net
-name, so supplies do not depend on a fixed list of rail names.
+Power symbols are native library definitions placed as ordinary components.
+**Capture → Ground** selects GND directly; **P** opens the Power library in the
+Parts Catalog. **Value** names the global rail. GND, VCC, VCC (bar), +3V3, +5V,
++12V, VDD, VSS and GNDA are bundled choices, and custom libraries can declare the
+same electrical role without depending on their names or drawings.
 
-**VCC** keeps the arrow-shaped supply drawing, while **VCC (bar)** uses a flat
-horizontal bar. Both default to the electrical name `VCC`; the descriptive
-catalog name does not create a separate net. Each drawing retains its style when
-its net name is edited.
+Power uses ordinary component properties, fields, library-copy authoring and
+G/M/R tools. Dragging Value changes its text position; R over Value rotates its
+text, while R over the body rotates the symbol. Double-click Value to edit it
+in place. G keeps wire contacts and M leaves existing wiring behind. The
+bundled definitions start excluded from BOM, board and position outputs through
+editable instance defaults. See [bundled libraries](builtin-symbol-libraries.md).
 
-Choose **Place**, then click to place the anchor. **R** turns its preview
-counterclockwise in quarter turns, and **Esc** or right-click → **Cancel** cancels. Hover a
-placed marker and use **E** for properties, **M** to pick it up, **R** to rotate or
-**Delete** to remove it. Drag an ordinary label or a power symbol's drawing to move
-the anchor, releasing to finish; Escape or releasing outside the canvas cancels
-the preview. A power/ground name moves independently when dragged, and **R** over
-its text rotates only the name. Double-click the name or hover it and press **E**
-to edit in place, with **Enter** to apply and **Esc** to cancel. Its context menu offers the same actions; **Apply**
-confirms property changes. Each completed placement, move, property change or
-deletion is one shared undo step. Cancelled previews and forms leave project data
-unchanged; stale forms cannot replace newer work.
+## Text labels
 
-The catalog's **Repeat placement**, also available in the active tool's right-click
-menu, keeps new markers active after each placement and is enabled by default for new settings,
-with fresh IDs and the same name/rotation until **Esc**. Moving an existing marker
-remains one edit regardless of that setting.
+**L** creates a local text label; **Ctrl+L** (⌘L on macOS) creates a global label.
+Set the name, scope and rotation, choose Place and click its electrical anchor.
+R rotates a preview and Escape cancels. E opens an existing label's properties;
+M picks up the complete label, R rotates it and Delete removes it. A held drag
+moves the complete label; cancellation leaves the document unchanged.
 
-A marker connects where its small anchor meets a pin or wire exactly. A physically
-connected anchor omits the open-pin ring and a contacted wire end's open square;
-these indicators return when that physical contact is released. It can
-also stand alone and serve as the endpoint of a later wire. Drawing with **W**
-uses that anchor like an ordinary pin. A label placed at a crossing connects the
-routes it contacts; crossing wires elsewhere still remain separate. Moving a
-marker in the editor retains those contacts, whether the marker or the wire was
-placed first. Wire ends and branches follow it; touching wire interiors split at
-the old anchor, and fixed pins or other markers remain connected by a wire leg.
+A text label or a definition-declared power terminal connects exact coincident
+pins and every wire segment through its anchor, so either contact at a crossing
+joins all routes there. Wire legs referencing the same electrical endpoint, such
+as a junction or symbol terminal, also connect without a named contact; a geometric
+crossing alone creates no connection.
+Connected label movement retains touching wires, with fixed pins connected by
+a wire leg. Local names join only within their sheet, including hierarchical
+interfaces. Global labels and definition-declared power terminals join matching
+global names across sheets. Names are case-sensitive, so GND and gnd are distinct.
+A local label joins that connection when a matching global name exists on its sheet.
 
-Names are case-sensitive: GND and gnd are distinct. Local names connect only
-within their sheet, including matching hierarchical labels. Global labels,
-power and ground connect matching global names anywhere in the project; a local
-label shares that connection when a matching global name appears on its sheet.
-A ground drawing with the name GNDA therefore joins GNDA, not GND. Changing a
-power symbol's name changes its electrical connection, without changing any
-component value or creating a PCB footprint.
-
-The Browser and Net Inspector show named groups instead of Net 1, and PCB pad
-annotations use the same names. Inspection retains every alias when a wire joins
-several named nets. Global names take display priority, with lexical ordering
-within each scope; this ordering does not imply that joining different supply
-names is electrically correct. ERC and supply-conflict diagnostics are separate
-work. Unnamed groups keep their existing view-local numbering.
+The Browser, Net Inspector and PCB annotations show resolved names. Inspection
+retains aliases when wires join differently named groups. Global names take
+display priority, followed by lexical ordering within each scope. That ordering
+does not imply that joining different supply names is electrically correct;
+ERC and supply-conflict diagnostics remain separate work.
 
 ## Shared commands
 
-`schematic.place_net_label` takes `name`, `style`, `x_nm`, `y_nm`, optional
-`rotation`, optional `text` and `expected_revision`. `style` is `local`, `global`, `power`,
-`power_bar` or `ground`; rotation defaults to zero and accepts 0, 90, 180 or 270 degrees.
-`schematic.set_net_label` takes the same properties plus the stable `id` from
-inspection. Its optional `keep_connected: true` carries existing physical contacts
-when moving; omitted/false retains the earlier coordinate-edit behavior, where
-positional contacts are released and directly attached endpoints follow. The GUI
-requests connected movement. Optional `auto_heal` controls route cleanup for that
-movement and defaults on. `text` is a physical net-name layout with visibility, show-name,
-offset, height, alignment and rotation, using the same vocabulary as component
-field layouts. Omitting it on placement uses the style defaults; omitting it from
-`schematic.set_net_label` preserves the stored layout. The GUI exposes these
-appearance controls for power and ground symbols. `schematic.delete_net_label`
-takes `id` and `expected_revision`.
-Supply the `sheet` UUID when more than one sheet exists. The live editor and
-headless MCP expose the same command schemas and transactions as the GUI.
+Use `schematic.place_symbol` with an exact library/item/revision/digest selection
+for power definitions. Optional `value` overrides the initial Value. Standard
+component field, movement, deletion and history commands apply to these instances.
+The definition's `behavior` explicitly identifies the globally named terminal.
 
-Inspect `project.schematic.net_labels` or the addressed sheet's schematic to
-find records and endpoint objects such as `{"net_label":"net-label-7"}`.
-Use that endpoint with `schematic.draw_wire`. Project `netlist` resolves all
-sheets; sheet netlists retain only that sheet's endpoints after resolving remote
-connections. Named groups include `name` and a `names` array of all aliases.
-Deleting a label removes wires explicitly attached to its endpoint, while
-unrelated contacted wires remain. Undo restores the complete edit.
+`schematic.place_net_label` creates text labels with `name`, `style` (`local` or
+`global`), `x_nm`, `y_nm`, optional quarter-turn `rotation`, optional `text` and
+`expected_revision`. `schematic.set_net_label` accepts the same properties plus
+`id`; `keep_connected: true` retains physical contacts when moving. The GUI uses
+connected movement. Optional `auto_heal` controls route cleanup and defaults on.
+The `text` layout uses the existing visibility, offset, size, alignment and angle
+vocabulary; omitting it preserves an existing appearance. `schematic.delete_net_label`
+removes the label and directly attached wires in one undoable transaction.
+
+Supply the sheet UUID when more than one sheet exists. Inspect `net_labels` for
+text-label records and endpoints such as `{"net_label":"net-label-7"}`. Power
+instances instead have ordinary symbol/component IDs and terminal endpoints.
+Both the live editor and headless MCP use these same schemas and transactions.
 
 ## Storage and limits
 
-Each sheet supports 256 named anchors and names up to 200 characters, without
-surrounding whitespace or control characters. Folder and `.pc.zip` saves retain
-names, scope, placement, rotation and endpoint identities in
-[sheet format 3 or later](native-project-storage.md#named-net-records). Explicit
-net-name text appearance requires sheet format 5; format 3 rejects it rather
-than discarding it. Existing unnamed
-projects retain their previous sheet encodings; legacy single-file export
-refuses named anchors rather than silently discarding them.
-
-Custom power drawings, library-authored power-symbol definitions, electrical
-rules checks, additional ordinary-label fields/formatting and inter-sheet reference
-lists remain outside this slice.
+Each sheet supports 256 text labels, with names of 1–200 characters without
+surrounding whitespace or control characters. Named labels require at least sheet
+format 3. Symbol field layouts select format 4, including the defaults of a bundled
+GND symbol on the same sheet; an explicit label text layout selects format 5.
+Power uses the normal component budget
+and project-pinned native definitions, including offline reopening and Home
+previews. The former `power`, `power_bar` and `ground` net-label styles and their
+separate editing tools have been removed. Such older records are rejected;
+there is no automatic migration or silent substitution.

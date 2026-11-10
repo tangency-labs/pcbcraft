@@ -34,12 +34,7 @@ pub(crate) enum Tool {
         drag: fields::Drag,
         revision: u64,
     },
-    /// The power marker and its electrical contact stay fixed while its name is positioned.
-    NetLabelText {
-        label: pcbcraft_engine::net_labels::Label,
-        revision: u64,
-        drag: Option<Vec2>,
-    },
+    /// A local/global label preview moves its electrical anchor and complete text together.
     NetLabel {
         label: pcbcraft_engine::net_labels::Label,
         revision: u64,
@@ -58,6 +53,7 @@ pub(crate) enum Tool {
     },
     PlaceSymbol {
         definition: Arc<SymbolDefinition>,
+        value: String,
         revision: u64,
         turns: u8,
     },
@@ -98,7 +94,6 @@ impl Tool {
         match self {
             Self::Field { revision, .. }
             | Self::NetLabel { revision, .. }
-            | Self::NetLabelText { revision, .. }
             | Self::SheetGesture { revision, .. }
             | Self::Hierarchy { revision, .. }
             | Self::PlaceSymbol { revision, .. }
@@ -123,8 +118,6 @@ pub(crate) enum Click {
     NetLabelDrag(pcbcraft_engine::net_labels::Label, Vec2),
     NetLabelCancel,
     NetLabelRotate,
-    NetLabelTextDrag(pcbcraft_engine::net_labels::Label, Vec2),
-    NetLabelTextRotate,
     GrabSheetGesture(Box<crate::hierarchy::Drag>),
     FinishSheetGesture(Option<crate::hierarchy::Geometry>),
     SelectSheetSymbol(u64),
@@ -154,7 +147,7 @@ pub(crate) enum Click {
     Edit(SymbolAction, String),
     /// A row of a wire's context menu, with the leg it was opened on.
     WireEdit(WireAction, wires::LegTarget),
-    /// A component or power marker dragged from the catalog was released at this snapped point.
+    /// A native symbol template dragged from the catalog was released at this snapped point.
     Drop(PartDrag, Point),
 }
 
@@ -274,7 +267,6 @@ pub(crate) fn show(
         Some(
             Tool::Field { .. }
                 | Tool::NetLabel { drag: Some(_), .. }
-                | Tool::NetLabelText { .. }
                 | Tool::SheetGesture { .. }
                 | Tool::Move { .. }
                 | Tool::MoveItems { .. }
@@ -416,7 +408,7 @@ pub(crate) fn show(
     }
 
     fields::paint(ui, project, camera, rect, selected, highlighted, tool.as_ref(), input_enabled && filters.symbols, editing);
-    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, input_enabled.then_some(filters), editing);
+    crate::net_labels::paint(ui, rect, camera, project, tool.as_ref(), label_position, selected, editing);
     crate::hierarchy::paint(&painter, rect, camera, project, tool.as_ref(), response.hover_pos().filter(|_| filters.sheets), selected_sheet);
     // Handles go over the symbols, so a corner under a symbol's outline can still be grabbed.
     if !whole_wire_drag
@@ -443,10 +435,10 @@ pub(crate) fn show(
         && let Some(popup) = menu::context(&response, |ui| tool_menu::active(ui, tool.as_ref(), repeat))
     {
         let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
-        if let (Some(Tool::PlaceSymbol { definition, turns, .. }), Some(at)) = (&tool, anchor) {
-            let at = camera.snap(at, rect);
+        if let (Some(Tool::PlaceSymbol { definition, value, turns, .. }), Some(at)) = (&tool, anchor) {
+            let at = wires::symbol_position(project, definition, *turns, camera, rect, at, draft, revision);
             if valid_position(at) {
-                paint_symbol(&painter, definition, screen(at), unit_step, *turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
+                paint_template(&painter, definition, value, screen(at), unit_step, *turns, tokens.accent);
             }
         }
         if let Some(Tool::Wire { start, .. }) = tool {
@@ -468,31 +460,15 @@ pub(crate) fn show(
         && let Some(drag) = response.dnd_hover_payload::<PartDrag>()
         && let Some(pointer) = drag_pointer
     {
-        let point = camera.snap(pointer, rect);
+        let point = wires::symbol_position(project, &drag.placement.definition, 0, camera, rect, pointer, draft, revision);
         if valid_position(point) {
-            match &drag.placement {
-                crate::parts_browser::Placement::Symbol(definition) => {
-                    paint_symbol(&painter, definition, screen(point), unit_step, 0, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
-                }
-                crate::parts_browser::Placement::Power(label) => {
-                    pcbcraft_chrome::net_label::paint(
-                        &painter,
-                        screen(point),
-                        &label.name,
-                        crate::net_labels::visual(label.style),
-                        label.rotation,
-                        unit_step,
-                        tokens.accent,
-                        false,
-                    );
-                }
-            }
+            paint_template(&painter, &drag.placement.definition, &drag.placement.value, screen(point), unit_step, 0, tokens.accent);
         }
     }
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
         && let Some(pointer) = drag_pointer
     {
-        let point = camera.snap(pointer, rect);
+        let point = wires::symbol_position(project, &drag.placement.definition, 0, camera, rect, pointer, draft, revision);
         return (input_enabled && valid_position(point)).then(|| Click::Drop(PartDrag::clone(&drag), point));
     }
 
@@ -818,14 +794,13 @@ pub(crate) fn show(
         return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
     }
     match tool? {
-        Tool::PlaceSymbol { definition, turns, .. } => {
-            placement_preview(&painter, rect, response, camera, tokens, &definition, turns).map(Click::Place)
+        Tool::PlaceSymbol { definition, value, turns, .. } => {
+            placement_preview(&painter, rect, response, camera, tokens, &definition, &value, turns, project, draft, revision).map(Click::Place)
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
         Tool::Field { .. }
         | Tool::NetLabel { .. }
-        | Tool::NetLabelText { .. }
         | Tool::SheetGesture { .. }
         | Tool::Hierarchy { .. }
         | Tool::Move { .. }
@@ -911,28 +886,42 @@ fn valid_position(point: Point) -> bool {
 
 /// Place on the primary press so a fast release or incidental motion cannot discard the click.
 /// Explicit placement owns this press; the following release never places a second symbol.
+#[allow(clippy::too_many_arguments)]
 fn placement_preview(
     painter: &Painter,
     rect: Rect,
     response: Response,
     camera: &Camera,
     tokens: Tokens,
-    definition: &SymbolDefinition,
+    definition: &Arc<SymbolDefinition>,
+    value: &str,
     turns: u8,
+    project: &Project,
+    draft: &Draft,
+    revision: u64,
 ) -> Option<Point> {
     let screen = |point| camera.screen(point, rect);
     let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos())?;
-    let point = camera.snap(pointer, rect);
+    let point = wires::symbol_position(project, definition, turns, camera, rect, pointer, draft, revision);
     if !valid_position(point) {
         return None;
     }
-    paint_symbol(painter, definition, screen(point), camera.unit_step(), turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, tokens.accent));
+    paint_template(painter, definition, value, screen(point), camera.unit_step(), turns, tokens.accent);
     let pressed = response.contains_pointer() && response.ctx.input(|input| input.pointer.primary_pressed());
     if pressed && response.ctx.input(|input| input.pointer.primary_down()) {
         response.ctx.data_mut(|data| data.insert_temp(response.id.with("placed_on_press"), true));
     }
     response.on_hover_cursor(egui::CursorIcon::Crosshair);
     pressed.then_some(point)
+}
+
+/// Preview ordinary drawing and instance fields from the same native defaults as placement.
+fn paint_template(painter: &Painter, definition: &Arc<SymbolDefinition>, value: &str, center: Pos2, step: f32, turns: u8, color: egui::Color32) {
+    paint_symbol(painter, definition, center, step, turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+    let fallback = pcbcraft_engine::library::Defaults::default();
+    let defaults = definition.defaults.as_ref().unwrap_or(&fallback);
+    let symbol = SymbolPlacement::preview(definition.clone(), turns, defaults.field_layout.clone());
+    fields::paint_labels(painter, &symbol, fields::Content { reference: "", value, metadata: &defaults.metadata }, center, step, color);
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.

@@ -494,6 +494,9 @@ fn endpoints(project: &Project, camera: &Camera, rect: Rect) -> Vec<(WireEndpoin
     for label in project.net_labels() {
         named.entry((label.at.x_nm, label.at.y_nm)).or_insert(WireEndpoint::NetLabel(label.id));
     }
+    for (end, _, at) in project.power_terminals() {
+        named.entry((at.x_nm, at.y_nm)).or_insert(end);
+    }
     project
         .symbols()
         .iter()
@@ -543,6 +546,43 @@ pub(super) fn label_position(
         .anchor(camera, rect, pointer, ignore, true)
         .and_then(|anchor| anchor.position(project))
         .unwrap_or_else(|| camera.snap(pointer, rect))
+}
+
+/// Align the closest pin of any placement template with an explicit contact. Ambiguous
+/// equal-distance targets retain grid snapping; no body or library-name special case is used.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn symbol_position(
+    project: &Project,
+    definition: &pcbcraft_engine::schematic::SymbolDefinition,
+    turns: u8,
+    camera: &Camera,
+    rect: Rect,
+    pointer: Pos2,
+    draft: &Draft,
+    revision: u64,
+) -> Point {
+    let mut cache = draft.target_cache.borrow_mut();
+    let targets = cache.get(project, revision, camera, rect);
+    let mut best = None;
+    let mut ambiguous = false;
+    for pin in definition.pins() {
+        let (x, y) = pcbcraft_engine::schematic::rotate(pin.offset.x_nm, pin.offset.y_nm, turns);
+        let offset = egui::vec2(x as f32, y as f32) * (camera.unit_step() / pcbcraft_engine::schematic::GRID_NM as f32);
+        let pin_at = pointer + offset;
+        let Some(anchor) = targets.anchor(camera, rect, pin_at, None, true).filter(|a| !matches!(a, Anchor::Free(_))) else { continue };
+        let Some(at) = anchor.position(project) else { continue };
+        let candidate = Point { x_nm: at.x_nm - x, y_nm: at.y_nm - y };
+        let distance = camera.screen(at, rect).distance_sq(pin_at);
+        match best {
+            Some((old, old_distance)) if distance == old_distance && candidate != old => ambiguous = true,
+            Some((_, old_distance)) if distance >= old_distance => {}
+            _ => {
+                best = Some((candidate, distance));
+                ambiguous = false;
+            }
+        }
+    }
+    if ambiguous { camera.snap(pointer, rect) } else { best.map_or_else(|| camera.snap(pointer, rect), |(at, _)| at) }
 }
 
 /// Resolve an unconnected pin or free wire end for automatic starts. Occupied pins and

@@ -130,7 +130,7 @@ fn grid_keys_step_through_the_presets() {
 
     h.key_press(Key::A);
     h.run();
-    h.get_by_role(Role::TextInput).type_text("n");
+    h.get_by_label("Search parts").type_text("n");
     h.run();
     assert_eq!(snap(&h), 10);
 }
