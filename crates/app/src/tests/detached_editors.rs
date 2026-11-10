@@ -26,6 +26,7 @@ struct Peer {
     output: egui::FullOutput,
     frames: usize,
     decorations: Option<bool>,
+    title: Option<String>,
 }
 
 impl Peer {
@@ -77,6 +78,7 @@ fn many_windows() -> (Harness<'static, PcbApp>, Peers) {
         {
             let mut peer = state.borrow_mut();
             peer.decorations = viewport.builder.decorations;
+            peer.title = viewport.builder.title.clone();
             input.focused = peer.focused;
             input.events = std::mem::take(&mut peer.events);
             let mut info = egui::ViewportInfo { parent: Some(ViewportId::ROOT), focused: Some(peer.focused), ..Default::default() };
@@ -1867,4 +1869,58 @@ fn detached_inline_text_remains_in_the_child_canvas() {
     assert_eq!(h.state().session.project().unwrap().components().next().unwrap().reference(), "R42");
     child_key(&mut h, &peer, Key::Z, Modifiers::COMMAND);
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Titles sent to the main native window, stepping one frame at a time so a command sent in an
+/// intermediate frame isn't hidden behind `run`'s final output. Queue at most one event before
+/// calling: kittest's `step` runs one frame per queued event and keeps only the last output.
+fn root_titles_over(h: &mut Harness<'_, PcbApp>, frames: usize) -> Vec<String> {
+    let mut titles = Vec::new();
+    for _ in 0..frames {
+        h.step();
+        let Some(output) = h.output().viewport_output.get(&ViewportId::ROOT) else {
+            continue;
+        };
+        titles.extend(output.commands.iter().filter_map(|command| match command {
+            ViewportCommand::Title(title) => Some(title.clone()),
+            _ => None,
+        }));
+    }
+    titles
+}
+
+/// The main window's OS title names its focused document the way a detached window's does
+/// (#220); it used to stay "PCBCraft", so taskbars couldn't tell two projects apart. Home shows
+/// the app name alone, an unchanged title isn't resent every frame, and a main window that an
+/// arrangement recreates after it was closed is titled again.
+#[test]
+fn main_window_title_names_its_document_like_a_detached_window() {
+    let (mut h, peers) = many_windows();
+    focus_host(&mut h, &peers, HostId::ROOT);
+    let document = h.state().view_title(h.state().views.hosts[&HostId::ROOT].focused);
+    assert!(document.starts_with(&h.state().session.project().unwrap().name), "{document}");
+    let titled = format!("{document} — PCBCraft");
+    h.get_by_label("Home").click();
+    assert_eq!(root_titles_over(&mut h, 3), ["PCBCraft"]);
+    assert!(h.state().home);
+    let back = format!("Back to {}", h.state().session.project().unwrap().name);
+    h.get_by_label(&back).click();
+    assert_eq!(root_titles_over(&mut h, 3), [titled.as_str()]);
+    assert!(!h.state().home);
+    assert!(root_titles_over(&mut h, 3).is_empty(), "an unchanged title is not resent");
+
+    let original = h.state().views.active.id();
+    let child = h.state_mut().views.open_window(original).unwrap();
+    h.run();
+    let peer = peers.borrow()[&editor_windows::viewport(child)].clone();
+    assert_eq!(peer.borrow().title.as_deref(), Some(titled.as_str()));
+
+    close_root(&mut h);
+    assert!(!h.state().views.hosts.contains_key(&HostId::ROOT));
+    let ctx = h.ctx.clone();
+    h.state_mut()
+        .queue_arrangement(&ctx, crate::arrangements::Action::Create { name: "One window".into(), start: crate::arrangements::Start::SingleView });
+    let titles = root_titles_over(&mut h, 4);
+    assert!(h.state().views.hosts.contains_key(&HostId::ROOT), "the arrangement recreates the main window");
+    assert_eq!(titles, [titled.as_str()]);
 }
