@@ -1133,6 +1133,62 @@ fn properties_summarize_the_board_when_nothing_is_selected() {
     assert!(in_row(&h, "Unrouted", "0"), "the next frame uses the new connectivity revision");
 }
 
+/// Independent track and via filters apply to clicking, marquee and connected selection.
+#[test]
+fn vias_filter_separately_from_tracks() {
+    let mut h = routable();
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":7_620_000,"y_nm":2_540_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    h.run();
+    let via = vias(&h)[0].id;
+    let view = h.state().views.active.id();
+    let ctx = h.ctx.clone();
+    let on_track = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    h.hover_at(on_track);
+    h.run();
+    h.key_press(Key::U);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track, via]));
+    h.state_mut().views.active.board.tracks.selected = std::collections::BTreeSet::from([track, via]);
+    h.state_mut().run_window_command(&ctx, "view.set_selection_filters", &json!({"view":view.0,"vias":false})).unwrap();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "only the via leaves the selection");
+    h.run();
+    h.key_press(Key::U);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "connected selection skips filtered vias");
+    let on_via = at(&h, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, on_via);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "the track is picked under the filtered via");
+    let (from, to) = (at(&h, Point { x_nm: 1_524_000, y_nm: -2_540_000 }), at(&h, Point { x_nm: 8_636_000, y_nm: 3_810_000 }));
+    h.hover_at(from);
+    h.run();
+    h.drag_at(from);
+    h.run();
+    h.hover_at(to);
+    h.run();
+    h.drop_at(to);
+    h.run();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "the box skips the via");
+    h.state_mut().set_selection_filters(view, &json!({"vias": true, "tracks": false})).unwrap();
+    assert!(h.state().views.active.board.tracks.selected.is_empty());
+    h.run();
+    click_canvas_at(&mut h, on_via);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([via]));
+}
+
+/// Saved filter settings from before the Vias row keep existing choices and enable vias.
+#[test]
+fn older_filter_settings_default_vias_to_enabled() {
+    let filters: crate::selection_filters::Filters = serde_json::from_value(json!({"tracks":false,"footprints":false})).unwrap();
+    assert!(filters.vias);
+    assert!(!filters.tracks);
+    assert!(!filters.footprints);
+}
+
 /// At a T-junction, D keeps the connection: a dragged end on the middle of another track holds
 /// there while the segment pivots, and a track ending along a dragged segment follows it.
 #[test]

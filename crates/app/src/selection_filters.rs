@@ -17,12 +17,13 @@ pub(super) struct Filters {
     pub labels: bool,
     pub footprints: bool,
     pub tracks: bool,
+    pub vias: bool,
     pub graphics: bool,
 }
 
 impl Default for Filters {
     fn default() -> Self {
-        Self { symbols: true, wires: true, sheets: true, labels: true, footprints: true, tracks: true, graphics: true }
+        Self { symbols: true, wires: true, sheets: true, labels: true, footprints: true, tracks: true, vias: true, graphics: true }
     }
 }
 
@@ -74,7 +75,7 @@ impl Filters {
                 row("footprints", "Footprints", self.footprints),
                 planned("pads", "Pads"),
                 row("tracks", "Tracks", self.tracks),
-                planned("vias", "Vias"),
+                row("vias", "Vias", self.vias),
                 planned("zones", "Zones"),
                 planned("text", "Text"),
                 row("graphics", "Graphics", self.graphics),
@@ -98,6 +99,7 @@ impl PcbApp {
                 (Workspace::Schematic, "labels") => &mut next.labels,
                 (Workspace::Board, "footprints") => &mut next.footprints,
                 (Workspace::Board, "tracks") => &mut next.tracks,
+                (Workspace::Board, "vias") => &mut next.vias,
                 (Workspace::Board, "graphics") => &mut next.graphics,
                 (_, "view" | "collapsed" | "open") => continue,
                 _ => return Err(format!("Selection filter `{key}` is unavailable in this workspace")),
@@ -122,8 +124,15 @@ impl PcbApp {
             if !next.footprints {
                 view.board.selection.clear();
             }
-            if !next.tracks {
-                view.board.tracks.selected.clear();
+            if !next.tracks || !next.vias {
+                // Drop only the copper kinds that can no longer be picked.
+                let vias: std::collections::BTreeSet<uuid::Uuid> = self
+                    .session
+                    .project()
+                    .and_then(|project| view.board.target.and_then(|target| project.board_view(target)))
+                    .map(|board| board.vias().iter().map(|via| via.id).collect())
+                    .unwrap_or_default();
+                view.board.tracks.selected.retain(|id| if vias.contains(id) { next.vias } else { next.tracks });
             }
             if !next.graphics {
                 view.board.drawing.select(None);

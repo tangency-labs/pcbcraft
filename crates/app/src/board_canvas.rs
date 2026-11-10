@@ -171,7 +171,8 @@ pub(super) fn show(
             && !footprint_drag
             && state.drawing.tool.is_none()
             && state.drawing.source().is_none(),
-        hovered.is_some() || !filters.tracks,
+        hovered.is_some(),
+        crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
     );
     let edge = crate::board_drawing::interact(
         ui,
@@ -224,7 +225,14 @@ pub(super) fn show(
         && (response.drag_started_by(PointerButton::Secondary)
             || (response.drag_started_by(PointerButton::Primary)
                 && hit(start).is_none()
-                && !(filters.tracks && crate::board_tracks::copper_under(start, camera, rect, project, &state.hidden_layers))))
+                && !crate::board_tracks::copper_under(
+                    start,
+                    camera,
+                    rect,
+                    project,
+                    &state.hidden_layers,
+                    crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
+                )))
     {
         state.box_drag = Some(BoxDrag {
             source,
@@ -563,7 +571,9 @@ fn net_under(
         .filter(|pad| pad_visible(pad, view, hidden))
         .find(|pad| pad.copper.is_some_and(|land| egui::Rect::from_points(&land.map(|corner| camera.screen(corner, rect))).contains(pointer)))
         .and_then(|pad| pad.net)
-        .or_else(|| crate::board_tracks::copper_at(pointer, camera, rect, view, hidden).and_then(|id| nets.get(&id).cloned()))
+        .or_else(|| {
+            crate::board_tracks::copper_at(pointer, camera, rect, view, hidden, crate::board_tracks::Kinds::ALL).and_then(|id| nets.get(&id).cloned())
+        })
 }
 
 /// Outline visible pads and tracks assigned to `net`, reusing cached copper assignments.
@@ -766,7 +776,7 @@ fn geometry_for_box(
     let vias = project
         .vias()
         .iter()
-        .filter(|_| filters.tracks && visible_copper)
+        .filter(|_| filters.vias && visible_copper)
         .filter(|v| {
             let center = camera.screen(v.at, rect);
             let radius = radius(v.diameter_nm / 2);

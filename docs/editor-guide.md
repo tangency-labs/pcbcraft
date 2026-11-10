@@ -681,8 +681,9 @@ both snap to the grid, Esc or right-click cancels, and each completed move is on
 step. Properties shows the selected tracks and vias, with editable **Width**, **Via
 pad** and **Via drill** fields in the display units; a value applies to every selected
 item when you release a drag or press Enter. A move or resize whose copper would reach
-another net's pad is refused, leaving the board unchanged. The **Tracks** selection
-filter turns track picking off. Tracks stay on their layer, so a back-side track does
+another net's pad is refused, leaving the board unchanged. The **Tracks** and **Vias**
+selection filters turn picking of each off, by click, drag, U or box, and drop that kind
+from the current selection. Tracks stay on their layer, so a back-side track does
 not reach front-only SMD pads, while a via joins copper on every layer. With the pointer over a segment and no tool armed, **D** drags that segment with the
 pointer while segments touching it on the same layer stretch to stay attached. An end
 that meets the middle of another track holds there, so the segment pivots on that
