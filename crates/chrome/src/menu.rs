@@ -132,8 +132,9 @@ pub struct MenuItem<'a> {
     icon: Option<MenuIcon>,
     /// A ribbon glyph in the leading column, for rows that repeat a ribbon action.
     tool: Option<crate::workspace::ToolIcon>,
-    /// `Some` for a row that toggles: a check mark in the leading column when on, nothing when off.
+    /// `Some` for a row that displays a check mark when checked.
     checked: Option<bool>,
+    toggle_on_click: bool,
 }
 
 impl<'a> MenuItem<'a> {
@@ -159,7 +160,7 @@ impl<'a> MenuItem<'a> {
 
     /// Start with an enabled text row. Use the builders to add a glyph or shortcut.
     pub fn new(label: &'a str) -> Self {
-        Self { label, shortcut: "", enabled: true, icon: None, tool: None, checked: None }
+        Self { label, shortcut: "", enabled: true, icon: None, tool: None, checked: None, toggle_on_click: false }
     }
 
     /// Add a theme-aware glyph in the row's leading column.
@@ -174,11 +175,15 @@ impl<'a> MenuItem<'a> {
         self
     }
 
-    /// Make the row a toggle. The leading column shows a check mark while `checked`, in place
-    /// of any glyph, and the checked state is available to assistive technology.
-    pub fn checked(mut self, checked: bool) -> Self {
-        self.checked = Some(checked);
-        self
+    /// Show a check mark in place of the glyph for a selected choice and expose its state to assistive technology.
+    pub fn checked(self, checked: bool) -> Self {
+        Self { checked: Some(checked), toggle_on_click: false, ..self }
+    }
+
+    /// Show a toggle whose accessibility click event reports the new checked state.
+    /// The caller must flip its value when the row is clicked.
+    pub fn toggle(self, checked: bool) -> Self {
+        Self { checked: Some(checked), toggle_on_click: true, ..self }
     }
 
     /// Display a shortcut in its own column. The caller handles keyboard input.
@@ -210,6 +215,7 @@ impl<'a> MenuItem<'a> {
 
     /// Measure to content on the popup's sizing pass and fill the row on subsequent passes.
     /// Truncate long labels before the shortcut and expose the full label and any checked state.
+    /// On activation, report the state the caller will apply to a toggle.
     fn row(&self, ui: &mut Ui) -> Response {
         let t = Tokens::get();
         let leading = self.icon.is_some() || self.tool.is_some() || self.checked.is_some();
@@ -228,7 +234,10 @@ impl<'a> MenuItem<'a> {
         let sense = if enabled { Sense::click() } else { Sense::hover() };
         let (r, response) = ui.allocate_exact_size(vec2(width, height), sense);
         response.widget_info(|| match self.checked {
-            Some(checked) => WidgetInfo::selected(WidgetType::Checkbox, enabled, checked, self.label),
+            Some(checked) => {
+                let checked = if self.toggle_on_click && response.clicked() { !checked } else { checked };
+                WidgetInfo::selected(WidgetType::Checkbox, enabled, checked, self.label)
+            }
             None => WidgetInfo::labeled(WidgetType::Button, enabled, self.label),
         });
         let hot = enabled && (response.hovered() || response.has_focus());

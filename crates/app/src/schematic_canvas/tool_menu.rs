@@ -73,7 +73,7 @@ pub(super) fn active(ui: &mut Ui, tool: Option<&Tool>, repeat: bool) -> Option<A
         if MenuItem::new("Rotate").tool_icon(ToolIcon::Rotate).shortcut("R").show(ui) {
             return Some(Action::Rotate);
         }
-        if MenuItem::new("Repeat placement").checked(repeat).show(ui) {
+        if MenuItem::new("Repeat placement").toggle(repeat).show(ui) {
             return Some(Action::Repeat(!repeat));
         }
     }

@@ -124,8 +124,13 @@ fn idle_and_placement_context_menus_keep_input_and_repeat_choices() {
     assert!(matches!(h.state().views.active.schematic.tool, Some(Tool::PlaceSymbol { turns: 1, .. })));
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     right_click(&mut h, point + egui::vec2(150., 80.));
-    click(&mut h, "Repeat placement");
+    h.get_by_role_and_label(Role::CheckBox, "Repeat placement").click();
+    h.run_steps(1);
     assert!(!h.state().parts.repeats());
+    assert!(h.output().platform_output.events.iter().any(|event| {
+        matches!(event, egui::output::OutputEvent::Clicked(info)
+            if info.label.as_deref() == Some("Repeat placement") && info.selected == Some(false))
+    }));
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     right_click(&mut h, point + egui::vec2(150., 80.));
     let repeat = h.get_by_role_and_label(Role::CheckBox, "Repeat placement");
