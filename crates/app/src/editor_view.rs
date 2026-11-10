@@ -141,6 +141,7 @@ impl Binding {
 /// Schematic interaction state is separate from board selection and input handling.
 #[derive(Debug, Default)]
 pub(super) struct SchematicState {
+    pub(super) clipboard: crate::clipboard::State,
     pub(super) properties: crate::properties::State,
     pub(super) selection: Selection,
     pub(super) selected_sheet_symbol: Option<u64>,
@@ -565,6 +566,7 @@ impl EditorView {
 
     /// Drop unfinished gestures without altering selection or the document.
     pub(super) fn cancel_gesture(&mut self) {
+        self.schematic.clipboard = crate::clipboard::State::default();
         self.board.drawing.cancel();
         self.board.tracks.cancel();
         self.board.draft = None;

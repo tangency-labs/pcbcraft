@@ -20,6 +20,7 @@ mod board_tracks;
 mod board_update;
 mod board_workspace;
 mod canvas_camera;
+mod clipboard;
 mod definition_graphics;
 mod editor_layout;
 mod editor_view;
@@ -151,6 +152,7 @@ enum Dialog {
     #[default]
     None,
     LibrarySources,
+    PasteOptions(Box<clipboard::Options>),
     /// Asks for the name that `project.rename` takes.
     Name {
         command: &'static str,
@@ -201,6 +203,7 @@ enum Dialog {
 /// navigation and unfinished input separately; split panes share the project authority.
 #[derive(Debug, Default)]
 pub struct PcbApp {
+    clipboard_request: Option<(ViewInput, bool)>,
     library_sources: native_sources::Sources,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
@@ -1146,6 +1149,8 @@ impl PcbApp {
                     if !empty {
                         ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
                     }
+                } else if self.views.active.schematic.clipboard.active() {
+                    ui.label(dim("Paste · Click to place · R rotate · Esc cancel"));
                 } else if self.views.active.schematic.tool.is_none() && self.views.active.schematic.selection.len() > 1 {
                     ui.label(dim(format!("{} items selected · Drag to move · Del delete", self.views.active.schematic.selection.len())));
                 } else if let (None, Some(reference)) = (&self.views.active.schematic.tool, self.selected_reference()) {
@@ -1311,6 +1316,9 @@ impl PcbApp {
                         }
                     }
                     if let Some(project) = snapshot.as_deref() {
+                        if self.schematic_clipboard_canvas(ui, project, &label, input_enabled) {
+                            return None;
+                        }
                         let highlight = self.views.highlight_for(self.views.active.id(), &self.session);
                         let edited = self.views.active.schematic.text_edit.as_ref().map(|edit| edit.target.clone());
                         let click = schematic_canvas::show(
@@ -1557,10 +1565,13 @@ impl PcbApp {
     }
 
     /// Context menus share the same catalog, drawing and preview handlers as ribbon actions.
-    /// These actions never publish authored data; placement still uses validated canvas input.
+    /// Clipboard edits use shared commands; placement still uses validated canvas input.
     fn canvas_tool_action(&mut self, ctx: &egui::Context, action: schematic_canvas::ToolAction) {
         use schematic_canvas::ToolAction;
         match action {
+            ToolAction::Copy | ToolAction::Cut => self.copy_schematic_clipboard(ctx, matches!(action, ToolAction::Cut)),
+            ToolAction::Paste | ToolAction::PasteOptions => self.request_schematic_clipboard(ctx, matches!(action, ToolAction::PasteOptions)),
+            ToolAction::Duplicate => self.duplicate_schematic_clipboard(),
             ToolAction::Symbols => self.parts.focus_search(),
             ToolAction::Wire => self.begin_wire(),
             ToolAction::Ground => self.begin_ground(ctx),
@@ -1656,6 +1667,12 @@ impl PcbApp {
             }
         }
         if self.parts.is_modal() || ctx.egui_wants_keyboard_input() || !matches!(self.dialog, Dialog::None) {
+            return;
+        }
+        if self.clipboard_shortcuts(ctx, assistant_keys) {
+            return;
+        }
+        if self.views.active.schematic.clipboard.active() {
             return;
         }
         let pressed = |shortcut: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(shortcut));
@@ -1896,6 +1913,7 @@ impl PcbApp {
             Dialog::EditFields(edit) => self.symbol_properties_dialog(ctx, *edit),
             Dialog::LibraryClose(id) => self.library_close_dialog(ctx, id),
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
+            Dialog::PasteOptions(draft) => self.paste_options_dialog(ctx, draft),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
@@ -2140,6 +2158,7 @@ impl PcbApp {
         self.views.sync(&self.session);
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
+        self.pending_clipboard_response(&ctx);
         if self.views.active.definition.is_some() && !(main && self.home) {
             self.library_frame(ui, integrated_titlebar);
             self.editor_drag_cursor(&ctx);
@@ -2196,7 +2215,7 @@ impl PcbApp {
             let _ = workspace;
         });
         self.integrated_titlebar = integrated;
-        let dialog_host = self.arrangement_dialog_host().unwrap_or(self.views.main);
+        let dialog_host = self.arrangement_dialog_host().or_else(|| self.paste_options_host()).unwrap_or(self.views.main);
         if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
         } else if (!had_dialog && !matches!(self.dialog, Dialog::None)) || (!was_home && self.home) {

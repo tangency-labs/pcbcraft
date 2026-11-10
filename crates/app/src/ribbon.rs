@@ -36,6 +36,11 @@ pub(super) fn tab_slot(name: &str) -> usize {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
+    Copy,
+    Cut,
+    Paste,
+    PasteOptions,
+    Duplicate,
     Symbol,
     Ground,
     HierarchicalLabel,
@@ -116,6 +121,11 @@ const CAPTURE: &[Group] = &[
             tool(Action::Mirror, "Mirror", Icon::Mirror, "Mirroring is not available yet.", ""),
         ],
         extras: &[
+            tool(Action::Copy, "Copy", Icon::Sheet, "Copy selected items", "Ctrl+C"),
+            tool(Action::Cut, "Cut", Icon::Sheet, "Cut selected items", "Ctrl+X"),
+            tool(Action::Paste, "Paste", Icon::Sheet, "Paste from system clipboard", "Ctrl+V"),
+            tool(Action::PasteOptions, "Paste Options…", Icon::Sheet, "Choose paste options", "Ctrl+Shift+V"),
+            tool(Action::Duplicate, "Duplicate", Icon::Sheet, "Duplicate selected items", "Ctrl+D"),
             tool(Action::Delete, "Delete", Icon::Delete, "Delete selected items", "Del"),
             tool(Action::Slice, "Slice", Icon::Slice, "Slice selected wire", ""),
             tool(Action::Heal, "Heal", Icon::Heal, "Heal selected wires", ""),
@@ -192,6 +202,11 @@ impl Action {
                 | Self::Heal
                 | Self::AutoHeal
                 | Self::Sync
+                | Self::Copy
+                | Self::Cut
+                | Self::Paste
+                | Self::PasteOptions
+                | Self::Duplicate
         )
     }
 
@@ -203,6 +218,8 @@ impl Action {
         let project = app.session.project().is_some();
         let schematic = app.views.active.workspace == Workspace::Schematic && !app.views.active.unavailable();
         match self {
+            Self::Copy | Self::Cut | Self::Duplicate => project && schematic && !app.views.active.schematic.selection.is_empty(),
+            Self::Paste | Self::PasteOptions => project && schematic,
             Self::Sources => true,
             Self::Sync => project && app.views.active.input(&app.session).is_some(),
             Self::OpenLibraryItem => !app.library_editors.busy(),
@@ -306,6 +323,9 @@ impl PcbApp {
             return;
         }
         match action {
+            Action::Copy | Action::Cut => self.copy_schematic_clipboard(ctx, action == Action::Cut),
+            Action::Paste | Action::PasteOptions => self.request_schematic_clipboard(ctx, action == Action::PasteOptions),
+            Action::Duplicate => self.duplicate_schematic_clipboard(),
             Action::Sources => self.dialog = Dialog::LibrarySources,
             Action::Sync => self.message = self.begin_board_update(self.views.active.id()).err(),
             Action::OpenLibraryItem => self.message = self.open_library_picker(ctx).err(),

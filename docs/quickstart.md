@@ -127,6 +127,11 @@ the same `VCC` net name, which can be changed before placement.
    with attached wires, or **M** to leave its old wiring in place. Press **R** while
    moving to rotate the preview, then click to finish; **Esc** cancels both changes.
    Each edit has one undo step.
+   **Ctrl+C**, **Ctrl+X** and **Ctrl+V** copy/cut/paste through the system
+   clipboard, including between split panes, windows and running instances.
+   Paste previews at the pointer; **R** rotates, a click places, and **Esc** cancels.
+   **Ctrl+Shift+V** opens [Paste Options](clipboard.md) for references, named-net
+   isolation or original-position placement. Use **⌘** instead of Ctrl on macOS.
 5. Click a wire segment; only that segment turns blue, and **Delete** removes
    it. Use **Undo**, then drag the segment perpendicular to its direction to
    adjust alignment, or hover it and press **G**, then click to finish. Corner

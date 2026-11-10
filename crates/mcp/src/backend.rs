@@ -60,7 +60,8 @@ impl Backend for Headless {
 
 /// Run an operation against the supplied session. Its owner controls execution policy.
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
-/// because a bare session has no window to act on.
+/// because a bare session has no window to act on. Clipboard/export queries retain their
+/// requested data even when project inspection is suppressed.
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, String> {
     match method {
         "engine.commands" => Ok(json!(catalog().iter().map(|c| c.to_json()).collect::<Vec<_>>())),
@@ -69,7 +70,15 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
             if is_window_command(id) {
                 return Err(needs_live_editor(&format!("`{id}`")));
             }
-            if params["inspect"].as_bool() == Some(false) && id != pcbcraft_engine::PREVIEW_UPDATE && id != pcbcraft_engine::CHECK_DESIGN {
+            if params["inspect"].as_bool() == Some(false)
+                && !matches!(
+                    id,
+                    pcbcraft_engine::PREVIEW_UPDATE
+                        | pcbcraft_engine::CHECK_DESIGN
+                        | pcbcraft_engine::clipboard::COPY
+                        | pcbcraft_engine::clipboard::CUT
+                )
+            {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())
             } else {
                 session.execute(id, &params["params"]).map_err(|e| e.to_string())

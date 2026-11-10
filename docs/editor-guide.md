@@ -134,6 +134,17 @@ New resistors, capacitors, LEDs and two-pin connectors use shorter leads from
 revision 2 of the starter symbols; saved revision 1 parts retain their original
 geometry.
 
+## Copy and paste
+
+The schematic canvas uses the system clipboard across split panes, detached
+windows, projects and running instances. **Ctrl+C**, **Ctrl+X** and **Ctrl+V**
+(**⌘** on macOS) also appear in the canvas context menu and Capture → Modify.
+Paste previews at the pointer, **R** rotates the group, a click places it and
+**Esc** cancels. **Ctrl+D** duplicates without replacing the clipboard, while
+**Ctrl+Shift+V** opens reference, named-net and original-position options.
+The [clipboard guide](clipboard.md) describes preserved definitions and wiring,
+cut behavior, browser gestures, shared commands and supported limits.
+
 ## Moving symbols
 
 Hover a symbol and press **G**, or choose **Grab (keep connected)** from its context

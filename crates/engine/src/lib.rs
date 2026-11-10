@@ -9,6 +9,7 @@
 mod allocation_tests;
 pub mod authoring;
 pub mod board;
+pub mod clipboard;
 pub mod hierarchy;
 pub mod library;
 pub mod library_graphics;
@@ -59,6 +60,8 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    ClipboardText,
+    ReferencePolicy,
     CreateBoard,
     ComponentMetadata,
     FieldLayouts,
@@ -125,6 +128,8 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::ClipboardText => json!({"type":"string","maxLength":clipboard::MAX_BYTES}),
+            Self::ReferencePolicy => json!({"type":"string","enum":["renumber","preserve"]}),
             Self::CreateBoard => json!({"type":"boolean"}),
             Self::ComponentMetadata => schematic::fields::metadata_schema(),
             Self::FieldLayouts => schematic::fields::layouts_schema(),
@@ -220,6 +225,10 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::ClipboardText if value.as_str().is_some_and(|s| s.len() <= clipboard::MAX_BYTES) => Ok(()),
+            Self::ReferencePolicy if matches!(value.as_str(), Some("renumber" | "preserve")) => Ok(()),
+            Self::ClipboardText => Err("must be UTF-8 text of at most 8 MiB"),
+            Self::ReferencePolicy => Err("must be renumber or preserve"),
             Self::CreateBoard if value.is_boolean() => Ok(()),
             Self::CreateBoard => Err("must be a boolean"),
             Self::TextLayout => serde_json::from_value::<schematic::fields::Layout>(value.clone())
@@ -553,6 +562,42 @@ const ANCHOR_X: Param = Param { required: true, name: "x_nm", summary: "Anchor X
 const ANCHOR_Y: Param = Param { required: true, name: "y_nm", summary: "Anchor Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 const DIRECTION: Param = Param { required: true, name: "direction", summary: "Hierarchical interface direction", kind: ParamKind::Direction };
 const CATALOG: &[Command] = &[
+    Command {
+        id: clipboard::COPY,
+        title: "Copy",
+        summary: "Export selected schematic objects as a portable native clipboard fragment; no project change.",
+        params: &[ITEMS, EXPECTED_REVISION],
+    },
+    Command {
+        id: clipboard::CUT,
+        title: "Cut",
+        summary: "Copy selected objects and remove them in one edit, preserving other incident wires as dangling routes.",
+        params: &[ITEMS, EXPECTED_REVISION],
+    },
+    Command {
+        id: clipboard::PASTE,
+        title: "Paste",
+        summary: "Paste a portable schematic fragment with fresh identities in one undo step.",
+        params: &[
+            Param { name: "text", required: true, kind: ParamKind::ClipboardText, summary: "pcbcraft-clipboard/1 UTF-8 envelope" },
+            SYMBOL_X,
+            SYMBOL_Y,
+            EXPECTED_REVISION,
+            NET_ROTATION,
+            Param {
+                name: "references",
+                required: false,
+                kind: ParamKind::ReferencePolicy,
+                summary: "renumber (default) or preserve; collisions reject the entire paste",
+            },
+            Param {
+                name: "net_name_suffix",
+                required: false,
+                kind: ParamKind::Text,
+                summary: "Append to copied label/power names to isolate named nets",
+            },
+        ],
+    },
     Command {
         id: hierarchy::RESIZE_SHEET,
         title: "Resize Sheet Symbol",
@@ -1726,6 +1771,9 @@ impl Session {
             | ATTACH_JUNCTION
             | HEAL_WIRES
             | MOVE_ITEMS
+            | clipboard::COPY
+            | clipboard::CUT
+            | clipboard::PASTE
             | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
             SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
@@ -1798,6 +1846,13 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Failed commands leave the project intact.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        if matches!(id, clipboard::COPY | clipboard::CUT) {
+            let text = self.copy_schematic(params)?;
+            if id == clipboard::CUT {
+                self.apply(id, params)?;
+            }
+            return Ok(json!({"clipboard":text,"revision":self.revision}));
+        }
         if id.starts_with("library.") {
             return self.library_command(id, params);
         }
@@ -1982,6 +2037,11 @@ impl Session {
             BREAK_WIRE => self.break_wire(params)?,
             DELETE_WIRE_SEGMENT => self.delete_wire_segment(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
+            clipboard::COPY => {
+                self.copy_schematic(params)?;
+            }
+            clipboard::CUT => self.cut_schematic(params)?,
+            clipboard::PASTE => self.paste_schematic(params)?,
             MOVE_ITEMS => self.move_items(params)?,
             DELETE_ITEMS => self.delete_items(params)?,
             ROTATE_SYMBOL => self.rotate_symbol(params)?,

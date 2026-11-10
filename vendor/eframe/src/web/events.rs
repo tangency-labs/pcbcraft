@@ -341,29 +341,19 @@ fn install_copy_cut_paste(runner_ref: &WebRunner, target: &EventTarget) -> Resul
             return; // The eframe app is not interested
         }
 
-        if let Some(data) = event.clipboard_data()
-            && let Ok(text) = data.get_data("text")
-        {
-            let text = text.replace("\r\n", "\n");
-
-            let mut should_stop_propagation = true;
-            let mut should_prevent_default = true;
-            if !text.is_empty() {
-                let egui_event = egui::Event::Paste(text);
-                should_stop_propagation = (runner.web_options.should_stop_propagation)(&egui_event);
-                should_prevent_default = (runner.web_options.should_prevent_default)(&egui_event);
-                runner.input.raw.events.push(egui_event);
-                runner.needs_repaint.repaint_asap();
-            }
-
-            // Use web options to tell if the web event should be propagated to parent elements based on the egui event.
-            if should_stop_propagation {
-                event.stop_propagation();
-            }
-
-            if should_prevent_default {
-                event.prevent_default();
-            }
+        // Report completion even when the clipboard has no supported text. A canvas
+        // host can then retire its pending destination rather than retaining it.
+        let text = event.clipboard_data().and_then(|data| data.get_data("text").ok()).unwrap_or_default().replace("\r\n", "\n");
+        let egui_event = egui::Event::Paste(text);
+        let should_stop_propagation = (runner.web_options.should_stop_propagation)(&egui_event);
+        let should_prevent_default = (runner.web_options.should_prevent_default)(&egui_event);
+        runner.input.raw.events.push(egui_event);
+        runner.needs_repaint.repaint_asap();
+        if should_stop_propagation {
+            event.stop_propagation();
+        }
+        if should_prevent_default {
+            event.prevent_default();
         }
     })?;
 

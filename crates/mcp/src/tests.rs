@@ -938,3 +938,52 @@ fn populated_setup_and_footprint_deletion_are_discoverable_shared_commands() {
     assert_eq!(removed["project"]["schematic"], original["project"]["schematic"]);
     assert_eq!(execute(&mut s, "edit.undo", json!({}))["project"], configured["project"]);
 }
+
+/// The shared dispatcher retains clipboard payloads with inspect:false, while paste remains
+/// a single ordinary revision-checked edit.
+#[test]
+fn clipboard_payloads_survive_suppressed_project_inspection() {
+    use pcbcraft_engine::clipboard::{COPY, CUT, PASTE};
+    let mut server = server();
+    let created = body(&call(&mut server, "execute", json!({"command":"project.new","params":{}})));
+    let placed =
+        body(&call(&mut server, "execute", json!({"command":PLACE_RESISTOR,"params":{"x_nm":0,"y_nm":0,"expected_revision":created["revision"]}})));
+    let symbol = placed["project"]["schematic"]["symbols"][0]["id"].clone();
+    let selection = json!({"symbols":[symbol],"wires":[]});
+    for command in [COPY, CUT] {
+        let result = body(&call(
+            &mut server,
+            "execute",
+            json!({"command":command,"inspect":false,"params":{"items":selection,"expected_revision":placed["revision"]}}),
+        ));
+        assert!(result["clipboard"].as_str().is_some_and(|s| pcbcraft_engine::clipboard::Fragment::from_text(s).is_ok()));
+        if command == COPY {
+            assert_eq!(result["revision"], placed["revision"]);
+        } else {
+            let pasted = body(&call(
+                &mut server,
+                "execute",
+                json!({"command":PASTE,"inspect":false,"params":{"text":result["clipboard"],"x_nm":12_700_000,"y_nm":0,"expected_revision":result["revision"]}}),
+            ));
+            assert!(pasted.get("project").is_none());
+        }
+    }
+    let state = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(state["project"]["schematic"]["symbols"].as_array().unwrap().len(), 1);
+    assert_eq!(state["project"]["schematic"]["symbols"][0]["x_nm"], 12_700_000);
+}
+
+/// Suppressing project inspection still returns the DRC report without changing the project,
+/// alongside the clipboard payload exceptions in the shared dispatcher.
+#[test]
+fn design_check_report_survives_suppressed_project_inspection() {
+    let mut server = server();
+    let created = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true}})));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::CHECK_DESIGN,"params":{"clearance_nm":250_000},"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["revision"], created["revision"]);
+    assert_eq!(result["design_check"]["rules"]["clearance_nm"], 250_000);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
