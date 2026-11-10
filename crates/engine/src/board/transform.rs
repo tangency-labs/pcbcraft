@@ -84,8 +84,9 @@ fn bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
 }
 
 /// Displacements that align or distribute `boxes` (min x, min y, max x, max y). Top is the
-/// smallest board Y. Centers align on the middle of the whole selection's bounds. Distribution
-/// keeps the outermost items and makes the gaps between neighbors' bounds equal.
+/// smallest board Y. Centers align on the middle of the whole selection's bounds, rounding
+/// half-nanometer centers downward consistently across zero so repeating alignment is a no-op.
+/// Distribution keeps the outermost items and makes the gaps between neighbors' bounds equal.
 fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Vec<(i64, i64)> {
     let min = |i: usize| boxes.iter().map(|b| b[i]).min().unwrap_or(0);
     let max = |i: usize| boxes.iter().map(|b| b[i]).max().unwrap_or(0);
@@ -94,8 +95,8 @@ fn alignment(mode: AlignMode, boxes: &[[i64; 4]]) -> Vec<(i64, i64)> {
         AlignMode::Right => boxes.iter().map(|b| (max(2) - b[2], 0)).collect(),
         AlignMode::Top => boxes.iter().map(|b| (0, min(1) - b[1])).collect(),
         AlignMode::Bottom => boxes.iter().map(|b| (0, max(3) - b[3])).collect(),
-        AlignMode::CenterX => boxes.iter().map(|b| ((min(0) + max(2)) / 2 - (b[0] + b[2]) / 2, 0)).collect(),
-        AlignMode::CenterY => boxes.iter().map(|b| (0, (min(1) + max(3)) / 2 - (b[1] + b[3]) / 2)).collect(),
+        AlignMode::CenterX => boxes.iter().map(|b| ((min(0) + max(2)).div_euclid(2) - (b[0] + b[2]).div_euclid(2), 0)).collect(),
+        AlignMode::CenterY => boxes.iter().map(|b| (0, (min(1) + max(3)).div_euclid(2) - (b[1] + b[3]).div_euclid(2))).collect(),
         AlignMode::DistributeX | AlignMode::DistributeY => {
             let axis = if mode == AlignMode::DistributeX { 0 } else { 1 };
             let mut order: Vec<usize> = (0..boxes.len()).collect();

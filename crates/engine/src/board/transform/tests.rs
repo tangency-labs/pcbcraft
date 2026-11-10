@@ -199,6 +199,22 @@ fn alignment_moves_boxes_to_shared_edges_and_equal_gaps() {
     assert_eq!(placed, vec![[0, 10], [30, 34], [16, 24]], "gaps of 6: 34 of span minus 22 of sizes, in two gaps");
 }
 
+/// Center alignment rounds consistently across zero and does not move aligned mixed-width boxes
+/// on a second application, on either axis and at positive or negative positions.
+#[test]
+fn center_alignment_is_idempotent_across_zero() {
+    for offset in [-20, 0, 20] {
+        let boxes = [[-3 + offset, -3 + offset, offset, offset], [offset, offset, 10 + offset, 10 + offset]];
+        for (mode, axis) in [(super::AlignMode::CenterX, 0), (super::AlignMode::CenterY, 1)] {
+            let moved: Vec<_> =
+                boxes.iter().zip(super::alignment(mode, &boxes)).map(|(b, (dx, dy))| [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]).collect();
+            let centers: Vec<_> = moved.iter().map(|b| (b[axis] + b[axis + 2]).div_euclid(2)).collect();
+            assert_eq!(centers, vec![3 + offset; 2], "{mode:?} at offset {offset}: {moved:?}");
+            assert_eq!(super::alignment(mode, &moved), vec![(0, 0); 2], "repeating {mode:?} must not create another edit");
+        }
+    }
+}
+
 /// The command aligns real footprints in one undoable edit, is a no-op when already aligned,
 /// and refuses too few, repeated or unknown footprints and unknown modes.
 #[test]
