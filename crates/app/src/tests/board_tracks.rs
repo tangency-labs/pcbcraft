@@ -773,3 +773,42 @@ fn properties_set_exact_footprint_position_rotation_and_side() {
     assert_eq!(placed(&h).0.y_nm, -pcbcraft_engine::schematic::MAX_CENTER_NM);
     assert_eq!(h.state().message, None);
 }
+
+/// Mid-route, PgDn drops a via and continues on back copper and PgUp returns to the front; a key
+/// for the side the route is already on adds nothing. Outside a route they only change layer.
+#[test]
+fn page_keys_place_vias_mid_route() {
+    let mut h = routable();
+    let (top, bottom) = (layer_named(&h, "Top"), layer_named(&h, "Bottom"));
+    h.key_press(Key::X);
+    h.run();
+    let start = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
+    let corner = Point { x_nm: 5_080_000, y_nm: 2_540_000 };
+    click_route(&mut h, start);
+    h.hover_at(at(&h, corner));
+    h.run();
+    h.key_press(Key::PageDown);
+    h.run();
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()));
+    let next = Point { x_nm: 5_080_000, y_nm: -1_270_000 };
+    click_route(&mut h, next);
+    h.hover_at(at(&h, next));
+    h.run();
+    h.key_press(Key::PageUp);
+    h.run();
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
+    h.key_press(Key::PageUp);
+    h.run();
+    click_route(&mut h, Point { x_nm: 7_620_000, y_nm: -1_270_000 });
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(vias(&h).len(), 2, "one via per side change, none for the repeated PgUp");
+    assert!(tracks(&h).iter().any(|t| t.layer.to_string() == bottom));
+    h.key_press(Key::Escape);
+    h.run();
+    h.key_press(Key::PageDown);
+    h.run();
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()), "outside a route PgDn only changes layer");
+    assert_eq!(vias(&h).len(), 2);
+}
