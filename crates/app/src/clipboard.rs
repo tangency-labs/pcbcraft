@@ -78,6 +78,7 @@ impl PcbApp {
 
     /// Consume native Copy/Cut/Paste events only when the canvas owns input. Text editors and
     /// assistant fields keep their normal clipboard behavior; no app-local fallback masks OS data.
+    /// The board's standalone-via chord takes precedence over the generic Cut shortcut.
     pub(super) fn clipboard_shortcuts(&mut self, ctx: &Context, assistant_keys: bool) -> bool {
         if self.home
             || assistant_keys
@@ -88,6 +89,10 @@ impl PcbApp {
             || self.parts.is_modal()
         {
             return false;
+        }
+        if self.views.active.workspace == Workspace::Board && ctx.input_mut(|input| input.consume_shortcut(&crate::PLACE_VIA)) {
+            self.start_via();
+            return true;
         }
         let events = ctx.input_mut(|input| {
             let mut clipboard = Vec::new();

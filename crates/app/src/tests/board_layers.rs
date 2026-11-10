@@ -171,6 +171,8 @@ fn compact_layers_reveal_the_active_row_after_resize() {
     let row = h.get_by_label("Activate layer Board Outline").rect();
     assert!(row.center().y > visibility.bottom());
     assert!(row.bottom() < 528., "active row is outside the compact card: {row:?}");
+    h.get_by_label("Active layer").scroll_to_me();
+    h.run();
     let selector = h.get_by_label("Active layer").rect();
     assert!(egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(760., 175.)).contains_rect(selector));
 }

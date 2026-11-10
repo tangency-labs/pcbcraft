@@ -55,8 +55,7 @@ fn change_value(h: &mut Harness<'_, PcbApp>) {
 fn open(h: &mut Harness<'_, PcbApp>) {
     h.remove_cursor();
     h.run();
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Update PCB from schematic").click();
-    h.run();
+    click(h, "Update PCB from schematic");
     assert!(matches!(h.state().dialog, Dialog::BoardUpdate(_)), "dialog {:?}; message {:?}", h.state().dialog, h.state().message);
 }
 

@@ -94,6 +94,9 @@ pub(super) fn show(
     let idle = !crate::board_clipboard::busy(state);
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
+    if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+        state.context_menu_allowed = idle;
+    }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
     camera.navigate_board(&response, rect, project, enabled, navigation);
     let placement_enabled = enabled;
@@ -380,7 +383,7 @@ pub(super) fn show(
         board::empty(&p, rect);
     }
     out.placement = place_group(ui, &response, project, camera, state, source, appearance, placement_enabled, visible, color, rotation);
-    if source.is_some() && idle && !crate::board_clipboard::busy(state) {
+    if source.is_some() && idle && state.context_menu_allowed && !crate::board_clipboard::busy(state) {
         response.context_menu(|ui| {
             use crate::board_clipboard::Action;
             use pcbcraft_chrome::menu::MenuItem;
