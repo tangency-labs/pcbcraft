@@ -223,14 +223,19 @@ impl PcbApp {
 
     /// Resolve hierarchy editing targets by stable IDs; a current explicit selection wins over
     /// hover, and ordinary flat selections never collect unrelated objects beneath the pointer.
+    /// Hover requires the current pointer on the canvas background, excluding floating panels;
+    /// the preceding frame's cached model point grants no targeting authority.
     fn schematic_clipboard_objects(&self, ctx: Option<&Context>) -> std::collections::BTreeSet<String> {
         if let Some(id) = self.views.active.schematic.selected_sheet_symbol {
             return [format!("sheet-symbol-{id}")].into();
         }
-        if !self.views.active.schematic.selection.is_empty() || self.pointer.is_none() {
+        if !self.views.active.schematic.selection.is_empty() {
             return Default::default();
         }
         let Some(ctx) = ctx else { return Default::default() };
+        if !self.views.active.camera.schematic_rect().is_some_and(|rect| ctx.rect_contains_pointer(egui::LayerId::background(), rect)) {
+            return Default::default();
+        }
         let Some(project) = self.views.active.snapshot(&self.session) else { return Default::default() };
         crate::hierarchy::clipboard_hover(&project, &self.views.active.camera, ctx, self.views.active.filters).into_iter().collect()
     }
@@ -305,7 +310,8 @@ impl PcbApp {
     }
 
     /// Decode clipboard text once, before entering a local preview; malformed data never creates
-    /// a tool or modifies the project. Special paste shows reference and named-net choices.
+    /// a tool or modifies the project. Special paste shows reference and named-net choices;
+    /// eligible Cut metadata opens the form but never enables live-sheet reuse automatically.
     fn receive_schematic_clipboard(&mut self, text: String, special: bool) {
         if text.is_empty() {
             self.message = Some("The clipboard contains no text.".into());
@@ -316,11 +322,11 @@ impl PcbApp {
         };
         match Fragment::from_text(&text) {
             Ok(fragment) => {
-                let reuse_sheets = self.views.active.snapshot(&self.session).is_some_and(|p| fragment.offers_sheet_reuse(&p));
-                let options = PasteOptions { reuse_sheets, ..Default::default() };
+                let offers_reuse = self.views.active.snapshot(&self.session).is_some_and(|p| fragment.offers_sheet_reuse(&p));
+                let options = PasteOptions::default();
                 let mut placement = Placement { source, text, fragment, options, preview: None };
                 self.views.active.cancel_gesture();
-                if special || placement.fragment.hierarchy_counts().1 > 0 {
+                if special || offers_reuse || placement.fragment.hierarchy_counts().1 > 0 {
                     self.dialog = Dialog::PasteOptions(Box::new(Options { placement, original: false, error: None }));
                     self.message = None;
                 } else if let Err(error) = self.prepare_schematic_clipboard(&mut placement) {
@@ -546,7 +552,7 @@ impl PcbApp {
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
 mod native_tests;
 
 #[cfg(test)]

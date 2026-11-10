@@ -132,6 +132,9 @@ the same `VCC` net name, which can be changed before placement.
    Paste previews at the pointer; **R** rotates, a click places, and **Esc** cancels.
    **Ctrl+Shift+V** opens [Paste Options](clipboard.md) for references, named-net
    isolation or original-position placement. Use **⌘** instead of Ctrl on macOS.
+   Copying a sheet body includes its child subtree. For a same-project Cut,
+   Paste Options requires **Reuse original unparented sheets** to be enabled
+   explicitly; leaving it unchecked creates independent copies.
 5. Click a wire segment; only that segment turns blue, and **Delete** removes
    it. Use **Undo**, then drag the segment perpendicular to its direction to
    adjust alignment, or hover it and press **G**, then click to finish. Corner

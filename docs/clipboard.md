@@ -89,8 +89,9 @@ selected MCP transport's request/reply budgets also apply to encoded payloads.
 
 Select a sheet body to copy/cut/duplicate it with its complete child subtree,
 including nested sheets, symbols, explicit interface connections and pinned
-package intent. Interface labels can be copied or duplicated while hovered or
-from their context menu. Copy/Cut on a selected sheet body also work from the
+package intent. Interface labels can be copied or duplicated while hovered on
+the canvas or from their context menu; floating panels exclude hover targets.
+Copy/Cut on a selected sheet body also work from the
 normal canvas/ribbon menus. Root wire routes enter the payload only when selected;
 unselected parent routes stay outside the copied tree.
 
@@ -105,9 +106,10 @@ of a shared definition. Existing single-parent/cycle rules still apply.
 Cut detaches sheet bodies while retaining their child documents/content. It
 preserves unselected parent routes as dangling endpoints at their old coordinates.
 Cutting an interface similarly preserves unselected routes on both its child and
-parent sides. A same-project Cut defaults to **Reuse original unparented sheets**,
-which reparents the current child content without duplicating components or
-renaming its nets. The form can instead choose independent duplication. Occupied,
+parent sides. An eligible same-project Cut opens Paste Options with independent
+duplication selected. Explicitly enable **Reuse original unparented sheets** to
+reparent the current child content without duplicating components or renaming
+its nets. Clipboard metadata never enables this choice automatically. Occupied,
 missing, foreign or cyclic child ownership is refused without stealing a parent
 or publishing part of the operation. Cancel leaves only the preceding Cut;
 ordinary Undo recovers it.
@@ -129,18 +131,20 @@ Hierarchical sheet symbols and interfaces retain their orientation. Their
 previews cache document creation and remapping once, with stable transient IDs;
 final paste always uses the original portable text and validates again.
 
-An opt-in Linux native regression exchanges clipboard text between two real
-processes. Run it on a separate Wayland display because it temporarily owns that
-display's clipboard:
+The opt-in native regressions exchange clipboard text between two real processes
+on Linux or Windows. Run them one at a time on an isolated interactive desktop
+(a separate Wayland display on Linux); they open two windows and temporarily
+replace that desktop's clipboard. The windows must be allowed to receive focus.
+These commands also work in PowerShell on Windows:
 
 ```sh
-cargo test --locked -p pcbcraft-app \
-  clipboard::native_tests::native_clipboard_between_processes -- --ignored --exact --nocapture
-cargo test --locked -p pcbcraft-app \
-  clipboard::native_tests::native_board_clipboard_between_processes -- --ignored --exact --nocapture
-cargo test --locked -p pcbcraft-app \
-  clipboard::native_tests::native_hierarchy_clipboard_between_processes -- --ignored --exact --nocapture
+cargo test --locked -p pcbcraft-app clipboard::native_tests::native_clipboard_between_processes -- --ignored --exact --nocapture
+cargo test --locked -p pcbcraft-app clipboard::native_tests::native_board_clipboard_between_processes -- --ignored --exact --nocapture
+cargo test --locked -p pcbcraft-app clipboard::native_tests::native_hierarchy_clipboard_between_processes -- --ignored --exact --nocapture
 ```
+
+The native module remains unavailable on macOS. Compiling the Windows tests
+alone does not verify an actual Windows clipboard exchange.
 
 ## Paste from other programs
 

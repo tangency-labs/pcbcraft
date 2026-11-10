@@ -10,7 +10,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(target_os = "linux")]
 use winit::platform::wayland::EventLoopBuilderExtWayland as _;
+#[cfg(target_os = "windows")]
+use winit::platform::windows::EventLoopBuilderExtWindows as _;
 
 struct ClipboardLogger;
 impl log::Log for ClipboardLogger {
@@ -200,24 +203,24 @@ fn native_clipboard_peer() -> eframe::Result {
     Ok(())
 }
 
-/// Run on an isolated Wayland session: two real windows/processes exchange OS clipboard text.
-/// The sender must remain alive because Wayland clipboard ownership is tied to the native client.
+/// Run on an isolated interactive desktop: two real windows/processes exchange OS clipboard text.
+/// The sender remains alive for platforms such as Wayland that tie clipboard ownership to a client.
 #[test]
-#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated Wayland display"]
+#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated interactive desktop"]
 fn native_clipboard_between_processes() {
     exchange("schematic");
 }
 
 /// Exercise the same real OS boundary with linked PCB data between independent project instances.
 #[test]
-#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated Wayland display"]
+#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated interactive desktop"]
 fn native_board_clipboard_between_processes() {
     exchange("board");
 }
 
 /// The extended schematic envelope carries complete child documents across real OS processes.
 #[test]
-#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated Wayland display"]
+#[ignore = "opens two native windows and temporarily replaces the system clipboard; use an isolated interactive desktop"]
 fn native_hierarchy_clipboard_between_processes() {
     exchange("hierarchy");
 }

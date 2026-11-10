@@ -80,8 +80,8 @@ fn sheet_tree_copies_between_instances_and_previews_keep_stable_child_ids() {
     crate::tests::assert_same_content(&before, &to.state().session.snapshot().unwrap());
 }
 
-/// Same-project Cut retains child identity/content; Paste relocates the body instead of silently
-/// making another copy. Cancelling a ghost leaves only the earlier Cut in history.
+/// Explicit same-project relocation retains child identity/content. Cancelling a ghost leaves
+/// only the earlier Cut in history, and a later paste requires a fresh relocation choice.
 #[test]
 fn cut_paste_relocates_original_child_sheets_and_escape_is_read_only() {
     let mut h = tree();
@@ -92,12 +92,18 @@ fn cut_paste_relocates_original_child_sheets_and_escape_is_read_only() {
     assert_eq!(cut.parent_sheet(child), None);
     h.event(Event::Paste(text.clone()));
     h.run();
+    assert!(matches!(&h.state().dialog, Dialog::PasteOptions(draft) if !draft.placement.options.reuse_sheets));
+    click(&mut h, "Reuse original unparented sheets");
+    click(&mut h, "Paste");
     assert!(h.state().views.active.schematic.clipboard.paste.as_ref().unwrap().options.reuse_sheets);
     h.key_press(Key::Escape);
     h.run();
     assert!(Arc::ptr_eq(&cut, &h.state().session.snapshot().unwrap()));
     h.event(Event::Paste(text));
     h.run();
+    assert!(matches!(&h.state().dialog, Dialog::PasteOptions(draft) if !draft.placement.options.reuse_sheets));
+    click(&mut h, "Reuse original unparented sheets");
+    click(&mut h, "Paste");
     place(&mut h);
     assert_eq!(h.state().message, None);
     let p = h.state().session.project().unwrap();
@@ -185,4 +191,67 @@ fn schematic_preview_navigation_has_no_authoring_authority() {
     h.run();
     assert!(h.state().views.active.schematic.clipboard.active());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// A current floating card owns its pointer even when the preceding canvas frame left a model
+/// point cached. Only an explicit hierarchy selection may be copied from beneath that card.
+#[test]
+fn floating_panel_blocks_stale_hierarchy_hover_clipboard_targets() {
+    use crate::workspace_panels::FILTERS;
+    use pcbcraft_chrome::workspace::panels::Position;
+    for action in 0..4 {
+        let mut h = tree();
+        let rect = h.get_by_label("Schematic canvas").rect();
+        let body = h.state().views.active.camera.screen(Point { x_nm: 8 * GRID_NM, y_nm: 5 * GRID_NM }, rect);
+        h.state_mut().views.active.filters_open = true;
+        h.state_mut().views.active.panels[FILTERS].set_position(Position::Floating, Some([body.x - rect.left() - 130., body.y - rect.top() - 12.]));
+        h.run();
+        let over_panel = h.get_by_label("Move Selection filters").rect().center();
+        let project = h.state().views.active.snapshot(&h.state().session).unwrap();
+        assert!(crate::hierarchy::hovered(&project, &h.state().views.active.camera, over_panel, h.state().views.active.filters));
+        assert!(h.ctx.layer_id_at(over_panel).is_some_and(|layer| layer.order != egui::Order::Background));
+        if action < 3 {
+            h.state_mut().views.active.schematic.selected_sheet_symbol = None;
+        }
+        h.hover_at(over_panel);
+        h.run();
+        // Exercise the shortcut handler with the preceding canvas frame's cached point.
+        h.state_mut().pointer = Some(Point { x_nm: 8 * GRID_NM, y_nm: 5 * GRID_NM });
+        let before = h.state().session.snapshot().unwrap();
+        let ctx = h.ctx.clone();
+        match action {
+            0 | 3 => h.state_mut().copy_schematic_clipboard(&ctx, false),
+            1 => h.state_mut().copy_schematic_clipboard(&ctx, true),
+            _ => h.state_mut().duplicate_schematic_clipboard_from(Some(&ctx)),
+        }
+        let copied = ctx.output(|output| output.commands.iter().any(|command| matches!(command, egui::OutputCommand::CopyText(_))));
+        assert_eq!(copied, action == 3, "action={action}");
+        assert!(!h.state().views.active.schematic.clipboard.active(), "action={action}");
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()), "action={action}");
+    }
+}
+
+/// Externally editable Cut metadata may offer relocation, but cannot opt the user into changing
+/// ownership of live sheets. The default paste creates independent children only after placement.
+#[test]
+fn cut_metadata_requires_an_explicit_relocation_choice() {
+    let mut h = tree();
+    let child = h.state().session.project().unwrap().sheets().find(|sheet| sheet.name == "Child").unwrap().target;
+    let text = copy(&mut h, true);
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    h.event(Event::Paste(text));
+    h.run();
+    assert!(matches!(&h.state().dialog, Dialog::PasteOptions(draft) if !draft.placement.options.reuse_sheets));
+    assert!(!h.state().views.active.schematic.clipboard.active());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    click(&mut h, "Paste");
+    assert!(!h.state().views.active.schematic.clipboard.paste.as_ref().unwrap().options.reuse_sheets);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    place(&mut h);
+    assert_eq!(h.state().message, None);
+    let project = h.state().session.project().unwrap();
+    assert_eq!(project.sheets().len(), 5);
+    assert_eq!(project.components().count(), 2);
+    assert_eq!(project.parent_sheet(child), None);
 }
