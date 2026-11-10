@@ -97,6 +97,35 @@ fn duplicated_footprints_and_circuit_are_one_atomic_edit() {
     crate::assert_same_content(&after, &s.snapshot().unwrap());
 }
 
+/// Clipboard transport retains a bottom-side pose through group rotation, native format 14
+/// round-tripping and atomic undo, alongside an ordinary top-side footprint.
+#[test]
+fn bottom_side_survives_copy_rotate_paste_and_undo() {
+    let mut s = fixture();
+    let footprint = view(&s).footprints().next().unwrap();
+    s.apply(
+        crate::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":footprint.id,"x_nm":footprint.position.x_nm,"y_nm":footprint.position.y_nm,"rotation":90,"side":"back","expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let before = s.snapshot().unwrap();
+    let copied = s.execute(COPY, &json!({"items":all(&s),"expected_revision":s.revision()})).unwrap();
+    let mut params = paste_params(&s, copied["clipboard"].as_str().unwrap());
+    params["rotation"] = json!(90);
+    s.apply(PASTE, &params).unwrap();
+    let after = s.snapshot().unwrap();
+    assert_eq!(after.board.footprints().len(), 4);
+    for (original, pasted) in before.board.footprints().iter().zip(&after.board.footprints()[2..]) {
+        assert_eq!(pasted.bottom, original.bottom);
+        assert_eq!(pasted.rotation, (original.rotation + 90) % 360);
+    }
+    let documents = encode_documents(after).unwrap();
+    assert!(String::from_utf8(documents["board.json"].clone()).unwrap().contains("pcbcraft-board/14"));
+    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
+}
+
 /// A physical cut keeps the original components, circuit and accepted package state, and same-
 /// project paste reuses those identities while allocating fresh physical placement IDs.
 #[test]

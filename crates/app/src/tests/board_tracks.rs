@@ -655,8 +655,8 @@ fn measure_reports_the_distance_between_snapped_points() {
     }
 }
 
-/// A ruler owns canvas input without changing an existing mixed selection. Delete, Cut and the
-/// shared delete action cannot mutate its footprints or copper until measurement is left.
+/// A ruler owns canvas input without changing an existing mixed selection. Delete, Cut, Flip and
+/// the shared delete action cannot mutate its footprints or copper until measurement is left.
 #[test]
 fn measure_preserves_mixed_selection_against_delete_and_cut() {
     let mut h = routable();
@@ -670,6 +670,8 @@ fn measure_preserves_mixed_selection_against_delete_and_cut() {
     h.key_press(Key::Delete);
     h.run();
     h.event(egui::Event::Cut);
+    h.run();
+    h.key_press(Key::F);
     h.run();
     h.state_mut().delete_board_items();
     h.run();
