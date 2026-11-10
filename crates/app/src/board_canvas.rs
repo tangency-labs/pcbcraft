@@ -8,6 +8,7 @@ use egui::{PointerButton, Sense, Ui};
 use pcbcraft_chrome::board;
 use pcbcraft_engine::{
     board::{
+        rotate as rotate_board,
         setup::{LayerPurpose, Side},
         view::{BoardView, FootprintView},
     },
@@ -544,19 +545,23 @@ fn preview(footprint: &mut FootprintView<'_>, draft: &Draft) {
     footprint.bottom = draft.bottom;
 }
 
-/// Match the footprint's disposable move/quarter-turn/flip preview without changing pad
-/// identity: undo the current rotation, mirror local X when the side changes, then apply the
-/// draft's rotation at its position. Same-side moves reduce to one combined rotation.
+/// Match the footprint's disposable move/rotation/flip preview without changing pad identity.
+/// Unchanged orientation keeps resolved offsets exact; pose changes use whole-degree geometry.
 fn preview_point(point: Point, origin: Point, rotation: u16, bottom: bool, draft: &Draft) -> Point {
     let (x, y) = repose(point.x_nm - origin.x_nm, point.y_nm - origin.y_nm, (rotation, bottom), (draft.rotation, draft.bottom));
     Point { x_nm: draft.position.x_nm.saturating_add(x), y_nm: draft.position.y_nm.saturating_add(y) }
 }
 
-/// Move an offset from one quarter-turn pose (rotation, bottom) to another about the origin.
+/// Move a resolved offset between validated whole-degree poses (rotation, bottom). Equal poses
+/// preserve exact offsets. Same-side changes rotate by the angle difference; a side change
+/// reflects X then rotates by the angle sum, applying the engine's rounding only once.
 fn repose(x: i64, y: i64, from: (u16, bool), to: (u16, bool)) -> (i64, i64) {
-    let (x, y) = rotate(x, y, ((360 - from.0 % 360) % 360 / 90) as u8);
-    let x = if from.1 != to.1 { -x } else { x };
-    rotate(x, y, (to.0 % 360 / 90) as u8)
+    if from == to {
+        return (x, y);
+    }
+    let mirrored = from.1 != to.1;
+    let degrees = if mirrored { (from.0 + to.0) % 360 } else { (to.0 + 360 - from.0) % 360 };
+    rotate_board(if mirrored { -x } else { x }, y, degrees)
 }
 
 /// Project physical geometry without deriving dimensions or copper membership from UI state.
@@ -780,6 +785,32 @@ mod clipboard_geometry_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whole-degree source poses move without changing their resolved offsets; side changes and
+    /// rotations agree with canonical engine geometry within its nanometer rounding precision.
+    #[test]
+    fn repose_preserves_whole_degree_poses() {
+        let local = (3_345_678, 1_234_567);
+        for from_angle in [0, 17, 45, 127, 359] {
+            for from_bottom in [false, true] {
+                let point = rotate_board(if from_bottom { -local.0 } else { local.0 }, local.1, from_angle);
+                let from = (from_angle, from_bottom);
+                assert_eq!(repose(point.0, point.1, from, from), point, "unchanged pose {from:?}");
+                for to_angle in [from_angle, (from_angle + 90) % 360, (from_angle + 37) % 360] {
+                    for to_bottom in [false, true] {
+                        let to = (to_angle, to_bottom);
+                        let expected = rotate_board(if to_bottom { -local.0 } else { local.0 }, local.1, to_angle);
+                        let actual = repose(point.0, point.1, from, to);
+                        assert!(
+                            (actual.0 - expected.0).abs() <= 1 && (actual.1 - expected.1).abs() <= 1,
+                            "{from:?} -> {to:?}: {actual:?} vs {expected:?}"
+                        );
+                    }
+                }
+                assert_eq!(repose(point.0, point.1, from, ((from_angle + 90) % 360, from_bottom)), rotate(point.0, point.1, 1));
+            }
+        }
+    }
 
     /// A side change mirrors local X about the origin; same-side moves match one combined turn.
     #[test]

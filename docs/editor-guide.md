@@ -606,7 +606,7 @@ zones, hole spacing, silkscreen and solder mask are not checked, so a clean resu
 not a manufacturing sign-off.
 
 **Layout → Design → Outputs** saves one `<project>-fabrication.zip` with Gerber X2
-files for each copper layer, the top and bottom solder mask and paste, the top silkscreen
+files for each copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
 through-hole pads). Coordinates are in millimeters with Y up, as seen from the top. Mask
 and paste openings match the pads exactly, leaving any expansion to the fabricator, and

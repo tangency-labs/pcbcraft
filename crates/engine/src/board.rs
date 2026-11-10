@@ -210,8 +210,10 @@ impl Footprint {
     }
 }
 
-/// Rotate a bounded local footprint offset, with exact quarter turns and nearest-nanometer output.
-pub(crate) fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
+/// Rotate a bounded local footprint offset counterclockwise in board coordinates (positive Y
+/// points down). Whole-degree angles use nearest-nanometer output; quarter turns are exact.
+/// Shared by resolved footprint geometry and disposable editor previews.
+pub fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
     if degrees.is_multiple_of(90) {
         return crate::schematic::rotate(x, y, (degrees / 90) as u8);
     }
