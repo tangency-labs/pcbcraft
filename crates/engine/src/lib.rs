@@ -60,6 +60,9 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    BoardSelection,
+    SchematicPasteTargets,
+    ClipboardLayers,
     ClipboardText,
     ReferencePolicy,
     CreateBoard,
@@ -128,6 +131,17 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::BoardSelection => json!({"type":"object","properties":{
+                "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
+                "drawings":{"type":"array","maxItems":512,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
+                "tracks":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
+                "vias":{"type":"array","maxItems":2048,"uniqueItems":true,"items":ParamKind::DrawingId.schema()}
+            },"additionalProperties":false}),
+            Self::SchematicPasteTargets => {
+                json!({"type":"object","maxProperties":sheets::MAX_SHEETS,"additionalProperties":{"type":"object","properties":{"sheet":ParamKind::SheetId.schema(),"at":ParamKind::Point.schema()},"required":["sheet","at"],"additionalProperties":false}})
+            }
+            Self::ClipboardLayers => json!({"type":"object","maxProperties":128,"additionalProperties":ParamKind::DrawingId.schema()}),
+
             Self::ClipboardText => json!({"type":"string","maxLength":clipboard::MAX_BYTES}),
             Self::ReferencePolicy => json!({"type":"string","enum":["renumber","preserve"]}),
             Self::CreateBoard => json!({"type":"boolean"}),
@@ -225,6 +239,20 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::BoardSelection if board::clipboard::BoardSelection::parse(value).is_some() => Ok(()),
+            Self::SchematicPasteTargets
+                if serde_json::from_value::<BTreeMap<uuid::Uuid, board::clipboard::SchematicDestination>>(value.clone())
+                    .is_ok_and(|m| m.len() <= sheets::MAX_SHEETS) =>
+            {
+                Ok(())
+            }
+            Self::ClipboardLayers if serde_json::from_value::<BTreeMap<uuid::Uuid, uuid::Uuid>>(value.clone()).is_ok_and(|m| m.len() <= 128) => {
+                Ok(())
+            }
+            Self::BoardSelection => Err("must be bounded unique board object ID lists"),
+            Self::SchematicPasteTargets => Err("must map source sheet UUIDs to explicit destination sheets and anchors"),
+            Self::ClipboardLayers => Err("must map source layer UUIDs to destination layer UUIDs"),
+
             Self::ClipboardText if value.as_str().is_some_and(|s| s.len() <= clipboard::MAX_BYTES) => Ok(()),
             Self::ReferencePolicy if matches!(value.as_str(), Some("renumber" | "preserve")) => Ok(()),
             Self::ClipboardText => Err("must be UTF-8 text of at most 8 MiB"),
@@ -562,6 +590,67 @@ const ANCHOR_X: Param = Param { required: true, name: "x_nm", summary: "Anchor X
 const ANCHOR_Y: Param = Param { required: true, name: "y_nm", summary: "Anchor Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 const DIRECTION: Param = Param { required: true, name: "direction", summary: "Hierarchical interface direction", kind: ParamKind::Direction };
 const CATALOG: &[Command] = &[
+    Command {
+        id: board::clipboard::COPY,
+        title: "Copy PCB items",
+        summary: "Export selected physical objects and their pinned logical/package context without editing the project.",
+        params: &[BOARD, EXPECTED_REVISION, Param { name: "items", required: true, kind: ParamKind::BoardSelection, summary: "Physical object IDs" }],
+    },
+    Command {
+        id: board::clipboard::CUT,
+        title: "Cut PCB items",
+        summary: "Copy and remove physical objects in one edit; logical components and package history remain.",
+        params: &[BOARD, EXPECTED_REVISION, Param { name: "items", required: true, kind: ParamKind::BoardSelection, summary: "Physical object IDs" }],
+    },
+    Command {
+        id: board::clipboard::DELETE,
+        title: "Delete PCB items",
+        summary: "Remove a mixed physical selection in one undo step without deleting logical components.",
+        params: &[BOARD, EXPECTED_REVISION, Param { name: "items", required: true, kind: ParamKind::BoardSelection, summary: "Physical object IDs" }],
+    },
+    Command {
+        id: board::clipboard::PASTE,
+        title: "Paste PCB items",
+        summary: "Paste physical geometry with explicit component reuse or new counterparts on chosen schematic sheets; one atomic undo step.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            SYMBOL_X,
+            SYMBOL_Y,
+            NET_ROTATION,
+            Param { name: "text", required: true, kind: ParamKind::ClipboardText, summary: "Native board clipboard/1 UTF-8 envelope" },
+            Param {
+                name: "reuse_components",
+                required: false,
+                kind: ParamKind::CreateBoard,
+                summary: "Reuse compatible unplaced source components on their original project/board instead of duplicating",
+            },
+            Param {
+                name: "schematic_targets",
+                required: false,
+                kind: ParamKind::SchematicPasteTargets,
+                summary: "Required for duplication: source sheet UUID to destination sheet/anchor",
+            },
+            Param {
+                name: "layers",
+                required: false,
+                kind: ParamKind::ClipboardLayers,
+                summary: "Explicit compatible source/destination layer UUID mapping; ambiguous roles require a choice",
+            },
+            Param {
+                name: "references",
+                required: false,
+                kind: ParamKind::ReferencePolicy,
+                summary: "renumber (default) or preserve; only for new counterparts",
+            },
+            Param {
+                name: "net_name_suffix",
+                required: false,
+                kind: ParamKind::Text,
+                summary: "Suffix for new counterparts' named nets; unavailable with reuse",
+            },
+        ],
+    },
     Command {
         id: clipboard::COPY,
         title: "Copy",
@@ -1774,6 +1863,10 @@ impl Session {
             | clipboard::COPY
             | clipboard::CUT
             | clipboard::PASTE
+            | board::clipboard::COPY
+            | board::clipboard::CUT
+            | board::clipboard::PASTE
+            | board::clipboard::DELETE
             | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
             SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
@@ -1846,6 +1939,13 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Failed commands leave the project intact.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        if matches!(id, board::clipboard::COPY | board::clipboard::CUT) {
+            let text = self.copy_board(params, id == board::clipboard::CUT)?;
+            if id == board::clipboard::CUT {
+                self.apply(id, params)?;
+            }
+            return Ok(json!({"clipboard":text,"revision":self.revision}));
+        }
         if matches!(id, clipboard::COPY | clipboard::CUT) {
             let text = self.copy_schematic(params)?;
             if id == clipboard::CUT {
@@ -2037,6 +2137,12 @@ impl Session {
             BREAK_WIRE => self.break_wire(params)?,
             DELETE_WIRE_SEGMENT => self.delete_wire_segment(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
+            board::clipboard::COPY => {
+                self.copy_board(params, false)?;
+            }
+            board::clipboard::CUT => self.delete_board_items(params, true)?,
+            board::clipboard::DELETE => self.delete_board_items(params, false)?,
+            board::clipboard::PASTE => self.paste_board(params)?,
             clipboard::COPY => {
                 self.copy_schematic(params)?;
             }

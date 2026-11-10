@@ -987,3 +987,44 @@ fn design_check_report_survives_suppressed_project_inspection() {
     assert_eq!(result["design_check"]["rules"]["clearance_nm"], 250_000);
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
+
+/// Board Copy/Cut return native payloads with inspect:false, and a same-project cut can relocate
+/// its existing logical component through the ordinary shared paste transaction.
+#[test]
+fn pcb_clipboard_payloads_and_component_reuse_share_the_dispatcher() {
+    use pcbcraft_engine::board::clipboard::{BoardFragment, COPY, CUT, PASTE};
+    let mut server = server();
+    let initial = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true}})));
+    let symbol =
+        body(&call(&mut server, "execute", json!({"command":PLACE_RESISTOR,"params":{"x_nm":0,"y_nm":0,"expected_revision":initial["revision"]}})));
+    let symbol_id = symbol["project"]["schematic"]["symbols"][0]["id"].clone();
+    let placed = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::PLACE_FOOTPRINT,"params":{"symbol":symbol_id,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":symbol["revision"]}}),
+    ));
+    let footprint = placed["project"]["board"]["footprints"][0]["id"].clone();
+    let items = json!({"footprints":[footprint]});
+    for command in [COPY, CUT] {
+        let copied = body(&call(
+            &mut server,
+            "execute",
+            json!({"command":command,"inspect":false,"params":{"items":items,"expected_revision":placed["revision"]}}),
+        ));
+        assert!(BoardFragment::from_text(copied["clipboard"].as_str().unwrap()).is_ok());
+        if command == COPY {
+            assert_eq!(copied["revision"], placed["revision"]);
+        } else {
+            let pasted = call(
+                &mut server,
+                "execute",
+                json!({"command":PASTE,"inspect":false,"params":{"text":copied["clipboard"],"reuse_components":true,"x_nm":7_000_000,"y_nm":3_000_000,"expected_revision":copied["revision"]}}),
+            );
+            assert_ne!(pasted["isError"], true, "{pasted}");
+        }
+    }
+    let state = body(&call(&mut server, "inspect_project", json!({})));
+    assert_eq!(state["project"]["schematic"]["symbols"].as_array().unwrap().len(), 1);
+    assert_eq!(state["project"]["board"]["footprints"].as_array().unwrap().len(), 1);
+    assert_eq!(state["project"]["board"]["footprints"][0]["x_nm"], 7_000_000);
+}

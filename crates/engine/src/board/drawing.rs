@@ -106,7 +106,7 @@ impl BoardView<'_> {
 impl Drawing {
     /// Bound path size and coordinates, rejecting collapsed segments and duplicated closing
     /// vertices. Open paths are valid editing state; closure never depends on a screen tolerance.
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.id.is_nil()
             || self.layer.is_nil()
             || !((if self.closed { 3 } else { 2 })..=MAX_POINTS).contains(&self.points.len())

@@ -34,7 +34,7 @@ struct Envelope {
 /// An immutable validated fragment, independent of the source session, view and library catalog.
 #[derive(Clone, Debug)]
 pub struct Fragment {
-    project: Arc<Project>,
+    pub(crate) project: Arc<Project>,
     anchor: Point,
 }
 
@@ -55,14 +55,14 @@ fn invalid(message: impl ToString) -> CommandError {
 }
 
 /// Allocate only inside a disposable candidate. The session reserves the high water on commit.
-fn allocate(cursor: &mut u64) -> Result<u64, CommandError> {
+pub(crate) fn allocate(cursor: &mut u64) -> Result<u64, CommandError> {
     let id = *cursor;
     *cursor = cursor.checked_add(1).filter(|next| *next <= crate::MAX_OBJECT_ID).ok_or_else(|| invalid("clipboard exhausts object IDs"))?;
     Ok(id)
 }
 
 /// Translate/rotate using checked arithmetic; pasted geometry cannot escape native coordinate bounds.
-fn transformed(point: Point, anchor: Point, at: Point, turns: u8) -> Result<Point, CommandError> {
+pub(crate) fn transformed(point: Point, anchor: Point, at: Point, turns: u8) -> Result<Point, CommandError> {
     let (x, y) = crate::schematic::rotate(point.x_nm - anchor.x_nm, point.y_nm - anchor.y_nm, turns % 4);
     let point = Point {
         x_nm: at.x_nm.checked_add(x).ok_or_else(|| invalid("paste exceeds coordinate bounds"))?,
@@ -424,7 +424,7 @@ impl Session {
 }
 
 /// Reuse production validation, including pinned definitions, field text and cross-document links.
-fn validate_candidate(project: &Project) -> Result<(), CommandError> {
+pub(crate) fn validate_candidate(project: &Project) -> Result<(), CommandError> {
     let documents = crate::persistence::encode_documents(Arc::new(project.clone())).map_err(invalid)?;
     crate::persistence::decode_documents(&documents).map_err(invalid)?;
     Ok(())

@@ -77,6 +77,8 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::clipboard::COPY
                         | pcbcraft_engine::clipboard::CUT
+                        | pcbcraft_engine::board::clipboard::COPY
+                        | pcbcraft_engine::board::clipboard::CUT
                 )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(|e| e.to_string())

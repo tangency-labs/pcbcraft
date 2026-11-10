@@ -874,3 +874,12 @@ The existing MIT/Apache-2.0 eframe 0.36.2 patch additionally reports empty nativ
 and browser clipboard reads as completed paste events. The change and upstream
 revision are recorded in `vendor/eframe/PATCH.md`; original upstream notices
 remain intact. No new dependency or clipboard implementation is introduced.
+
+## Portable PCB clipboard commands
+
+The board fragment contract, typed layer and schematic destination mapping,
+component relocation/duplication, cached preview and mixed physical transactions
+are original PCBcraft work using the existing native codecs, board update and
+copper contact model. Command-built tests use native bundled definitions. No
+external implementation, fixture, asset, dependency or saved-format change was
+introduced; the separate EDA importer/source boundary remains unchanged.

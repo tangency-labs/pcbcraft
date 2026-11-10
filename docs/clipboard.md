@@ -92,3 +92,54 @@ display's clipboard:
 cargo test --locked -p pcbcraft-app \
   clipboard::native_tests::native_clipboard_between_processes -- --ignored --exact --nocapture
 ```
+
+## PCB command contract
+
+The engine and MCP also support `pcb.copy`, `pcb.cut`, `pcb.paste` and
+`pcb.delete_items`. Canvas controls are added separately. Copy/Cut/Delete take
+an explicit `board`, `expected_revision`, and `items`, whose optional arrays are
+`footprints` (canonical placement IDs), `drawings`, `tracks` and `vias` (UUIDs).
+Copy/Cut return portable `clipboard` text even with `inspect:false`; MCP does not
+operate the system clipboard. Mixed cuts and deletes create one undo step.
+Removing physical objects retains their schematic counterparts.
+
+A `kind: "board"` envelope carries exact placed native packages and pad maps,
+physical geometry, used layer identities/roles, and one native schematic
+fragment per source sheet. It includes wiring internal to selected components,
+connected named-net boundaries and related excluded native power annotations;
+it does not flatten sheets or carry unrelated components. Source and destination
+projects need no shared library installation. The same 8 MiB bound applies.
+
+Ordinary PCB paste duplicates logical and physical objects together. It takes
+`text`, `x_nm`, `y_nm`, `board`, `expected_revision`, and a `schematic_targets`
+map keyed by every source sheet UUID. Each value explicitly supplies a destination
+`sheet` UUID and `at: {x_nm, y_nm}` anchor. Schematic placement is independent of
+board coordinates. `rotation`, `references` and `net_name_suffix` follow the
+schematic policies, with rotation applying only to physical geometry. Copied
+power annotations stay excluded from the board. A destination with an accepted
+PCB baseline must have no unrelated pending update; paste accepts only its own
+new component/package additions. Legacy two-pad markers require native package
+assignment before duplication into an accepted board.
+
+`reuse_components: true` instead places compatible, currently unplaced original
+components on their original project and board, retaining their references and
+current schematic wiring. This supports Cut followed by Paste without creating
+extra symbols. It refuses occupied, retired or changed-package components,
+foreign project/board identities, schematic target remapping and net suffixes.
+A clipboard's Cut flag suggests relocation to a host; it does not grant mutation
+authority or bypass validation.
+
+Optional `layers` maps source layer UUIDs to destination layer UUIDs. Defaults
+use compatible exact identities or a unique purpose/side match; ambiguous inner
+layers require a choice. Explicit mappings preserve purpose and may deliberately
+change copper side. Names never determine identity. Board setup is not copied,
+and through vias require an existing compatible setup. Geometry-only paste
+creates no logical counterparts or package acceptance changes.
+
+All pasted physical objects get fresh placement/graphic/copper identities.
+Copper shorts are checked using the existing track/pad contact model before
+publication, including newly pasted pads touching existing copper. This is the
+current routing approximation, not a clearance or fabrication sign-off. A failed
+mapping, scope, package, bounds, reference or copper check leaves the destination
+and history unchanged. Preview snapshots cache logical work but confer no commit
+authority; the command validates the complete candidate again.
