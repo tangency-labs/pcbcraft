@@ -627,10 +627,11 @@ umask. The archive is flushed before replacement and its directory is flushed
 afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
 
-Press **Backtick** over a pad, track or via to highlight its net. Pads and copper
-assigned to that net are outlined in the highlight color, and the status bar names
-the net. Each copper island takes the net of its first netted pad; floating copper
-has none. If an island joins pads on different nets, including after a footprint
+Press **Backtick** over a visible pad, track or via to highlight its net. Visible
+pads and tracks assigned to that net, along with its vias, are outlined in the
+highlight color, and the status bar names the net. Each copper island takes the
+net of its first netted pad; floating copper has none. If an island joins pads on
+different nets, including after a footprint
 move, its copper highlights only with that first net, while the pads retain their
 own nets. Press Backtick over empty space to clear it. Highlighting is per view
 and edits nothing.

@@ -10,7 +10,7 @@ use pcbcraft_engine::{
     board::{
         rotate as rotate_board,
         setup::{LayerPurpose, Side},
-        view::{BoardView, FootprintView},
+        view::{BoardView, CopperLayers, FootprintView, PadView},
     },
     schematic::{Point, rotate},
 };
@@ -369,7 +369,7 @@ pub(super) fn show(
             state.highlight_net = response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &nets));
         }
         if let Some(net) = &state.highlight_net {
-            paint_net(&p, camera, rect, project, net, &nets);
+            paint_net(&p, camera, rect, project, net, &nets, &state.hidden_layers);
         }
     }
     for (at, focused) in markers {
@@ -537,7 +537,19 @@ fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egu
         .collect()
 }
 
-/// The net under a screen point: a pad's net, else the cached net of a track or via there.
+/// Whether a pad has visible copper; unconfigured bindings remain visible, while legacy markers
+/// follow the board's overall copper visibility just as they do in normal footprint rendering.
+fn pad_visible(pad: &PadView, view: BoardView<'_>, hidden: &BTreeSet<String>) -> bool {
+    match &pad.copper_layers {
+        Some(CopperLayers::Resolved { layers, .. }) => layers.iter().any(|layer| !hidden.contains(&layer.to_string())),
+        Some(CopperLayers::Unconfigured { .. }) => true,
+        None => view
+            .setup()
+            .is_none_or(|setup| setup.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()))),
+    }
+}
+
+/// The net under a screen point: a visible pad's net, else the cached net of a track or via there.
 fn net_under(
     pointer: egui::Pos2,
     camera: &Camera,
@@ -548,21 +560,32 @@ fn net_under(
 ) -> Option<String> {
     view.footprints()
         .flat_map(|footprint| footprint.pads)
+        .filter(|pad| pad_visible(pad, view, hidden))
         .find(|pad| pad.copper.is_some_and(|land| egui::Rect::from_points(&land.map(|corner| camera.screen(corner, rect))).contains(pointer)))
         .and_then(|pad| pad.net)
         .or_else(|| crate::board_tracks::copper_at(pointer, camera, rect, view, hidden).and_then(|id| nets.get(&id).cloned()))
 }
 
-/// Outline every pad, track and via on `net`, reusing the view's cached copper assignments.
-fn paint_net(p: &egui::Painter, camera: &Camera, rect: egui::Rect, view: BoardView<'_>, net: &str, nets: &BTreeMap<uuid::Uuid, String>) {
+/// Outline visible pads and tracks assigned to `net`, reusing cached copper assignments.
+/// Vias retain normal rendering's layer-independent visibility policy.
+fn paint_net(
+    p: &egui::Painter,
+    camera: &Camera,
+    rect: egui::Rect,
+    view: BoardView<'_>,
+    net: &str,
+    nets: &BTreeMap<uuid::Uuid, String>,
+    hidden: &BTreeSet<String>,
+) {
     let width = |nm: i64| (camera.screen(Point { x_nm: nm, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length();
-    for pad in view.footprints().flat_map(|footprint| footprint.pads).filter(|pad| pad.net.as_deref() == Some(net)) {
+    for pad in view.footprints().flat_map(|footprint| footprint.pads).filter(|pad| pad.net.as_deref() == Some(net) && pad_visible(pad, view, hidden))
+    {
         match pad.copper {
             Some(land) => board::net_highlight(p, &land.map(|corner| camera.screen(corner, rect)), true, 2.),
             None => board::net_highlight(p, &[camera.screen(pad.center, rect)], false, 6.),
         }
     }
-    for track in view.tracks().iter().filter(|track| nets.get(&track.id).is_some_and(|n| n == net)) {
+    for track in view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string()) && nets.get(&track.id).is_some_and(|n| n == net)) {
         board::net_highlight(p, &[camera.screen(track.start, rect), camera.screen(track.end, rect)], false, width(track.width_nm) * 0.4);
     }
     for via in view.vias().iter().filter(|via| nets.get(&via.id).is_some_and(|n| n == net)) {
