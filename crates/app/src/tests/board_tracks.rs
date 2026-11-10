@@ -512,7 +512,8 @@ fn mixed_via_sizes_are_read_only_in_properties() {
 }
 
 /// Design › Outputs explains a missing outline, then saves one deterministic archive of Gerber
-/// and drill files without editing the project.
+/// and drill files without editing the project. A subsequent cancelled export clears the old
+/// success notice without replacing it with another message.
 #[test]
 fn outputs_export_one_archive_of_fabrication_files() {
     let mut h = routable();
@@ -540,6 +541,16 @@ fn outputs_export_one_archive_of_fabrication_files() {
     h.run();
     assert!(!h.state().fabrication_exports.busy());
     assert!(h.query_by_label("Saved fabrication outputs").is_some(), "the board status bar shows file results");
+    click(&mut h, "Generate fabrication outputs");
+    assert!(h.state().fabrication_exports.busy());
+    assert!(h.state().file_notice.is_none(), "a new attempt clears the previous success notice");
+    assert!(h.query_by_label("Saved fabrication outputs").is_none());
+    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Cancelled)).unwrap();
+    h.run();
+    assert!(!h.state().fabrication_exports.busy());
+    assert!(h.state().file_notice.is_none() && h.state().message.is_none(), "cancellation is quiet");
+    assert!(h.query_by_label("Saved fabrication outputs").is_none());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "cancelling edits nothing");
 }
 
 /// Right-click cancels a copper move without editing, and the ribbon's Move starts one when only

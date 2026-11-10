@@ -420,9 +420,10 @@ impl PcbApp {
 
     /// Generate the focused board's Gerber and drill files as one archive and save it off the
     /// editor loop. A missing setup or outline, or an export already running, is reported in the
-    /// status bar; nothing in the project changes.
+    /// status bar. A targeted attempt clears the previous file notice; nothing in the project changes.
     pub(super) fn export_fabrication(&mut self, ctx: &egui::Context) {
         let Some(target) = self.views.active.board.target else { return };
+        self.file_notice = None;
         let result = self
             .session
             .export_fabrication(&serde_json::json!({"board": target.board}))
