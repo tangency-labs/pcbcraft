@@ -170,6 +170,10 @@ defaults. Kinds are `clearance`, `track_width`, `annular_ring`, `unconnected`,
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`:
 Gerber X2 copper per layer, mask and paste top and bottom, top silkscreen and the outline,
 and one Excellon plated drill file. It needs a board setup and a closed Board Outline.
+File names are deterministic and unique after portable-name sanitization,
+including case-insensitive collisions with fixed-purpose output names. One
+`execute` request generates the file contents once; `apply` still validates
+exportability without changing the project or revision.
 
 `pcb.add_via` places one standalone through via from `at`, `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad

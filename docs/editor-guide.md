@@ -607,6 +607,14 @@ vias are tented. It needs a board setup and a closed Board Outline, says so othe
 and never edits the project; the same board always produces the same archive. Run DRC
 first: outputs do not check the design.
 
+Copper filenames receive numeric suffixes when sanitized names collide with
+another output, including names that differ only in case. Fixed mask, paste,
+silkscreen and outline filenames retain their names. On Unix, replacement saves
+preserve the existing file's permission bits and new archives follow the process
+umask. The archive is flushed before replacement and its directory is flushed
+afterward on Unix. If that last flush fails, the error states that the complete
+archive was published but its directory sync failed.
+
 To stitch layers or start a route from a via, choose **Layout → Place → Via** or press
 **Ctrl+Shift+X** (macOS: **Command+Shift+X**). Each click places one through via with the current pad and drill,
 snapping to a nearby pad center or track end on any copper layer, otherwise to the grid;

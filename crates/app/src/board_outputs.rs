@@ -1,12 +1,10 @@
 //! Fabrication output export: one archive of Gerber and drill files, saved off the editor loop.
 //!
-//! The archive bytes are built from the current snapshot on the UI thread, which is quick and
-//! deterministic; only the save dialog and filesystem write run on a worker. One export runs at
+//! The archive bytes are built deterministically from the current snapshot on the UI thread;
+//! only the save dialog and filesystem write run on a worker. One export runs at
 //! a time. Dropping the application never joins the worker, and a worker that stops reports a
 //! disconnect instead of leaving the slot busy forever.
-#[cfg(not(test))]
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 /// How an export finished. Tests capture the archive instead of saving, and browser downloads
 /// cannot be cancelled, so those builds never construct every variant.
@@ -24,6 +22,8 @@ pub(crate) struct Exports {
     /// Tests capture the archive instead of opening a save dialog.
     #[cfg(test)]
     pub(super) captured: Option<(String, Vec<u8>)>,
+    #[cfg(test)]
+    completion: Option<mpsc::SyncSender<Result<Outcome, String>>>,
 }
 
 impl Exports {
@@ -49,15 +49,15 @@ impl Exports {
         if self.busy() {
             return Err("Finish the current fabrication export first.".into());
         }
+        let (send, receive) = mpsc::sync_channel(1);
         #[cfg(test)]
         {
             let _ = ctx;
             self.captured = Some((name, bytes));
-            Ok(())
+            self.completion = Some(send);
         }
         #[cfg(not(test))]
         {
-            let (send, receive) = mpsc::sync_channel(1);
             let ctx = ctx.clone();
             #[cfg(not(target_arch = "wasm32"))]
             std::thread::Builder::new()
@@ -72,9 +72,16 @@ impl Exports {
                 let _ = send.send(download(&bytes, &name).map(|_| Outcome::Saved).map_err(|e| format!("Download failed: {e:?}")));
                 ctx.request_repaint();
             }
-            self.pending = Some(receive);
-            Ok(())
         }
+        self.pending = Some(receive);
+        Ok(())
+    }
+
+    /// Complete a captured test export through the same channel the native save worker uses.
+    /// Refuses if no captured request owns a completion sender.
+    #[cfg(test)]
+    pub(super) fn complete_captured(&mut self, result: Result<Outcome, String>) -> Result<(), String> {
+        self.completion.take().ok_or("No captured export is pending.")?.send(result).map_err(|error| error.to_string())
     }
 }
 
@@ -82,16 +89,69 @@ impl Exports {
 /// destination folder replaces the target only after it is written and synced.
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
 fn native(name: &str, bytes: &[u8]) -> Result<Outcome, String> {
-    use std::io::Write;
     let Some(path) = rfd::FileDialog::new().set_title("Save fabrication outputs").set_file_name(name).add_filter("Zip archive", &["zip"]).save_file()
     else {
         return Ok(Outcome::Cancelled);
     };
-    let parent = path.parent().ok_or("Choose a destination folder.")?;
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
-    file.write_all(bytes).and_then(|_| file.as_file().sync_all()).map_err(|e| e.to_string())?;
-    file.persist(&path).map_err(|e| e.error.to_string())?;
+    publish_archive(&path, bytes)?;
     Ok(Outcome::Saved)
+}
+
+/// Publish complete bytes with ordinary umask-filtered creation permissions on Unix, retaining
+/// an existing file's permissions on replacement. Sync failures after rename report that the
+/// new archive is already present but its directory entry's durability is unconfirmed.
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_archive(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    publish_archive_with_sync(path, bytes, sync_directory)
+}
+
+/// Stage, flush and rename before invoking the directory-sync boundary. Any earlier failure
+/// drops the staging file and leaves the destination intact; a later sync failure is propagated.
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_archive_with_sync(path: &std::path::Path, bytes: &[u8], sync: impl FnOnce(&std::path::Path) -> std::io::Result<()>) -> Result<(), String> {
+    use std::{fs, io::Write};
+    let permissions = match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Some(metadata.permissions()),
+        Ok(_) => return Err("The archive destination is not a regular file.".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.to_string()),
+    };
+    let parent = path.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::PermissionsExt;
+        if permissions.is_some() {
+            // Do not expose a private overwritten file through a wider staging mode.
+            tempfile::NamedTempFile::new_in(parent)
+        } else {
+            tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o666)).tempfile_in(parent)
+        }
+    }
+    .map_err(|error| error.to_string())?;
+    #[cfg(not(unix))]
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
+    file.write_all(bytes).map_err(|error| error.to_string())?;
+    if let Some(permissions) = permissions {
+        file.as_file().set_permissions(permissions).map_err(|error| error.to_string())?;
+    }
+    file.as_file().sync_all().map_err(|error| error.to_string())?;
+    file.persist(path).map_err(|error| error.error.to_string())?;
+    sync(parent).map_err(|error| format!("Archive published, but syncing its directory failed: {error}"))
+}
+
+/// Flush the rename's directory entry on Unix. Other platforms retain their existing native
+/// rename behavior; this helper does not claim a portable power-loss durability guarantee.
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_directory(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(path)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 #[cfg(all(target_arch = "wasm32", not(test)))]
@@ -111,3 +171,6 @@ pub(super) fn archive_name(project: &str) -> String {
     let base = if cleaned.trim_matches('_').is_empty() { "board".to_owned() } else { cleaned };
     format!("{base}-fabrication.zip")
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;

@@ -535,8 +535,10 @@ fn outputs_export_one_archive_of_fabrication_files() {
     let outputs = h.state().session.export_fabrication(&json!({})).unwrap();
     assert!(outputs.iter().any(|o| o.name.ends_with("-Top.gbr")) && outputs.iter().any(|o| o.name.ends_with("-PTH.drl")));
     assert_eq!(bytes, pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
-    h.state_mut().file_notice = Some("Saved fabrication outputs".into());
+    assert!(h.state().fabrication_exports.busy());
+    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved)).unwrap();
     h.run();
+    assert!(!h.state().fabrication_exports.busy());
     assert!(h.query_by_label("Saved fabrication outputs").is_some(), "the board status bar shows file results");
 }
 

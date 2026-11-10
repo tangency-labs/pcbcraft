@@ -2019,6 +2019,7 @@ impl Session {
     /// Run a shared command. Document edits answer [`Self::inspect`]; library
     /// queries return catalog data and board-update preview returns its bounded
     /// review report. Queries never change authored project state or history.
+    /// Fabrication queries generate their file data once, after shared command validation.
     /// Failed commands leave the project intact.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
@@ -2042,15 +2043,16 @@ impl Session {
         if id.starts_with("library.") {
             return self.library_command(id, params);
         }
+        if id == EXPORT_FABRICATION {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
+        }
         self.apply(id, params)?;
         if id == PREVIEW_UPDATE {
             return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
         }
         if id == CHECK_DESIGN {
             return Ok(json!({"revision":self.revision,"design_check":self.check_design(params)?}));
-        }
-        if id == EXPORT_FABRICATION {
-            return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
         Ok(self.inspect())
     }
@@ -2071,9 +2073,9 @@ impl Session {
         self.apply_inner(id, params)
     }
 
-    /// Dispatch validated commands inside one atomic sheet transaction or the project session.
-    /// External symbol placement names missing revision/digest guards before catalog resolution.
-    fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+    /// Check catalog parameters, board identity and availability without generating query data
+    /// or changing the session. State-specific setup diagnostics remain with their handlers.
+    fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
         if id == ASSIGN_FOOTPRINT && params.get("board").is_some() {
@@ -2151,6 +2153,13 @@ impl Session {
                 _ => format!("`{id}` can't run now"),
             }));
         }
+        Ok(())
+    }
+
+    /// Dispatch validated commands inside one atomic sheet transaction or the project session.
+    /// External symbol placement names missing revision/digest guards before catalog resolution.
+    fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        self.validate_project_command(id, params)?;
         match id {
             "project.new" => self.change(Project {
                 name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },

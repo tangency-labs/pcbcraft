@@ -117,3 +117,89 @@ fn export_command_returns_files_without_editing() {
     let files = result["fabrication"]["files"].as_array().unwrap();
     assert!(files.iter().any(|file| file["name"].as_str().unwrap().ends_with("-PTH.drl")));
 }
+
+/// Sanitization and case folding cannot merge copper files with each other or the fixed outputs.
+/// Names and ZIP bytes remain stable, and fixed file functions keep their conventional names.
+#[test]
+fn colliding_layer_names_produce_unique_deterministic_archives() {
+    for second in ["F_Cu", "f_Cu"] {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({"create_board":true})).unwrap();
+        s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":6,"expected_revision":s.revision()})).unwrap();
+        let mut setup = s.inspect()["project"]["board"]["setup"].clone();
+        let names = ["F.Cu", second, "Mask_Top", "Paste_Top", "Silkscreen_Top", "Outline"];
+        let order: Vec<_> = view(&s)
+            .setup()
+            .unwrap()
+            .stackup()
+            .strata
+            .iter()
+            .filter_map(|stratum| if let Stratum::Copper { layer, .. } = stratum { Some(*layer) } else { None })
+            .collect();
+        assert_eq!(order.len(), names.len());
+        for (id, name) in order.into_iter().zip(names) {
+            let layer = setup["layers"].as_array_mut().unwrap().iter_mut().find(|layer| layer["id"] == json!(id)).unwrap();
+            layer["name"] = json!(name);
+        }
+        s.apply(crate::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":s.revision()})).unwrap();
+        outline(&mut s);
+        let outputs = view(&s).fabrication_outputs().unwrap();
+        let unique: BTreeSet<_> = outputs.iter().map(|output| output.name.to_ascii_lowercase()).collect();
+        assert_eq!(unique.len(), outputs.len());
+        assert!(outputs[0].name.ends_with("-F_Cu.gbr"));
+        assert!(outputs[1].name.ends_with("-2.gbr"));
+        assert!(outputs[2].name.ends_with("-Mask_Top-2.gbr"));
+        assert!(file(&outputs, "-Mask_Top.gbr").contains("%TF.FileFunction,Soldermask,Top*%"));
+        assert!(file(&outputs, "-Silkscreen_Top.gbr").contains("%TF.FileFunction,Legend,Top*%"));
+        assert!(file(&outputs, "-Outline.gbr").contains("%TF.FileFunction,Profile,NP*%"));
+        assert_eq!(outputs, view(&s).fabrication_outputs().unwrap());
+        assert_eq!(zip(&outputs).unwrap(), zip(&view(&s).fabrication_outputs().unwrap()).unwrap());
+    }
+}
+
+/// Footprint graphics are already transformed into board space; export only flips their Y axis.
+#[test]
+fn translated_rotated_silkscreen_preserves_board_coordinates() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let id = view(&s).footprints().next().unwrap().id;
+    s.apply(
+        crate::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":id,"x_nm":30_000_000,"y_nm":-25_000_000,"rotation":90,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let footprint = view(&s).footprints().find(|footprint| footprint.id == id).unwrap();
+    assert_eq!(footprint.position, Point { x_nm: 30_000_000, y_nm: -25_000_000 });
+    assert_eq!(footprint.rotation, 90);
+    let graphic = footprint.graphics.iter().find(|graphic| graphic.purpose == GraphicPurpose::Silkscreen && graphic.points.len() >= 2).unwrap();
+    let (from, to) = (graphic.points[0], graphic.points[1]);
+    let expected = format!("X{}Y{}D02*\nX{}Y{}D01*", from.x_nm, -from.y_nm, to.x_nm, -to.y_nm);
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    assert!(file(&outputs, "-Silkscreen_Top.gbr").contains(&expected), "{expected}");
+}
+
+/// Both command entry points reject the same invalid targets, parameters and unavailable boards,
+/// and refusals retain revision, snapshot and undo/redo availability.
+#[test]
+fn fabrication_apply_and_execute_share_validation() {
+    let mut s = Session::default();
+    for phase in 0..3 {
+        if phase == 1 {
+            s.apply("project.new", &json!({"create_board":true})).unwrap();
+        } else if phase == 2 {
+            s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
+        }
+        let before = s.inspect();
+        for params in [json!({}), json!({"board":true}), json!({"board":uuid::Uuid::from_u128(1)})] {
+            let applied = s.apply(EXPORT_FABRICATION, &params).unwrap_err().to_string();
+            assert_eq!(s.execute(EXPORT_FABRICATION, &params).unwrap_err().to_string(), applied);
+            assert_eq!(s.inspect(), before);
+        }
+    }
+    outline(&mut s);
+    let before = s.inspect();
+    assert_eq!(s.apply(EXPORT_FABRICATION, &json!({})).unwrap(), s.revision());
+    let exported = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
+    assert!(!exported["fabrication"]["files"].as_array().unwrap().is_empty());
+    assert_eq!(s.inspect(), before);
+}

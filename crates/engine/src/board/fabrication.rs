@@ -16,7 +16,11 @@ use super::{
 use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fmt::Write as _, io::Write as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+    io::Write as _,
+};
 
 /// Generate the board's fabrication files; returns them without editing anything.
 pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
@@ -166,9 +170,28 @@ fn file_part(text: &str) -> String {
     if cleaned.trim_matches('_').is_empty() { "board".into() } else { cleaned }
 }
 
+/// Allocate portable, case-insensitively unique names without changing file order or contents.
+/// Fixed-purpose files take precedence over the first `copper_count` layer-named files;
+/// collisions receive deterministic numeric suffixes after sanitization.
+fn unique_file_names(files: &mut [Output], copper_count: usize) {
+    let mut used = BTreeSet::new();
+    for index in (copper_count..files.len()).chain(0..copper_count) {
+        let original = &files[index].name;
+        let (stem, extension) = original.rsplit_once('.').unwrap_or((original, ""));
+        let mut name = original.clone();
+        let mut suffix = 2;
+        while !used.insert(name.to_ascii_lowercase()) {
+            name = format!("{stem}-{suffix}.{extension}");
+            suffix += 1;
+        }
+        files[index].name = name;
+    }
+}
+
 impl BoardView<'_> {
     /// Build every fabrication file for this board, in a fixed order. Requires a board setup
     /// with copper layers and a closed Board Outline; returns why when either is missing.
+    /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     pub fn fabrication_outputs(self) -> Result<Vec<Output>, String> {
         let setup = self.setup().ok_or("Initialize the board setup before generating fabrication outputs.")?;
         let copper: Vec<_> = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).collect();
@@ -219,6 +242,7 @@ impl BoardView<'_> {
             });
         }
 
+        let copper_count = files.len();
         let front = order.first().copied();
         let back = order.last().copied().filter(|_| order.len() > 1);
         for (side, label, layer) in [("Top", "Mask_Top", front), ("Bot", "Mask_Bottom", back)] {
@@ -259,6 +283,7 @@ impl BoardView<'_> {
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive") });
 
         files.push(Output { name: format!("{base}-PTH.drl"), contents: self.drill_file() });
+        unique_file_names(&mut files, copper_count);
         Ok(files)
     }
 

@@ -584,3 +584,8 @@ Same-project Cut/Paste can reuse the original unplaced components. Review the
 Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
+
+With a configured board and a closed Board Outline, **Layout → Design → Outputs**
+saves a fabrication ZIP without editing the design. Output names remain unique
+when layer names collide after sanitization; the [editor guide](editor-guide.md)
+describes the generated files and desktop save behavior.
