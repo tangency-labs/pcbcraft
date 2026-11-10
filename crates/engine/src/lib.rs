@@ -10,6 +10,7 @@ mod allocation_tests;
 pub mod authoring;
 pub mod board;
 pub mod clipboard;
+pub mod clipboard_text;
 pub mod hierarchy;
 pub mod library;
 pub mod library_graphics;
@@ -60,6 +61,8 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    ExternalText,
+    ClipboardUnits,
     BoardSelection,
     SchematicPasteTargets,
     ClipboardLayers,
@@ -131,6 +134,8 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::ExternalText => json!({"type":"string","maxLength":clipboard_text::MAX_TEXT_BYTES}),
+            Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
                 "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
                 "drawings":{"type":"array","maxItems":512,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
@@ -239,6 +244,10 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::ExternalText if value.as_str().is_some_and(|s| s.len() <= clipboard_text::MAX_TEXT_BYTES) => Ok(()),
+            Self::ClipboardUnits if serde_json::from_value::<clipboard_text::CoordinateUnits>(value.clone()).is_ok() => Ok(()),
+            Self::ExternalText => Err("must be UTF-8 text of at most 64 KiB"),
+            Self::ClipboardUnits => Err("must be mm or mil"),
             Self::BoardSelection if board::clipboard::BoardSelection::parse(value).is_some() => Ok(()),
             Self::SchematicPasteTargets
                 if serde_json::from_value::<BTreeMap<uuid::Uuid, board::clipboard::SchematicDestination>>(value.clone())
@@ -590,6 +599,45 @@ const ANCHOR_X: Param = Param { required: true, name: "x_nm", summary: "Anchor X
 const ANCHOR_Y: Param = Param { required: true, name: "y_nm", summary: "Anchor Y in nanometers, increasing down", kind: ParamKind::Coordinate };
 const DIRECTION: Param = Param { required: true, name: "direction", summary: "Hierarchical interface direction", kind: ParamKind::Direction };
 const CATALOG: &[Command] = &[
+    Command {
+        id: clipboard_text::LABELS,
+        title: "Prepare net-name text paste",
+        summary: "Convert 1–256 plain net-name lines into a portable fragment without editing the destination. Labels are electrical, with explicit scope and spacing.",
+        params: &[
+            EXPECTED_REVISION,
+            NET_STYLE,
+            Param { name: "text", required: true, kind: ParamKind::ExternalText, summary: "Plain net-name lines, one column" },
+            Param { name: "spacing_nm", required: true, kind: ParamKind::Coordinate, summary: "Positive vertical label spacing in nanometers" },
+            Param { name: "net_name_suffix", required: false, kind: ParamKind::Text, summary: "Suffix added to every prepared net name" },
+        ],
+    },
+    Command {
+        id: clipboard_text::OUTLINE,
+        title: "Prepare outline coordinate paste",
+        summary: "Convert a numeric CSV/TSV X/Y table into a portable Board Outline polyline, with explicit source units and optional Y inversion. Does not edit the destination or its setup.",
+        params: &[
+            EXPECTED_REVISION,
+            Param {
+                name: "text",
+                required: true,
+                kind: ParamKind::ExternalText,
+                summary: "Two-column numeric CSV/TSV, optional x/y or unit-qualified header",
+            },
+            Param {
+                name: "units",
+                required: true,
+                kind: ParamKind::ClipboardUnits,
+                summary: "Source mm or mil; must match any unit-qualified header",
+            },
+            Param {
+                name: "closed",
+                required: true,
+                kind: ParamKind::CreateBoard,
+                summary: "Close the outline; a repeated final point is normalized",
+            },
+            Param { name: "invert_y", required: false, kind: ParamKind::CreateBoard, summary: "Invert source Y coordinates before placement" },
+        ],
+    },
     Command {
         id: board::clipboard::COPY,
         title: "Copy PCB items",
@@ -1797,6 +1845,9 @@ impl Session {
     /// and deletion retains one sheet. Package assignment needs only a project; physical
     /// placement and setup still need a board. Unknown IDs are unavailable.
     pub fn available(&self, id: &str) -> bool {
+        if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
+            return true;
+        }
         if id == board::identity::CREATE_BOARD {
             return self.project.as_ref().is_some_and(|project| project.board_target().is_none());
         }
@@ -1939,6 +1990,10 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Failed commands leave the project intact.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE) {
+            let text = self.prepare_text_clipboard(id, params)?;
+            return Ok(json!({"clipboard":text,"revision":self.revision}));
+        }
         if matches!(id, board::clipboard::COPY | board::clipboard::CUT) {
             let text = self.copy_board(params, id == board::clipboard::CUT)?;
             if id == board::clipboard::CUT {
@@ -2137,6 +2192,9 @@ impl Session {
             BREAK_WIRE => self.break_wire(params)?,
             DELETE_WIRE_SEGMENT => self.delete_wire_segment(params)?,
             MOVE_SYMBOL => self.move_symbol(params)?,
+            clipboard_text::LABELS | clipboard_text::OUTLINE => {
+                self.prepare_text_clipboard(id, params)?;
+            }
             board::clipboard::COPY => {
                 self.copy_board(params, false)?;
             }

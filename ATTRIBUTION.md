@@ -892,3 +892,11 @@ contract, independent board renderer and existing Craft controls. Native
 regressions extend the existing two-process eframe clipboard harness; fixtures
 are created with shared commands. No dependency, external source, artwork,
 library data or native saved-format change was introduced.
+
+## Ordinary-text clipboard conversions
+
+The bounded net-name and numeric CSV/TSV conversion commands, editable conversion
+form, dimension preview and regression data are original PCBcraft work using
+shared native commands and codecs. No external EDA implementation, source-derived
+fixture, artwork, library data, parser dependency or saved-format change was
+introduced. These explicit text conversions do not use the paused importer.

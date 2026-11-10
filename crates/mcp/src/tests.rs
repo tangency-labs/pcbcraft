@@ -1028,3 +1028,19 @@ fn pcb_clipboard_payloads_and_component_reuse_share_the_dispatcher() {
     assert_eq!(state["project"]["board"]["footprints"].as_array().unwrap().len(), 1);
     assert_eq!(state["project"]["board"]["footprints"][0]["x_nm"], 7_000_000);
 }
+
+/// Text preparation returns the portable payload when inspection is suppressed; a client can
+/// review/relay it without editing a project or invoking the OS clipboard.
+#[test]
+fn external_clipboard_preparation_preserves_payload_without_inspection() {
+    let mut session = pcbcraft_engine::Session::default();
+    for (id, params) in [
+        (pcbcraft_engine::clipboard_text::LABELS, json!({"text":"A\nB","style":"local","spacing_nm":2_540_000,"expected_revision":0})),
+        (pcbcraft_engine::clipboard_text::OUTLINE, json!({"text":"0,0\n10,0\n10,10","units":"mm","closed":true,"expected_revision":0})),
+    ] {
+        let result = crate::backend::call_session(&mut session, "engine.execute", &json!({"command":id,"params":params,"inspect":false})).unwrap();
+        assert!(result["clipboard"].as_str().is_some());
+        assert_eq!(session.revision(), 0);
+        assert!(session.project().is_none());
+    }
+}

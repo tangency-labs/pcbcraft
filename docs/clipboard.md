@@ -49,10 +49,11 @@ Original-position paste still creates new identities and one undo step.
 
 Package assignments are copied as intent, without creating PCB placements.
 Hierarchical sheet blocks and hierarchical interface labels are not included in
-this flat schematic fragment contract. Plain text, images and other EDA
-applications' native clipboard formats are not accepted as design fragments in
-this slice; unsupported input is reported without changing the project. The
-separate import/source boundary remains in force.
+this flat schematic fragment contract. Ordinary text can be converted explicitly
+as described below. Images, SVG and other EDA applications' native clipboard
+formats are not accepted as native
+design fragments; unsupported input does not change the project. The separate
+import/source boundary remains in force.
 
 Browser keyboard copy/paste uses browser clipboard events. Browser menu paste
 arms the destination, then asks for **Ctrl+V** (or **⌘V**) because the browser
@@ -94,6 +95,52 @@ cargo test --locked -p pcbcraft-app \
 cargo test --locked -p pcbcraft-app \
   clipboard::native_tests::native_board_clipboard_between_processes -- --ignored --exact --nocapture
 ```
+
+## Paste from other programs
+
+Ordinary text opens **Paste Text** before any design objects are created. In a
+schematic, one line becomes one local or global electrical net label, with an
+explicit scope, vertical spacing and optional net-name suffix. These are named
+net anchors, not drawing notes: matching names connect within their scope. Empty
+rows, multi-column input, invalid names and more than 256 labels reject the whole
+conversion. The form text is editable, and its text field retains normal system
+copy/paste behavior.
+
+On a PCB, a numeric CSV or tab-separated table becomes one Board Outline
+polyline. Choose source **mm** or **mil**, optional closure and Y-axis inversion;
+the displayed vertex count and dimensions use the same parser as the command.
+**Keep source coordinates** places the validated geometry directly; otherwise
+placement uses the native cursor preview with R rotation and cancellation.
+An optional header is `x,y`, `x_mm,y_mm` or `x_mil,y_mil` (tabs also work).
+Unit-qualified headers must match the chosen units. Cells may quote numeric
+values and use decimal points or finite scientific notation; formulas and
+locale decimal commas are not evaluated or guessed. Closed outlines normalize
+one repeated final vertex. Limits are 64 KiB and 2–256 vertices, with at least
+three for closure. A malformed row rejects the entire conversion.
+
+For example, a table copied from a spreadsheet can contain:
+
+```csv
+x_mm,y_mm
+0,0
+25.4,0
+25.4,12.7
+0,12.7
+```
+
+The form stays in its initiating view/window, and a changed project opening or
+revision invalidates Apply. Preparation creates no destination objects or undo
+entry; successful placement is one native edit. Native PCBcraft payloads with
+unsupported versions stay on the strict native parser and cannot become net
+names accidentally. Structured EDA payloads and images are outside these text
+conversions; they do not invoke an importer.
+
+Headless clients use `schematic.prepare_text_paste` (`text`, `style`,
+`spacing_nm`, optional `net_name_suffix`) or `pcb.prepare_coordinate_paste`
+(`text`, `units`, `closed`, optional `invert_y`), both with `expected_revision`.
+They return portable `clipboard` text even with `inspect:false`, without
+requiring an open project or touching the OS clipboard. Submit the reviewed
+result to the ordinary native paste command with explicit destination authority.
 
 ## PCB canvas
 

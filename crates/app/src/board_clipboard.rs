@@ -158,6 +158,21 @@ impl PcbApp {
             Err(error) => self.message = Some(error),
         }
     }
+    /// External coordinate conversion uses the same native placement path. Keeping coordinates
+    /// commits only a successfully prepared preview; failures retain correction state.
+    pub(super) fn receive_prepared_board_clipboard(&mut self, text: String, original: bool) {
+        self.receive_board_clipboard(text, false);
+        if original {
+            if let Some(placement) = self.views.active.board.clipboard.paste.clone() {
+                if let Err(error) = self.commit_board_clipboard(&placement, placement.fragment.anchor()) {
+                    self.message = Some(error);
+                }
+            } else if let Dialog::BoardPasteOptions(draft) = &mut self.dialog {
+                draft.original = true;
+            }
+        }
+    }
+
     /// Decode once before addressing the destination. Duplication always exposes schematic
     /// ownership; a same-project Cut can default to component reuse without creating symbols.
     pub(super) fn receive_board_clipboard(&mut self, text: String, special: bool) {

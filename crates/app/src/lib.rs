@@ -27,6 +27,7 @@ mod editor_layout;
 mod editor_view;
 mod editor_windows;
 mod editor_workspace;
+mod external_clipboard;
 mod field_actions;
 mod footprint_assignment;
 mod hierarchy;
@@ -155,6 +156,7 @@ enum Dialog {
     LibrarySources,
     PasteOptions(Box<clipboard::Options>),
     BoardPasteOptions(Box<board_clipboard::Options>),
+    ExternalPasteOptions(Box<external_clipboard::Options>),
     /// Asks for the name that `project.rename` takes.
     Name {
         command: &'static str,
@@ -1923,6 +1925,7 @@ impl PcbApp {
             Dialog::LibraryProperties(id, view) => self.library_properties_dialog(ctx, id, view),
             Dialog::PasteOptions(draft) => self.paste_options_dialog(ctx, draft),
             Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),
+            Dialog::ExternalPasteOptions(draft) => self.external_paste_options_dialog(ctx, draft),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
@@ -2228,6 +2231,7 @@ impl PcbApp {
             .arrangement_dialog_host()
             .or_else(|| self.paste_options_host())
             .or_else(|| self.board_paste_options_host())
+            .or_else(|| self.external_paste_options_host())
             .unwrap_or(self.views.main);
         if self.views.host == dialog_host {
             self.project_dialogs(&ctx);
