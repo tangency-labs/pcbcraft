@@ -298,7 +298,8 @@ fn save_at(
 /// Canonicalize the parent directory so application instances use the same lock for the destination.
 /// The result is also what Recent projects show and store, so a Windows target comes back in its
 /// plain `C:\…` spelling, not `\\?\C:\…`, whenever Windows reads that spelling as the same file
-/// (#154). Otherwise, for example `CON.pc.zip` or a name ending in a dot, it keeps `\\?\`.
+/// (#154). Otherwise, for example a name ending in a dot, or `CON.pc.zip` on Windows 10 and
+/// earlier, it keeps `\\?\`.
 fn normalize(path: &Path) -> Result<PathBuf, String> {
     let parent = path.parent().ok_or("Project file has no parent directory")?;
     let name = path.file_name().ok_or("Project file has no name")?;
