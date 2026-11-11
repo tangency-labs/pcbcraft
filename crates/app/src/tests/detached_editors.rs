@@ -1726,7 +1726,9 @@ fn detached_board_edge_preview_cancels_on_focus_loss_and_close() {
     let child = h.state().views.hosts[&HostId(1)].focused;
     let layer = child_rect(&peer, "Activate layer Board Outline").center();
     child_click_at(&mut h, &peer, layer);
-    let tool = child_rect(&peer, "Draw rectangle on Board Outline").center();
+    let draw = child_rect(&peer, "Draw").center();
+    child_click_at(&mut h, &peer, draw);
+    let tool = child_rect(&peer, "Draw rectangle on active layer").center();
     child_click_at(&mut h, &peer, tool);
     let origin = child_rect(&peer, "PCB canvas").center();
     child_click_at(&mut h, &peer, origin);

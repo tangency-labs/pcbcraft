@@ -73,6 +73,7 @@ fn pcb_zoom_reaches_copper_detail_and_round_trips_in_arrangements() {
     h.run();
     for _ in 0..8 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 8.0),
             phase: egui::TouchPhase::Move,

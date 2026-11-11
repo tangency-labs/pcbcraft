@@ -976,3 +976,8 @@ pinch behavior in SolidCraft's `crates/ui-egui/src/navigation.rs` at the pinned
 reference (MIT OR Apache-2.0, SolidCraft contributors). No SolidCraft application
 engine or camera implementation was imported; the existing shared egui renderer
 and PCBcraft's 2D camera remain the rendering path. No dependency or asset was added.
+
+The persistent PCB ribbon controls, Draw tab and physical technical-layer graphics
+are original PCBcraft work using the existing shared chrome, drawing and conductive
+segment commands. Board format 16 extends the upstream format 15 reference-label
+work; no external EDA implementation, asset or dependency was introduced.

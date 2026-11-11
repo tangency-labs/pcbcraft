@@ -72,3 +72,10 @@ flat-bar **VCC (bar)** choices with the same editable default net name.
 The board walkthrough, polished demo and fresh-user onboarding acceptance in [#90](https://github.com/tangency-labs/pcbcraft/issues/90)
 remain pending their dependencies. Documentation command checks and automated UI
 tests do not substitute for a new person's end-to-end acceptance run.
+
+PCB Draw tools operate on the active visible layer: copper linework uses the
+validated conductive-segment path, while non-copper graphics preserve physical
+strokes through saves and clipboard operations. Silkscreen, mask and paste
+artwork is included in the matching fabrication layer; documentation-layer
+graphics remain native board content. Persistent layer/width/via controls stay
+visible across PCB tabs, with routing in Layout and alignment in its Modify menu.

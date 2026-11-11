@@ -231,7 +231,7 @@ fn appearance_fields(ui: &mut Ui, edit: &mut Edit, resolved: &Resolved, referenc
             Some(_) => "Legacy stroke",
             None => "Library default",
         };
-        properties::select(ui, "Font", ui.id().with("reference_font"), label, |ui| {
+        properties::select(ui, "Font", ui.scope_id().with("reference_font"), label, |ui| {
             ui.selectable_value(&mut edit.appearance.font, None, "Library default");
             ui.selectable_value(&mut edit.appearance.font, Some("pcbcraft-technical-1".into()), "Technical");
             ui.selectable_value(&mut edit.appearance.font, Some("pcbcraft-stroke-1".into()), "Legacy stroke");
@@ -252,7 +252,7 @@ fn appearance_fields(ui: &mut Ui, edit: &mut Edit, resolved: &Resolved, referenc
             Some(TextAlign::Middle) => "Center",
             Some(TextAlign::End) => "Right",
         };
-        properties::select(ui, "Alignment", ui.id().with("reference_align"), align, |ui| {
+        properties::select(ui, "Alignment", ui.scope_id().with("reference_align"), align, |ui| {
             ui.selectable_value(&mut edit.appearance.align, None, "Default");
             ui.selectable_value(&mut edit.appearance.align, Some(TextAlign::Start), "Left");
             ui.selectable_value(&mut edit.appearance.align, Some(TextAlign::Middle), "Center");

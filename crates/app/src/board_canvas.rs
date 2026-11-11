@@ -291,6 +291,7 @@ pub(super) fn show(
         camera,
         project,
         &mut state.drawing,
+        state.tracks.width_nm,
         state.active_layer.as_deref(),
         &state.hidden_layers,
         source,
@@ -448,7 +449,7 @@ pub(super) fn show(
     }
     let focus = connectivity.as_deref().and_then(|data| CopperFocus::new(data, state.tracks.route_contact(), state.highlight_net.as_deref()));
     let context = board::context_painter(&p, focus.is_some());
-    crate::board_drawing::paint(&context, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
+    crate::board_drawing::paint(&context, rect, camera, project, &state.drawing, state.tracks.width_nm, &state.hidden_layers, appearance);
     // A transform committed in this frame is painted at its new pose. The engine applies it after
     // this pass, so painting the stored pose here would make the footprint spring back for a frame.
     // Tracks on its pads are painted where the move carries them.

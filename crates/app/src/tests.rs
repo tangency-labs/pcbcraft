@@ -1967,7 +1967,7 @@ mod live_mcp {
             h.run();
             assert_eq!(result["windows"][0]["ribbon_tab"], if tab == "manage" { "sheets" } else { tab });
         }
-        for tab in ["route", "manufacture"] {
+        for tab in ["route", "draw", "manufacture"] {
             let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
             let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
             assert_eq!(error["isError"], true);
@@ -1975,10 +1975,10 @@ mod live_mcp {
         }
         click(&mut h, "Choose workspace");
         click(&mut h, "PCB layout");
-        for tab in ["layout", "route", "analyze", "manufacture", "libraries", "view"] {
+        for tab in ["layout", "route", "draw", "analyze", "manufacture", "libraries", "view"] {
             let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":tab}));
             h.run();
-            assert_eq!(result["windows"][0]["ribbon_tab"], tab);
+            assert_eq!(result["windows"][0]["ribbon_tab"], if tab == "route" { "layout" } else { tab });
         }
         for tab in ["sheets", "manage"] {
             let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
@@ -2157,7 +2157,7 @@ fn ribbon_group_menus_run_their_actions() {
         assert_eq!(harness.state().browser.open, open);
         assert!(harness.output().platform_output.events.iter().any(|event| {
             matches!(event, egui::output::OutputEvent::Clicked(info)
-                if info.label.as_deref() == Some("Browser") && info.typ == egui::WidgetType::Checkbox && info.selected == Some(open))
+                if info.label.as_deref() == Some("Browser") && info.role == egui::Role::CheckBox && info.selected == Some(open))
         }));
         harness.run();
         assert_eq!(harness.query_by_label("Collapse Browser").is_some(), open);

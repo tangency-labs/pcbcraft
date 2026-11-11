@@ -219,7 +219,7 @@ impl<'a> MenuItem<'a> {
         let mut item = solidcraft_ui_kit::MenuItem::new(self.label, self.label, "");
         item.enabled = self.enabled && ui.is_enabled();
         item.shortcut = self.shortcut;
-        item.checked = self.checked.map(|(_,checked)| checked);
+        item.checked = self.checked.map(|(_, checked)| checked);
         item.submenu = submenu;
         let response = item.show(ui);
         response.widget_info(|| match self.checked {

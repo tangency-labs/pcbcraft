@@ -56,16 +56,23 @@ pub fn ratsnest_visibility(ui: &mut egui::Ui, visible: &mut bool) -> egui::Respo
     crate::controls::checkbox(ui, visible, "Ratsnest")
 }
 
-/// Paint a layer graphic in its effective color; selection, previews and handles use the shared accent.
-pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, selected: bool, preview: bool, color: Color32) {
+/// Paint layer linework at its physical screen width with round ends. Missing width retains
+/// legacy hairlines; selection, previews and handles use the shared accent.
+pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, width: Option<f32>, selected: bool, preview: bool, color: Color32) {
     let t = Tokens::get();
     let color = if selected || preview { t.accent } else { color };
-    p.add(egui::Shape::Path(egui::epaint::PathShape {
-        points: points.clone(),
-        closed,
-        fill: Color32::TRANSPARENT,
-        stroke: Stroke::new(1.5, color).into(),
-    }));
+    if let Some(width) = width {
+        for (a, b) in points.iter().zip(points.iter().cycle().skip(1)).take(points.len().saturating_sub(usize::from(!closed))) {
+            track(p, [*a, *b], width, color, selected, preview);
+        }
+    } else {
+        p.add(egui::Shape::Path(egui::epaint::PathShape {
+            points: points.clone(),
+            closed,
+            fill: Color32::TRANSPARENT,
+            stroke: Stroke::new(1.5, color).into(),
+        }));
+    }
     if selected {
         for point in points {
             p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, t.accent);

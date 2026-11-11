@@ -493,17 +493,18 @@ successful save. See the [arrangement persistence details](board-workspace-plan.
 
 ## PCB layout
 
-The PCB ribbon separates **Layout**, **Route**, **Analyze**, **Manufacture**,
-**Libraries** and **View**. Layout groups footprint placement, clipboard, outline
-drawing, selection edits and alignment, followed by explicit **Update PCB** and
-**Board setup** actions in **Board**. Route keeps tracks and vias beside their
-active layer, track width and via pad/drill settings. Analyze contains DRC,
-measurement and cross-probing;
-Manufacture contains fabrication outputs. Libraries provides library editing
-and sources, while View contains grid, panels, navigation, **Flip view** and
-window layout. Planned copper tools remain disabled in the Route menu; planned
-rule editing is in Analyze's Checks menu. Tabs wrap on narrow windows, and the
-commands within a tab scroll sideways when needed.
+The PCB ribbon separates **Layout**, **Draw**, **Analyze**, **Manufacture**,
+**Libraries** and **View**. Layout contains footprint placement, Route, clipboard,
+Modify and board setup/synchronization. Alignment and distribution are available
+in the Modify menu. Draw contains Line and Rectangle, which use the active layer.
+Analyze contains checks, measurement and cross-probing; Manufacture contains
+fabrication outputs; Libraries contains library editors and sources; View contains
+panels, navigation, Flip view and window layout.
+
+**Active layer**, **Track / line width** and **Via pad / drill** stay visible as
+you switch PCB tabs. They sit at the right of a wide ribbon and wrap below the
+commands on narrow windows, while each tab's commands scroll independently.
+Click a numeric value to type in the display units, or drag it to adjust it.
 
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;
@@ -513,7 +514,7 @@ placement at a time. With nothing selected, Properties summarizes the board: the
 **Size** in the display units (or **No outline**), copper layers, footprints, tracks, vias
 and, once connections are accepted, the number still **Unrouted**.
 
-With two or more footprints selected, the **Align** group aligns them by their physical
+With two or more footprints selected, the **Modify** menu aligns them by their physical
 bounds (pads, courtyard and fabrication outlines, not silkscreen): **Align to Left**,
 **Right**, **Top** or **Bottom**, or **Align to Vertical Center** and **Horizontal Center**
 (the middle of the selection). With three or more, **Distribute Horizontally** or
@@ -621,20 +622,29 @@ menus and dialogs keep their normal keys; switching layers cancels an unfinished
 Board Outline gesture or route, except that PgUp and PgDn during a route place a via and
 keep routing on that side. The keys are also listed in Keyboard Shortcuts.
 
-For a board boundary, select **Board Outline** in the selector or Layers card and
-use **Layout → Outline → Line** or **Rectangle**. Line accepts successive clicked
-vertices, closes when you click the first vertex, and finishes an open path with
-Enter. Rectangle uses two opposite corners. Both snap to the grid and nearby edge
-vertices, and Esc cancels unfinished geometry before exiting the tool. After
-exiting, click an edge to select it, drag a vertex to reshape it, drag a segment
-or press M to move the drawing, and Delete to remove it. These edits share project
-Undo; Fit and layer visibility include the edge geometry. A Board Outline layer is
-available independently of copper setup, including on older populated boards.
-Open paths remain valid editing state while you draw; **Analyze → Checks → DRC**
-reports a missing closed outline and copper outside it or too close to its edge.
+Use **Draw → Line** or **Rectangle** on the active, visible layer. Line accepts
+successive vertices, closes when you click the first vertex, and finishes an
+open path with Enter. Rectangle uses two opposite corners. Both use the grid
+and nearby graphic vertices, with the current Track / line width as the physical
+stroke. Esc cancels unfinished geometry before exiting the tool.
+
+On copper, these tools create conductive linework: a rectangle outline becomes
+four connected segments. It participates in connectivity, short checks, DRC and
+fabrication and uses the ordinary copper selection/editing tools. Filled copper
+zones remain a planned Route subtool. Non-copper shapes remain independent
+editable graphics: select a line, drag a vertex or segment, use M to move it, or
+Delete to remove it. Silkscreen, mask and paste artwork reaches its matching
+fabrication surface. Mechanical, fabrication, courtyard and user-layer graphics
+remain documentation in the native board.
+
+Select **Board Outline** when drawing the physical boundary. Its centerline
+continues to define the board edge; a closed boundary is required for fabrication.
+Board Outline is also available without a copper setup. Fit and layer visibility
+include these graphics, while DRC reports a missing closed outline and copper
+outside it or too close to the edge.
 
 To route copper, select a copper layer such as **Top** and press **X** or use
-**Route → Track**. Set **Track width** beside it in the display units
+**Layout → Route → Track**. Set **Track / line width** in the persistent controls in the display units
 (0.25 mm by default). The crosshair follows the pointer, while a dot marks where a
 click will land in free space or a ring marks a nearby copper connection. Free
 points snap when the grid point is close to the cursor. Hold **Ctrl** to bypass

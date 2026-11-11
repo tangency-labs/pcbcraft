@@ -17,10 +17,11 @@ implementation source or other GPL EDA source is an input.
 
 ## The workflow today
 
-The PCB ribbon separates Layout, Route, Analyze, Manufacture, Libraries and
-View. Layout groups placement, clipboard, outline and selection edits, alignment
-and board setup/synchronization. Route keeps copper tools and their settings
-together; Analyze holds checks and inspection; Manufacture holds outputs.
+The PCB ribbon separates Layout, Draw, Analyze, Manufacture, Libraries and
+View. Layout groups placement, Route, clipboard, selection edits and board
+setup/synchronization; alignment is available in Modify's menu. Draw operates
+on the active layer, while layer, width and via settings stay visible across
+tabs. Analyze holds checks and inspection; Manufacture holds outputs.
 Planned tools remain disabled in their task's menu. Every edit below uses a
 revision-checked engine command that the GUI, live MCP and headless MCP share.
 Each edit is one undo step.
@@ -28,9 +29,9 @@ Each edit is one undo step.
 | Step | What works | Where |
 | --- | --- | --- |
 | Set up | Copper count, stackup and materials, silkscreen settings | Layout › Board › Board setup |
-| Place | Assign packages, place, move (M or drag), rotate (R), flip to the bottom side (F), exact X/Y/rotation/side in Properties, align and distribute | Layout › Place / Modify / Align, Properties |
-| Outline | Board Outline lines and rectangles; vertex, segment and whole-shape edits | Layout › Outline |
-| Route | Tracks with an explicit width and 45° posture. Snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Route |
+| Place | Assign packages, place, move (M or drag), rotate (R), flip to the bottom side (F), exact X/Y/rotation/side in Properties, align and distribute | Layout › Place / Modify, Properties |
+| Draw | Active-layer lines and rectangle outlines: conductive copper segments or non-copper graphics with physical strokes; Board Outline vertex, segment and whole-shape edits | Draw |
+| Route | Tracks with an explicit width and 45° posture. Snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
 | Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
 | Output | Gerber X2 copper, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
@@ -219,7 +220,7 @@ DRC: no new violations, and connectivity is unchanged except for the routed net.
 These need their own design before implementation. They are listed so the
 ribbon's planned entries and the editor guide have a stated destination.
 
-- **Differential pairs and length tuning** (Route › Pair, Route › Tune) need
+- **Differential pairs and length tuning** (Layout › Route › Pair, Layout › Route › Tune) need
   net-registry pairs and length rules from slice 2. Pairs reference two net IDs,
   never name suffixes.
 - **Arcs and teardrops** need a curved track segment in the board format. DRC,
@@ -227,7 +228,7 @@ ribbon's planned entries and the editor guide have a stated destination.
   must support it in the same slice.
 - **Blind, buried and micro vias** need layer spans checked against the stackup
   and drill pairs in the Excellon output.
-- **Board text and graphics** on copper and silkscreen need independently
+- **Board text** on copper and silkscreen needs independently
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for footprints, tracks and zones is a per-object flag. It refuses
   moves until the object is unlocked, and selection filters can exclude locked

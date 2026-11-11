@@ -173,6 +173,11 @@ the Parts Catalog in its last presentation. **Help → Keyboard Shortcuts**
 shows the current bindings. Keyboard editing shortcuts apply to the canvas when
 a text field or dialog is not using the keys.
 
+PCB routing is under **Layout → Route**, and **Draw → Line / Rectangle** uses
+the active layer. Copper shapes are conductive linework; technical-layer graphics
+retain a physical stroke. The layer, Track / line width and via dimensions stay
+visible across PCB tabs, with alignment actions in **Layout → Modify**.
+
 The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
 **Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
 views and windows. Grid opacity affects visible grids in both workspaces; display
@@ -425,7 +430,7 @@ and place later. **Copy report** includes all message categories.
 adoption remain separate edits. External changes or another client's preview
 require **Review again**; a reopened/replaced project requires a fresh dialog.
 
-In **Layers → Board**, select **Board Outline**, then choose **Layout → Outline → Line**
+In **Layers → Board**, select **Board Outline**, then choose **Draw → Line**
 or **Rectangle**. Click successive vertices for a line path; click its first vertex
 to close it, or press **Enter** to finish an open path. Rectangle uses two opposite
 corner clicks. Points snap to the current grid and nearby existing edge vertices.

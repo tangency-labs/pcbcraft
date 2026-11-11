@@ -253,7 +253,7 @@ fn ctrl_bypasses_the_routing_grid_but_keeps_copper_contacts() {
 fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     let mut h = routable();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-    click(&mut h, "Route");
+    click(&mut h, "Layout");
     click(&mut h, "Route tracks on the active copper layer");
     let start = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
     click_route(&mut h, start);
@@ -267,7 +267,7 @@ fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "cancelled routes edit nothing");
 
     h.state_mut().views.active.board.tracks.width_nm = 500_000;
-    click(&mut h, "Route");
+    click(&mut h, "Layout");
     click(&mut h, "Route tracks on the active copper layer");
     for x in [2_540_000, 5_080_000, 7_620_000] {
         click_route(&mut h, Point { x_nm: x, y_nm: 2_540_000 });
@@ -346,7 +346,7 @@ fn clicking_a_track_selects_it_and_delete_removes_it() {
 #[test]
 fn routing_requires_a_visible_copper_layer() {
     let mut h = routable();
-    click(&mut h, "Route");
+    click(&mut h, "Layout");
     click(&mut h, "Activate layer Board Outline");
     h.key_press(Key::X);
     h.run();
@@ -509,7 +509,7 @@ fn place_via_tool_drops_vias_until_escape() {
     h.key_press_modifiers(Modifiers { ctrl: true, command: true, shift: true, ..Modifiers::NONE }, Key::X);
     h.run();
     assert!(h.state().views.active.board.tracks.via_tool);
-    click(&mut h, "Route");
+    click(&mut h, "Layout");
     assert!(!h.get_by_label("Place vias").accesskit_node().is_disabled(), "Route › Via is a working button");
     let revision = h.state().session.revision();
     click_route(&mut h, free);
@@ -1295,7 +1295,7 @@ fn modify_menu_aligns_selected_footprints() {
     h.state_mut().views.active.board.selection = ids.clone();
     h.run();
     let revision = h.state().session.revision();
-    click(&mut h, "Align menu");
+    click(&mut h, "Modify menu");
     assert!(h.get_by_label("Distribute Horizontally").accesskit_node().is_disabled(), "distributing needs three footprints");
     click(&mut h, "Align to Top");
     assert_eq!(h.state().message, None);

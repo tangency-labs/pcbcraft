@@ -408,7 +408,8 @@ impl BoardFragment {
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft board fragment."))?;
-        if envelope.format != "pcbcraft-clipboard/1"
+        if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2")
+            || (envelope.format == "pcbcraft-clipboard/2") != envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some())
             || envelope.kind != "board"
             || envelope.source_project.is_nil()
             || envelope.source_board.is_nil()
@@ -500,7 +501,6 @@ impl BoardFragment {
                 || layer.name.is_empty()
                 || layer.name.chars().count() > 80
                 || layer.name.chars().any(char::is_control)
-                || !matches!(layer.purpose, LayerPurpose::Copper | LayerPurpose::Outline)
                 || (layer.purpose == LayerPurpose::Outline && layer.side.is_some())
             {
                 return Err(invalid("invalid or duplicate clipboard layer"));
@@ -509,7 +509,11 @@ impl BoardFragment {
         let mut used = BTreeSet::new();
         for drawing in &envelope.drawings {
             drawing.validate().map_err(invalid)?;
-            if !uuids.insert(drawing.id) || !layers.get(&drawing.layer).is_some_and(|l| l.purpose == LayerPurpose::Outline) {
+            if !uuids.insert(drawing.id)
+                || !layers
+                    .get(&drawing.layer)
+                    .is_some_and(|l| l.purpose != LayerPurpose::Copper && (l.purpose == LayerPurpose::Outline || drawing.stroke_nm.is_some()))
+            {
                 return Err(invalid("invalid copied drawing layer/identity"));
             }
             used.insert(drawing.layer);
@@ -554,7 +558,8 @@ impl BoardFragment {
             .map(|c| Ok(CircuitEnvelope { sheet: c.source_sheet, name: c.name.clone(), text: c.fragment.to_text()? }))
             .collect::<Result<_, CommandError>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: "pcbcraft-clipboard/1".into(),
+            format: if self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()) { "pcbcraft-clipboard/2" } else { "pcbcraft-clipboard/1" }
+                .into(),
             kind: "board".into(),
             source_project: self.source_project,
             source_board: self.source_board,

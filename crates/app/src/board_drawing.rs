@@ -1,4 +1,4 @@
-//! Board Outline drawing gestures. Previews are view-local; every completed edit is an engine command.
+//! Active-layer drawing gestures. Previews are view-local; every completed edit is an engine command.
 use crate::{canvas_camera::Camera, editor_view::ViewInput};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
 use pcbcraft_engine::{
@@ -8,7 +8,8 @@ use pcbcraft_engine::{
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-/// The first canvas drawing tools; both author ordinary graphics on the active Board Outline layer.
+/// Lines and rectangle outlines use the active layer. Copper becomes conductive segments;
+/// technical layers retain independently editable graphics with physical stroke widths.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tool {
     Lines,
@@ -108,11 +109,9 @@ impl State {
     }
 }
 
-/// Whether the active, visible layer accepts these tools. Copper visibility never enables drawing.
+/// Whether the active layer exists and is visible. Copper uses validated conductive paths.
 pub(super) fn can_draw(view: BoardView<'_>, active: Option<&str>, hidden: &BTreeSet<String>) -> bool {
-    view.layers().iter().any(|layer| {
-        layer.purpose == LayerPurpose::Outline && active == Some(layer.id.to_string().as_str()) && !hidden.contains(&layer.id.to_string())
-    })
+    view.layers().iter().any(|layer| active == Some(layer.id.to_string().as_str()) && !hidden.contains(&layer.id.to_string()))
 }
 
 /// Prefer exact existing edge vertices within the pointer target, then use this view's snap grid.
@@ -135,7 +134,8 @@ fn hit(pointer: Pos2, camera: &Camera, rect: Rect, drawing: &Drawing) -> bool {
         |(a, b)| {
             let delta = b - a;
             let t = if delta.length_sq() > 0. { ((pointer - a).dot(delta) / delta.length_sq()).clamp(0., 1.) } else { 0. };
-            pointer.distance(a + t * delta) <= 6.
+            pointer.distance(a + t * delta)
+                <= drawing.stroke_nm.map_or(6., |width| (width as f32 * camera.unit_step() / pcbcraft_engine::schematic::GRID_NM as f32 / 2.).max(6.))
         },
     )
 }
@@ -151,6 +151,20 @@ fn command(source: ViewInput, id: &'static str, mut params: Value) -> Command {
     Command { source, id, params }
 }
 
+/// Choose the existing typed command for the active material. Copper paths become atomic
+/// track segments, including closure; other layers retain a graphic with its physical stroke.
+fn create_path(source: ViewInput, view: BoardView<'_>, layer: &str, points: &[Point], closed: bool, width_nm: i64) -> Command {
+    if view.layers().iter().any(|record| record.id.to_string() == layer && record.purpose == LayerPurpose::Copper) {
+        let mut path = points.to_vec();
+        if closed && let Some(first) = points.first() {
+            path.push(*first);
+        }
+        command(source, pcbcraft_engine::ADD_TRACKS, json!({"layer":layer,"points":path,"width_nm":width_nm}))
+    } else {
+        command(source, pcbcraft_engine::ADD_DRAWING, json!({"layer":layer,"points":points,"closed":closed,"stroke_nm":width_nm}))
+    }
+}
+
 /// Route canvas-only drawing/selection/vertex and whole-graphic movement. Release over chrome,
 /// right-click, stale input or a hidden/changed layer cannot commit an unfinished edit.
 /// `selectable` gates existing graphics; explicitly chosen creation tools remain available.
@@ -161,6 +175,7 @@ pub(super) fn interact(
     camera: &Camera,
     view: BoardView<'_>,
     state: &mut State,
+    width_nm: i64,
     active: Option<&str>,
     hidden: &BTreeSet<String>,
     source: Option<ViewInput>,
@@ -216,8 +231,7 @@ pub(super) fn interact(
         }
         if std::mem::take(&mut state.finish_requested) {
             if let Some(draft) = state.draft.as_ref().filter(|draft| draft.points.len() >= 2) {
-                out.command =
-                    Some(command(draft.source, pcbcraft_engine::ADD_DRAWING, json!({"layer":draft.layer,"points":draft.points,"closed":false})));
+                out.command = Some(create_path(draft.source, view, &draft.layer, &draft.points, false, width_nm));
                 state.draft = None;
             }
             return out;
@@ -228,8 +242,7 @@ pub(super) fn interact(
             if let Some(draft) = &mut state.draft {
                 if tool == Tool::Rectangle {
                     if let Some(points) = rectangle(draft.points[0], at) {
-                        out.command =
-                            Some(command(draft.source, pcbcraft_engine::ADD_DRAWING, json!({"layer":draft.layer,"points":points,"closed":true})));
+                        out.command = Some(create_path(draft.source, view, &draft.layer, &points, true, width_nm));
                         state.draft = None;
                     }
                 } else {
@@ -238,11 +251,7 @@ pub(super) fn interact(
                         draft.points.push(at);
                     }
                     if (close || response.double_clicked()) && draft.points.len() >= 2 {
-                        out.command = Some(command(
-                            draft.source,
-                            pcbcraft_engine::ADD_DRAWING,
-                            json!({"layer":draft.layer,"points":draft.points,"closed":close}),
-                        ));
+                        out.command = Some(create_path(draft.source, view, &draft.layer, &draft.points, close, width_nm));
                         state.draft = None;
                     }
                 }
@@ -325,13 +334,16 @@ pub(super) fn interact(
 }
 
 /// Paint only visible layer graphics and disposable previews; selected vertices are handles,
-/// not copper pads or electrical edit selections. No physical stroke width is implied.
+/// not copper pads or electrical edit selections. Physical widths scale with the camera;
+/// legacy hairlines retain their original presentation.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     painter: &egui::Painter,
     rect: Rect,
     camera: &Camera,
     view: BoardView<'_>,
     state: &State,
+    width_nm: i64,
     hidden: &BTreeSet<String>,
     appearance: &crate::board_appearance::Appearance,
 ) {
@@ -346,6 +358,7 @@ pub(super) fn paint(
             painter,
             drawing.points.iter().map(|point| camera.screen(*point, rect)).collect(),
             drawing.closed,
+            drawing.stroke_nm.map(|width| width as f32 * camera.unit_step() / pcbcraft_engine::schematic::GRID_NM as f32),
             selected,
             false,
             view.layers()
@@ -370,6 +383,7 @@ pub(super) fn paint(
             painter,
             points.iter().map(|point| camera.screen(*point, rect)).collect(),
             state.tool == Some(Tool::Rectangle),
+            Some(width_nm as f32 * camera.unit_step() / pcbcraft_engine::schematic::GRID_NM as f32),
             false,
             true,
             view.layers()

@@ -238,6 +238,44 @@ pub fn ribbon(
     quick: &[RibbonTool<'_>],
     add: impl FnOnce(&mut Ui, usize),
 ) -> RibbonResponse {
+    let mut add = Some(add);
+    ribbon_with_controls(ui, workspace, tabs, tab, RibbonLayout { workspaces, quick, pinned_fields: 0 }, |ui, section| {
+        if let RibbonSection::Commands(shown) = section
+            && let Some(add) = add.take()
+        {
+            add(ui, shown);
+        }
+    })
+}
+
+/// Host-owned options for the command ribbon and its persistent editing fields.
+pub struct RibbonLayout<'a> {
+    pub workspaces: Workspaces<'a>,
+    pub quick: &'a [RibbonTool<'a>],
+    /// Number of standard-width fields kept outside the tab's scrolling commands.
+    pub pinned_fields: usize,
+}
+
+/// The command strip changes with its tab; editing fields keep their own identity and position.
+pub enum RibbonSection {
+    Commands(usize),
+    /// Narrow windows place compact, wrapping fields below the command strip.
+    Controls {
+        compact: bool,
+    },
+}
+
+/// Compose a tab ribbon with persistent fields at the right. At narrow widths fields wrap
+/// below the commands, staying visible while only the tab's command strip scrolls horizontally.
+pub fn ribbon_with_controls(
+    ui: &mut Ui,
+    workspace: &str,
+    tabs: &[&str],
+    tab: &mut usize,
+    layout: RibbonLayout<'_>,
+    mut add: impl FnMut(&mut Ui, RibbonSection),
+) -> RibbonResponse {
+    let RibbonLayout { workspaces, quick, pinned_fields } = layout;
     let t = Tokens::get();
     let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
     let tab_gap = if wide { t.space_6 } else { t.space_2 };
@@ -250,7 +288,16 @@ pub fn ribbon(
         .sum::<f32>();
     let tab_room = (ui.available_width() - if wide { WORKSPACE_WIDTH + t.space_8 * 5.0 } else { t.space_8 * 4.0 }).max(1.0);
     let extra_tab_rows = (tab_width / tab_room).ceil().max(1.0) - 1.0;
-    let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 } + extra_tab_rows * t.control_height;
+    let field_width = t.control_height * 6.0;
+    let fixed_width = pinned_fields as f32 * field_width + pinned_fields.saturating_sub(1) as f32 * t.space_8;
+    let side_controls = pinned_fields > 0 && tab_room >= fixed_width + 240.0;
+    let compact_width = t.control_height * 5.5;
+    let columns = ((tab_room + t.space_8) / (compact_width + t.space_8)).floor().max(1.0) as usize;
+    let control_rows = pinned_fields.div_ceil(columns);
+    let compact_height = t.control_height + t.font_small + t.space_8;
+    let controls_height = control_rows as f32 * (compact_height + 1.0);
+    let extra_controls = if pinned_fields > 0 && !side_controls { controls_height + t.space_24 } else { 0.0 };
+    let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 } + extra_tab_rows * t.control_height + extra_controls;
     let painter = ui.painter().clone();
     let background = painter.add(Shape::Noop);
     let panel = Panel::top("workspace_ribbon")
@@ -330,10 +377,35 @@ pub fn ribbon(
                         ui.spacing_mut().scroll.bar_width = RIBBON_SCROLL_GUTTER;
                         ui.spacing_mut().scroll.bar_inner_margin = 0.0;
                         ui.spacing_mut().scroll.bar_outer_margin = 0.0;
-                        ScrollArea::horizontal().id_salt("ribbon_actions").auto_shrink([false, true]).show(ui, |ui| {
+                        let width = ui.available_width();
+                        let commands_width = if side_controls { (width - fixed_width - t.space_12).max(1.0) } else { width };
+                        let (_, row) = ui.allocate_space(vec2(width, solidcraft_ui_kit::ribbon::GROUP_HEIGHT + RIBBON_SCROLL_GUTTER));
+                        let commands = Rect::from_min_size(row.min, vec2(commands_width, row.height()));
+                        let mut command_ui = ui
+                            .new_child(egui::UiBuilder::new().id_salt("ribbon_command_host").max_rect(commands).layout(Layout::top_down(Align::Min)));
+                        command_ui.set_clip_rect(ui.clip_rect().intersect(commands));
+                        ScrollArea::horizontal().id_salt("ribbon_actions").auto_shrink([false, true]).show(&mut command_ui, |ui| {
                             describe_scroll_viewport(ui);
-                            ui.horizontal_top(|ui| add(ui, *tab));
+                            ui.horizontal_top(|ui| add(ui, RibbonSection::Commands(*tab)));
                         });
+                        if pinned_fields > 0 {
+                            let controls = if side_controls {
+                                ui.painter().vline(commands.right() + t.space_6, row.top()..=row.bottom(), Stroke::new(1.0, t.border));
+                                Rect::from_min_size(pos2(row.right() - fixed_width, row.top()), vec2(fixed_width, row.height()))
+                            } else {
+                                ui.add_space(t.space_8);
+                                ui.allocate_space(vec2(width, controls_height)).1
+                            };
+                            let mut controls_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .id_salt("ribbon_controls")
+                                    .max_rect(controls)
+                                    .layout(Layout::left_to_right(Align::Min).with_main_wrap(!side_controls)),
+                            );
+                            controls_ui.set_clip_rect(ui.clip_rect().intersect(controls));
+                            controls_ui.spacing_mut().item_spacing.x = t.space_8;
+                            add(&mut controls_ui, RibbonSection::Controls { compact: !side_controls });
+                        }
                     });
                 });
             });
@@ -577,7 +649,7 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -
 fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool, wide: bool) -> Response {
     let t = Tokens::get();
     let galley = ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_body), t.text);
-    let size = vec2(galley.size().x + 2.0 * if wide { t.space_8 } else { t.space_4 }, t.control_height - t.space_6);
+    let size = vec2(galley.size().x + 2.0 * if wide { t.space_8 } else { t.space_4 }, t.space_24);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| WidgetInfo::selected(Role::Tab, true, selected, title));
     if ui.is_rect_visible(rect) {
@@ -909,18 +981,25 @@ fn layer_choice_patch(ui: &Ui, rect: Rect, color: Color32) {
 
 /// Place a standard themed field in the ribbon using the existing group height and caption.
 /// Its own control opens any menu; the caption adds no second popup or interaction target.
-pub fn ribbon_field<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+/// Compact fields place the caption above the control for a wrapping persistent settings row.
+pub fn ribbon_field<R>(ui: &mut Ui, title: &str, compact: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
     let t = Tokens::get();
-    let width = t.control_height * 6.0;
-    let height = RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP + t.font_small + t.space_4;
+    let width = t.control_height * if compact { 5.5 } else { 6.0 };
+    let height =
+        if compact { t.control_height + t.font_small + t.space_8 } else { RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP + t.font_small + t.space_4 };
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    let field = Rect::from_min_max(
-        rect.min + vec2(RIBBON_GROUP_PADDING, t.space_8),
-        pos2(rect.right() - RIBBON_GROUP_PADDING, rect.top() + RIBBON_TOOL_HEIGHT),
-    );
-    let result = ui.scope_builder(egui::UiBuilder::new().max_rect(field).layout(Layout::top_down(Align::Min)), add).inner;
+    let field = if compact {
+        Rect::from_min_max(rect.min + vec2(RIBBON_GROUP_PADDING, t.font_small + t.space_4), rect.max - vec2(RIBBON_GROUP_PADDING, 0.0))
+    } else {
+        Rect::from_min_max(
+            rect.min + vec2(RIBBON_GROUP_PADDING, t.space_8),
+            pos2(rect.right() - RIBBON_GROUP_PADDING, rect.top() + RIBBON_TOOL_HEIGHT),
+        )
+    };
+    let mut field_ui = ui.new_child(egui::UiBuilder::new().id_salt(("ribbon_field", title)).max_rect(field).layout(Layout::top_down(Align::Center)));
+    let result = add(&mut field_ui);
     ui.painter().text(
-        pos2(rect.center().x, rect.top() + RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP),
+        pos2(rect.center().x, rect.top() + if compact { 0.0 } else { RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP }),
         Align2::CENTER_TOP,
         title,
         FontId::proportional(t.font_small),

@@ -8,12 +8,15 @@ use serde_json::json;
 
 /// Stable saved slots retain View=1 and the former Manage slot for Sheets.
 pub(super) const TAB_ORDER: [usize; 5] = [0, 4, 2, 3, 1];
-/// Routing and manufacturing extend the existing saved slots without renumbering them.
-pub(super) const ROUTE_TAB: usize = 5;
-/// Fabrication has a dedicated slot after routing.
+/// Legacy saved Route tabs now restore Layout, where the routing tools live.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const LEGACY_ROUTE_TAB: usize = 5;
+/// Drawing has its own slot without reusing the former Route slot.
+pub(super) const DRAW_TAB: usize = 7;
+/// Fabrication retains its existing saved slot.
 pub(super) const MANUFACTURE_TAB: usize = 6;
 /// PCB shares Analyze, Libraries and View with schematic hosts.
-pub(super) const BOARD_TAB_ORDER: [usize; 6] = [0, ROUTE_TAB, 2, MANUFACTURE_TAB, 3, 1];
+pub(super) const BOARD_TAB_ORDER: [usize; 6] = [0, DRAW_TAB, 2, MANUFACTURE_TAB, 3, 1];
 
 /// Names shared by live control inspection and its explicit tab-selection command.
 #[cfg(not(target_arch = "wasm32"))]
@@ -23,7 +26,8 @@ pub(super) fn tab_name(slot: usize) -> &'static str {
         2 => "analyze",
         3 => "libraries",
         4 => "sheets",
-        ROUTE_TAB => "route",
+        LEGACY_ROUTE_TAB => "layout",
+        DRAW_TAB => "draw",
         MANUFACTURE_TAB => "manufacture",
         _ => "capture",
     }
@@ -38,7 +42,8 @@ pub(super) fn tab_slot(name: &str) -> usize {
         "analyze" => 2,
         "libraries" => 3,
         "sheets" | "manage" => 4,
-        "route" => ROUTE_TAB,
+        "route" => 0,
+        "draw" => DRAW_TAB,
         "manufacture" => MANUFACTURE_TAB,
         _ => 0,
     }

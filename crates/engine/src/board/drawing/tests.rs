@@ -127,3 +127,74 @@ fn later_stackup_setup_preserves_edge_layer() {
     let docs = encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
 }
+
+/// Technical-layer widths survive native/clipboard codecs alongside upstream reference
+/// overrides, while Undo restores the old format and malformed stroke values are atomic.
+#[test]
+fn physical_graphics_preserve_widths_reference_overrides_and_history() {
+    let mut s = session(true, true);
+    let view = s.project().unwrap().boards().next().unwrap();
+    let footprint = view.footprints().next().unwrap().id.clone();
+    let board = view.target.board;
+    let layer = view.layers().into_iter().find(|l| l.purpose == LayerPurpose::Silkscreen).unwrap().id;
+    s.apply(
+        crate::board::reference::SET_REFERENCE_TEXT,
+        &json!({"board":board,"footprint":footprint,"appearance":{"text":"Input"},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&before["board.json"]).unwrap()["format"], "pcbcraft-board/15");
+    for width in [0, 9_999, 10_000_001] {
+        assert!(
+            s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points(),"closed":false,"stroke_nm":width,"expected_revision":s.revision()}))
+                .is_err()
+        );
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    }
+    s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points(),"closed":false,"stroke_nm":250_000,"expected_revision":s.revision()})).unwrap();
+    let after = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&after["board.json"]).unwrap()["format"], "pcbcraft-board/16");
+    assert_eq!(encode_documents(decode_documents(&after).unwrap()).unwrap(), after);
+    let view = s.project().unwrap().boards().next().unwrap();
+    let id = view.drawings()[0].id;
+    let fragment = crate::board::clipboard::BoardFragment::capture(
+        s.project().unwrap(),
+        &crate::board::clipboard::BoardSelection { drawings: [id].into(), ..Default::default() },
+        false,
+    )
+    .unwrap();
+    let text = fragment.to_text().unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["format"], "pcbcraft-clipboard/2");
+    assert_eq!(value["drawings"][0]["stroke_nm"], 250_000);
+    assert_eq!(crate::board::clipboard::BoardFragment::from_text(&text).unwrap().to_text().unwrap(), text);
+    let mut malformed = after.clone();
+    let mut value: Value = serde_json::from_slice(&malformed["board.json"]).unwrap();
+    value["format"] = json!("pcbcraft-board/15");
+    malformed.insert("board.json".into(), serde_json::to_vec(&value).unwrap());
+    assert!(decode_documents(&malformed).is_err());
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after);
+}
+
+/// Each visible manufacturing surface receives only its own explicit board artwork;
+/// the outline and opposite surfaces remain byte-identical.
+#[test]
+fn technical_graphics_reach_their_fabrication_layers() {
+    let mut s = session(true, false);
+    s.apply(ADD_DRAWING, &json!({"layer":edge(&s),"points":points(),"closed":true,"expected_revision":s.revision()})).unwrap();
+    for (purpose, label) in [(LayerPurpose::Silkscreen, "Silkscreen_Top"), (LayerPurpose::Mask, "Mask_Top"), (LayerPurpose::Paste, "Paste_Top")] {
+        let view = s.project().unwrap().boards().next().unwrap();
+        let layer = view.layers().into_iter().find(|l| l.purpose == purpose && l.side == Some(super::super::setup::Side::Front)).unwrap().id;
+        let before = view.fabrication_outputs().unwrap();
+        s.apply(ADD_DRAWING,&json!({"layer":layer,"points":[{"x_nm":0,"y_nm":0},{"x_nm":1_000_000,"y_nm":0}],"closed":false,"stroke_nm":250_000,"expected_revision":s.revision()})).unwrap();
+        let after = s.project().unwrap().boards().next().unwrap().fabrication_outputs().unwrap();
+        let changed: Vec<_> = before.iter().zip(&after).filter(|(a, b)| a.contents != b.contents).map(|(_, b)| b.name.as_str()).collect();
+        assert_eq!(changed.len(), 1, "{label}: {changed:?}");
+        assert!(changed[0].contains(label));
+        let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    }
+}

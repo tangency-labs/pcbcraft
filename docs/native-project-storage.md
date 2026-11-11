@@ -347,6 +347,17 @@ offset or nonempty print override. Resetting the last of both restores the
 format required by the board's other data.
 The [footprint format specification](footprint-schema.md) defines its placement schema and coordinate contract.
 
+Board format 16 adds optional integer `stroke_nm` to layer graphics, bounded
+from 10,000 to 10,000,000 nanometres. New non-copper technical graphics require
+an explicit width; omitted widths retain legacy Board Outline hairlines, and
+explicit nulls are rejected. The format carries every field supported by format
+15, including reference-position and print overrides, and requires at least one
+stroked graphic. Older formats reject the new field. Graphics reference existing
+non-copper layer UUIDs; conductive copper linework uses the existing track records
+and their connectivity/DRC/export rules. Removing the last stroked graphic returns
+the board to the format required by its remaining data. Unchanged legacy boards
+retain their previous encoding and bytes.
+
 The earlier local format 8 rectangle remains readable and byte-stable on no-op
 save. Its first actual geometry edit materializes a layer-addressed drawing in
 format 9. Versions 1–7 keep their encoding until new data is authored; they reject

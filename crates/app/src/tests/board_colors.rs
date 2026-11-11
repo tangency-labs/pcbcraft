@@ -328,7 +328,7 @@ fn technical_layer_colors_reach_edges_silkscreen_and_ribbon_patches() {
     };
     assert!(path_color(&h, egui::Color32::from_rgb(0xAE, 0x63, 0xD1)));
     assert!(path_color(&h, egui::Color32::from_rgb(0x40, 0xC8, 0xD0)));
-    click(&mut h, "Route");
+    click(&mut h, "Layout");
     click(&mut h, "Active layer");
     click(&mut h, "Board Outline");
     let field = h.get_by_label("Active layer").rect();
@@ -336,7 +336,7 @@ fn technical_layer_colors_reach_edges_silkscreen_and_ribbon_patches() {
     assert!(
         h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Rect(rect) if rect.fill==color && field.contains_rect(rect.rect)))
     );
-    click(&mut h, "Route");
+    click(&mut h, "Layout");
     click(&mut h, "Active layer");
     assert!(
         h.output().shapes.iter().filter(|shape| matches!(&shape.shape,egui::Shape::Rect(rect) if rect.fill==color)).count() >= 2,

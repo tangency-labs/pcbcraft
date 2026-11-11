@@ -4,7 +4,6 @@ use crate::{
     editor_view::{DocumentTarget, Workspace},
 };
 use egui::Ui;
-use pcbcraft_chrome::menu::CheckKind;
 use pcbcraft_chrome::{
     shell,
     workspace::{self, Placement, RibbonTool, ToolIcon},
@@ -20,21 +19,24 @@ fn length_field(
     range: std::ops::RangeInclusive<i64>,
     unit: pcbcraft_chrome::units::Unit,
     enabled: bool,
+    compact: bool,
 ) -> bool {
     let per_unit = match unit {
         pcbcraft_chrome::units::Unit::Mm => pcbcraft_chrome::units::NM_PER_MM,
         pcbcraft_chrome::units::Unit::Mil => pcbcraft_chrome::units::NM_PER_MIL,
     } as f64;
     let mut shown = *value as f64 / per_unit;
-    let changed = workspace::ribbon_field(ui, title, |ui| {
+    let changed = workspace::ribbon_field(ui, title, compact, |ui| {
         ui.add_enabled(
             enabled,
             egui::DragValue::new(&mut shown)
                 .range(*range.start() as f64 / per_unit..=*range.end() as f64 / per_unit)
                 .speed(if unit == pcbcraft_chrome::units::Unit::Mm { 0.01 } else { 0.5 })
                 .max_decimals(3)
+                .clip_text(true)
                 .suffix(format!(" {}", unit.symbol())),
         )
+        .accessible_name(title)
         .changed()
     });
     if changed {
@@ -45,7 +47,7 @@ fn length_field(
 
 /// One ribbon field for the next via's pad diameter and drill, in the display units. The drill
 /// stays smaller than the pad; both hold whole nanometers. Returns whether either changed.
-fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_chrome::units::Unit, enabled: bool) -> bool {
+fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_chrome::units::Unit, enabled: bool, compact: bool) -> bool {
     use pcbcraft_engine::board::track::{MAX_VIA_DIAMETER_NM, MIN_VIA_DRILL_NM};
     let per_unit = match unit {
         pcbcraft_chrome::units::Unit::Mm => pcbcraft_chrome::units::NM_PER_MM,
@@ -53,7 +55,7 @@ fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_ch
     } as f64;
     let speed = if unit == pcbcraft_chrome::units::Unit::Mm { 0.01 } else { 0.5 };
     let (mut pad, mut hole) = (*diameter as f64 / per_unit, *drill as f64 / per_unit);
-    let changed = workspace::ribbon_field(ui, "Via pad / drill", |ui| {
+    let changed = workspace::ribbon_field(ui, "Via pad / drill", compact, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             let pad_changed = ui
@@ -62,8 +64,10 @@ fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_ch
                     egui::DragValue::new(&mut pad)
                         .range((MIN_VIA_DRILL_NM + 1) as f64 / per_unit..=MAX_VIA_DIAMETER_NM as f64 / per_unit)
                         .speed(speed)
-                        .max_decimals(3),
+                        .max_decimals(3)
+                        .clip_text(true),
                 )
+                .accessible_name("Via pad diameter")
                 .on_hover_text("Via pad diameter")
                 .changed();
             ui.label("/");
@@ -74,8 +78,10 @@ fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_ch
                         .range(MIN_VIA_DRILL_NM as f64 / per_unit..=(MAX_VIA_DIAMETER_NM - 1) as f64 / per_unit)
                         .speed(speed)
                         .max_decimals(3)
+                        .clip_text(true)
                         .suffix(format!(" {}", unit.symbol())),
                 )
+                .accessible_name("Via drill diameter")
                 .on_hover_text("Via drill diameter")
                 .changed();
             pad_changed || hole_changed
@@ -165,14 +171,14 @@ impl PcbApp {
     /// Layout is the fallback for slots not handled by these PCB task groups.
     pub(super) fn board_tab(&mut self, ui: &mut Ui, slot: usize) {
         match slot {
-            crate::ribbon::ROUTE_TAB => self.board_route_tab(ui),
+            crate::ribbon::DRAW_TAB => self.board_draw_tab(ui),
             2 => self.board_analyze_tab(ui),
             crate::ribbon::MANUFACTURE_TAB => self.board_manufacture_tab(ui),
             _ => self.board_layout_tab(ui),
         }
     }
 
-    /// Placement, board drawings and selection edits, with board setup and synchronization.
+    /// Placement, routing and selection edits, with board setup and synchronization.
     fn board_layout_tab(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let editing = self.views.active.board.editing_footprint();
@@ -194,6 +200,8 @@ impl PcbApp {
                 .and_then(|board| board.footprints().find(|f| self.views.active.board.selection.contains(&f.id)).map(|f| f.component));
             self.begin_footprint_assignment(component);
         }
+        workspace::ribbon_separator(ui);
+        self.board_route_tools(ui);
         workspace::ribbon_separator(ui);
         let idle = enabled && !crate::board_clipboard::busy(&self.views.active.board);
         let selected_items = self.session.project().is_some_and(|p| !crate::board_clipboard::selection(&self.views.active.board, p).is_empty());
@@ -222,41 +230,6 @@ impl PcbApp {
             Some(3) => self.request_clipboard(ui.ctx(), true),
             Some(4) => self.duplicate_board_clipboard(),
             _ => {}
-        }
-        workspace::ribbon_separator(ui);
-
-        let can_draw =
-            self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))).is_some_and(
-                |board| {
-                    crate::board_drawing::can_draw(board, self.views.active.board.active_layer.as_deref(), &self.views.active.board.hidden_layers)
-                },
-            );
-        let outline = [
-            RibbonTool {
-                icon: ToolIcon::Line,
-                label: "Line",
-                description: "Draw lines on Board Outline",
-                shortcut: "",
-                enabled: enabled && can_draw && !editing,
-                active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Lines),
-                menu_check: None,
-            },
-            RibbonTool {
-                icon: ToolIcon::Rectangle,
-                label: "Rectangle",
-                description: "Draw rectangle on Board Outline",
-                shortcut: "",
-                enabled: enabled && can_draw && !editing,
-                active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Rectangle),
-                menu_check: None,
-            },
-        ];
-        if let Some(index) = workspace::ribbon_group(ui, "Outline", &outline) {
-            let tool = if index == 0 { crate::board_drawing::Tool::Lines } else { crate::board_drawing::Tool::Rectangle };
-            let layer = self.views.active.board.active_layer.clone();
-            self.views.active.board.tracks.cancel();
-            self.views.active.board.measure.cancel();
-            self.views.active.board.drawing.start(tool, layer);
         }
         workspace::ribbon_separator(ui);
 
@@ -302,24 +275,12 @@ impl PcbApp {
             active: false,
             menu_check: None,
         };
-        match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &[delete]) {
-            Some(0) => self.views.active.board.move_requested = true,
-            Some(1) => self.views.active.board.rotate_requested = 90,
-            Some(2) => self.views.active.board.flip_requested = true,
-            Some(3) => self.delete_board_items(),
-            _ => {}
-        }
-        workspace::ribbon_separator(ui);
         let count = self.views.active.board.selection.len();
         let aligns: Vec<RibbonTool> = ALIGNMENTS
             .iter()
             .map(|(label, mode)| RibbonTool {
                 icon: ToolIcon::Align,
-                label: match *mode {
-                    AlignMode::Left => "Left",
-                    AlignMode::Right => "Right",
-                    _ => label,
-                },
+                label,
                 description: label,
                 shortcut: "",
                 enabled: enabled && !editing && count >= mode.minimum(),
@@ -327,8 +288,14 @@ impl PcbApp {
                 menu_check: None,
             })
             .collect();
-        if let Some(index) = workspace::ribbon_group_with_menu(ui, "Align", &aligns[..2], &aligns[2..]) {
-            self.align_footprints(ALIGNMENTS[index].1);
+        let menu: Vec<_> = std::iter::once(delete).chain(aligns).collect();
+        match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &menu) {
+            Some(0) => self.views.active.board.move_requested = true,
+            Some(1) => self.views.active.board.rotate_requested = 90,
+            Some(2) => self.views.active.board.flip_requested = true,
+            Some(3) => self.delete_board_items(),
+            Some(index) if (4..4 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 4].1),
+            _ => {}
         }
         workspace::ribbon_separator(ui);
         let design = [
@@ -350,15 +317,6 @@ impl PcbApp {
                 active: false,
                 menu_check: None,
             },
-            RibbonTool {
-                icon: ToolIcon::Settings,
-                label: "Board setup",
-                description: "Board setup",
-                shortcut: "",
-                enabled,
-                active: false,
-                menu_check: None,
-            },
         ];
         match workspace::ribbon_group(ui, "Board", &design) {
             Some(0) => self.message = self.begin_board_update(self.views.active.id()).err(),
@@ -369,10 +327,11 @@ impl PcbApp {
 
     /// Tracks and vias share their layer and dimension controls; planned copper tools
     /// stay in the Route menu and cannot submit commands.
-    fn board_route_tab(&mut self, ui: &mut Ui) {
+    fn board_route_tools(&mut self, ui: &mut Ui) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         let editing = self.views.active.board.editing_footprint();
-        let planned = |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, toggle: false };
+        let planned =
+            |icon, label, description| RibbonTool { icon, label, description, shortcut: "", enabled: false, active: false, menu_check: None };
         let route = [RibbonTool {
             icon: ToolIcon::Track,
             label: "Track",
@@ -406,13 +365,56 @@ impl PcbApp {
             Some(1) => self.start_via(),
             _ => {}
         }
-        workspace::ribbon_separator(ui);
-        self.active_layer_field(ui);
+    }
+
+    /// Draw graphic paths on the active layer; routing and editing remain in Layout.
+    fn board_draw_tab(&mut self, ui: &mut Ui) {
+        let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
+        let editing = self.views.active.board.editing_footprint();
+        let can_draw =
+            self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target))).is_some_and(
+                |board| {
+                    crate::board_drawing::can_draw(board, self.views.active.board.active_layer.as_deref(), &self.views.active.board.hidden_layers)
+                },
+            );
+        let outline = [
+            RibbonTool {
+                icon: ToolIcon::Line,
+                label: "Line",
+                description: "Draw lines on active layer",
+                shortcut: "",
+                enabled: enabled && can_draw && !editing,
+                active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Lines),
+                menu_check: None,
+            },
+            RibbonTool {
+                icon: ToolIcon::Rectangle,
+                label: "Rectangle",
+                description: "Draw rectangle on active layer",
+                shortcut: "",
+                enabled: enabled && can_draw && !editing,
+                active: self.views.active.board.drawing.tool == Some(crate::board_drawing::Tool::Rectangle),
+                menu_check: None,
+            },
+        ];
+        if let Some(index) = workspace::ribbon_group(ui, "Draw", &outline) {
+            let tool = if index == 0 { crate::board_drawing::Tool::Lines } else { crate::board_drawing::Tool::Rectangle };
+            let layer = self.views.active.board.active_layer.clone();
+            self.views.active.board.tracks.cancel();
+            self.views.active.board.measure.cancel();
+            self.views.active.board.drawing.start(tool, layer);
+        }
+    }
+
+    /// Persistent layer and dimension fields follow the focused board across every PCB tab.
+    pub(super) fn board_ribbon_controls(&mut self, ui: &mut Ui, compact: bool) {
+        let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
+        self.active_layer_field(ui, compact);
         use pcbcraft_engine::board::track::{MAX_WIDTH_NM, MIN_WIDTH_NM};
         let unit = self.preferences.units;
         let tracks = &mut self.views.active.board.tracks;
-        length_field(ui, "Track width", &mut tracks.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, enabled);
-        via_field(ui, &mut tracks.via_diameter_nm, &mut tracks.via_drill_nm, unit, enabled);
+        length_field(ui, "Track / line width", &mut tracks.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, enabled, compact);
+        via_field(ui, &mut tracks.via_diameter_nm, &mut tracks.via_drill_nm, unit, enabled, compact);
     }
 
     /// Analysis opens existing DRC, measurement and counterpart tools without editing the board.
@@ -486,9 +488,15 @@ impl PcbApp {
 
     /// The ribbon's active-layer chooser, sharing the Layers card's view-local handler. Hidden
     /// layers stay choosable and say so; choosing one changes only this view's active layer.
-    fn active_layer_field(&mut self, ui: &mut Ui) {
+    fn active_layer_field(&mut self, ui: &mut Ui, compact: bool) {
         let Some(board) = self.session.project().and_then(|project| self.views.active.board.target.and_then(|target| project.board_view(target)))
         else {
+            workspace::ribbon_field(ui, "Active layer", compact, |ui| {
+                let mut empty = 0usize;
+                ui.add_enabled_ui(false, |ui| {
+                    workspace::layer_choice(ui, "Active layer", &mut empty, &[(0, "No board", egui::Color32::TRANSPARENT)])
+                });
+            });
             return;
         };
         let layers = crate::board_panels::ordered_layers(board);
@@ -507,7 +515,7 @@ impl PcbApp {
             .collect();
         let mut selected =
             layers.iter().position(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str())).unwrap_or(0);
-        let changed = workspace::ribbon_field(ui, "Active layer", |ui| workspace::layer_choice(ui, "Active layer", &mut selected, &options));
+        let changed = workspace::ribbon_field(ui, "Active layer", compact, |ui| workspace::layer_choice(ui, "Active layer", &mut selected, &options));
         if changed && let Some(layer) = layers.get(selected) {
             self.views.active.board.set_layer(&layer.id.to_string(), true, None);
         }

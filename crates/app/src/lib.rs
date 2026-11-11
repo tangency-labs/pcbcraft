@@ -261,7 +261,7 @@ pub struct PcbApp {
 
 /// The Schematic workspace's ribbon tabs, in order.
 const RIBBON_TABS: [&str; 5] = ["Capture", "Sheets", "Analyze", "Libraries", "View"];
-const BOARD_RIBBON_TABS: [&str; 6] = ["Layout", "Route", "Analyze", "Manufacture", "Libraries", "View"];
+const BOARD_RIBBON_TABS: [&str; 6] = ["Layout", "Draw", "Analyze", "Manufacture", "Libraries", "View"];
 const VIEW_TAB: usize = 1;
 
 /// Built-in workspace contributions. The picker handles presentation only; each document
@@ -282,7 +282,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             multiple_views: true,
             title: "PCB layout",
             description: "Inspect footprint placements and linked schematic components",
-            tabs: Some("Layout · Route · Analyze · Manufacture · Libraries · View"),
+            tabs: Some("Layout · Draw · Analyze · Manufacture · Libraries · View"),
             icon: workspace::WorkspaceIcon::Layout,
             current: false,
         },
@@ -869,17 +869,30 @@ impl PcbApp {
                 menu_check: None,
             });
         }
-        let response =
-            workspace::ribbon(ui, current.title(), tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, &quick, |ui, shown| {
-                let slot = order[shown];
-                if slot == VIEW_TAB {
-                    self.view_tab(ui);
-                } else if board && slot != 3 {
-                    self.board_tab(ui, slot);
-                } else {
-                    self.ported_ribbon_tab(ui, slot);
+        let response = workspace::ribbon_with_controls(
+            ui,
+            current.title(),
+            tabs,
+            &mut tab,
+            workspace::RibbonLayout {
+                workspaces: workspace::Workspaces { entries: &entries, ..WORKSPACES },
+                quick: &quick,
+                pinned_fields: if board { 3 } else { 0 },
+            },
+            |ui, section| match section {
+                workspace::RibbonSection::Commands(shown) => {
+                    let slot = order[shown];
+                    if slot == VIEW_TAB {
+                        self.view_tab(ui);
+                    } else if board && slot != 3 {
+                        self.board_tab(ui, slot);
+                    } else {
+                        self.ported_ribbon_tab(ui, slot);
+                    }
                 }
-            });
+                workspace::RibbonSection::Controls { compact } => self.board_ribbon_controls(ui, compact),
+            },
+        );
         self.ribbon_tab = order[tab];
         if let Some(action) = response.quick {
             if !board && action == 0 {
@@ -911,7 +924,7 @@ impl PcbApp {
             shortcut: "",
             enabled: has_project,
             active: self.preferences.grid_visible(!schematic),
-            toggle: true,
+            menu_check: Some(pcbcraft_chrome::menu::CheckKind::Toggle),
         }];
         if workspace::ribbon_group(ui, "Display", &grid).is_some() {
             self.preferences.set_grid_visible(!schematic, !self.preferences.grid_visible(!schematic));
@@ -996,7 +1009,7 @@ impl PcbApp {
                 shortcut: "",
                 enabled: self.session.project().and_then(|project| project.board_target()).is_some(),
                 active: self.views.active.camera.mirrored(),
-                toggle: true,
+                menu_check: Some(pcbcraft_chrome::menu::CheckKind::Toggle),
             });
         }
         match workspace::ribbon_group(ui, "Navigate", &navigate) {

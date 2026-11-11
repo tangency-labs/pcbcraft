@@ -175,24 +175,18 @@ fn move_button_uses_the_symbol_move_workflow() {
 /// measured scroll displacement so adding another ribbon tool preserves this clipping case.
 #[test]
 fn clicks_reach_a_tool_scrolled_under_the_ribbon_edge() {
-    const RECTANGLE: &str = "Draw rectangle on Board Outline";
+    const RECTANGLE: &str = "Draw rectangle on active layer";
     let mut h = harness();
     h.set_size(egui::vec2(1100., 700.));
     resistor_with_board_at_origin(&mut h);
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
-    h.get_by_label("Board setup").scroll_to_me();
+    click(&mut h, "Draw");
+    h.set_size(egui::vec2(320., 850.));
     h.run();
-    let width = h.ctx.content_rect().width() + 20. - h.get_by_label(RECTANGLE).rect().left();
-    h.set_size(egui::vec2(width, 700.));
-    h.run();
-    h.get_by_label("Board setup").scroll_to_me();
-    h.run();
-    let rect = h.get_by_label(RECTANGLE).rect();
-    assert!(h.ctx.content_rect().contains_rect(rect), "the tool stays inside the window: {rect:?}");
-    assert!(!crate::tests::fully_visible(&h, RECTANGLE), "the ribbon hides the tool: {rect:?}");
-    assert!(!h.get_by_label(RECTANGLE).accesskit_node().is_disabled());
+    let selector = h.get_by_label("Active layer").rect();
     click(&mut h, RECTANGLE);
+    assert_eq!(h.get_by_label("Active layer").rect(), selector);
     assert_eq!(h.state().views.active.board.drawing.tool, Some(crate::board_drawing::Tool::Rectangle));
 }
 
@@ -206,21 +200,23 @@ fn pcb_tasks_are_grouped_on_separate_tabs() {
     click(&mut h, "Choose workspace");
     click(&mut h, "PCB layout");
     let before = h.state().session.inspect();
-    for group in ["Place", "Clipboard", "Outline", "Modify", "Align", "Board"] {
+    for group in ["Place", "Route", "Clipboard", "Modify", "Board"] {
         h.get_by_label(&format!("{group} menu"));
     }
     for tool in ["Assign and place component footprints", "Update PCB from schematic", "Board setup"] {
         assert!(!h.get_by_label(tool).accesskit_node().is_disabled());
     }
-    for tool in ["Place vias", "Run design rules check", "Measure distance", "Generate fabrication outputs", "View the board from below"] {
+    for tool in ["Run design rules check", "Measure distance", "Generate fabrication outputs", "View the board from below"] {
         assert!(h.query_by_label(tool).is_none(), "{tool} should have its own task tab");
     }
     click(&mut h, "Board setup");
     assert!(!matches!(h.state().dialog, Dialog::None));
     click(&mut h, "Cancel");
-    click(&mut h, "Route");
+    click(&mut h, "Layout");
     h.get_by_label("Place vias");
     h.get_by_label("Route tracks on the active copper layer");
+    assert!(h.query_by_role_and_label(egui::Role::Tab, "Route").is_none());
+    assert!(h.query_by_label("Align menu").is_none());
     h.get_by_label("Active layer");
     click(&mut h, "Route menu");
     for tool in ["Zone", "Pair", "Tune", "Refill zones"] {
@@ -255,13 +251,92 @@ fn all_pcb_tabs_fit_compact_headers() {
     for width in [320., 400., 520., 700., 1400.] {
         h.set_size(egui::vec2(width, 850.));
         h.run();
-        for tab in ["Layout", "Route", "Analyze", "Manufacture", "Libraries", "View"] {
+        for tab in ["Layout", "Draw", "Analyze", "Manufacture", "Libraries", "View"] {
             let rect = h.get_by_role_and_label(egui::Role::Tab, tab).rect();
             assert!(rect.left() >= 0. && rect.right() <= width, "{width}: {tab} {rect:?}");
             click_tab(&mut h, tab);
         }
-        click(&mut h, "Route");
+        click(&mut h, "Layout");
         h.get_by_label("Place vias");
     }
     assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Layer and physical-size controls stay visible, in the same place and with the same
+/// widget identities on each PCB tab; changing tabs cannot clear their values.
+#[test]
+fn pcb_editing_fields_are_persistent_outside_the_commands() {
+    let mut app = PcbApp::default();
+    app.start_new_project_in(Workspace::Board);
+    let mut h = Harness::builder().with_size(egui::vec2(1400., 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.ctx.options_mut(|options| options.warn_on_id_clash = true);
+    h.run();
+    for width in [1400., 900., 760., 520., 400., 320.] {
+        h.set_size(egui::vec2(width, 900.));
+        h.run();
+        let labels = ["Active layer", "Track / line width", "Via pad diameter", "Via drill diameter"];
+        let bounds: Vec<_> = labels.iter().map(|name| h.get_by_label(name).rect()).collect();
+        let identities: Vec<_> = labels.iter().map(|name| h.get_by_label(name).accesskit_node().id()).collect();
+        for tab in ["Layout", "Draw", "Analyze", "Manufacture", "Libraries", "View"] {
+            click_tab(&mut h, tab);
+            let clashes: Vec<_> = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text.contains("use of widget ID") => Some((text.galley.job.text.clone(), text.pos)),
+                    _ => None,
+                })
+                .collect();
+            assert!(clashes.is_empty(), "{width} {tab}: editing fields must not produce widget-ID clash warnings: {clashes:?}");
+            let caption = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == "Track / line width" => Some(text.visual_bounding_rect()),
+                    _ => None,
+                })
+                .unwrap();
+            assert!((caption.center().x - h.get_by_label("Track / line width").rect().center().x).abs() <= 1.0);
+            for (index, name) in labels.iter().enumerate() {
+                let node = h.get_by_label(name);
+                let rect = node.rect();
+                assert_eq!(rect, bounds[index], "{width} {tab}: {name}");
+                assert_eq!(node.accesskit_node().id(), identities[index], "{width} {tab}: {name}");
+                assert!(rect.left() >= 0. && rect.right() <= width, "{width} {tab}: {name} {rect:?}");
+                assert!(
+                    rect.bottom() <= h.get_by_label("PCB canvas").rect().top(),
+                    "{width} {tab}: field overlaps canvas at {}: {name} {rect:?}",
+                    h.get_by_label("PCB canvas").rect().top()
+                );
+            }
+        }
+    }
+}
+
+/// One click permits typed dimensions in the display unit on either ribbon layout;
+/// changing the next stroke width is view state and cannot edit project history.
+#[test]
+fn pcb_stroke_width_accepts_typed_values() {
+    use pcbcraft_chrome::units::Unit;
+    for width in [1400., 760.] {
+        for (unit, text, expected) in [(Unit::Mm, "0.4", 400_000), (Unit::Mil, "20", 508_000)] {
+            let mut app = PcbApp::default();
+            app.start_new_project_in(Workspace::Board);
+            app.preferences.units = unit;
+            let mut h = Harness::builder().with_size(egui::vec2(width, 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let before = h.state().session.snapshot().unwrap();
+            click(&mut h, "Track / line width");
+            h.get_by_label("Track / line width").type_text(text);
+            h.run();
+            h.key_press(Key::Enter);
+            h.run();
+            assert_eq!(h.state().views.active.board.tracks.width_nm, expected, "{width} {unit:?}");
+            click_tab(&mut h, "Draw");
+            assert_eq!(h.state().views.active.board.tracks.width_nm, expected);
+            assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        }
+    }
 }

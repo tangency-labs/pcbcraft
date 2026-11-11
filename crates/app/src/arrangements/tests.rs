@@ -610,7 +610,7 @@ fn saved_ribbon_tabs_keep_the_legacy_view_slot() {
         assert_eq!(h.state().arrangement_snapshot().unwrap(), saved);
     }
     let mut invalid = h.state().arrangement_snapshot().unwrap();
-    invalid.hosts[0].panels.ribbon = 7;
+    invalid.hosts[0].panels.ribbon = 8;
     assert!(!invalid.valid());
 }
 
@@ -622,7 +622,7 @@ fn pcb_task_tabs_restore_and_fall_back_in_other_workspaces() {
     h.state_mut().start_new_project_in(Workspace::Board);
     h.run();
     let before = h.state().session.snapshot().unwrap();
-    for (name, slot) in [("Route", 5), ("Analyze", 2), ("Manufacture", 6), ("Libraries", 3), ("View", 1)] {
+    for (name, slot) in [("Draw", 7), ("Analyze", 2), ("Manufacture", 6), ("Libraries", 3), ("View", 1)] {
         crate::tests::click_tab(&mut h, name);
         let saved = h.state().arrangement_snapshot().unwrap();
         assert_eq!(saved.hosts[0].panels.ribbon, slot);
@@ -635,7 +635,7 @@ fn pcb_task_tabs_restore_and_fall_back_in_other_workspaces() {
         assert_eq!(h.state().ribbon_tab, slot);
         assert_eq!(h.state().arrangement_snapshot().unwrap(), saved);
     }
-    click(&mut h, "Route");
+    click(&mut h, "Draw");
     click(&mut h, "Choose workspace");
     click(&mut h, "Schematic");
     assert_eq!(h.state().ribbon_tab, 0);

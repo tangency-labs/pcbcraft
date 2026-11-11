@@ -137,7 +137,8 @@ fn reference_selection_highlights_its_owner_and_protects_footprint_geometry() {
     assert_eq!(reset.reference_appearance.text, "R99");
     assert_eq!(reset.reference_appearance.size.height_nm, 1_000_000);
     assert_eq!((reset.position, reset.rotation, reset.bottom), pose);
-    click(&mut h, "Draw lines on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw lines on active layer");
     let canvas = h.get_by_label("PCB canvas").rect();
     click_canvas_at(&mut h, canvas.center_top() + egui::vec2(0., 100.));
     assert!(h.state().views.active.board.reference.selected.is_none(), "An outline tool replaces the text edit target");

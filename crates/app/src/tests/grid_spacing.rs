@@ -88,7 +88,7 @@ fn grid_presets_announce_selected_radio_choices_without_document_edits() {
         h.run_steps(1);
         assert!(h.output().platform_output.events.iter().any(|event| {
             matches!(event, egui::output::OutputEvent::Clicked(info)
-                if info.label.as_deref() == Some("25 mil") && info.typ == egui::WidgetType::RadioButton && info.selected == Some(true))
+                if info.label.as_deref() == Some("25 mil") && info.role == egui::Role::RadioButton && info.selected == Some(true))
         }));
         assert_eq!(h.state().views.active.camera.snap_nm(), 25 * MIL);
         h.run();

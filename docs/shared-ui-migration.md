@@ -2,7 +2,7 @@
 
 This local branch adopts SolidCraft's extracted interface crates at
 `f56114219b2d7f6d16de8dd58700479646948f8a`. The migration began at PCBcraft
-`16e7bab` and was rebased onto upstream main `6895130` on November 11, 2026.
+`16e7bab` and was rebased onto upstream main `0e81115` on November 11, 2026.
 The first slice establishes dependencies, fonts and toolkit
 compatibility. The shared kit also draws menus and Preferences choices through
 `pcbcraft-chrome`.
@@ -234,20 +234,28 @@ and unit targets stay below the canvas, including at larger interface scales.
 
 ## Ribbon tasks
 
-PCB commands are split across Layout, Route, Analyze, Manufacture, Libraries
-and View. Layout retains placement, clipboard, outline and selection edits,
-with a separate Align group and explicit Board setup and Update PCB controls.
-Routing groups tracks, vias and their layer/dimension fields. Analysis groups
-DRC, measurement and cross-probing, fabrication outputs live in Manufacture,
-and Flip view lives beside Fit in View. Schematic Capture has a dedicated
-Clipboard group; Sheets brings independent sheet creation and hierarchy tools
-together. Annotation and reports remain under Analyze.
+PCB tabs are Layout, Draw, Analyze, Manufacture, Libraries and View. Layout
+contains placement, routing, clipboard and selection edits; alignment actions
+are in Modify's menu. Draw provides Line and Rectangle on the active layer.
+The active-layer, Track / line width and Via pad / drill fields remain outside
+the tab's horizontally scrolling commands, fixed at the right on wide windows
+and wrapping below them on narrow windows. These fields retain their identities
+and values across all PCB tabs. Routing's working and planned subtools remain
+in its Layout group. Analysis, fabrication, libraries and View retain their
+respective commands.
 
-Saved slots retain View=1, Analyze=2, Libraries=3 and Sheets=4 (formerly Manage).
-Route and Manufacture use new slots 5 and 6. Live commands accept `sheets`,
-`route` and `manufacture`, preserve `manage` as an alias for Sheets, and reject
-tabs unavailable in the target workspace. Compact headers wrap their tabs so
-all tasks remain reachable.
+Saved slots retain View=1, Analyze=2, Libraries=3, Sheets=4 and Manufacture=6.
+Draw uses slot 7. Old Route slot 5 restores Layout; live `route` also aliases
+Layout, while `manage` remains an alias for Sheets. Tabs unavailable in the
+target workspace are refused before changing its state.
+
+Copper drawing uses the existing atomic conductive-segment commands, so its
+linework participates in connectivity, short checks, DRC and copper fabrication.
+Non-copper graphics carry a physical stroke width in board format 16, retaining
+format 15's reference text/position overrides. Earlier hairline outlines retain
+their existing bytes. Explicit board artwork on silkscreen, mask and paste is
+included in its matching fabrication surface; documentation layers stay in the
+native board. Clipboard version 2 preserves graphic widths.
 
 ## Ribbon background
 
@@ -399,3 +407,13 @@ the page chooser before the draft. Its desktop layout was inspected at
 1280×800 in dark mode and 760×520 in light mode, with the action footer visible
 below the scrolling page editor. Dependency license, source and ban checks
 also passed.
+
+After rebasing onto main `0e81115`, the persistent PCB controls and active-layer
+drawing slice passed formatting, Clippy with warnings denied, all 1,328 workspace
+tests (eight ignored), and dependency license/source/ban checks. A packaged
+WebAssembly development build also passed. Isolated native X11 and headless
+Chrome runs covered the wide and compact ribbons; Chrome also exercised
+single-click typed width entry with no observed JavaScript or console errors.
+The regressions check physical graphic save/load, undo, clipboard widths and
+fabrication layers alongside copper drawing and persistent control identities.
+Windows, macOS and direct Wayland remain untested here.

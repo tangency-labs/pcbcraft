@@ -43,7 +43,8 @@ fn selection_filters_cancel_graphic_edits_and_leave_creation_tools_available() {
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     let count = drawings(&h).len();
-    click(&mut h, "Draw rectangle on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw rectangle on active layer");
     let first = at(&h, -10_160_000, 10_160_000);
     click_canvas_at(&mut h, first);
     let second = at(&h, 10_160_000, 20_320_000);
@@ -132,7 +133,8 @@ fn footprint_drag_overlapping_board_edge_keeps_input_ownership() {
 #[test]
 fn explicit_board_edge_tool_can_draw_over_footprint() {
     let mut h = overlapping_footprint();
-    click(&mut h, "Draw lines on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw lines on active layer");
     let origin = at(&h, 0, 0);
     click_canvas_at(&mut h, origin);
     let destination = at(&h, 0, 10_160_000);
@@ -176,7 +178,8 @@ fn rectangle_canvas_create_cancel_delete_and_undo() {
     let mut h = board();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
-    click(&mut h, "Draw rectangle on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw rectangle on active layer");
     let a = at(&h, -10_000_000, -8_000_000);
     let b = at(&h, 10_000_000, 8_000_000);
     click_canvas_at(&mut h, a);
@@ -215,7 +218,8 @@ fn rectangle_canvas_create_cancel_delete_and_undo() {
 #[test]
 fn lines_open_close_vertex_drag_and_stale_cancellation() {
     let mut h = board();
-    click(&mut h, "Draw lines on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw lines on active layer");
     let positions = [at(&h, -15_000_000, -8_000_000), at(&h, 10_000_000, -8_000_000), at(&h, 15_000_000, 8_000_000)];
     for pos in positions {
         click_canvas_at(&mut h, pos);
@@ -248,7 +252,8 @@ fn lines_open_close_vertex_drag_and_stale_cancellation() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
-    click(&mut h, "Draw lines on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw lines on active layer");
     for pos in positions {
         click_canvas_at(&mut h, pos);
         h.run_steps(20);
@@ -304,7 +309,8 @@ fn committed_board_edge_reshape_never_paints_the_previous_shape() {
 #[test]
 fn layer_visibility_is_view_only_and_cancels_editing() {
     let mut h = board();
-    click(&mut h, "Draw rectangle on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw rectangle on active layer");
     let a = at(&h, -10_000_000, -8_000_000);
     let b = at(&h, 10_000_000, 8_000_000);
     click_canvas_at(&mut h, a);
@@ -361,7 +367,8 @@ fn live_layer_choices_preserve_document_and_cancel_preview() {
     let view = h.state().views.active.id().0;
     let layer = h.state().views.active.board.active_layer.clone().unwrap();
     let before = h.state().session.inspect();
-    click(&mut h, "Draw rectangle on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw rectangle on active layer");
     let a = at(&h, 0, 0);
     click_canvas_at(&mut h, a);
     assert!(h.state().views.active.board.drawing.source().is_some());
@@ -378,7 +385,8 @@ fn live_layer_choices_preserve_document_and_cancel_preview() {
 #[test]
 fn drawing_moves_and_panel_release_use_one_captured_edit() {
     let mut h = board();
-    click(&mut h, "Draw rectangle on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw rectangle on active layer");
     let a = at(&h, -10_000_000, -8_000_000);
     let b = at(&h, 10_000_000, 8_000_000);
     click_canvas_at(&mut h, a);
@@ -416,4 +424,64 @@ fn drawing_moves_and_panel_release_use_one_captured_edit() {
     h.run();
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
     assert!(h.state().views.active.board.drawing.source().is_none());
+}
+
+/// The same Draw rectangle authors conductive segments on copper and physical-width graphics
+/// on technical layers, using the shared revision-checked commands and one undo step each.
+#[test]
+fn draw_rectangle_uses_the_active_layer_and_preserves_physical_width() {
+    let mut h = board();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
+    h.run();
+    for copper in [true, false] {
+        let layer = h
+            .state()
+            .session
+            .project()
+            .unwrap()
+            .boards()
+            .next()
+            .unwrap()
+            .layers()
+            .into_iter()
+            .find(|layer| {
+                if copper {
+                    layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper
+                } else {
+                    layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Silkscreen
+                }
+            })
+            .unwrap()
+            .id
+            .to_string();
+        h.state_mut().views.active.board.set_layer(&layer, true, None);
+        h.run();
+        click(&mut h, "Draw");
+        click(&mut h, "Draw rectangle on active layer");
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        let first = at(&h, -10_160_000, -10_160_000);
+        click_canvas_at(&mut h, first);
+        let second = at(&h, 10_160_000, 10_160_000);
+        click_canvas_at(&mut h, second);
+        assert_eq!(h.state().session.revision(), revision + 1);
+        let view = h.state().session.project().unwrap().boards().next().unwrap();
+        if copper {
+            assert_eq!(view.tracks().len(), 4);
+            assert!(view.drawings().is_empty());
+            assert!(view.tracks().iter().all(|t| t.layer.to_string() == layer && t.width_nm == 250_000));
+        } else {
+            let items = view.drawings();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].layer.to_string(), layer);
+            assert_eq!(items[0].stroke_nm, Some(250_000));
+        }
+        let saved = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(pcbcraft_engine::persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
+        h.key_press(Key::Escape);
+        h.run();
+        click(&mut h, "Undo");
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), encode_documents(before).unwrap());
+    }
 }
