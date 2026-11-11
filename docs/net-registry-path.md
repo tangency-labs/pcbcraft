@@ -69,10 +69,11 @@ occurrence identities and those two homes.
 Follow [multiboard-storage.md](multiboard-storage.md#migration-and-implementation-order),
 taking from each step only what the registry needs. Each slice is its own
 reviewed format change with its own migration tests, and each lands before the
-next starts. These migrations start from a `project.json` folder or a
-container-v3 `.pc` package, including the supported older split document schemas
-within that layout. They do not restore support for `project.pc` folders,
-container-v1/v2 archives or standalone project files; see the
+next starts. These migrations use a `project.json` folder or container-v3 `.pc`
+package, including the supported older split document schemas within that layout.
+PR #268 also reads immediately previous `project.pc` split folders and container-v2
+or manifest-less split archives in memory, then upgrades them on desktop Save or
+browser Download. Standalone JSON and container-v1 projects remain refused; see the
 [compatibility boundary](native-project-storage.md#compatibility-and-fixtures).
 
 ### Slice 1: board folders ([#228](https://github.com/tangency-labs/pcbcraft/issues/228))

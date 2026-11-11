@@ -17,7 +17,7 @@ export function pickProject(zipLimit) {
     return new Promise((resolve, reject) => {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.pc';
+        input.accept = '.pc,.zip';
         input.oncancel = () => resolve(null);
         input.onchange = async () => {
             const file = input.files[0];

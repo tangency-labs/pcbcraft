@@ -667,8 +667,9 @@ converter below creates a separate copy of the immediately previous split layout
 The fixed `project.json` filename identifies the new unpacked layout, and packed
 projects use `pcbcraft-container/3`. Existing split document schema versions
 remain supported under the new entry-point path; sheet, board and library
-schemas are unchanged. A hand-zipped folder without a manifest must likewise use
-`project.json`; its first save adds a version-3 manifest. Container versions 1/2
+schemas are unchanged. New hand-zipped folders use `project.json`; previous
+`project.pc` split ZIPs are also accepted for upgrade. Desktop Save or browser
+Download writes a version-3 manifest. Container versions 1/2
 are accepted only for version 2 with the previous `project.pc` split paths;
 version 1 remains unsupported. ZIP contents are
 validated independently of the filename, so a current version-3 package can
