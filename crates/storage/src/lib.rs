@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
 };
 
+mod bound;
 pub mod conversion;
 mod folder;
 pub mod layout;

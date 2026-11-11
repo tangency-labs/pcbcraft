@@ -1005,3 +1005,13 @@ save-metadata adoption across Undo/Redo are original PCBcraft work over the
 existing native model and journaled publication. Regression circuits use shared
 commands and original repository fixtures. No external implementation, data,
 dependency or asset was added.
+
+Handle-bound recovery publication is original PCBcraft work using `rustix` 1.1.6,
+already present in the qualified dependency graph and now a direct Unix storage
+dependency. The crate remains independently licensed `Apache-2.0 WITH
+LLVM-exception OR Apache-2.0 OR MIT`, with its package notices retained. Its
+[safe descriptor-relative filesystem API](https://docs.rs/rustix/1.1.6/rustix/fs/index.html)
+and Microsoft's [CreateFile sharing/reparse-point contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
+were consulted on November 11, 2026. Windows directory handles omit delete sharing
+and reject reparse points; no Windows implementation source was copied. No new
+crate version, external EDA source or asset was added.

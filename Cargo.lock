@@ -2763,6 +2763,7 @@ version = "0.1.0"
 dependencies = [
  "dunce",
  "pcbcraft-engine",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sha2",

@@ -219,7 +219,9 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
         Ok(metadata) if !metadata.is_dir() => return Err("Recovery journal path is not a directory.".to_owned()),
         Ok(_) => {}
     }
-    let journal_bytes = read_regular(&transaction.join("journal.json"), JOURNAL_LIMIT)?;
+    let root_directory = crate::bound::Directory::open(root).map_err(error)?;
+    let recovery = root_directory.child(TRANSACTION, false).map_err(error)?.ok_or("Missing recovery directory")?;
+    let journal_bytes = recovery.read("journal.json", JOURNAL_LIMIT).map_err(error)?.ok_or("Missing recovery journal")?;
     let journal: Journal = serde_json::from_slice(&journal_bytes).map_err(|e| format!("Invalid save journal: {e}"))?;
     if journal.version != 1 || journal.changes.is_empty() || journal.changes.len() > MAX_DOCUMENTS * 2 {
         return Err("Unsupported or oversized save journal.".to_owned());
@@ -231,7 +233,7 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
         if !is_document_path(&change.path) || !seen.insert(&change.path) || (change.before.is_none() && change.after.is_none()) {
             return Err(format!("Invalid save journal path: {}", change.path));
         }
-        let path = safe_path(root, &change.path, false)?;
+
         let mut payload = |claimed: &Option<Payload>, suffix: &str| -> Result<Option<Vec<u8>>, String> {
             claimed
                 .as_ref()
@@ -239,7 +241,7 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
                     if claimed.size > MAX_DOCUMENT_BYTES {
                         return Err("Recovery payload exceeds its size limit.".to_owned());
                     }
-                    let bytes = read_regular(&transaction.join(format!("{index}.{suffix}")), claimed.size)?;
+                    let bytes = recovery.read(&format!("{index}.{suffix}"), claimed.size).map_err(error)?.ok_or("Missing recovery payload")?;
                     total += bytes.len();
                     if total > MAX_DOCUMENTS_BYTES * 2 || bytes.len() != claimed.size || digest(&bytes) != claimed.sha256 {
                         return Err("Recovery payload size or digest mismatch.".to_owned());
@@ -250,15 +252,15 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
         };
         let before = payload(&change.before, "old")?;
         let after = payload(&change.after, "new")?;
-        let current = existing(&path)?;
+        let current = bound_existing(&root_directory, &change.path)?;
         if current != before && current != after {
             return Err(format!("{} changed outside the interrupted save; recovery stopped.", change.path));
         }
-        replacements.push((change.path.clone(), after));
+        replacements.push((change.path.clone(), before, after));
     }
     // Validate the complete proposed project before completing an interrupted transaction.
     let mut result = read_documents(root, true)?;
-    for (path, after) in &replacements {
+    for (path, _, after) in &replacements {
         if let Some(bytes) = after {
             result.insert(path.clone(), bytes.clone());
         } else {
@@ -266,42 +268,51 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
         }
     }
     decode_documents(&result)?;
-    for (relative, after) in replacements {
-        let path = safe_path(root, &relative, true)?;
-        let removed_board = after.is_none() && relative.ends_with("/board.json");
-        if existing(&path)? != after {
-            if let Some(bytes) = after {
-                let parent = path.parent().ok_or("missing document parent")?;
-                let mut file = tempfile::NamedTempFile::new_in(&transaction).map_err(error)?;
-                #[cfg(unix)]
-                if let Ok(metadata) = fs::symlink_metadata(&path) {
-                    file.as_file().set_permissions(metadata.permissions()).map_err(error)?;
-                }
-                file.write_all(&bytes).and_then(|()| file.as_file().sync_all()).map_err(error)?;
-                file.persist(&path).map_err(error)?;
-                sync_dir(parent)?;
-            } else {
-                fs::remove_file(&path).map_err(error)?;
-                sync_dir(path.parent().ok_or("missing document parent")?)?;
-            }
+    for (index, (relative, before, after)) in replacements.into_iter().enumerate() {
+        let bound = bind_document(&root_directory, &relative, true)?.ok_or("Missing publication parent")?;
+        // This checkpoint exercises a directory being replaced after resolution. Publication
+        // remains bound to the captured parent, and the final consistency check refuses adoption.
+        checkpoint(&format!("resolved:{relative}"))?;
+        let current = bound.parent.read(&bound.name, MAX_DOCUMENT_BYTES).map_err(error)?;
+        if current != before && current != after {
+            return Err(format!("{relative} changed during recovery; publication stopped."));
         }
-        // An undone board creation should not leave an empty folder that looks foreign on
-        // Redo. Only an actually empty board directory is removed; related user files survive.
-        // Retry this cleanup even when recovery finds the payload already deleted.
-        if removed_board
-            && let Some(parent) = path.parent()
-            && fs::remove_dir(parent).is_ok()
-        {
-            sync_dir(parent.parent().ok_or("missing board area")?)?;
+        let removed_board = after.is_none() && relative.ends_with("/board.json");
+        if current != after {
+            if let Some(bytes) = after {
+                let temporary = format!("publication-{index}.tmp");
+                recovery.remove_file(&temporary).map_err(error)?;
+                let mut file = recovery.create(&temporary).map_err(error)?;
+                #[cfg(unix)]
+                if let Some(previous) = bound.parent.open_file(&bound.name).map_err(error)? {
+                    file.set_permissions(previous.metadata().map_err(error)?.permissions()).map_err(error)?;
+                }
+                file.write_all(&bytes).and_then(|()| file.sync_all()).map_err(error)?;
+                drop(file);
+                recovery.rename(&temporary, &bound.parent, &bound.name).map_err(error)?;
+            } else {
+                bound.parent.remove_file(&bound.name).map_err(error)?;
+            }
+            bound.parent.sync().map_err(error)?;
+        }
+        if removed_board {
+            bound.remove_empty_parent()?;
         }
         checkpoint(&format!("published:{relative}"))?;
     }
-    // Rename the completed transaction out of the recovery path before deleting it. A crash
-    // during cleanup must not leave a journal referring to already deleted staging files.
+    // A moved/replaced parent must not turn a successful write to the captured directory into
+    // a successful save of a different visible tree. Keep the journal for an explicit recovery.
+    if read_documents(root, true)? != result {
+        return Err("Project directory changed during publication; recovery stopped.".into());
+    }
+    // Close the recovery directory before renaming it on Windows, whose captured directory
+    // handles intentionally deny deletion/renaming. The source and cleanup parents stay bound.
+    drop(recovery);
     let cleanup = tempfile::Builder::new().prefix(".pcbcraft-stage-").tempdir_in(root).map_err(error)?;
-    let retired = cleanup.path().join("completed");
-    fs::rename(&transaction, retired).map_err(error)?;
-    sync_dir(root)?;
+    let cleanup_directory = crate::bound::Directory::open(cleanup.path()).map_err(error)?;
+    root_directory.rename(TRANSACTION, &cleanup_directory, "completed").map_err(error)?;
+    root_directory.sync().map_err(error)?;
+    cleanup_directory.sync().map_err(error)?;
     checkpoint("completed")?;
     Ok(())
 }
@@ -354,7 +365,7 @@ fn read_documents_at(root: &Path, recovering: bool, entry_point: &str) -> Result
     if let Some(entry) = documents.get(entry_point)
         && let Some(path) = pcbcraft_engine::persistence::project_board_path(entry)?
         && path != "board.json"
-        && let Some(bytes) = existing(&safe_path(root, &path, false)?)?
+        && let Some(bytes) = bound_existing(&crate::bound::Directory::open(root).map_err(error)?, &path)?
     {
         documents.insert(path, bytes);
     }
@@ -471,30 +482,53 @@ impl Drop for FolderLock {
     }
 }
 
-/// Resolve an already validated relative path without traversing symlinked directories.
-fn safe_path(root: &Path, relative: &str, create: bool) -> Result<PathBuf, String> {
-    if !is_document_path(relative) {
-        return Err("Unsafe project document path.".to_owned());
-    }
-    regular_directory(root)?;
-    let mut current = root.to_path_buf();
-    let pieces: Vec<_> = relative.split('/').collect();
-    for piece in &pieces[..pieces.len() - 1] {
-        let parent = current.clone();
-        current.push(piece);
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if !metadata.is_dir() => return Err(format!("{}: not a regular directory", current.display())),
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if create {
-                    fs::create_dir(&current).map_err(error)?;
-                    sync_dir(&parent)?;
-                }
-            }
-            Err(e) => return Err(error(e)),
+/// A validated document leaf and its captured parent, with its containing directory for
+/// optional empty-board cleanup. Windows ancestor handles remain alive throughout publication.
+struct BoundDocument {
+    parent: crate::bound::Directory,
+    name: String,
+    containing: Option<(crate::bound::Directory, String)>,
+}
+
+impl BoundDocument {
+    /// Release the leaf-parent handle before Windows removal; a symlink or nonempty directory
+    /// is never removed. Repeating cleanup after an interrupted deletion remains harmless.
+    fn remove_empty_parent(self) -> Result<(), String> {
+        let Self { parent, containing, .. } = self;
+        drop(parent);
+        if let Some((directory, name)) = containing
+            && directory.remove_dir(&name).is_ok()
+        {
+            directory.sync().map_err(error)?;
         }
+        Ok(())
     }
-    Ok(root.join(relative))
+}
+
+/// Traverse one no-follow directory component at a time and retain its verified handle.
+/// Missing parents represent absent documents unless publication explicitly creates them.
+fn bind_document(root: &crate::bound::Directory, relative: &str, create: bool) -> Result<Option<BoundDocument>, String> {
+    if !is_document_path(relative) {
+        return Err("Unsafe project document path.".into());
+    }
+    let mut pieces = relative.split('/').peekable();
+    let mut parent = root.clone();
+    let mut containing = None;
+    while let Some(piece) = pieces.next() {
+        if pieces.peek().is_none() {
+            return Ok(Some(BoundDocument { parent, name: piece.into(), containing }));
+        }
+        let Some(child) = parent.child(piece, create).map_err(|error| format!("{relative}: {error}"))? else { return Ok(None) };
+        containing = Some((parent, piece.into()));
+        parent = child;
+    }
+    Err("Missing project document leaf".into())
+}
+
+/// Read through the same no-follow parent binding used for writes, preserving absence.
+fn bound_existing(root: &crate::bound::Directory, relative: &str) -> Result<Option<Vec<u8>>, String> {
+    let Some(bound) = bind_document(root, relative, false)? else { return Ok(None) };
+    bound.parent.read(&bound.name, MAX_DOCUMENT_BYTES).map_err(|error| format!("{relative}: {error}"))
 }
 
 /// Refuse symlinked or non-directory roots and owned subdirectories.

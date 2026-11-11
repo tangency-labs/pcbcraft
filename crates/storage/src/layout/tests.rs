@@ -173,3 +173,45 @@ fn new_board_uses_full_uuid_when_the_short_folder_is_occupied() {
     assert_eq!(crate::load(&root).unwrap(), after);
     assert!(Arc::ptr_eq(&prepared, &prepare(prepared.clone(), Some(&root), Some(&after)).unwrap()));
 }
+
+/// Replacing a resolved board directory with an external symlink cannot redirect recovery's
+/// write. The visible-tree mismatch retains the journal; restoring the parent recovers normally.
+#[cfg(unix)]
+#[test]
+fn replacing_a_resolved_board_parent_cannot_overwrite_an_external_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("board.json"), b"must survive").unwrap();
+    let project = Arc::new(legacy().with_board_folders(".").unwrap());
+    let before = encode_documents(project.clone()).unwrap();
+    crate::save(&root, None, &before, &mut |_| Ok(())).unwrap();
+    let mut session = Session::default();
+    session.open_snapshot(project);
+    session.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":session.revision()})).unwrap();
+    let after = encode_documents(session.snapshot().unwrap()).unwrap();
+    let path = session.project().unwrap().board_document_path().unwrap();
+    let parent = root.join(&path).parent().unwrap().to_path_buf();
+    let retained = root.join("retained-board");
+    let mut swapped = false;
+    assert!(
+        crate::save(&root, Some(&before), &after, &mut |step| {
+            if step == format!("resolved:{path}") && !swapped {
+                fs::rename(&parent, &retained).unwrap();
+                std::os::unix::fs::symlink(&outside, &parent).unwrap();
+                swapped = true;
+            }
+            Ok(())
+        })
+        .is_err()
+    );
+    assert!(swapped);
+    assert_eq!(fs::read(outside.join("board.json")).unwrap(), b"must survive");
+    assert_eq!(fs::read(retained.join("board.json")).unwrap(), after[&path]);
+    assert!(root.join(".pcbcraft-save").exists());
+    fs::remove_file(&parent).unwrap();
+    fs::rename(retained, &parent).unwrap();
+    assert_eq!(crate::load(&root).unwrap(), after);
+    assert_eq!(fs::read(outside.join("board.json")).unwrap(), b"must survive");
+}

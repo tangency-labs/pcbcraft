@@ -983,6 +983,15 @@ pub(crate) fn test_board_path(documents: &Documents) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Diagnostic single-document files have no directory layout. Compare electrical inspection
+    /// independently from board `file` paths, which are covered by the split-layout tests.
+    fn without_storage_paths(mut project: serde_json::Value) -> serde_json::Value {
+        for board in project["boards"].as_array_mut().unwrap() {
+            board.as_object_mut().unwrap().remove("file");
+        }
+        project
+    }
+
     use serde_json::json;
 
     use super::*;
@@ -1084,7 +1093,7 @@ mod tests {
         let bytes = encode(session.snapshot().unwrap()).unwrap();
         let mut reopened = Session::default();
         reopened.open_snapshot(decode(&bytes).unwrap());
-        assert_eq!(reopened.inspect()["project"], state["project"]);
+        assert_eq!(without_storage_paths(reopened.inspect()["project"].clone()), without_storage_paths(state["project"].clone()));
 
         let footprint = json!({
             "symbol": "symbol-3", "definition": "generic-through-hole-2",
@@ -1280,7 +1289,7 @@ mod tests {
         assert!(text.contains("\"rotation\":180"));
         let mut reopened = Session::default();
         reopened.open_snapshot(decode(&bytes).unwrap());
-        assert_eq!(reopened.inspect()["project"], session.inspect()["project"]);
+        assert_eq!(without_storage_paths(reopened.inspect()["project"].clone()), without_storage_paths(session.inspect()["project"].clone()));
         let led = &reopened.inspect()["project"]["schematic"]["symbols"][1];
         assert_eq!((led["reference"].clone(), led["value"].clone()), (json!("D7"), json!("Red")));
 
@@ -1301,7 +1310,7 @@ mod tests {
         assert!(before.same_document(&loaded));
         let mut reopened = Session::default();
         reopened.open_snapshot(loaded.clone());
-        assert_eq!(session.inspect()["project"], reopened.inspect()["project"]);
+        assert_eq!(without_storage_paths(session.inspect()["project"].clone()), without_storage_paths(reopened.inspect()["project"].clone()));
         reopened
             .apply(
                 MOVE_SYMBOL,

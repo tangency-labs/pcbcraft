@@ -291,6 +291,23 @@ mod migration_tests {
         }
     }
 
+    /// Inspection reports the same path the codec writes, including a nondefault storage root.
+    #[test]
+    fn inspected_board_paths_follow_the_registered_layout() {
+        let historical = decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap();
+        for root in [None, Some("."), Some("pcbcraft-data-test")] {
+            let project = match root {
+                None => historical.clone(),
+                Some(root) => Arc::new(historical.with_board_folders(root).unwrap()),
+            };
+            let path = project.board_document_path().unwrap();
+            let mut session = Session::default();
+            session.open_snapshot(project.clone());
+            assert_eq!(session.inspect()["project"]["boards"][0]["file"], path);
+            assert!(encode_documents(project).unwrap().contains_key(&path));
+        }
+    }
+
     /// Unsupported/mixed vocabularies, unsafe paths and extra physical data are never adopted.
     #[test]
     fn folder_codec_refuses_unsafe_roots_folders_and_unregistered_documents() {

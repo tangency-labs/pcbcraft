@@ -521,6 +521,11 @@ Ignore `.pcbcraft-save/`, `.pcbcraft-stage-*/` and `.*.pcbcraft-lock`. ZIP expor
 are binary; optional text conversion can make local diffs readable but does not
 provide normal text merging. The folder is the collaboration format.
 
+Board inspection reports the resolved project-relative physical path, including
+any custom layout-root prefix, in each board's `file` field. Diagnostic
+single-document files do not carry layout metadata and continue to report the
+flat compatibility path.
+
 ## Packed projects and manifests
 
 A `.pc` contains the same relative document paths and a root `manifest.json`:
@@ -634,6 +639,14 @@ instead. Through a usual path the publish itself fails after the journal commit,
 and every later open would fail in recovery. The message names the
 file; saving as a `.pc` archive works, because the archive stores documents as
 ZIP entries. Other platforms save these names as ordinary files.
+
+Recovery binds each document parent before checking and publishing its leaf.
+Unix traversal and replacement use no-follow directory-relative operations;
+Windows retains verified non-reparse directory handles without delete sharing
+until publication completes. A parent swapped after resolution cannot redirect
+the replacement to an external symlink target. A final visible-tree check stops
+adoption and retains the journal if registered paths no longer match the completed
+document set. Restoring the original directory permits ordinary recovery.
 
 ## Compatibility and fixtures
 

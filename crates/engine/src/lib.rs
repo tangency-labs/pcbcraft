@@ -2119,11 +2119,13 @@ impl Session {
     /// `footprint_catalog` lists exact
     /// available revisions with pad identities and provenance, without duplicating drawing data.
     /// A configured board also reports setup and laminate thickness (null when unspecified).
+    /// Each board's `file` is its registered project-relative physical document path, including
+    /// any selected layout-root prefix; flat historical snapshots retain `board.json` until Save.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json", "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks(), "vias":board.vias()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks(), "vias":board.vias()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
