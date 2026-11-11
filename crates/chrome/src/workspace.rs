@@ -148,9 +148,8 @@ const FLOATING_RADIUS: u8 = 12;
 const FLOATING_HEADER: f32 = 24.0;
 
 /// The shared surface for cards that overlay the canvas.
-fn floating_frame() -> Frame {
-    let t = Tokens::get();
-    Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(FLOATING_RADIUS).inner_margin(Margin::same(FLOATING_MARGIN as i8))
+fn floating_frame(ctx: &egui::Context) -> Frame {
+    solidcraft_ui_kit::panel_host_frame(ctx, true).inner_margin(Margin::same(FLOATING_MARGIN as i8))
 }
 
 /// The drawing on a workspace's tile in the picker.
@@ -261,7 +260,7 @@ pub fn ribbon(
                 if wide {
                     // Read before the tile can toggle it, so the picker knows the frame it opens on.
                     let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
-                    let tile = card(t, t.space_8)
+                    let tile = card(ui.ctx(), t.space_8)
                         .show(ui, |ui| {
                             workspace_tile(
                                 ui,
@@ -274,7 +273,7 @@ pub fn ribbon(
                     picked = picker(ui, &tile, workspaces, !was_open);
                 }
 
-                card(t, t.space_4).show(ui, |ui| {
+                card(ui.ctx(), t.space_4).show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.set_width(ui.available_width());
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
@@ -973,7 +972,7 @@ fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, cl
         .resizable(false)
         .show_separator_line(false)
         .frame(Frame::new().fill(t.canvas).inner_margin(margin))
-        .show(ui, |ui| card(t, t.space_8).show(ui, |ui| card_contents(ui, title, f32::INFINITY, closable, add)).inner)
+        .show(ui, |ui| card(ui.ctx(), t.space_8).show(ui, |ui| card_contents(ui, title, f32::INFINITY, closable, add)).inner)
         .inner
 }
 
@@ -996,7 +995,8 @@ pub fn floating_card_with_id(ui: &Ui, id: egui::Id, title: &str, area: Rect, col
 
 /// Minimum area height needed for a floating card's header, frame and edge clearance.
 pub(crate) fn floating_card_min_height() -> f32 {
-    FLOATING_HEADER + floating_frame().total_margin().sum().y + 2.0 * FLOATING_GAP
+    let t = solidcraft_theme::Tokens::get();
+    FLOATING_HEADER + 2.0 * (FLOATING_MARGIN + t.primary_border(t.border).width) + 2.0 * FLOATING_GAP
 }
 
 /// Anchor a workspace card to either canvas edge, retaining shared dimensions and collapse behavior.
@@ -1036,7 +1036,7 @@ pub fn floating_card_width(
     }
     let height = area.height() - 2.0 * FLOATING_GAP;
     let body_height = (height - 2.0 * (FLOATING_MARGIN + 1.0) - FLOATING_HEADER - t.space_8).max(0.0);
-    let frame = floating_frame();
+    let frame = floating_frame(ui.ctx());
     let shown = egui::Area::new(id)
         .enabled(ui.is_enabled())
         .order(egui::Order::Middle)
@@ -1063,30 +1063,50 @@ pub fn floating_card_width(
 }
 
 /// The shared six-dot grip marks the title region that can move a floating or docked card.
-pub(super) fn drag_grip(painter: &egui::Painter, header: Rect) {
-    for x in [4.0, 8.0] {
-        for y in [-4.0, 0.0, 4.0] {
-            painter.circle_filled(header.left_center() + vec2(x, y), 1.0, Tokens::get().text_dim);
-        }
-    }
+pub(super) fn drag_grip(ui: &mut Ui, header: Rect) {
+    let bounds = Rect::from_center_size(header.left_center() + vec2(7.0, 0.0), vec2(10.0, 18.0));
+    let mut grip = ui.new_child(egui::UiBuilder::new().id_salt("panel_grip").max_rect(bounds));
+    grip.set_clip_rect(ui.clip_rect().intersect(header));
+    solidcraft_ui_kit::panel_grip(&mut grip);
 }
 
 /// A floating card's header: its title on the left and a chevron on the right, one button that
 /// collapses or expands the card and is labelled for that.
 fn card_header(ui: &mut Ui, title: &str, collapsed: bool) -> Response {
     let t = Tokens::get();
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), FLOATING_HEADER), Sense::click());
+    let (id, rect) = ui.allocate_space(vec2(ui.available_width(), FLOATING_HEADER));
+    let response = panel_header_control(ui, id, rect, title, false);
     let action = if collapsed { "Expand" } else { "Collapse" };
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("{action} {title}")));
-    let p = ui.painter();
-    if response.hovered() || response.has_focus() {
-        p.rect_filled(rect, t.radius_sm, t.hover);
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), format!("{action} {title}")));
+    ui.ctx().accesskit_node_builder(response.id, |node| node.set_expanded(!collapsed));
+    let icon = Rect::from_center_size(rect.right_center() - vec2(10.0, 0.0), vec2(12.0, 12.0));
+    if collapsed {
+        solidcraft_ui_kit::icons::paint_ink(ui.painter(), icon, "chevron", t.text_dim);
+    } else {
+        solidcraft_ui_kit::icons::paint_ink_flipped(ui.painter(), icon, "chevron", t.text_dim);
     }
-    p.text(rect.left_center() + vec2(2.0, 0.0), Align2::LEFT_CENTER, title, fonts::interface_heading(ui, t.font_body), t.text);
-    let c = rect.right_center() - vec2(10.0, 0.0);
-    let sign = if collapsed { -1.0 } else { 1.0 };
-    p.add(Shape::line(vec![c + vec2(-4.0, -2.0 * sign), c + vec2(0.0, 2.0 * sign), c + vec2(4.0, -2.0 * sign)], Stroke::new(1.3, t.text_dim)));
     response.on_hover_text(if collapsed { "Expand panel" } else { "Collapse panel" })
+}
+
+/// Shared header presentation with host-owned identity and drag/collapse policy.
+pub(super) fn panel_header_control(ui: &mut Ui, id: egui::Id, rect: Rect, title: &str, drag: bool) -> Response {
+    solidcraft_ui_kit::panel_host_control(
+        ui,
+        id,
+        rect,
+        solidcraft_ui_kit::HostChrome {
+            label: title,
+            icon: None,
+            icon_only: false,
+            attention: false,
+            selected: false,
+            enabled: ui.is_enabled(),
+            drag,
+            title: drag,
+            grip_only: false,
+            rtl: false,
+        },
+    )
 }
 
 /// A card's header, with its title and optional named Close button, over a body that scrolls
@@ -1115,8 +1135,10 @@ fn card_contents(ui: &mut Ui, title: &str, max_body_height: f32, closable: bool,
 }
 
 /// Shared bordered surface for the ribbon and inspector.
-fn card(t: Tokens, inset: f32) -> Frame {
-    Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(inset as i8))
+fn card(ctx: &egui::Context, inset: f32) -> Frame {
+    solidcraft_ui_kit::Container::floating_card(solidcraft_ui_kit::Surface::Chrome)
+        .frame(ctx, Tokens::get().panel, solidcraft_ui_kit::frame::Side::Left)
+        .inner_margin(Margin::same(inset as i8))
 }
 
 /// Draw a workspace's icon, `size` points square, in the theme's icon colour roles. Planned

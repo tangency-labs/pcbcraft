@@ -174,6 +174,16 @@ model/mode selection. Typed option values remain with their existing callers.
 The active-layer selector retains its colour swatch and full accessible value
 while using shared dropdown chrome. Escape closes a dropdown before its modal.
 
+## Workspace panels and Assistant
+
+Floating workspace cards and ribbon cards use shared container frames. Panel
+titles, grips, disclosure controls and catalog header actions use toolkit
+presentation with PCBcraft-owned placement and drag state. Editor tabs use the
+shared tab surface and close control while retaining pane focus and native
+window commands. Assistant uses the shared drawer frame, status badges,
+composer and message bubbles. Its protocol, permissions, input limits and
+save/close lifecycle remain in PCBcraft.
+
 ## Ribbon background
 
 The outer ribbon strip is transparent, exposing each top pane's grid through

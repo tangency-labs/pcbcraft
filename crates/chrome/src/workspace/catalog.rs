@@ -83,7 +83,7 @@ impl Panel {
 
     /// Height of the header-only card, including the shared frame's border and padding.
     fn collapsed_height() -> f32 {
-        HEADER_HEIGHT + floating_frame().total_margin().sum().y
+        super::floating_card_min_height() - 2.0 * FLOATING_GAP - super::FLOATING_HEADER + HEADER_HEIGHT
     }
 
     /// Limit the Browser's height when this panel is anchored beneath it, leaving room for a
@@ -194,10 +194,10 @@ impl Panel {
             .fade_in(false)
             .show(ui.ctx(), |ui| {
                 ui.set_max_size(rect.size());
-                floating_frame()
+                floating_frame(ui.ctx())
                     .show(ui, |ui| {
                         // Allocate the whole host once, so scrolling never changes the card bounds.
-                        let size = (rect.size() - floating_frame().total_margin().sum()).max(Vec2::ZERO);
+                        let size = (rect.size() - floating_frame(ui.ctx()).total_margin().sum()).max(Vec2::ZERO);
                         let (body, _) = ui.allocate_exact_size(size, Sense::hover());
                         let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(body));
                         ui.set_clip_rect(ui.clip_rect().intersect(body));
@@ -214,7 +214,7 @@ impl Panel {
                             let (header, response) =
                                 ui.allocate_exact_size(vec2((ui.available_width() - controls_width).max(1.0), HEADER_HEIGHT), Sense::drag());
                             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Move Parts Catalog"));
-                            super::drag_grip(ui.painter(), header);
+                            super::drag_grip(ui, header);
                             ui.painter().text(
                                 header.left_center() + vec2(18.0, 0.0),
                                 Align2::LEFT_CENTER,
@@ -285,39 +285,14 @@ enum HeaderIcon {
 
 /// Quiet 24-point header controls, with explicit accessible names rather than glyph labels.
 fn icon_button(ui: &mut Ui, label: &str, icon: HeaderIcon) -> Response {
-    let t = Tokens::get();
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-    if matches!(icon, HeaderIcon::More) || response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(rect, t.radius_md, if response.hovered() || response.has_focus() { t.hover } else { t.panel_header });
-    }
+    let (id, rect) = ui.allocate_space(Vec2::splat(24.0));
     match icon {
-        HeaderIcon::Full => {
-            let c = rect.center();
-            let stroke = Stroke::new(1.1, t.text);
-            for sign in [-1., 1.] {
-                ui.painter().line_segment([c + vec2(-1., 1.) * sign, c + vec2(-5., 5.) * sign], stroke);
-                ui.painter().add(egui::Shape::line(vec![c + vec2(-5., 1.) * sign, c + vec2(-5., 5.) * sign, c + vec2(-1., 5.) * sign], stroke));
-            }
-        }
-        HeaderIcon::More => {
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "…", FontId::proportional(t.font_body), t.text);
-        }
-        HeaderIcon::Close => {
-            for sign in [-1.0, 1.0] {
-                ui.painter().line_segment([rect.center() + vec2(-3.5, -3.5 * sign), rect.center() + vec2(3.5, 3.5 * sign)], Stroke::new(1.0, t.text));
-            }
-        }
-        HeaderIcon::Collapse(collapsed) => {
-            let c = rect.center();
-            let sign = if collapsed { -1.0 } else { 1.0 };
-            ui.painter().add(egui::Shape::line(
-                vec![c + vec2(-4.0, -2.0 * sign), c + vec2(0.0, 2.0 * sign), c + vec2(4.0, -2.0 * sign)],
-                Stroke::new(1.3, t.text_dim),
-            ));
-        }
+        HeaderIcon::Collapse(collapsed) => solidcraft_ui_kit::panel_host_disclosure(ui, id, rect, label, ui.is_enabled(), collapsed, true),
+        HeaderIcon::Close => solidcraft_ui_kit::icon_button_at(ui, rect, "close", label),
+        HeaderIcon::Full => solidcraft_ui_kit::icon_button_at(ui, rect, "fit", label),
+        HeaderIcon::More => solidcraft_ui_kit::button_at(ui, "catalog_position", rect, "…", solidcraft_ui_kit::Button::Ghost).accessible_name(label),
     }
-    response.on_hover_text(label)
+    .on_hover_text(label)
 }
 
 /// Catalog preview density. A short dock uses List without replacing the person's preference.

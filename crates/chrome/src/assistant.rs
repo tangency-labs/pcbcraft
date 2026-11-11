@@ -80,10 +80,7 @@ pub fn drawer(ctx: &Context, workspace: Rect, dock: &mut Dock, status: &str, rea
         .default_size(rect.size())
         .order(Order::Foreground)
         .show(ctx, |ui| {
-            Frame::new()
-                .fill(t.panel)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(t.radius_lg)
+            solidcraft_ui_kit::panel_host_frame(ctx, true)
                 .inner_margin(Margin::same(t.space_12 as i8))
                 .show(ui, |ui| {
                     let inset = 2.0 * (t.space_12 + 1.0);
@@ -244,12 +241,16 @@ fn action_button(ui: &mut Ui, action: Action, label: &str, tooltip: &str) -> Opt
 /// Allocate a compact, labelled button shared by the toolbar and window header.
 fn icon_target(ui: &mut Ui, label: &str, tooltip: &str, active: bool) -> (Rect, egui::Response) {
     let t = Tokens::get();
-    let (rect, response) = ui.allocate_exact_size(vec2(t.control_height, t.control_height), Sense::click());
-    let response = response.on_hover_text(tooltip);
-    if active || response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(rect, t.radius_sm, icon_fill(&response, t, active));
-    }
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    let (_, rect) = ui.allocate_space(vec2(t.control_height, t.control_height));
+    let response = solidcraft_ui_kit::button_at(
+        ui,
+        label,
+        rect,
+        "",
+        if active { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
+    )
+    .accessible_name(label)
+    .on_hover_text(tooltip);
     (rect, response)
 }
 
@@ -264,16 +265,13 @@ fn icon_fill(response: &egui::Response, t: Tokens, active: bool) -> egui::Color3
     }
 }
 
-/// Render the compact SolidCraft status pill using the local theme roles.
+/// Render the shared Assistant status pill using its ready or neutral semantic tone.
 fn badge(ui: &mut Ui, label: &str, ready: bool) {
-    let t = Tokens::get();
-    let (ink, fill) = if ready { (t.text, t.accent_soft) } else { (t.text_dim, t.panel_header) };
-    let font = FontId::proportional(t.font_small);
-    let width = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), ink).size().x + t.space_12;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_6), Sense::hover());
-    ui.painter().rect_filled(rect, t.radius_lg, fill);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), label));
+    solidcraft_ui_kit::assistant_badge(
+        ui,
+        label,
+        if ready { solidcraft_ui_kit::AssistantTone::Success } else { solidcraft_ui_kit::AssistantTone::Neutral },
+    );
 }
 
 /// Render the launcher icon, title and up chevron inside one accessible hit target.
@@ -323,26 +321,19 @@ fn paint_glyph(painter: &egui::Painter, center: Pos2, ink: egui::Color32, fill: 
     }
 }
 
-/// Pin the input and actions in a darker band below the scrolling conversation.
+/// Pin input and actions in the shared composer surface below the scrolling conversation.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn composer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    let t = Tokens::get();
-    let frame =
-        Frame::new().fill(t.app_bar).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(t.space_8 as i8));
-    egui::Panel::bottom("assistant_composer").resizable(false).show_separator_line(false).frame(frame).show(ui, add);
+    let focused = ui.memory(|memory| memory.has_focus(egui::Id::unique("assistant_draft_input")));
+    egui::Panel::bottom("assistant_composer").resizable(false).show_separator_line(false).frame(Frame::NONE).show(ui, |ui| {
+        solidcraft_ui_kit::assistant_composer(ui, focused, add);
+    });
 }
 
 /// Place the user's message in a right-aligned bubble within the conversation.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn user_bubble(ui: &mut Ui, message: &str) {
-    let t = Tokens::get();
-    let width = ui.available_width() * 0.86;
-    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-        Frame::new()
-            .fill(t.accent_soft)
-            .corner_radius(egui::CornerRadius { se: t.radius_sm, ..egui::CornerRadius::same(t.radius_lg) })
-            .inner_margin(Margin::same(t.space_8 as i8))
-            .show(ui, |ui| {
-                ui.set_max_width((width - t.space_16).max(0.0));
-                ui.add(egui::Label::new(egui::RichText::new(message).color(t.text)).wrap());
-            });
+    solidcraft_ui_kit::assistant_bubble(ui, |ui| {
+        ui.add(egui::Label::new(message).wrap());
     });
 }

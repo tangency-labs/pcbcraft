@@ -120,19 +120,10 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
     ui.painter().rect_filled(strip, 0, t.panel);
     ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, t.border));
     let painter = ui.painter_at(tab);
-    painter.rect_filled(tab, egui::CornerRadius { nw: t.control_radius, ne: t.control_radius, sw: 0, se: 0 }, t.canvas);
+    solidcraft_ui_kit::app_bar::tab_shape(&painter, &solidcraft_theme::Tokens::get(), tab, focused, response.hovered());
     painter.galley(pos2(dock_rect.right() + t.space_12, tab.center().y - galley.size().y / 2.0), galley, t.text);
     painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(2.0, if focused { t.accent } else { t.border }));
-    let close = ui.interact(close_rect, ui.scope_id().with("close_pane"), Sense::click());
-    close.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("Close view {path}")));
-    if close.hovered() || close.has_focus() {
-        painter.rect_filled(close_rect.shrink(t.space_4), t.control_radius, t.hover);
-    }
-    let center = close_rect.center();
-    for direction in [-1.0, 1.0] {
-        let arm = vec2(t.space_3, direction * t.space_3);
-        painter.line_segment([center - arm, center + arm], Stroke::new(1.2, t.text_dim));
-    }
+    let close = solidcraft_ui_kit::icon_button_at(ui, close_rect, "close", &format!("Close view {path}"));
     let mut action = close.on_hover_text("Close view").clicked().then_some(PaneAction::Close);
     if dock_width > 0.0 && dock_rect.width() > t.space_8 {
         let dock = ui.interact(dock_rect, ui.scope_id().with("dock_pane"), Sense::click());
