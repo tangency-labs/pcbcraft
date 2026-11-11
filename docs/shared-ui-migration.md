@@ -113,6 +113,12 @@ bounded page editor. Its navigation and validation message sit outside the
 page's scrolling fields. The primary action follows the draft's validation and
 profile-loading state, and dropdowns handle Escape before the enclosing modal.
 
+Assign Footprint uses the shared modal frame, title text, close control and
+footer actions around its responsive browser panes. Place on board occupies
+the footer's left action slot and has its own enabled state. The header close
+control is named Close Assign Footprint so it remains distinguishable from the
+footer's Close button. Each pane controls its scrolling and preview input.
+
 ## Source and licence record
 
 The shared UI kit, look and theme retain the SolidCraft Brand and Interface

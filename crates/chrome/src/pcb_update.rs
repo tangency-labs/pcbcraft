@@ -72,7 +72,6 @@ pub fn form(ctx: &egui::Context, primary: &str, enabled: bool, report: bool, add
         false,
         true,
         if report { 20. } else { 8. },
-        None,
         "Close",
         |ui| {
             let t = Tokens::get();

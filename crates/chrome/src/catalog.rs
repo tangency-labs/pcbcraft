@@ -34,7 +34,7 @@ pub fn form(
     active: bool,
     add: impl FnOnce(&mut Ui),
 ) -> FormAction {
-    form_body(ctx, id, title, width, primary, enabled, libraries, active, if libraries { 18. } else { 8. }, None, "Cancel", add)
+    form_body(ctx, id, title, width, primary, enabled, libraries, active, if libraries { 18. } else { 8. }, "Cancel", add)
 }
 
 /// Keep the shared property actions visible while fields scroll. The caller handles field
@@ -63,22 +63,57 @@ pub fn property_form(ctx: &egui::Context, id: &'static str, title: &str, width: 
     FormAction { close: closed || cancelled || modal.should_close(), primary: action == kit::Action::Ok, ..Default::default() }
 }
 
-/// The footprint browser shares the property shell and keeps assignment/placement actions fixed.
+/// Keep footprint browsing bounded by shared modal chrome. Assignment and placement have
+/// independent enabled states, with optional placement in the footer's left action slot.
 pub fn footprint_form(ctx: &egui::Context, enabled: bool, place: Option<bool>, add: impl FnOnce(&mut Ui)) -> FormAction {
-    form_body(
-        ctx,
-        "footprint_assignment",
-        "Assign Footprint",
-        1160.,
-        "Assign",
-        enabled,
-        false,
-        true,
-        24.,
-        place.map(|enabled| ("Place on board", enabled)),
-        "Close",
-        add,
-    )
+    let t = Tokens::get();
+    let id = egui::Id::unique("footprint_assignment");
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let mut closed = false;
+    let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
+        let width = 1160.0_f32.min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
+        ui.set_width(width);
+        let field_style = ui.style().clone();
+        kit::scope(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (header, _) = ui.allocate_exact_size(vec2(width, kit::header_height()), Sense::hover());
+            let close = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.0), vec2(t.control_height, t.control_height));
+            closed = kit::icon_button_at(ui, close, "close", "Close Assign Footprint").clicked();
+            let title = Rect::from_min_max(header.min + vec2(t.space_24, 0.0), pos2(close.left() - t.space_8, header.bottom()));
+            kit::paint_text(ui, title, "Assign Footprint", fonts::interface_heading(ui, t.font_button), t.text, false);
+            ui.interact(title, ui.make_persistent_id("assignment_title"), Sense::hover())
+                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), "Assign Footprint"));
+            rule(ui, header.bottom(), header.x_range());
+            let footer_height = t.form_footer_height + t.space_4;
+            let height = (ctx.content_rect().height() - header.height() - footer_height - t.space_24 * 2.0).clamp(0.0, t.control_height * 24.0);
+            let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+            let mut content = ui.new_child(UiBuilder::new().id_salt("assignment_body").max_rect(body));
+            content.set_clip_rect(ui.clip_rect().intersect(body));
+            content.set_style(field_style);
+            add(&mut content);
+            ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            kit::footer(
+                ui,
+                "Assign",
+                "Close",
+                enabled,
+                kit::Footer {
+                    apply: place.map(|_| "Place on board"),
+                    nothing_to_apply: place != Some(true),
+                    confirm: true,
+                    secondary_left: true,
+                    ..Default::default()
+                },
+            )
+        })
+    });
+    let cancelled = modal.inner == kit::Action::Cancel && !ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    FormAction {
+        close: closed || cancelled || modal.should_close(),
+        primary: modal.inner == kit::Action::Ok,
+        secondary: modal.inner == kit::Action::Apply,
+        ..Default::default()
+    }
 }
 
 /// Keep shared window actions fixed around a bounded page editor. Navigation, validation
@@ -122,7 +157,6 @@ pub(crate) fn form_body(
     libraries: bool,
     active: bool,
     rows: f32,
-    secondary: Option<(&str, bool)>,
     dismiss: &str,
     add: impl FnOnce(&mut Ui),
 ) -> FormAction {
@@ -187,9 +221,6 @@ pub(crate) fn form_body(
         ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)), |ui| {
             ui.spacing_mut().item_spacing.x = t.space_8;
             action.primary = ui.add_enabled(enabled, button(primary, true)).clicked();
-            if let Some((label, enabled)) = secondary {
-                action.secondary = ui.add_enabled(enabled, button(label, false)).clicked();
-            }
             action.close |= ui.add(button(dismiss, false)).clicked();
             if libraries {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
