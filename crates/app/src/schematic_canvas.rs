@@ -265,7 +265,7 @@ pub(crate) fn show(
     let rect = ui.available_rect_before_wrap();
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
     let moving = matches!(
         tool,
         Some(

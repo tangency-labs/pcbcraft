@@ -47,7 +47,7 @@ impl Snapshot {
 fn row(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, label: &str, depth: usize, open: Option<bool>, tip: &str) -> bool {
     let response = workspace::tree_row(
         ui,
-        ui.id().with(key),
+        ui.scope_id().with(key),
         &workspace::TreeRow { depth, fold: open, icon: None, label, accessibility_label: None, tip, selected: false },
     );
     response.fold || response.clicked
@@ -72,10 +72,15 @@ impl NetInspector {
         }
         let width = if area.width() < 600. { area.width() } else { 260. };
         let (rect, collapse) =
-            workspace::floating_card_width(ui, ui.id().with("net_inspector"), "Net Inspector", area, self.collapsed, true, width, |ui| {
+            workspace::floating_card_width(ui, ui.scope_id().with("net_inspector"), "Net Inspector", area, self.collapsed, true, width, |ui| {
                 properties::inspector_body(ui);
-                let search = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search nets or pins").desired_width(ui.available_width()));
-                search.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search nets or pins"));
+                pcbcraft_chrome::controls::search(
+                    ui,
+                    ui.make_persistent_id("net_search"),
+                    &mut self.query,
+                    "Search nets or pins",
+                    "Search nets or pins",
+                );
                 let Some(snapshot) = &self.snapshot else {
                     ui.label(shell::dim("No project open"));
                     return;

@@ -26,7 +26,7 @@ pub fn input(value: &mut String) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(value)
         .margin(egui::Margin::symmetric(t.space_8 as i8, t.space_4 as i8))
         .min_size(vec2(0., t.control_height))
-        .vertical_align(Align::Center)
+        .align(egui::Align2::LEFT_CENTER)
 }
 
 /// A single-line editable field with a stable accessible name, independent of label placement.
@@ -34,7 +34,7 @@ pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     let t = Tokens::get();
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
-        ui.add(input(value).desired_width(ui.available_width())).labelled_by(label.id)
+        crate::controls::text(ui, value).labelled_by(label.id)
     })
     .inner
 }
@@ -46,15 +46,12 @@ pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, option
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));
         let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, text)| text.as_str()).unwrap_or(value.as_str()).to_owned();
-        egui::ComboBox::from_id_salt(id)
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                for (key, text) in options {
-                    ui.selectable_value(value, (*key).into(), text);
-                }
-            })
-            .response
-            .labelled_by(label.id)
+        solidcraft_ui_kit::dropdown_menu(ui, id, &selected, |ui| {
+            for (key, text) in options {
+                ui.selectable_value(value, (*key).into(), text);
+            }
+        })
+        .labelled_by(label.id)
     })
     .inner
 }
@@ -107,7 +104,7 @@ pub fn mapping_choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String
         ui.spacing_mut().interact_size.y = t.control_height;
         let label = field_name(ui, label, label_width, false);
         let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, text)| text.as_str()).unwrap_or(value.as_str());
-        egui::ComboBox::from_id_salt(id)
+        crate::controls::Choice::from_id_salt(id)
             .width(ui.available_width())
             .selected_text(selected)
             .show_ui(ui, |ui| {
@@ -131,7 +128,7 @@ pub fn rotation(ui: &mut Ui, degrees: &mut u16) {
     let t = Tokens::get();
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new("Rotation").halign(Align::Min));
-        egui::ComboBox::from_id_salt("property_rotation")
+        crate::controls::Choice::from_id_salt("property_rotation")
             .selected_text(format!("{degrees}°"))
             .show_ui(ui, |ui| {
                 for rotation in [0, 90, 180, 270] {
@@ -220,7 +217,7 @@ pub fn footprint_preview(ui: &mut Ui, label: &str) -> (egui::Rect, egui::Respons
     let t = Tokens::get();
     let height = if ui.available_width() > 360. { 320. } else { 240. };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
     ui.painter_at(rect).rect_filled(rect, t.radius_md, t.board_canvas);
     (rect.shrink(t.space_12), response)
 }
@@ -243,12 +240,12 @@ pub fn field_action(ui: &mut Ui, name: &str, action: &str, enabled: bool) -> egu
     let label_width = field_label_width(width);
     ui.horizontal(|ui| {
         field_name(ui, name, label_width, false);
-        ui.add_enabled(
+        crate::controls::bounded_button(
+            ui,
+            ("field_action", name),
+            action,
+            (width - label_width - 3. * t.space_8 - 2. * t.space_24).max(40.),
             enabled,
-            egui::Button::new(action)
-                .right_text(())
-                .truncate()
-                .min_size(vec2((width - label_width - 3. * t.space_8 - 2. * t.space_24).max(40.), t.control_height)),
         )
     })
     .inner
@@ -333,24 +330,10 @@ fn field_label_width(width: f32) -> f32 {
     if width >= 600. { Tokens::get().form_label_width * 2. + Tokens::get().space_8 } else { 112. }
 }
 
-/// Property navigation uses a quiet underline instead of another row of filled buttons.
+/// Property navigation uses shared segmented choices, falling back to a dropdown in narrow rows.
 pub fn tabs<T: Copy + PartialEq>(ui: &mut Ui, current: &mut T, options: &[(T, &str)]) {
-    let t = Tokens::get();
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = t.space_16;
-        for (value, label) in options {
-            let selected = *current == *value;
-            let response =
-                ui.add(egui::Button::selectable(selected, RichText::new(*label).color(if selected { t.text } else { t.text_dim })).frame(false));
-            if selected {
-                ui.painter().hline(response.rect.x_range(), response.rect.bottom() + t.space_4, egui::Stroke::new(2., t.accent));
-            }
-            if response.clicked() {
-                *current = *value;
-            }
-        }
-    });
-    ui.add_space(t.space_8);
+    crate::settings::segmented(ui, current, options);
+    ui.add_space(Tokens::get().space_8);
 }
 
 /// Recognize absolute HTTP(S) field links with a nonempty authority. Whitespace, control
@@ -389,7 +372,7 @@ pub fn inline_text(
     let top = (anchor.center().y - height / 2.).clamp(canvas.top(), (canvas.bottom() - height).max(canvas.top()));
     let rect = egui::Rect::from_min_size(egui::pos2(left, top), vec2(width, height));
     let response = ui.put(rect, input(value).id(id).font(font).char_limit(2048));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
     if focus {
         response.request_focus();
         if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {

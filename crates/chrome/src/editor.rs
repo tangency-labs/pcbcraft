@@ -1,6 +1,6 @@
 //! Editor pane layout and focus presentation. The host owns views, focus and document state.
 
-use egui::{FontId, Rect, Sense, Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2};
+use egui::{FontId, Rect, Role, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 
 use crate::Tokens;
 
@@ -19,8 +19,8 @@ pub fn split(ui: &mut Ui, ratio: &mut f32) -> [Rect; 2] {
     } else {
         Rect::from_min_max(pos2(rect.left(), rect.top() + at), pos2(rect.right(), rect.top() + at + gap))
     };
-    let response = ui.interact(divider, ui.id().with("editor_divider"), Sense::drag());
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Other, true, "Resize editor panes"));
+    let response = ui.interact(divider, ui.scope_id().with("editor_divider"), Sense::drag());
+    response.widget_info(|| WidgetInfo::labeled(Role::GenericContainer, true, "Resize editor panes"));
     if response.dragged() && extent > gap {
         let delta = if horizontal { response.drag_delta().x } else { response.drag_delta().y };
         *ratio = (*ratio + delta / (extent - gap)).clamp(0.25, 0.75);
@@ -106,7 +106,7 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
     let response = ui
         .interact(
             Rect::from_min_max(dock_rect.right_top(), close_rect.left_bottom()),
-            ui.id().with("sheet_tab"),
+            ui.scope_id().with("sheet_tab"),
             if native { Sense::click_and_drag() } else { Sense::click() },
         )
         .on_hover_cursor(if !native {
@@ -116,27 +116,18 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
         } else {
             egui::CursorIcon::Grab
         });
-    response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, focused, path));
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, focused, path));
     ui.painter().rect_filled(strip, 0, t.panel);
     ui.painter().line_segment([strip.left_bottom(), strip.right_bottom()], Stroke::new(1.0, t.border));
     let painter = ui.painter_at(tab);
-    painter.rect_filled(tab, egui::CornerRadius { nw: t.control_radius, ne: t.control_radius, sw: 0, se: 0 }, t.canvas);
+    solidcraft_ui_kit::app_bar::tab_shape(&painter, &solidcraft_theme::Tokens::get(), tab, focused, response.hovered());
     painter.galley(pos2(dock_rect.right() + t.space_12, tab.center().y - galley.size().y / 2.0), galley, t.text);
     painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(2.0, if focused { t.accent } else { t.border }));
-    let close = ui.interact(close_rect, ui.id().with("close_pane"), Sense::click());
-    close.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("Close view {path}")));
-    if close.hovered() || close.has_focus() {
-        painter.rect_filled(close_rect.shrink(t.space_4), t.control_radius, t.hover);
-    }
-    let center = close_rect.center();
-    for direction in [-1.0, 1.0] {
-        let arm = vec2(t.space_3, direction * t.space_3);
-        painter.line_segment([center - arm, center + arm], Stroke::new(1.2, t.text_dim));
-    }
+    let close = solidcraft_ui_kit::icon_button_at(ui, close_rect, "close", &format!("Close view {path}"));
     let mut action = close.on_hover_text("Close view").clicked().then_some(PaneAction::Close);
     if dock_width > 0.0 && dock_rect.width() > t.space_8 {
-        let dock = ui.interact(dock_rect, ui.id().with("dock_pane"), Sense::click());
-        dock.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Dock in main window"));
+        let dock = ui.interact(dock_rect, ui.scope_id().with("dock_pane"), Sense::click());
+        dock.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Dock in main window"));
         let ink = ui.painter_at(dock_rect);
         let button = dock_rect.shrink(t.space_3);
         ink.rect_filled(button, t.control_radius, if dock.hovered() { t.hover } else { t.panel });
@@ -160,7 +151,7 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
         }
         choices.push(("Close view", PaneAction::Close));
         for (label, choice) in choices {
-            if ui.button(label).clicked() {
+            if crate::controls::button(ui, label).clicked() {
                 action = Some(choice);
                 ui.close();
             }
@@ -203,7 +194,7 @@ fn placement_preview(ui: &Ui, id: egui::Id, rect: Rect, caption: &str, active: b
     painter.rect_filled(region, t.control_radius, t.accent.gamma_multiply(0.22 * amount));
     painter.rect_stroke(region, t.control_radius, Stroke::new(2.0, t.accent.gamma_multiply(amount)), egui::StrokeKind::Inside);
     if active {
-        ui.interact(region, id.with("label"), Sense::hover()).widget_info(|| WidgetInfo::labeled(WidgetType::Other, true, caption));
+        ui.interact(region, id.with("label"), Sense::hover()).widget_info(|| WidgetInfo::labeled(Role::GenericContainer, true, caption));
         let label = painter.layout_no_wrap(caption.to_owned(), FontId::proportional(t.font_label), t.text);
         let badge = Rect::from_center_size(region.center(), label.size() + vec2(t.space_24, t.space_12));
         painter.rect_filled(badge, t.control_radius, t.panel);
@@ -244,7 +235,7 @@ pub fn window_drop_targets(
     let width = (pane.width() - 2.0 * t.space_12).clamp(180.0, 280.0);
     let left = pane.left() + t.space_12;
     let right = (pane.right() - width - t.space_12).max(left);
-    egui::Area::new(ui.id().with("window_drop_targets"))
+    egui::Area::new(ui.scope_id().with("window_drop_targets"))
         .order(egui::Order::Tooltip)
         .fixed_pos(pos2((anchor.x - width).clamp(left, right), pane.top() + header_height() + t.space_4))
         .show(ui.ctx(), |ui| {
@@ -264,7 +255,7 @@ pub fn window_drop_targets(
                     let (rect, response) = ui.allocate_exact_size(vec2(width, header_height()), Sense::hover());
                     let under_pointer = state.pointer.is_some_and(|pointer| rect.contains(pointer));
                     let selected = under_pointer || (destination == WindowDrop::NewWindow && state.detaching);
-                    response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, &label));
+                    response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, &label));
                     let amount = ui.ctx().animate_bool_with_time(response.id, selected, 0.12);
                     ui.painter().rect_filled(rect, t.control_radius, t.accent.gamma_multiply(0.24 * amount));
                     if under_pointer {
@@ -285,7 +276,7 @@ pub fn window_drop_targets(
 
 /// Keep the source pane outlined and shaded until the drag ends, with a brief entrance fade.
 pub fn pane_drag_source(ui: &Ui, source: Rect, active: bool) {
-    let id = ui.id().with("pane_drag_preview");
+    let id = ui.scope_id().with("pane_drag_preview");
     let amount = ui.ctx().animate_bool_with_time(id, active, if active { 0.12 } else { 0.0 });
     if active {
         let t = Tokens::get();

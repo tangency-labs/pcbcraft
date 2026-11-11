@@ -205,7 +205,7 @@ impl PcbApp {
                                     && !choices.contains_key(&id)
                                 {
                                     let label = format!("Assign footprint to {}", component.reference());
-                                    if ui.button(label).clicked() {
+                                    if pcbcraft_chrome::controls::button(ui, label).clicked() {
                                         action = Action::Assign(id);
                                     }
                                 }
@@ -238,7 +238,9 @@ impl PcbApp {
                         }
                     }
                 }
-                if (!source_current || (edit.phase == Phase::Review && !current_plan)) && ui.button("Review again").clicked() {
+                if (!source_current || (edit.phase == Phase::Review && !current_plan))
+                    && pcbcraft_chrome::controls::button(ui, "Review again").clicked()
+                {
                     action = Action::Review;
                 }
             }
@@ -547,7 +549,7 @@ fn draw_unplaced(ui: &mut egui::Ui, project: &Project, action: &mut Action) {
         return;
     }
     ui.label(if unplaced.len() == 1 { "1 footprint ready to place".into() } else { format!("{} footprints ready to place", unplaced.len()) });
-    if ui.button("Place footprints").clicked() {
+    if pcbcraft_chrome::controls::button(ui, "Place footprints").clicked() {
         *action = Action::PlaceAll;
     }
 }

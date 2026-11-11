@@ -256,7 +256,7 @@ impl PcbApp {
                 ui.add_enabled(original, egui::Checkbox::new(&mut draft.options.reuse_components, "Reuse original unplaced components"));
                 if !draft.options.reuse_components {
                     ui.label(shell::dim("Duplication creates linked schematic components and physical placements in one edit. Matching net names can join existing nets within their scope; add a suffix to keep the copied circuit separate."));
-                    ui.checkbox(&mut draft.options.items.preserve_references, "Keep original references");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.options.items.preserve_references, "Keep original references");
                     properties::text(ui, "Net-name suffix", &mut draft.options.items.net_name_suffix);
                     for target in &mut draft.targets {
                         ui.push_id(target.source, |ui| {
@@ -264,7 +264,7 @@ impl PcbApp {
                             let mut choices = vec![("".to_owned(), "Choose sheet…".to_owned())];
                             choices.extend(sheets.clone());
                             let choices: Vec<_> = choices.iter().map(|(id, name)| (id.as_str(), name.clone())).collect();
-                            properties::choice(ui, "Sheet", ui.id().with("sheet"), &mut target.sheet, &choices);
+                            properties::choice(ui, "Sheet", ui.scope_id().with("sheet"), &mut target.sheet, &choices);
                             properties::text(ui, "Schematic X", &mut target.x);
                             properties::text(ui, "Schematic Y", &mut target.y);
                         });
@@ -277,16 +277,16 @@ impl PcbApp {
                     let mut choices = vec![("".to_owned(), "Choose layer…".to_owned())];
                     choices.extend(destination_layers.iter().filter(|l| l.purpose == layer.purpose).map(|l| (l.id.to_string(), l.name.clone())));
                     let choices: Vec<_> = choices.iter().map(|(id, name)| (id.as_str(), name.clone())).collect();
-                    properties::mapping_choice(ui, &layer.name, ui.id().with(layer.id), draft.layers.entry(layer.id).or_default(), &choices);
+                    properties::mapping_choice(ui, &layer.name, ui.scope_id().with(layer.id), draft.layers.entry(layer.id).or_default(), &choices);
                 }
             }
-            ui.checkbox(&mut draft.original, "Paste at original board position");
+            pcbcraft_chrome::controls::checkbox(ui, &mut draft.original, "Paste at original board position");
             if let Some(error) = &draft.error {
                 ui.label(shell::error(error));
             }
             ui.horizontal(|ui| {
-                apply = ui.button("Paste").clicked();
-                cancel = ui.button("Cancel").clicked();
+                apply = pcbcraft_chrome::controls::button(ui, "Paste").clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if apply {
@@ -387,7 +387,7 @@ impl PcbApp {
             &self.board_appearance,
             true,
             self.preferences.navigation,
-            self.preferences.grid_opacity_percent,
+            self.preferences.grid_opacity(true),
             self.preferences.board_grid_style,
             label,
             &[],

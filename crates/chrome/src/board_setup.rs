@@ -56,10 +56,13 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
         heading(&mut nav, "Board setup");
         for value in [Page::Layers, Page::Stackup, Page::Materials, Page::Silkscreen, Page::Profiles] {
             if nav
-                .add_sized(
-                    vec2(nav.available_width(), t.control_height + t.space_8),
-                    egui::Button::new(value.title()).selected(*page == value).frame(*page == value),
-                )
+                .add_sized(vec2(nav.available_width(), t.control_height + t.space_8), |ui: &mut Ui| {
+                    solidcraft_ui_kit::button(
+                        ui,
+                        value.title(),
+                        if *page == value { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
+                    )
+                })
                 .clicked()
             {
                 *page = value;
@@ -69,7 +72,7 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
     } else {
         let bar = Rect::from_min_size(body.min, vec2(body.width(), t.form_header_height));
         let mut nav = ui.new_child(UiBuilder::new().max_rect(bar.shrink2(vec2(t.space_16, t.space_6))));
-        egui::ComboBox::from_id_salt("setup_page")
+        crate::controls::Choice::from_id_salt("setup_page")
             .selected_text(page.title())
             .width(nav.available_width())
             .show_ui(&mut nav, |ui| {
@@ -78,7 +81,7 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
                 }
             })
             .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Board setup page"));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Board setup page"));
         body.min.y = bar.bottom();
     }
     if *page != previous {
@@ -166,7 +169,7 @@ pub fn table_label(ui: &mut Ui, label: &str, width: f32) {
 pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     field(ui, label, |ui| {
         let response = ui.add(crate::properties::input(value).desired_width(ui.available_width()));
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, label));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
         response
     })
 }
@@ -188,18 +191,23 @@ pub fn material_heading(ui: &mut Ui, name: &str, family: Option<&str>, used: boo
 /// A compact material choice exposes its family without a characterization form.
 pub fn material_choice(ui: &mut Ui, name: &str, assign: bool) -> bool {
     let t = Tokens::get();
-    ui.add(
-        crate::catalog::button(&format!("{} {name}", if assign { "Use" } else { "Add" }), false)
-            .min_size(vec2(ui.available_width(), t.control_height + t.space_8)),
+    ui.add_sized(
+        vec2(ui.available_width(), t.control_height + t.space_8),
+        crate::catalog::button(&format!("{} {name}", if assign { "Use" } else { "Add" }), false),
     )
     .clicked()
 }
 
-/// Align summary labels with their controls independently of each caption's text width.
+/// Align summary labels independently of their text width. Dropdowns use the available field
+/// column rather than egui's narrow default, so ordinary choices do not truncate prematurely.
 pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         table_label(ui, label, Tokens::get().form_label_width * 2.);
-        ui.with_layout(Layout::left_to_right(Align::Center), add).inner
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            ui.spacing_mut().combo_width = ui.available_width();
+            add(ui)
+        })
+        .inner
     })
     .inner
 }
@@ -236,7 +244,7 @@ pub fn stratum_row(ui: &mut Ui, name: &str, width: f32, selected: bool) -> egui:
         egui::FontId::proportional(t.font_label),
         t.text,
     );
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, name));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
     response.on_hover_text(name)
 }
 
@@ -252,7 +260,7 @@ pub fn thickness_lock(ui: &mut Ui, width: f32, value: &mut bool, label: &str) ->
         state.corner_radius = egui::CornerRadius::same(Tokens::get().radius_sm / 2);
     }
     let response = control.add(egui::Checkbox::without_text(value));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Checkbox, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::CheckBox, true, label));
     response
 }
 
@@ -329,7 +337,7 @@ pub fn cross_section(ui: &mut Ui, bands: &[(String, Option<i64>, bool)], rows: &
                 line_y += t.space_8;
             }
         }
-        ui.interact(band, ui.id().with(("stratum", i)), Sense::hover()).on_hover_text(format!(
+        ui.interact(band, ui.scope_id().with(("stratum", i)), Sense::hover()).on_hover_text(format!(
             "{name}: {}",
             thickness.map(|n| crate::units::label(n, crate::units::Unit::Mm)).unwrap_or_else(|| "Unspecified".into())
         ));

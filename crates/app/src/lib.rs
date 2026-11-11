@@ -19,6 +19,7 @@ mod board_drc;
 mod board_measure;
 mod board_outputs;
 mod board_panels;
+mod board_presets;
 mod board_reference;
 mod board_setup;
 mod board_tracks;
@@ -68,7 +69,7 @@ use window_commands::Panel;
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use pcbcraft_chrome::{
-    MenuItem, Tokens, fonts, grid,
+    MenuItem, Tokens, grid,
     menu::{self, MenuIcon},
     shell::{self, dim},
     theme, units, workspace,
@@ -180,6 +181,8 @@ enum Dialog {
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
     LayerColor(board_appearance::Edit),
+    /// Custom tool dimensions and optional reusable presets, independent of board setup.
+    RoutingSize(board_presets::Edit),
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     /// Expanded selection properties retain their originating view and revision.
@@ -229,12 +232,13 @@ pub struct PcbApp {
     preferences: Preferences,
     board_appearance: board_appearance::Appearance,
     board_profile_files: board_setup::profile_io::Files,
+    routing_presets: board_presets::Presets,
     /// The one fabrication export that may be saving at a time.
     fabrication_exports: board_outputs::Exports,
     net_inspector: net_inspector::NetInspector,
     parts: parts_browser::PartsBrowser,
     browser: project_browser::ProjectBrowser,
-    /// The ribbon tab shown, an index into [`RIBBON_TABS`].
+    /// The ribbon's stable saved slot, mapped to the active workspace's visual tab order.
     ribbon_tab: usize,
     dialog: Dialog,
     /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
@@ -260,7 +264,8 @@ pub struct PcbApp {
 }
 
 /// The Schematic workspace's ribbon tabs, in order.
-const RIBBON_TABS: [&str; 5] = ["Capture", "Analyze", "Libraries", "Manage", "View"];
+const RIBBON_TABS: [&str; 5] = ["Capture", "Sheets", "Analyze", "Libraries", "View"];
+const BOARD_RIBBON_TABS: [&str; 6] = ["Layout", "Draw", "Analyze", "Manufacture", "Libraries", "View"];
 const VIEW_TAB: usize = 1;
 
 /// Built-in workspace contributions. The picker handles presentation only; each document
@@ -272,7 +277,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             multiple_views: true,
             title: "Schematic",
             description: "Capture circuits, place symbols and connect pins",
-            tabs: Some("Capture · Analyze · Libraries · Manage · View"),
+            tabs: Some("Capture · Sheets · Analyze · Libraries · View"),
             icon: workspace::WorkspaceIcon::Schematic,
             current: true,
         },
@@ -281,7 +286,7 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             multiple_views: true,
             title: "PCB layout",
             description: "Inspect footprint placements and linked schematic components",
-            tabs: Some("Layout · Libraries · View"),
+            tabs: Some("Layout · Draw · Analyze · Manufacture · Libraries · View"),
             icon: workspace::WorkspaceIcon::Layout,
             current: false,
         },
@@ -332,7 +337,7 @@ impl PcbApp {
     /// Successful New/Open actions enter the workspace; cancelling them leaves Home visible.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Home uses custom fonts on its first frame; installing during that frame is too late.
-        fonts::install(&cc.egui_ctx);
+        pcbcraft_chrome::install(&cc.egui_ctx);
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
         let mut views = EditorViews::default();
         views.set_grid_everywhere(preferences.schematic_grid_nm);
@@ -345,6 +350,7 @@ impl PcbApp {
             board_appearance: board_appearance::Appearance::from_storage(
                 cc.storage.and_then(|storage| storage.get_string(board_appearance::STORAGE_KEY)),
             ),
+            routing_presets: board_presets::Presets::from_storage(cc.storage.and_then(|storage| storage.get_string(board_presets::STORAGE_KEY))),
             views,
             #[cfg(not(target_arch = "wasm32"))]
             files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
@@ -834,16 +840,16 @@ impl PcbApp {
         !self.home && self.assistant.shortcuts(ctx)
     }
 
-    /// Render the workspace toolbar using ported schematic groups and upstream PCB/View controls.
-    /// Saved tab slots stay stable while visual ordering follows Next; quick actions use the focused view.
-    fn ribbon(&mut self, ui: &mut Ui) {
+    /// Render task-oriented tabs for the focused workspace, preserving stable saved slots.
+    /// Unsupported slots fall back to its first tab; quick actions use the focused view.
+    fn ribbon(&mut self, ui: &mut Ui) -> Option<workspace::RibbonBackground> {
         use workspace::{RibbonTool, ToolIcon};
         let current = self.views.active.workspace;
         let board = current == Workspace::Board;
         let order: &[usize] = if board { &ribbon::BOARD_TAB_ORDER } else { &ribbon::TAB_ORDER };
         let mut tab = order.iter().position(|slot| *slot == self.ribbon_tab).unwrap_or(0);
         let entries = self.workspace_entries();
-        let tabs: &[&str] = if board { &["Layout", "Libraries", "View"] } else { &RIBBON_TABS };
+        let tabs: &[&str] = if board { &BOARD_RIBBON_TABS } else { &RIBBON_TABS };
         let has_project = self.session.project().is_some();
         let mut quick = Vec::new();
         if self.ribbon_tab != VIEW_TAB {
@@ -868,17 +874,31 @@ impl PcbApp {
                 menu_check: None,
             });
         }
-        let response =
-            workspace::ribbon(ui, current.title(), tabs, &mut tab, workspace::Workspaces { entries: &entries, ..WORKSPACES }, &quick, |ui, shown| {
-                let slot = order[shown];
-                if slot == VIEW_TAB {
-                    self.view_tab(ui);
-                } else if board && slot == 0 {
-                    self.board_tab(ui);
-                } else {
-                    self.ported_ribbon_tab(ui, slot);
+        let response = workspace::ribbon_with_controls(
+            ui,
+            current.title(),
+            tabs,
+            &mut tab,
+            workspace::RibbonLayout {
+                workspaces: workspace::Workspaces { entries: &entries, ..WORKSPACES },
+                quick: &quick,
+                pinned_fields: if board { 3 } else { 0 },
+                controls_label: "Layer & sizes",
+            },
+            |ui, section| match section {
+                workspace::RibbonSection::Commands(shown) => {
+                    let slot = order[shown];
+                    if slot == VIEW_TAB {
+                        self.view_tab(ui);
+                    } else if board && slot != 3 {
+                        self.board_tab(ui, slot);
+                    } else {
+                        self.ported_ribbon_tab(ui, slot);
+                    }
                 }
-            });
+                workspace::RibbonSection::Controls { compact } => self.board_ribbon_controls(ui, compact),
+            },
+        );
         self.ribbon_tab = order[tab];
         if let Some(action) = response.quick {
             if !board && action == 0 {
@@ -892,9 +912,10 @@ impl PcbApp {
         if let Some(pick) = response.workspace {
             self.pick_workspace(ui.ctx(), pick);
         }
+        response.background
     }
 
-    /// The View tab: show or hide contextual panels, fit the active view, and toggle the split.
+    /// The View tab: control the workspace grid, contextual panels, navigation and editor layout.
     /// Each group's caption also lists its actions in a menu, with check marks for the panels.
     fn view_tab(&mut self, ui: &mut Ui) {
         use workspace::{RibbonTool, ToolIcon};
@@ -902,6 +923,19 @@ impl PcbApp {
         let has_project = self.session.project().is_some();
         let schematic = self.views.active.workspace == Workspace::Schematic;
         let parts = schematic && self.session.available(PLACE_SYMBOL);
+        let grid = [RibbonTool {
+            icon: ToolIcon::Grid,
+            label: "Grid",
+            description: "Show grid",
+            shortcut: "",
+            enabled: has_project,
+            active: self.preferences.grid_visible(!schematic),
+            menu_check: Some(pcbcraft_chrome::menu::CheckKind::Toggle),
+        }];
+        if workspace::ribbon_group(ui, "Display", &grid).is_some() {
+            self.preferences.set_grid_visible(!schematic, !self.preferences.grid_visible(!schematic));
+        }
+        workspace::ribbon_separator(ui);
         let panels = [
             RibbonTool {
                 icon: ToolIcon::Browser,
@@ -972,8 +1006,25 @@ impl PcbApp {
             active: false,
             menu_check: None,
         }];
-        if workspace::ribbon_group(ui, "Navigate", &navigate).is_some() {
-            self.fit_view(self.views.active.id());
+        let mut navigate = navigate.to_vec();
+        if !schematic {
+            navigate.push(RibbonTool {
+                icon: ToolIcon::FlipView,
+                label: "Flip view",
+                description: "View the board from below",
+                shortcut: "",
+                enabled: self.session.project().and_then(|project| project.board_target()).is_some(),
+                active: self.views.active.camera.mirrored(),
+                menu_check: Some(pcbcraft_chrome::menu::CheckKind::Toggle),
+            });
+        }
+        match workspace::ribbon_group(ui, "Navigate", &navigate) {
+            Some(0) => self.fit_view(self.views.active.id()),
+            Some(1) => {
+                let camera = &mut self.views.active.camera;
+                camera.set_mirrored(!camera.mirrored());
+            }
+            _ => {}
         }
         workspace::ribbon_separator(ui);
         let mut editors = vec![
@@ -1104,7 +1155,7 @@ impl PcbApp {
         let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
         let mut spacing = self.views.active.camera.snap_nm();
         let every = grid::shown_every(self.views.active.camera.snap_step()).unwrap_or(1);
-        let grid_style = if self.preferences.grid_opacity_percent == 0 {
+        let grid_style = if !self.preferences.grid_visible(self.views.active.workspace == Workspace::Board) {
             grid::Style::Off
         } else if self.views.active.workspace == Workspace::Board {
             self.preferences.board_grid_style
@@ -1372,7 +1423,7 @@ impl PcbApp {
                             input_enabled,
                             input_enabled,
                             self.preferences.navigation,
-                            self.preferences.grid_opacity_percent,
+                            self.preferences.grid_opacity(false),
                             self.preferences.auto_heal_wires,
                             self.parts.repeats(),
                             self.preferences.units,
@@ -1960,8 +2011,8 @@ impl PcbApp {
                         ui.label(shell::error(error.as_str()));
                     }
                     ui.horizontal(|ui| {
-                        submit |= ui.button("OK").clicked();
-                        cancel = ui.button("Cancel").clicked();
+                        submit |= pcbcraft_chrome::controls::button(ui, "OK").clicked();
+                        cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
                     });
                 });
                 if submit {
@@ -1990,6 +2041,7 @@ impl PcbApp {
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
+            Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
@@ -2000,13 +2052,13 @@ impl PcbApp {
                 let mut cancel = false;
                 let closing = shell::dialog(ctx, "open_location", "Open Project", |ui| {
                     ui.vertical(|ui| {
-                        if ui.button("Project file or archive…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Project file or archive…").clicked() {
                             selected = Some(false);
                         }
-                        if ui.button("Project folder…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Project folder…").clicked() {
                             selected = Some(true);
                         }
-                        cancel = ui.button("Cancel").clicked();
+                        cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
                     });
                 });
                 if let Some(folder) = selected {
@@ -2021,13 +2073,13 @@ impl PcbApp {
                 let title = if IN_BROWSER { "Download Project" } else { "Save Project As" };
                 let closing = shell::dialog(ctx, "save_encoding", title, |ui| {
                     ui.vertical(|ui| {
-                        if !IN_BROWSER && ui.button("Project folder…").clicked() {
+                        if !IN_BROWSER && pcbcraft_chrome::controls::button(ui, "Project folder…").clicked() {
                             selected = Some(SaveFormat::Folder);
                         }
-                        if ui.button("Packed project (.pc.zip)…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Packed project (.pc.zip)…").clicked() {
                             selected = Some(SaveFormat::Archive);
                         }
-                        cancel = ui.button("Cancel").clicked();
+                        cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
                     });
                 });
                 if let Some(encoding) = selected {
@@ -2072,8 +2124,9 @@ impl PcbApp {
                     ui.label("Electronics design for people and AI agents working together on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
                     workspace::ribbon_licenses(ui);
+                    pcbcraft_chrome::fonts::licenses(ui);
                     ui.hyperlink_to("Report a bug", BUG_REPORT_URL);
-                    close = ui.button("Close").clicked();
+                    close = pcbcraft_chrome::controls::button(ui, "Close").clicked();
                 });
                 if !(closing || close) {
                     self.dialog = Dialog::About;
@@ -2086,7 +2139,7 @@ impl PcbApp {
         let dark = self.preferences.is_dark(ctx.system_theme());
         let zoom = self.preferences.zoom();
         if self.applied.is_none() {
-            fonts::install(ctx);
+            pcbcraft_chrome::install(ctx);
         }
         if self.applied != Some((dark, zoom)) {
             theme::apply(ctx, dark);
@@ -2104,11 +2157,11 @@ impl PcbApp {
                 ui.label("Clients with this configuration can inspect and edit this project and control its editor windows.");
                 let disable = ui
                     .horizontal(|ui| {
-                        if ui.button(if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
+                        if pcbcraft_chrome::controls::button(ui, if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
                             ctx.copy_text(control.client_configuration());
                             copied = true;
                         }
-                        ui.button("Disable connection").clicked()
+                        pcbcraft_chrome::controls::button(ui, "Disable connection").clicked()
                     })
                     .inner;
                 if disable {
@@ -2117,7 +2170,7 @@ impl PcbApp {
                 }
             } else {
                 ui.label("Let a local MCP client inspect and edit this project and control its editor windows.");
-                if ui.button("Enable local connection").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Enable local connection").clicked() {
                     match live_control::LiveControl::start(ctx) {
                         Ok(control) => {
                             self.live_control = Some(control);
@@ -2130,7 +2183,7 @@ impl PcbApp {
             if let Some(error) = &error {
                 ui.label(shell::error(error.as_str()));
             }
-            close = ui.button("Close").clicked();
+            close = pcbcraft_chrome::controls::button(ui, "Close").clicked();
         });
         if !(close || dismissed) {
             self.dialog = Dialog::LocalMcp { error, copied };
@@ -2167,6 +2220,7 @@ impl PcbApp {
     /// Poll project and library file owners once through the framework root, even after its native
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
+        pcbcraft_chrome::begin_frame();
         let ctx = ui.ctx().clone();
         self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
@@ -2263,7 +2317,7 @@ impl PcbApp {
                 self.home_page(ui);
                 None
             } else {
-                self.ribbon(ui);
+                let ribbon = self.ribbon(ui);
                 self.views.sync(&self.session);
                 if !matches!(self.dialog, Dialog::None) {
                     self.views.cancel_gestures();
@@ -2274,6 +2328,7 @@ impl PcbApp {
                 self.status(ui);
                 let workspace = ui.available_rect_before_wrap();
                 self.editor_workspace(ui, workspace);
+                self.paint_ribbon_background(ribbon);
                 Some(workspace)
             };
             #[cfg(not(target_arch = "wasm32"))]
@@ -2404,7 +2459,7 @@ impl eframe::App for PcbApp {
             // Release the native surface after the frame; surviving host/window IDs stay put.
             frame.retire_root_window();
         }
-        let changed = self.preferences != before || self.board_appearance.dirty;
+        let changed = self.preferences != before || self.board_appearance.dirty || self.routing_presets.dirty;
         #[cfg(not(target_arch = "wasm32"))]
         let changed = self.assistant.take_settings_changed() || changed;
         #[cfg(not(target_arch = "wasm32"))]
@@ -2430,6 +2485,10 @@ impl eframe::App for PcbApp {
             storage.set_string(arrangements::STORAGE_KEY, text);
         }
         storage.set_string(PREFERENCES_KEY, self.preferences.to_text());
+        if let Some(text) = self.routing_presets.storage_text() {
+            storage.set_string(board_presets::STORAGE_KEY, text);
+            self.routing_presets.dirty = false;
+        }
         if let Some(text) = self.board_appearance.storage_text() {
             storage.set_string(board_appearance::STORAGE_KEY, text);
         }

@@ -7,10 +7,8 @@
 
 use std::fmt;
 
-use egui::{RichText, Ui};
+use egui::Ui;
 use serde::{Deserialize, Serialize};
-
-use crate::Tokens;
 
 /// Nanometres in one mil (a thousandth of an inch), exactly.
 pub const NM_PER_MIL: i64 = 25_400;
@@ -156,12 +154,10 @@ pub fn readout(nm: i64, unit: Unit) -> String {
 /// The status bar's unit button. It shows the display unit, and a click switches to the other one.
 /// `shortcut` is shown in its tooltip. Returns true when the unit changed.
 pub fn toggle(ui: &mut Ui, unit: &mut Unit, shortcut: &str) -> bool {
-    let t = Tokens::get();
-    let button = egui::Button::new(RichText::new(unit.symbol()).size(t.font_label)).frame(false);
     let tip = if shortcut.is_empty() { "Switch units".to_owned() } else { format!("Switch units ({shortcut})") };
-    let response = ui.add(button).on_hover_text(tip);
+    let response = solidcraft_ui_kit::text_button(ui, unit.symbol(), true).on_hover_text(tip);
     let shown = *unit;
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Units: {}", shown.symbol())));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Units: {}", shown.symbol())));
     if response.clicked() {
         *unit = unit.toggled();
         return true;

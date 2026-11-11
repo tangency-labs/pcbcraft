@@ -126,7 +126,7 @@ fn waiting_for_a_file_job_allows_canceling_close_without_abandoning_the_job() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), PcbApp::default());
     h.run();
     *h.state_mut() = app;
-    h.step();
+    h.run();
     h.get_by_label("Cancel close").click();
     h.step();
     assert!(!h.state().project_action_pending());

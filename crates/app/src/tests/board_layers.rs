@@ -19,6 +19,33 @@ fn layer(h: &Harness<'_, PcbApp>, name: &str) -> String {
     h.state().session.project().unwrap().boards().next().unwrap().layers().into_iter().find(|layer| layer.name == name).unwrap().id.to_string()
 }
 
+/// Each disclosure remains independently addressable and toggles only its own persisted
+/// section. Reusing the toolkit's default arrow ID loses nodes and paints clash warnings.
+#[test]
+fn layer_disclosures_have_independent_identities_and_state() {
+    let mut h = board();
+    h.state_mut().browser.open = false;
+    h.run();
+    let before = h.state().session.inspect();
+    h.get_by_label("Collapse Copper");
+    h.get_by_label("Collapse Board");
+    h.get_by_label("Expand Component details");
+    h.get_by_label("Expand Manufacturing");
+    click(&mut h, "Collapse Copper");
+    h.get_by_label("Expand Copper");
+    h.get_by_label("Collapse Board");
+    assert!(h.query_by_label("Activate layer Top").is_none());
+    click(&mut h, "Expand Component details");
+    h.get_by_label("Collapse Component details");
+    h.get_by_label("Expand Copper");
+    click(&mut h, "Expand Copper");
+    h.get_by_label("Collapse Copper");
+    h.get_by_label("Activate layer Top");
+    h.get_by_label("Collapse Board");
+    h.get_by_label("Expand Manufacturing");
+    assert_eq!(h.state().session.inspect(), before);
+}
+
 /// Old default names display consistently after reopening, without rewriting layer identities,
 /// drawings or saved bytes. Custom names remain visible as authored.
 #[test]
@@ -51,7 +78,9 @@ fn legacy_outline_names_preserve_saved_geometry_and_custom_names() {
         let before = h.state().session.inspect();
         h.run();
         click(&mut h, &format!("Activate layer {displayed_name}"));
-        click(&mut h, "Draw lines on Board Outline");
+        click(&mut h, "Layout");
+        click(&mut h, "Draw");
+        click(&mut h, "Draw lines on active layer");
         h.get_by_label(&format!("Line · {displayed_name}"));
         assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(outline.as_str()));
         assert_eq!(layer(&h, saved_name), outline);
@@ -84,12 +113,15 @@ fn colliding_outline_defaults_remain_distinct_in_all_layer_controls() {
             h.get_by_label(&format!("Activate layer {name}"));
             click(&mut h, &format!("Activate layer {name}"));
             assert_eq!(h.state().views.active.board.active_layer.as_ref(), Some(id));
-            click(&mut h, "Draw lines on Board Outline");
+            click(&mut h, "Layout");
+            click(&mut h, "Draw");
+            click(&mut h, "Draw lines on active layer");
             h.get_by_label(&format!("Line · {name}"));
             h.key_press(Key::Escape);
             h.run();
         }
         for (name, id) in [("Board Edge", &legacy), (other_name, &other)] {
+            click(&mut h, "Layout");
             click(&mut h, "Active layer");
             click(&mut h, name);
             assert_eq!(h.state().views.active.board.active_layer.as_ref(), Some(id));
@@ -109,17 +141,22 @@ fn active_layer_picker_and_rows_share_state_without_document_edits() {
     let top = layer(&h, "Top");
     let edge = layer(&h, "Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
+    click(&mut h, "Layout");
     click(&mut h, "Active layer");
     click(&mut h, "Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(edge.clone()));
     assert_eq!(h.get_by_label("Activate layer Board Outline").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
-    click(&mut h, "Draw lines on Board Outline");
+    click(&mut h, "Layout");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw lines on active layer");
     h.get_by_label("Line · Board Outline");
     click(&mut h, "Show layer Board Outline");
     assert_eq!(h.state().views.active.board.active_layer, Some(edge.clone()));
     assert!(h.state().views.active.board.hidden_layers.contains(&edge));
+    click(&mut h, "Layout");
     h.get_by_label("Board Outline (hidden)");
-    assert!(h.get_by_label("Draw lines on Board Outline").accesskit_node().is_disabled());
+    click(&mut h, "Draw");
+    assert!(h.get_by_label("Draw lines on active layer").accesskit_node().is_disabled());
     click(&mut h, "Activate layer Top");
     assert_eq!(h.state().views.active.board.active_layer, Some(top));
     assert!(h.state().views.active.board.hidden_layers.contains(&edge));
@@ -158,6 +195,7 @@ fn isolate_and_show_all_remain_view_local_and_reject_invalid_targets() {
 #[test]
 fn compact_layers_reveal_the_active_row_after_resize() {
     let mut h = board();
+    click(&mut h, "Layout");
     click(&mut h, "Active layer");
     click(&mut h, "Board Outline");
     h.set_size(egui::vec2(760., 560.));
@@ -174,7 +212,8 @@ fn compact_layers_reveal_the_active_row_after_resize() {
     h.get_by_label("Active layer").scroll_to_me();
     h.run();
     let selector = h.get_by_label("Active layer").rect();
-    assert!(egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(760., 175.)).contains_rect(selector));
+    let ribbon_bottom = h.get_by_label("PCB canvas").rect().top();
+    assert!(egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(760., ribbon_bottom)).contains_rect(selector));
 }
 
 /// Eyes have separate hit targets and toggle semantics; keyboard visibility changes never activate a row.
@@ -250,12 +289,14 @@ fn layer_shortcuts_respect_fields_popups_and_discard_old_layer_gestures() {
     let mut h = board();
     let top = layer(&h, "Top");
     let edge = layer(&h, "Board Outline");
+    click(&mut h, "Layout");
     click(&mut h, "Active layer");
     h.key_press(Key::Plus);
     h.run();
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
     h.key_press(Key::Escape);
     h.run();
+    click(&mut h, "Layout");
     super::board_views::open_silkscreen(&mut h);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Text height").click();
     h.run();
@@ -266,7 +307,8 @@ fn layer_shortcuts_respect_fields_popups_and_discard_old_layer_gestures() {
     assert_eq!(h.state().views.active.board.active_layer, Some(top.clone()));
     click(&mut h, "Cancel");
     click(&mut h, "Activate layer Board Outline");
-    click(&mut h, "Draw rectangle on Board Outline");
+    click(&mut h, "Draw");
+    click(&mut h, "Draw rectangle on active layer");
     let canvas = h.get_by_label("PCB canvas").rect();
     click_canvas_at(&mut h, canvas.center());
     assert!(h.state().views.active.board.drawing.source().is_some());

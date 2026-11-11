@@ -1,7 +1,7 @@
 //! Movable contextual cards share the workspace frame and Parts' edge-docking gestures.
 use super::{FLOATING_GAP, FLOATING_HEADER, FLOATING_RADIUS, floating_card_min_height, floating_frame};
-use crate::{MenuItem, Tokens, fonts, menu};
-use egui::{Align2, Id, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, pos2, vec2};
+use crate::{MenuItem, Tokens, menu};
+use egui::{Align2, Id, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 /// Hosts below this width stack a full-width inspector beneath Browser.
 pub const COMPACT_HOST_WIDTH: f32 = 600.0;
@@ -188,7 +188,7 @@ impl Panel {
         }
         let width = width.min((canvas.width() - 2.0 * FLOATING_GAP).max(1.0));
         let height = if floating { 440.0_f32.min(area.height() - 2.0 * FLOATING_GAP) } else { area.height() - 2.0 * FLOATING_GAP };
-        let body_height = (height - floating_frame().total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0);
+        let body_height = (height - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0);
         let bounds = canvas.shrink(FLOATING_GAP);
         let desired = if floating {
             self.state.at.map(|[x, y]| canvas.min + vec2(x, y)).unwrap_or(bounds.min + vec2(32.0, 32.0))
@@ -202,8 +202,8 @@ impl Panel {
             desired.x.clamp(bounds.left(), (bounds.right() - width).max(bounds.left())),
             desired.y.clamp(bounds.top(), (bounds.bottom() - floating_card_min_height() + 2.0 * FLOATING_GAP).max(bounds.top())),
         );
-        let body_height =
-            body_height.min((bounds.bottom() - at.y - floating_frame().total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0));
+        let body_height = body_height
+            .min((bounds.bottom() - at.y - floating_frame(ui.ctx()).total_margin().sum().y - FLOATING_HEADER - Tokens::get().space_8).max(0.0));
         let t = Tokens::get();
         let shown = egui::Area::new(id)
             .enabled(ui.is_enabled())
@@ -214,25 +214,17 @@ impl Panel {
             .fade_in(false)
             .show(ui.ctx(), |ui| {
                 ui.set_max_height(height);
-                floating_frame()
+                floating_frame(ui.ctx())
                     .show(ui, |ui| {
-                        ui.set_width(width - floating_frame().total_margin().sum().x);
+                        ui.set_width(width - floating_frame(ui.ctx()).total_margin().sum().x);
                         ui.spacing_mut().item_spacing.y = t.space_2;
                         let mut collapse = false;
                         ui.horizontal(|ui| {
-                            let header_width = (width - floating_frame().total_margin().sum().x).min(ui.available_width());
+                            let header_width = (width - floating_frame(ui.ctx()).total_margin().sum().x).min(ui.available_width());
                             let remaining = (header_width - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
-                            let (header, response) = ui.allocate_exact_size(vec2(remaining, FLOATING_HEADER), Sense::drag());
-                            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), format!("Move {title}")));
-                            super::drag_grip(ui.painter(), header);
-                            let galley = super::elided(
-                                ui.painter(),
-                                title,
-                                fonts::interface_heading(ui, t.font_body),
-                                t.text,
-                                (header.width() - 20.0).max(0.0),
-                            );
-                            ui.painter().galley(egui::pos2(header.left() + 18.0, header.center().y - galley.size().y / 2.0), galley, t.text);
+                            let (id, header) = ui.allocate_space(vec2(remaining, FLOATING_HEADER));
+                            let response = super::panel_header_control(ui, id, header, title, true);
+                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("Move {title}")));
                             self.drag_header(&response, Rect::from_min_size(at, vec2(width, height)), canvas);
                             response.on_hover_cursor(egui::CursorIcon::Grab);
                             let (more_rect, more) = ui.allocate_exact_size(vec2(22.0, FLOATING_HEADER), Sense::click());
@@ -240,7 +232,7 @@ impl Panel {
                                 ui.painter().rect_filled(more_rect, t.radius_sm, t.hover);
                             }
                             ui.painter().text(more_rect.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(t.font_button), t.text_dim);
-                            more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), format!("{title} position")));
+                            more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("{title} position")));
                             egui::Popup::menu(&more).frame(menu::frame()).show(|ui| {
                                 for (position, label) in
                                     [(Position::Floating, "Float"), (Position::Left, "Dock left"), (Position::Right, "Dock right")]
@@ -253,23 +245,9 @@ impl Panel {
                                     }
                                 }
                             });
-                            let (rect, response) = ui.allocate_exact_size(vec2(22.0, FLOATING_HEADER), Sense::click());
-                            response.widget_info(|| {
-                                egui::WidgetInfo::labeled(
-                                    egui::WidgetType::Button,
-                                    ui.is_enabled(),
-                                    format!("{} {title}", if collapsed { "Expand" } else { "Collapse" }),
-                                )
-                            });
-                            if response.hovered() || response.has_focus() {
-                                ui.painter().rect_filled(rect, t.radius_sm, t.hover);
-                            }
-                            let c = rect.center();
-                            let sign = if collapsed { -1.0 } else { 1.0 };
-                            ui.painter().add(Shape::line(
-                                vec![c + vec2(-4.0, -2.0 * sign), c + vec2(0.0, 2.0 * sign), c + vec2(4.0, -2.0 * sign)],
-                                Stroke::new(1.3, t.text_dim),
-                            ));
+                            let (id, rect) = ui.allocate_space(vec2(22.0, FLOATING_HEADER));
+                            let label = format!("{} {title}", if collapsed { "Expand" } else { "Collapse" });
+                            let response = solidcraft_ui_kit::panel_host_disclosure(ui, id, rect, &label, ui.is_enabled(), collapsed, true);
                             collapse = response.clicked();
                         });
                         if !collapsed && body_height > 0.0 {

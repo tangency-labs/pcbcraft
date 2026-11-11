@@ -6,10 +6,17 @@ use pcbcraft_chrome::menu::CheckKind;
 use pcbcraft_chrome::workspace::{self, RibbonTool, ToolIcon as Icon};
 use serde_json::json;
 
-/// Stable saved indices retain legacy View=1 while visual tab order follows PCBcraft Next.
-pub(super) const TAB_ORDER: [usize; 5] = [0, 2, 3, 4, 1];
-/// PCB shares the saved Libraries and View slots with schematic hosts.
-pub(super) const BOARD_TAB_ORDER: [usize; 3] = [0, 3, 1];
+/// Stable saved slots retain View=1 and the former Manage slot for Sheets.
+pub(super) const TAB_ORDER: [usize; 5] = [0, 4, 2, 3, 1];
+/// Legacy saved Route tabs now restore Layout, where the routing tools live.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) const LEGACY_ROUTE_TAB: usize = 5;
+/// Drawing has its own slot without reusing the former Route slot.
+pub(super) const DRAW_TAB: usize = 7;
+/// Fabrication retains its existing saved slot.
+pub(super) const MANUFACTURE_TAB: usize = 6;
+/// PCB shares Analyze, Libraries and View with schematic hosts.
+pub(super) const BOARD_TAB_ORDER: [usize; 6] = [0, DRAW_TAB, 2, MANUFACTURE_TAB, 3, 1];
 
 /// Names shared by live control inspection and its explicit tab-selection command.
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,19 +25,26 @@ pub(super) fn tab_name(slot: usize) -> &'static str {
         1 => "view",
         2 => "analyze",
         3 => "libraries",
-        4 => "manage",
+        4 => "sheets",
+        LEGACY_ROUTE_TAB => "layout",
+        DRAW_TAB => "draw",
+        MANUFACTURE_TAB => "manufacture",
         _ => "capture",
     }
 }
 
-/// Unknown names are already rejected by command validation; legacy Layout selects slot zero.
+/// Unknown names are rejected by command validation; Layout and Capture share slot zero,
+/// and the legacy Manage name remains an alias for Sheets.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn tab_slot(name: &str) -> usize {
     match name {
         "view" => 1,
         "analyze" => 2,
         "libraries" => 3,
-        "manage" => 4,
+        "sheets" | "manage" => 4,
+        "route" => 0,
+        "draw" => DRAW_TAB,
+        "manufacture" => MANUFACTURE_TAB,
         _ => 0,
     }
 }
@@ -90,6 +104,7 @@ const fn tool(action: Action, label: &'static str, icon: Icon, hint: &'static st
     ToolSpec { action, label, icon, hint, key }
 }
 const SHEETS: &[ToolSpec] = &[
+    tool(Action::NewSheet, "New sheet", Icon::Sheet, "Create an independent sheet", ""),
     tool(Action::Subsheet, "Subsheet", Icon::Subsheet, "Place hierarchical sheet (S)", "S"),
     tool(Action::HierarchicalLabel, "Hierarchical label", Icon::HierarchicalLabel, "Place hierarchical label (H)", "H"),
 ];
@@ -112,8 +127,18 @@ const CAPTURE: &[Group] = &[
         ],
         extras: &[],
     },
-    Group { title: "Sheets", tools: SHEETS, extras: &[] },
-    Group { title: "PCB", tools: &[tool(Action::Sync, "Update PCB", Icon::Sync, "Update PCB from schematic", "")], extras: &[] },
+    Group {
+        title: "Clipboard",
+        tools: &[
+            tool(Action::Copy, "Copy", Icon::Sheet, "Copy selected items", "Ctrl+C"),
+            tool(Action::Paste, "Paste", Icon::Sheet, "Paste from system clipboard", "Ctrl+V"),
+        ],
+        extras: &[
+            tool(Action::Cut, "Cut", Icon::Sheet, "Cut selected items", "Ctrl+X"),
+            tool(Action::PasteOptions, "Paste Options…", Icon::Sheet, "Choose paste options", "Ctrl+Shift+V"),
+            tool(Action::Duplicate, "Duplicate", Icon::Sheet, "Duplicate selected items", "Ctrl+D"),
+        ],
+    },
     Group {
         title: "Modify",
         tools: &[
@@ -122,17 +147,13 @@ const CAPTURE: &[Group] = &[
             tool(Action::Mirror, "Mirror", Icon::Mirror, "Mirroring is not available yet.", ""),
         ],
         extras: &[
-            tool(Action::Copy, "Copy", Icon::Sheet, "Copy selected items", "Ctrl+C"),
-            tool(Action::Cut, "Cut", Icon::Sheet, "Cut selected items", "Ctrl+X"),
-            tool(Action::Paste, "Paste", Icon::Sheet, "Paste from system clipboard", "Ctrl+V"),
-            tool(Action::PasteOptions, "Paste Options…", Icon::Sheet, "Choose paste options", "Ctrl+Shift+V"),
-            tool(Action::Duplicate, "Duplicate", Icon::Sheet, "Duplicate selected items", "Ctrl+D"),
             tool(Action::Delete, "Delete", Icon::Delete, "Delete selected items", "Del"),
             tool(Action::Slice, "Slice", Icon::Slice, "Slice selected wire", ""),
             tool(Action::Heal, "Heal", Icon::Heal, "Heal selected wires", ""),
             tool(Action::AutoHeal, "Auto-heal wires", Icon::Heal, "Auto-heal wires", ""),
         ],
     },
+    Group { title: "PCB", tools: &[tool(Action::Sync, "Update PCB", Icon::Sync, "Update PCB from schematic", "")], extras: &[] },
 ];
 const ANALYZE: &[Group] = &[
     Group {
@@ -140,10 +161,15 @@ const ANALYZE: &[Group] = &[
         tools: &[
             tool(Action::Erc, "ERC", Icon::Erc, "Electrical rule checking is not available yet.", ""),
             tool(Action::Rules, "Rules", Icon::Rules, "Electrical rules are not available yet.", ""),
+            tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
         ],
         extras: &[],
     },
-    Group { title: "Reports", tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", "")], extras: &[] },
+    Group {
+        title: "Reports",
+        tools: &[tool(Action::Bom, "BOM", Icon::Bom, "Bill of materials generation is not available yet.", "")],
+        extras: &[tool(Action::Variants, "Variants", Icon::Bom, "Assembly variants are not available yet.", "")],
+    },
 ];
 const LIBRARIES: &[Group] = &[
     Group {
@@ -168,17 +194,7 @@ const LIBRARIES: &[Group] = &[
         extras: &[],
     },
 ];
-const MANAGE: &[Group] = &[
-    Group { title: "Sheets", tools: &[tool(Action::NewSheet, "New sheet", Icon::Sheet, "Create an independent sheet", "")], extras: &[] },
-    Group {
-        title: "Project",
-        tools: &[
-            tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
-            tool(Action::Variants, "Variants", Icon::Bom, "Assembly variants are not available yet.", ""),
-        ],
-        extras: &[],
-    },
-];
+const SHEET_GROUPS: &[Group] = &[Group { title: "Sheets", tools: SHEETS, extras: &[] }];
 
 impl Action {
     /// Keep future controls visible on wide ribbons but out of compact promoted rows.
@@ -292,7 +308,7 @@ impl PcbApp {
         let groups = match slot {
             2 => ANALYZE,
             3 => LIBRARIES,
-            4 => MANAGE,
+            4 => SHEET_GROUPS,
             _ => CAPTURE,
         };
         let compact = workspace::ribbon_is_compact(ui);
@@ -418,7 +434,7 @@ mod tests {
     #[test]
     fn actions_are_not_repeated_across_tabs() {
         let mut owners = Vec::new();
-        for (tab, groups) in [("Capture", CAPTURE), ("Analyze", ANALYZE), ("Libraries", LIBRARIES), ("Manage", MANAGE)] {
+        for (tab, groups) in [("Capture", CAPTURE), ("Analyze", ANALYZE), ("Libraries", LIBRARIES), ("Sheets", SHEET_GROUPS)] {
             for tool in groups.iter().flat_map(|group| group.tools.iter().chain(group.extras)) {
                 assert!(!owners.iter().any(|(action, _)| *action == tool.action), "{:?} repeated on {tab}: {owners:?}", tool.action);
                 owners.push((tool.action, tab));

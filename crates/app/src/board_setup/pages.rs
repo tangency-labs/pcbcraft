@@ -5,15 +5,15 @@ use super::*;
 fn copper_count(ui: &mut Ui, count: &mut u64) -> bool {
     let previous = *count;
     form::field(ui, "Copper layers", |ui| {
-        egui::ComboBox::from_id_salt("copper_count")
-            .selected_text(format!("{count} copper layers"))
+        pcbcraft_chrome::controls::Choice::from_id_salt("copper_count")
+            .selected_text(count.to_string())
             .show_ui(ui, |ui| {
                 for n in (2..=64).step_by(2) {
-                    ui.selectable_value(count, n, format!("{n} copper layers"));
+                    ui.selectable_value(count, n, n.to_string());
                 }
             })
             .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Copper layers"));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Copper layers"));
     });
     *count != previous
 }
@@ -24,7 +24,7 @@ fn material_choice(ui: &mut Ui, id: impl egui::AsIdSalt, reference: &mut Option<
         .and_then(|r| materials.iter().find(|m| m.reference() == r))
         .map(|m| format!("{} · r{}", m.name, m.revision))
         .unwrap_or_else(|| "Unspecified".into());
-    egui::ComboBox::from_id_salt(id)
+    pcbcraft_chrome::controls::Choice::from_id_salt(id)
         .selected_text(text)
         .show_ui(ui, |ui| {
             ui.selectable_value(reference, None, "Unspecified");
@@ -33,7 +33,7 @@ fn material_choice(ui: &mut Ui, id: impl egui::AsIdSalt, reference: &mut Option<
             }
         })
         .response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Material specification"));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Material specification"));
 }
 
 impl Edit {
@@ -114,12 +114,12 @@ impl Edit {
                     let Some(index) = candidate.setup.layers().iter().position(|l| l.id == layer.id) else { continue };
                     let required = matches!(layer.purpose, LayerPurpose::Copper | LayerPurpose::Outline | LayerPurpose::Courtyard);
                     ui.add_enabled_ui(!required, |ui| {
-                        ui.checkbox(&mut candidate.enabled[index], "")
+                        pcbcraft_chrome::controls::checkbox(ui, &mut candidate.enabled[index], "")
                             .on_hover_text(if required { "Required layer" } else { "Remove this layer from the board catalog" })
-                            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Checkbox, !required, format!("Use layer {}", layer.name)))
+                            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::CheckBox, !required, format!("Use layer {}", layer.name)))
                     });
                     ui.add_sized(egui::vec2(widths[1], t.control_height), properties::input(&mut candidate.names[index]).id_salt(layer.id))
-                        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("Layer name {}", layer.name)));
+                        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("Layer name {}", layer.name)));
                     form::table_label(ui, purpose_name(layer.purpose), widths[2]);
                     form::table_label(
                         ui,
@@ -140,31 +140,35 @@ impl Edit {
         form::card(ui, |ui| {
             form::text(ui, "Layer name", &mut self.new_name);
             form::field(ui, "Purpose", |ui| {
-                egui::ComboBox::from_id_salt("new_purpose").selected_text(purpose_name(self.new_purpose)).show_ui(ui, |ui| {
-                    for purpose in [
-                        LayerPurpose::User,
-                        LayerPurpose::Mechanical,
-                        LayerPurpose::Outline,
-                        LayerPurpose::Silkscreen,
-                        LayerPurpose::Fabrication,
-                        LayerPurpose::Courtyard,
-                        LayerPurpose::Mask,
-                        LayerPurpose::Paste,
-                        LayerPurpose::Adhesive,
-                    ] {
-                        if ui.selectable_value(&mut self.new_purpose, purpose, purpose_name(purpose)).changed() {
-                            self.new_side = if matches!(purpose, LayerPurpose::User | LayerPurpose::Mechanical | LayerPurpose::Outline) {
-                                None
-                            } else {
-                                Some(Side::Front)
-                            };
+                pcbcraft_chrome::controls::Choice::from_id_salt("new_purpose")
+                    .selected_text(purpose_name(self.new_purpose))
+                    .show_ui(ui, |ui| {
+                        for purpose in [
+                            LayerPurpose::User,
+                            LayerPurpose::Mechanical,
+                            LayerPurpose::Outline,
+                            LayerPurpose::Silkscreen,
+                            LayerPurpose::Fabrication,
+                            LayerPurpose::Courtyard,
+                            LayerPurpose::Mask,
+                            LayerPurpose::Paste,
+                            LayerPurpose::Adhesive,
+                        ] {
+                            if ui.selectable_value(&mut self.new_purpose, purpose, purpose_name(purpose)).changed() {
+                                self.new_side = if matches!(purpose, LayerPurpose::User | LayerPurpose::Mechanical | LayerPurpose::Outline) {
+                                    None
+                                } else {
+                                    Some(Side::Front)
+                                };
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .accessible_name("Technical layer purpose");
             });
             if self.new_purpose != LayerPurpose::Outline {
                 form::field(ui, "Side", |ui| {
-                    egui::ComboBox::from_id_salt("new_side")
+                    pcbcraft_chrome::controls::Choice::from_id_salt("new_side")
                         .selected_text(match self.new_side {
                             Some(Side::Front) => "Front",
                             Some(Side::Back) => "Back",
@@ -176,10 +180,12 @@ impl Edit {
                             }
                             ui.selectable_value(&mut self.new_side, Some(Side::Front), "Front");
                             ui.selectable_value(&mut self.new_side, Some(Side::Back), "Back");
-                        });
+                        })
+                        .response
+                        .accessible_name("Technical layer side");
                 });
             }
-            if ui.button("Add layer").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "Add layer").clicked() {
                 let result = candidate
                     .value(self.unit)
                     .and_then(|s| s.with_added_technical_layer(self.new_name.clone(), self.new_purpose, self.new_side).map_err(|e| e.to_string()));
@@ -222,7 +228,7 @@ impl Edit {
         let mut preset = None;
         form::field(ui, "Starting stackup", |ui| {
             ui.add_enabled_ui(self.candidate.setup.stackup().strata.len() == 3, |ui| {
-                egui::ComboBox::from_id_salt("starting_stackup")
+                pcbcraft_chrome::controls::Choice::from_id_salt("starting_stackup")
                     .selected_text("Choose preset…")
                     .show_ui(ui, |ui| {
                         for value in pcbcraft_engine::board::setup::StackupPreset::ALL {
@@ -232,7 +238,7 @@ impl Edit {
                         }
                     })
                     .response
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Starting stackup"));
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Starting stackup"));
             });
         });
         if let Some(preset) = preset {
@@ -279,7 +285,7 @@ impl Edit {
         properties::section(ui, "Adjust dielectric thickness");
         form::card(ui, |ui| {
             form::text(ui, "Target thickness", &mut self.target_thickness);
-            if ui.button("Fit unlocked dielectrics").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "Fit unlocked dielectrics").clicked() {
                 self.error = self.fit().err();
             }
         });
@@ -327,7 +333,7 @@ impl Edit {
                     egui::vec2(widths[1], t.control_height),
                     properties::input(&mut candidate.thickness[i].text).id_salt(("thickness", i)).hint_text("Unspecified"),
                 );
-                thickness.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("{name} thickness")));
+                thickness.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("{name} thickness")));
                 if thickness.gained_focus() {
                     *selected = i;
                 }
@@ -396,7 +402,7 @@ impl Edit {
                         };
                         let before = kind;
                         form::field(ui, "Construction", |ui| {
-                            egui::ComboBox::from_id_salt("construction")
+                            pcbcraft_chrome::controls::Choice::from_id_salt("construction")
                                 .selected_text(["Unspecified", "Core", "Prepreg"][kind])
                                 .show_ui(ui, |ui| {
                                     for (n, label) in ["Unspecified", "Core", "Prepreg"].iter().enumerate() {
@@ -404,7 +410,7 @@ impl Edit {
                                     }
                                 })
                                 .response
-                                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Construction"));
+                                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Construction"));
                         });
                         if kind != before {
                             candidate.constructions[i] = match kind {
@@ -440,7 +446,7 @@ impl Edit {
                                         let fields = candidate.plies.entry(ply.id.to_string()).or_insert_with(|| PlyFields::new(ply, unit));
                                         form::text(ui, "Resin content (%)", &mut fields.resin);
                                         form::text(ui, "Nominal stock thickness", &mut fields.nominal.text);
-                                        if ui.button("Remove ply").clicked() {
+                                        if pcbcraft_chrome::controls::button(ui, "Remove ply").clicked() {
                                             remove = Some(n);
                                         }
                                     });
@@ -448,7 +454,7 @@ impl Edit {
                                 if let Some(n) = remove {
                                     plies.remove(n);
                                 }
-                                if ui.button("Add ply").clicked() {
+                                if pcbcraft_chrome::controls::button(ui, "Add ply").clicked() {
                                     match PrepregPly::new() {
                                         Ok(ply) => plies.push(ply),
                                         Err(e) => error = Some(e.to_string()),

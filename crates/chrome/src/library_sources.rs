@@ -1,52 +1,35 @@
 //! Native library management presentation, independent of source I/O and electrical models.
-use crate::{
-    Tokens, fonts,
-    menu::{self, MenuIcon},
-};
-use egui::{Align, Frame, Label, Layout, Margin, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use crate::{Tokens, fonts, menu};
+use egui::{Align, Frame, Label, Layout, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use solidcraft_ui_kit::{self as kit, Container, Surface};
 
 /// Present the manager on the same header, body and footer surfaces as Preferences.
 /// The body has a fixed viewport; each pane scrolls without moving the closing actions.
 pub fn dialog(ctx: &egui::Context, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
+    let id = egui::Id::unique("library_sources");
+    let frame = kit::navigation_popup_frame().inner_margin(0);
     let mut close = false;
-    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_lg);
-    let modal = egui::Modal::new(egui::Id::new("library_sources")).frame(frame).show(ctx, |ui| {
-        let width = (t.form_card_width * 3.4).min(ctx.content_rect().width() - t.space_16 * 2.0).max(0.0);
+    let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
+        let width = (t.form_card_width * 3.4).min((ctx.content_rect().width() - t.space_16 * 2.0).max(0.0));
         ui.set_width(width);
-        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-        let (header, _) = ui.allocate_exact_size(vec2(width, t.form_header_height + t.space_8), Sense::hover());
-        MenuIcon::Open.paint_sized(ui.painter(), header.left_center() + vec2(t.space_24, 0.0), t.space_16, t, true);
-        ui.painter().text(
-            header.left_center() + vec2(t.space_24 * 2.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            "Library sources",
-            fonts::interface_heading(ui, t.font_heading),
-            t.text,
-        );
-        let close_rect = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.0), vec2(t.control_height, t.control_height));
-        let response = ui.interact(close_rect, ui.id().with("close_sources"), Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close Library sources"));
-        if response.hovered() || response.has_focus() {
-            ui.painter().rect_filled(close_rect, t.radius_sm, t.hover);
-        }
-        MenuIcon::Close.paint_sized(ui.painter(), close_rect.center(), t.space_16, t, true);
-        close |= response.on_hover_text("Close Library sources").clicked();
-        rule(ui, header.bottom(), header.x_range());
-
-        let height = (ctx.content_rect().height() - t.space_24 * 2.0 - header.height() - t.form_footer_height).clamp(0.0, t.control_height * 17.0);
-        let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-        let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body));
-        body_ui.set_clip_rect(ui.clip_rect().intersect(body));
-        add(&mut body_ui);
-        let (footer, _) = ui.allocate_exact_size(vec2(width, t.form_footer_height), Sense::hover());
-        ui.painter().rect_filled(footer, egui::CornerRadius { nw: 0, ne: 0, sw: t.radius_lg, se: t.radius_lg }, t.dialog_footer);
-        rule(ui, footer.top(), footer.x_range());
-        ui.scope_builder(UiBuilder::new().max_rect(footer.shrink2(vec2(t.space_16, t.space_8))).layout(Layout::right_to_left(Align::Center)), |ui| {
-            close |= ui.add(button("Close", true).min_size(vec2(t.space_24 * 3.0, t.control_height))).clicked();
-        });
+        let field_style = ui.style().clone();
+        kit::scope(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (header, closed) = crate::catalog::form_header(ui, "Library sources");
+            close = closed;
+            let height =
+                (ctx.content_rect().height() - t.space_24 * 2.0 - header.height() - t.form_footer_height).clamp(0.0, t.control_height * 17.0);
+            let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+            let mut content = ui.new_child(UiBuilder::new().id_salt("library_sources_body").max_rect(body));
+            content.set_clip_rect(ui.clip_rect().intersect(body));
+            content.set_style(field_style);
+            add(&mut content);
+            ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            kit::footer(ui, "Close", "", true, kit::Footer::default())
+        })
     });
-    modal.should_close() || close
+    close || modal.inner == kit::Action::Ok || modal.should_close()
 }
 
 /// Place sources beside the catalog, or in tabs when two useful columns no longer fit.
@@ -56,7 +39,7 @@ pub fn panes(ui: &mut Ui, mut add: impl FnMut(&mut Ui, usize)) {
     let body = ui.max_rect();
     let wide = body.width() >= t.form_card_width * 2.5;
     if !wide {
-        let id = ui.id().with("compact_source_pane");
+        let id = ui.scope_id().with("compact_source_pane");
         let mut pane = ui.ctx().data_mut(|data| *data.get_temp_mut_or_default::<usize>(id));
         let tabs = Rect::from_min_size(body.min, vec2(body.width(), t.form_header_height + t.space_8));
         ui.painter().rect_filled(tabs, 0, t.dialog_footer);
@@ -64,7 +47,7 @@ pub fn panes(ui: &mut Ui, mut add: impl FnMut(&mut Ui, usize)) {
             ui.new_child(UiBuilder::new().max_rect(tabs.shrink2(vec2(t.space_16, t.space_8))).layout(Layout::left_to_right(Align::Center)));
         tab_ui.spacing_mut().item_spacing.x = t.space_8;
         for (index, title) in ["Sources", "Catalog"].into_iter().enumerate() {
-            if tab_ui.add(button(title, pane == index).selected(pane == index)).clicked() {
+            if kit::button(&mut tab_ui, title, if pane == index { kit::Button::SmallSelected } else { kit::Button::Small }).clicked() {
                 pane = index;
             }
         }
@@ -109,25 +92,18 @@ pub fn list(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
     egui::ScrollArea::vertical().id_salt(id).max_height(ui.available_height()).auto_shrink([false, false]).show(ui, add);
 }
 
-/// A consistent control surface for source actions and the dialog footer.
-fn button(label: &str, primary: bool) -> egui::Button<'_> {
-    let t = Tokens::get();
-    egui::Button::new(RichText::new(label).size(t.font_label).color(if primary { t.form_primary } else { t.text }))
-        .fill(if primary { t.selected_bg } else { t.dialog_body })
-        .stroke(Stroke::new(1.0, if primary { t.form_primary } else { t.border }))
-        .corner_radius(t.control_radius)
-        .min_size(vec2(0.0, t.control_height))
-}
-
 /// Source import actions retain readable control height and can wrap on compact hosts.
 pub fn imports(ui: &mut Ui, enabled: bool, desktop: bool) -> (bool, bool) {
     let mut add = false;
     let mut upload = false;
     ui.horizontal_wrapped(|ui| {
         if desktop {
-            add = ui.add_enabled(enabled, button("Add folder…", true)).clicked();
+            add = ui.add_enabled_ui(enabled, |ui| kit::primary_button(ui, "Add folder…")).inner.clicked();
         }
-        upload = ui.add_enabled(enabled, button("Upload bundle…", !desktop)).clicked();
+        upload = ui
+            .add_enabled_ui(enabled, |ui| kit::button(ui, "Upload bundle…", if desktop { kit::Button::Normal } else { kit::Button::Primary }))
+            .inner
+            .clicked();
     });
     (add, upload)
 }
@@ -171,8 +147,8 @@ pub fn source(ui: &mut Ui, source: Source<'_>, can_refresh: bool) -> SourceActio
         if !source.builtin {
             let menu_rect = Rect::from_min_max(pos2(header.right() - t.space_24, header.top()), header.max);
             title_rect.max.x = menu_rect.left() - t.space_4;
-            let response = ui.interact(menu_rect, ui.id().with(source.name), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Actions for {}", source.name)));
+            let response = ui.interact(menu_rect, ui.scope_id().with(source.name), Sense::click());
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Actions for {}", source.name)));
             if response.hovered() || response.has_focus() {
                 ui.painter().rect_filled(menu_rect, t.radius_sm, t.hover);
             }
@@ -233,28 +209,13 @@ pub fn source(ui: &mut Ui, source: Source<'_>, can_refresh: bool) -> SourceActio
 /// Keep menu labels short while exposing their source-qualified names to assistive technology.
 fn source_action(ui: &mut Ui, label: &str, name: &str, enabled: bool) -> bool {
     let response = menu::MenuItem::new(label).enabled(enabled).show_response(ui);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, format!("{label} {name}")));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{label} {name}")));
     response.clicked()
 }
 
 /// Full-width search with the same inset glyph and field surface as settings search.
 pub fn search(ui: &mut Ui, query: &mut String) {
-    let t = Tokens::get();
-    let before = query.clone();
-    let response = ui.add_sized(
-        vec2(ui.available_width(), t.control_height + t.space_4),
-        egui::TextEdit::singleline(query)
-            .hint_text("Search symbols and footprints…")
-            .background_color(t.field)
-            .margin(Margin { left: (t.space_24 + t.space_4) as i8, right: t.space_8 as i8, top: t.space_6 as i8, bottom: t.space_6 as i8 })
-            .vertical_align(Align::Center),
-    );
-    response.widget_info(|| {
-        let mut info = egui::WidgetInfo::text_edit(ui.is_enabled(), before.as_str(), query.as_str(), "Search symbols and footprints…");
-        info.label = Some("Search libraries".into());
-        info
-    });
-    MenuIcon::Search.paint_sized(ui.painter(), response.rect.left_center() + vec2(t.space_16, 0.0), t.space_16, t, false);
+    kit::search_field(ui, ui.make_persistent_id("library_search"), query, "Search symbols and footprints…").accessible_name("Search libraries");
 }
 
 /// View-only catalog categories, mapped to domain kinds by the host.
@@ -272,8 +233,8 @@ pub fn filters(ui: &mut Ui, kind: &mut Filter) {
         ui.spacing_mut().item_spacing.x = t.space_4;
         for (value, label) in [(Filter::All, "All items"), (Filter::Symbols, "Symbols"), (Filter::Footprints, "Footprints")] {
             let selected = *kind == value;
-            let response = ui.add(button(label, selected).selected(selected));
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, format!("Show {}", label.to_lowercase())));
+            let response = kit::button(ui, label, if selected { kit::Button::SmallSelected } else { kit::Button::Small });
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, format!("Show {}", label.to_lowercase())));
             if response.clicked() {
                 *kind = value;
             }

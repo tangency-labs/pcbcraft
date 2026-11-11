@@ -1,7 +1,7 @@
-//! Menus share one popup surface and one row painter, like SolidCraft's. What a row does stays with
-//! the caller.
+//! Shared Craft menu surfaces and rows with PCBcraft's popup routing and action glyphs.
 
-use egui::{CornerRadius, FontId, Frame, Margin, Response, RichText, Sense, Ui, WidgetInfo, WidgetType, pos2, vec2};
+use egui::{FontId, Frame, Response, RichText, Role, Sense, Ui, WidgetInfo, pos2, vec2};
+use solidcraft_ui_kit::Menu;
 
 use crate::theme::Tokens;
 
@@ -10,13 +10,7 @@ pub use icons::MenuIcon;
 
 /// The surface every menu sits on.
 pub fn frame() -> Frame {
-    let t = Tokens::get();
-    Frame::new()
-        .fill(t.panel)
-        .stroke(egui::Stroke::new(1.0, t.border))
-        .corner_radius(CornerRadius::same(t.radius_md))
-        .inner_margin(Margin::same(t.space_4 as i8))
-        .shadow(egui::Shadow { offset: [0, 4], blur: 12, spread: 0, color: egui::Color32::from_black_alpha(60) })
+    Menu::frame()
 }
 
 /// Anchor a popup under its label and restore the caller's style after drawing it.
@@ -46,20 +40,15 @@ fn top<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> egui::Inn
 /// Disabled actions still show their tooltip and never report a click. The caller runs the action.
 pub fn quick_action(ui: &mut Ui, icon: MenuIcon, label: &str, shortcut: &str, enabled: bool) -> Response {
     let t = Tokens::get();
-    let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(vec2(t.space_24, t.control_height), sense);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    let hot = enabled && (response.hovered() || response.has_focus());
+    let (_, rect) = ui.allocate_space(vec2(t.space_24, t.control_height));
+    let response = crate::controls::glyph_target(ui, ui.scope_id().with(("quick_action", label)), rect, label, enabled, false);
     let mut painter = ui.painter().clone();
-    if hot {
-        painter.rect_filled(rect.shrink(t.space_2), t.radius_sm, t.hover);
-    }
     if !enabled {
         painter.multiply_opacity(0.4);
     }
     icon.paint(&painter, rect.center(), t, enabled);
     let tooltip = if shortcut.is_empty() { label.to_owned() } else { format!("{label} ({shortcut})") };
-    response.on_hover_text(tooltip)
+    response.on_hover_text(tooltip.clone()).on_disabled_hover_text(tooltip)
 }
 
 /// Draw a bordered app bar action with its icon leading the visible label.
@@ -67,11 +56,9 @@ pub fn labeled_action(ui: &mut Ui, icon: MenuIcon, label: &str) -> Response {
     let t = Tokens::get();
     let text = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(t.font_label), t.text);
     let width = t.space_16 + t.space_6 + text.size().x + 2.0 * t.space_8;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_2), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    let fill = if response.hovered() || response.has_focus() { t.hover } else { egui::Color32::TRANSPARENT };
+    let (_, rect) = ui.allocate_space(vec2(width, t.control_height - t.space_2));
+    let response = solidcraft_ui_kit::button_at(ui, label, rect, "", solidcraft_ui_kit::Button::Normal).accessible_name(label);
     let painter = ui.painter();
-    painter.rect(rect, t.radius_sm, fill, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
     icon.paint(painter, rect.left_center() + vec2(t.space_8 + t.space_16 / 2.0, 0.0), t, true);
     painter.galley(pos2(rect.left() + t.space_8 + t.space_16 + t.space_6, rect.center().y - text.size().y / 2.0), text, t.text);
     response
@@ -149,7 +136,7 @@ impl<'a> MenuItem<'a> {
     /// Open nested choices from the shared row painter, retaining egui's submenu behavior
     /// and the Craft popup surface. Disabled rows cannot open a submenu.
     pub fn submenu<R>(&self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
-        let response = self.row(ui);
+        let response = self.row(ui, true);
         if !self.enabled || !ui.is_enabled() {
             return None;
         }
@@ -220,70 +207,40 @@ impl<'a> MenuItem<'a> {
     /// Draw the row and return its response, so the caller can preview what a hovered row will
     /// do. A click closes the menu, as with [`Self::show`].
     pub fn show_response(&self, ui: &mut Ui) -> Response {
-        let response = self.row(ui);
+        let response = self.row(ui, false);
         if response.clicked() {
             ui.close();
         }
         response
     }
 
-    /// Measure to content on the popup's sizing pass and fill the row on subsequent passes.
-    /// Truncate long labels before the shortcut and expose the full label and any checked state.
-    /// On activation, report the state the caller will apply to a choice or toggle.
-    fn row(&self, ui: &mut Ui) -> Response {
-        let t = Tokens::get();
-        let leading = self.icon.is_some() || self.tool.is_some() || self.checked.is_some();
-        let icon_column = if leading { t.space_16 + t.space_8 } else { 0.0 };
-        let height = if leading { t.control_height + t.space_2 } else { t.control_height };
-        // Popups first measure their content. Filling the provisional width would keep them wide.
-        let width = if ui.is_sizing_pass() {
-            let measure = |text: &str, font: FontId| ui.painter().layout_no_wrap(text.to_owned(), font, t.text).size().x;
-            let label = measure(self.label, FontId::proportional(t.font_label));
-            let shortcut = measure(self.shortcut, FontId::monospace(t.font_small));
-            (label + shortcut + icon_column + t.space_24 * 2.0).min(ui.available_width())
-        } else {
-            ui.available_width()
-        };
-        let enabled = self.enabled && ui.is_enabled();
-        let sense = if enabled { Sense::click() } else { Sense::hover() };
-        let (r, response) = ui.allocate_exact_size(vec2(width, height), sense);
+    /// Draw and size the shared row. Its check state takes precedence over a PCBcraft glyph.
+    fn row(&self, ui: &mut Ui, submenu: bool) -> Response {
+        let mut item = solidcraft_ui_kit::MenuItem::new(self.label, self.label, "");
+        item.enabled = self.enabled && ui.is_enabled();
+        item.shortcut = self.shortcut;
+        item.checked = self.checked.map(|(_, checked)| checked);
+        item.submenu = submenu;
+        let response = item.show(ui);
         response.widget_info(|| match self.checked {
-            Some((CheckKind::Choice, selected)) => WidgetInfo::selected(WidgetType::RadioButton, enabled, selected || response.clicked(), self.label),
-            Some((CheckKind::Toggle, checked)) => WidgetInfo::selected(WidgetType::Checkbox, enabled, checked ^ response.clicked(), self.label),
-            None => WidgetInfo::labeled(WidgetType::Button, enabled, self.label),
+            Some((CheckKind::Choice, selected)) => WidgetInfo::selected(Role::RadioButton, item.enabled, selected || response.clicked(), self.label),
+            Some((CheckKind::Toggle, checked)) => WidgetInfo::selected(Role::CheckBox, item.enabled, checked ^ response.clicked(), self.label),
+            None => WidgetInfo::labeled(Role::Button, item.enabled, self.label),
         });
-        let hot = enabled && (response.hovered() || response.has_focus());
-        let mut painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(r));
-        if !enabled {
-            painter.multiply_opacity(0.4);
-        }
-        if hot {
-            painter.rect_filled(r, t.control_radius, t.accent_soft);
-        }
-        let lead = pos2(r.left() + t.space_16, r.center().y);
-        match (self.checked, self.tool, self.icon) {
-            (Some((_, true)), ..) => {
-                let ink = egui::Stroke::new(1.5, t.accent);
-                painter.add(egui::Shape::line(vec![lead + vec2(-5.0, 0.0), lead + vec2(-1.0, 4.0), lead + vec2(6.0, -4.0)], ink));
+        if self.checked.is_none() && (self.tool.is_some() || self.icon.is_some()) {
+            let t = Tokens::get();
+            let shared = solidcraft_theme::Tokens::get();
+            let lead = response.rect.left_center() + vec2(shared.control_height / 2.0, 0.0);
+            let mut painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(response.rect));
+            if !item.enabled {
+                painter.multiply_opacity(0.4);
             }
-            (Some((_, false)), ..) => {}
-            (None, Some(tool), _) => crate::workspace::paint_menu_glyph(&painter, tool, lead, t.space_16),
-            (None, None, Some(icon)) => icon.paint(&painter, lead, t, hot),
-            (None, None, None) => {}
+            if let Some(tool) = self.tool {
+                crate::workspace::paint_menu_glyph(&painter, tool, lead, shared.space_16);
+            } else if let Some(icon) = self.icon {
+                icon.paint_sized(&painter, lead, shared.space_16, t, item.enabled && (response.hovered() || response.has_focus()));
+            }
         }
-        let mut right = r.right() - t.space_8;
-        if !self.shortcut.is_empty() {
-            let keys = painter.layout_no_wrap(self.shortcut.to_owned(), FontId::monospace(t.font_small), t.text_dim);
-            right -= keys.size().x;
-            painter.galley(pos2(right, r.center().y - keys.size().y / 2.0), keys, t.text_dim);
-            right -= t.space_12;
-        }
-        let left = r.left() + t.space_8 + icon_column;
-        let mut text = egui::text::LayoutJob::simple_singleline(self.label.to_owned(), FontId::proportional(t.font_label), t.text);
-        text.wrap.max_width = (right - left).max(0.0);
-        text.wrap.max_rows = 1;
-        let label = painter.layout_job(text);
-        painter.galley(pos2(left, r.center().y - label.size().y / 2.0), label, t.text);
         response
     }
 }

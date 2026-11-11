@@ -101,6 +101,7 @@ fn footprint_assignment_invalid_cancel_and_stale_dialog_preserve_state() {
 
 /// A short window keeps the form inside the viewport and allows scrolling to placement and
 /// Close, even when the complete package form is taller than the available content area.
+/// Escape closes mapping choices before the draft, and the title close discards no saved work.
 #[test]
 fn short_window_can_scroll_to_placement_and_close() {
     let mut h = component_harness();
@@ -122,15 +123,21 @@ fn short_window_can_scroll_to_placement_and_close() {
         assert!(rect.top() >= 0.0 && rect.bottom() <= 320.0, "{label}: {rect:?}");
         assert!(rect.top() >= h.get_by_label("Assign Footprint").rect().bottom(), "form content overlaps its fixed title");
     }
+    h.get_by_label("Terminal 1").scroll_to_me();
+    h.run();
+    click(&mut h, "Terminal 1");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::Footprint(_)));
     click(&mut h, "Place on board");
     assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(h.state().session.inspect()["project"]["board"]["footprints"].as_array().unwrap().len(), 1);
     h.state_mut().begin_footprint_assignment(None);
     h.run();
-    h.get_by_label("Close").scroll_to_me();
-    h.run();
-    click(&mut h, "Close");
+    let before = h.state().session.inspect();
+    click(&mut h, "Close Assign Footprint");
     assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.inspect(), before);
 }
 
 /// The live editor refuses assignment while its modal owns input, then shares the assignment,

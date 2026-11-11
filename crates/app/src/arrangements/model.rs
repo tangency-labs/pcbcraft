@@ -123,7 +123,7 @@ impl Snapshot {
             if !host.layout.members(0, &mut placed)
                 || !host.layout.visible(host.focused)
                 || !host.panels.parts.valid()
-                || host.panels.ribbon > 4
+                || host.panels.ribbon > crate::ribbon::DRAW_TAB
                 || host.bounds.as_ref().is_some_and(|bounds| !bounds.valid())
             {
                 return false;

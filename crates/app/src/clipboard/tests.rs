@@ -230,6 +230,27 @@ fn empty_clipboard_completion_clears_pending_options() {
     assert!(h.state().views.active.schematic.clipboard.active());
 }
 
+/// An egui 0.37 image-only result completes a captured text read without editing the project
+/// or applying its Paste Options authority to the next ordinary clipboard event.
+#[test]
+fn image_only_clipboard_completion_clears_pending_options() {
+    let mut h = source();
+    let text = copied_text(&mut h);
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().request_clipboard(&ctx, true);
+    h.event(Event::PasteImage(Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]))));
+    h.run();
+    assert!(h.state().clipboard_request.is_none());
+    assert!(!h.state().views.active.schematic.clipboard.active());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.event(Event::Paste(text));
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(h.state().views.active.schematic.clipboard.active());
+}
+
 /// A detached initiating pane keeps its own Paste Options form and placement authority.
 #[test]
 fn paste_options_are_hosted_in_the_initiating_window() {

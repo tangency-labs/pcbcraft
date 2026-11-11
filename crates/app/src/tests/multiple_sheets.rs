@@ -19,7 +19,7 @@ fn sheet_harness(width: f32) -> Harness<'static, PcbApp> {
 
 /// Open a real Browser row's contextual actions with separate press/release input frames.
 fn menu(h: &mut Harness<'_, PcbApp>, label: &str) {
-    let pos = h.get_by_label(label).rect().center();
+    let pos = h.get_by_role_and_label(egui::Role::Button, label).rect().center();
     h.hover_at(pos);
     h.run();
     for pressed in [true, false] {

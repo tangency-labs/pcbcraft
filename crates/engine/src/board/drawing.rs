@@ -1,4 +1,4 @@
-//! Layer-addressed board drawings, with the Board Outline layer independent of copper setup.
+//! Layer-addressed non-copper board graphics, with physical strokes on technical layers.
 use super::{
     setup::{Layer, LayerPurpose, Stratum},
     view::BoardView,
@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-/// Add one open or closed graphic to an explicitly addressed Board Outline layer.
+/// Add an open or closed graphic on a non-copper layer. Copper uses the conductive track commands.
 pub const ADD_DRAWING: &str = "pcb.add_drawing";
 /// Replace one graphic's vertices while retaining its identity and layer.
 pub const SET_DRAWING: &str = "pcb.set_drawing";
@@ -19,7 +19,8 @@ const MAX_ITEMS: usize = 512;
 const MAX_POINTS: usize = 256;
 const MAX_TOTAL_POINTS: usize = 4096;
 
-/// An independently selectable graphic on one explicitly addressed Board Outline layer.
+/// An independently selectable non-copper layer graphic. Missing stroke width preserves
+/// legacy Board Outline hairlines; new technical graphics carry an explicit physical width.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Drawing {
@@ -27,6 +28,13 @@ pub struct Drawing {
     pub layer: Uuid,
     pub points: Vec<Point>,
     pub closed: bool,
+    #[serde(default, deserialize_with = "explicit_stroke", skip_serializing_if = "Option::is_none")]
+    pub stroke_nm: Option<i64>,
+}
+
+/// An omitted width retains a legacy hairline; an explicitly present width cannot be null.
+fn explicit_stroke<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<i64>, D::Error> {
+    i64::deserialize(value).map(Some)
 }
 
 /// Additional technical layers do not invent a copper stackup or rebind legacy footprints.
@@ -113,6 +121,7 @@ impl BoardView<'_> {
                     layer: id,
                     points: outline.corners().to_vec(),
                     closed: true,
+                    stroke_nm: None,
                 }])
             })
             .unwrap_or_default()
@@ -121,7 +130,8 @@ impl BoardView<'_> {
 
 impl Drawing {
     /// Bound path size and coordinates, rejecting collapsed segments and duplicated closing
-    /// vertices. Open paths are valid editing state; closure never depends on a screen tolerance.
+    /// vertices and out-of-range physical widths. Open paths are valid editing state;
+    /// closure never depends on a screen tolerance.
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.id.is_nil()
             || self.layer.is_nil()
@@ -129,6 +139,7 @@ impl Drawing {
             || self.points.iter().any(|point| !crate::wire::valid_point(point))
             || self.points.windows(2).any(|pair| pair[0] == pair[1])
             || (self.closed && self.points.first() == self.points.last())
+            || self.stroke_nm.is_some_and(|width| !(super::track::MIN_WIDTH_NM..=super::track::MAX_WIDTH_NM).contains(&width))
         {
             return Err("a drawing needs a non-nil identity/layer and 2–256 bounded distinct consecutive points (at least 3 when closed)".into());
         }
@@ -176,8 +187,12 @@ impl Drawings {
         let mut ids = BTreeSet::new();
         for item in &self.items {
             item.validate()?;
-            if !ids.insert(item.id) || !layers.get(&item.layer).is_some_and(|layer| layer.purpose == LayerPurpose::Outline) {
-                return Err("duplicate graphic or unknown/non-edge drawing layer".into());
+            if !ids.insert(item.id)
+                || !layers.get(&item.layer).is_some_and(|layer| {
+                    layer.purpose != LayerPurpose::Copper && (layer.purpose == LayerPurpose::Outline || item.stroke_nm.is_some())
+                })
+            {
+                return Err("duplicate graphic, unknown/copper layer, or missing technical stroke width".into());
             }
         }
         self.layers.sort_by_key(|layer| layer.id);
@@ -212,8 +227,8 @@ impl Session {
             let record = view
                 .layers()
                 .into_iter()
-                .find(|record| record.id == layer && record.purpose == LayerPurpose::Outline)
-                .ok_or_else(|| CommandError::InvalidParams("select a Board Outline layer".into()))?;
+                .find(|record| record.id == layer && record.purpose != LayerPurpose::Copper)
+                .ok_or_else(|| CommandError::InvalidParams("select a non-copper layer; use pcb.add_tracks for conductive copper".into()))?;
             if !view.setup().is_some_and(|setup| setup.layers().iter().any(|existing| existing.id == layer))
                 && !data.layers.iter().any(|existing| existing.id == layer)
             {
@@ -224,6 +239,11 @@ impl Session {
                 layer,
                 points: serde_json::from_value(params["points"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?,
                 closed: params["closed"].as_bool().unwrap_or(false),
+                stroke_nm: params
+                    .get("stroke_nm")
+                    .map(|value| serde_json::from_value(value.clone()))
+                    .transpose()
+                    .map_err(|error| CommandError::InvalidParams(error.to_string()))?,
             });
         } else {
             let id: Uuid = serde_json::from_value(params["drawing"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
@@ -235,6 +255,10 @@ impl Session {
                 data.items[index].points =
                     serde_json::from_value(params["points"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
                 data.items[index].closed = params["closed"].as_bool().unwrap_or(false);
+                if let Some(value) = params.get("stroke_nm") {
+                    data.items[index].stroke_nm =
+                        Some(serde_json::from_value(value.clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?);
+                }
             }
         }
         data.validate(project).map_err(CommandError::InvalidParams)?;

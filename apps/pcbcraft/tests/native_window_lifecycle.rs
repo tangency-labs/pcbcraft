@@ -110,6 +110,12 @@ impl eframe::App for Verify {
         if matches!(self.stage, 1 | 5 | 8 | 13) && self.evidence.lock().unwrap().ids.len() != 1 {
             return;
         }
+        // A new child's native notifications can also trail a slow software-rendered frame.
+        // Keep the exact creation-count assertion below; Observe's deadline rejects a child
+        // that never appears, without treating an unprocessed native event as a lost window.
+        if self.stage == 12 && self.evidence.lock().unwrap().created < 8 {
+            return;
+        }
         self.due = Instant::now() + Duration::from_secs(1);
         println!("Checkpoint {}", self.stage);
         match self.stage {

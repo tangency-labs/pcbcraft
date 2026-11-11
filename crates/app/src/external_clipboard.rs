@@ -72,17 +72,29 @@ impl PcbApp {
                         "Each line becomes an electrical net label. Matching names connect within their scope; these are not drawing notes.",
                     ));
                     let mut scope = if draft.global { "global".into() } else { "local".into() };
-                    properties::choice(ui, "Scope", ui.id().with("scope"), &mut scope, &[("local", "Local".into()), ("global", "Global".into())]);
+                    properties::choice(
+                        ui,
+                        "Scope",
+                        ui.scope_id().with("scope"),
+                        &mut scope,
+                        &[("local", "Local".into()), ("global", "Global".into())],
+                    );
                     draft.global = scope == "global";
                     properties::text(ui, "Spacing", &mut draft.spacing);
                     properties::text(ui, "Net-name suffix", &mut draft.suffix);
                 }
                 Workspace::Board => {
                     ui.label(shell::dim("Paste a two-column X/Y coordinate table as a Board Outline polyline. CSV and tab-separated numbers are supported; source units are independent of the display units."));
-                    properties::choice(ui, "Source units", ui.id().with("units"), &mut draft.units, &[("mm", "mm".into()), ("mil", "mil".into())]);
-                    ui.checkbox(&mut draft.closed, "Close outline");
-                    ui.checkbox(&mut draft.invert_y, "Invert Y axis");
-                    ui.checkbox(&mut draft.original, "Keep source coordinates");
+                    properties::choice(
+                        ui,
+                        "Source units",
+                        ui.scope_id().with("units"),
+                        &mut draft.units,
+                        &[("mm", "mm".into()), ("mil", "mil".into())],
+                    );
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.closed, "Close outline");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.invert_y, "Invert Y axis");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.original, "Keep source coordinates");
                     outline_size(ui, &draft);
                 }
             }
@@ -99,8 +111,9 @@ impl PcbApp {
                 ui.label(shell::error(error));
             }
             ui.horizontal(|ui| {
-                apply = ui.button(if draft.workspace == Workspace::Schematic { "Paste labels" } else { "Paste outline" }).clicked();
-                cancel = ui.button("Cancel").clicked();
+                apply = pcbcraft_chrome::controls::button(ui, if draft.workspace == Workspace::Schematic { "Paste labels" } else { "Paste outline" })
+                    .clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if apply {

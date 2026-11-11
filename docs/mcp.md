@@ -133,8 +133,8 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state; selection commands refuse disabled object categories |
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | The named arrangement tabs: click, **+** and **Duplicate…**, **Rename…**, **Delete** |
-| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Analyze, Libraries, Manage and View for schematics; Layout, Libraries and View for PCB), closing a non-last window |
-| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, PCB grid style, selection following, navigation) and **Home** |
+| `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
+| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, grid opacity, PCB grid style, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
 
 Closing the last window and choosing where to save an Untitled project stay in

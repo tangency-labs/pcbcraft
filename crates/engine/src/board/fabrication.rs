@@ -165,6 +165,25 @@ fn rounded(corners: &[Point; 4], radius: i64) -> Vec<Point> {
     points
 }
 
+/// Add explicit board artwork to its manufacturing surface. Documentation-only layers
+/// stay in the native board; copper is already represented by validated conductive tracks.
+fn board_graphics(gerber: &mut Gerber, view: BoardView<'_>, purpose: LayerPurpose, side: Option<Side>) {
+    let layers = view.layers();
+    for drawing in view
+        .drawings()
+        .into_iter()
+        .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == purpose && layer.side == side))
+    {
+        let mut points = drawing.points;
+        if drawing.closed
+            && let Some(first) = points.first().copied()
+        {
+            points.push(first);
+        }
+        gerber.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM));
+    }
+}
+
 /// Keep file names portable: letters, digits, `-` and `_` only.
 fn file_part(text: &str) -> String {
     let cleaned: String = text.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
@@ -251,6 +270,7 @@ impl BoardView<'_> {
             for pad in pads.iter().filter(|pad| layer.is_some_and(|layer| on(pad, layer))) {
                 gerber.pad(pad);
             }
+            board_graphics(&mut gerber, self, LayerPurpose::Mask, Some(if side == "Top" { Side::Front } else { Side::Back }));
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Soldermask,{side}"), "Negative") });
         }
         for (side, label, layer) in [("Top", "Paste_Top", front), ("Bot", "Paste_Bottom", back)] {
@@ -258,6 +278,7 @@ impl BoardView<'_> {
             for pad in pads.iter().filter(|pad| !pad.through_hole && layer.is_some_and(|layer| on(pad, layer))) {
                 gerber.pad(pad);
             }
+            board_graphics(&mut gerber, self, LayerPurpose::Paste, Some(if side == "Top" { Side::Front } else { Side::Back }));
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Paste,{side}"), "Positive") });
         }
 
@@ -272,6 +293,7 @@ impl BoardView<'_> {
                     silk.stroke(&points, graphic.stroke_nm.unwrap_or(DEFAULT_SILK_NM));
                 }
             }
+            board_graphics(&mut silk, self, LayerPurpose::Silkscreen, Some(side));
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: silk.finish(&format!("Legend,{position}"), "Positive") });
         }
 
@@ -281,7 +303,7 @@ impl BoardView<'_> {
             if drawing.closed {
                 points.push(points[0]);
             }
-            profile.stroke(&points, OUTLINE_NM);
+            profile.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM));
         }
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive") });
 

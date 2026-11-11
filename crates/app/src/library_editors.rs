@@ -303,8 +303,8 @@ impl Document {
         }
         let (mut apply, mut reset) = (false, false);
         ui.horizontal(|ui| {
-            apply = ui.add_enabled(draft.dirty(), egui::Button::new("Apply")).clicked();
-            reset = ui.button("Reset").clicked();
+            apply = pcbcraft_chrome::controls::enabled_button(ui, draft.dirty(), "Apply").clicked();
+            reset = pcbcraft_chrome::controls::button(ui, "Reset").clicked();
         });
         if apply {
             let result = draft.action().and_then(|action| self.session.execute(draft.revision, action));
@@ -377,7 +377,7 @@ impl Document {
             authoring::Region::Browser => self.browser(ui),
             authoring::Region::Properties => {
                 self.properties(ui, false);
-                expanded = ui.button("More properties…").clicked();
+                expanded = pcbcraft_chrome::controls::button(ui, "More properties…").clicked();
             }
             authoring::Region::Canvas { area, covered } => self.canvas(ui, area, covered, navigation, active),
         });
@@ -523,7 +523,7 @@ impl PcbApp {
             },
             |ui| {
                 if tabs.len() > 1 {
-                    egui::ComboBox::from_id_salt("library_documents").selected_text("Documents").show_ui(ui, |ui| {
+                    pcbcraft_chrome::controls::Choice::from_id_salt("library_documents").selected_text("Documents").show_ui(ui, |ui| {
                         for (id, name) in &tabs {
                             if ui.selectable_label(active == Some(*id), name).clicked() {
                                 intents.borrow_mut().push(Intent::Focus(*id));
@@ -602,7 +602,7 @@ impl PcbApp {
                 self.library_editors.notice = Some(error);
             }
         }
-        ui.add_enabled_ui(enabled, |ui| self.library_ribbon(ui, can_save));
+        let ribbon = ui.add_enabled_ui(enabled, |ui| self.library_ribbon(ui, can_save)).inner;
         if let Some(notice) = self.message.as_ref().or(self.library_editors.notice.as_ref()) {
             ui.label(notice);
         }
@@ -610,6 +610,7 @@ impl PcbApp {
             let area = ui.available_rect_before_wrap();
             self.editor_workspace(ui, area);
         });
+        self.paint_ribbon_background(ribbon);
         #[cfg(not(target_arch = "wasm32"))]
         if main {
             let area = self.library_editors.active.and_then(|id| self.library_editors.documents.get(&id)).and_then(|doc| doc.camera.schematic_rect());
@@ -636,7 +637,7 @@ impl PcbApp {
     }
     /// Authoring uses the shared workspace picker and ribbon while keeping drawing state,
     /// file operations and contextual panels owned by the active definition document.
-    fn library_ribbon(&mut self, ui: &mut Ui, can_save: bool) {
+    fn library_ribbon(&mut self, ui: &mut Ui, can_save: bool) -> Option<pcbcraft_chrome::workspace::RibbonBackground> {
         use pcbcraft_chrome::workspace::{self, RibbonTool, ToolIcon};
         let entries = self.workspace_entries();
         let split = self.views.is_split();
@@ -662,8 +663,8 @@ impl PcbApp {
             menu_check: (label == "Split").then_some(CheckKind::Toggle),
         });
         let mut layout_action = None;
-        let Some(id) = self.library_editors.active else { return };
-        let Some(doc) = self.library_editors.documents.get_mut(&id) else { return };
+        let id = self.library_editors.active?;
+        let doc = self.library_editors.documents.get_mut(&id)?;
         let kind = doc.session.snapshot().kind;
         let title = if kind == Kind::Symbol { "Symbol Editor" } else { "Footprint Editor" };
         let mut tab = doc.ribbon_tab;
@@ -722,6 +723,7 @@ impl PcbApp {
                 _ => self.library_editors.save(ui.ctx(), id, action == 3).err(),
             };
         }
+        response.background
     }
 
     /// Explicit close/quit decisions protect every authoring document, including unapplied fields.
@@ -743,9 +745,9 @@ impl PcbApp {
         let dismissed = shell::dialog(ctx, "library_close", if id.is_some() { "Close library item?" } else { "Unsaved library items" }, |ui| {
             ui.label(if busy { "Finish the library file operation before closing." } else { "Unsaved library edits will be lost." });
             ui.horizontal(|ui| {
-                review = ui.button("Review edits").clicked();
-                discard = ui.add_enabled(!busy, egui::Button::new("Discard library edits")).clicked();
-                cancel = ui.button("Cancel").clicked();
+                review = pcbcraft_chrome::controls::button(ui, "Review edits").clicked();
+                discard = pcbcraft_chrome::controls::enabled_button(ui, !busy, "Discard library edits").clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if discard {
@@ -771,7 +773,7 @@ impl PcbApp {
         let mut close = false;
         let dismissed = shell::scrolling_dialog_width(ctx, &format!("library_details_{id}"), "Library Properties", 760.0, |ui| {
             doc.properties(ui, true);
-            close = ui.button("Close").clicked();
+            close = pcbcraft_chrome::controls::button(ui, "Close").clicked();
         });
         if !(close || dismissed) {
             self.dialog = Dialog::LibraryProperties(id, view);

@@ -73,6 +73,7 @@ fn pcb_zoom_reaches_copper_detail_and_round_trips_in_arrangements() {
     h.run();
     for _ in 0..8 {
         h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 8.0),
             phase: egui::TouchPhase::Move,
@@ -467,7 +468,8 @@ fn mixed_pane_close_buttons_preserve_the_surviving_view() {
 }
 
 /// PCB grid preferences change only board drawing, survive serialization, and preserve snapping
-/// and project state. Cancel restores the previous style and page defaults restore Off.
+/// and project state. Off retains the previous style, Cancel restores visibility as well,
+/// and page defaults restore the legacy Off style.
 #[test]
 fn pcb_grid_preferences_are_shared_display_settings() {
     use pcbcraft_chrome::grid::Style;
@@ -499,8 +501,10 @@ fn pcb_grid_preferences_are_shared_display_settings() {
         h.get_by_label("PCB grid");
         click(&mut h, label);
         click(&mut h, "OK");
-        assert_eq!(h.state().preferences.board_grid_style, style);
-        assert_eq!(crate::preferences::Preferences::parse(&h.state().preferences.to_text()).board_grid_style, style);
+        let remembered = if style == Style::Off { Style::Lines } else { style };
+        assert_eq!(h.state().preferences.board_grid_style, remembered);
+        assert_eq!(h.state().preferences.grid_visible(true), style != Style::Off);
+        assert_eq!(crate::preferences::Preferences::parse(&h.state().preferences.to_text()), h.state().preferences);
         let (dots, lines) = marks(&h, Tokens::get().board_grid);
         match style {
             Style::Dots => {
@@ -527,12 +531,50 @@ fn pcb_grid_preferences_are_shared_display_settings() {
     click(&mut h, "Preferences");
     click(&mut h, "Dots");
     click(&mut h, "Cancel");
-    assert_eq!(h.state().preferences.board_grid_style, Style::Off);
+    assert_eq!(h.state().preferences.board_grid_style, Style::Lines);
+    assert!(!h.state().preferences.grid_visible(true));
     click(&mut h, "Preferences");
     click(&mut h, "Lines");
     click(&mut h, "Restore page defaults");
     assert_eq!(h.state().preferences.board_grid_style, Style::Off);
     click(&mut h, "OK");
+}
+
+/// Choosing a visible PCB style in Preferences restores a ribbon-hidden grid, including
+/// legacy zero opacity. Cancel restores the hidden state and OK preserves the chosen style.
+#[test]
+fn pcb_grid_preferences_restore_hidden_grid() {
+    use pcbcraft_chrome::grid::Style;
+    for opacity in [0, 100] {
+        let mut h = board_harness();
+        choose(&mut h, "Choose workspace", "PCB layout");
+        h.state_mut().preferences.board_grid_style = Style::Dots;
+        h.state_mut().preferences.board_grid_visible = false;
+        h.state_mut().preferences.grid_opacity_percent = opacity;
+        h.run();
+        let hidden = h.state().preferences;
+        let before = h.state().session.snapshot().unwrap();
+        let canvas = h.get_by_label("PCB canvas").rect();
+        assert!(super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        click(&mut h, "Preferences");
+        click(&mut h, "Dots");
+        assert!(h.state().preferences.grid_visible(true));
+        click(&mut h, "Cancel");
+        assert_eq!(h.state().preferences, hidden);
+        assert!(super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        click(&mut h, "Preferences");
+        click(&mut h, "Dots");
+        click(&mut h, "OK");
+        assert!(h.state().preferences.grid_visible(true));
+        assert!(!super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        click(&mut h, "View");
+        click(&mut h, "Show grid");
+        assert!(!h.state().preferences.grid_visible(true));
+        click(&mut h, "Show grid");
+        assert!(h.state().preferences.grid_visible(true));
+        assert!(!super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
 }
 
 /// Open a board with its origin unobstructed, retaining the real layers/properties panels.

@@ -35,6 +35,7 @@ mod save_changes;
 mod selection_filters;
 mod split_editors;
 mod tool_modes;
+mod zoom;
 
 /// Compare restored authored state while preserving the allocation metadata retained by Undo.
 /// Rejected commands, cancelled gestures and no-ops must still use exact snapshot comparisons.
@@ -113,6 +114,12 @@ pub(super) fn click(harness: &mut Harness<'_, PcbApp>, label: &str) {
         harness.run();
     }
     harness.get_by_label(label).click();
+    harness.run();
+}
+
+/// Select an actual ribbon tab when a Browser row has the same visible label.
+pub(super) fn click_tab(harness: &mut Harness<'_, PcbApp>, label: &str) {
+    harness.get_by_role_and_label(egui::Role::Tab, label).click();
     harness.run();
 }
 
@@ -490,7 +497,7 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
 
     // File ends with Preferences and Keyboard Shortcuts above Quit, as SolidCraft's does.
     choose(&mut harness, "File", "Preferences…");
-    harness.get_by_label("Interface scale");
+    harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Interface scale");
     click(&mut harness, "OK");
     choose(&mut harness, "File", "Keyboard Shortcuts…");
     harness.get_by_label("Draw wire");
@@ -783,6 +790,67 @@ fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
     assert!(harness.query_by_label("Close").is_none());
 }
 
+/// Hiding Lines through Preferences retains that choice for the ribbon's next Show Grid.
+#[test]
+fn preferences_grid_off_retains_previous_line_style() {
+    use pcbcraft_chrome::grid;
+    let mut h = harness();
+    click(&mut h, "Preferences");
+    click(&mut h, "Lines");
+    assert!(h.state().preferences.grid_visible(true));
+    click(&mut h, "Off");
+    assert!(!h.state().preferences.grid_visible(true));
+    assert_eq!(h.state().preferences.board_grid_style, grid::Style::Lines);
+    click(&mut h, "OK");
+    h.state_mut().preferences.set_grid_visible(true, true);
+    assert!(h.state().preferences.grid_visible(true));
+    assert_eq!(h.state().preferences.board_grid_style, grid::Style::Lines);
+}
+
+/// Scale edits keep the slider's geometry stable until the pointer is released or the typed
+/// number is confirmed. Cancel can still restore a scale that was previewed in the app.
+#[test]
+fn preferences_scale_applies_after_release_or_numeric_confirmation() {
+    let mut h = harness();
+    click(&mut h, "Preferences");
+    let role = egui::accesskit::Role::Slider;
+    let rect = h.get_by_role_and_label(role, "Interface scale").rect();
+    let press = rect.center();
+    let end = press + egui::vec2(rect.width() * 0.1, 0.0);
+    let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.hover_at(press);
+    h.run();
+    h.event(pointer(press, true));
+    h.run();
+    assert_eq!(h.state().preferences().scale_percent, 100);
+    h.event(egui::Event::PointerMoved(end));
+    h.run();
+    let slider = h.get_by_role_and_label(role, "Interface scale");
+    let preview = slider.accesskit_node().numeric_value().unwrap() as u16;
+    assert!(preview > 100);
+    assert_eq!(slider.rect(), rect);
+    assert_eq!(h.state().preferences().scale_percent, 100);
+    assert_eq!(h.ctx.zoom_factor(), 1.0);
+    h.event(pointer(end, false));
+    h.run();
+    assert_eq!(h.state().preferences().scale_percent, preview);
+    assert_eq!(h.ctx.zoom_factor(), f32::from(preview) / 100.0);
+    click(&mut h, "Cancel");
+    assert_eq!(h.ctx.zoom_factor(), 1.0);
+
+    click(&mut h, "Preferences");
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Interface scale").click();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(egui::Event::Text("125".into()));
+    h.run();
+    assert_eq!(h.ctx.zoom_factor(), 1.0);
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.ctx.zoom_factor(), 1.25);
+    assert!(matches!(h.state().dialog, Dialog::Preferences(_)));
+}
+
 /// Cancel, Esc and the close button put back what was there when Preferences opened, and
 /// Apply moves that point forward.
 #[test]
@@ -807,8 +875,43 @@ fn preferences_cancel_restores_and_apply_keeps() {
 
     click(&mut harness, "Preferences");
     click(&mut harness, "Light");
-    click(&mut harness, "Close Preferences");
+    click(&mut harness, "Close");
     assert_eq!(harness.state().preferences().theme, ThemeChoice::Dark);
+}
+
+/// The shared segments fall back to a named dropdown when the setting column is too narrow.
+/// Choosing from that dropdown updates the same draft and Cancel restores the original theme.
+#[test]
+fn narrow_preferences_keep_theme_choices_available() {
+    let mut h = harness();
+    h.set_size(egui::vec2(340.0, 800.0));
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Theme").click();
+    h.run();
+    click(&mut h, "Light");
+    assert_eq!(h.state().preferences().theme, ThemeChoice::Light);
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().preferences().theme, ThemeChoice::Dark);
+}
+
+/// A click over the editor outside Preferences dismisses its draft and never reaches the editor.
+#[test]
+fn preferences_backdrop_cancels_without_activating_home() {
+    let mut h = harness();
+    new_project(&mut h);
+    let pos = h.get_by_label("Home").rect().center();
+    click(&mut h, "Preferences");
+    click(&mut h, "Light");
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().preferences().theme, ThemeChoice::Dark);
+    assert!(!h.state().home);
 }
 
 /// Cleanup is discoverable in Preferences and shares the ribbon's saved setting. Cancel
@@ -909,23 +1012,27 @@ fn preferences_search_filters_rows_across_pages() {
         harness.run();
         harness.run();
     };
-    search(&mut harness, "zoom");
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    harness.run();
+    harness.event(egui::Event::Text("zoom".into()));
+    harness.run();
+    harness.run();
     assert!(harness.get_by_label("Restore page defaults").accesskit_node().is_disabled(), "results span pages");
-    harness.get_by_label("Zoom speed");
+    harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Zoom speed");
     harness.get_by_label("Zoom direction");
     assert!(harness.query_by_label("Theme").is_none());
     assert!(harness.query_by_label("Add symbol").is_none());
 
     search(&mut harness, "dark");
     harness.get_by_label("Theme");
-    assert!(harness.query_by_label("Zoom speed").is_none());
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Slider, "Zoom speed").is_none());
 
     search(&mut harness, "Draw wire");
     harness.get_by_label("Draw wire");
     harness.key_press(Key::Enter);
     harness.run();
     harness.run();
-    assert!(harness.query_by_label("Zoom speed").is_none());
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Slider, "Zoom speed").is_none());
     assert!(harness.query_all_by_label("Shortcuts").any(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)));
     harness.get_by_label("Add symbol");
 
@@ -944,7 +1051,7 @@ fn grid_opacity_preference_steps_resets_and_cancels() {
     let mut harness = harness();
     harness.state_mut().preferences.grid_opacity_percent = 40;
     click(&mut harness, "Preferences");
-    harness.get_by_label("Grid opacity");
+    harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Grid opacity");
     // The percentage box beside it reads "40%"; the slider itself carries the number.
     harness.get_by_value("40%");
     let slider = harness.query_all_by_role(egui::accesskit::Role::Slider).find(|node| node.accesskit_node().numeric_value() == Some(40.0));
@@ -965,7 +1072,7 @@ fn grid_opacity_preference_steps_resets_and_cancels() {
     harness.get_by_role(egui::accesskit::Role::TextInput).type_text("grid");
     harness.run();
     harness.run();
-    harness.get_by_label("Grid opacity");
+    harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Grid opacity");
     assert!(harness.query_by_label("Theme").is_none());
 }
 
@@ -1006,6 +1113,7 @@ fn navigation_preferences_change_what_the_wheel_does() {
         harness.hover_at(canvas_center(harness));
         harness.run();
         harness.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 2.0),
             phase: egui::TouchPhase::Move,
@@ -1116,6 +1224,7 @@ fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     harness.hover_at(point);
     harness.run();
     harness.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, 4.0),
         phase: egui::TouchPhase::Move,
@@ -1861,8 +1970,41 @@ mod live_mcp {
         assert_eq!(document(&harness), untouched);
     }
 
-    /// Live clients can select every schematic tab; PCB-only hosts refuse schematic tabs
-    /// before changing any host state, and tab switches never edit project history.
+    /// Explicit visibility restores legacy hidden grids and takes precedence over accompanying
+    /// Off/zero values; style and opacity alone still preserve intentional hiding.
+    #[test]
+    fn live_grid_visibility_resolves_style_and_opacity_before_showing() {
+        use pcbcraft_chrome::grid;
+        let mut h = harness();
+        wiring_project(&mut h);
+        let (port, token) = connect(&mut h);
+        let connection = (port, token.as_str());
+        let original = document(&h);
+        for params in [json!({"board_grid_style":"off","grid_opacity_percent":0}), json!({"board_grid_style":"lines","grid_opacity_percent":0})] {
+            window(&mut h, connection, "app.set_preferences", params.clone());
+            assert!(!h.state().preferences.grid_visible(true));
+            window(&mut h, connection, "app.set_preferences", json!({"board_grid_visible":true}));
+            assert!(h.state().preferences.grid_visible(true));
+            assert!(!h.state().preferences.grid_visible(false));
+            let style = if params["board_grid_style"] == "lines" { grid::Style::Lines } else { grid::Style::Dots };
+            assert_eq!(h.state().preferences.board_grid_style, style);
+        }
+        window(
+            &mut h,
+            connection,
+            "app.set_preferences",
+            json!({"board_grid_style":"off","grid_opacity_percent":0,"board_grid_visible":true,"schematic_grid_visible":true}),
+        );
+        assert!(h.state().preferences.grid_visible(true) && h.state().preferences.grid_visible(false));
+        window(&mut h, connection, "app.set_preferences", json!({"board_grid_style":"lines","grid_opacity_percent":35,"board_grid_visible":false}));
+        assert!(!h.state().preferences.grid_visible(true));
+        assert_eq!(h.state().preferences.board_grid_style, grid::Style::Lines);
+        assert_eq!(h.state().preferences.grid_opacity_percent, 35);
+        assert_eq!(document(&h), original);
+    }
+
+    /// Live clients address each task tab, retain the Manage alias, and reject tabs from
+    /// the other workspace before changing any host state or authored content.
     #[test]
     fn ported_ribbon_tabs_are_addressable_without_changing_the_project() {
         let mut h = harness();
@@ -1870,18 +2012,26 @@ mod live_mcp {
         let (port, token) = connect(&mut h);
         let connection = (port, token.as_str());
         let original = document(&h);
-        for tab in ["analyze", "libraries", "manage", "view", "capture"] {
+        for tab in ["analyze", "libraries", "sheets", "view", "capture", "manage"] {
             let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":tab}));
             h.run();
-            assert_eq!(result["windows"][0]["ribbon_tab"], tab);
+            assert_eq!(result["windows"][0]["ribbon_tab"], if tab == "manage" { "sheets" } else { tab });
+        }
+        for tab in ["layout", "route", "draw", "manufacture"] {
+            let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
+            let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
+            assert_eq!(error["isError"], true);
+            assert_eq!(payload(tool(&mut h, connection, "inspect_editor", json!({}))), before);
         }
         click(&mut h, "Choose workspace");
         click(&mut h, "PCB layout");
-        let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":"libraries"}));
-        h.run();
-        assert_eq!(result["windows"][0]["ribbon_tab"], "libraries");
-        let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
-        for tab in ["analyze", "manage"] {
+        for tab in ["layout", "route", "draw", "analyze", "manufacture", "libraries", "view"] {
+            let result = window(&mut h, connection, "window.set_ribbon_tab", json!({"window":0,"tab":tab}));
+            h.run();
+            assert_eq!(result["windows"][0]["ribbon_tab"], if tab == "route" { "layout" } else { tab });
+        }
+        for tab in ["capture", "sheets", "manage"] {
+            let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
             let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
             assert_eq!(error["isError"], true);
             assert!(error["content"][0]["text"].as_str().unwrap().contains("schematic workspace"));
@@ -2057,7 +2207,7 @@ fn ribbon_group_menus_run_their_actions() {
         assert_eq!(harness.state().browser.open, open);
         assert!(harness.output().platform_output.events.iter().any(|event| {
             matches!(event, egui::output::OutputEvent::Clicked(info)
-                if info.label.as_deref() == Some("Browser") && info.typ == egui::WidgetType::Checkbox && info.selected == Some(open))
+                if info.label.as_deref() == Some("Browser") && info.role == egui::Role::CheckBox && info.selected == Some(open))
         }));
         harness.run();
         assert_eq!(harness.query_by_label("Collapse Browser").is_some(), open);

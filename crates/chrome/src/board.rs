@@ -53,19 +53,26 @@ pub fn reference_owner_link(p: &Painter, bounds: Rect, owner: Pos2, color: Color
 
 /// The ratsnest is a view overlay, separate from physical drawing layers.
 pub fn ratsnest_visibility(ui: &mut egui::Ui, visible: &mut bool) -> egui::Response {
-    ui.checkbox(visible, "Ratsnest")
+    crate::controls::checkbox(ui, visible, "Ratsnest")
 }
 
-/// Paint a layer graphic in its effective color; selection, previews and handles use the shared accent.
-pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, selected: bool, preview: bool, color: Color32) {
+/// Paint layer linework at its physical screen width with round ends. Missing width retains
+/// legacy hairlines; selection, previews and handles use the shared accent.
+pub fn drawing(p: &Painter, points: Vec<Pos2>, closed: bool, width: Option<f32>, selected: bool, preview: bool, color: Color32) {
     let t = Tokens::get();
     let color = if selected || preview { t.accent } else { color };
-    p.add(egui::Shape::Path(egui::epaint::PathShape {
-        points: points.clone(),
-        closed,
-        fill: Color32::TRANSPARENT,
-        stroke: Stroke::new(1.5, color).into(),
-    }));
+    if let Some(width) = width {
+        for (a, b) in points.iter().zip(points.iter().cycle().skip(1)).take(points.len().saturating_sub(usize::from(!closed))) {
+            track(p, [*a, *b], width, color, selected, preview);
+        }
+    } else {
+        p.add(egui::Shape::Path(egui::epaint::PathShape {
+            points: points.clone(),
+            closed,
+            fill: Color32::TRANSPARENT,
+            stroke: Stroke::new(1.5, color).into(),
+        }));
+    }
     if selected {
         for point in points {
             p.rect_filled(Rect::from_center_size(point, vec2(7., 7.)), 0, t.accent);
@@ -474,13 +481,13 @@ pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], he
             ui.label(crate::shell::error(error));
         }
         ui.horizontal(|ui| {
-            if ui.button("Apply color").clicked() {
+            if crate::controls::button(ui, "Apply color").clicked() {
                 action = LayerColorAction::Apply;
             }
-            if ui.button("Reset to default").clicked() {
+            if crate::controls::button(ui, "Reset to default").clicked() {
                 action = LayerColorAction::Reset;
             }
-            if ui.button("Cancel").clicked() {
+            if crate::controls::button(ui, "Cancel").clicked() {
                 action = LayerColorAction::Cancel;
             }
         });
@@ -501,7 +508,7 @@ pub fn layer_visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::R
 pub fn visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::Response {
     let t = Tokens::get();
     let (rect, response) = ui.allocate_exact_size(vec2(t.space_24, t.space_24), egui::Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, format!("Show {name}")));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), visible, format!("Show {name}")));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if response.hovered() || response.has_focus() {

@@ -152,8 +152,8 @@ fn project_title(ui: &mut Ui, title: &str, dirty: bool, has_project: bool, room:
 fn unsaved_marker(ui: &mut Ui, rect: egui::Rect, t: Tokens) {
     const LABEL: &str = "Unsaved changes";
     ui.painter().circle_filled(rect.center(), t.space_2, t.accent);
-    let response = ui.interact(rect, ui.id().with("unsaved_project"), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, LABEL));
+    let response = ui.interact(rect, ui.scope_id().with("unsaved_project"), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, LABEL));
     response.on_hover_text(LABEL);
 }
 
@@ -163,7 +163,7 @@ fn unsaved_marker(ui: &mut Ui, rect: egui::Rect, t: Tokens) {
 pub fn status_bar(ui: &mut Ui, left: impl FnOnce(&mut Ui), right: impl FnOnce(&mut Ui)) {
     let t = Tokens::get();
     egui::Panel::bottom("chrome_status_bar")
-        .exact_size(t.control_height - t.space_4)
+        .exact_size(t.control_height.max(solidcraft_theme::Tokens::get().control_height))
         .resizable(false)
         .frame(Frame::new().fill(t.panel).inner_margin(Margin::symmetric(t.space_8 as i8, 0)))
         .show(ui, |ui| {
@@ -193,38 +193,48 @@ pub fn dialog(ctx: &egui::Context, id: &str, title: &str, add: impl FnOnce(&mut 
     dialog_width(ctx, id, title, 340.0, add)
 }
 
-/// Keep a variable-length form within the viewport, with a fixed title and scrollable content.
-/// Escape and outside clicks retain the ordinary modal close behavior.
+/// Keep a variable-length form within the shared modal's bounded scrolling body.
+/// Escape, header close and outside clicks retain the ordinary modal close behavior.
 pub fn scrolling_dialog(ctx: &egui::Context, id: &str, title: &str, add: impl FnOnce(&mut Ui)) -> bool {
     scrolling_dialog_width(ctx, id, title, 340.0, add)
 }
 
-/// Show a responsive wide form while keeping its variable-length body inside the viewport.
+/// Show a responsive wide form with the shared modal header and bounded body.
 pub fn scrolling_dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui)) -> bool {
-    let t = Tokens::get();
-    let height = (ctx.content_rect().height() - t.space_16 * 5.0 - t.control_height).max(0.0);
-    dialog_width(ctx, id, title, width, |ui| {
-        ui.scope(|ui| {
-            // Recompute the body's height when a package adds rows, without resetting the title's cursor.
-            ui.set_max_height(height);
-            egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]).show(ui, add);
-        });
-    })
+    dialog_width(ctx, id, title, width, add)
 }
 
-/// Draw a modal with a preferred content width bounded by the viewport.
+/// Draw a shared modal with a preferred content width bounded by the viewport. Callers retain
+/// their field focus, validation and actions; the title stays fixed while long bodies scroll.
 pub fn dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui)) -> bool {
+    use solidcraft_ui_kit::{self as kit, Container, Surface};
     let t = Tokens::get();
-    let frame = Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(t.space_16 as i8));
-    egui::Modal::new(egui::Id::new(id))
-        .frame(frame)
-        .show(ctx, |ui| {
-            ui.set_width(width.min((ctx.content_rect().width() - t.space_16 * 3.0).max(0.0)));
-            ui.spacing_mut().item_spacing.y = t.space_8;
-            ui.label(RichText::new(title).font(fonts::semibold(t.font_button + 2.0)));
-            add(ui);
-        })
-        .should_close()
+    let mut closed = false;
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let modal = Container::new(ctx, Surface::Window).modal(egui::Id::unique(id)).frame(frame).show(ctx, |ui| {
+        let width = (width + 2.0 * t.space_16).min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
+        ui.set_width(width);
+        let field_style = ui.style().clone();
+        kit::scope(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (header, close) = crate::catalog::form_header(ui, title);
+            closed = close;
+            Frame::NONE.inner_margin(t.space_16 as i8).show(ui, |ui| {
+                ui.set_style(field_style);
+                ui.set_width((width - 2.0 * t.space_16).max(0.0));
+                ui.spacing_mut().item_spacing.y = t.space_8;
+                let height = (ctx.content_rect().height() - header.height() - 4.0 * t.space_16).max(0.0);
+                egui::ScrollArea::vertical().id_salt("dialog_body").max_height(height).min_scrolled_height(height).auto_shrink([false, true]).show(
+                    ui,
+                    |ui| {
+                        crate::workspace::describe_scroll_viewport(ui);
+                        add(ui);
+                    },
+                );
+            });
+        });
+    });
+    closed || modal.should_close()
 }
 
 /// A save prompt returns a choice without owning the application's save or close lifecycle.
@@ -235,41 +245,48 @@ pub enum SaveDecision {
     Cancel,
 }
 
-/// Present the unsaved-work decision with the Craft dialog surface and fixed action footer.
+/// Present the unsaved-work decision with the shared Craft modal, header and action footer.
 /// Browser callers omit Save because downloading cannot confirm that a project was kept.
-/// Escape and outside clicks cancel; a disabled Save still leaves Discard and Cancel available.
+/// Header close, Escape and outside clicks cancel; disabled Save leaves Discard and Cancel
+/// available. An unowned Enter never approves a choice.
 pub fn save_changes(ctx: &egui::Context, title: &str, message: &str, offer_save: bool, save_enabled: bool) -> Option<SaveDecision> {
     let t = Tokens::get();
-    let mut decision = None;
-    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1., t.border)).corner_radius(t.radius_lg);
-    let modal = egui::Modal::new(egui::Id::new("save_changes")).frame(frame).show(ctx, |ui| {
+    use solidcraft_ui_kit::{self as kit, Container, Surface};
+    let mut closed = false;
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let modal = Container::new(ctx, Surface::Window).modal(egui::Id::unique("save_changes")).frame(frame).show(ctx, |ui| {
         let width = (t.form_card_width * 1.75).min((ctx.content_rect().width() - 2. * t.space_16).max(0.));
         ui.set_width(width);
-        ui.spacing_mut().item_spacing = vec2(0., 0.);
-        Frame::new().inner_margin(t.space_24 as i8).show(ui, |ui| {
-            ui.set_width((width - 2. * t.space_24).max(0.));
-            ui.spacing_mut().item_spacing.y = t.space_12;
-            ui.label(RichText::new(title).font(fonts::interface_heading(ui, t.font_heading)));
-            ui.add(Label::new(message).wrap());
-        });
-        let (footer, _) = ui.allocate_exact_size(vec2(width, t.form_footer_height), Sense::hover());
-        ui.painter().rect_filled(footer, egui::CornerRadius { nw: 0, ne: 0, sw: t.radius_lg, se: t.radius_lg }, t.dialog_footer);
-        ui.painter().hline(footer.x_range(), footer.top(), Stroke::new(1., t.dialog_rule));
-        let inner = footer.shrink2(vec2(t.space_16, t.space_8));
-        ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)), |ui| {
-            ui.spacing_mut().item_spacing.x = t.space_8;
-            if offer_save && ui.add_enabled(save_enabled, crate::catalog::button("Save", true)).clicked() {
-                decision = Some(SaveDecision::Save);
+        kit::scope(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.;
+            closed = crate::catalog::form_header(ui, title).1;
+            Frame::NONE.inner_margin(t.space_16 as i8).show(ui, |ui| {
+                ui.set_width((width - 2. * t.space_16).max(0.));
+                ui.add(Label::new(message).wrap());
+            });
+            // Opening a save prompt must not implicitly approve a choice on an unowned Enter.
+            if ui.ctx().memory(|memory| memory.focused().is_none()) {
+                ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             }
-            if ui.add(crate::catalog::button("Cancel", false)).clicked() {
-                decision = Some(SaveDecision::Cancel);
-            }
-            if ui.add(crate::catalog::button("Don't Save", false)).clicked() {
-                decision = Some(SaveDecision::Discard);
-            }
-        });
+            kit::footer(
+                ui,
+                if offer_save { "Save" } else { "" },
+                "Cancel",
+                save_enabled,
+                kit::Footer { apply: Some("Don't Save"), confirm: true, secondary_left: true, ..Default::default() },
+            )
+        })
     });
-    if modal.should_close() { Some(SaveDecision::Cancel) } else { decision }
+    if closed || modal.should_close() {
+        Some(SaveDecision::Cancel)
+    } else {
+        match modal.inner {
+            kit::Action::Ok => Some(SaveDecision::Save),
+            kit::Action::Apply => Some(SaveDecision::Discard),
+            kit::Action::Cancel => Some(SaveDecision::Cancel),
+            kit::Action::None => None,
+        }
+    }
 }
 
 /// Small dim text, as in a status bar.

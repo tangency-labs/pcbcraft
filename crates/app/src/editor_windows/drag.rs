@@ -273,9 +273,15 @@ impl PcbApp {
         let destination = self.windows.drag.as_ref().and_then(|drag| self.drag_destination(drag));
         for (id, rect) in panes {
             let active = matches!(destination, Some(DropDestination::Beside(target)) if target.view() == *id);
-            pcbcraft_chrome::editor::dock_preview(ui, ui.id().with(("dock_destination", id)), *rect, active, self.windows.drag.is_some());
+            pcbcraft_chrome::editor::dock_preview(ui, ui.scope_id().with(("dock_destination", id)), *rect, active, self.windows.drag.is_some());
             let reposition = matches!(destination, Some(DropDestination::Reorder(target)) if target.view() == *id);
-            pcbcraft_chrome::editor::reorder_preview(ui, ui.id().with(("reorder_destination", id)), *rect, reposition, self.windows.drag.is_some());
+            pcbcraft_chrome::editor::reorder_preview(
+                ui,
+                ui.scope_id().with(("reorder_destination", id)),
+                *rect,
+                reposition,
+                self.windows.drag.is_some(),
+            );
         }
         if let Some(drag) = &self.windows.drag
             && drag.host == host

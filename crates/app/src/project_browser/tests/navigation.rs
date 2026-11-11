@@ -41,7 +41,7 @@ fn common_browser_navigates_both_workspaces_without_document_edits() {
         let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         let sheet_height = h.get_by_label("Main").rect().height();
         assert_eq!(h.get_by_label("Board Board").rect().height(), sheet_height);
-        h.get_by_label("Sheets");
+        h.get_by_role_and_label(egui::Role::Button, "Sheets");
         h.get_by_label("Boards");
         let camera = h.state().views.active.camera.saved_state();
         click(&mut h, "Board Board");
@@ -51,7 +51,7 @@ fn common_browser_navigates_both_workspaces_without_document_edits() {
         assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
         crate::tests::open_browser_row(&mut h, "Board Board", "Open in PCB layout");
         assert_eq!(h.state().views.active.workspace, Workspace::Board);
-        h.get_by_label("Sheets");
+        h.get_by_role_and_label(egui::Role::Button, "Sheets");
         h.get_by_label("Main");
         h.get_by_label("Boards");
         assert_eq!(h.get_by_label("Footprint R1  R").rect().height(), sheet_height);

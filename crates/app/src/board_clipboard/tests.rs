@@ -98,6 +98,7 @@ fn measure_supersedes_clipboard_preview_without_editing() {
     click(&mut h, "Paste");
     assert!(h.state().views.active.board.clipboard.active());
     let before = h.state().session.snapshot().unwrap();
+    click(&mut h, "Analyze");
     click(&mut h, "Measure distance");
     assert!(!h.state().views.active.board.clipboard.active());
     assert!(h.state().views.active.board.measure.tool);

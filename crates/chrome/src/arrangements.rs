@@ -1,6 +1,6 @@
 //! Named arrangements of project views and windows in the title bar.
 
-use egui::{Ui, WidgetInfo, WidgetType};
+use egui::{Role, Ui, WidgetInfo};
 
 /// Presentation intents; the host validates identities and owns all layout changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,13 +35,13 @@ pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> 
                     for (id, name) in tabs {
                         ui.push_id(id, |ui| {
                             let selected = *id == active;
-                            let response = ui.selectable_label(selected, name);
-                            response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, format!("Arrangement {name}")));
+                            let response = solidcraft_ui_kit::button(ui, name, if selected { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost });
+                            response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, format!("Arrangement {name}")));
                             response.context_menu(|ui| {
                                 for (label, pick) in
                                     [("Rename…", Intent::Rename(*id)), ("Duplicate…", Intent::Duplicate(*id)), ("Delete…", Intent::Remove(*id))]
                                 {
-                                    if ui.add_enabled(!matches!(pick, Intent::Remove(_)) || tabs.len() > 1, egui::Button::new(label)).clicked() {
+                                    if crate::controls::enabled_button(ui, !matches!(pick, Intent::Remove(_)) || tabs.len() > 1, label).clicked() {
                                         intent = Some(pick);
                                         ui.close_kind(egui::UiKind::Menu);
                                     }
@@ -59,8 +59,8 @@ pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> 
                     }
                 });
             });
-        let create = ui.button(label);
-        create.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "New arrangement"));
+        let create = crate::controls::button(ui, label);
+        create.widget_info(|| WidgetInfo::labeled(Role::Button, true, "New arrangement"));
         if create.on_hover_text("New arrangement").clicked() {
             intent = Some(Intent::New);
         }
@@ -135,8 +135,8 @@ impl Form {
                 }
             }
             ui.horizontal(|ui| {
-                submit |= ui.button(submit_label).clicked();
-                cancel = ui.button("Cancel").clicked();
+                submit |= crate::controls::button(ui, submit_label).clicked();
+                cancel = crate::controls::button(ui, "Cancel").clicked();
             });
         });
         if cancel || dismissed {

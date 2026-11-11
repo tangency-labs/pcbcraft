@@ -333,7 +333,7 @@ mod live {
     const ZOOM_AROUND: &[&str] = &["pointer", "center"];
     const PANELS: &[&str] = &["browser", "parts", "nets", "properties", "selection_filters"];
     const CATALOG_MODES: &[&str] = &["expanded", "compact"];
-    const TABS: &[&str] = &["capture", "layout", "analyze", "libraries", "manage", "view"];
+    const TABS: &[&str] = &["capture", "layout", "sheets", "analyze", "libraries", "manage", "route", "draw", "manufacture", "view"];
     const WORKSPACES: &[&str] = &["schematic", "board"];
     const PLACEMENTS: &[&str] = &["here", "beside", "window"];
     const BOARD_GRIDS: &[&str] = &["off", "dots", "lines"];
@@ -706,7 +706,7 @@ mod live {
         WindowCommand {
             id: "window.set_ribbon_tab",
             title: "Ribbon Tab",
-            summary: "Show a schematic ribbon tab (Capture, Analyze, Libraries, Manage, View) or a PCB ribbon tab (Layout, Libraries, View).",
+            summary: "Show a schematic tab (Capture, Sheets, Analyze, Libraries, View) or PCB tab (Layout, Draw, Analyze, Manufacture, Libraries, View). Manage aliases Sheets; Route aliases Layout.",
             params: &[WINDOW, Param { name: "tab", summary: "Which tab", required: true, kind: Kind::Choice(TABS) }],
         },
         WindowCommand {
@@ -752,6 +752,8 @@ mod live {
                 setting("scale_percent", "The interface scale", Kind::Integer { min: 75, max: 200, step: 5 }),
                 setting("units", "The unit lengths and coordinates are shown in", Kind::Choice(UNITS)),
                 setting("grid_opacity_percent", "How strongly the grid shows; 0 hides it", Kind::Integer { min: 0, max: 100, step: 5 }),
+                setting("schematic_grid_visible", "Show the schematic grid; true restores zero opacity", Kind::Bool),
+                setting("board_grid_visible", "Show the PCB grid; true overrides Off and zero opacity", Kind::Bool),
                 setting("board_grid_style", "How PCB views draw their grid", Kind::Choice(BOARD_GRIDS)),
                 setting("selection_follow", "Which views pan to reveal another view's selection", Kind::Choice(FOLLOW)),
                 setting("scroll", "What the mouse wheel does on the canvas", Kind::Choice(SCROLL)),
@@ -805,6 +807,8 @@ mod live {
             "scale_percent": preferences.scale_percent,
             "units": preferences.units.symbol(),
             "grid_opacity_percent": preferences.grid_opacity_percent,
+            "schematic_grid_visible": preferences.schematic_grid_visible,
+            "board_grid_visible": preferences.board_grid_visible,
             "board_grid_style": match preferences.board_grid_style {
                 grid::Style::Off => "off",
                 grid::Style::Dots => "dots",
@@ -818,7 +822,9 @@ mod live {
         })
     }
 
-    /// The settings with the given (already validated) changes applied; the rest are kept.
+    /// Apply validated settings, then explicit visibility requests. Visibility wins over an
+    /// accompanying Off style or zero opacity, restoring dots/default opacity when needed.
+    /// Without a visibility request, explicit style and opacity remain unchanged.
     fn updated_preferences(mut preferences: Preferences, params: &Value) -> Preferences {
         let text = |key: &str| params.get(key).and_then(Value::as_str);
         let number = |key: &str| params.get(key).and_then(Value::as_u64);
@@ -844,6 +850,11 @@ mod live {
                 "lines" => grid::Style::Lines,
                 _ => grid::Style::Off,
             };
+        }
+        for (key, board) in [("board_grid_visible", true), ("schematic_grid_visible", false)] {
+            if let Some(visible) = params.get(key).and_then(Value::as_bool) {
+                preferences.set_grid_visible(board, visible);
+            }
         }
         if let Some(follow) = text("selection_follow") {
             preferences.selection_follow = match follow {
@@ -1376,16 +1387,17 @@ mod live {
                     if self.views.hosts.get(&host).and_then(|host| self.views.view(host.focused)).is_some_and(|view| view.definition.is_some()) {
                         return Err("Use app.library_view to select the authoring ribbon tab.".into());
                     }
-                    let tab = crate::ribbon::tab_slot(params["tab"].as_str().unwrap_or_default());
-                    if !crate::ribbon::BOARD_TAB_ORDER.contains(&tab)
-                        && self
-                            .views
-                            .hosts
-                            .get(&host)
-                            .and_then(|host| self.views.view(host.focused))
-                            .is_some_and(|view| view.workspace == Workspace::Board)
-                    {
-                        return Err("This ribbon tab is available in the schematic workspace.".into());
+                    let name = params["tab"].as_str().unwrap_or_default();
+                    let tab = crate::ribbon::tab_slot(name);
+                    let board = self
+                        .views
+                        .hosts
+                        .get(&host)
+                        .and_then(|host| self.views.view(host.focused))
+                        .is_some_and(|view| view.workspace == Workspace::Board);
+                    let allowed: &[usize] = if board { &crate::ribbon::BOARD_TAB_ORDER } else { &crate::ribbon::TAB_ORDER };
+                    if !allowed.contains(&tab) || (board && name == "capture") || (!board && matches!(name, "layout" | "route")) {
+                        return Err(format!("This ribbon tab is available in the {} workspace.", if board { "schematic" } else { "PCB" }));
                     }
                     self.in_window(host, |app| app.ribbon_tab = tab);
                 }
@@ -1511,6 +1523,9 @@ mod live {
             assert_eq!(updated_preferences(Preferences::default(), &inspected), changed);
             assert_eq!(updated_preferences(changed, &json!({})), changed);
             assert_eq!(changed.scale_percent, Preferences::default().scale_percent);
+            let hidden = updated_preferences(changed, &json!({"schematic_grid_visible":false,"board_grid_visible":false,"grid_opacity_percent":0}));
+            assert!(!hidden.grid_visible(false) && !hidden.grid_visible(true));
+            assert_eq!(updated_preferences(Preferences::default(), &inspect_preferences(&hidden)), hidden);
         }
     }
 }

@@ -22,6 +22,30 @@ fn library_documents_are_independent_and_revision_checked() {
 
 use egui_kittest::{Harness, kittest::Queryable};
 
+/// Definition panes extend their own canvas palette through the exposed ribbon margins.
+#[test]
+fn definition_ribbon_backdrop_matches_the_document_canvas() {
+    for kind in [Kind::Footprint, Kind::Symbol] {
+        let mut app = PcbApp::default();
+        app.new_library_item(kind);
+        let mut h = Harness::builder().with_size(egui::vec2(1200., 800.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let pane = h.state().views.hosts[&h.state().views.host].rects[0].1;
+        let t = pcbcraft_chrome::Tokens::get();
+        let fill = if kind == Kind::Footprint { t.board_canvas } else { t.canvas };
+        assert!(
+            h.output().shapes.iter().any(|shape| match &shape.shape {
+                egui::Shape::Vec(shapes) => shapes.iter().any(|shape| matches!(shape, egui::Shape::Rect(rect)
+                if rect.fill == fill && rect.rect.bottom() <= pane.top()
+                    && (rect.rect.left() - pane.left()).abs() < 0.5
+                    && (rect.rect.right() - pane.right()).abs() < 0.5)),
+                _ => false,
+            }),
+            "{kind:?} must carry its canvas palette through the ribbon"
+        );
+    }
+}
+
 /// Definition properties author the default reference, and both editable and exported files
 /// retain it without changing the active project or the library primitives.
 #[test]

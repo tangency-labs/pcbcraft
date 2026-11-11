@@ -151,7 +151,7 @@ impl Edit {
         ui.collapsing("Technical properties", |ui| {
             form::text(ui, "Tg (°C)", &mut self.tg);
             form::field(ui, "Tg method", |ui| {
-                egui::ComboBox::from_id_salt("tg_method")
+                pcbcraft_chrome::controls::Choice::from_id_salt("tg_method")
                     .selected_text(match self.tg_method {
                         Some(TgMethod::Dsc) => "DSC",
                         Some(TgMethod::Tma) => "TMA",
@@ -164,13 +164,13 @@ impl Edit {
                         }
                     })
                     .response
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Tg method"));
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Tg method"));
             });
             form::text(ui, "Dk", &mut self.dk);
             form::text(ui, "Df", &mut self.df);
             form::text(ui, "Frequency (Hz)", &mut self.frequency);
             form::field(ui, "Basis", |ui| {
-                egui::ComboBox::from_id_salt("report_basis")
+                pcbcraft_chrome::controls::Choice::from_id_salt("report_basis")
                     .selected_text(self.basis.map(|b| format!("{b:?}")).unwrap_or_else(|| "Choose basis".into()))
                     .show_ui(ui, |ui| {
                         for value in [ReportBasis::Typical, ReportBasis::Minimum, ReportBasis::Maximum, ReportBasis::Measured] {
@@ -178,7 +178,7 @@ impl Edit {
                         }
                     })
                     .response
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Basis"));
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Basis"));
             });
             form::text(ui, "Source document", &mut self.document);
             form::text(ui, "Source revision", &mut self.revision);
@@ -190,7 +190,7 @@ impl Edit {
                 form::text(ui, "Specimen resin (%)", &mut self.resin);
                 form::text(ui, "Specimen thickness (mm)", &mut self.specimen_thickness);
                 form::field(ui, "Dk/Df value", |ui| {
-                    egui::ComboBox::from_id_salt("value_kind")
+                    pcbcraft_chrome::controls::Choice::from_id_salt("value_kind")
                         .selected_text(match self.value_kind {
                             Some(DielectricValueKind::Design) => "Design",
                             Some(DielectricValueKind::Test) => "Test",
@@ -203,7 +203,7 @@ impl Edit {
                         });
                 });
                 form::field(ui, "Axis", |ui| {
-                    egui::ComboBox::from_id_salt("report_axis")
+                    pcbcraft_chrome::controls::Choice::from_id_salt("report_axis")
                         .selected_text(self.axis.map(|a| format!("{a:?}")).unwrap_or_else(|| "Unspecified".into()))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut self.axis, None, "Unspecified");
@@ -240,7 +240,7 @@ impl super::Edit {
         let candidate = &mut self.candidate;
         if let Some(edit) = &mut self.material_edit {
             form::card(ui, |ui| edit.show(ui));
-            if ui.button("Discard material edits").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "Discard material edits").clicked() {
                 self.material_edit = None;
             }
             return;
@@ -265,7 +265,7 @@ impl super::Edit {
             }
         }
         properties::section(ui, "Board materials");
-        if ui.button("Add material").clicked() {
+        if pcbcraft_chrome::controls::button(ui, "Add material").clicked() {
             match Material::new("New material".into()).map_err(|e| e.to_string()).and_then(|m| Edit::new(m, false)) {
                 Ok(edit) => self.material_edit = Some(edit),
                 Err(error) => self.error = Some(error),
@@ -284,7 +284,7 @@ impl super::Edit {
                         _ => false,
                     });
                     form::material_heading(ui, &material.name, material.family.as_deref(), used);
-                    if !used && can_use && ui.button("Use for stackup").clicked() {
+                    if !used && can_use && pcbcraft_chrome::controls::button(ui, "Use for stackup").clicked() {
                         use_material = Some(material.reference());
                     }
                     ui.collapsing("Technical details", |ui| {
@@ -313,7 +313,7 @@ impl super::Edit {
                             ));
                             ui.label(&report.source.document);
                         }
-                        if ui.button("Add specification…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Add specification…").clicked() {
                             match Edit::new(material.clone(), true) {
                                 Ok(edit) => self.material_edit = Some(edit),
                                 Err(error) => self.error = Some(error),

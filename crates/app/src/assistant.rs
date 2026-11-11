@@ -152,7 +152,7 @@ impl Assistant {
         if ctx.input(|input| input.pointer.any_pressed()) {
             self.keyboard_active = self.panel_rect.zip(ctx.pointer_interact_pos()).is_some_and(|(rect, point)| rect.contains(point));
         }
-        let owns_keys = self.keyboard_active || ctx.memory(|memory| memory.has_focus(egui::Id::new("assistant_draft_input")));
+        let owns_keys = self.keyboard_active || ctx.memory(|memory| memory.has_focus(egui::Id::unique("assistant_draft_input")));
         if owns_keys {
             self.chat_shortcuts(ctx);
         }
@@ -198,7 +198,7 @@ impl Assistant {
     fn release_focus(&mut self, ctx: &Context) {
         ctx.memory_mut(|memory| {
             if let Some(id) = memory.focused()
-                && (self.keyboard_active || id == egui::Id::new("assistant_draft_input"))
+                && (self.keyboard_active || id == egui::Id::unique("assistant_draft_input"))
             {
                 memory.surrender_focus(id);
             }
@@ -578,9 +578,9 @@ impl Assistant {
         if self.confirm_new {
             ui.label("Start a new chat? This clears the conversation and draft.");
             ui.horizontal(|ui| {
-                if ui.button("Start new chat").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Start new chat").clicked() {
                     self.new_chat();
-                } else if ui.button("Keep chat").clicked() {
+                } else if pcbcraft_chrome::controls::button(ui, "Keep chat").clicked() {
                     self.confirm_new = false;
                 }
             });
@@ -619,23 +619,26 @@ impl Assistant {
                 }
                 ui.horizontal_wrapped(|ui| match &approval.source {
                     chat::Source::Tool { .. } => {
-                        if ui.button("Allow").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Allow").clicked() {
                             answered = Some((approval.id, Answer::Allow));
                         }
-                        if ui.button("Always allow").on_hover_text("Allow this command for this agent from now on").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Always allow")
+                            .on_hover_text("Allow this command for this agent from now on")
+                            .clicked()
+                        {
                             answered = Some((approval.id, Answer::AlwaysAllow));
                         }
-                        if ui.button("Deny").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Deny").clicked() {
                             answered = Some((approval.id, Answer::Deny));
                         }
                     }
                     chat::Source::Agent { options, .. } => {
                         for option in options {
-                            if ui.button(&option.name).clicked() {
+                            if pcbcraft_chrome::controls::button(ui, &option.name).clicked() {
                                 answered = Some((approval.id, Answer::Option(option.id.clone())));
                             }
                         }
-                        if ui.button("Cancel").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Cancel").clicked() {
                             answered = Some((approval.id, Answer::Deny));
                         }
                     }
@@ -682,11 +685,11 @@ impl Assistant {
                     .on_disabled_hover_text(format!("Install with: {install}"));
             }
             ui.separator();
-            if ui.button("Add agent…").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "Add agent…").clicked() {
                 self.settings_request = Some(SettingsRequest::Add(Box::default()));
                 ui.close();
             }
-            if ui.button("AI settings…").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "AI settings…").clicked() {
                 self.settings_request = Some(SettingsRequest::Settings);
                 ui.close();
             }
@@ -700,12 +703,12 @@ impl Assistant {
         }
         ui.horizontal_wrapped(|ui| {
             if self.chat.connected() {
-                if ui.button("Disconnect").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Disconnect").clicked() {
                     self.chat.disconnect();
                 }
             } else {
                 let label = if matches!(self.chat.state, State::Failed(_)) { "Retry" } else { "Connect" };
-                if ui.add_enabled(current.is_some(), egui::Button::new(label)).clicked() {
+                if pcbcraft_chrome::controls::enabled_button(ui, current.is_some(), label).clicked() {
                     self.connect(ui.ctx());
                 }
             }
@@ -721,7 +724,7 @@ impl Assistant {
                 ui.horizontal(|ui| {
                     ui.label("Sign in to continue.");
                     // A terminal or environment sign-in happens outside; the agent restarts to see it.
-                    if ui.button("Retry").on_hover_text("Restart the agent after signing in elsewhere").clicked() {
+                    if pcbcraft_chrome::controls::button(ui, "Retry").on_hover_text("Restart the agent after signing in elsewhere").clicked() {
                         self.connect(ui.ctx());
                     }
                 });
@@ -729,7 +732,7 @@ impl Assistant {
                     for method in methods {
                         match &method.kind {
                             craft_agents::acp::AuthKind::Agent => {
-                                if ui.button(&method.name).on_hover_text(&method.description).clicked() {
+                                if pcbcraft_chrome::controls::button(ui, &method.name).on_hover_text(&method.description).clicked() {
                                     self.chat.sign_in(&method.id);
                                 }
                             }
@@ -759,23 +762,31 @@ impl Assistant {
                 if self.chat.config.is_empty() {
                     if let Some((current, models)) = &self.chat.models {
                         let shown = models.iter().find(|m| &m.id == current).map_or(current.as_str(), |m| m.name.as_str());
-                        egui::ComboBox::from_id_salt("assistant_model").selected_text(format!("Model: {shown}")).show_ui(ui, |ui| {
-                            for m in models {
-                                if ui.selectable_label(&m.id == current, &m.name).on_hover_text(&m.description).clicked() {
-                                    model = Some(m.id.clone());
+                        pcbcraft_chrome::controls::Choice::from_id_salt("assistant_model")
+                            .selected_text(format!("Model: {shown}"))
+                            .show_ui(ui, |ui| {
+                                for m in models {
+                                    if ui.selectable_label(&m.id == current, &m.name).on_hover_text(&m.description).clicked() {
+                                        model = Some(m.id.clone());
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .accessible_name("Assistant model");
                     }
                     if let Some((current, modes)) = &self.chat.modes {
                         let shown = modes.iter().find(|(id, _)| id == current).map_or(current.as_str(), |(_, name)| name.as_str());
-                        egui::ComboBox::from_id_salt("assistant_mode").selected_text(format!("Mode: {shown}")).show_ui(ui, |ui| {
-                            for (id, name) in modes {
-                                if ui.selectable_label(id == current, name).clicked() {
-                                    mode = Some(id.clone());
+                        pcbcraft_chrome::controls::Choice::from_id_salt("assistant_mode")
+                            .selected_text(format!("Mode: {shown}"))
+                            .show_ui(ui, |ui| {
+                                for (id, name) in modes {
+                                    if ui.selectable_label(id == current, name).clicked() {
+                                        mode = Some(id.clone());
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .accessible_name("Assistant permission mode");
                     }
                 }
                 for option in &self.chat.config {
@@ -784,17 +795,18 @@ impl Assistant {
                         .iter()
                         .find(|choice| choice.value == option.current_value)
                         .map_or(option.current_value.as_str(), |choice| choice.name.as_str());
-                    egui::ComboBox::from_id_salt(("assistant_option", &option.id)).selected_text(format!("{}: {shown}", option.name)).show_ui(
-                        ui,
-                        |ui| {
+                    pcbcraft_chrome::controls::Choice::from_id_salt(("assistant_option", &option.id))
+                        .selected_text(format!("{}: {shown}", option.name))
+                        .show_ui(ui, |ui| {
                             for choice in &option.options {
                                 let row = ui.selectable_label(choice.value == option.current_value, &choice.name);
                                 if row.on_hover_text(&choice.description).clicked() {
                                     chosen = Some((option.id.clone(), choice.value.clone(), option.category == "model"));
                                 }
                             }
-                        },
-                    );
+                        })
+                        .response
+                        .accessible_name(option.name.clone());
                 }
             });
         });
@@ -818,7 +830,7 @@ impl Assistant {
     fn composer(&mut self, ui: &mut Ui, _session: &Session, can_edit: bool, has_document: bool) {
         let running = self.chat.state == State::Running;
         let can_send = has_document && can_edit && self.chat.state == State::Ready && !self.draft.trim().is_empty();
-        let draft_id = egui::Id::new("assistant_draft_input");
+        let draft_id = egui::Id::unique("assistant_draft_input");
         let enter = can_send
             && ui.memory(|memory| memory.has_focus(draft_id))
             && ui.input_mut(|input| input.modifiers == egui::Modifiers::NONE && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
@@ -835,11 +847,11 @@ impl Assistant {
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if running {
-                if ui.button("Stop").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Stop").clicked() {
                     self.chat.stop();
                 }
                 ui.spinner();
-            } else if ui.add_enabled(can_send, egui::Button::new("Send")).on_hover_text("Send (Enter)").clicked() || enter {
+            } else if pcbcraft_chrome::controls::enabled_button(ui, can_send, "Send").on_hover_text("Send (Enter)").clicked() || enter {
                 let text = self.draft.trim().to_owned();
                 if self.chat.send(&text) {
                     self.draft.clear();
@@ -890,7 +902,7 @@ fn conversation_item(ui: &mut Ui, item: &Item, agent: &str) {
                 Some(craft_agents::acp::ToolStatus::InProgress) => "Running",
                 Some(craft_agents::acp::ToolStatus::Pending) | None => "Waiting",
             };
-            egui::CollapsingHeader::new(format!("{title} · {status}")).id_salt(("assistant_tool", id)).show(ui, |ui| {
+            pcbcraft_chrome::controls::collapsing(ui, ("assistant_tool", id), &format!("{title} · {status}"), false, None, |ui| {
                 if let Some(input) = input {
                     ui.monospace(input.to_string().chars().take(MAX_TOOL_DETAIL).collect::<String>());
                 }

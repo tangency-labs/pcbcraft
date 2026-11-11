@@ -5,6 +5,23 @@ use crate::{Tokens, workspace::ToolIcon};
 use egui::{Color32, Painter, Pos2, Rect, Vec2};
 use std::hash::{Hash, Hasher};
 
+/// The shared ribbon reserves an icon slot while PCBcraft paints its qualified command glyph.
+pub(crate) const HOST_PAINTED: &str = "pcbcraft-host-painted";
+
+/// Extend the shared icon set with an empty, explicitly registered host-painted slot. The
+/// pinned ribbon always draws an icon; registering this slot avoids its unknown-icon marker.
+pub(crate) fn install() {
+    use solidcraft_ui_kit::icons::{IconExtension, IconSet};
+    static ICONS: IconSet = IconSet::extended(
+        solidcraft_look::icons::DATA,
+        IconExtension {
+            masters: &[(HOST_PAINTED, "flat", "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\"></svg>")],
+            ..IconExtension::NONE
+        },
+    );
+    solidcraft_ui_kit::icons::install(&ICONS);
+}
+
 /// Return a registered master; other existing chrome glyphs retain their native painter.
 fn source(icon: ToolIcon) -> Option<(&'static str, &'static str)> {
     macro_rules! svg {

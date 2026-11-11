@@ -46,7 +46,7 @@ pub fn minimized(ctx: &Context, workspace: Rect) -> bool {
     let t = Tokens::get();
     let rect = entry_bounds(workspace);
     let width = rect.width();
-    Area::new(egui::Id::new("assistant_minimized"))
+    Area::new(egui::Id::unique("assistant_minimized"))
         .fixed_pos(rect.min)
         .constrain_to(workspace)
         .default_size(vec2(width, ENTRY_HEIGHT))
@@ -73,17 +73,14 @@ pub fn drawer(ctx: &Context, workspace: Rect, dock: &mut Dock, status: &str, rea
     let bounds = workspace.shrink(t.space_12);
     let rect = drawer_bounds(workspace, *dock);
     let left = dock.left;
-    let shown = Area::new(egui::Id::new("assistant_drawer"))
+    let shown = Area::new(egui::Id::unique("assistant_drawer"))
         .fixed_pos(rect.min)
         .movable(false)
         .constrain_to(workspace)
         .default_size(rect.size())
         .order(Order::Foreground)
         .show(ctx, |ui| {
-            Frame::new()
-                .fill(t.panel)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(t.radius_lg)
+            solidcraft_ui_kit::panel_host_frame(ctx, true)
                 .inner_margin(Margin::same(t.space_12 as i8))
                 .show(ui, |ui| {
                     let inset = 2.0 * (t.space_12 + 1.0);
@@ -99,7 +96,7 @@ pub fn drawer(ctx: &Context, workspace: Rect, dock: &mut Dock, status: &str, rea
     let edge = if left { rect.right() } else { rect.left() };
     let grip = Rect::from_center_size(egui::pos2(edge, rect.center().y), vec2(t.space_8, rect.height()));
     // Keep the resize grip on the panel layer so it wins over the schematic canvas.
-    Area::new(egui::Id::new("assistant_resize_grip")).fixed_pos(grip.min).movable(false).order(Order::Foreground).show(ctx, |ui| {
+    Area::new(egui::Id::unique("assistant_resize_grip")).fixed_pos(grip.min).movable(false).order(Order::Foreground).show(ctx, |ui| {
         let (_, resize) = ui.allocate_exact_size(grip.size(), Sense::drag());
         if resize.hovered() || resize.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -157,7 +154,7 @@ fn header(ui: &mut Ui, status: &str, ready: bool, dock: Option<(&mut Dock, Rect)
         }
         let title = ui.label(egui::RichText::new("Assistant").font(crate::fonts::semibold(t.font_button)));
         if let Some((dock, bounds)) = dock {
-            let drag = ui.interact(grip.union(title.rect), ui.id().with("assistant_dock"), Sense::drag());
+            let drag = ui.interact(grip.union(title.rect), ui.scope_id().with("assistant_dock"), Sense::drag());
             dock_drag(ui, &drag, dock, bounds);
         }
         if size.x >= 275.0 {
@@ -193,7 +190,7 @@ fn dock_drag(ui: &Ui, drag: &egui::Response, dock: &mut Dock, bounds: Rect) {
         let t = Tokens::get();
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         let target = dock_bounds(bounds, Dock { left, ..*dock });
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(Order::Tooltip, egui::Id::new("assistant_dock_preview")));
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(Order::Tooltip, egui::Id::unique("assistant_dock_preview")));
         painter.rect(target, t.radius_lg, t.accent.gamma_multiply(0.18), Stroke::new(2.0, t.accent), StrokeKind::Inside);
         painter.text(
             target.center(),
@@ -244,12 +241,9 @@ fn action_button(ui: &mut Ui, action: Action, label: &str, tooltip: &str) -> Opt
 /// Allocate a compact, labelled button shared by the toolbar and window header.
 fn icon_target(ui: &mut Ui, label: &str, tooltip: &str, active: bool) -> (Rect, egui::Response) {
     let t = Tokens::get();
-    let (rect, response) = ui.allocate_exact_size(vec2(t.control_height, t.control_height), Sense::click());
-    let response = response.on_hover_text(tooltip);
-    if active || response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(rect, t.radius_sm, icon_fill(&response, t, active));
-    }
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    let (_, rect) = ui.allocate_space(vec2(t.control_height, t.control_height));
+    let response = crate::controls::glyph_target(ui, ui.scope_id().with(("assistant_action", label)), rect, label, ui.is_enabled(), active)
+        .on_hover_text(tooltip);
     (rect, response)
 }
 
@@ -264,22 +258,19 @@ fn icon_fill(response: &egui::Response, t: Tokens, active: bool) -> egui::Color3
     }
 }
 
-/// Render the compact SolidCraft status pill using the local theme roles.
+/// Render the shared Assistant status pill using its ready or neutral semantic tone.
 fn badge(ui: &mut Ui, label: &str, ready: bool) {
-    let t = Tokens::get();
-    let (ink, fill) = if ready { (t.text, t.accent_soft) } else { (t.text_dim, t.panel_header) };
-    let font = FontId::proportional(t.font_small);
-    let width = ui.painter().layout_no_wrap(label.to_owned(), font.clone(), ink).size().x + t.space_12;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_6), Sense::hover());
-    ui.painter().rect_filled(rect, t.radius_lg, fill);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), label));
+    solidcraft_ui_kit::assistant_badge(
+        ui,
+        label,
+        if ready { solidcraft_ui_kit::AssistantTone::Success } else { solidcraft_ui_kit::AssistantTone::Neutral },
+    );
 }
 
 /// Render the launcher icon, title and up chevron inside one accessible hit target.
 fn launcher(ui: &mut Ui, width: f32, t: Tokens) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(width, ENTRY_HEIGHT), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Expand Assistant"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Expand Assistant"));
     let painter = ui.painter();
     let fill = if response.hovered() || response.has_focus() { t.hover } else { t.panel };
     painter.rect(rect, t.radius_lg, fill, Stroke::new(1.0, t.border), StrokeKind::Inside);
@@ -299,16 +290,10 @@ fn chevron(painter: &egui::Painter, center: Pos2, direction: f32, ink: egui::Col
 
 /// Draw the agent switcher. The caller supplies the available agents and handles selection.
 pub fn agent_switcher(ui: &mut Ui, label: &str, enabled: bool, add: impl FnOnce(&mut Ui)) {
-    let t = Tokens::get();
     ui.add_enabled_ui(enabled, |ui| {
-        let inactive = &mut ui.visuals_mut().widgets.inactive;
-        inactive.weak_bg_fill = t.field;
-        inactive.bg_stroke = Stroke::new(1.0, t.border);
-        inactive.corner_radius = egui::CornerRadius::same(t.control_radius);
-        egui::ComboBox::from_id_salt("assistant_agent")
+        crate::controls::Choice::from_id_salt("assistant_agent")
             .selected_text(label)
             .width(ui.available_width().min(260.0))
-            .icon(move |ui, rect, _, open| chevron(ui.painter(), rect.center(), if open { -1.0 } else { 1.0 }, t.text_dim))
             .show_ui(ui, add)
             .response
             .on_hover_text("Choose an agent");
@@ -329,26 +314,19 @@ fn paint_glyph(painter: &egui::Painter, center: Pos2, ink: egui::Color32, fill: 
     }
 }
 
-/// Pin the input and actions in a darker band below the scrolling conversation.
+/// Pin input and actions in the shared composer surface below the scrolling conversation.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn composer(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    let t = Tokens::get();
-    let frame =
-        Frame::new().fill(t.app_bar).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(t.space_8 as i8));
-    egui::Panel::bottom("assistant_composer").resizable(false).show_separator_line(false).frame(frame).show(ui, add);
+    let focused = ui.memory(|memory| memory.has_focus(egui::Id::unique("assistant_draft_input")));
+    egui::Panel::bottom("assistant_composer").resizable(false).show_separator_line(false).frame(Frame::NONE).show(ui, |ui| {
+        solidcraft_ui_kit::assistant_composer(ui, focused, add);
+    });
 }
 
 /// Place the user's message in a right-aligned bubble within the conversation.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn user_bubble(ui: &mut Ui, message: &str) {
-    let t = Tokens::get();
-    let width = ui.available_width() * 0.86;
-    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-        Frame::new()
-            .fill(t.accent_soft)
-            .corner_radius(egui::CornerRadius { se: t.radius_sm, ..egui::CornerRadius::same(t.radius_lg) })
-            .inner_margin(Margin::same(t.space_8 as i8))
-            .show(ui, |ui| {
-                ui.set_max_width((width - t.space_16).max(0.0));
-                ui.add(egui::Label::new(egui::RichText::new(message).color(t.text)).wrap());
-            });
+    solidcraft_ui_kit::assistant_bubble(ui, |ui| {
+        ui.add(egui::Label::new(message).wrap());
     });
 }

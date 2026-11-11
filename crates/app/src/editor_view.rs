@@ -602,7 +602,7 @@ impl EditorView {
 
     /// Scope widgets to their document; captured actions separately validate the input epoch.
     pub(super) fn widget_id(&self) -> egui::Id {
-        egui::Id::new((self.id, self.binding))
+        egui::Id::unique((self.id, self.binding))
     }
 
     /// Capture input only while this view is bound to its current document opening.
@@ -659,9 +659,12 @@ impl EditorView {
         self.schematic.move_requested = false;
     }
 
-    /// Invalidate captured input on focus or host transitions, retaining both cameras.
+    /// Invalidate captured input and stop wheel animation on focus or host transitions,
+    /// retaining the displayed transforms of both cameras.
     pub(super) fn release_input(&mut self) {
         self.cancel_gesture();
+        self.camera.cancel_zoom();
+        self.parked_camera.cancel_zoom();
         for panel in &mut self.panels {
             panel.cancel_drag();
         }

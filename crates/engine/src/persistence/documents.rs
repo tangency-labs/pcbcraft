@@ -37,6 +37,7 @@ const TRACK_BOARD_FORMAT: &str = "pcbcraft-board/12";
 const VIA_BOARD_FORMAT: &str = "pcbcraft-board/13";
 const SIDE_BOARD_FORMAT: &str = "pcbcraft-board/14";
 const REFERENCE_BOARD_FORMAT: &str = "pcbcraft-board/15";
+const STROKED_BOARD_FORMAT: &str = "pcbcraft-board/16";
 
 /// Relative portable paths and exact document bytes; folders carry no hash manifest.
 pub type Documents = BTreeMap<String, Vec<u8>>;
@@ -310,24 +311,31 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
+    let stroked = board.format == STROKED_BOARD_FORMAT;
+    let physical_graphics = board.graphics.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some()));
+    if stroked != physical_graphics {
+        return Err("board.json: physical graphic strokes require format 16, which requires at least one".into());
+    }
     let sided = board.format == SIDE_BOARD_FORMAT;
     let references = board.format == REFERENCE_BOARD_FORMAT;
-    let tracked = matches!(board.format.as_str(), TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT | REFERENCE_BOARD_FORMAT);
+    let tracked =
+        matches!(board.format.as_str(), TRACK_BOARD_FORMAT | VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT | REFERENCE_BOARD_FORMAT | STROKED_BOARD_FORMAT);
     if board.tracks.as_ref().is_some_and(Vec::is_empty) || board.vias.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
     }
     if (board.format == VIA_BOARD_FORMAT && board.vias.is_none())
-        || (board.vias.is_some() && !matches!(board.format.as_str(), VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT | REFERENCE_BOARD_FORMAT))
+        || (board.vias.is_some()
+            && !matches!(board.format.as_str(), VIA_BOARD_FORMAT | SIDE_BOARD_FORMAT | REFERENCE_BOARD_FORMAT | STROKED_BOARD_FORMAT))
     {
         return Err("board.json: vias require board format 13 or later, and format 13 requires at least one via".into());
     }
     if (board.format == TRACK_BOARD_FORMAT && board.tracks.is_none()) || (!tracked && board.tracks.is_some()) {
         return Err("board.json: tracks require board format 12 or later, and format 12 requires at least one track".into());
     }
-    if !references && sided != board.footprints.iter().any(|footprint| footprint.bottom) {
+    if !references && !stroked && sided != board.footprints.iter().any(|footprint| footprint.bottom) {
         return Err("board.json: bottom-side footprints require board format 14 or later, and format 14 requires at least one".into());
     }
-    if references != board.footprints.iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some()) {
+    if !stroked && references != board.footprints.iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some()) {
         return Err("board.json: footprint reference offsets and print overrides require board format 15, which requires at least one".into());
     }
     if !tracked && matches!(board.format.as_str(), BASELINE_BOARD_FORMAT | INTENT_BOARD_FORMAT) != board.baseline.is_some() {
@@ -393,6 +401,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | VIA_BOARD_FORMAT
             | SIDE_BOARD_FORMAT
             | REFERENCE_BOARD_FORMAT
+            | STROKED_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
@@ -409,6 +418,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | VIA_BOARD_FORMAT
                 | SIDE_BOARD_FORMAT
                 | REFERENCE_BOARD_FORMAT
+                | STROKED_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
@@ -427,6 +437,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("board.json: layer graphics require board format 9".into());
     }
     let setup = match (board.format.as_str(), board.setup) {
+        (STROKED_BOARD_FORMAT, None) => None,
+        (STROKED_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (REFERENCE_BOARD_FORMAT, None) => None,
         (REFERENCE_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (SIDE_BOARD_FORMAT, None) => None,
@@ -977,7 +989,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
     let physical = !board.definitions.is_empty();
     let references = board.footprints().iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some());
     if let Some(setup) = setup {
-        let format = if references {
+        let format = if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
+            STROKED_BOARD_FORMAT
+        } else if references {
             REFERENCE_BOARD_FORMAT
         } else if board.footprints().iter().any(|footprint| footprint.bottom) {
             SIDE_BOARD_FORMAT
@@ -1027,7 +1041,9 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         }
         bytes.extend_from_slice(b"      ]\n    }\n  },\n");
     } else {
-        let format = if references {
+        let format = if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
+            STROKED_BOARD_FORMAT
+        } else if references {
             REFERENCE_BOARD_FORMAT
         } else if board.footprints().iter().any(|footprint| footprint.bottom) {
             SIDE_BOARD_FORMAT

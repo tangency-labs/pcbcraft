@@ -40,7 +40,7 @@ recovery path if a platform clipboard service fails.
 
 ## Paste Options
 
-**Ctrl+Shift+V** or Capture → Modify → **Paste Options…** offers original
+**Ctrl+Shift+V** or Capture → Clipboard → **Paste Options…** offers original
 reference preservation, a net-name suffix, and placement at the original model
 coordinates. Keeping references rejects the entire paste if any reference
 already exists. A suffix changes copied local/global label names and power
@@ -238,6 +238,12 @@ an explicit `board`, `expected_revision`, and `items`, whose optional arrays are
 Copy/Cut return portable `clipboard` text even with `inspect:false`; MCP does not
 operate the system clipboard. Mixed cuts and deletes create one undo step.
 Removing physical objects retains their schematic counterparts.
+
+Board fragments with physical graphic strokes use `pcbcraft-clipboard/2` and
+preserve each `stroke_nm` and layer role. Fragments without stroked graphics
+retain version 1. Version 2 is distinguished by `kind`, independently of the
+existing hierarchical schematic payload. Both board versions are read; older
+clients reject the new payload rather than dropping its widths.
 
 A `kind: "board"` envelope carries exact placed native packages and pad maps,
 physical geometry, used layer identities/roles, and one native schematic

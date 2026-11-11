@@ -202,7 +202,7 @@ impl PcbApp {
                             form::choice(
                                 ui,
                                 "Library",
-                                ui.id().with("footprint_library"),
+                                ui.scope_id().with("footprint_library"),
                                 &mut edit.library,
                                 &std::iter::once(("", "All libraries".into()))
                                     .chain(
@@ -238,8 +238,8 @@ impl PcbApp {
                             ui.add(form::input(&mut edit.query).desired_width(ui.available_width()).hint_text("Name or package"))
                                 .labelled_by(label.id);
                             ui.horizontal_wrapped(|ui| {
-                                ui.checkbox(&mut edit.compatible, "Match pin count");
-                                egui::ComboBox::from_id_salt("mounting_filter")
+                                pcbcraft_chrome::controls::checkbox(ui, &mut edit.compatible, "Match pin count");
+                                pcbcraft_chrome::controls::Choice::from_id_salt("mounting_filter")
                                     .selected_text(match edit.mounting {
                                         Mounting::All => "All mounting types",
                                         Mounting::Surface => "Surface mount",
@@ -251,7 +251,7 @@ impl PcbApp {
                                         ui.selectable_value(&mut edit.mounting, Mounting::Through, "Through hole");
                                     })
                                     .response
-                                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Mounting type"));
+                                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Mounting type"));
                             });
                             let pin_count = project.components().find(|c| c.id() == edit.component).map(|c| c.definition.pins().len());
                             let matches: Vec<_> = catalog.iter().filter(|d| edit.matches(d, pin_count)).cloned().collect();
@@ -260,7 +260,7 @@ impl PcbApp {
                             egui::ScrollArea::vertical().id_salt("package_results").max_height(height).show(ui, |ui| {
                                 if matches.is_empty() {
                                     ui.label("No footprints match");
-                                    if ui.button("Clear filters").clicked() {
+                                    if pcbcraft_chrome::controls::button(ui, "Clear filters").clicked() {
                                         edit.query.clear();
                                         edit.library.clear();
                                         edit.compatible = false;
@@ -321,7 +321,7 @@ impl PcbApp {
                                                     || format!("Terminal {}", pin.number),
                                                     |name| format!("Terminal {} · {name}", pin.number),
                                                 ),
-                                                ui.id().with((&edit.component, &pin.number)),
+                                                ui.scope_id().with((&edit.component, &pin.number)),
                                                 mapped,
                                                 &options,
                                             );

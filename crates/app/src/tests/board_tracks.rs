@@ -253,6 +253,7 @@ fn ctrl_bypasses_the_routing_grid_but_keeps_copper_contacts() {
 fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     let mut h = routable();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Layout");
     click(&mut h, "Route tracks on the active copper layer");
     let start = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
     click_route(&mut h, start);
@@ -266,6 +267,7 @@ fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "cancelled routes edit nothing");
 
     h.state_mut().views.active.board.tracks.width_nm = 500_000;
+    click(&mut h, "Layout");
     click(&mut h, "Route tracks on the active copper layer");
     for x in [2_540_000, 5_080_000, 7_620_000] {
         click_route(&mut h, Point { x_nm: x, y_nm: 2_540_000 });
@@ -344,6 +346,7 @@ fn clicking_a_track_selects_it_and_delete_removes_it() {
 #[test]
 fn routing_requires_a_visible_copper_layer() {
     let mut h = routable();
+    click(&mut h, "Layout");
     click(&mut h, "Activate layer Board Outline");
     h.key_press(Key::X);
     h.run();
@@ -506,7 +509,8 @@ fn place_via_tool_drops_vias_until_escape() {
     h.key_press_modifiers(Modifiers { ctrl: true, command: true, shift: true, ..Modifiers::NONE }, Key::X);
     h.run();
     assert!(h.state().views.active.board.tracks.via_tool);
-    assert!(!h.get_by_label("Place vias").accesskit_node().is_disabled(), "Place › Via is a working button");
+    click(&mut h, "Layout");
+    assert!(!h.get_by_label("Place vias").accesskit_node().is_disabled(), "Route › Via is a working button");
     let revision = h.state().session.revision();
     click_route(&mut h, free);
     let near_pad = at(&h, pad) + egui::vec2(3., 2.);
@@ -651,6 +655,7 @@ fn drc_lists_findings_focuses_them_and_goes_stale_after_edits() {
     let mut h = routable();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
+    click(&mut h, "Analyze");
     click(&mut h, "Run design rules check");
     assert_eq!(h.state().session.revision(), revision, "DRC edits nothing");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
@@ -707,6 +712,7 @@ fn mixed_via_sizes_are_read_only_in_properties() {
 #[test]
 fn outputs_export_one_archive_of_fabrication_files() {
     let mut h = routable();
+    click(&mut h, "Manufacture");
     click(&mut h, "Generate fabrication outputs");
     assert!(h.state().message.as_deref().is_some_and(|m| m.contains("closed Board Outline")), "{:?}", h.state().message);
     let outline = layer_named(&h, "Board Outline");
@@ -718,6 +724,7 @@ fn outputs_export_one_archive_of_fabrication_files() {
     );
     h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Manufacture");
     click(&mut h, "Generate fabrication outputs");
     assert_eq!(h.state().message, None);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "exporting edits nothing");
@@ -731,6 +738,7 @@ fn outputs_export_one_archive_of_fabrication_files() {
     h.run();
     assert!(!h.state().fabrication_exports.busy());
     assert!(h.query_by_label("Saved fabrication outputs").is_some(), "the board status bar shows file results");
+    click(&mut h, "Manufacture");
     click(&mut h, "Generate fabrication outputs");
     assert!(h.state().fabrication_exports.busy());
     assert!(h.state().file_notice.is_none(), "a new attempt clears the previous success notice");
@@ -772,7 +780,7 @@ fn right_click_cancels_and_ribbon_starts_copper_moves() {
     assert!(h.state().views.active.board.tracks.busy(), "the ribbon started a copper move");
 }
 
-/// Design › Flip view mirrors this view left-to-right around the centered point, keeps the zoom,
+/// View › Flip view mirrors this view left-to-right around the centered point, keeps the zoom,
 /// and maps pointer picks back to the same model points, so clicks still select what they hit.
 #[test]
 fn flip_view_mirrors_drawing_and_picking_without_editing() {
@@ -783,6 +791,7 @@ fn flip_view_mirrors_drawing_and_picking_without_editing() {
     let revision = h.state().session.revision();
     let (left_before, right_before) = (at(&h, left), at(&h, right));
     assert!(left_before.x < right_before.x);
+    click(&mut h, "View");
     click(&mut h, "View the board from below");
     assert!(h.state().views.active.camera.mirrored());
     let (left_after, right_after) = (at(&h, left), at(&h, right));
@@ -797,13 +806,16 @@ fn flip_view_mirrors_drawing_and_picking_without_editing() {
     h.run();
     // Flip back before selecting: selection changes the Properties card, which moves the
     // uncovered canvas center that flipping reflects about.
+    click(&mut h, "View");
     click(&mut h, "View the board from below");
     assert!(!h.state().views.active.camera.mirrored());
     assert!((at(&h, left) - left_before).length() < 0.5, "flipping back restores the view");
+    click(&mut h, "View");
     click(&mut h, "View the board from below");
     let middle = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
     click_canvas_at(&mut h, middle);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]), "picking follows the mirror");
+    click(&mut h, "View");
     click(&mut h, "View the board from below");
     assert!(!h.state().views.active.camera.mirrored());
     let ctx = h.ctx.clone();
@@ -861,6 +873,7 @@ fn measure_preserves_mixed_selection_against_delete_and_cut() {
     assert!(!h.state().views.active.board.selection.is_empty());
     assert!(!h.state().views.active.board.tracks.selected.is_empty());
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Analyze");
     click(&mut h, "Measure distance");
     h.key_press(Key::Delete);
     h.run();
@@ -1260,7 +1273,7 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
     assert!(!std::sync::Arc::ptr_eq(&before_open, &reopened));
 }
 
-/// Modify › Align to Top aligns the selected footprints in one edit; Distribute needs three.
+/// Align › Align to Top aligns the selected footprints in one edit; Distribute needs three.
 #[test]
 fn modify_menu_aligns_selected_footprints() {
     let mut h = routable();

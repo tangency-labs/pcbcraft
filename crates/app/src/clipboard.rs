@@ -51,11 +51,18 @@ impl PcbApp {
         let text = ctx.input_mut(|input| {
             let mut text = None;
             input.events.retain(|event| {
-                if let Event::Paste(value) = event {
-                    text = Some(value.clone());
-                    false
-                } else {
-                    true
+                match event {
+                    Event::Paste(value) => {
+                        text = Some(value.clone());
+                        false
+                    }
+                    Event::PasteImage(_) => {
+                        // Image-only reads complete the text request without retaining its
+                        // captured destination or converting bitmap pixels into project data.
+                        text = Some(String::new());
+                        false
+                    }
+                    _ => true,
                 }
             });
             text
@@ -102,7 +109,10 @@ impl PcbApp {
         let events = ctx.input_mut(|input| {
             let mut clipboard = Vec::new();
             input.events.retain(|event| {
-                if matches!(event, Event::Copy | Event::Cut | Event::Paste(_)) {
+                if matches!(event, Event::PasteImage(_)) {
+                    clipboard.push(Event::Paste(String::new()));
+                    false
+                } else if matches!(event, Event::Copy | Event::Cut | Event::Paste(_)) {
                     clipboard.push(event.clone());
                     false
                 } else {
@@ -395,20 +405,20 @@ impl PcbApp {
                     ui.label(pcbcraft_chrome::shell::dim("Relocation retains the child sheets' current content, references and net names."));
                 }
             }
-            ui.checkbox(&mut draft.placement.options.preserve_references, "Keep original references");
+            pcbcraft_chrome::controls::checkbox(ui, &mut draft.placement.options.preserve_references, "Keep original references");
             ui.add_enabled_ui(!draft.placement.options.reuse_sheets, |ui| {
                 pcbcraft_chrome::properties::text(ui, "Net-name suffix", &mut draft.placement.options.net_name_suffix);
             });
             ui.label(pcbcraft_chrome::shell::dim(
                 "Named nets retain their names and may join existing nets. Add a suffix to keep the copied circuit separate.",
             ));
-            ui.checkbox(&mut draft.original, "Paste at original position");
+            pcbcraft_chrome::controls::checkbox(ui, &mut draft.original, "Paste at original position");
             if let Some(error) = &draft.error {
                 ui.label(pcbcraft_chrome::shell::error(error));
             }
             ui.horizontal(|ui| {
-                apply = ui.button("Paste").clicked();
-                cancel = ui.button("Cancel").clicked();
+                apply = pcbcraft_chrome::controls::button(ui, "Paste").clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if apply {
@@ -490,7 +500,7 @@ impl PcbApp {
             false,
             true,
             self.preferences.navigation,
-            self.preferences.grid_opacity_percent,
+            self.preferences.grid_opacity(false),
             false,
             false,
             self.preferences.units,

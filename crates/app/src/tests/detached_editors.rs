@@ -109,13 +109,16 @@ fn child_rect(peer: &Rc<RefCell<Peer>>, label: &str) -> Rect {
         .nodes
         .values()
         .find_map(|node| {
-            if node.label() != Some(label) {
+            if node.label().or_else(|| node.value()) != Some(label) {
                 return None;
             }
             let bounds = node.bounds()?;
             Some(Rect::from_min_max(pos2(bounds.x0 as f32, bounds.y0 as f32), pos2(bounds.x1 as f32, bounds.y1 as f32)))
         })
-        .unwrap_or_else(|| panic!("missing child control: {label}"))
+        .unwrap_or_else(|| {
+            let named: Vec<_> = peer.borrow().nodes.values().filter_map(|node| node.label().or_else(|| node.value())).map(str::to_owned).collect();
+            panic!("missing child control: {label}; available names: {named:?}")
+        })
 }
 
 /// Deliver focus to one host only, keeping its input stream independent of repaint order.
@@ -183,6 +186,20 @@ fn detached_browser_navigation_and_selection_stay_in_the_child_host() {
     h.run_steps(3);
     let at = child_rect(&peer, "Open in PCB layout").center();
     child_click_at(&mut h, &peer, at);
+    // Shared ribbon metrics leave less vertical room in this 760 pt child. Reveal the
+    // footprint row through the child's Browser, retaining its independent input stream.
+    let at = child_rect(&peer, "Board Board").center();
+    peer.borrow_mut().events.extend([
+        Event::PointerMoved(at),
+        Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -52.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    h.run_steps(5);
     let at = child_rect(&peer, "Footprint R1  R").center();
     child_click_at(&mut h, &peer, at);
     let child = h.state().views.hosts[&HostId(1)].focused;
@@ -745,6 +762,9 @@ fn closing_matching_or_mixed_windows_keeps_the_addressed_survivor() {
             if board {
                 let at = child_rect(&peer, "Choose workspace").center();
                 child_click_at(&mut h, &peer, at);
+                // egui 0.37 sizes a new popup in a hidden child pass. The harness only
+                // settles root repaints, so deliver the child's requested paint too.
+                h.run();
                 let at = child_rect(&peer, "PCB layout").center();
                 child_click_at(&mut h, &peer, at);
             }
@@ -1706,7 +1726,9 @@ fn detached_board_edge_preview_cancels_on_focus_loss_and_close() {
     let child = h.state().views.hosts[&HostId(1)].focused;
     let layer = child_rect(&peer, "Activate layer Board Outline").center();
     child_click_at(&mut h, &peer, layer);
-    let tool = child_rect(&peer, "Draw rectangle on Board Outline").center();
+    let draw = child_rect(&peer, "Draw").center();
+    child_click_at(&mut h, &peer, draw);
+    let tool = child_rect(&peer, "Draw rectangle on active layer").center();
     child_click_at(&mut h, &peer, tool);
     let origin = child_rect(&peer, "PCB canvas").center();
     child_click_at(&mut h, &peer, origin);
