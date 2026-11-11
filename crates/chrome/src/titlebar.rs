@@ -6,12 +6,12 @@ use crate::Tokens;
 
 /// Native window interactions share a layer raised above project modals in each viewport.
 pub(crate) fn interaction_layer() -> LayerId {
-    LayerId::new(Order::Foreground, Id::new("native-window-interactions"))
+    LayerId::new(Order::Foreground, Id::unique("native-window-interactions"))
 }
 
 /// Keep native-grab recovery local to the viewport whose pointer the OS took over.
 fn native_grab_id(ctx: &egui::Context) -> Id {
-    Id::new(("native-window-grab", ctx.viewport_id()))
+    Id::unique(("native-window-grab", ctx.viewport_id()))
 }
 
 /// Hand ownership to the OS and remember that its grab may consume the pointer release.
@@ -47,7 +47,7 @@ pub(crate) fn drag_area(ui: &mut Ui, rect: Rect, region: &'static str) {
         return;
     }
     let native = ui.new_child(egui::UiBuilder::new().layer_id(interaction_layer()).max_rect(rect));
-    let response = native.interact(rect, ui.id().with(("window-drag", region)), Sense::click_and_drag());
+    let response = native.interact(rect, ui.scope_id().with(("window-drag", region)), Sense::click_and_drag());
     if response.double_clicked() {
         ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!is_maximized(ui)));
     } else if response.is_pointer_button_down_on() && ui.input(|input| input.pointer.button_pressed(PointerButton::Primary)) {
@@ -72,7 +72,7 @@ pub(crate) fn window_controls(ui: &mut Ui, t: Tokens, compact: bool) {
     ] {
         let width = if compact { t.space_24 } else { t.control_height };
         let (rect, response) = ui.allocate_exact_size(vec2(width, t.control_height), Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
         if response.hovered() || response.has_focus() {
             ui.painter().rect_filled(rect, t.radius_sm, t.hover);
         }
@@ -132,7 +132,7 @@ pub fn resize_window_edges(ui: &mut Ui) {
     ];
     let resize = ui.new_child(egui::UiBuilder::new().layer_id(interaction_layer()).max_rect(window));
     for (index, (min, max, direction, cursor)) in zones.into_iter().enumerate() {
-        let response = resize.interact(Rect::from_min_max(min, max), Id::new(("window-resize", index)), Sense::drag());
+        let response = resize.interact(Rect::from_min_max(min, max), Id::unique(("window-resize", index)), Sense::drag());
         if response.on_hover_cursor(cursor).drag_started_by(PointerButton::Primary) {
             begin_native_grab(&ctx, ViewportCommand::BeginResize(direction));
         }

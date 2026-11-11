@@ -1,8 +1,8 @@
 //! Shared workspace surfaces and tool buttons. Command state stays with the caller.
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Frame, Label, Layout, Margin, Panel, Pos2, Rect, Response, RichText, ScrollArea, Sense, Shape,
-    Stroke, Ui, WidgetInfo, WidgetType, pos2, vec2,
+    Align, Align2, Color32, CornerRadius, FontId, Frame, Label, Layout, Margin, Panel, Pos2, Rect, Response, RichText, Role, ScrollArea, Sense,
+    Shape, Stroke, Ui, WidgetInfo, pos2, vec2,
 };
 
 use crate::{Tokens, fonts, menu::CheckKind};
@@ -246,7 +246,7 @@ pub fn ribbon(
             ui.horizontal_top(|ui| {
                 if wide {
                     // Read before the tile can toggle it, so the picker knows the frame it opens on.
-                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id());
+                    let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
                     let tile = card(t, t.space_8)
                         .show(ui, |ui| {
                             workspace_tile(
@@ -265,12 +265,12 @@ pub fn ribbon(
                         ui.set_width(ui.available_width());
                         ui.set_min_height(height - 2.0 * (t.space_4 + 1.0));
                         if !wide {
-                            let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id());
+                            let was_open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
                             let tile = ui.small_button(format!("{workspace}    "));
                             let c = tile.rect.right_center() - vec2(t.space_6, 0.0);
                             ui.painter()
                                 .add(Shape::line(vec![c + vec2(-3.0, -1.5), c + vec2(0.0, 1.5), c + vec2(3.0, -1.5)], Stroke::new(1.0, t.text_dim)));
-                            tile.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Choose workspace"));
+                            tile.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Choose workspace"));
                             picked = picker(ui, &tile, workspaces, !was_open);
                         }
                         ui.spacing_mut().item_spacing.y = 1.0;
@@ -292,7 +292,7 @@ pub fn ribbon(
                                         vec2(t.space_24, t.space_24),
                                         if tool.enabled { Sense::click() } else { Sense::hover() },
                                     );
-                                    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, tool.enabled, tool.active, tool.description));
+                                    response.widget_info(|| WidgetInfo::selected(Role::Button, tool.enabled, tool.active, tool.description));
                                     if tool.active {
                                         ui.painter().rect_filled(rect, t.control_radius, t.accent_soft);
                                     } else if response.hovered() {
@@ -331,8 +331,8 @@ fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32
         vec2(if workspace.len() > 10 { WORKSPACE_WIDTH + 32.0 } else { WORKSPACE_WIDTH } - 2.0 * inset, height - 2.0 * inset),
         Sense::click(),
     );
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Choose workspace"));
-    let open = egui::Popup::is_id_open(ui.ctx(), picker_id());
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Choose workspace"));
+    let open = egui::Popup::is_id_open(ui.ctx(), picker_id(ui.ctx()));
     let center = rect.center();
     let p = ui.painter();
     if open || response.hovered() || response.has_focus() {
@@ -355,8 +355,9 @@ fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32
     response.on_hover_text("Choose workspace")
 }
 
-fn picker_id() -> egui::Id {
-    egui::Id::new("workspace_picker")
+/// Keep a picker in its native viewport when several hosts draw the same ribbon.
+fn picker_id(ctx: &egui::Context) -> egui::Id {
+    egui::Id::unique(("workspace_picker", ctx.viewport_id()))
 }
 
 /// Show the workspace picker under the tile while it's open. Clicking an available row, or
@@ -371,7 +372,7 @@ fn picker(ui: &Ui, tile: &Response, workspaces: Workspaces<'_>, opening: bool) -
         (t.form_card_width + t.form_label_width * 2.0 + t.space_24 + t.space_16 + t.space_6).min(ui.ctx().content_rect().width() - t.space_24);
     let height = (ui.ctx().content_rect().bottom() - tile.rect.bottom() - t.space_4).max(160.0);
     egui::Popup::from_toggle_button_response(tile)
-        .id(picker_id())
+        .id(picker_id(ui.ctx()))
         .kind(egui::PopupKind::Menu)
         .align(egui::RectAlign::BOTTOM_START)
         .align_alternatives(&[])
@@ -476,7 +477,7 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -
     let text_right = rect.right() - t.space_8 - action_width;
     let body = Rect::from_min_max(rect.min, pos2(text_right, rect.bottom()));
     let response = ui.interact(body, allocated.id.with("workspace"), if available { Sense::click() } else { Sense::hover() });
-    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, available, entry.current, entry.title));
+    response.widget_info(|| WidgetInfo::selected(Role::Button, available, entry.current, entry.title));
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     if entry.current || (available && (response.hovered() || response.has_focus())) {
         painter.rect_filled(rect, t.control_radius, soft);
@@ -533,7 +534,7 @@ fn workspace_row(ui: &mut Ui, entry: &Workspace<'_>, width: f32, native: bool) -
                 vec2(t.space_24, t.space_24),
             );
             let action = ui.interact(target, allocated.id.with(index), Sense::click());
-            action.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &label));
+            action.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
             if action.hovered() || action.has_focus() {
                 painter.rect_filled(target, t.control_radius, t.hover);
             }
@@ -554,7 +555,7 @@ fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool, wide: bool) -> Response 
     let galley = ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_body), t.text);
     let size = vec2(galley.size().x + 2.0 * if wide { t.space_8 } else { t.space_4 }, t.control_height - t.space_6);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, true, selected, title));
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, title));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if selected {
@@ -571,8 +572,8 @@ fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool, wide: bool) -> Response 
 /// Draw one Browser row with a stable `id`, so a press and its release stay on the same row
 /// while rows above it open or close. The disclosure arrow is its own target, labelled
 /// "Expand …" or "Collapse …": clicking it folds the row without clicking the row. Only the
-/// part right of the arrow highlights. Metrics follow PCBcraft Next's Browser rows; the separate
-/// arrow and row targets follow SolidCraft's `ui_kit/tree.rs`.
+/// part right of the arrow highlights when the row is selected. The kit draws the disclosure,
+/// while the row owns the PCBcraft glyph and any independent layer color target.
 pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
     let t = Tokens::get();
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), TREE_ROW_HEIGHT), Sense::hover());
@@ -585,15 +586,15 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
     let response = ui.interact(activation, id, Sense::click());
     let icon_response = editable.then(|| {
         let response = ui.interact(icon_rect, id.with("layer_color"), Sense::click());
-        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), format!("Change color for layer {}", row.label)));
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), format!("Change color for layer {}", row.label)));
         response
     });
-    response.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, row.selected, row.accessibility_label.unwrap_or(row.label)));
+    response.widget_info(|| WidgetInfo::selected(Role::Button, true, row.selected, row.accessibility_label.unwrap_or(row.label)));
     let fold = row.fold.map(|open| {
-        let fold = ui.interact(fold_rect, id.with("fold"), Sense::click());
         let action = if open { "Collapse" } else { "Expand" };
-        fold.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("{action} {}", row.label)));
-        (open, fold)
+        let mut arrow = ui.new_child(egui::UiBuilder::new().id_salt(id.with("fold")).max_rect(fold_rect));
+        arrow.set_clip_rect(arrow.clip_rect().intersect(fold_rect));
+        solidcraft_ui_kit::panel_disclosure_button_at(&mut arrow, fold_rect, open, &format!("{action} {}", row.label))
     });
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
@@ -606,16 +607,6 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
             p.rect_filled(icon_rect, t.radius_sm, t.hover);
         }
         let cy = rect.center().y;
-        if let Some((open, fold)) = &fold {
-            let ink = if fold.hovered() || fold.has_focus() { t.text } else { t.text_dim };
-            let c = fold_rect.center();
-            let points = if *open {
-                vec![c + vec2(-3.5, -2.0), c + vec2(0.0, 1.5), c + vec2(3.5, -2.0)]
-            } else {
-                vec![c + vec2(-2.0, -3.5), c + vec2(1.5, 0.0), c + vec2(-2.0, 3.5)]
-            };
-            p.add(Shape::line(points, Stroke::new(1.3, ink)));
-        }
         if let Some(icon) = row.icon {
             paint_tree_icon(p, icon, pos2(body.left() + TREE_ICON_CENTER, cy), TREE_ICON, t);
         }
@@ -624,10 +615,7 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: &TreeRow<'_>) -> TreeResponse {
         let galley = elided(p, row.label, font, t.text, (body.right() - t.space_6 - x).max(0.0));
         p.galley(pos2(x, cy - galley.size().y / 2.0), galley, t.text);
     }
-    let fold_clicked = fold.as_ref().is_some_and(|(_, fold)| fold.clicked());
-    if let Some((open, fold)) = fold {
-        fold.on_hover_text(if open { "Collapse branch" } else { "Expand branch" });
-    }
+    let fold_clicked = fold.is_some_and(|fold| fold.clicked());
     let response = if row.tip.is_empty() { response } else { response.on_hover_text(row.tip) };
     let icon_clicked = icon_response.as_ref().is_some_and(|response| response.clicked());
     if let Some(icon) = icon_response {
@@ -750,9 +738,9 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
     }
 
     let caption = Rect::from_min_size(pos2(rect.left(), rect.top() + RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP), vec2(width, caption_height));
-    let response = ui.interact(caption, ui.id().with(("ribbon_group", title)), Sense::click());
+    let response = ui.interact(caption, ui.scope_id().with(("ribbon_group", title)), Sense::click());
     // Named for what it opens, so it never reads as one of the group's actions.
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("{title} menu")));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("{title} menu")));
     let response = response.on_hover_text(format!("{title} actions"));
     if ui.is_rect_visible(caption) {
         let p = ui.painter();
@@ -801,7 +789,7 @@ pub fn layer_choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T
     if let Some((_, _, color)) = selected {
         layer_choice_patch(ui, result.response.rect, *color);
     }
-    result.response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, ui.is_enabled(), label));
+    result.response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, ui.is_enabled(), label));
     before != *value
 }
 
@@ -878,8 +866,8 @@ pub fn ribbon_separator(ui: &mut Ui) {
 fn tool_button(ui: &mut Ui, rect: Rect, tool: &RibbonTool<'_>) -> Response {
     let t = Tokens::get();
     let sense = if tool.enabled { Sense::click() } else { Sense::hover() };
-    let response = ui.interact(rect, ui.id().with(("ribbon_tool", tool.description)), sense);
-    response.widget_info(|| WidgetInfo::selected(WidgetType::Button, tool.enabled, tool.active, tool.description));
+    let response = ui.interact(rect, ui.scope_id().with(("ribbon_tool", tool.description)), sense);
+    response.widget_info(|| WidgetInfo::selected(Role::Button, tool.enabled, tool.active, tool.description));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if tool.active {
@@ -970,7 +958,7 @@ fn docked_card(ui: &mut Ui, panel: Panel, title: &str, bottom_clearance: f32, cl
 /// rectangle and whether the header was clicked, which should toggle `collapsed`. Inherits
 /// the host's enabled state, including when a project dialog lives in another native window.
 pub fn floating_card(ui: &Ui, id: &'static str, title: &str, area: Rect, collapsed: bool, add: impl FnOnce(&mut Ui)) -> (Rect, bool) {
-    floating_card_with_id(ui, egui::Id::new(id), title, area, collapsed, add)
+    floating_card_with_id(ui, egui::Id::unique(id), title, area, collapsed, add)
 }
 
 /// Render a floating card with an explicit host identity, allowing independent native windows.
@@ -1061,7 +1049,7 @@ fn card_header(ui: &mut Ui, title: &str, collapsed: bool) -> Response {
     let t = Tokens::get();
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), FLOATING_HEADER), Sense::click());
     let action = if collapsed { "Expand" } else { "Collapse" };
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("{action} {title}")));
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("{action} {title}")));
     let p = ui.painter();
     if response.hovered() || response.has_focus() {
         p.rect_filled(rect, t.radius_sm, t.hover);
@@ -1084,7 +1072,7 @@ fn card_contents(ui: &mut Ui, title: &str, max_body_height: f32, closable: bool,
             // Named after the card, so a screen reader can tell several cards apart.
             let close = closable && {
                 let close = ui.small_button("Close");
-                close.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, format!("Close {title}")));
+                close.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("Close {title}")));
                 close.clicked()
             };
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {

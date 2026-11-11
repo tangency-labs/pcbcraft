@@ -223,7 +223,7 @@ impl Panel {
                             let header_width = (width - floating_frame().total_margin().sum().x).min(ui.available_width());
                             let remaining = (header_width - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
                             let (header, response) = ui.allocate_exact_size(vec2(remaining, FLOATING_HEADER), Sense::drag());
-                            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), format!("Move {title}")));
+                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("Move {title}")));
                             super::drag_grip(ui.painter(), header);
                             let galley = super::elided(
                                 ui.painter(),
@@ -240,7 +240,7 @@ impl Panel {
                                 ui.painter().rect_filled(more_rect, t.radius_sm, t.hover);
                             }
                             ui.painter().text(more_rect.center(), Align2::CENTER_CENTER, "…", egui::FontId::proportional(t.font_button), t.text_dim);
-                            more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), format!("{title} position")));
+                            more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), format!("{title} position")));
                             egui::Popup::menu(&more).frame(menu::frame()).show(|ui| {
                                 for (position, label) in
                                     [(Position::Floating, "Float"), (Position::Left, "Dock left"), (Position::Right, "Dock right")]
@@ -256,7 +256,7 @@ impl Panel {
                             let (rect, response) = ui.allocate_exact_size(vec2(22.0, FLOATING_HEADER), Sense::click());
                             response.widget_info(|| {
                                 egui::WidgetInfo::labeled(
-                                    egui::WidgetType::Button,
+                                    egui::Role::Button,
                                     ui.is_enabled(),
                                     format!("{} {title}", if collapsed { "Expand" } else { "Collapse" }),
                                 )

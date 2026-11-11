@@ -16,9 +16,13 @@ pcbcraft-chrome = { path = "crates/chrome" }
 pcbcraft-engine = { path = "crates/engine" }
 pcbcraft-mcp = { path = "crates/mcp" }
 pcbcraft-storage = { path = "crates/storage" }
-eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "persistence"] }
-egui = "=0.36.2"
-egui_kittest = "=0.36.2"
+solidcraft-ui-kit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
+solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
+solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
+solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
+eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "persistence"] }
+egui = "=0.37.0"
+egui_kittest = "=0.37.0"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -43,3 +47,7 @@ codegen-units = 16
 # Local native-root lifetime fix; source and patch boundary are recorded in vendor/eframe/PATCH.md.
 [patch.crates-io]
 eframe = { path = "vendor/eframe" }
+
+# Shared viewport callbacks require SolidCraft's published renderer fixes.
+egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }
+winit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "f56114219b2d7f6d16de8dd58700479646948f8a" }

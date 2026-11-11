@@ -26,7 +26,7 @@ pub fn input(value: &mut String) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(value)
         .margin(egui::Margin::symmetric(t.space_8 as i8, t.space_4 as i8))
         .min_size(vec2(0., t.control_height))
-        .vertical_align(Align::Center)
+        .align(egui::Align2::LEFT_CENTER)
 }
 
 /// A single-line editable field with a stable accessible name, independent of label placement.
@@ -220,7 +220,7 @@ pub fn footprint_preview(ui: &mut Ui, label: &str) -> (egui::Rect, egui::Respons
     let t = Tokens::get();
     let height = if ui.available_width() > 360. { 320. } else { 240. };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
     ui.painter_at(rect).rect_filled(rect, t.radius_md, t.board_canvas);
     (rect.shrink(t.space_12), response)
 }
@@ -389,7 +389,7 @@ pub fn inline_text(
     let top = (anchor.center().y - height / 2.).clamp(canvas.top(), (canvas.bottom() - height).max(canvas.top()));
     let rect = egui::Rect::from_min_size(egui::pos2(left, top), vec2(width, height));
     let response = ui.put(rect, input(value).id(id).font(font).char_limit(2048));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
     if focus {
         response.request_focus();
         if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {

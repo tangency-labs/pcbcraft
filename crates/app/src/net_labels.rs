@@ -437,14 +437,10 @@ impl PcbApp {
             760.,
             if edit.label.id == 0 { "Place" } else { "Apply" },
             |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    egui::Frame::new().inner_margin(Tokens::get().space_16).show(ui, |ui| {
-                        submit |= label_fields(ui, &mut edit, true);
-                        if let Some(error) = &edit.error {
-                            ui.label(shell::error(error));
-                        }
-                    });
-                });
+                submit |= label_fields(ui, &mut edit, true);
+                if let Some(error) = &edit.error {
+                    ui.label(shell::error(error));
+                }
             },
         );
         if action.close {
@@ -509,7 +505,7 @@ impl PcbApp {
         let width = pcbcraft_chrome::workspace::panels::card_width(canvas, true);
         let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
-            egui::Id::new(("selection_properties", self.views.host)),
+            egui::Id::unique(("selection_properties", self.views.host)),
             "Properties",
             canvas,
             area,
@@ -598,7 +594,7 @@ fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
     }
     let enter = name.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
     let mut key = if edit.label.style == Style::Global { "global" } else { "local" }.to_owned();
-    form::choice(ui, "Scope", ui.id().with("label_style"), &mut key, &[("local", "Local".into()), ("global", "Global".into())]);
+    form::choice(ui, "Scope", ui.scope_id().with("label_style"), &mut key, &[("local", "Local".into()), ("global", "Global".into())]);
     edit.label.style = if key == "global" { Style::Global } else { Style::Local };
     form::rotation(ui, &mut edit.label.rotation);
     let position_enter = if edit.label.id != 0 {

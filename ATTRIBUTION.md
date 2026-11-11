@@ -472,8 +472,8 @@ proxies; the later SMD geometry and its dimensional references are recorded belo
 
 ## Eframe native window lifecycle patch
 
-`vendor/eframe/` contains the crates.io eframe 0.36.2 package from egui revision
-`49682f8baa058bf49e011035cfbd6e825f88a5ef`, copyright (c) 2018-2021 Emil Ernerfeldt,
+`vendor/eframe/` contains the crates.io eframe 0.37.0 package from egui revision
+`3c6eb8261c3293ad9c7ea1ed58487e038860ebef`, copyright (c) 2018-2021 Emil Ernerfeldt,
 MIT OR Apache-2.0. Both license texts are retained alongside it. Local changes add
 an opt-in WGPU root-window retirement request so a surviving editor keeps its
 native window when the original closes. The patch boundary and upgrade procedure
@@ -919,3 +919,39 @@ rooted engine contract and existing Craft controls. Regression fixtures use
 shared native commands; the native two-process harness uses eframe's existing
 clipboard path. No external EDA implementation, source-derived fixture, asset,
 dependency or native saved-format change was introduced.
+
+## Shared Craft UI migration
+
+`solidcraft-ui-kit`, `solidcraft-look` and `solidcraft-theme` are pinned to
+SolidCraft revision `f56114219b2d7f6d16de8dd58700479646948f8a`, copyright
+2026 the SolidCraft maintainers, under the SolidCraft Brand and Interface
+Licence. They retain that licence independently of PCBcraft's MIT OR Apache-2.0
+code. The retained text is
+`crates/chrome/assets/shared-ui/SOLIDCRAFT-UI-LICENSE`, SHA-256
+`3cabf11ab54508ee3c5a0c2573239a2e34eee715d1802c229188a33bc92dda11`.
+Travis Lowe explicitly directed local inclusion on November 10, 2026 as an
+official Tangency Labs subproject. The upstream written record is requested in
+[SolidCraft #14690](https://github.com/tangency-labs/solidcraft/issues/14690).
+
+The shared look's Plex face bytes match the previously qualified copies in
+`crates/chrome/assets/fonts`; their OFL notices are retained. PCBcraft also keeps
+the unmodified `NotoEmoji-Regular.ttf` from the original crates.io
+`epaint_default_fonts` 0.36.2 package under OFL-1.1, with that package's `OFL.txt`.
+The font's SHA-256 is
+`415dc6290378574135b64c808dc640c1df7531973290c4970c51fdeb849cb0c5`;
+the notice's SHA-256 is
+`6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2`.
+This preserves the emoji coverage supplied by egui before 0.37 moved it to
+platform providers. Fonts are data, and no egui 0.36 code dependency is retained.
+
+Shared Preferences dropdowns draw their chevron from `solidcraft-look`'s
+embedded icon set at the same pinned revision, under the licence recorded above.
+
+The pinned SolidCraft source also supplies its `egui-wgpu` 0.37.0 patch
+(MIT OR Apache-2.0, Emil Ernerfeldt and contributors) and winit 0.30.13 patch
+(Apache-2.0, the winit contributors). Their original notices remain in the
+dependency packages, and upstream's `vendor/README.md` at the pinned revision
+documents the rendering, surface lifecycle and Wayland gesture changes. The
+shared renderer and SolidCore library dependency closure is recorded in
+[the migration notes](docs/shared-ui-migration.md); PCBcraft does not depend on
+SolidCraft's executable or mechanical application orchestration.

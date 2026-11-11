@@ -43,7 +43,7 @@ impl Document {
         let item = self.session.snapshot();
         let primitives = self.selection.iter().filter_map(|id| item.objects.get(id).cloned()).collect::<Vec<_>>();
         if !primitives.is_empty() {
-            ctx.data_mut(|data| data.insert_temp(egui::Id::new("library_clipboard"), Clipboard { kind: item.kind, primitives }));
+            ctx.data_mut(|data| data.insert_temp(egui::Id::unique("library_clipboard"), Clipboard { kind: item.kind, primitives }));
         }
     }
     /// Enter a cancellable paste preview. Fresh IDs and unused electrical numbers allocate only on commit.
@@ -52,7 +52,7 @@ impl Document {
             self.error = Some("Apply or reset the property fields before pasting.".into());
             return;
         }
-        let Some(clipboard) = ctx.data(|data| data.get_temp::<Clipboard>(egui::Id::new("library_clipboard"))) else { return };
+        let Some(clipboard) = ctx.data(|data| data.get_temp::<Clipboard>(egui::Id::unique("library_clipboard"))) else { return };
         if clipboard.kind != self.session.snapshot().kind {
             self.error = Some("Paste into a definition of the same kind.".into());
             return;

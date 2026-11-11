@@ -164,7 +164,7 @@ impl Edit {
                         }
                     })
                     .response
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Tg method"));
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Tg method"));
             });
             form::text(ui, "Dk", &mut self.dk);
             form::text(ui, "Df", &mut self.df);
@@ -178,7 +178,7 @@ impl Edit {
                         }
                     })
                     .response
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Basis"));
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Basis"));
             });
             form::text(ui, "Source document", &mut self.document);
             form::text(ui, "Source revision", &mut self.revision);

@@ -161,7 +161,7 @@ pub fn toggle(ui: &mut Ui, unit: &mut Unit, shortcut: &str) -> bool {
     let tip = if shortcut.is_empty() { "Switch units".to_owned() } else { format!("Switch units ({shortcut})") };
     let response = ui.add(button).on_hover_text(tip);
     let shown = *unit;
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Units: {}", shown.symbol())));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Units: {}", shown.symbol())));
     if response.clicked() {
         *unit = unit.toggled();
         return true;

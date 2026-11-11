@@ -109,13 +109,16 @@ fn child_rect(peer: &Rc<RefCell<Peer>>, label: &str) -> Rect {
         .nodes
         .values()
         .find_map(|node| {
-            if node.label() != Some(label) {
+            if node.label().or_else(|| node.value()) != Some(label) {
                 return None;
             }
             let bounds = node.bounds()?;
             Some(Rect::from_min_max(pos2(bounds.x0 as f32, bounds.y0 as f32), pos2(bounds.x1 as f32, bounds.y1 as f32)))
         })
-        .unwrap_or_else(|| panic!("missing child control: {label}"))
+        .unwrap_or_else(|| {
+            let named: Vec<_> = peer.borrow().nodes.values().filter_map(|node| node.label().or_else(|| node.value())).map(str::to_owned).collect();
+            panic!("missing child control: {label}; available names: {named:?}")
+        })
 }
 
 /// Deliver focus to one host only, keeping its input stream independent of repaint order.
@@ -745,6 +748,9 @@ fn closing_matching_or_mixed_windows_keeps_the_addressed_survivor() {
             if board {
                 let at = child_rect(&peer, "Choose workspace").center();
                 child_click_at(&mut h, &peer, at);
+                // egui 0.37 sizes a new popup in a hidden child pass. The harness only
+                // settles root repaints, so deliver the child's requested paint too.
+                h.run();
                 let at = child_rect(&peer, "PCB layout").center();
                 child_click_at(&mut h, &peer, at);
             }

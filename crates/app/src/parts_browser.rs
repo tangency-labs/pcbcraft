@@ -359,7 +359,7 @@ impl PartsBrowser {
                     && !egui::Popup::is_any_open(ui.ctx());
                 ui.horizontal(|ui| {
                     let response = ui.button("Libraries…");
-                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Manage libraries…"));
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Manage libraries…"));
                     action.libraries = response.clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         action.primary = ui.add_enabled(enabled, egui::Button::new("Place")).clicked();
@@ -421,7 +421,7 @@ impl PartsBrowser {
             [ui.available_width(), pcbcraft_chrome::Tokens::get().control_height],
             egui::TextEdit::singleline(&mut self.query).hint_text("Search parts"),
         );
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), "Search parts"));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), "Search parts"));
         self.focus_ids.push(response.id);
         if response.changed() {
             self.selected = None;
@@ -450,7 +450,7 @@ impl PartsBrowser {
             .collect();
         let mut value = choices.iter().position(|(choice, _)| *choice == self.collection).map(|i| keys[i].clone()).unwrap_or_else(|| "all".into());
         let options: Vec<_> = keys.iter().zip(&choices).map(|(key, (_, name))| (key.as_str(), name.clone())).collect();
-        properties::choice(ui, "Library", ui.id().with("catalog_library"), &mut value, &options);
+        properties::choice(ui, "Library", ui.scope_id().with("catalog_library"), &mut value, &options);
         if let Some(index) = keys.iter().position(|key| *key == value)
             && self.collection != choices[index].0
         {
@@ -522,8 +522,7 @@ impl PartsBrowser {
         for (collection, name) in collections(sources) {
             let count = entries.iter().filter(|entry| entry.in_collection(&collection)).count();
             let response = ui.selectable_label(self.collection == collection, format!("{name}  {count}"));
-            response
-                .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, self.collection == collection, name.as_str()));
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, self.collection == collection, name.as_str()));
             if response.clicked() {
                 self.collection = collection;
                 self.selected = None;

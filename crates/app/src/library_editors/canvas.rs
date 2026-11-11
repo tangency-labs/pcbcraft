@@ -279,15 +279,19 @@ impl Document {
                         GraphicPurpose::Silkscreen => "Silkscreen",
                         GraphicPurpose::Courtyard => "Courtyard",
                     };
-                    egui::ComboBox::from_id_salt("drawing_layer").selected_text(title).show_ui(ui, |ui| {
-                        for (value, label) in [
-                            (GraphicPurpose::Fabrication, "Fabrication"),
-                            (GraphicPurpose::Silkscreen, "Silkscreen"),
-                            (GraphicPurpose::Courtyard, "Courtyard"),
-                        ] {
-                            ui.selectable_value(&mut self.drawing_purpose, value, label);
-                        }
-                    });
+                    egui::ComboBox::from_id_salt("drawing_layer")
+                        .selected_text(title)
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                (GraphicPurpose::Fabrication, "Fabrication"),
+                                (GraphicPurpose::Silkscreen, "Silkscreen"),
+                                (GraphicPurpose::Courtyard, "Courtyard"),
+                            ] {
+                                ui.selectable_value(&mut self.drawing_purpose, value, label);
+                            }
+                        })
+                        .response
+                        .accessible_name("Drawing layer");
                 } else {
                     use pcbcraft_engine::library_graphics::Fill;
                     egui::ComboBox::from_id_salt("drawing_fill")
@@ -300,10 +304,16 @@ impl Document {
                             for (value, label) in [(Fill::None, "Unfilled"), (Fill::Solid, "Solid fill"), (Fill::Background, "Background fill")] {
                                 ui.selectable_value(&mut self.drawing_fill, value, label);
                             }
-                        });
+                        })
+                        .response
+                        .accessible_name("Drawing fill");
                 }
                 let mut width = self.drawing_stroke_nm as f64 / 1_000_000.;
-                if ui.add(egui::DragValue::new(&mut width).range(0.01..=2.).speed(0.01).suffix(" mm stroke")).changed() {
+                if ui
+                    .add(egui::DragValue::new(&mut width).range(0.01..=2.).speed(0.01).suffix(" mm stroke"))
+                    .accessible_name("Drawing stroke width")
+                    .changed()
+                {
                     self.drawing_stroke_nm = (width * 1_000_000.).round() as i64;
                 }
             },
@@ -330,9 +340,9 @@ impl Document {
         }
         workspace::ribbon_separator(ui);
         workspace::ribbon_control(ui, "Grid", Tokens::get().space_24 * 5.0, |ui| {
-            egui::ComboBox::from_id_salt("library_grid").selected_text(format!("Grid {} mm", self.camera.snap_nm() as f64 / 1_000_000.0)).show_ui(
-                ui,
-                |ui| {
+            egui::ComboBox::from_id_salt("library_grid")
+                .selected_text(format!("Grid {} mm", self.camera.snap_nm() as f64 / 1_000_000.0))
+                .show_ui(ui, |ui| {
                     let spacings: &[i64] = if self.session.snapshot().kind == Kind::Symbol {
                         &[1_270_000]
                     } else {
@@ -343,8 +353,9 @@ impl Document {
                             self.camera.set_snap_nm(spacing);
                         }
                     }
-                },
-            );
+                })
+                .response
+                .accessible_name("Library grid");
         });
     }
     /// Move retains the captured selection and revision until a completed placement.
@@ -539,8 +550,8 @@ impl Document {
         let item = self.session.snapshot();
         let reference = self.reference_preview(&item);
         let t = Tokens::get();
-        let response = ui.interact(area, ui.id().with("library_canvas"), egui::Sense::click_and_drag());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, ui.is_enabled(), "Library canvas"));
+        let response = ui.interact(area, ui.scope_id().with("library_canvas"), egui::Sense::click_and_drag());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::GenericContainer, ui.is_enabled(), "Library canvas"));
         if !ui.input(|i| i.focused) {
             self.tool = Tool::Select;
         }

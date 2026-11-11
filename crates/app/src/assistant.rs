@@ -152,7 +152,7 @@ impl Assistant {
         if ctx.input(|input| input.pointer.any_pressed()) {
             self.keyboard_active = self.panel_rect.zip(ctx.pointer_interact_pos()).is_some_and(|(rect, point)| rect.contains(point));
         }
-        let owns_keys = self.keyboard_active || ctx.memory(|memory| memory.has_focus(egui::Id::new("assistant_draft_input")));
+        let owns_keys = self.keyboard_active || ctx.memory(|memory| memory.has_focus(egui::Id::unique("assistant_draft_input")));
         if owns_keys {
             self.chat_shortcuts(ctx);
         }
@@ -198,7 +198,7 @@ impl Assistant {
     fn release_focus(&mut self, ctx: &Context) {
         ctx.memory_mut(|memory| {
             if let Some(id) = memory.focused()
-                && (self.keyboard_active || id == egui::Id::new("assistant_draft_input"))
+                && (self.keyboard_active || id == egui::Id::unique("assistant_draft_input"))
             {
                 memory.surrender_focus(id);
             }
@@ -759,23 +759,31 @@ impl Assistant {
                 if self.chat.config.is_empty() {
                     if let Some((current, models)) = &self.chat.models {
                         let shown = models.iter().find(|m| &m.id == current).map_or(current.as_str(), |m| m.name.as_str());
-                        egui::ComboBox::from_id_salt("assistant_model").selected_text(format!("Model: {shown}")).show_ui(ui, |ui| {
-                            for m in models {
-                                if ui.selectable_label(&m.id == current, &m.name).on_hover_text(&m.description).clicked() {
-                                    model = Some(m.id.clone());
+                        egui::ComboBox::from_id_salt("assistant_model")
+                            .selected_text(format!("Model: {shown}"))
+                            .show_ui(ui, |ui| {
+                                for m in models {
+                                    if ui.selectable_label(&m.id == current, &m.name).on_hover_text(&m.description).clicked() {
+                                        model = Some(m.id.clone());
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .accessible_name("Assistant model");
                     }
                     if let Some((current, modes)) = &self.chat.modes {
                         let shown = modes.iter().find(|(id, _)| id == current).map_or(current.as_str(), |(_, name)| name.as_str());
-                        egui::ComboBox::from_id_salt("assistant_mode").selected_text(format!("Mode: {shown}")).show_ui(ui, |ui| {
-                            for (id, name) in modes {
-                                if ui.selectable_label(id == current, name).clicked() {
-                                    mode = Some(id.clone());
+                        egui::ComboBox::from_id_salt("assistant_mode")
+                            .selected_text(format!("Mode: {shown}"))
+                            .show_ui(ui, |ui| {
+                                for (id, name) in modes {
+                                    if ui.selectable_label(id == current, name).clicked() {
+                                        mode = Some(id.clone());
+                                    }
                                 }
-                            }
-                        });
+                            })
+                            .response
+                            .accessible_name("Assistant permission mode");
                     }
                 }
                 for option in &self.chat.config {
@@ -784,17 +792,18 @@ impl Assistant {
                         .iter()
                         .find(|choice| choice.value == option.current_value)
                         .map_or(option.current_value.as_str(), |choice| choice.name.as_str());
-                    egui::ComboBox::from_id_salt(("assistant_option", &option.id)).selected_text(format!("{}: {shown}", option.name)).show_ui(
-                        ui,
-                        |ui| {
+                    egui::ComboBox::from_id_salt(("assistant_option", &option.id))
+                        .selected_text(format!("{}: {shown}", option.name))
+                        .show_ui(ui, |ui| {
                             for choice in &option.options {
                                 let row = ui.selectable_label(choice.value == option.current_value, &choice.name);
                                 if row.on_hover_text(&choice.description).clicked() {
                                     chosen = Some((option.id.clone(), choice.value.clone(), option.category == "model"));
                                 }
                             }
-                        },
-                    );
+                        })
+                        .response
+                        .accessible_name(option.name.clone());
                 }
             });
         });
@@ -818,7 +827,7 @@ impl Assistant {
     fn composer(&mut self, ui: &mut Ui, _session: &Session, can_edit: bool, has_document: bool) {
         let running = self.chat.state == State::Running;
         let can_send = has_document && can_edit && self.chat.state == State::Ready && !self.draft.trim().is_empty();
-        let draft_id = egui::Id::new("assistant_draft_input");
+        let draft_id = egui::Id::unique("assistant_draft_input");
         let enter = can_send
             && ui.memory(|memory| memory.has_focus(draft_id))
             && ui.input_mut(|input| input.modifiers == egui::Modifiers::NONE && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));

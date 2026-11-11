@@ -50,11 +50,7 @@ impl PcbApp {
     /// The rail: back to the workspace, then the project and app actions with their shortcuts.
     /// Save rows are disabled without a project or while a file job runs, like the File menu.
     fn home_navigation(&self, ui: &mut Ui, action: &mut Option<Action>) {
-        let back = match self.session.project() {
-            Some(project) => format!("Back to {}", project.name),
-            None => "Back to the workspace".to_owned(),
-        };
-        if home::back_to(ui, "home:back", &back, "Esc").clicked() {
+        if home::back_to(ui, self.session.project().map(|project| project.name.as_str())).clicked() {
             *action = Some(Action::Back);
         }
         let key = |shortcut| if IN_BROWSER { String::new() } else { ui.ctx().format_shortcut(shortcut) };

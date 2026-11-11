@@ -46,7 +46,7 @@ pub fn minimized(ctx: &Context, workspace: Rect) -> bool {
     let t = Tokens::get();
     let rect = entry_bounds(workspace);
     let width = rect.width();
-    Area::new(egui::Id::new("assistant_minimized"))
+    Area::new(egui::Id::unique("assistant_minimized"))
         .fixed_pos(rect.min)
         .constrain_to(workspace)
         .default_size(vec2(width, ENTRY_HEIGHT))
@@ -73,7 +73,7 @@ pub fn drawer(ctx: &Context, workspace: Rect, dock: &mut Dock, status: &str, rea
     let bounds = workspace.shrink(t.space_12);
     let rect = drawer_bounds(workspace, *dock);
     let left = dock.left;
-    let shown = Area::new(egui::Id::new("assistant_drawer"))
+    let shown = Area::new(egui::Id::unique("assistant_drawer"))
         .fixed_pos(rect.min)
         .movable(false)
         .constrain_to(workspace)
@@ -99,7 +99,7 @@ pub fn drawer(ctx: &Context, workspace: Rect, dock: &mut Dock, status: &str, rea
     let edge = if left { rect.right() } else { rect.left() };
     let grip = Rect::from_center_size(egui::pos2(edge, rect.center().y), vec2(t.space_8, rect.height()));
     // Keep the resize grip on the panel layer so it wins over the schematic canvas.
-    Area::new(egui::Id::new("assistant_resize_grip")).fixed_pos(grip.min).movable(false).order(Order::Foreground).show(ctx, |ui| {
+    Area::new(egui::Id::unique("assistant_resize_grip")).fixed_pos(grip.min).movable(false).order(Order::Foreground).show(ctx, |ui| {
         let (_, resize) = ui.allocate_exact_size(grip.size(), Sense::drag());
         if resize.hovered() || resize.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -157,7 +157,7 @@ fn header(ui: &mut Ui, status: &str, ready: bool, dock: Option<(&mut Dock, Rect)
         }
         let title = ui.label(egui::RichText::new("Assistant").font(crate::fonts::semibold(t.font_button)));
         if let Some((dock, bounds)) = dock {
-            let drag = ui.interact(grip.union(title.rect), ui.id().with("assistant_dock"), Sense::drag());
+            let drag = ui.interact(grip.union(title.rect), ui.scope_id().with("assistant_dock"), Sense::drag());
             dock_drag(ui, &drag, dock, bounds);
         }
         if size.x >= 275.0 {
@@ -193,7 +193,7 @@ fn dock_drag(ui: &Ui, drag: &egui::Response, dock: &mut Dock, bounds: Rect) {
         let t = Tokens::get();
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         let target = dock_bounds(bounds, Dock { left, ..*dock });
-        let painter = ui.ctx().layer_painter(egui::LayerId::new(Order::Tooltip, egui::Id::new("assistant_dock_preview")));
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(Order::Tooltip, egui::Id::unique("assistant_dock_preview")));
         painter.rect(target, t.radius_lg, t.accent.gamma_multiply(0.18), Stroke::new(2.0, t.accent), StrokeKind::Inside);
         painter.text(
             target.center(),
@@ -249,7 +249,7 @@ fn icon_target(ui: &mut Ui, label: &str, tooltip: &str, active: bool) -> (Rect, 
     if active || response.hovered() || response.has_focus() {
         ui.painter().rect_filled(rect, t.radius_sm, icon_fill(&response, t, active));
     }
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     (rect, response)
 }
 
@@ -273,13 +273,13 @@ fn badge(ui: &mut Ui, label: &str, ready: bool) {
     let (rect, response) = ui.allocate_exact_size(vec2(width, t.control_height - t.space_6), Sense::hover());
     ui.painter().rect_filled(rect, t.radius_lg, fill);
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), label));
 }
 
 /// Render the launcher icon, title and up chevron inside one accessible hit target.
 fn launcher(ui: &mut Ui, width: f32, t: Tokens) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(width, ENTRY_HEIGHT), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Expand Assistant"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Expand Assistant"));
     let painter = ui.painter();
     let fill = if response.hovered() || response.has_focus() { t.hover } else { t.panel };
     painter.rect(rect, t.radius_lg, fill, Stroke::new(1.0, t.border), StrokeKind::Inside);

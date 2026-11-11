@@ -171,7 +171,7 @@ pub fn opacity_control(ui: &mut Ui, opacity_percent: &mut u8) -> bool {
     let t = Tokens::get();
     let before = *opacity_percent;
     let slider = egui::Slider::new(opacity_percent, OPACITY_RANGE).step_by(f64::from(OPACITY_STEP)).suffix("%");
-    ui.add(slider);
+    ui.add(slider).accessible_name("Grid opacity");
     let reset = egui::Button::new(egui::RichText::new("Reset").size(t.font_label));
     if ui.add_enabled(*opacity_percent != OPACITY_DEFAULT, reset).on_hover_text(format!("Back to {OPACITY_DEFAULT}%")).clicked() {
         *opacity_percent = OPACITY_DEFAULT;
@@ -200,7 +200,7 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
     let caption = text.replace(&format!(" {}", unit.symbol()), "");
     let button = egui::Button::new(RichText::new(caption).size(t.font_label)).frame(false);
     let response = ui.add(button).on_hover_text("Grid spacing of the focused view (N, Shift+N)");
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &text));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &text));
     let field_id = response.id.with("custom_spacing");
     egui::Popup::menu(&response)
         .frame(menu::frame())

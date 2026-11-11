@@ -51,11 +51,18 @@ impl PcbApp {
         let text = ctx.input_mut(|input| {
             let mut text = None;
             input.events.retain(|event| {
-                if let Event::Paste(value) = event {
-                    text = Some(value.clone());
-                    false
-                } else {
-                    true
+                match event {
+                    Event::Paste(value) => {
+                        text = Some(value.clone());
+                        false
+                    }
+                    Event::PasteImage(_) => {
+                        // Image-only reads complete the text request without retaining its
+                        // captured destination or converting bitmap pixels into project data.
+                        text = Some(String::new());
+                        false
+                    }
+                    _ => true,
                 }
             });
             text
@@ -102,7 +109,10 @@ impl PcbApp {
         let events = ctx.input_mut(|input| {
             let mut clipboard = Vec::new();
             input.events.retain(|event| {
-                if matches!(event, Event::Copy | Event::Cut | Event::Paste(_)) {
+                if matches!(event, Event::PasteImage(_)) {
+                    clipboard.push(Event::Paste(String::new()));
+                    false
+                } else if matches!(event, Event::Copy | Event::Cut | Event::Paste(_)) {
                     clipboard.push(event.clone());
                     false
                 } else {

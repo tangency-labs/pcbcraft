@@ -180,6 +180,7 @@ fn schematic_preview_navigation_has_no_authoring_authority() {
     h.run();
     let zoom = h.state().views.active.camera.zoom();
     h.event(Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0., 2.),
         phase: egui::TouchPhase::Move,

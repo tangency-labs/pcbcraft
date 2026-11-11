@@ -564,7 +564,13 @@ mod tests {
 
     fn scroll(y: f32, command: bool) -> Event {
         let modifiers = if command { egui::Modifiers::COMMAND } else { egui::Modifiers::NONE };
-        Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(0.0, y), modifiers, phase: egui::TouchPhase::Move }
+        Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: MouseWheelUnit::Point,
+            delta: vec2(0.0, y),
+            modifiers,
+            phase: egui::TouchPhase::Move,
+        }
     }
 
     #[test]

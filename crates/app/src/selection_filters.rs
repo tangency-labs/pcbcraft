@@ -162,7 +162,7 @@ impl PcbApp {
         let mut changed = false;
         let (rect, toggle) = self.views.active.panels[crate::workspace_panels::FILTERS].show(
             ui,
-            egui::Id::new(("selection_filters", self.views.host)),
+            egui::Id::unique(("selection_filters", self.views.host)),
             "Selection filters",
             canvas,
             area,

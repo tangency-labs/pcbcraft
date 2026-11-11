@@ -71,7 +71,7 @@ impl Draft {
             properties::choice(
                 ui,
                 "Pad type",
-                egui::Id::new("pad_type"),
+                egui::Id::unique("pad_type"),
                 &mut kind,
                 &[("smd", "SMD".into()), ("through_hole", "Through hole".into())],
             );
@@ -230,7 +230,7 @@ fn fields(ui: &mut Ui, value: &mut Value, numbers: &mut BTreeMap<String, (String
                 properties::text(ui, &label(path), text);
             } else {
                 let options = options.iter().map(|option| (*option, display(option))).collect::<Vec<_>>();
-                properties::choice(ui, &label(path), egui::Id::new(path), text, &options);
+                properties::choice(ui, &label(path), egui::Id::unique(path), text, &options);
             }
         }
         Value::Null if path.ends_with("drill_nm") => {

@@ -69,11 +69,15 @@ impl Appearance {
         }
         chrome::text(ui, "Text height", &mut self.height);
         chrome::field(ui, "Text rotation", |ui| {
-            egui::ComboBox::from_id_salt("field_rotation").selected_text(format!("{}°", self.layout.rotation)).show_ui(ui, |ui| {
-                for rotation in [0, 90, 180, 270] {
-                    ui.selectable_value(&mut self.layout.rotation, rotation, format!("{rotation}°"));
-                }
-            });
+            egui::ComboBox::from_id_salt("field_rotation")
+                .selected_text(format!("{}°", self.layout.rotation))
+                .show_ui(ui, |ui| {
+                    for rotation in [0, 90, 180, 270] {
+                        ui.selectable_value(&mut self.layout.rotation, rotation, format!("{rotation}°"));
+                    }
+                })
+                .response
+                .accessible_name("Field rotation");
         });
         chrome::field(ui, "Align", |ui| {
             egui::ComboBox::from_id_salt("text_align")
@@ -86,7 +90,9 @@ impl Appearance {
                     ui.selectable_value(&mut self.layout.align, TextAlign::Start, "Left");
                     ui.selectable_value(&mut self.layout.align, TextAlign::Middle, "Center");
                     ui.selectable_value(&mut self.layout.align, TextAlign::End, "Right");
-                });
+                })
+                .response
+                .accessible_name("Field text alignment");
         });
         ui.button("Reset appearance").clicked()
     }
@@ -206,11 +212,15 @@ impl Edit {
         }
         chrome::field(ui, "Field", |ui| {
             let current = names.iter().find(|(id, _)| id == &self.appearance_field).map(|(_, name)| name.as_str()).unwrap_or("Reference");
-            egui::ComboBox::from_id_salt("appearance_field").selected_text(current).show_ui(ui, |ui| {
-                for (id, name) in &names {
-                    ui.selectable_value(&mut self.appearance_field, id.clone(), name);
-                }
-            });
+            egui::ComboBox::from_id_salt("appearance_field")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (id, name) in &names {
+                        ui.selectable_value(&mut self.appearance_field, id.clone(), name);
+                    }
+                })
+                .response
+                .accessible_name("Field appearance target");
         });
         let Some(draft) = self.appearance.get_mut(&self.appearance_field) else { return };
         ui.push_id(&self.appearance_field, |ui| {

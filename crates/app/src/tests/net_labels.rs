@@ -156,14 +156,41 @@ fn ground_ribbon_places_directly_and_cancels_without_edits() {
     }
 }
 
-/// Local/global shortcuts and compact caption-menu controls reach the same form. Cancelled
-/// properties and cancelled placement leave both encoded bytes and undo history unchanged.
+/// Local/global shortcuts and compact caption-menu controls reach the same form. Escape closes
+/// the scope menu first. Dismissing a draft or preview leaves encoded bytes and history unchanged.
 #[test]
 fn label_tools_and_cancel_at_both_widths() {
     for width in [1400., 600.] {
         let mut h = editor(width);
         let original = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
         let revision = h.state().session.revision();
+        let home = h.get_by_label("Home").rect().center();
+        h.key_press(Key::L);
+        h.run();
+        name(&mut h, "DISCARD");
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Scope").click();
+        h.run();
+        h.get_by_label("Global");
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::NetLabel(_)));
+        assert!(h.query_by_label("Global").is_none());
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
+
+        h.key_press(Key::L);
+        h.run();
+        name(&mut h, "DISCARD");
+        h.event(egui::Event::PointerMoved(home));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: home, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run();
+        }
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert!(!h.state().home);
+        assert!(h.state().views.active.schematic.tool.is_none());
+
         h.key_press(Key::L);
         h.run();
         name(&mut h, "RESET");

@@ -429,6 +429,7 @@ fn visuals(t: Tokens, dark: bool) -> egui::Visuals {
 /// changes, not every frame: it asks for a repaint.
 pub fn apply(ctx: &egui::Context, dark: bool) {
     DARK.set(dark);
+    solidcraft_theme::set_dark(dark);
     let t = Tokens::get();
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.set_visuals(visuals(t, dark));

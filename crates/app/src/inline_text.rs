@@ -61,7 +61,7 @@ impl PcbApp {
     /// applies once; Escape, outside clicks, focus loss or a changed opening/revision discard it.
     pub(super) fn show_inline_text(&mut self, ui: &mut Ui, project: &Project) {
         let Some(mut edit) = self.views.active.schematic.text_edit.take() else { return };
-        let id = *edit.widget.get_or_insert_with(|| ui.id().with(("inline_field", ui.ctx().cumulative_pass_nr())));
+        let id = *edit.widget.get_or_insert_with(|| ui.scope_id().with(("inline_field", ui.ctx().cumulative_pass_nr())));
         if !self.views.active.accepts(edit.source, &self.session) || !matches!(self.dialog, crate::Dialog::None) {
             ui.memory_mut(|memory| memory.surrender_focus(id));
             ui.ctx().request_repaint();

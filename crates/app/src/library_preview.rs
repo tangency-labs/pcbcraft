@@ -23,12 +23,12 @@ pub(super) fn interactive_footprint(ui: &mut egui::Ui, definition: &FootprintDef
                 *camera = FootprintCamera::default();
             }
             let zoom_in = ui.button("+").on_hover_text("Zoom footprint preview in");
-            zoom_in.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Zoom footprint preview in"));
+            zoom_in.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Zoom footprint preview in"));
             if zoom_in.clicked() {
                 camera.zoom = (camera.zoom * 1.25).min(16.);
             }
             let zoom_out = ui.button("−").on_hover_text("Zoom footprint preview out");
-            zoom_out.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Zoom footprint preview out"));
+            zoom_out.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Zoom footprint preview out"));
             if zoom_out.clicked() {
                 camera.zoom = (camera.zoom / 1.25).max(0.25);
             }

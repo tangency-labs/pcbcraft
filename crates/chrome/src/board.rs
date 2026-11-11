@@ -501,7 +501,7 @@ pub fn layer_visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::R
 pub fn visibility(ui: &mut egui::Ui, name: &str, visible: bool) -> egui::Response {
     let t = Tokens::get();
     let (rect, response) = ui.allocate_exact_size(vec2(t.space_24, t.space_24), egui::Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), visible, format!("Show {name}")));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), visible, format!("Show {name}")));
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if response.hovered() || response.has_focus() {

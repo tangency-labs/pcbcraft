@@ -185,7 +185,7 @@ impl Panel {
     pub fn show(&mut self, ui: &Ui, canvas: Rect, browser: Rect, add: impl FnOnce(&mut Ui, bool)) -> (Rect, PanelAction) {
         let rect = self.rect(canvas, browser, self.position);
         let t = Tokens::get();
-        let shown = egui::Area::new("parts_browser".into())
+        let shown = egui::Area::new(egui::Id::unique("parts_browser"))
             .enabled(ui.is_enabled())
             .order(egui::Order::Middle)
             .fixed_pos(rect.min)
@@ -213,7 +213,7 @@ impl Panel {
                             let controls_width = 4.0 * (24.0 + ui.spacing().item_spacing.x);
                             let (header, response) =
                                 ui.allocate_exact_size(vec2((ui.available_width() - controls_width).max(1.0), HEADER_HEIGHT), Sense::drag());
-                            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Move Parts Catalog"));
+                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Move Parts Catalog"));
                             super::drag_grip(ui.painter(), header);
                             ui.painter().text(
                                 header.left_center() + vec2(18.0, 0.0),
@@ -266,7 +266,7 @@ impl Panel {
             let position = Self::snap(canvas, pointer);
             if position != Position::Floating {
                 let target = self.rect(canvas, browser, position);
-                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, "parts_snap_preview".into()));
+                let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("parts_snap_preview")));
                 painter.rect_filled(target, super::FLOATING_RADIUS, t.accent_soft.gamma_multiply(0.7));
                 painter.rect_stroke(target, super::FLOATING_RADIUS, Stroke::new(2.0, t.accent), StrokeKind::Inside);
                 painter.text(target.center(), Align2::CENTER_CENTER, "Release to dock", fonts::interface_heading(ui, t.font_body), t.text);
@@ -287,7 +287,7 @@ enum HeaderIcon {
 fn icon_button(ui: &mut Ui, label: &str, icon: HeaderIcon) -> Response {
     let t = Tokens::get();
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     if matches!(icon, HeaderIcon::More) || response.hovered() || response.has_focus() {
         ui.painter().rect_filled(rect, t.radius_md, if response.hovered() || response.has_focus() { t.hover } else { t.panel_header });
     }
@@ -373,7 +373,7 @@ pub fn search(ui: &mut Ui, query: &mut String) -> Response {
         let width = ui.available_width() - if query.is_empty() { 0.0 } else { 30.0 };
         let response = ui.add_sized(
             [width, 28.0],
-            egui::TextEdit::singleline(query).hint_text("Search parts…").vertical_align(Align::Center).margin(vec2(9.0, 0.0)),
+            egui::TextEdit::singleline(query).hint_text("Search parts…").align(egui::Align2::LEFT_CENTER).margin(vec2(9.0, 0.0)),
         );
         if !query.is_empty() && icon_button(ui, "Clear parts search", HeaderIcon::Close).clicked() {
             query.clear();
@@ -462,7 +462,7 @@ pub fn tile(ui: &mut Ui, view: View, width: f32, item: Item<'_>, paint: impl FnO
     let height = view.tile_height();
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
     let accessible = item.identity.map_or_else(|| item.name.to_owned(), |identity| format!("{} · {identity}", item.name));
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), item.selected, accessible.as_str()));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), item.selected, accessible.as_str()));
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     let preview = if view == View::List {
         Rect::from_min_size(rect.min, vec2(66.0, height - 4.0))

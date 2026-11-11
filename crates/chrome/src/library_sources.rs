@@ -11,7 +11,7 @@ pub fn dialog(ctx: &egui::Context, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     let mut close = false;
     let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_lg);
-    let modal = egui::Modal::new(egui::Id::new("library_sources")).frame(frame).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("library_sources")).frame(frame).show(ctx, |ui| {
         let width = (t.form_card_width * 3.4).min(ctx.content_rect().width() - t.space_16 * 2.0).max(0.0);
         ui.set_width(width);
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -25,8 +25,8 @@ pub fn dialog(ctx: &egui::Context, add: impl FnOnce(&mut Ui)) -> bool {
             t.text,
         );
         let close_rect = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.0), vec2(t.control_height, t.control_height));
-        let response = ui.interact(close_rect, ui.id().with("close_sources"), Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close Library sources"));
+        let response = ui.interact(close_rect, ui.scope_id().with("close_sources"), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Close Library sources"));
         if response.hovered() || response.has_focus() {
             ui.painter().rect_filled(close_rect, t.radius_sm, t.hover);
         }
@@ -56,7 +56,7 @@ pub fn panes(ui: &mut Ui, mut add: impl FnMut(&mut Ui, usize)) {
     let body = ui.max_rect();
     let wide = body.width() >= t.form_card_width * 2.5;
     if !wide {
-        let id = ui.id().with("compact_source_pane");
+        let id = ui.scope_id().with("compact_source_pane");
         let mut pane = ui.ctx().data_mut(|data| *data.get_temp_mut_or_default::<usize>(id));
         let tabs = Rect::from_min_size(body.min, vec2(body.width(), t.form_header_height + t.space_8));
         ui.painter().rect_filled(tabs, 0, t.dialog_footer);
@@ -171,8 +171,8 @@ pub fn source(ui: &mut Ui, source: Source<'_>, can_refresh: bool) -> SourceActio
         if !source.builtin {
             let menu_rect = Rect::from_min_max(pos2(header.right() - t.space_24, header.top()), header.max);
             title_rect.max.x = menu_rect.left() - t.space_4;
-            let response = ui.interact(menu_rect, ui.id().with(source.name), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Actions for {}", source.name)));
+            let response = ui.interact(menu_rect, ui.scope_id().with(source.name), Sense::click());
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Actions for {}", source.name)));
             if response.hovered() || response.has_focus() {
                 ui.painter().rect_filled(menu_rect, t.radius_sm, t.hover);
             }
@@ -233,7 +233,7 @@ pub fn source(ui: &mut Ui, source: Source<'_>, can_refresh: bool) -> SourceActio
 /// Keep menu labels short while exposing their source-qualified names to assistive technology.
 fn source_action(ui: &mut Ui, label: &str, name: &str, enabled: bool) -> bool {
     let response = menu::MenuItem::new(label).enabled(enabled).show_response(ui);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, format!("{label} {name}")));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{label} {name}")));
     response.clicked()
 }
 
@@ -247,7 +247,7 @@ pub fn search(ui: &mut Ui, query: &mut String) {
             .hint_text("Search symbols and footprints…")
             .background_color(t.field)
             .margin(Margin { left: (t.space_24 + t.space_4) as i8, right: t.space_8 as i8, top: t.space_6 as i8, bottom: t.space_6 as i8 })
-            .vertical_align(Align::Center),
+            .align(egui::Align2::LEFT_CENTER),
     );
     response.widget_info(|| {
         let mut info = egui::WidgetInfo::text_edit(ui.is_enabled(), before.as_str(), query.as_str(), "Search symbols and footprints…");
@@ -273,7 +273,7 @@ pub fn filters(ui: &mut Ui, kind: &mut Filter) {
         for (value, label) in [(Filter::All, "All items"), (Filter::Symbols, "Symbols"), (Filter::Footprints, "Footprints")] {
             let selected = *kind == value;
             let response = ui.add(button(label, selected).selected(selected));
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, format!("Show {}", label.to_lowercase())));
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, format!("Show {}", label.to_lowercase())));
             if response.clicked() {
                 *kind = value;
             }

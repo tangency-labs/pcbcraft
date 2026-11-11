@@ -169,6 +169,8 @@ pub(crate) struct PreferencesWindow {
     state: WindowState,
     /// What Cancel restores: the settings when the window opened, or at the last Apply.
     kept: Preferences,
+    /// The slider's displayed value while a pointer gesture still owns it.
+    pending_scale: Option<u16>,
 }
 
 /// What the window asks the app to do after a frame.
@@ -194,6 +196,7 @@ const AI: usize = 5;
 pub(crate) struct PageData<'a> {
     pub preferences: &'a mut Preferences,
     pub shortcuts: &'a [(&'static str, &'static str, String)],
+    pending_scale: &'a mut Option<u16>,
     /// The Assistant draws the AI page and may ask to add an agent from it.
     #[cfg(not(target_arch = "wasm32"))]
     pub assistant: &'a mut crate::assistant::Assistant,
@@ -204,23 +207,23 @@ pub(crate) struct PageData<'a> {
 impl PreferencesWindow {
     /// Open on Appearance, remembering the current settings for Cancel.
     pub(crate) fn new(preferences: Preferences) -> Self {
-        Self { state: WindowState::default(), kept: preferences }
+        Self { state: WindowState::default(), kept: preferences, pending_scale: None }
     }
 
     /// Open on Views from the View ribbon, with the same Apply and Cancel behavior.
     pub(crate) fn at_views(preferences: Preferences) -> Self {
-        Self { state: WindowState { page: VIEWS, query: String::new() }, kept: preferences }
+        Self { state: WindowState { page: VIEWS, query: String::new() }, ..Self::new(preferences) }
     }
 
     /// Open on the Shortcuts page, for Help › Keyboard Shortcuts.
     pub(crate) fn at_shortcuts(preferences: Preferences) -> Self {
-        Self { state: WindowState { page: SHORTCUTS, query: String::new() }, kept: preferences }
+        Self { state: WindowState { page: SHORTCUTS, query: String::new() }, ..Self::new(preferences) }
     }
 
     /// Open on the AI page, for the Assistant's own Settings button.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn at_ai(preferences: Preferences) -> Self {
-        Self { state: WindowState { page: AI, query: String::new() }, kept: preferences }
+        Self { state: WindowState { page: AI, query: String::new() }, ..Self::new(preferences) }
     }
 
     /// Draw the window. OK keeps the changes; Cancel, Esc and × restore the kept settings;
@@ -251,12 +254,17 @@ impl PreferencesWindow {
         let mut data = PageData {
             preferences,
             shortcuts,
+            pending_scale: &mut self.pending_scale,
             #[cfg(not(target_arch = "wasm32"))]
             assistant,
             #[cfg(not(target_arch = "wasm32"))]
             request: None,
         };
         let action = settings::paged_window(ctx, "preferences_window", "Preferences", &mut self.state, &pages, &mut data, footer);
+        // Discard an interrupted drag even when search or a page switch hid the slider.
+        if action != settings::Action::None || !ctx.input(|input| input.focused && input.pointer.primary_down()) {
+            *data.pending_scale = None;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(crate::assistant::SettingsRequest::Add(form)) = data.request.take()
             && action == settings::Action::None
@@ -305,10 +313,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
 fn schematic(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::section(ui, "Wiring", |ui| {
         settings::row_with_keywords(ui, "Auto-heal wires", &["smart routing", "cleanup", "detours", "loops", "overlaps"], |ui| {
-            let response = ui.checkbox(&mut data.preferences.auto_heal_wires, "Enabled");
-            response.widget_info(|| {
-                egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), data.preferences.auto_heal_wires, "Auto-heal wires")
-            });
+            settings::checkbox(ui, "Enabled", "Auto-heal wires", &mut data.preferences.auto_heal_wires);
         });
         settings::hint(
             ui,
@@ -319,7 +324,7 @@ fn schematic(ui: &mut Ui, data: &mut PageData<'_>) {
 
 /// Theme, interface scale, PCB grid display, shared grid opacity and display units.
 fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
-    settings::heading(ui, "Appearance", "How PCBCraft looks. Changes show at once; Cancel puts them back.");
+    settings::heading(ui, "Appearance", "How PCBCraft looks. Cancel restores your previous settings.");
     let preferences = &mut *data.preferences;
     settings::section(ui, "Theme", |ui| {
         settings::row(ui, "Theme", |ui| {
@@ -333,13 +338,13 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     });
     settings::section(ui, "Scale", |ui| {
         settings::row(ui, "Interface scale", |ui| {
-            let slider = egui::Slider::new(&mut preferences.scale_percent, SCALE_RANGE).step_by(5.0).suffix("%");
-            ui.add(slider);
+            interface_scale(ui, &mut preferences.scale_percent, data.pending_scale);
         });
         settings::row(ui, "Scale presets", |ui| {
             for preset in SCALE_PRESETS {
                 if ui.selectable_label(preferences.scale_percent == preset, format!("{preset}%")).clicked() {
                     preferences.scale_percent = preset;
+                    *data.pending_scale = None;
                 }
             }
         });
@@ -363,6 +368,22 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     });
 }
 
+/// Preview the percentage in the slider during a pointer drag and apply it on release.
+/// Keyboard steps apply immediately, while the number field applies a typed value on confirmation.
+fn interface_scale(ui: &mut Ui, scale: &mut u16, pending: &mut Option<u16>) {
+    let mut value = pending.take().unwrap_or(*scale);
+    let slider = egui::Slider::new(&mut value, SCALE_RANGE).step_by(5.0).suffix("%").update_while_editing(false);
+    let response = ui.add(slider).accessible_name("Interface scale");
+    if !ui.input(|input| input.focused) {
+        return;
+    }
+    if response.is_pointer_button_down_on() {
+        *pending = Some(value);
+    } else if response.drag_stopped_by(egui::PointerButton::Primary) || response.changed() {
+        *scale = value;
+    }
+}
+
 /// How the scroll wheel and pointer move around the schematic.
 fn navigation(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(ui, "Navigation", "How the mouse and trackpad move around the canvas.");
@@ -378,7 +399,7 @@ fn navigation(ui: &mut Ui, data: &mut PageData<'_>) {
             settings::segmented(ui, &mut navigation.reverse_zoom, &[(false, "Normal"), (true, "Reversed")]);
         });
         settings::row(ui, "Zoom speed", |ui| {
-            ui.add(egui::Slider::new(&mut navigation.zoom_speed_percent, ZOOM_SPEED_RANGE).step_by(10.0).suffix("%"));
+            ui.add(egui::Slider::new(&mut navigation.zoom_speed_percent, ZOOM_SPEED_RANGE).step_by(10.0).suffix("%")).accessible_name("Zoom speed");
         });
     });
     settings::section(ui, "Zoom", |ui| {

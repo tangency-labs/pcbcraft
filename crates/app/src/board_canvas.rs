@@ -153,7 +153,7 @@ pub(super) fn show(
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
         state.context_menu_allowed = idle;
     }
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Panel, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
     camera.navigate_board(&response, rect, project, enabled, navigation);
     let placement_enabled = enabled;
     let enabled = enabled && state.placement.is_none();

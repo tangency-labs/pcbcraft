@@ -13,7 +13,7 @@ fn copper_count(ui: &mut Ui, count: &mut u64) -> bool {
                 }
             })
             .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Copper layers"));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Copper layers"));
     });
     *count != previous
 }
@@ -33,7 +33,7 @@ fn material_choice(ui: &mut Ui, id: impl egui::AsIdSalt, reference: &mut Option<
             }
         })
         .response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Material specification"));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Material specification"));
 }
 
 impl Edit {
@@ -116,10 +116,10 @@ impl Edit {
                     ui.add_enabled_ui(!required, |ui| {
                         ui.checkbox(&mut candidate.enabled[index], "")
                             .on_hover_text(if required { "Required layer" } else { "Remove this layer from the board catalog" })
-                            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Checkbox, !required, format!("Use layer {}", layer.name)))
+                            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::CheckBox, !required, format!("Use layer {}", layer.name)))
                     });
                     ui.add_sized(egui::vec2(widths[1], t.control_height), properties::input(&mut candidate.names[index]).id_salt(layer.id))
-                        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("Layer name {}", layer.name)));
+                        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("Layer name {}", layer.name)));
                     form::table_label(ui, purpose_name(layer.purpose), widths[2]);
                     form::table_label(
                         ui,
@@ -140,27 +140,31 @@ impl Edit {
         form::card(ui, |ui| {
             form::text(ui, "Layer name", &mut self.new_name);
             form::field(ui, "Purpose", |ui| {
-                egui::ComboBox::from_id_salt("new_purpose").selected_text(purpose_name(self.new_purpose)).show_ui(ui, |ui| {
-                    for purpose in [
-                        LayerPurpose::User,
-                        LayerPurpose::Mechanical,
-                        LayerPurpose::Outline,
-                        LayerPurpose::Silkscreen,
-                        LayerPurpose::Fabrication,
-                        LayerPurpose::Courtyard,
-                        LayerPurpose::Mask,
-                        LayerPurpose::Paste,
-                        LayerPurpose::Adhesive,
-                    ] {
-                        if ui.selectable_value(&mut self.new_purpose, purpose, purpose_name(purpose)).changed() {
-                            self.new_side = if matches!(purpose, LayerPurpose::User | LayerPurpose::Mechanical | LayerPurpose::Outline) {
-                                None
-                            } else {
-                                Some(Side::Front)
-                            };
+                egui::ComboBox::from_id_salt("new_purpose")
+                    .selected_text(purpose_name(self.new_purpose))
+                    .show_ui(ui, |ui| {
+                        for purpose in [
+                            LayerPurpose::User,
+                            LayerPurpose::Mechanical,
+                            LayerPurpose::Outline,
+                            LayerPurpose::Silkscreen,
+                            LayerPurpose::Fabrication,
+                            LayerPurpose::Courtyard,
+                            LayerPurpose::Mask,
+                            LayerPurpose::Paste,
+                            LayerPurpose::Adhesive,
+                        ] {
+                            if ui.selectable_value(&mut self.new_purpose, purpose, purpose_name(purpose)).changed() {
+                                self.new_side = if matches!(purpose, LayerPurpose::User | LayerPurpose::Mechanical | LayerPurpose::Outline) {
+                                    None
+                                } else {
+                                    Some(Side::Front)
+                                };
+                            }
                         }
-                    }
-                });
+                    })
+                    .response
+                    .accessible_name("Technical layer purpose");
             });
             if self.new_purpose != LayerPurpose::Outline {
                 form::field(ui, "Side", |ui| {
@@ -176,7 +180,9 @@ impl Edit {
                             }
                             ui.selectable_value(&mut self.new_side, Some(Side::Front), "Front");
                             ui.selectable_value(&mut self.new_side, Some(Side::Back), "Back");
-                        });
+                        })
+                        .response
+                        .accessible_name("Technical layer side");
                 });
             }
             if ui.button("Add layer").clicked() {
@@ -232,7 +238,7 @@ impl Edit {
                         }
                     })
                     .response
-                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Starting stackup"));
+                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Starting stackup"));
             });
         });
         if let Some(preset) = preset {
@@ -327,7 +333,7 @@ impl Edit {
                     egui::vec2(widths[1], t.control_height),
                     properties::input(&mut candidate.thickness[i].text).id_salt(("thickness", i)).hint_text("Unspecified"),
                 );
-                thickness.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, format!("{name} thickness")));
+                thickness.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("{name} thickness")));
                 if thickness.gained_focus() {
                     *selected = i;
                 }
@@ -404,7 +410,7 @@ impl Edit {
                                     }
                                 })
                                 .response
-                                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Construction"));
+                                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Construction"));
                         });
                         if kind != before {
                             candidate.constructions[i] = match kind {

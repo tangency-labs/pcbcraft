@@ -68,7 +68,7 @@ use window_commands::Panel;
 use eframe::Frame;
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use pcbcraft_chrome::{
-    MenuItem, Tokens, fonts, grid,
+    MenuItem, Tokens, grid,
     menu::{self, MenuIcon},
     shell::{self, dim},
     theme, units, workspace,
@@ -332,7 +332,7 @@ impl PcbApp {
     /// Successful New/Open actions enter the workspace; cancelling them leaves Home visible.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Home uses custom fonts on its first frame; installing during that frame is too late.
-        fonts::install(&cc.egui_ctx);
+        pcbcraft_chrome::install(&cc.egui_ctx);
         let preferences = cc.storage.and_then(|s| s.get_string(PREFERENCES_KEY)).map(|text| Preferences::parse(&text)).unwrap_or_default();
         let mut views = EditorViews::default();
         views.set_grid_everywhere(preferences.schematic_grid_nm);
@@ -2072,6 +2072,7 @@ impl PcbApp {
                     ui.label("Electronics design for people and AI agents working together on the same board.");
                     ui.label(dim("MIT OR Apache-2.0. Third-party notices are in ATTRIBUTION.md."));
                     workspace::ribbon_licenses(ui);
+                    pcbcraft_chrome::fonts::licenses(ui);
                     ui.hyperlink_to("Report a bug", BUG_REPORT_URL);
                     close = ui.button("Close").clicked();
                 });
@@ -2086,7 +2087,7 @@ impl PcbApp {
         let dark = self.preferences.is_dark(ctx.system_theme());
         let zoom = self.preferences.zoom();
         if self.applied.is_none() {
-            fonts::install(ctx);
+            pcbcraft_chrome::install(ctx);
         }
         if self.applied != Some((dark, zoom)) {
             theme::apply(ctx, dark);
@@ -2167,6 +2168,7 @@ impl PcbApp {
     /// Poll project and library file owners once through the framework root, even after its native
     /// window is hidden. Visible hosts borrow that state; none starts another service or file worker.
     pub fn frame(&mut self, ui: &mut Ui) {
+        pcbcraft_chrome::begin_frame();
         let ctx = ui.ctx().clone();
         self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());

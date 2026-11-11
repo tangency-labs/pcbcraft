@@ -1,11 +1,11 @@
-//! Paged settings windows and the form rows drawn on their pages, adapted from SolidCraft's
-//! `ui_kit` page window, settings sections and Preferences search (see `ATTRIBUTION.md`).
+//! Preferences pages and form rows inside a shared Craft modal.
 //!
 //! The caller owns the settings and what Cancel, Apply and the page defaults mean; this module
 //! draws the window, reports which footer action was chosen, and filters rows while searching.
 //! A row is found by being drawn: nothing registers for search.
 
-use egui::{Align, FontId, Frame, Id, Key, Label, Layout, Margin, Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use egui::{Align, FontId, Id, Key, Label, Layout, Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use solidcraft_ui_kit::{self as kit, Container, Surface, Window};
 
 use crate::{Tokens, fonts, menu::MenuIcon};
 
@@ -81,7 +81,7 @@ struct Search {
 
 /// Where the shared search state lives in egui memory.
 fn search_id() -> Id {
-    Id::new(SEARCH_STATE)
+    Id::unique(SEARCH_STATE)
 }
 
 /// Run `f` on the shared search state. `f` runs under egui's memory lock, so it must not read
@@ -106,73 +106,39 @@ pub fn paged_window<S>(
         return Action::Cancel;
     }
     state.page = state.page.min(pages.len() - 1);
-    let mut action = Action::None;
-    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md);
-    let modal = egui::Modal::new(Id::new(id)).frame(frame).show(ctx, |ui| {
+    let id = Id::unique(id);
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let window = Window::new(id, "settings", title).fields().actions("OK", "Cancel", Some("Apply")).apply_enabled(footer.apply_enabled);
+    let mut defaults = false;
+    let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
         let width = (t.form_card_width * 10.0 / 3.0).min(ui.ctx().content_rect().width() - 2.0 * t.space_16).max(0.0);
         ui.set_width(width);
-        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-        let search_field = title_bar(ui, title, state, &mut action);
-        let opened = keyboard(ui, state, &search_field);
-        if let Some(hit) = opened {
-            state.page = hit.page;
-            state.query.clear();
-            let until = ui.input(|i| i.time) + REVEAL_SECONDS;
-            with_search(ui, |search| search.reveal = Some((hit, until)));
-        }
-        body(ui, width, state, pages, data);
-        footer_bar(ui, width, footer, &mut action);
+        let page_style = ui.style().clone();
+        window.content(
+            ui,
+            true,
+            |ui| {
+                // Page controls still use the host's field styling, including slider tracks.
+                ui.set_style(page_style);
+                body(ui, id, state, pages, data);
+            },
+            |ui| {
+                defaults =
+                    kit::text_button(ui, "Restore page defaults", footer.defaults_enabled).on_hover_text("Reset the settings on this page").clicked();
+            },
+        )
     });
-    if modal.should_close() && action == Action::None {
-        action = Action::Cancel;
-    }
+    let action = match modal.inner {
+        (_, kit::Action::Ok) => Action::Ok,
+        (_, kit::Action::Apply) => Action::Apply,
+        (closed, action) if closed || action == kit::Action::Cancel || modal.should_close() => Action::Cancel,
+        _ if defaults => Action::Defaults,
+        _ => Action::None,
+    };
     if !matches!(action, Action::None) {
         ctx.data_mut(|data| data.remove::<Search>(search_id()));
     }
     action
-}
-
-/// The icon and title at the left, then the search field and the close button at the right.
-/// Returns the search field's response so Esc and the arrow keys can tell when it has focus.
-fn title_bar(ui: &mut Ui, title: &str, state: &mut WindowState, action: &mut Action) -> Response {
-    let t = Tokens::get();
-    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), t.form_header_height), Sense::hover());
-    let inner = bar.shrink2(vec2(t.space_12, t.space_6));
-    let icon = pos2(inner.left() + t.space_8, inner.center().y);
-    MenuIcon::Settings.paint_sized(ui.painter(), icon, t.space_16, t, true);
-    let title_font = fonts::semibold(t.font_button);
-    let title_width = ui.painter().layout_no_wrap(title.to_owned(), title_font.clone(), t.text).size().x;
-    let title_rect = Rect::from_min_size(pos2(icon.x + t.space_16, inner.top()), vec2(title_width, inner.height()));
-    ui.put(title_rect, Label::new(RichText::new(title).font(title_font).color(t.text)).selectable(false));
-
-    let close = Rect::from_min_size(
-        pos2(inner.right() - t.control_height, inner.center().y - t.control_height / 2.0),
-        vec2(t.control_height, t.control_height),
-    );
-    let close_label = format!("Close {title}");
-    let response = ui.interact(close, ui.id().with("settings_close"), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &close_label));
-    if response.hovered() || response.has_focus() {
-        ui.painter().rect_filled(close, t.radius_sm, t.hover);
-    }
-    MenuIcon::Close.paint_sized(ui.painter(), close.center(), t.space_16, t, true);
-    if response.on_hover_text(&close_label).clicked() {
-        *action = Action::Cancel;
-    }
-
-    let room = (close.left() - t.space_8 - (title_rect.right() + t.space_16)).max(0.0);
-    let field_width = (t.space_24 * 9.0 + t.space_12).min(room);
-    let field = Rect::from_min_size(pos2(close.left() - t.space_8 - field_width, inner.top()), vec2(field_width, inner.height()));
-    let edit = egui::TextEdit::singleline(&mut state.query)
-        .hint_text("Search settings")
-        .background_color(t.dialog_footer)
-        .margin(Margin { left: (t.space_24 + t.space_2) as i8, right: t.space_6 as i8, top: t.space_4 as i8, bottom: t.space_4 as i8 })
-        .vertical_align(Align::Center);
-    let field_response = ui.put(field, edit);
-    MenuIcon::Search.paint_sized(ui.painter(), pos2(field.left() + t.space_12 + t.space_2, field.center().y), t.space_12 + t.space_2, t, false);
-    let painter = ui.painter();
-    painter.hline(bar.x_range(), bar.bottom() - 0.5, Stroke::new(1.0, t.dialog_rule));
-    field_response
 }
 
 /// Arrow keys move through the found rows and Enter opens the one under the cursor.
@@ -220,17 +186,23 @@ pub fn searching(query: &str) -> bool {
 }
 
 /// The sidebar of pages and the scrolling page body, or every page's matching rows while searching.
-fn body<S>(ui: &mut Ui, width: f32, state: &mut WindowState, pages: &[Page<S>], data: &mut S) {
+fn body<S>(ui: &mut Ui, id: Id, state: &mut WindowState, pages: &[Page<S>], data: &mut S) {
     let t = Tokens::get();
-    let height =
-        (ui.ctx().content_rect().height() - t.form_header_height - t.form_footer_height - t.space_24 * 3.0).clamp(0.0, t.control_height * 18.0);
+    let width = ui.available_width();
+    // The shared window adds 12 points of padding around this body. Keep the page scroll
+    // within its budget so the sidebar and footer stay in reach on short viewports.
+    let shared = solidcraft_theme::Tokens::get();
+    let height = (ui.ctx().content_rect().height() - shared.form_header_height - shared.form_footer_height - shared.space_24 * 3.0)
+        .clamp(0.0, t.control_height * 18.0);
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let nav_width = if width < NARROW_AT { NARROW_SIDEBAR } else { t.form_label_width * 2.0 + t.space_24 * 2.0 }.min(width);
     let nav = Rect::from_min_size(rect.min, vec2(nav_width, height));
     ui.painter().rect_filled(nav, 0, t.dialog_footer);
     ui.painter().vline(nav.right() - 0.5, nav.y_range(), Stroke::new(1.0, t.dialog_rule));
     let list = nav.shrink2(vec2(t.space_8, t.space_6));
-    ui.scope_builder(UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)), |ui| {
+    let mut sidebar = ui.new_child(UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
+    sidebar.set_clip_rect(sidebar.clip_rect().intersect(nav));
+    egui::ScrollArea::vertical().id_salt("settings_pages").max_height(list.height().max(0.0)).show(&mut sidebar, |ui| {
         ui.spacing_mut().item_spacing.y = t.space_2;
         for (index, page) in pages.iter().enumerate() {
             if nav_row(ui, page, index == state.page).clicked() {
@@ -246,22 +218,38 @@ fn body<S>(ui: &mut Ui, width: f32, state: &mut WindowState, pages: &[Page<S>], 
     if !content.is_positive() {
         return;
     }
-    let query = fold(state.query.trim());
-    let active = searching(&state.query);
-    // Read the clock before taking egui's memory lock: the input lock can't be taken inside it.
-    let now = ui.input(|i| i.time);
-    with_search(ui, |search| {
-        search.last_found = std::mem::take(&mut search.found);
-        search.query = if active { query.clone() } else { String::new() };
-        search.probing = 0;
-        search.hits = 0;
-        if search.reveal.as_ref().is_some_and(|(_, until)| now > *until) {
-            search.reveal = None;
+    // Both slots were allocated in the body above. A long control may scroll or clip inside
+    // its slot, but must not grow the window past its chosen viewport width.
+    let mut contents = ui.new_child(UiBuilder::new().max_rect(content).layout(Layout::top_down(Align::Min)));
+    contents.set_clip_rect(contents.clip_rect().intersect(content));
+    contents.scope(|ui| {
+        let field = kit::preferences_search_field(ui, id.with("search"), &mut state.query, "Search settings", "preferences");
+        if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::F)) {
+            field.request_focus();
         }
-    });
-    ui.scope_builder(UiBuilder::new().max_rect(content).layout(Layout::top_down(Align::Min)), |ui| {
+        if let Some(hit) = keyboard(ui, state, &field) {
+            state.page = hit.page;
+            state.query.clear();
+            let until = ui.input(|i| i.time) + REVEAL_SECONDS;
+            with_search(ui, |search| search.reveal = Some((hit, until)));
+            ui.ctx().request_repaint();
+        }
+        let query = fold(state.query.trim());
+        let active = searching(&state.query);
+        // Read the clock before taking the memory lock.
+        let now = ui.input(|i| i.time);
+        with_search(ui, |search| {
+            search.last_found = std::mem::take(&mut search.found);
+            search.query = if active { query } else { String::new() };
+            search.probing = 0;
+            search.hits = 0;
+            if search.reveal.as_ref().is_some_and(|(_, until)| now > *until) {
+                search.reveal = None;
+            }
+        });
         let salt = if active { usize::MAX } else { state.page };
         egui::ScrollArea::vertical().id_salt(("settings_page", salt)).auto_shrink([false, false]).show(ui, |ui| {
+            crate::workspace::describe_scroll_viewport(ui);
             ui.set_width(ui.available_width() - t.space_12);
             ui.spacing_mut().item_spacing.y = t.form_gap_y;
             if !active {
@@ -296,7 +284,7 @@ fn body<S>(ui: &mut Ui, width: f32, state: &mut WindowState, pages: &[Page<S>], 
 fn nav_row<S>(ui: &mut Ui, page: &Page<S>, selected: bool) -> Response {
     let t = Tokens::get();
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), t.control_height + t.space_4), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, page.label));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, page.label));
     if selected || response.hovered() || response.has_focus() {
         ui.painter().rect_filled(rect, t.control_radius, if selected { t.selected_bg } else { t.hover });
     }
@@ -312,32 +300,6 @@ fn nav_row<S>(ui: &mut Ui, page: &Page<S>, selected: bool) -> Response {
     let left = icon.x + t.space_8 + NAV_ROW_GAP;
     ui.painter().with_clip_rect(rect).galley(pos2(left, rect.center().y - galley.size().y / 2.0), galley, ink);
     response
-}
-
-/// Restore page defaults at the left; OK, Apply and Cancel at the right with OK outermost.
-fn footer_bar(ui: &mut Ui, width: f32, footer: Footer, action: &mut Action) {
-    let t = Tokens::get();
-    let (bar, _) = ui.allocate_exact_size(vec2(width, t.form_footer_height), Sense::hover());
-    ui.painter().rect_filled(bar, egui::CornerRadius { nw: 0, ne: 0, sw: t.radius_md, se: t.radius_md }, t.dialog_footer);
-    ui.painter().hline(bar.x_range(), bar.top() + 0.5, Stroke::new(1.0, t.dialog_rule));
-    let inner = bar.shrink2(vec2(t.space_16, t.space_8 + t.space_2));
-    let mut left = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)));
-    let defaults =
-        left.add_enabled(footer.defaults_enabled, egui::Button::new(RichText::new("Restore page defaults").size(t.font_label)).frame(false));
-    if defaults.on_hover_text("Reset the settings on this page").clicked() {
-        *action = Action::Defaults;
-    }
-    let mut right = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)));
-    right.spacing_mut().item_spacing.x = t.space_8;
-    if right.add(action_button("OK", true)).clicked() {
-        *action = Action::Ok;
-    }
-    if right.add_enabled(footer.apply_enabled, action_button("Apply", false)).clicked() {
-        *action = Action::Apply;
-    }
-    if right.add(action_button("Cancel", false)).clicked() {
-        *action = Action::Cancel;
-    }
 }
 
 /// Start a page for the rows that follow, so a search for the page name shows all of them.
@@ -455,18 +417,31 @@ pub fn row_with_keywords<R>(ui: &mut Ui, label: &str, keywords: &[&str], control
     if !show || !real {
         return None;
     }
-    let label_width = t.form_label_width * 2.0 + t.space_8;
-    let inner = ui.horizontal(|ui| {
-        ui.set_min_height(t.control_height);
-        ui.spacing_mut().item_spacing.x = t.space_8;
-        ui.allocate_ui_with_layout(vec2(label_width, t.control_height), Layout::left_to_right(Align::Center), |ui| {
-            ui.set_width(label_width);
-            ui.add(Label::new(RichText::new(label).size(t.font_label).color(t.text)).truncate());
-        });
-        // Controls wrap inside their column, so a long row never widens the window.
+    let label_width = label_column(ui);
+    let text = RichText::new(label).size(t.font_label).color(t.text);
+    let controls = |ui: &mut Ui| {
         let room = ui.available_width().max(0.0);
-        ui.allocate_ui_with_layout(vec2(room, t.control_height), Layout::left_to_right(Align::Center).with_main_wrap(true), control).inner
-    });
+        ui.allocate_ui_with_layout(vec2(room, t.control_height), Layout::left_to_right(Align::Center).with_main_wrap(true), |ui| {
+            solidcraft_ui_kit::named_control(ui, label, control)
+        })
+        .inner
+    };
+    let inner = if label_width == 0.0 {
+        ui.vertical(|ui| {
+            ui.add(Label::new(text).wrap());
+            controls(ui)
+        })
+    } else {
+        ui.horizontal(|ui| {
+            ui.set_min_height(t.control_height);
+            ui.spacing_mut().item_spacing.x = t.space_8;
+            ui.allocate_ui_with_layout(vec2(label_width, t.control_height), Layout::left_to_right(Align::Center), |ui| {
+                ui.set_width(label_width);
+                ui.add(Label::new(text).truncate());
+            });
+            controls(ui)
+        })
+    };
     let rect = inner.response.rect.expand2(vec2(t.space_6, t.space_2));
     if cursor || reveal {
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.5, t.form_primary), StrokeKind::Outside);
@@ -481,65 +456,61 @@ pub fn row_with_keywords<R>(ui: &mut Ui, label: &str, keywords: &[&str], control
     Some(inner.inner)
 }
 
-/// A line of explanation under a row, indented to the control column.
+/// Reserve a label column only when there is room left for a slider and its value.
+/// Zero means the label and control stack within the page width.
+fn label_column(ui: &Ui) -> f32 {
+    let t = Tokens::get();
+    let width = t.form_label_width * 2.0 + t.space_8;
+    if ui.available_width() >= width + t.space_24 * 7.0 { width } else { 0.0 }
+}
+
+/// A line of explanation under a row, aligned with its control.
 pub fn hint(ui: &mut Ui, text: &str) {
     if with_search(ui, |search| search.probing > 0 || (!search.query.is_empty() && !search.section_hit)) {
         return;
     }
     let t = Tokens::get();
+    let column = label_column(ui);
     ui.horizontal(|ui| {
-        ui.add_space(t.form_label_width * 2.0 + t.space_8 + t.space_8);
+        if column > 0.0 {
+            ui.add_space(column + t.space_8);
+        }
         ui.add(Label::new(RichText::new(text).size(t.font_small).color(t.form_dim)).wrap());
     });
 }
 
-/// Choose a single option in a compact dropdown, using the window's themed widget styles.
+/// Choose a single option in the shared dropdown.
 /// The label supplies a stable accessible name; returns whether the value changed.
 pub fn choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T, options: &[(T, &str)]) -> bool {
-    let before = *value;
-    let selected = options.iter().find(|(option, _)| option == value).map_or("", |(_, text)| *text);
-    egui::ComboBox::from_id_salt(label)
-        .selected_text(selected)
-        .width(ui.available_width())
-        .show_ui(ui, |ui| {
-            for (option, text) in options {
-                ui.selectable_value(value, *option, *text);
-            }
-        })
-        .response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
-    before != *value
+    choose_option(value, options, |selected, labels| {
+        solidcraft_ui_kit::named_control(ui, label, |ui| solidcraft_ui_kit::dropdown(ui, label, selected, labels));
+    })
 }
 
-/// Choose one of `options` with a row of joined toggle buttons. True when the choice changed.
+/// Choose one of `options` with the shared segments, which fall back to a dropdown in a narrow row.
+/// Returns whether the setting changed.
 pub fn segmented<T: Copy + PartialEq>(ui: &mut Ui, value: &mut T, options: &[(T, &str)]) -> bool {
-    let t = Tokens::get();
-    let mut changed = false;
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        for (index, (option, label)) in options.iter().enumerate() {
-            let selected = *value == *option;
-            let corner = |first: bool, last: bool| egui::CornerRadius {
-                nw: if first { t.radius_sm } else { 0 },
-                sw: if first { t.radius_sm } else { 0 },
-                ne: if last { t.radius_sm } else { 0 },
-                se: if last { t.radius_sm } else { 0 },
-            };
-            let text = RichText::new(*label).size(t.font_label).color(if selected { t.form_primary } else { t.text });
-            let button = egui::Button::new(text)
-                .selected(selected)
-                .frame_when_inactive(true)
-                .fill(if selected { t.selected_bg } else { t.field })
-                .stroke(Stroke::new(1.0, if selected { t.form_primary } else { t.border }))
-                .corner_radius(corner(index == 0, index + 1 == options.len()))
-                .min_size(vec2(t.space_24 * 2.5, t.control_height - t.space_4));
-            if ui.add(button).clicked() && !selected {
-                *value = *option;
-                changed = true;
-            }
-        }
-    });
-    changed
+    choose_option(value, options, |selected, labels| {
+        solidcraft_ui_kit::segmented(ui, selected, labels, solidcraft_ui_kit::Segments { dense: true, intrinsic: true, ..Default::default() });
+    })
+}
+
+/// Give an indexed widget the labels and the current selection, keeping the setting's typed value.
+/// A value absent from the options stays in place until the widget selects a valid option.
+fn choose_option<T: Copy + PartialEq>(value: &mut T, options: &[(T, &str)], draw: impl FnOnce(&mut usize, &[&str])) -> bool {
+    let before = *value;
+    let mut selected = options.iter().position(|(option, _)| *option == before).unwrap_or(options.len());
+    let labels: Vec<_> = options.iter().map(|(_, label)| *label).collect();
+    draw(&mut selected, &labels);
+    if let Some((option, _)) = options.get(selected) {
+        *value = *option;
+    }
+    *value != before
+}
+
+/// Draw a shared checkbox with a visible label and an accessible setting name.
+pub fn checkbox(ui: &mut Ui, label: &str, accessible_name: &str, value: &mut bool) -> Response {
+    solidcraft_ui_kit::checkbox(ui, label, value).accessible_name(accessible_name)
 }
 
 /// A keyboard key or gesture as a bordered chip, for read-only shortcut lists.
@@ -548,7 +519,7 @@ pub fn key_chip(ui: &mut Ui, text: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::monospace(t.font_small), t.text);
     let size = galley.size() + vec2(t.space_12, t.space_6);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
     ui.painter().rect(rect, t.radius_sm, t.dialog_footer, Stroke::new(1.0, t.border), StrokeKind::Inside);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, t.text);
     response

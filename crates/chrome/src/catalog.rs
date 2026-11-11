@@ -1,6 +1,7 @@
 //! Craft catalog and property forms share the source manager's header, body and footer rhythm.
 use crate::{Tokens, fonts, menu::MenuIcon};
 use egui::{Align, Frame, Layout, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
+use solidcraft_ui_kit::{self as kit, Container, Surface, Window};
 
 /// A shared explicit placement choice keeps compact and expanded catalogs in agreement.
 pub fn repeat_placement(ui: &mut Ui, repeat: &mut bool) -> egui::Response {
@@ -36,9 +37,30 @@ pub fn form(
     form_body(ctx, id, title, width, primary, enabled, libraries, active, if libraries { 18. } else { 8. }, None, "Cancel", add)
 }
 
-/// A consolidated property form keeps Apply/Cancel visible while its fields scroll.
+/// Keep the shared property actions visible while fields scroll. The caller handles field
+/// submission and validation; Escape and backdrop clicks dismiss the dialog.
 pub fn property_form(ctx: &egui::Context, id: &'static str, title: &str, width: f32, primary: &str, add: impl FnOnce(&mut Ui)) -> FormAction {
-    form_body(ctx, id, title, width, primary, true, false, true, 26., None, "Cancel", add)
+    let t = Tokens::get();
+    let id = egui::Id::unique(id);
+    let window = Window::new(id, "settings", title).fields().actions(primary, "Cancel", None);
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
+        ui.set_width(width.min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0)));
+        let field_style = ui.style().clone();
+        window.content(
+            ui,
+            true,
+            |ui| {
+                ui.set_style(field_style);
+                add(ui);
+            },
+            |_| {},
+        )
+    });
+    let (closed, action) = modal.inner;
+    // Let the modal route Escape so an open dropdown dismisses before the draft does.
+    let cancelled = action == kit::Action::Cancel && !ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    FormAction { close: closed || cancelled || modal.should_close(), primary: action == kit::Action::Ok, ..Default::default() }
 }
 
 /// The footprint browser shares the property shell and keeps assignment/placement actions fixed.
@@ -84,7 +106,7 @@ pub(crate) fn form_body(
     let t = Tokens::get();
     let mut action = FormAction::default();
     let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(if libraries { t.radius_lg } else { t.radius_md });
-    let modal = egui::Modal::new(id.into()).frame(frame).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique(id)).frame(frame).show(ctx, |ui| {
         if !active {
             ui.disable();
         }
@@ -93,7 +115,7 @@ pub(crate) fn form_body(
         ui.spacing_mut().item_spacing = vec2(0., 0.);
         let (header, header_response) =
             ui.allocate_exact_size(vec2(width, t.form_header_height + if libraries { t.space_8 } else { 0. }), Sense::hover());
-        header_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, title));
+        header_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, title));
         if libraries {
             MenuIcon::Open.paint_sized(ui.painter(), header.left_center() + vec2(t.space_24, 0.), t.space_16, t, true);
         }
@@ -105,8 +127,8 @@ pub(crate) fn form_body(
             t.text,
         );
         let close = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.), vec2(t.control_height, t.control_height));
-        let response = ui.interact(close, ui.id().with("close"), Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("Close {title}")));
+        let response = ui.interact(close, ui.scope_id().with("close"), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Close {title}")));
         if response.hovered() {
             ui.painter().rect_filled(close, t.radius_sm, t.hover);
         }
@@ -114,7 +136,7 @@ pub(crate) fn form_body(
         if libraries {
             let dock = Rect::from_min_max(close.left_top() - vec2(56., 0.), close.left_bottom() - vec2(t.space_8, 0.));
             let response = ui.put(dock, egui::Button::new("Dock").small()).on_hover_text("Show compact catalog");
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Dock Parts Catalog"));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Dock Parts Catalog"));
             action.compact = response.clicked();
         }
         action.close = response.clicked();
@@ -186,7 +208,7 @@ pub fn panes(ui: &mut Ui, mut add: impl FnMut(&mut Ui, Region)) {
         pane(ui, rect, true, |ui| add(ui, Region::Libraries));
     }
     if content.width() < 600. {
-        let id = ui.id().with("catalog_pane");
+        let id = ui.scope_id().with("catalog_pane");
         let mut tab = ui.ctx().data_mut(|d| *d.get_temp_mut_or_default::<usize>(id));
         let tabs = Rect::from_min_size(content.min, vec2(content.width(), t.form_header_height));
         ui.scope_builder(UiBuilder::new().max_rect(tabs.shrink(t.space_8)).layout(Layout::left_to_right(Align::Center)), |ui| {
@@ -228,7 +250,7 @@ pub fn preview(ui: &mut Ui, paint: impl FnOnce(&egui::Painter, Rect)) {
 /// A selected catalog item's heading uses the same heading family as the source manager.
 pub fn title(ui: &mut Ui, text: &str) {
     let response = ui.label(RichText::new(text).font(fonts::interface_heading(ui, Tokens::get().font_intro)));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("Preview {text}")));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("Preview {text}")));
 }
 
 /// Inset search/filter controls above the catalog panes using the source manager's spacing.
@@ -296,6 +318,6 @@ pub fn footprint_result(ui: &mut Ui, label: &str, name: &str, detail: &str, sele
     );
     text.append(detail, 0., egui::TextFormat { font_id: egui::FontId::proportional(t.font_label - 1.), color: t.text_dim, ..Default::default() });
     let response = ui.add_sized(vec2(ui.available_width(), t.control_height * 2.), egui::Button::selectable(selected, text).right_text(()).wrap());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), selected, label));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, label));
     response
 }

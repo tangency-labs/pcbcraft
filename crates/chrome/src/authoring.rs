@@ -17,7 +17,7 @@ pub fn workspace(ui: &mut Ui, collapsed: [bool; 2], panel: &mut workspace::panel
     let area = ui.available_rect_before_wrap();
     let (browser, b) = workspace::floating_card_aligned(
         ui,
-        ui.id().with("library_browser"),
+        ui.scope_id().with("library_browser"),
         "Browser",
         crate::properties::browser_area(area),
         collapsed[0],
@@ -30,7 +30,7 @@ pub fn workspace(ui: &mut Ui, collapsed: [bool; 2], panel: &mut workspace::panel
     }
     let width = if area.width() < 600.0 { area.width() } else { 260.0 };
     let (properties, p) =
-        panel.show(ui, ui.id().with("library_properties"), "Properties", area, dock, collapsed[1], width, |ui| draw(ui, Region::Properties));
+        panel.show(ui, ui.scope_id().with("library_properties"), "Properties", area, dock, collapsed[1], width, |ui| draw(ui, Region::Properties));
     draw(ui, Region::Canvas { area, covered: [browser, properties] });
     [collapsed[0] ^ b, collapsed[1] ^ p]
 }

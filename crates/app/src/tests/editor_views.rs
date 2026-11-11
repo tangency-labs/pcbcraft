@@ -18,6 +18,7 @@ fn navigation_and_selection_belong_to_the_view() {
     harness.hover_at(canvas_center(&harness));
     harness.run();
     harness.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, 2.0),
         phase: egui::TouchPhase::Move,

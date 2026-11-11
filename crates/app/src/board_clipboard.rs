@@ -264,7 +264,7 @@ impl PcbApp {
                             let mut choices = vec![("".to_owned(), "Choose sheet…".to_owned())];
                             choices.extend(sheets.clone());
                             let choices: Vec<_> = choices.iter().map(|(id, name)| (id.as_str(), name.clone())).collect();
-                            properties::choice(ui, "Sheet", ui.id().with("sheet"), &mut target.sheet, &choices);
+                            properties::choice(ui, "Sheet", ui.scope_id().with("sheet"), &mut target.sheet, &choices);
                             properties::text(ui, "Schematic X", &mut target.x);
                             properties::text(ui, "Schematic Y", &mut target.y);
                         });
@@ -277,7 +277,7 @@ impl PcbApp {
                     let mut choices = vec![("".to_owned(), "Choose layer…".to_owned())];
                     choices.extend(destination_layers.iter().filter(|l| l.purpose == layer.purpose).map(|l| (l.id.to_string(), l.name.clone())));
                     let choices: Vec<_> = choices.iter().map(|(id, name)| (id.as_str(), name.clone())).collect();
-                    properties::mapping_choice(ui, &layer.name, ui.id().with(layer.id), draft.layers.entry(layer.id).or_default(), &choices);
+                    properties::mapping_choice(ui, &layer.name, ui.scope_id().with(layer.id), draft.layers.entry(layer.id).or_default(), &choices);
                 }
             }
             ui.checkbox(&mut draft.original, "Paste at original board position");

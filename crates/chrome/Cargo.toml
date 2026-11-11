@@ -1,6 +1,6 @@
 [package]
 name = "pcbcraft-chrome"
-description = "PCBCraft's window chrome in the Craft family style. Meant to be replaced by the shared Craft UI crate"
+description = "PCBCraft's window chrome and adapters to the shared Craft UI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+solidcraft-ui-kit = { workspace = true }
+solidcraft-ui-registry = { workspace = true }
+solidcraft-theme = { workspace = true }
+solidcraft-look = { workspace = true }
 egui = { workspace = true }
-egui_extras = { version = "=0.36.2", default-features = false, features = ["svg"] }
+egui_extras = { version = "=0.37.0", default-features = false, features = ["svg"] }
 serde = { workspace = true }

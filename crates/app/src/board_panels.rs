@@ -20,7 +20,7 @@ impl PcbApp {
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
             return ([Rect::NOTHING; 3], Rect::NOTHING);
         };
-        let host = Id::new(("board_panels", self.views.host));
+        let host = Id::unique(("board_panels", self.views.host));
         let mut browser_area = area;
         browser_area.max.y = board::browser_bottom(area);
         let mut color_pick = None;
@@ -66,7 +66,7 @@ impl PcbApp {
                 });
             },
             |ui| {
-                layer_groups(ui, target, state, Id::new((view_id, target.target)), &self.board_appearance, &mut color_pick);
+                layer_groups(ui, target, state, Id::unique((view_id, target.target)), &self.board_appearance, &mut color_pick);
             },
         );
         if collapse {
@@ -226,10 +226,10 @@ fn footprint_transform(
 /// A whole-degree rotation field, 0 through 359 with wrap-around, that keeps its draft while
 /// dragged or typed into and returns once on release or confirmation, only when it changed.
 fn committed_degrees(ui: &mut Ui, salt: (&str, impl std::hash::Hash + std::fmt::Debug), model: u16) -> Option<u16> {
-    let id = ui.id().with(&salt);
+    let id = ui.scope_id().with(&salt);
     let mut value = ui.data(|data| data.get_temp::<i64>(id)).unwrap_or(i64::from(model));
     let response = ui.add(egui::DragValue::new(&mut value).speed(1.0).suffix("°"));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, salt.0));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, true, salt.0));
     let commit = response.drag_stopped() || (response.changed() && !response.dragged());
     if response.dragged() || response.has_focus() {
         ui.data_mut(|data| data.insert_temp(id, value));
@@ -312,7 +312,7 @@ fn committed_length(
         units::Unit::Mm => units::NM_PER_MM,
         units::Unit::Mil => units::NM_PER_MIL,
     } as f64;
-    let id = ui.id().with(&salt);
+    let id = ui.scope_id().with(&salt);
     let mut value = ui.data(|data| data.get_temp::<f64>(id)).unwrap_or(model_nm as f64 / per_unit);
     let response = ui.add(
         egui::DragValue::new(&mut value)
@@ -321,7 +321,7 @@ fn committed_length(
             .max_decimals(3)
             .suffix(format!(" {}", unit.symbol())),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, true, salt.0));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, true, salt.0));
     let commit = response.drag_stopped() || (response.changed() && !response.dragged());
     if response.dragged() || response.has_focus() {
         ui.data_mut(|data| data.insert_temp(id, value));
@@ -451,7 +451,7 @@ fn layer_row(
                 let active = state.active_layer.as_ref() == Some(&id);
                 let row = workspace::tree_row(
                     ui,
-                    ui.id().with("activate"),
+                    ui.scope_id().with("activate"),
                     &workspace::TreeRow {
                         depth: 0,
                         fold: None,

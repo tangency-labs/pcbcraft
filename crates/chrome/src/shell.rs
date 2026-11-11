@@ -152,8 +152,8 @@ fn project_title(ui: &mut Ui, title: &str, dirty: bool, has_project: bool, room:
 fn unsaved_marker(ui: &mut Ui, rect: egui::Rect, t: Tokens) {
     const LABEL: &str = "Unsaved changes";
     ui.painter().circle_filled(rect.center(), t.space_2, t.accent);
-    let response = ui.interact(rect, ui.id().with("unsaved_project"), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, LABEL));
+    let response = ui.interact(rect, ui.scope_id().with("unsaved_project"), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, LABEL));
     response.on_hover_text(LABEL);
 }
 
@@ -216,7 +216,7 @@ pub fn scrolling_dialog_width(ctx: &egui::Context, id: &str, title: &str, width:
 pub fn dialog_width(ctx: &egui::Context, id: &str, title: &str, width: f32, add: impl FnOnce(&mut Ui)) -> bool {
     let t = Tokens::get();
     let frame = Frame::new().fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(t.radius_md).inner_margin(Margin::same(t.space_16 as i8));
-    egui::Modal::new(egui::Id::new(id))
+    egui::Modal::new(egui::Id::unique(id))
         .frame(frame)
         .show(ctx, |ui| {
             ui.set_width(width.min((ctx.content_rect().width() - t.space_16 * 3.0).max(0.0)));
@@ -242,7 +242,7 @@ pub fn save_changes(ctx: &egui::Context, title: &str, message: &str, offer_save:
     let t = Tokens::get();
     let mut decision = None;
     let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1., t.border)).corner_radius(t.radius_lg);
-    let modal = egui::Modal::new(egui::Id::new("save_changes")).frame(frame).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("save_changes")).frame(frame).show(ctx, |ui| {
         let width = (t.form_card_width * 1.75).min((ctx.content_rect().width() - 2. * t.space_16).max(0.));
         ui.set_width(width);
         ui.spacing_mut().item_spacing = vec2(0., 0.);

@@ -202,7 +202,7 @@ impl PcbApp {
                             form::choice(
                                 ui,
                                 "Library",
-                                ui.id().with("footprint_library"),
+                                ui.scope_id().with("footprint_library"),
                                 &mut edit.library,
                                 &std::iter::once(("", "All libraries".into()))
                                     .chain(
@@ -251,7 +251,7 @@ impl PcbApp {
                                         ui.selectable_value(&mut edit.mounting, Mounting::Through, "Through hole");
                                     })
                                     .response
-                                    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Mounting type"));
+                                    .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Mounting type"));
                             });
                             let pin_count = project.components().find(|c| c.id() == edit.component).map(|c| c.definition.pins().len());
                             let matches: Vec<_> = catalog.iter().filter(|d| edit.matches(d, pin_count)).cloned().collect();
@@ -321,7 +321,7 @@ impl PcbApp {
                                                     || format!("Terminal {}", pin.number),
                                                     |name| format!("Terminal {} · {name}", pin.number),
                                                 ),
-                                                ui.id().with((&edit.component, &pin.number)),
+                                                ui.scope_id().with((&edit.component, &pin.number)),
                                                 mapped,
                                                 &options,
                                             );

@@ -101,7 +101,7 @@ impl Drc {
         let mut action = Action::None;
         let mut close = false;
         let width = if area.width() < 600. { area.width() } else { 300. };
-        let (rect, collapse) = workspace::floating_card_width(ui, ui.id().with("board_drc"), "DRC", area, self.collapsed, true, width, |ui| {
+        let (rect, collapse) = workspace::floating_card_width(ui, ui.scope_id().with("board_drc"), "DRC", area, self.collapsed, true, width, |ui| {
             properties::inspector_body(ui);
             ui.horizontal(|ui| {
                 if ui.button("Run again").clicked() {

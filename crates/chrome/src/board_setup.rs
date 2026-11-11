@@ -78,7 +78,7 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
                 }
             })
             .response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Board setup page"));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Board setup page"));
         body.min.y = bar.bottom();
     }
     if *page != previous {
@@ -166,7 +166,7 @@ pub fn table_label(ui: &mut Ui, label: &str, width: f32) {
 pub fn text(ui: &mut Ui, label: &str, value: &mut String) -> egui::Response {
     field(ui, label, |ui| {
         let response = ui.add(crate::properties::input(value).desired_width(ui.available_width()));
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, label));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
         response
     })
 }
@@ -236,7 +236,7 @@ pub fn stratum_row(ui: &mut Ui, name: &str, width: f32, selected: bool) -> egui:
         egui::FontId::proportional(t.font_label),
         t.text,
     );
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, name));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
     response.on_hover_text(name)
 }
 
@@ -252,7 +252,7 @@ pub fn thickness_lock(ui: &mut Ui, width: f32, value: &mut bool, label: &str) ->
         state.corner_radius = egui::CornerRadius::same(Tokens::get().radius_sm / 2);
     }
     let response = control.add(egui::Checkbox::without_text(value));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Checkbox, true, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::CheckBox, true, label));
     response
 }
 
@@ -329,7 +329,7 @@ pub fn cross_section(ui: &mut Ui, bands: &[(String, Option<i64>, bool)], rows: &
                 line_y += t.space_8;
             }
         }
-        ui.interact(band, ui.id().with(("stratum", i)), Sense::hover()).on_hover_text(format!(
+        ui.interact(band, ui.scope_id().with(("stratum", i)), Sense::hover()).on_hover_text(format!(
             "{name}: {}",
             thickness.map(|n| crate::units::label(n, crate::units::Unit::Mm)).unwrap_or_else(|| "Unspecified".into())
         ));

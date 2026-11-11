@@ -490,7 +490,7 @@ fn the_help_menu_holds_about_shortcuts_issues_and_ai_connection() {
 
     // File ends with Preferences and Keyboard Shortcuts above Quit, as SolidCraft's does.
     choose(&mut harness, "File", "Preferences…");
-    harness.get_by_label("Interface scale");
+    harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Interface scale");
     click(&mut harness, "OK");
     choose(&mut harness, "File", "Keyboard Shortcuts…");
     harness.get_by_label("Draw wire");
@@ -783,6 +783,50 @@ fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
     assert!(harness.query_by_label("Close").is_none());
 }
 
+/// Scale edits keep the slider's geometry stable until the pointer is released or the typed
+/// number is confirmed. Cancel can still restore a scale that was previewed in the app.
+#[test]
+fn preferences_scale_applies_after_release_or_numeric_confirmation() {
+    let mut h = harness();
+    click(&mut h, "Preferences");
+    let role = egui::accesskit::Role::Slider;
+    let rect = h.get_by_role_and_label(role, "Interface scale").rect();
+    let press = rect.center();
+    let end = press + egui::vec2(rect.width() * 0.1, 0.0);
+    let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.hover_at(press);
+    h.run();
+    h.event(pointer(press, true));
+    h.run();
+    assert_eq!(h.state().preferences().scale_percent, 100);
+    h.event(egui::Event::PointerMoved(end));
+    h.run();
+    let slider = h.get_by_role_and_label(role, "Interface scale");
+    let preview = slider.accesskit_node().numeric_value().unwrap() as u16;
+    assert!(preview > 100);
+    assert_eq!(slider.rect(), rect);
+    assert_eq!(h.state().preferences().scale_percent, 100);
+    assert_eq!(h.ctx.zoom_factor(), 1.0);
+    h.event(pointer(end, false));
+    h.run();
+    assert_eq!(h.state().preferences().scale_percent, preview);
+    assert_eq!(h.ctx.zoom_factor(), f32::from(preview) / 100.0);
+    click(&mut h, "Cancel");
+    assert_eq!(h.ctx.zoom_factor(), 1.0);
+
+    click(&mut h, "Preferences");
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Interface scale").click();
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.event(egui::Event::Text("125".into()));
+    h.run();
+    assert_eq!(h.ctx.zoom_factor(), 1.0);
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.ctx.zoom_factor(), 1.25);
+    assert!(matches!(h.state().dialog, Dialog::Preferences(_)));
+}
+
 /// Cancel, Esc and the close button put back what was there when Preferences opened, and
 /// Apply moves that point forward.
 #[test]
@@ -807,8 +851,43 @@ fn preferences_cancel_restores_and_apply_keeps() {
 
     click(&mut harness, "Preferences");
     click(&mut harness, "Light");
-    click(&mut harness, "Close Preferences");
+    click(&mut harness, "Close");
     assert_eq!(harness.state().preferences().theme, ThemeChoice::Dark);
+}
+
+/// The shared segments fall back to a named dropdown when the setting column is too narrow.
+/// Choosing from that dropdown updates the same draft and Cancel restores the original theme.
+#[test]
+fn narrow_preferences_keep_theme_choices_available() {
+    let mut h = harness();
+    h.set_size(egui::vec2(340.0, 800.0));
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+    h.run();
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Theme").click();
+    h.run();
+    click(&mut h, "Light");
+    assert_eq!(h.state().preferences().theme, ThemeChoice::Light);
+    click(&mut h, "Cancel");
+    assert_eq!(h.state().preferences().theme, ThemeChoice::Dark);
+}
+
+/// A click over the editor outside Preferences dismisses its draft and never reaches the editor.
+#[test]
+fn preferences_backdrop_cancels_without_activating_home() {
+    let mut h = harness();
+    new_project(&mut h);
+    let pos = h.get_by_label("Home").rect().center();
+    click(&mut h, "Preferences");
+    click(&mut h, "Light");
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().preferences().theme, ThemeChoice::Dark);
+    assert!(!h.state().home);
 }
 
 /// Cleanup is discoverable in Preferences and shares the ribbon's saved setting. Cancel
@@ -909,23 +988,27 @@ fn preferences_search_filters_rows_across_pages() {
         harness.run();
         harness.run();
     };
-    search(&mut harness, "zoom");
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::F);
+    harness.run();
+    harness.event(egui::Event::Text("zoom".into()));
+    harness.run();
+    harness.run();
     assert!(harness.get_by_label("Restore page defaults").accesskit_node().is_disabled(), "results span pages");
-    harness.get_by_label("Zoom speed");
+    harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Zoom speed");
     harness.get_by_label("Zoom direction");
     assert!(harness.query_by_label("Theme").is_none());
     assert!(harness.query_by_label("Add symbol").is_none());
 
     search(&mut harness, "dark");
     harness.get_by_label("Theme");
-    assert!(harness.query_by_label("Zoom speed").is_none());
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Slider, "Zoom speed").is_none());
 
     search(&mut harness, "Draw wire");
     harness.get_by_label("Draw wire");
     harness.key_press(Key::Enter);
     harness.run();
     harness.run();
-    assert!(harness.query_by_label("Zoom speed").is_none());
+    assert!(harness.query_by_role_and_label(egui::accesskit::Role::Slider, "Zoom speed").is_none());
     assert!(harness.query_all_by_label("Shortcuts").any(|node| node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)));
     harness.get_by_label("Add symbol");
 
@@ -944,7 +1027,7 @@ fn grid_opacity_preference_steps_resets_and_cancels() {
     let mut harness = harness();
     harness.state_mut().preferences.grid_opacity_percent = 40;
     click(&mut harness, "Preferences");
-    harness.get_by_label("Grid opacity");
+    harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Grid opacity");
     // The percentage box beside it reads "40%"; the slider itself carries the number.
     harness.get_by_value("40%");
     let slider = harness.query_all_by_role(egui::accesskit::Role::Slider).find(|node| node.accesskit_node().numeric_value() == Some(40.0));
@@ -965,7 +1048,7 @@ fn grid_opacity_preference_steps_resets_and_cancels() {
     harness.get_by_role(egui::accesskit::Role::TextInput).type_text("grid");
     harness.run();
     harness.run();
-    harness.get_by_label("Grid opacity");
+    harness.get_by_role_and_label(egui::accesskit::Role::Slider, "Grid opacity");
     assert!(harness.query_by_label("Theme").is_none());
 }
 
@@ -1006,6 +1089,7 @@ fn navigation_preferences_change_what_the_wheel_does() {
         harness.hover_at(canvas_center(harness));
         harness.run();
         harness.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
             unit: egui::MouseWheelUnit::Line,
             delta: egui::vec2(0.0, 2.0),
             phase: egui::TouchPhase::Move,
@@ -1116,6 +1200,7 @@ fn wheel_zoom_and_middle_pan_preserve_the_placement_coordinate() {
     harness.hover_at(point);
     harness.run();
     harness.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, 4.0),
         phase: egui::TouchPhase::Move,

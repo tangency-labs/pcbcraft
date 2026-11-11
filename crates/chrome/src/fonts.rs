@@ -1,35 +1,42 @@
-//! The bundled IBM Plex interface faces, the same ones SolidCraft uses, ahead of egui's own fonts,
-//! which stay as fallbacks for symbols.
+//! Shared Craft interface faces behind PCBcraft's existing chrome API.
 
 use std::sync::Arc;
 
-use egui::{FontData, FontDefinitions, FontFamily, FontId};
+use egui::{FontData, FontId};
 
-const PLEX_SANS: &[u8] = include_bytes!("../assets/fonts/ibm-plex-sans/IBMPlexSans-Variable.ttf");
-const PLEX_MONO: &[u8] = include_bytes!("../assets/fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf");
-const SEMIBOLD: &str = "ui-semibold";
+/// The OFL fallback bundled by egui 0.36.2, retained across egui 0.37's move to platform glyphs.
+const EMOJI: &[u8] = include_bytes!("../assets/fonts/noto-emoji/NotoEmoji-Regular.ttf");
 
-fn definitions() -> FontDefinitions {
-    let mut fonts = FontDefinitions::default();
-    let fallbacks = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    for (name, weight, family) in [("plex-sans", 400.0, FontFamily::Proportional), (SEMIBOLD, 600.0, FontFamily::Name(SEMIBOLD.into()))] {
-        let mut data = FontData::from_static(PLEX_SANS);
-        data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", weight)]);
-        fonts.font_data.insert(name.to_owned(), Arc::new(data));
-        fonts.families.insert(family, std::iter::once(name.to_owned()).chain(fallbacks.iter().cloned()).collect());
-    }
-    fonts.font_data.insert("plex-mono".to_owned(), Arc::new(FontData::from_static(PLEX_MONO)));
-    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "plex-mono".to_owned());
-    fonts
-}
-
+/// Install the pinned shared look's Plex faces in this egui context, preserving symbol fallbacks.
 pub fn install(ctx: &egui::Context) {
-    ctx.set_fonts(definitions());
+    let mut fonts = solidcraft_look::fonts::definitions();
+    let fallback = "pcbcraft-emoji";
+    fonts.font_data.insert(fallback.into(), Arc::new(FontData::from_static(EMOJI)));
+    for family in fonts.families.values_mut() {
+        family.push(fallback.into());
+    }
+    solidcraft_look::fonts::apply(ctx, fonts);
 }
 
 /// Semibold interface text at this size.
 pub fn semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
+    solidcraft_ui_kit::type_face::semibold(size)
+}
+
+/// Show the shared interface and bundled font notices in the host's About dialog.
+pub fn licenses(ui: &mut egui::Ui) {
+    ui.collapsing("Shared UI licenses", |ui| {
+        egui::ScrollArea::vertical().id_salt("shared_ui_licenses").max_height(240.0).show(ui, |ui| {
+            for text in [
+                include_str!("../assets/shared-ui/SOLIDCRAFT-UI-LICENSE"),
+                include_str!("../assets/fonts/ibm-plex-sans/OFL.txt"),
+                include_str!("../assets/fonts/ibm-plex-mono/OFL.txt"),
+                include_str!("../assets/fonts/noto-emoji/OFL.txt"),
+            ] {
+                ui.label(egui::RichText::new(text).small());
+            }
+        });
+    });
 }
 
 /// Use the bundled semibold face once egui has loaded it, with a first-frame fallback.

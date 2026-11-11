@@ -152,6 +152,7 @@ fn split_views_keep_navigation_and_selection_but_share_undo() {
     h.hover_at(canvas(&h, 1).center());
     h.run();
     h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, 2.0),
         phase: egui::TouchPhase::Move,

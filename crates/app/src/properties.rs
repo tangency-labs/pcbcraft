@@ -176,7 +176,7 @@ impl PcbApp {
             let count = self.views.active.schematic.selection.len();
             let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
                 ui,
-                egui::Id::new(("selection_properties", self.views.host)),
+                egui::Id::unique(("selection_properties", self.views.host)),
                 "Properties",
                 canvas,
                 area,
@@ -214,7 +214,7 @@ impl PcbApp {
         edit.set_units(units);
         let (rect, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
-            egui::Id::new(("selection_properties", self.views.host)),
+            egui::Id::unique(("selection_properties", self.views.host)),
             "Properties",
             canvas,
             area,
@@ -311,80 +311,76 @@ impl PcbApp {
         let title = format!("{} · Symbol properties", edit.original.0);
         let footprint = self.package_label(&edit.component);
         let action = pcbcraft_chrome::catalog::property_form(ctx, "edit_fields", &title, 760.0, "OK", |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Frame::new().inner_margin(pcbcraft_chrome::Tokens::get().space_16).show(ui, |ui| {
-                    ui.label(shell::dim(&edit.definition.name));
-                    chrome::tabs(ui, &mut edit.tab, &[(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")]);
-                    ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
-                    match edit.tab {
-                        Tab::General => {
-                            chrome::group(ui, "Component fields", |ui| {
-                                apply |= edit.metadata_fields(ui);
-                                choose = chrome::field_action(ui, "Footprint", &footprint, can_choose).clicked();
-                                egui::CollapsingHeader::new("Text appearance").show(ui, |ui| edit.field_appearance(ui));
-                            });
-                            ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
-                            let mut position_apply = false;
-                            chrome::split(ui, |ui, column| {
-                                if column == 0 {
-                                    chrome::group(ui, "Placement", |ui| {
-                                        chrome::field(ui, "Unit", |ui| {
-                                            ui.label(edit.definition.unit_id());
-                                        });
-                                        chrome::rotation(ui, &mut edit.rotation);
-                                        position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
-                                    });
-                                } else {
-                                    chrome::group(ui, "Attributes", |ui| edit.attributes(ui));
-                                }
-                            });
-                            apply |= position_apply;
-                        }
-                        Tab::Terminals => {
-                            egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
-                                ui.strong("Terminal");
-                                ui.strong("Name");
-                                ui.strong("Electrical type");
-                                ui.end_row();
-                                for pin in edit.definition.pins() {
-                                    ui.label(&pin.number);
-                                    ui.label(pin.name.as_deref().unwrap_or("—"));
-                                    ui.label(format!("{:?}", pin.electrical_type));
-                                    ui.end_row();
-                                }
-                            });
-                        }
-                        Tab::Library => {
-                            chrome::group(ui, "Pinned symbol", |ui| {
-                                chrome::field(ui, "Library", |ui| {
-                                    ui.label(&edit.definition.library);
+            ui.label(shell::dim(&edit.definition.name));
+            chrome::tabs(ui, &mut edit.tab, &[(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")]);
+            ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
+            match edit.tab {
+                Tab::General => {
+                    chrome::group(ui, "Component fields", |ui| {
+                        apply |= edit.metadata_fields(ui);
+                        choose = chrome::field_action(ui, "Footprint", &footprint, can_choose).clicked();
+                        egui::CollapsingHeader::new("Text appearance").show(ui, |ui| edit.field_appearance(ui));
+                    });
+                    ui.add_space(pcbcraft_chrome::Tokens::get().space_12);
+                    let mut position_apply = false;
+                    chrome::split(ui, |ui, column| {
+                        if column == 0 {
+                            chrome::group(ui, "Placement", |ui| {
+                                chrome::field(ui, "Unit", |ui| {
+                                    ui.label(edit.definition.unit_id());
                                 });
-                                chrome::field(ui, "Symbol", |ui| {
-                                    ui.label(&edit.definition.id);
-                                });
-                                chrome::field(ui, "Revision", |ui| {
-                                    ui.label(edit.definition.revision().to_string());
-                                });
+                                chrome::rotation(ui, &mut edit.rotation);
+                                position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
                             });
-                            chrome::group(ui, "Library actions", |ui| {
-                                let pending = "Apply or cancel pending property changes before opening library actions.";
-                                if ui.add_enabled(can_choose, egui::Button::new("Edit symbol copy…")).on_disabled_hover_text(pending).clicked() {
-                                    library_action = Some(LibraryAction::EditCopy);
-                                }
-                                if ui.add_enabled(can_choose, egui::Button::new("Manage libraries…")).on_disabled_hover_text(pending).clicked() {
-                                    library_action = Some(LibraryAction::Sources);
-                                }
-                                ui.label(shell::dim(
-                                    "Definition edits open as an independent copy. Updating or replacing the placed symbol is not implemented yet.",
-                                ));
-                            });
+                        } else {
+                            chrome::group(ui, "Attributes", |ui| edit.attributes(ui));
                         }
-                    }
-                    if let Some(error) = &edit.error {
-                        ui.label(shell::error(error));
-                    }
-                });
-            });
+                    });
+                    apply |= position_apply;
+                }
+                Tab::Terminals => {
+                    egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
+                        ui.strong("Terminal");
+                        ui.strong("Name");
+                        ui.strong("Electrical type");
+                        ui.end_row();
+                        for pin in edit.definition.pins() {
+                            ui.label(&pin.number);
+                            ui.label(pin.name.as_deref().unwrap_or("—"));
+                            ui.label(format!("{:?}", pin.electrical_type));
+                            ui.end_row();
+                        }
+                    });
+                }
+                Tab::Library => {
+                    chrome::group(ui, "Pinned symbol", |ui| {
+                        chrome::field(ui, "Library", |ui| {
+                            ui.label(&edit.definition.library);
+                        });
+                        chrome::field(ui, "Symbol", |ui| {
+                            ui.label(&edit.definition.id);
+                        });
+                        chrome::field(ui, "Revision", |ui| {
+                            ui.label(edit.definition.revision().to_string());
+                        });
+                    });
+                    chrome::group(ui, "Library actions", |ui| {
+                        let pending = "Apply or cancel pending property changes before opening library actions.";
+                        if ui.add_enabled(can_choose, egui::Button::new("Edit symbol copy…")).on_disabled_hover_text(pending).clicked() {
+                            library_action = Some(LibraryAction::EditCopy);
+                        }
+                        if ui.add_enabled(can_choose, egui::Button::new("Manage libraries…")).on_disabled_hover_text(pending).clicked() {
+                            library_action = Some(LibraryAction::Sources);
+                        }
+                        ui.label(shell::dim(
+                            "Definition edits open as an independent copy. Updating or replacing the placed symbol is not implemented yet.",
+                        ));
+                    });
+                }
+            }
+            if let Some(error) = &edit.error {
+                ui.label(shell::error(error));
+            }
         });
         apply |= action.primary;
         if apply {

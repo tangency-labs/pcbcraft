@@ -602,7 +602,7 @@ impl EditorView {
 
     /// Scope widgets to their document; captured actions separately validate the input epoch.
     pub(super) fn widget_id(&self) -> egui::Id {
-        egui::Id::new((self.id, self.binding))
+        egui::Id::unique((self.id, self.binding))
     }
 
     /// Capture input only while this view is bound to its current document opening.

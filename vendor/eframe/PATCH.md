@@ -1,7 +1,9 @@
 # Native root window lifetime
 
-This is eframe 0.36.2 from crates.io, upstream egui commit
-`49682f8baa058bf49e011035cfbd6e825f88a5ef`, with its MIT and Apache-2.0 notices.
+This is eframe 0.37.0 from crates.io, upstream egui commit
+`3c6eb8261c3293ad9c7ea1ed58487e038860ebef` (the package's `.cargo_vcs_info.json`),
+with its MIT and Apache-2.0 notices. PCBcraft's existing 0.36.2 changes were
+compared with the original crates.io package before being carried forward.
 The package manifest retains registry dependency versions; no dependency is fetched
 from a moving Git branch. The local changes are in `src/epi.rs`,
 `src/native/epi_integration.rs`, `src/native/canvas_shortcut.rs`, `src/native/wgpu_integration.rs`,
@@ -34,13 +36,14 @@ can continue. Root recreation flushes deferred visibility commands immediately;
 the startup builder's hidden state must not strand a childless restored root.
 
 Native tests must check destruction of the original OS window and retention of
-the survivor's native ID, not merely that one editor remains visible. The isolated
-Linux Wayland and X11 tests also exercise root recreation, replacement of all
+the survivor's native ID, not merely that one editor remains visible. The native
+regression also exercises root recreation, replacement of all
 children with a single root, cancelled close, shutdown requested from a child,
 and accepting/cancelling root Close when the last child is omitted in that same
 frame. Late events for destroyed windows do not count as new windows in the test,
-and a deadline bounds event-driver failures. Windows and
-macOS use the same code path but require native qualification on those systems.
+and a deadline bounds event-driver failures. This 0.37.0 rebase passed on an
+isolated nested X11 display. Direct Wayland, Windows and macOS require native
+qualification for this version.
 
 Keep this dependency patch separate from document and workspace models. Reassess
 it when updating eframe, comparing all files listed above with the pinned upstream
@@ -61,7 +64,9 @@ no immediate child exists; the public request documents this precondition.
 
 The native WGPU and Glow menu `RequestPaste` handlers and browser paste-event
 handler also publish `Event::Paste("")` when a clipboard read has no supported
-text. PCBcraft uses this completion to retire the captured canvas destination;
+text or image. Upstream 0.37 image paste remains available to widgets; PCBcraft
+also consumes an image-only response to its captured canvas text read as an
+unsupported completion. PCBcraft uses completion to retire the captured canvas destination;
 otherwise an abandoned Paste Options read can affect a later paste. Nonempty
 text and ordinary text-widget editing keep the existing event path. No extra
 clipboard backend, polling, timeout, thread or platform API is introduced.
@@ -71,7 +76,7 @@ by application regressions. Reassess this change when updating eframe.
 # Native canvas standalone-via shortcut
 
 The local native input integration also preserves Command/Ctrl+Shift+X as a key
-event when no widget owns keyboard input. egui-winit 0.36.2 otherwise converts
+event when no widget owns keyboard input. egui-winit 0.37 otherwise converts
 it to Cut and drops the key. Pending modifier events take precedence over the
 previous frame. Unmapped non-Latin characters fall back to physical X before
 Cut conversion, while mapped logical letters retain their layout meaning.

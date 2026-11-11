@@ -226,20 +226,24 @@ impl Assistant {
             }
             let own = self.settings.agents.agent_permissions.get(&entry.id).copied();
             let shown = own.map_or("Use the global mode", Mode::label);
-            egui::ComboBox::from_id_salt("agent_mode").selected_text(shown).show_ui(ui, |ui| {
-                let mut chosen = own;
-                ui.selectable_value(&mut chosen, None, "Use the global mode");
-                for mode in Mode::ALL {
-                    ui.selectable_value(&mut chosen, Some(mode), mode.label());
-                }
-                if chosen != own {
-                    match chosen {
-                        Some(mode) => self.settings.agents.agent_permissions.insert(entry.id.clone(), mode),
-                        None => self.settings.agents.agent_permissions.remove(&entry.id),
-                    };
-                    self.settings_changed = true;
-                }
-            });
+            egui::ComboBox::from_id_salt("agent_mode")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    let mut chosen = own;
+                    ui.selectable_value(&mut chosen, None, "Use the global mode");
+                    for mode in Mode::ALL {
+                        ui.selectable_value(&mut chosen, Some(mode), mode.label());
+                    }
+                    if chosen != own {
+                        match chosen {
+                            Some(mode) => self.settings.agents.agent_permissions.insert(entry.id.clone(), mode),
+                            None => self.settings.agents.agent_permissions.remove(&entry.id),
+                        };
+                        self.settings_changed = true;
+                    }
+                })
+                .response
+                .accessible_name("Agent permission mode");
             let remembered = self.settings.agents.agent_always_allow.get(&entry.id).map_or(0, Vec::len);
             if remembered > 0 && ui.button(format!("Forget {remembered} always-allowed")).clicked() {
                 self.settings.agents.agent_always_allow.remove(&entry.id);
