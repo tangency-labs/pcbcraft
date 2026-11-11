@@ -331,6 +331,8 @@ impl PcbApp {
                                 problems: &problems,
                                 symbols: data.and_then(|s| s["symbols"].as_u64()).unwrap_or_default(),
                                 footprints: data.and_then(|s| s["footprints"].as_u64()).unwrap_or_default(),
+                                parts: data.and_then(|s| s["parts"].as_u64()).unwrap_or_default(),
+                                categories: data.and_then(|s| s["categories"].as_u64()).unwrap_or_default(),
                                 builtin: false,
                                 available: data.is_some_and(|s| s["available"] != false),
                                 loading: self.library_sources.job.as_ref().is_some_and(|job| job.source == *id),
@@ -352,6 +354,8 @@ impl PcbApp {
                         None => chrome::Filter::All,
                         Some(Kind::Symbol) => chrome::Filter::Symbols,
                         Some(Kind::Footprint) => chrome::Filter::Footprints,
+                        Some(Kind::Part) => chrome::Filter::Parts,
+                        Some(Kind::Category) => chrome::Filter::Categories,
                     };
                     chrome::search(ui, &mut self.library_sources.query);
                     chrome::filters(ui, &mut kind);
@@ -359,6 +363,8 @@ impl PcbApp {
                         chrome::Filter::All => None,
                         chrome::Filter::Symbols => Some(Kind::Symbol),
                         chrome::Filter::Footprints => Some(Kind::Footprint),
+                        chrome::Filter::Parts => Some(Kind::Part),
+                        chrome::Filter::Categories => Some(Kind::Category),
                     };
                     let mut params = json!({"query":self.library_sources.query});
                     if let Some(kind) = self.library_sources.kind {
@@ -375,6 +381,13 @@ impl PcbApp {
                                 id: item["key"]["id"].as_str().unwrap_or_default(),
                                 revision: item["key"]["revision"].as_u64().unwrap_or_default(),
                                 footprint: item["key"]["kind"] == "footprint",
+                                kind: match item["key"]["kind"].as_str() {
+                                    Some("part") => "Part definition",
+                                    Some("category") => "Category",
+                                    Some("footprint") => "Footprint",
+                                    _ => "Symbol",
+                                },
+                                problem: item["resolution"]["reason"].as_str(),
                                 license: item["license"].as_str().unwrap_or_default(),
                             })
                             .collect();

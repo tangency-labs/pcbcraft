@@ -19,6 +19,7 @@ use crate::schematic::{ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PinDefinition
 
 #[cfg(test)]
 mod bundled_tests;
+pub mod parts;
 pub mod sources;
 #[cfg(test)]
 use crate::schematic::PIN_OFFSET_NM;
@@ -51,6 +52,8 @@ pub fn bundled_documents() -> impl Iterator<Item = (&'static str, sources::Docum
 pub const SYMBOL_FORMAT: &str = "pcbcraft-symbol/1";
 /// Native definitions carrying explicit electrical semantics or instance defaults.
 pub const SYMBOL_FORMAT_V2: &str = "pcbcraft-symbol/2";
+/// Native symbols with an explicit default typed category/primary-value binding.
+pub const SYMBOL_FORMAT_V3: &str = "pcbcraft-symbol/3";
 
 /// Electrical roles survive copying and never follow from an item or library name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +203,8 @@ struct SymbolFile {
     behavior: Option<Behavior>,
     #[serde(default)]
     defaults: Option<Defaults>,
+    #[serde(default)]
+    category: Option<parts::CategoryBinding>,
     terminals: Vec<TerminalFile>,
     units: Vec<UnitFile>,
 }
@@ -243,8 +248,8 @@ struct PinFile {
 
 /// Parse and check one symbol file.
 ///
-/// The file must be [`SYMBOL_FORMAT`] or [`SYMBOL_FORMAT_V2`] with no unknown fields.
-/// Version 2 validates explicit electrical roles and instance defaults. Terminals, 1 to 128 of them, have
+/// The file must be [`SYMBOL_FORMAT`], [`SYMBOL_FORMAT_V2`] or [`SYMBOL_FORMAT_V3`] with no unknown fields.
+/// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding. Terminals, 1 to 128 of them, have
 /// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. This build places symbols with one unit
 /// that has exactly one pin per terminal. Pins sit on the 1.27 mm grid, at most 12.7 mm from the
 /// center on each axis and apart from each other. Drawings have at most 256 strokes within
@@ -265,12 +270,22 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
     let format_version = match value["format"].as_str() {
         Some(SYMBOL_FORMAT) => 1,
         Some(SYMBOL_FORMAT_V2) => 2,
+        Some(SYMBOL_FORMAT_V3) => 3,
         _ => return Err("unsupported symbol format".into()),
     };
     if format_version == 1 && (value.get("behavior").is_some() || value.get("defaults").is_some()) {
         return Err("electrical behavior and defaults require pcbcraft-symbol/2".into());
     }
+    if format_version < 3 && value.get("category").is_some() {
+        return Err("default category bindings require pcbcraft-symbol/3".into());
+    }
     let file: SymbolFile = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    if format_version == 3 && file.category.is_none() {
+        return Err("pcbcraft-symbol/3 requires an explicit category binding".into());
+    }
+    if let Some(category) = &file.category {
+        category.validate()?;
+    }
     if let Some(defaults) = &file.defaults {
         defaults.metadata.validate()?;
         crate::schematic::fields::validate_layouts(&defaults.field_layout, &defaults.metadata)?;
@@ -341,6 +356,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         format_version,
         behavior: file.behavior,
         defaults: file.defaults,
+        category: file.category,
         provenance: None,
         library: String::new(),
         id: file.id,
@@ -401,9 +417,23 @@ fn read_saved_mode(value: Value, draft: bool) -> Result<Arc<SymbolDefinition>, S
 /// stroke or pin changes one line. The JSON is the same as [`saved_copy`] serializes, and the
 /// output depends only on the definition, so an unchanged project saves without a diff.
 pub(crate) fn write_saved_copy(bytes: &mut Vec<u8>, definition: &SymbolDefinition) -> Result<(), String> {
-    let SavedSymbol { library, format, id, revision, name, reference_prefix, default_value, provenance, behavior, defaults, terminals, units } =
-        saved_copy(definition);
-    let header = compact(&SavedHeader { library, format, id, revision, name, reference_prefix, default_value, provenance, behavior, defaults })?;
+    let SavedSymbol {
+        library,
+        format,
+        id,
+        revision,
+        name,
+        reference_prefix,
+        default_value,
+        provenance,
+        behavior,
+        defaults,
+        category,
+        terminals,
+        units,
+    } = saved_copy(definition);
+    let header =
+        compact(&SavedHeader { library, format, id, revision, name, reference_prefix, default_value, provenance, behavior, defaults, category })?;
     // The header object stays open so the lists below continue it.
     let header = header.strip_suffix('}').unwrap_or(&header);
     let list = |bytes: &mut Vec<u8>, indent: &str, items: Vec<String>| {
@@ -449,6 +479,8 @@ struct SavedHeader<'a> {
     behavior: Option<&'a Behavior>,
     #[serde(skip_serializing_if = "Option::is_none")]
     defaults: Option<&'a Defaults>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'a parts::CategoryBinding>,
 }
 
 /// The saved form of a symbol in a project: its library ID, then the same fields as its
@@ -458,6 +490,7 @@ pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
     SavedSymbol {
         behavior: definition.behavior.as_ref(),
         defaults: definition.defaults.as_ref(),
+        category: definition.category.as_ref(),
         provenance: definition.provenance.as_ref(),
         library: &definition.library,
         format: definition.format(),
@@ -509,6 +542,8 @@ pub(crate) struct SavedSymbol<'a> {
     behavior: Option<&'a Behavior>,
     #[serde(skip_serializing_if = "Option::is_none")]
     defaults: Option<&'a Defaults>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'a parts::CategoryBinding>,
     terminals: Vec<SavedTerminal<'a>>,
     units: [SavedUnit<'a>; 1],
 }

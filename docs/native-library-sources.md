@@ -1,14 +1,16 @@
 # Native library sources
 
-This slice of #92 loads native symbols and footprints from personal sources.
+This slice of #92 loads native symbols, footprints, category definitions and
+part definitions from personal sources.
 Symbols can be searched and placed through the Parts Catalog. Footprints can be searched and
 inspected in Library sources; connecting external footprints to the assignment
 chooser remains separate work. Registering, refreshing or removing a source
 does not change the project, its revision, dirty state or undo history.
 
 Open **Libraries → Sources**. On desktop, **Add folder…** selects a native
-library containing `library.json` and optional flat `symbols/` and `footprints/`
-directories. Registrations are saved in personal application settings, including
+library containing `library.json` and optional flat `symbols/`, `footprints/`,
+`categories/` and `parts/` directories. Registrations are saved in personal
+application settings, including
 their machine-specific folder paths. They are read in the background on startup.
 Each source card's **⋯** menu contains **Refresh**, **Relocate…** and **Remove**
 (uploaded sources offer only Remove). **Refresh** reloads a source; **Relocate…**
@@ -33,8 +35,8 @@ symbols already placed in a saved project reopen from their pinned copies.
 
 After loading the example, press **A**, search for **Workshop**, choose
 **Workshop resistor**, and place it. Search results retain library/item IDs,
-revision and license in their tooltips. Library sources can search both symbols
-and footprints and filter by kind. Sources and the catalog appear side by side
+revision and license in their tooltips. Library sources can search all four
+native record kinds and filter by kind. Sources and the catalog appear side by side
 on wide windows and as **Sources** / **Catalog** tabs on compact windows, with
 independent scrolling and a fixed Close action. A bad item reports its filename
 and validation error without hiding other valid items; an invalid manifest prevents the source
@@ -74,7 +76,7 @@ engine to read a path.
 | --- | --- |
 | `library.load_source` | `source` is a personal portable ID; `documents` maps supported relative paths to file text. Returns source inspection. |
 | `library.list_sources` | No parameters. Returns source identities, licenses, counts and file/conflict diagnostics. |
-| `library.search` | Optional `query` and `kind` (`symbol` or `footprint`). Returns current unambiguous items, their exact keys, formats, provenance and content digests. |
+| `library.search` | Optional `query` and `kind` (`symbol`, `footprint`, `category` or `part`). Returns current unambiguous items, their exact keys, formats, provenance and content digests. |
 | `library.remove_source` | `source`. Removes that session source without changing pinned definitions. Desktop personal folder registrations are managed in the Sources dialog. |
 
 Use `execute` with normal inspection enabled to receive these results;
@@ -91,6 +93,26 @@ filesystem read retains the single worker slot until it returns; removing its
 registration discards the result, and application shutdown does not wait for the
 reader. Project commands and editing remain independent of the reader.
 
-Native parts linking symbols to footprints, project source tables, external
-footprint assignment, library authoring, Git/providers and external-format
-imports are outside this slice. The remaining acceptance in #92 stays open.
+Native part/category definitions and exact dependency resolution are described
+in [part-schema.md](part-schema.md). Part selection and pinning into project
+instances, project source tables, external footprint assignment, library
+authoring integration, Git/providers and external-format imports remain
+separate work. The remaining acceptance in #92 stays open.
+
+## Part definitions and categories
+
+The [native part example](../examples/native-parts/README.md) exercises the same
+folder/bundle path with a resistor, connector and IC. Part/category files are
+validated independently; complete resolution checks their exact cross-library
+references and typed values. Unresolved items stay inspectable and show their
+diagnostics rather than silently choosing another revision.
+
+| Command | Parameters and result |
+| --- | --- |
+| `library.resolve_part` | `library`, `definition`, `definition_revision`. Returns the exact part, symbol, category and package footprints after semantic validation. |
+| `library.parse_quantity` | `quantity`, `value`. Normalizes compatible unit-aware input into exact canonical base-unit JSON. |
+
+Both are read-only shared engine operations and need no open project. Resolving
+a definition neither pins it into a project nor changes assignment/placement.
+Current project Value controls retain their existing free-text behavior until
+typed part-instance editing is integrated.

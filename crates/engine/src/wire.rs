@@ -106,7 +106,7 @@ impl Project {
         leg > 0 || leg + 2 < path.len() || wire.endpoints.iter().any(|&end| self.wire_end_has_attachment(end))
     }
 
-    /// Component/hierarchy pins and shared junctions anchor a route end; degree-one
+    /// Part instance/hierarchy pins and shared junctions anchor a route end; degree-one
     /// junctions are already free and keep their identity when a neighboring leg is broken.
     fn wire_end_has_attachment(&self, end: WireEndpoint) -> bool {
         !matches!(end, WireEndpoint::Junction(_)) || self.wires.iter().filter(|wire| wire.endpoints.contains(&end)).count() > 1

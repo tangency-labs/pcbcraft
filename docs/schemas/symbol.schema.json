@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:symbol",
+  "title": "Supported PCBcraft published symbol definitions",
+  "oneOf": [
+    {
+      "$ref": "urn:pcbcraft:schema:symbol:1"
+    },
+    {
+      "$ref": "urn:pcbcraft:schema:symbol:2"
+    },
+    {
+      "$ref": "urn:pcbcraft:schema:symbol:3"
+    }
+  ]
+}

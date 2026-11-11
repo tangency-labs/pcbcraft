@@ -1,0 +1,36 @@
+{
+  "format": "pcbcraft-category/1",
+  "library": "parts-demo",
+  "id": "ic",
+  "revision": 1,
+  "name": "Integrated circuit",
+  "license": "MIT OR Apache-2.0",
+  "fields": {
+    "pcbcraft:supply-voltage-min": {
+      "name": "Minimum supply voltage",
+      "value_type": {
+        "type": "quantity",
+        "quantity": "voltage",
+        "unit": "V"
+      }
+    },
+    "pcbcraft:supply-voltage-max": {
+      "name": "Maximum supply voltage",
+      "value_type": {
+        "type": "quantity",
+        "quantity": "voltage",
+        "unit": "V"
+      }
+    },
+    "parts-demo:function": {
+      "name": "Function",
+      "value_type": {
+        "type": "choice",
+        "choices": [
+          "buffer",
+          "voltage-reference"
+        ]
+      }
+    }
+  }
+}

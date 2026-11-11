@@ -409,7 +409,7 @@ fn component_number(component: &str) -> Option<u64> {
 
 /// Resolve review labels from the captured input so removed parts keep their original annotation.
 fn component_label(preview: &BoardUpdatePreview<'_>, component: u64) -> String {
-    preview.component(component).map_or_else(|| "Component".into(), |part| part.reference.clone())
+    preview.component(component).map_or_else(|| "Part".into(), |part| part.reference.clone())
 }
 
 /// Keep package identity and revision visible without exposing runtime capabilities or source hashes.

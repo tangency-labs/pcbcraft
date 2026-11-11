@@ -31,6 +31,8 @@ pub enum Kind {
 pub struct SymbolSettings {
     pub behavior: Option<library::Behavior>,
     pub defaults: Option<library::Defaults>,
+    #[serde(default)]
+    pub category: Option<library::parts::CategoryBinding>,
 }
 
 /// Generated reference settings owned by the footprint definition, independent of board instances.
@@ -190,6 +192,8 @@ pub struct Item {
     pub behavior: Option<library::Behavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defaults: Option<library::Defaults>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<library::parts::CategoryBinding>,
     pub unit: String,
     pub reference_font: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -322,6 +326,7 @@ impl Item {
             default_value: "Custom part".into(),
             behavior: None,
             defaults: None,
+            category: None,
             unit: "main".into(),
             reference_font: None,
             reference_offset: None,
@@ -411,6 +416,7 @@ impl Item {
         item.unit = definition.unit_id().into();
         item.behavior = definition.behavior.clone();
         item.defaults = definition.defaults.clone();
+        item.category = definition.category.clone();
         let mut consumed = std::collections::BTreeSet::new();
         for pin in definition.pins() {
             item.objects.insert(
@@ -503,13 +509,16 @@ impl Item {
                     _ => return Err("A symbol cannot contain footprint primitives.".into()),
                 });
             }
-            let mut value = json!({"format":if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+            let mut value = json!({"format":if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":[{"id":self.unit,"drawing":drawing,"pins":pins}]});
             if let Some(behavior) = &self.behavior {
                 value["behavior"] = json!(behavior);
             }
             if let Some(defaults) = &self.defaults {
                 value["defaults"] = json!(defaults);
+            }
+            if let Some(category) = &self.category {
+                value["category"] = json!(category);
             }
             if draft {
                 library::read_saved_draft(value.clone())?;
@@ -753,6 +762,7 @@ impl Session {
                             }
                             next.behavior = settings.behavior;
                             next.defaults = settings.defaults;
+                            next.category = settings.category;
                         }
                         if let Some(settings) = footprint_reference {
                             if next.kind != Kind::Footprint {

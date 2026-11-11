@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::{
     MAX_NAME, MAX_OBJECT_ID, MAX_REFERENCE_NUMBER, Project,
     board::{Board, Footprint},
-    schematic::{Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolPlacement, Terminal, Wire, WireEndpoint, wiring::MAX_WIRES},
+    schematic::{MAX_CENTER_NM, MAX_SYMBOLS, PartInstance, Point, SymbolPlacement, Terminal, Wire, WireEndpoint, wiring::MAX_WIRES},
 };
 
 mod archive;
@@ -160,7 +160,7 @@ struct BoardRecords {
     footprints: Vec<Footprint>,
 }
 
-/// Component data has no schematic coordinates or footprint geometry.
+/// Part instance data has no schematic coordinates or footprint geometry.
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ComponentRecord<'a> {
@@ -763,7 +763,7 @@ fn validate_with_hierarchy(
         metadata.validate()?;
         components.insert(
             record.id,
-            Component {
+            PartInstance {
                 ordinal: record.id,
                 definition,
                 reference_number: record.reference_number,
@@ -1245,7 +1245,7 @@ mod tests {
         assert!(error(&|d| d["symbol_definitions"][0]["library"] = json!("Bad Library")).contains("library ID"));
     }
 
-    /// Component fields and unit rotation survive a save, while invalid rotations and
+    /// Part instance fields and unit rotation survive a save, while invalid rotations and
     /// duplicate component references are refused.
     #[test]
     fn rotation_and_edited_fields_round_trip() {
@@ -1345,7 +1345,7 @@ mod tests {
         assert!(decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
     }
 
-    /// Component and symbol IDs may differ. Field edits only change the component record;
+    /// Part instance and symbol IDs may differ. Field edits only change the component record;
     /// wire/pad addresses, geometry, undo/redo and last-unit deletion follow explicit ownership.
     #[test]
     fn independent_component_identity_survives_edit_history_and_board_links() {

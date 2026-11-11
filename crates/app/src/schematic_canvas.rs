@@ -1000,7 +1000,7 @@ fn body(definition: &SymbolDefinition, turns: u8) -> Rect {
 
 /// Draw the symbol's library strokes around its center, with one grid step of `step` points,
 /// turned with the symbol.
-/// Component fields are drawn separately so their layout never changes the body or pins.
+/// Part instance fields are drawn separately so their layout never changes the body or pins.
 fn paint_symbol(painter: &Painter, definition: &SymbolDefinition, center: Pos2, step: f32, turns: u8, stroke: Stroke) {
     let color = stroke.color;
     let xy = |point: &Point| {

@@ -318,7 +318,7 @@ impl PcbApp {
             ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
             match edit.tab {
                 Tab::General => {
-                    chrome::group(ui, "Component fields", |ui| {
+                    chrome::group(ui, "Part fields", |ui| {
                         apply |= edit.metadata_fields(ui);
                         choose = chrome::field_action(ui, "Footprint", &footprint, can_choose).clicked();
                         pcbcraft_chrome::controls::collapsing(ui, "text_appearance", "Text appearance", false, None, |ui| edit.field_appearance(ui));

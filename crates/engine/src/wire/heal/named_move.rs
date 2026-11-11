@@ -90,7 +90,7 @@ impl Project {
 
     /// Move an existing named marker with its touching wires, independent of placement order.
     /// Free-end/branch contacts become explicit marker endpoints; interior routes split at
-    /// the old anchor. Component pins and other named anchors stay fixed and gain a connecting
+    /// the old anchor. Part instance pins and other named anchors stay fixed and gain a connecting
     /// leg. Preview and commit allocate at the same revision. Invalid geometry, exhausted IDs
     /// or wire limits reject the entire candidate; rotation alone never rewrites contacts.
     pub fn dragged_net_label(&self, id: u64, to: Point, rotation: u16, revision: u64, auto_heal: bool) -> Result<Self, CommandError> {

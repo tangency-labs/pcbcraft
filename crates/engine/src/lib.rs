@@ -33,7 +33,7 @@ use std::{
 };
 
 use schematic::{
-    Component, MAX_CENTER_NM, MAX_SYMBOLS, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, WireEndpoint,
+    MAX_CENTER_NM, MAX_SYMBOLS, PartInstance, Point, SymbolDefinition, SymbolPlacement, Terminal, Wire, WireEndpoint,
     wiring::{Connectivity, MAX_WIRES},
 };
 use serde_json::{Map, Value, json};
@@ -71,7 +71,7 @@ enum ParamKind {
     ClipboardHierarchyObjects,
     ReferencePolicy,
     CreateBoard,
-    ComponentMetadata,
+    PartMetadata,
     FieldLayouts,
     ReferenceText,
     TextLayout,
@@ -81,6 +81,7 @@ enum ParamKind {
     LibraryDocuments,
     LibraryQuery,
     LibraryKind,
+    LibraryQuantity,
     LibraryDigest,
     DefinitionRevision,
     AutoHeal,
@@ -96,7 +97,7 @@ enum ParamKind {
     FootprintMapping,
     FootprintId,
     FootprintIds,
-    ComponentIds,
+    PartIds,
     ResolveExistingFootprints,
     BoardRotation,
     PadNumber,
@@ -159,7 +160,7 @@ impl ParamKind {
             Self::ClipboardText => json!({"type":"string","maxLength":clipboard::MAX_BYTES}),
             Self::ReferencePolicy => json!({"type":"string","enum":["renumber","preserve"]}),
             Self::CreateBoard => json!({"type":"boolean"}),
-            Self::ComponentMetadata => schematic::fields::metadata_schema(),
+            Self::PartMetadata => schematic::fields::metadata_schema(),
             Self::ReferenceText => board::reference::Text::schema(),
             Self::FieldLayouts => schematic::fields::layouts_schema(),
             Self::TextLayout => schematic::fields::layouts_schema()["additionalProperties"].clone(),
@@ -170,7 +171,10 @@ impl ParamKind {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
-            Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint"]}),
+            Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part"]}),
+            Self::LibraryQuantity => {
+                json!({"type":"string","enum":["resistance","capacitance","inductance","voltage","current","power","frequency","time","length","temperature","ratio"]})
+            }
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
@@ -212,7 +216,7 @@ impl ParamKind {
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
             Self::FootprintId => json!({"type":"string", "pattern":"^footprint-[1-9][0-9]*$"}),
-            Self::ComponentIds => {
+            Self::PartIds => {
                 json!({"type":"array","minItems":1,"maxItems":MAX_SYMBOLS,"uniqueItems":true,"items":{"type":"string","pattern":"^component-[1-9][0-9]*$"}})
             }
             Self::FootprintIds => json!({"type":"array","minItems":1,"maxItems":MAX_SYMBOLS,"uniqueItems":true,"items":Self::FootprintId.schema()}),
@@ -296,7 +300,7 @@ impl ParamKind {
                 })
                 .map(|_| ())
                 .ok_or("must contain a valid text appearance"),
-            Self::ComponentMetadata => serde_json::from_value::<schematic::fields::Metadata>(value.clone())
+            Self::PartMetadata => serde_json::from_value::<schematic::fields::Metadata>(value.clone())
                 .ok()
                 .filter(|m| m.validate().is_ok())
                 .map(|_| ())
@@ -322,11 +326,13 @@ impl ParamKind {
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
             Self::LibraryQuery if value.as_str().is_some_and(|s| s.len() <= 128) => Ok(()),
-            Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint")) => Ok(()),
+            Self::LibraryKind if matches!(value.as_str(), Some("symbol" | "footprint" | "category" | "part")) => Ok(()),
+            Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
-            Self::LibraryKind => Err("must be symbol or footprint"),
+            Self::LibraryKind => Err("must be symbol, footprint, category or part"),
+            Self::LibraryQuantity => Err("must name a supported physical quantity"),
             Self::DrawingPoints
                 if value.as_array().is_some_and(|v| (2..=256).contains(&v.len()) && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
             {
@@ -434,7 +440,7 @@ impl ParamKind {
             {
                 Ok(())
             }
-            Self::ComponentIds if board::assignment::component_ids(value).is_some() => Ok(()),
+            Self::PartIds if board::assignment::component_ids(value).is_some() => Ok(()),
             Self::ResolveExistingFootprints if value.is_boolean() => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::NetLabelStyle if serde_json::from_value::<net_labels::Style>(value.clone()).is_ok() => Ok(()),
@@ -467,7 +473,7 @@ impl ParamKind {
             Self::FootprintMapping => Err("must map terminal IDs to pad IDs of 1 to 8 letters, digits, +, - or _"),
             Self::BoardRotation => Err("must be a whole-degree orientation from 0 through 359"),
             Self::FootprintId => Err("must identify a placed footprint"),
-            Self::ComponentIds => Err("must contain unique component IDs within the symbol limit"),
+            Self::PartIds => Err("must contain unique component IDs within the symbol limit"),
             Self::FootprintIds => Err("must contain unique placed footprint IDs within the symbol limit"),
             Self::ResolveExistingFootprints => Err("must be a boolean"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
@@ -1166,7 +1172,7 @@ const CATALOG: &[Command] = &[
                 required: false,
                 name: "metadata",
                 summary: "Replace component fields and attributes; omission preserves them",
-                kind: ParamKind::ComponentMetadata,
+                kind: ParamKind::PartMetadata,
             },
             Param {
                 required: false,
@@ -1248,7 +1254,7 @@ const CATALOG: &[Command] = &[
         summary: "Place a group of accepted assigned packages in a spaced grid at the given anchor. One atomic undo step; existing placements stay fixed.",
         params: &[
             BOARD,
-            Param { required: true, name: "components", summary: "Unique assigned component IDs, in placement order", kind: ParamKind::ComponentIds },
+            Param { required: true, name: "components", summary: "Unique assigned component IDs, in placement order", kind: ParamKind::PartIds },
             SYMBOL_X,
             SYMBOL_Y,
             Param {
@@ -1443,6 +1449,8 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[1],
     library::sources::COMMANDS[2],
     library::sources::COMMANDS[3],
+    library::sources::COMMANDS[4],
+    library::sources::COMMANDS[5],
     Command {
         id: ADD_DRAWING,
         title: "Draw Board Graphic",
@@ -1707,7 +1715,7 @@ pub struct Project {
     /// Transient immutable projection; canonical session snapshots always use index zero.
     sheet_index: usize,
     /// Logical components own their definition, reference and value.
-    components: Arc<BTreeMap<u64, Component>>,
+    components: Arc<BTreeMap<u64, PartInstance>>,
     /// Derived index of each placed component unit to its symbol ID.
     units: Arc<BTreeMap<(u64, String), u64>>,
     /// Unplaced package choices are project-owned while no physical board exists.
@@ -1741,7 +1749,7 @@ impl Project {
     }
 
     /// Return the logical components in stable component ID order.
-    pub fn components(&self) -> impl Iterator<Item = &Component> {
+    pub fn components(&self) -> impl Iterator<Item = &PartInstance> {
         self.components.values()
     }
 
@@ -1753,7 +1761,7 @@ impl Project {
     }
 
     /// Resolve a placement's owner in this snapshot. Foreign placements may have no component.
-    pub fn component(&self, symbol: &SymbolPlacement) -> Option<&Component> {
+    pub fn component(&self, symbol: &SymbolPlacement) -> Option<&PartInstance> {
         self.components.get(&symbol.component)
     }
 
@@ -1774,7 +1782,7 @@ impl Project {
 
     /// Return the owning component's value, or empty text for a foreign placement.
     pub fn value(&self, symbol: &SymbolPlacement) -> &str {
-        self.component(symbol).map_or("", Component::value)
+        self.component(symbol).map_or("", PartInstance::value)
     }
 
     /// Resolve a component pin through the unit-placement index. Only one unit is supported today.
@@ -1996,7 +2004,12 @@ impl Session {
             return false;
         }
         match id {
-            library::sources::LOAD | library::sources::REMOVE | library::sources::LIST | library::sources::SEARCH => true,
+            library::sources::LOAD
+            | library::sources::REMOVE
+            | library::sources::LIST
+            | library::sources::SEARCH
+            | library::sources::RESOLVE_PART
+            | library::sources::PARSE_QUANTITY => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -2095,7 +2108,7 @@ impl Session {
                 "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":"board.json", "layers":board.layers(), "drawings":board.drawings(), "tracks":board.tracks(), "vias":board.vias()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
-                "components": p.components.values().map(Component::inspect).collect::<Vec<_>>(),
+                "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
                 "footprint_assignments": p.footprint_assignments(),
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
@@ -2459,7 +2472,7 @@ impl Session {
         }
         let defaults = definition.defaults.clone().unwrap_or_default();
         let ordinal = self.next_object_id()?;
-        let component = Component {
+        let component = PartInstance {
             ordinal,
             definition: definition.clone(),
             reference_number,

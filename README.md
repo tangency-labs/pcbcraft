@@ -101,7 +101,7 @@ connections and command examples.
 | [Editor guide](docs/editor-guide.md) | Tools, shortcuts, wiring, views and project files |
 | [Capabilities](docs/capabilities.md) | Current support, limits and planned work |
 | [AI assistants and MCP](docs/mcp.md) | Desktop Assistant, live editing and headless automation |
-| [Symbols](docs/symbol-library.md) · [Footprints](docs/footprint-library.md) · [Library sources](docs/library-sources.md) | Definitions, mappings and source policy |
+| [Symbols](docs/symbol-library.md) · [Footprints](docs/footprint-library.md) · [Parts and categories](docs/part-schema.md) · [Library sources](docs/library-sources.md) | Definitions, mappings and source policy |
 | [Native storage](docs/native-project-storage.md) | Folder/archive formats and save behavior |
 | [Multiboard and sheet instances](docs/multiboard-and-sheet-instances.md) | Board folders, instances, cross-probing, assembly and output design under #122 |
 | [Net identity](docs/net-identity.md) · [Path to the registry](docs/net-registry-path.md) | Continuation, split/merge, storage and rule-reconciliation design for single-board and multiboard projects, and the proposed storage slices that reach it |

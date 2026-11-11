@@ -23,6 +23,34 @@ fn body(result: &Value) -> Value {
     serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
 }
 
+/// MCP uses the native record resolver and exact quantity normalizer without an open project.
+#[test]
+fn native_part_resolution_and_units_are_available_through_mcp() {
+    let mut server = server();
+    let documents = json!({
+        "library.json":include_str!("../../../examples/native-parts/library.json"),
+        "symbols/resistor.json":include_str!("../../../examples/native-parts/symbols/resistor.json"),
+        "footprints/resistor-0603.json":include_str!("../../../examples/native-parts/footprints/resistor-0603.json"),
+        "categories/resistor.json":include_str!("../../../examples/native-parts/categories/resistor.json"),
+        "parts/resistor.json":include_str!("../../../examples/native-parts/parts/resistor.json")
+    });
+    let loaded = call(&mut server, "execute", json!({"command":"library.load_source","params":{"source":"demo","documents":documents}}));
+    assert_ne!(loaded["isError"], true);
+    let result = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":"library.resolve_part","inspect":false,"params":{"library":"parts-demo","definition":"resistor","definition_revision":1}}),
+    ));
+    assert_eq!(result["part"]["format"], "pcbcraft-part/1");
+    assert_eq!(result["symbol"]["format"], "pcbcraft-symbol/3");
+    let normalized = body(&call(
+        &mut server,
+        "execute",
+        json!({"command":"library.parse_quantity","inspect":false,"params":{"quantity":"resistance","value":"100 mΩ"}}),
+    ));
+    assert_eq!(normalized, json!({"type":"quantity","value":"0.1","unit":"Ohm"}));
+}
+
 /// Headless and live clients share preview/apply capability validation, including
 /// dedicated read-query results when the caller suppresses project inspection.
 #[cfg(not(target_arch = "wasm32"))]
@@ -322,7 +350,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 4);
+    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 6);
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);

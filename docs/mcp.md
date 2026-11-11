@@ -262,3 +262,16 @@ stay fixed, and the entire group is one undo step. Duplicate/unknown, already
 placed, excluded or pending assignments refuse the whole command. The native
 Update PCB cursor handoff commits through this same command. Inspect and describe
 the command before supplying IDs or coordinates; spacing is not a DRC result.
+
+## Native part definitions and quantities
+
+`library.search` accepts `kind: "part"` or `"category"` alongside symbols and
+footprints. `library.resolve_part` takes an exact `library`, `definition` and
+`definition_revision`, validates category values and every package map, and
+returns native dependency documents. It never fetches or substitutes definitions.
+`library.parse_quantity` takes a declared `quantity` and input `value`; for
+example, resistance `100 mΩ` produces
+`{"type":"quantity","value":"0.1","unit":"Ohm"}`. Both operations are read-only
+and work without an open project. [The native contracts](part-schema.md)
+distinguish part definitions from placed part instances and describe remaining
+project-selection/pinning integration.

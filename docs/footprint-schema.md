@@ -161,14 +161,14 @@ pad clipping and footprint transform.
 A local text literal is used for rendered and exported ink. The schematic,
 component reference, BOM identity and terminal mappings continue to use the
 owning component. For example, printing `Power input` on R2 leaves its component
-reference R2. An explicit **Rename component** action uses the existing shared
+reference R2. An explicit **Rename part** action uses the existing shared
 reference edit with uniqueness validation, updating that component across its
 schematic and board views. The component's stable ID and local literal survive
 that rename. A literal `R2` remains literal even when the component becomes R12.
 Removing the `text` override restores the current component reference.
 
 The Properties card shows the component reference alongside local print controls.
-**Use component reference** removes the literal override while retaining other
+**Use part reference** removes the literal override while retaining other
 appearance settings. **Reset silkscreen** removes all local print overrides and
 the placement offset. Reference selection has its own edit target and uses the
 owner only for correspondence, layer-colored emphasis and existing unrouted connections.

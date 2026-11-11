@@ -118,6 +118,8 @@ pub struct Source<'a> {
     pub problems: &'a [&'a str],
     pub symbols: u64,
     pub footprints: u64,
+    pub parts: u64,
+    pub categories: u64,
     pub builtin: bool,
     pub available: bool,
     pub loading: bool,
@@ -173,6 +175,9 @@ pub fn source(ui: &mut Ui, source: Source<'_>, can_refresh: bool) -> SourceActio
         let mut title_ui = ui.new_child(UiBuilder::new().max_rect(title_rect).layout(Layout::left_to_right(Align::Center)));
         title_ui.add(Label::new(RichText::new(source.name).font(fonts::interface_heading(ui, t.font_button))).truncate()).on_hover_text(source.name);
         ui.label(RichText::new(format!("{} symbols · {} footprints", source.symbols, source.footprints)).size(t.font_small).color(t.text_dim));
+        if source.parts != 0 || source.categories != 0 {
+            ui.label(RichText::new(format!("Parts: {} · Categories: {}", source.parts, source.categories)).size(t.font_small).color(t.text_dim));
+        }
         ui.horizontal(|ui| {
             let state = if source.loading {
                 "Loading…"
@@ -215,7 +220,7 @@ fn source_action(ui: &mut Ui, label: &str, name: &str, enabled: bool) -> bool {
 
 /// Full-width search with the same inset glyph and field surface as settings search.
 pub fn search(ui: &mut Ui, query: &mut String) {
-    kit::search_field(ui, ui.make_persistent_id("library_search"), query, "Search symbols and footprints…").accessible_name("Search libraries");
+    kit::search_field(ui, ui.make_persistent_id("library_search"), query, "Search library items…").accessible_name("Search libraries");
 }
 
 /// View-only catalog categories, mapped to domain kinds by the host.
@@ -224,14 +229,22 @@ pub enum Filter {
     All,
     Symbols,
     Footprints,
+    Parts,
+    Categories,
 }
 
 /// A compact segmented filter, with the selection exposed to keyboard and accessibility users.
 pub fn filters(ui: &mut Ui, kind: &mut Filter) {
     let t = Tokens::get();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = t.space_4;
-        for (value, label) in [(Filter::All, "All items"), (Filter::Symbols, "Symbols"), (Filter::Footprints, "Footprints")] {
+        for (value, label) in [
+            (Filter::All, "All items"),
+            (Filter::Symbols, "Symbols"),
+            (Filter::Footprints, "Footprints"),
+            (Filter::Parts, "Parts"),
+            (Filter::Categories, "Categories"),
+        ] {
             let selected = *kind == value;
             let response = kit::button(ui, label, if selected { kit::Button::SmallSelected } else { kit::Button::Small });
             response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, format!("Show {}", label.to_lowercase())));
@@ -249,6 +262,8 @@ pub struct Item<'a> {
     pub id: &'a str,
     pub revision: u64,
     pub footprint: bool,
+    pub kind: &'a str,
+    pub problem: Option<&'a str>,
     pub license: &'a str,
 }
 
@@ -291,12 +306,20 @@ fn item(ui: &mut Ui, item: &Item<'_>, height: f32) {
     let mut text_ui = ui.new_child(UiBuilder::new().max_rect(text).layout(Layout::top_down(Align::Min)));
     text_ui.spacing_mut().item_spacing.y = t.space_4;
     text_ui.add(Label::new(RichText::new(item.name).font(fonts::interface_heading(ui, t.font_button)).color(t.text)).truncate());
-    let kind = if item.footprint { "Footprint" } else { "Symbol" };
+    let kind = if item.problem.is_some() { format!("{} · Unresolved", item.kind) } else { item.kind.to_owned() };
     text_ui.add(
         Label::new(RichText::new(format!("{kind}  ·  {}/{}  ·  r{}", item.library, item.id, item.revision)).size(t.font_small).color(t.text_dim))
             .truncate(),
     );
-    response.on_hover_text(format!("{}\n{}/{} r{}\n{}", item.name, item.library, item.id, item.revision, item.license));
+    response.on_hover_text(format!(
+        "{}\n{}/{} r{}\n{}{}",
+        item.name,
+        item.library,
+        item.id,
+        item.revision,
+        item.license,
+        item.problem.map(|problem| format!("\n{problem}")).unwrap_or_default()
+    ));
     rule(ui, rect.bottom(), rect.x_range());
 }
 

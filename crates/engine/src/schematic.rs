@@ -136,6 +136,8 @@ pub struct SymbolDefinition {
     /// Versioned electrical semantics and instance defaults; independent of library identity.
     pub behavior: Option<crate::library::Behavior>,
     pub defaults: Option<crate::library::Defaults>,
+    /// Explicit default category for symbol-only workflows; never inferred from names or drawings.
+    pub category: Option<crate::library::parts::CategoryBinding>,
     pub(crate) reference_prefix: String,
     pub(crate) value: String,
     /// The library-defined identity of the supported unit.
@@ -156,7 +158,11 @@ impl SymbolDefinition {
 
     /// Native schema retained when pinning or exporting an unchanged definition.
     pub fn format(&self) -> &'static str {
-        if self.format_version == 2 { crate::library::SYMBOL_FORMAT_V2 } else { crate::library::SYMBOL_FORMAT }
+        match self.format_version {
+            3 => crate::library::SYMBOL_FORMAT_V3,
+            2 => crate::library::SYMBOL_FORMAT_V2,
+            _ => crate::library::SYMBOL_FORMAT,
+        }
     }
 
     /// Resolve raw drawing plus integrated pin graphics without changing native serialization.
@@ -233,10 +239,10 @@ pub fn rotate(x: i64, y: i64, turns: u8) -> (i64, i64) {
     }
 }
 
-/// One logical component, independent of the position of its schematic unit.
-/// The component owns the definition, designator and value; footprints link to its ID.
+/// One placed part instance, independent of the position of its schematic unit.
+/// It owns the definition, designator and value; footprints link to its stable legacy component ID.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Component {
+pub struct PartInstance {
     pub definition: Arc<SymbolDefinition>,
     pub(crate) ordinal: u64,
     pub(crate) reference_number: usize,
@@ -245,7 +251,7 @@ pub struct Component {
     pub metadata: fields::Metadata,
 }
 
-impl Component {
+impl PartInstance {
     /// Return the component identity, which is independent of any symbol placement ID.
     pub fn id(&self) -> String {
         format!("component-{}", self.ordinal)

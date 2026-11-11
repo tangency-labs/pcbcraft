@@ -167,7 +167,7 @@ fn legacy_typed_uuid_collision_keeps_a_readable_compatibility_encoding() {
     assert_eq!(session.project().unwrap().board.footprints().len(), 2);
 }
 
-/// Component metadata and explicit zero/one ownership use a combined vocabulary;
+/// Part instance metadata and explicit zero/one ownership use a combined vocabulary;
 /// no reader may reinterpret its fields under either separate predecessor schema.
 #[test]
 fn metadata_and_optional_board_ownership_round_trip_with_strict_combined_schema() {

@@ -1,0 +1,37 @@
+{
+  "format": "pcbcraft-part/1",
+  "library": "parts-demo",
+  "id": "connector",
+  "revision": 1,
+  "name": "Four-contact connector",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "PCBcraft native part example",
+    "locator": "examples/native-parts"
+  },
+  "symbol": {
+    "library": "parts-demo",
+    "id": "connector-4",
+    "revision": 1
+  },
+  "category": {
+    "definition": {
+      "library": "parts-demo",
+      "id": "connector",
+      "revision": 1
+    }
+  },
+  "fixed_parameters": {
+    "parts-demo:contact-count": {
+      "type": "integer",
+      "value": 4
+    },
+    "pcbcraft:pitch": {
+      "type": "quantity",
+      "value": "0.00254",
+      "unit": "m"
+    }
+  },
+  "packages": {}
+}

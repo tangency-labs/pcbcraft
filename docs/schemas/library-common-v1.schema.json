@@ -1,0 +1,1285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:library-common:1",
+  "title": "PCBcraft native library record vocabulary, version 1",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\\s\\S])"
+    },
+    "field_id": {
+      "type": "string",
+      "maxLength": 129,
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?![\\s\\S])"
+    },
+    "terminal_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8,
+      "pattern": "^[A-Za-z0-9+_-]+(?![\\s\\S])"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "library",
+        "id",
+        "revision"
+      ],
+      "properties": {
+        "library": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+        },
+        "id": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+        },
+        "revision": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/revision"
+        }
+      }
+    },
+    "category_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition"
+      ],
+      "properties": {
+        "definition": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/reference"
+        },
+        "primary_value": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/field_id"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reference",
+        "locator"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        }
+      }
+    },
+    "decimal": {
+      "type": "string",
+      "maxLength": 56,
+      "pattern": "^-?(?=(?:[0-9]\\.?){1,36}(?![\\s\\S]))(?:0|[1-9][0-9]*)(?:\\.[0-9]{0,17}[1-9])?(?![\\s\\S])",
+      "not": {
+        "const": "-0"
+      }
+    },
+    "parameter_value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "value": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/decimal"
+            },
+            "unit": {
+              "enum": [
+                "Ohm",
+                "F",
+                "H",
+                "V",
+                "A",
+                "W",
+                "Hz",
+                "s",
+                "m",
+                "K",
+                "1"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "integer"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "choice"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "boolean"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "field_type": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "resistance"
+            },
+            "unit": {
+              "const": "Ohm"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "capacitance"
+            },
+            "unit": {
+              "const": "F"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "inductance"
+            },
+            "unit": {
+              "const": "H"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "voltage"
+            },
+            "unit": {
+              "const": "V"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "current"
+            },
+            "unit": {
+              "const": "A"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "power"
+            },
+            "unit": {
+              "const": "W"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "frequency"
+            },
+            "unit": {
+              "const": "Hz"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "time"
+            },
+            "unit": {
+              "const": "s"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "length"
+            },
+            "unit": {
+              "const": "m"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "temperature"
+            },
+            "unit": {
+              "const": "K"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "quantity",
+            "unit"
+          ],
+          "properties": {
+            "type": {
+              "const": "quantity"
+            },
+            "quantity": {
+              "const": "ratio"
+            },
+            "unit": {
+              "const": "1"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "minimum",
+            "maximum"
+          ],
+          "properties": {
+            "type": {
+              "const": "integer"
+            },
+            "minimum": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "maximum": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "choices"
+          ],
+          "properties": {
+            "type": {
+              "const": "choice"
+            },
+            "choices": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+              },
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value_type"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "value_type": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/field_type"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "footprint",
+        "mapping"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "footprint": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/reference"
+        },
+        "mapping": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 128,
+          "propertyNames": {
+            "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+            },
+            "minItems": 1,
+            "maxItems": 128,
+            "uniqueItems": true
+          }
+        },
+        "unconnected_pads": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+          },
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true
+        }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x_nm",
+        "y_nm"
+      ],
+      "properties": {
+        "x_nm": {
+          "type": "integer",
+          "minimum": -100000000,
+          "maximum": 100000000
+        },
+        "y_nm": {
+          "type": "integer",
+          "minimum": -100000000,
+          "maximum": 100000000
+        }
+      }
+    },
+    "xy": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "minimum": -100000000,
+          "maximum": 100000000
+        },
+        {
+          "type": "integer",
+          "minimum": -100000000,
+          "maximum": 100000000
+        }
+      ],
+      "items": false,
+      "minItems": 2
+    },
+    "pin_xy": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "integer",
+          "minimum": -12700000,
+          "maximum": 12700000,
+          "multipleOf": 1270000
+        },
+        {
+          "type": "integer",
+          "minimum": -12700000,
+          "maximum": 12700000,
+          "multipleOf": 1270000
+        }
+      ],
+      "items": false,
+      "minItems": 2
+    },
+    "graphic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "geometry",
+        "stroke_nm",
+        "fill"
+      ],
+      "properties": {
+        "geometry": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "from",
+                "to"
+              ],
+              "properties": {
+                "type": {
+                  "const": "line"
+                },
+                "from": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point"
+                },
+                "to": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "min",
+                "max"
+              ],
+              "properties": {
+                "type": {
+                  "const": "rectangle"
+                },
+                "min": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point"
+                },
+                "max": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "center",
+                "radius_nm"
+              ],
+              "properties": {
+                "type": {
+                  "const": "circle"
+                },
+                "center": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point"
+                },
+                "radius_nm": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/size"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "center",
+                "radius_nm",
+                "start_degrees",
+                "sweep_degrees"
+              ],
+              "properties": {
+                "type": {
+                  "const": "arc"
+                },
+                "center": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point"
+                },
+                "radius_nm": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/size"
+                },
+                "start_degrees": {
+                  "type": "integer",
+                  "minimum": -360,
+                  "maximum": 360
+                },
+                "sweep_degrees": {
+                  "allOf": [
+                    {
+                      "type": "integer",
+                      "minimum": -360,
+                      "maximum": 360
+                    },
+                    {
+                      "not": {
+                        "const": 0
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "points",
+                "closed"
+              ],
+              "properties": {
+                "type": {
+                  "const": "polyline"
+                },
+                "points": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 64,
+                  "items": {
+                    "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point"
+                  }
+                },
+                "closed": {
+                  "type": "boolean"
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "closed": {
+                        "const": true
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "points": {
+                        "minItems": 3
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "at",
+                "text",
+                "height_nm",
+                "rotation",
+                "align"
+              ],
+              "properties": {
+                "type": {
+                  "const": "text"
+                },
+                "at": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point"
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+                },
+                "height_nm": {
+                  "type": "integer",
+                  "minimum": 100000,
+                  "maximum": 10000000
+                },
+                "rotation": {
+                  "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/rotation"
+                },
+                "align": {
+                  "enum": [
+                    "start",
+                    "middle",
+                    "end"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "stroke_nm": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000000
+        },
+        "fill": {
+          "enum": [
+            "none",
+            "solid",
+            "background"
+          ]
+        }
+      }
+    },
+    "shape": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "from_nm",
+            "to_nm"
+          ],
+          "properties": {
+            "type": {
+              "const": "line"
+            },
+            "from_nm": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/xy"
+            },
+            "to_nm": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/xy"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "min_nm",
+            "max_nm"
+          ],
+          "properties": {
+            "type": {
+              "const": "rect"
+            },
+            "min_nm": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/xy"
+            },
+            "max_nm": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/xy"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "center_nm",
+            "radius_nm"
+          ],
+          "properties": {
+            "type": {
+              "const": "circle"
+            },
+            "center_nm": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/xy"
+            },
+            "radius_nm": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "points_nm"
+          ],
+          "properties": {
+            "type": {
+              "const": "polyline"
+            },
+            "points_nm": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/xy"
+              },
+              "minItems": 2,
+              "maxItems": 64
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "at_nm",
+            "text",
+            "align"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "at_nm": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/xy"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+            },
+            "align": {
+              "enum": [
+                "start",
+                "middle",
+                "end"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "graphic"
+          ],
+          "properties": {
+            "type": {
+              "const": "graphic"
+            },
+            "graphic": {
+              "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/graphic"
+            }
+          }
+        }
+      ]
+    },
+    "pin_appearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orientation",
+        "length_nm",
+        "style",
+        "show_name",
+        "show_number",
+        "name_height_nm",
+        "number_height_nm"
+      ],
+      "properties": {
+        "orientation": {
+          "enum": [
+            "right",
+            "down",
+            "left",
+            "up"
+          ]
+        },
+        "length_nm": {
+          "type": "integer",
+          "minimum": 100000,
+          "maximum": 100000000
+        },
+        "style": {
+          "enum": [
+            "line",
+            "inverted",
+            "clock",
+            "inverted_clock"
+          ]
+        },
+        "show_name": {
+          "type": "boolean"
+        },
+        "show_number": {
+          "type": "boolean"
+        },
+        "name_height_nm": {
+          "type": "integer",
+          "minimum": 100000,
+          "maximum": 5000000
+        },
+        "number_height_nm": {
+          "type": "integer",
+          "minimum": 100000,
+          "maximum": 5000000
+        }
+      }
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "terminal",
+        "at_nm"
+      ],
+      "properties": {
+        "terminal": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+        },
+        "at_nm": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/pin_xy"
+        },
+        "appearance": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/pin_appearance"
+        }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "electrical_type"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+        },
+        "electrical_type": {
+          "enum": [
+            "passive",
+            "input",
+            "output",
+            "bidirectional",
+            "power_in",
+            "power_out",
+            "tri_state",
+            "open_collector",
+            "open_emitter",
+            "no_connect",
+            "unspecified"
+          ]
+        }
+      }
+    },
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "drawing",
+        "pins"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+        },
+        "drawing": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/shape"
+          },
+          "minItems": 0,
+          "maxItems": 256
+        },
+        "pins": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/pin"
+          },
+          "minItems": 1,
+          "maxItems": 128
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fields",
+        "attributes"
+      ],
+      "properties": {
+        "fields": {
+          "type": "object",
+          "minProperties": 0,
+          "maxProperties": 64,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^(?:datasheet|description|manufacturer|manufacturer_part_number|(?!00000000-0000-0000-0000-000000000000)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![\\s\\S])"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "value"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+              },
+              "value": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 2048,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+              }
+            }
+          }
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "do_not_populate",
+            "exclude_from_bom",
+            "exclude_from_board",
+            "exclude_from_simulation",
+            "exclude_from_position_files"
+          ],
+          "properties": {
+            "do_not_populate": {
+              "type": "boolean"
+            },
+            "exclude_from_bom": {
+              "type": "boolean"
+            },
+            "exclude_from_board": {
+              "type": "boolean"
+            },
+            "exclude_from_simulation": {
+              "type": "boolean"
+            },
+            "exclude_from_position_files": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offset",
+        "visible",
+        "show_name",
+        "rotation",
+        "align",
+        "height_nm"
+      ],
+      "properties": {
+        "offset": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "x_nm",
+                "y_nm"
+              ],
+              "properties": {
+                "x_nm": {
+                  "type": "integer",
+                  "minimum": -987300000,
+                  "maximum": 987300000
+                },
+                "y_nm": {
+                  "type": "integer",
+                  "minimum": -987300000,
+                  "maximum": 987300000
+                }
+              }
+            }
+          ]
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "show_name": {
+          "type": "boolean"
+        },
+        "rotation": {
+          "enum": [
+            0,
+            90,
+            180,
+            270
+          ]
+        },
+        "align": {
+          "enum": [
+            "start",
+            "middle",
+            "end"
+          ]
+        },
+        "height_nm": {
+          "type": "integer",
+          "minimum": 100000,
+          "maximum": 10000000
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metadata",
+        "field_layout"
+      ],
+      "properties": {
+        "metadata": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/metadata"
+        },
+        "field_layout": {
+          "type": "object",
+          "minProperties": 0,
+          "maxProperties": 66,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^(?:reference|value|datasheet|description|manufacturer|manufacturer_part_number|(?!00000000-0000-0000-0000-000000000000)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![\\s\\S])"
+          },
+          "additionalProperties": {
+            "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/layout"
+          }
+        }
+      }
+    },
+    "behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "terminal"
+      ],
+      "properties": {
+        "type": {
+          "const": "power"
+        },
+        "terminal": {
+          "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
+        }
+      }
+    }
+  }
+}

@@ -92,7 +92,7 @@ fn reference_selection_highlights_its_owner_and_protects_footprint_geometry() {
     );
     assert!(h.state().views.active.board.hidden_layers.contains(crate::editor_view::RATSNEST_KEY));
     let schematic = h.state().session.inspect()["project"]["schematic"].clone();
-    click(&mut h, "Use component reference");
+    click(&mut h, "Use part reference");
     type_field(&mut h, "Printed text", "Power input");
     type_field(&mut h, "Height", "1.6 mm");
     type_field(&mut h, "Stroke", "0.16 mm");
@@ -108,7 +108,7 @@ fn reference_selection_highlights_its_owner_and_protects_footprint_geometry() {
     assert_eq!(changed.pads, pads);
     click(&mut h, "Rename…");
     type_field(&mut h, "Reference", "R99");
-    click(&mut h, "Rename component");
+    click(&mut h, "Rename part");
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     let snapshot = h.state().session.snapshot().unwrap();
     let changed = snapshot.board_view(target).unwrap().footprints().find(|footprint| footprint.id == id).unwrap();
@@ -207,7 +207,7 @@ fn reference_properties_refuse_stale_drafts_and_duplicate_component_names() {
     let app = h.state_mut();
     app.views.select_board_reference(id.clone(), &app.session, policy);
     h.run();
-    click(&mut h, "Use component reference");
+    click(&mut h, "Use part reference");
     type_field(&mut h, "Printed text", "Pending print");
     let revision = h.state().session.revision();
     h.state_mut().run(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":id,"x_nm":1_000_000,"y_nm":0,"rotation":0,"expected_revision":revision}));
@@ -219,12 +219,12 @@ fn reference_properties_refuse_stale_drafts_and_duplicate_component_names() {
     h.run();
     click(&mut h, "Rename…");
     type_field(&mut h, "Reference", "R2");
-    click(&mut h, "Rename component");
+    click(&mut h, "Rename part");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
     assert!(h.state().message.is_some());
     h.get_by_label("Cancel rename");
     type_field(&mut h, "Reference", "R42");
-    click(&mut h, "Rename component");
+    click(&mut h, "Rename part");
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     h.get_by_label("Silkscreen text");
 }
@@ -275,7 +275,7 @@ fn live_reference_selection_and_rename_reach_a_component_on_another_sheet() {
     h.run();
     click(&mut h, "Rename…");
     type_field(&mut h, "Reference", "R88");
-    click(&mut h, "Rename component");
+    click(&mut h, "Rename part");
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     let snapshot = h.state().session.snapshot().unwrap();
     let scoped = snapshot.for_sheet(power).unwrap();

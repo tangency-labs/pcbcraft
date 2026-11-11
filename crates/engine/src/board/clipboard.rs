@@ -31,7 +31,7 @@ pub const PASTE: &str = "pcb.paste";
 /// Delete a mixed physical selection without deleting its logical components.
 pub const DELETE: &str = "pcb.delete_items";
 
-/// One bounded physical selection. Component correspondence highlights are never editing targets.
+/// One bounded physical selection. Part instance correspondence highlights are never editing targets.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoardSelection {

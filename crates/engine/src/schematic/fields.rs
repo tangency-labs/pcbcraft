@@ -1,4 +1,4 @@
-//! Component metadata and per-placement field appearance are independent of pin geometry.
+//! Part instance metadata and per-placement field appearance are independent of pin geometry.
 use super::{MAX_CENTER_NM, Point, TextAlign};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -30,7 +30,7 @@ pub struct Attributes {
     pub exclude_from_position_files: bool,
 }
 
-/// Component content is shared by its units; library definitions remain pinned and unchanged.
+/// Part instance content is shared by its units; library definitions remain pinned and unchanged.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Metadata {

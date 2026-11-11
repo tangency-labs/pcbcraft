@@ -158,3 +158,13 @@ rejects these fields rather than silently ignoring them.
 
 The [bundled-library contract](builtin-symbol-libraries.md) describes source
 identity, instance behavior and removal of the old power-marker representation.
+
+## Published schemas and explicit categories (`pcbcraft-symbol/3`)
+
+[The symbol schema contract](symbol-schema.md) publishes machine-readable schemas
+for versions 1–3. Version 3 adds an explicit default category and optional primary
+quantity-field binding, retained by native loading, authoring export and pinned
+symbol save/reopen. Versions 1–2 reject that field and preserve their existing
+encodings. Category lookup uses exact native identities; names/drawings never
+determine a symbol's units. See [part-schema.md](part-schema.md) for reusable
+part definitions, typed category fields and canonical quantities.

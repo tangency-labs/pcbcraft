@@ -1,0 +1,42 @@
+{
+  "format": "pcbcraft-part/1",
+  "library": "parts-demo",
+  "id": "ic",
+  "revision": 1,
+  "name": "Four-terminal IC example",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "PCBcraft native part example",
+    "locator": "examples/native-parts"
+  },
+  "symbol": {
+    "library": "parts-demo",
+    "id": "ic-4",
+    "revision": 1
+  },
+  "category": {
+    "definition": {
+      "library": "parts-demo",
+      "id": "ic",
+      "revision": 1
+    }
+  },
+  "fixed_parameters": {
+    "pcbcraft:supply-voltage-min": {
+      "type": "quantity",
+      "value": "1.8",
+      "unit": "V"
+    },
+    "pcbcraft:supply-voltage-max": {
+      "type": "quantity",
+      "value": "3.6",
+      "unit": "V"
+    },
+    "parts-demo:function": {
+      "type": "choice",
+      "value": "buffer"
+    }
+  },
+  "packages": {}
+}

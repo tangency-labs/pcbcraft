@@ -167,7 +167,7 @@ impl PcbApp {
         let (command, params) = match &edit.target {
             Target::Symbol { symbol, field } => {
                 let placement = project.symbols().iter().find(|s| s.id() == *symbol).ok_or("Symbol no longer exists")?;
-                let component = project.component(placement).ok_or("Component no longer exists")?;
+                let component = project.component(placement).ok_or("Part no longer exists")?;
                 let mut params = json!({"sheet":edit.sheet.id(),"symbol":symbol,"reference":component.reference(),"value":component.value(),"expected_revision":edit.source.revision});
                 match field.as_str() {
                     "reference" => params["reference"] = json!(edit.value),

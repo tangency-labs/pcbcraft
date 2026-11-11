@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:symbol:3",
+  "title": "PCBcraft published symbol definition, format 3",
+  "description": "Canonical standalone symbol data. Library identity and license come from the manifest; pinned copies have a separate envelope. Semantic checks are documented in symbol-schema.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "id",
+    "revision",
+    "name",
+    "reference_prefix",
+    "default_value",
+    "terminals",
+    "units",
+    "category"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-symbol/3"
+    },
+    "id": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/id"
+    },
+    "revision": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/revision"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "reference_prefix": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4,
+      "pattern": "^[A-Z]+(?![\\s\\S])"
+    },
+    "default_value": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "terminals": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal"
+      },
+      "minItems": 1,
+      "maxItems": 128
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/unit"
+      },
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "behavior": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/behavior"
+    },
+    "defaults": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/defaults"
+    },
+    "category": {
+      "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/category_binding"
+    }
+  }
+}

@@ -990,3 +990,15 @@ The contextual-card header spacing reuses the existing compact Parts Catalog
 composition. Plain titles use original PCBcraft interaction/rendering code with
 the shared grip, fonts and keyboard-focus outline, without hover fills or
 duplicate tooltips. This adaptation adds no external source or dependency.
+
+## Native part/category definitions and symbol schemas
+
+The native `pcbcraft-part/1`, `pcbcraft-category/1` and `pcbcraft-symbol/3`
+contracts, semantic resolver, exact decimal normalization and schema tooling
+are original PCBcraft work based on this repository's library-model document.
+`examples/native-parts` derives its resistor, four-pin schematic drawings and
+0603 land pattern from the existing original starter definitions at
+`0ed4f13986a4b08364b963f8b3dde4303166b6f1`, retaining MIT OR Apache-2.0 and the
+footprint's recorded dimensional provenance. The IC example is an original
+illustrative definition with no claimed manufacturer qualification. No external
+EDA implementation, library data, artwork or new runtime dependency was introduced.

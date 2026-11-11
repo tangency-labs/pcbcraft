@@ -50,7 +50,7 @@ fn choices_roundtrip_without_a_board_and_follow_explicit_creation() {
     crate::assert_same_content(&before, &s.snapshot().unwrap());
     s.apply("edit.redo", &json!({})).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), assigned);
-    // Component metadata shares the new entry-point vocabulary without changing package intent.
+    // Part instance metadata shares the new entry-point vocabulary without changing package intent.
     let symbol = s.project().unwrap().symbols()[0].id();
     let reference = s.project().unwrap().components().next().unwrap().reference().to_owned();
     let mut metadata = crate::schematic::fields::Metadata::default();

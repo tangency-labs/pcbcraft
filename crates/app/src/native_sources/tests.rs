@@ -18,6 +18,40 @@ fn documents() -> sources::Documents {
     ])
 }
 
+/// New record filters remain usable in compact/wide forms and neither browse nor resolve edits a project.
+#[test]
+fn native_part_and_category_filters_preserve_project_state() {
+    let documents: sources::Documents = [
+        ("library.json", include_str!("../../../../examples/native-parts/library.json")),
+        ("symbols/resistor.json", include_str!("../../../../examples/native-parts/symbols/resistor.json")),
+        ("footprints/resistor-0603.json", include_str!("../../../../examples/native-parts/footprints/resistor-0603.json")),
+        ("categories/resistor.json", include_str!("../../../../examples/native-parts/categories/resistor.json")),
+        ("parts/resistor.json", include_str!("../../../../examples/native-parts/parts/resistor.json")),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.into(), text.into()))
+    .collect();
+    for (width, dark) in [(1400., false), (420., false), (1400., true), (420., true)] {
+        let mut app = PcbApp::default();
+        app.preferences.theme = if dark { crate::ThemeChoice::Dark } else { crate::ThemeChoice::Light };
+        app.run("project.new", &json!({}));
+        app.session.execute(sources::LOAD, &json!({"source":"part-demo","documents":documents})).unwrap();
+        let before = app.session.inspect();
+        app.dialog = Dialog::LibrarySources;
+        let mut h = Harness::builder().with_size(egui::vec2(width, 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        if width < 800. {
+            click(&mut h, "Catalog");
+        }
+        click(&mut h, "Show parts");
+        h.get_by_label("Generic resistor");
+        assert!(h.query_by_label("Part definition  ·  parts-demo/resistor  ·  r1").is_some());
+        click(&mut h, "Show categories");
+        h.get_by_label("Resistor");
+        assert_eq!(h.state().session.inspect(), before);
+    }
+}
+
 /// Source browsing and removal are inert to the project; external placement pins attribution
 /// and reopens offline through the normal production encoder, at normal and compact sizes.
 #[test]

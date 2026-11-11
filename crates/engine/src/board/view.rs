@@ -47,7 +47,7 @@ pub enum CopperLayers {
 }
 
 impl CopperLayers {
-    /// Resolve library copper binding in physical stack order. Component-side lands use the
+    /// Resolve library copper binding in physical stack order. Mounting-side lands use the
     /// front copper of a top-side placement and the back copper of a bottom-side one;
     /// all-copper lands span the stack.
     pub(crate) fn resolve(setup: Option<&super::setup::BoardSetup>, binding: super::definition::CopperBinding, bottom: bool) -> Self {

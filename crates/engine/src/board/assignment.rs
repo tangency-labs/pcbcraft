@@ -1,4 +1,4 @@
-//! Component package choices are independent of board coordinates and placement IDs.
+//! Part instance package choices are independent of board coordinates and placement IDs.
 use super::{Footprint, definition};
 use crate::{CommandError, Project, Session, schematic::Point};
 use serde::{Deserialize, Serialize};

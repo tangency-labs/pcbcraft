@@ -216,7 +216,7 @@ Selecting reference lettering opens **Silkscreen text** in PCB Properties. The
 component reference remains visible alongside **Printed text**, font, size,
 stroke width, local rotation, alignment, visibility and offsets. Clear **Use
 component reference** to print local words such as `Power input`. These edits
-belong to the placed footprint and its Gerber ink. **Rename… → Rename component**
+belong to the placed footprint and its Gerber ink. **Rename… → Rename part**
 explicitly changes the shared component reference through its validated command,
 including the schematic. A local text literal retains its wording across a
 component rename. **Reset silkscreen** restores inherited wording and appearance.
