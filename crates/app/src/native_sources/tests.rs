@@ -228,6 +228,11 @@ fn compact_source_manager_tabs_keep_search_and_actions_reachable() {
     h.get_by_label("Actions for Workshop").scroll_to_me();
     h.run();
     click(&mut h, "Actions for Workshop");
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::LibrarySources));
+    assert!(h.query_by_label("Remove Workshop").is_none());
+    click(&mut h, "Actions for Workshop");
     click(&mut h, "Remove Workshop");
     assert!(h.state().session.libraries().search("Workshop", None).is_empty());
     assert_eq!(h.state().session.inspect(), before);

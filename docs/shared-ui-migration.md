@@ -115,6 +115,11 @@ left action slot, including when Place is disabled. The bounded browsing area
 hosts the catalog's toolbar and responsive panes, and the app handles Enter
 confirmation and switching between expanded and docked presentations.
 
+Library Sources uses the shared modal frame, named title close, footer, search
+field and import buttons. Its source cards, category filters and responsive
+panes carry the existing source diagnostics and catalog metadata. The manager
+handles an open source-action menu's Escape before dismissing the dialog.
+
 ## Shared property dialogs
 
 Symbol Properties and the net label forms use the kit's modal host, window
