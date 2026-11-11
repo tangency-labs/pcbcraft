@@ -70,7 +70,7 @@ taking from each step only what the registry needs. Each slice is its own
 reviewed format change with its own migration tests, and each lands before the
 next starts.
 
-### Slice 1: board folders
+### Slice 1: board folders ([#228](https://github.com/tangency-labs/pcbcraft/issues/228))
 
 - **Layout.** `project.pc` gains `layout_root` and each board registration gains
   its `folder`. The board's `board.json` moves to
@@ -102,7 +102,7 @@ next starts.
   builds, outputs and associated documents. None exists yet, and each keeps the
   storage design's rules when it arrives.
 
-### Slice 2: occurrence identities
+### Slice 2: occurrence identities ([#229](https://github.com/tangency-labs/pcbcraft/issues/229))
 
 - **Records.**
   - Each existing sheet gets exactly one sheet occurrence.
@@ -120,7 +120,7 @@ next starts.
 - **Behavior.** The editor behaves exactly as before. No repeated uses, no
   definition editing scope and no visible parent sheet are added.
 
-### Slice 3: the net registry
+### Slice 3: the net registry ([#230](https://github.com/tangency-labs/pcbcraft/issues/230))
 
 - **IDs.** Net IDs are UUIDs, allocated independently and never reused. They
   are never derived from names or members.
@@ -153,7 +153,10 @@ next starts.
 ### Then zones
 
 A zone stores its net's registry ID. Creating a zone on a net that has no record
-promotes it in the same transaction. Zone authoring, the fill (computed with
+promotes it in the same transaction. The zone steps are
+[#231](https://github.com/tangency-labs/pcbcraft/issues/231) (drawing and editing),
+[#232](https://github.com/tangency-labs/pcbcraft/issues/232) (fill) and
+[#233](https://github.com/tangency-labs/pcbcraft/issues/233) (Gerber output). Zone authoring, the fill (computed with
 i_overlay, pending its dependency review) and contour output then follow the
 zones plan proposed in #214.
 
