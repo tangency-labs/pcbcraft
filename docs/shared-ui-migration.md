@@ -159,6 +159,13 @@ This follows the visual composition of SolidCraft's floating shell at the
 pinned revision, whose viewport is painted before its ribbon cards. This slice
 extends PCBcraft's grid background into those margins.
 
+Both project workspaces expose a Grid toggle on the View ribbon and its Display
+menu. Schematic and PCB visibility are saved independently, including through
+the live preference interface, while opacity and the PCB's dot/line style are
+retained when hidden. Showing a grid from older opacity-zero settings restores
+default opacity for that workspace; showing a PCB grid set to Off starts with
+dots. The renderer applies these choices to the canvas and ribbon margins.
+
 ## Source and licence record
 
 The shared UI kit, look and theme retain the SolidCraft Brand and Interface

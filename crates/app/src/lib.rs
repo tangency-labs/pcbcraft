@@ -895,7 +895,7 @@ impl PcbApp {
         response.background
     }
 
-    /// The View tab: show or hide contextual panels, fit the active view, and toggle the split.
+    /// The View tab: control the workspace grid, contextual panels, navigation and editor layout.
     /// Each group's caption also lists its actions in a menu, with check marks for the panels.
     fn view_tab(&mut self, ui: &mut Ui) {
         use workspace::{RibbonTool, ToolIcon};
@@ -903,6 +903,19 @@ impl PcbApp {
         let has_project = self.session.project().is_some();
         let schematic = self.views.active.workspace == Workspace::Schematic;
         let parts = schematic && self.session.available(PLACE_SYMBOL);
+        let grid = [RibbonTool {
+            icon: ToolIcon::Grid,
+            label: "Grid",
+            description: "Show grid",
+            shortcut: "",
+            enabled: has_project,
+            active: self.preferences.grid_visible(!schematic),
+            toggle: true,
+        }];
+        if workspace::ribbon_group(ui, "Display", &grid).is_some() {
+            self.preferences.set_grid_visible(!schematic, !self.preferences.grid_visible(!schematic));
+        }
+        workspace::ribbon_separator(ui);
         let panels = [
             RibbonTool {
                 icon: ToolIcon::Browser,
@@ -1105,7 +1118,7 @@ impl PcbApp {
         let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
         let mut spacing = self.views.active.camera.snap_nm();
         let every = grid::shown_every(self.views.active.camera.snap_step()).unwrap_or(1);
-        let grid_style = if self.preferences.grid_opacity_percent == 0 {
+        let grid_style = if !self.preferences.grid_visible(self.views.active.workspace == Workspace::Board) {
             grid::Style::Off
         } else if self.views.active.workspace == Workspace::Board {
             self.preferences.board_grid_style
@@ -1373,7 +1386,7 @@ impl PcbApp {
                             input_enabled,
                             input_enabled,
                             self.preferences.navigation,
-                            self.preferences.grid_opacity_percent,
+                            self.preferences.grid_opacity(false),
                             self.preferences.auto_heal_wires,
                             self.parts.repeats(),
                             self.preferences.units,

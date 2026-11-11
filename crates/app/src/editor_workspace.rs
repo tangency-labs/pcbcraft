@@ -782,9 +782,9 @@ impl PcbApp {
                     let Some(camera) = self.library_editors.view_camera(definition, *id) else { continue };
                     (camera, t.canvas, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
                 } else if view.workspace == Workspace::Board {
-                    (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity_percent, self.preferences.board_grid_style)
+                    (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity(true), self.preferences.board_grid_style)
                 } else {
-                    (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity_percent, grid::Style::Dots)
+                    (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity(false), grid::Style::Dots)
                 };
                 let area = Rect::from_min_max(egui::pos2(pane.left(), ribbon.area.top()), egui::pos2(pane.right(), ribbon.area.bottom()))
                     .intersect(ribbon.area);
@@ -1068,7 +1068,7 @@ impl PcbApp {
                                     false,
                                     false,
                                     self.preferences.navigation,
-                                    self.preferences.grid_opacity_percent,
+                                    self.preferences.grid_opacity(false),
                                     self.preferences.auto_heal_wires,
                                     self.parts.repeats(),
                                     self.preferences.units,

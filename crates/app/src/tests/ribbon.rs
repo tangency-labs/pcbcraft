@@ -1,6 +1,50 @@
 //! Acceptance for the ported toolbar's command routing and compact presentation.
 use super::*;
 
+/// Schematic and PCB grid controls work in both ribbon layouts without changing project history,
+/// snap spacing, opacity or the PCB's chosen line style. Menu actions share the same visibility.
+#[test]
+fn ribbon_grid_visibility_is_independent_between_workspaces() {
+    for width in [1400.0, 420.0] {
+        let mut app = PcbApp::default();
+        app.start_new_project_in(Workspace::Board);
+        app.preferences.grid_opacity_percent = 35;
+        app.preferences.board_grid_style = grid::Style::Lines;
+        let mut h = Harness::builder().with_size(egui::vec2(width, 850.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        choose(&mut h, "Choose workspace", "Schematic");
+        click(&mut h, "View");
+        let before = h.state().session.snapshot().unwrap();
+        let spacing = h.state().views.active.camera.snap_nm();
+        click(&mut h, "Show grid");
+        assert!(!h.state().preferences.grid_visible(false));
+        assert!(h.state().preferences.grid_visible(true));
+        let canvas = h.get_by_label("Schematic canvas").rect();
+        assert!(super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        click(&mut h, "Show grid");
+        assert!(h.state().preferences.grid_visible(false));
+        assert!(!super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        choose(&mut h, "Display menu", "Grid");
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(!h.state().preferences.grid_visible(false));
+        choose(&mut h, "Choose workspace", "PCB layout");
+        click(&mut h, "View");
+        click(&mut h, "Show grid");
+        assert!(!h.state().preferences.grid_visible(true));
+        assert!(!h.state().preferences.grid_visible(false));
+        click(&mut h, "Show grid");
+        assert!(h.state().preferences.grid_visible(true));
+        assert!(!h.state().preferences.grid_visible(false));
+        assert_eq!(h.state().preferences.grid_opacity_percent, 35);
+        assert_eq!(h.state().preferences.board_grid_style, grid::Style::Lines);
+        assert_eq!(h.state().views.active.camera.snap_nm(), spacing);
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        let restored = preferences::Preferences::parse(&h.state().preferences.to_text());
+        assert!(!restored.grid_visible(false) && restored.grid_visible(true));
+    }
+}
+
 /// Both promoted buttons and caption menus reach the same sheet/label tools without
 /// editing the document until the existing placement form is committed.
 #[test]

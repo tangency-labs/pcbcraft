@@ -87,6 +87,10 @@ pub struct Preferences {
     /// How strongly visible canvas grids show, in percent; 0 hides them. Shared across views
     /// and windows, this changes drawing only, never snapping, cameras or project history.
     pub grid_opacity_percent: u8,
+    /// Schematic grid visibility is independent of PCB grid visibility and snapping.
+    pub schematic_grid_visible: bool,
+    /// PCB grid visibility preserves the selected dot or line style when hidden.
+    pub board_grid_visible: bool,
     /// Display style for every PCB view. Off is the default, including for older saved settings.
     /// Schematic views retain their dot grid; snap spacing stays independent in each view.
     pub board_grid_style: grid::Style,
@@ -111,6 +115,8 @@ impl Default for Preferences {
             scale_percent: 100,
             navigation: Navigation::default(),
             grid_opacity_percent: grid::OPACITY_DEFAULT,
+            schematic_grid_visible: true,
+            board_grid_visible: true,
             board_grid_style: grid::Style::Off,
             schematic_grid_nm: grid::SCHEMATIC_SPACING_DEFAULT_NM,
             auto_heal_wires: true,
@@ -121,6 +127,35 @@ impl Default for Preferences {
 }
 
 impl Preferences {
+    /// Effective drawing opacity for a workspace, preserving the chosen opacity while hidden.
+    pub(crate) fn grid_opacity(self, board: bool) -> u8 {
+        let visible = if board { self.board_grid_visible } else { self.schematic_grid_visible };
+        if visible { self.grid_opacity_percent } else { 0 }
+    }
+
+    /// Whether the workspace currently draws a grid, including legacy opacity-zero and PCB-Off settings.
+    pub(crate) fn grid_visible(self, board: bool) -> bool {
+        self.grid_opacity(board) > 0 && (!board || self.board_grid_style != grid::Style::Off)
+    }
+
+    /// Show or hide one workspace without altering snapping. Showing a legacy opacity-zero grid
+    /// restores default opacity while keeping the other workspace hidden; PCB Off starts as dots.
+    pub(crate) fn set_grid_visible(&mut self, board: bool, visible: bool) {
+        if visible && self.grid_opacity_percent == 0 {
+            self.schematic_grid_visible = false;
+            self.board_grid_visible = false;
+            self.grid_opacity_percent = grid::OPACITY_DEFAULT;
+        }
+        if board {
+            self.board_grid_visible = visible;
+            if visible && self.board_grid_style == grid::Style::Off {
+                self.board_grid_style = grid::Style::Dots;
+            }
+        } else {
+            self.schematic_grid_visible = visible;
+        }
+    }
+
     /// Read saved settings. Anything unreadable falls back to the defaults rather than stopping the
     /// app from starting, a scale or zoom speed off its range or step goes back to 100%, and a
     /// grid opacity above 100% or a grid spacing outside its range goes back to the default.
@@ -298,6 +333,8 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
             preferences.theme = defaults.theme;
             preferences.scale_percent = defaults.scale_percent;
             preferences.grid_opacity_percent = defaults.grid_opacity_percent;
+            preferences.schematic_grid_visible = defaults.schematic_grid_visible;
+            preferences.board_grid_visible = defaults.board_grid_visible;
             preferences.board_grid_style = defaults.board_grid_style;
             preferences.units = defaults.units;
         }
@@ -475,6 +512,23 @@ fn shortcuts_page(ui: &mut Ui, data: &mut PageData<'_>) {
 mod tests {
     use super::*;
 
+    /// Older settings keep their grid defaults. Enabling one legacy opacity-zero grid leaves
+    /// the other hidden and supplies a visible PCB style without changing the snap interval.
+    #[test]
+    fn grid_visibility_restores_legacy_hidden_settings_per_workspace() {
+        let mut preferences = Preferences::parse("{\"grid_opacity_percent\":0}");
+        assert!(!preferences.grid_visible(false) && !preferences.grid_visible(true));
+        let spacing = preferences.schematic_grid_nm;
+        preferences.set_grid_visible(true, true);
+        assert!(preferences.grid_visible(true));
+        assert!(!preferences.grid_visible(false));
+        assert_eq!(preferences.board_grid_style, grid::Style::Dots);
+        preferences.set_grid_visible(false, true);
+        assert!(preferences.grid_visible(false));
+        assert_eq!(preferences.schematic_grid_nm, spacing);
+        assert_eq!(Preferences::parse(&preferences.to_text()), preferences);
+    }
+
     #[test]
     fn saved_settings_come_back() {
         let preferences = Preferences {
@@ -482,6 +536,8 @@ mod tests {
             scale_percent: 110,
             navigation: Navigation { scroll: ScrollAction::Pan, reverse_zoom: true, zoom_speed_percent: 150, zoom_around: ZoomAround::Center },
             grid_opacity_percent: 35,
+            schematic_grid_visible: false,
+            board_grid_visible: true,
             board_grid_style: grid::Style::Dots,
             schematic_grid_nm: 25 * grid::NM_PER_MIL,
             auto_heal_wires: false,
@@ -547,6 +603,8 @@ mod tests {
             scale_percent: 150,
             navigation: Navigation { reverse_zoom: true, ..Navigation::default() },
             grid_opacity_percent: 20,
+            schematic_grid_visible: false,
+            board_grid_visible: false,
             board_grid_style: grid::Style::Lines,
             schematic_grid_nm: 10 * grid::NM_PER_MIL,
             auto_heal_wires: false,

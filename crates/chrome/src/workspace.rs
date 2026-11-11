@@ -68,6 +68,8 @@ pub enum ToolIcon {
     Delete,
     Nets,
     Fit,
+    /// Dots for the drawing-grid visibility control.
+    Grid,
     Browser,
     SplitView,
     EditorWindow,
@@ -1274,6 +1276,13 @@ fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: f32, t: Tok
                 line(&corner, s);
             }
             p.rect_filled(Rect::from_min_max(at(24.0, 24.0), at(40.0, 40.0)), (2.0 * size / 64.0) as u8, ink);
+        }
+        ToolIcon::Grid => {
+            for x in [-0.3, 0.0, 0.3] {
+                for y in [-0.3, 0.0, 0.3] {
+                    p.circle_filled(center + vec2(x, y) * size, size * 0.055, ink);
+                }
+            }
         }
         ToolIcon::Settings => {
             let mut painter = p.clone();

@@ -752,6 +752,8 @@ mod live {
                 setting("scale_percent", "The interface scale", Kind::Integer { min: 75, max: 200, step: 5 }),
                 setting("units", "The unit lengths and coordinates are shown in", Kind::Choice(UNITS)),
                 setting("grid_opacity_percent", "How strongly the grid shows; 0 hides it", Kind::Integer { min: 0, max: 100, step: 5 }),
+                setting("schematic_grid_visible", "Show the schematic grid", Kind::Bool),
+                setting("board_grid_visible", "Show the PCB grid", Kind::Bool),
                 setting("board_grid_style", "How PCB views draw their grid", Kind::Choice(BOARD_GRIDS)),
                 setting("selection_follow", "Which views pan to reveal another view's selection", Kind::Choice(FOLLOW)),
                 setting("scroll", "What the mouse wheel does on the canvas", Kind::Choice(SCROLL)),
@@ -805,6 +807,8 @@ mod live {
             "scale_percent": preferences.scale_percent,
             "units": preferences.units.symbol(),
             "grid_opacity_percent": preferences.grid_opacity_percent,
+            "schematic_grid_visible": preferences.schematic_grid_visible,
+            "board_grid_visible": preferences.board_grid_visible,
             "board_grid_style": match preferences.board_grid_style {
                 grid::Style::Off => "off",
                 grid::Style::Dots => "dots",
@@ -837,6 +841,12 @@ mod live {
         }
         if let Some(opacity) = number("grid_opacity_percent").and_then(|n| u8::try_from(n).ok()) {
             preferences.grid_opacity_percent = opacity;
+        }
+        if let Some(visible) = params.get("schematic_grid_visible").and_then(Value::as_bool) {
+            preferences.schematic_grid_visible = visible;
+        }
+        if let Some(visible) = params.get("board_grid_visible").and_then(Value::as_bool) {
+            preferences.board_grid_visible = visible;
         }
         if let Some(style) = text("board_grid_style") {
             preferences.board_grid_style = match style {
@@ -1511,6 +1521,9 @@ mod live {
             assert_eq!(updated_preferences(Preferences::default(), &inspected), changed);
             assert_eq!(updated_preferences(changed, &json!({})), changed);
             assert_eq!(changed.scale_percent, Preferences::default().scale_percent);
+            let hidden = updated_preferences(changed, &json!({"schematic_grid_visible":false,"board_grid_visible":false,"grid_opacity_percent":0}));
+            assert!(!hidden.grid_visible(false) && !hidden.grid_visible(true));
+            assert_eq!(updated_preferences(Preferences::default(), &inspect_preferences(&hidden)), hidden);
         }
     }
 }

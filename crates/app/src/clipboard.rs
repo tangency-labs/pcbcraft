@@ -500,7 +500,7 @@ impl PcbApp {
             false,
             true,
             self.preferences.navigation,
-            self.preferences.grid_opacity_percent,
+            self.preferences.grid_opacity(false),
             false,
             false,
             self.preferences.units,

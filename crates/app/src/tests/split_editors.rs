@@ -780,7 +780,7 @@ fn grid_dots(h: &Harness<'_, PcbApp>, id: u64) -> Vec<(egui::Pos2, egui::Color32
 }
 
 /// Inspect canvas and deferred ribbon grid shapes through their shared dot geometry.
-fn painted_grid_dots(h: &Harness<'_, PcbApp>, rect: egui::Rect) -> Vec<(egui::Pos2, egui::Color32)> {
+pub(super) fn painted_grid_dots(h: &Harness<'_, PcbApp>, rect: egui::Rect) -> Vec<(egui::Pos2, egui::Color32)> {
     let mut pending: Vec<_> = h.output().shapes.iter().map(|shape| &shape.shape).collect();
     let mut dots = Vec::new();
     while let Some(shape) = pending.pop() {

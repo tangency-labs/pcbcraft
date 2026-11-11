@@ -387,7 +387,7 @@ impl PcbApp {
             &self.board_appearance,
             true,
             self.preferences.navigation,
-            self.preferences.grid_opacity_percent,
+            self.preferences.grid_opacity(true),
             self.preferences.board_grid_style,
             label,
             &[],
