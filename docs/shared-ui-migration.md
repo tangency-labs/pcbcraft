@@ -417,3 +417,20 @@ single-click typed width entry with no observed JavaScript or console errors.
 The regressions check physical graphic save/load, undo, clipboard widths and
 fabrication layers alongside copper drawing and persistent control identities.
 Windows, macOS and direct Wayland remain untested here.
+
+PCB width and via dimensions now use shared Craft dropdowns with built-in choices
+and Custom forms. Via pad/drill values are selected and validated together.
+Custom values accept explicit units and can be remembered in local app settings,
+independently of Board Setup profiles. Shareable and project-pinned routing
+profiles remain unimplemented. Captions are centered on the actual dropdown
+bounds with a short gap; the plain Layer & sizes section caption has no menu.
+Movable card headers reuse the compact catalog's grip spacing and neutral
+control hover while retaining shared host input and keyboard-focus behavior.
+
+This follow-up passed all 1,332 workspace tests (eight ignored), formatting,
+Clippy with warnings denied and the packaged WebAssembly build. Focused
+regressions cover caption centering/spacing, the noninteractive section caption,
+custom size validation and cancellation, stale view authority, local preset
+restoration and neutral header hover/grip geometry. Isolated X11 and Chrome
+checks covered both ribbon widths; Chrome confirmed that a custom width remained
+available after an immediate reload, with no observed JavaScript or console errors.

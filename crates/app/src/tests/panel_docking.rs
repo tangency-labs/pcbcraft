@@ -32,6 +32,38 @@ fn document(h: &Harness<'_, PcbApp>) -> Value {
     json!({"inspection":h.state().session.inspect(),"revision":h.state().session.revision(),"dirty":h.state().files.dirty(&h.state().session),"bytes":encode_documents(h.state().session.snapshot().unwrap()).unwrap()})
 }
 
+/// Movable card headers reuse the compact catalog's leading grip and ordinary hover color;
+/// collapsing or hovering them must not look like selecting project content.
+#[test]
+fn card_headers_keep_grips_near_the_edge_and_use_neutral_hover() {
+    for (board, title) in [(true, "Layers"), (true, "Properties"), (true, "Selection filters"), (false, "Properties")] {
+        let mut h = fixture(board);
+        let before = document(&h);
+        click(&mut h, &format!("Collapse {title}"));
+        let header = h.get_by_label(&format!("Move {title}")).rect();
+        h.hover_at(header.center());
+        h.run();
+        let dots: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(dot) if header.contains(dot.center) && (dot.radius - 1.1).abs() < 0.01 => Some(dot.center),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dots.len(), 6, "{title}: grip must remain visible");
+        let leading = dots.iter().map(|dot| dot.x).min_by(f32::total_cmp).unwrap();
+        assert!(leading - header.left() <= 8.0, "{title}: duplicated header padding places the grip too far inward");
+        assert!(
+            h.output().shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(tile) if header.contains_rect(tile.rect) && tile.rect.contains(header.center()) && tile.fill == Tokens::get().hover)),
+            "{title}: title hover must use the neutral control color"
+        );
+        assert_eq!(document(&h), before);
+    }
+}
+
 /// Menus and live requests use the same anchor, and co-located cards occupy separate slots.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

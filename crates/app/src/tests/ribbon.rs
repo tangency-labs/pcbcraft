@@ -274,7 +274,7 @@ fn pcb_editing_fields_are_persistent_outside_the_commands() {
     for width in [1400., 900., 760., 520., 400., 320.] {
         h.set_size(egui::vec2(width, 900.));
         h.run();
-        let labels = ["Active layer", "Track / line width", "Via pad diameter", "Via drill diameter"];
+        let labels = ["Active layer", "Track / line width", "Via pad / drill"];
         let bounds: Vec<_> = labels.iter().map(|name| h.get_by_label(name).rect()).collect();
         let identities: Vec<_> = labels.iter().map(|name| h.get_by_label(name).accesskit_node().id()).collect();
         for tab in ["Layout", "Draw", "Analyze", "Manufacture", "Libraries", "View"] {
@@ -289,19 +289,39 @@ fn pcb_editing_fields_are_persistent_outside_the_commands() {
                 })
                 .collect();
             assert!(clashes.is_empty(), "{width} {tab}: editing fields must not produce widget-ID clash warnings: {clashes:?}");
-            let caption = h
+            let section = h
                 .output()
                 .shapes
                 .iter()
                 .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.job.text == "Track / line width" => Some(text.visual_bounding_rect()),
+                    egui::Shape::Text(text) if text.galley.job.text == "Layer & sizes" => Some(text.visual_bounding_rect()),
                     _ => None,
                 })
                 .unwrap();
-            assert!((caption.center().x - h.get_by_label("Track / line width").rect().center().x).abs() <= 1.0);
+            let fields = labels.iter().map(|name| h.get_by_label(name).rect()).reduce(egui::Rect::union).unwrap();
+            assert!((section.center().x - fields.center().x).abs() <= 1.0, "{width} {tab}: section caption {section:?}, fields {fields:?}");
+            assert!(section.bottom() <= h.get_by_label("PCB canvas").rect().top(), "{width} {tab}: section caption overlaps canvas");
+            assert!(h.query_by_role_and_label(egui::Role::Button, "Layer & sizes").is_none());
             for (index, name) in labels.iter().enumerate() {
                 let node = h.get_by_label(name);
                 let rect = node.rect();
+                let caption = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == *name => Some(text.visual_bounding_rect()),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!((caption.center().x - rect.center().x).abs() <= 1.0, "{width} {tab}: {name} caption {caption:?}, control {rect:?}");
+                if caption.top() > rect.top() {
+                    assert!(
+                        caption.top() - rect.bottom() <= 10.0,
+                        "{width} {tab}: {name} caption {caption:?}, dropdown {rect:?} has too much spacing"
+                    );
+                }
+
                 assert_eq!(rect, bounds[index], "{width} {tab}: {name}");
                 assert_eq!(node.accesskit_node().id(), identities[index], "{width} {tab}: {name}");
                 assert!(rect.left() >= 0. && rect.right() <= width, "{width} {tab}: {name} {rect:?}");
@@ -315,8 +335,8 @@ fn pcb_editing_fields_are_persistent_outside_the_commands() {
     }
 }
 
-/// One click permits typed dimensions in the display unit on either ribbon layout;
-/// changing the next stroke width is view state and cannot edit project history.
+/// Custom widths accept display units and remain reusable after local settings are restored;
+/// picking or adding a width cannot edit project geometry or history.
 #[test]
 fn pcb_stroke_width_accepts_typed_values() {
     use pcbcraft_chrome::units::Unit;
@@ -329,14 +349,82 @@ fn pcb_stroke_width_accepts_typed_values() {
             h.run();
             let before = h.state().session.snapshot().unwrap();
             click(&mut h, "Track / line width");
-            h.get_by_label("Track / line width").type_text(text);
+            click(&mut h, "Custom…");
+            click(&mut h, "Width");
+            h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+            h.get_by_label("Width").type_text(text);
             h.run();
-            h.key_press(Key::Enter);
-            h.run();
+            click(&mut h, "Use");
             assert_eq!(h.state().views.active.board.tracks.width_nm, expected, "{width} {unit:?}");
+            assert!(matches!(h.state().dialog, Dialog::None));
+            let saved = h.state().routing_presets.storage_text();
+            h.state_mut().routing_presets = crate::board_presets::Presets::from_storage(saved);
             click_tab(&mut h, "Draw");
+            assert_eq!(h.state().views.active.board.tracks.width_nm, expected);
+            h.state_mut().views.active.board.tracks.width_nm = 250_000;
+            click(&mut h, "Track / line width");
+            click(&mut h, &pcbcraft_chrome::units::label(expected, unit));
             assert_eq!(h.state().views.active.board.tracks.width_nm, expected);
             assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         }
+    }
+}
+
+/// Via presets apply as pairs. Invalid custom values, cancellation and stale view input must
+/// not change the pair or remember a preset; explicit units work with another display unit.
+#[test]
+fn pcb_via_dropdown_validates_custom_pairs_and_cancellation() {
+    for width in [1400., 760.] {
+        let mut app = PcbApp::default();
+        app.start_new_project_in(Workspace::Board);
+        app.preferences.units = pcbcraft_chrome::units::Unit::Mm;
+        let mut h = Harness::builder().with_size(egui::vec2(width, 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let before = h.state().session.snapshot().unwrap();
+        let set = |h: &mut Harness<'_, PcbApp>, label: &str, text: &str| {
+            click(h, label);
+            h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+            h.get_by_label(label).type_text(text);
+            h.run();
+        };
+        let pair = |h: &Harness<'_, PcbApp>| {
+            let tracks = &h.state().views.active.board.tracks;
+            [tracks.via_diameter_nm, tracks.via_drill_nm]
+        };
+        click(&mut h, "Via pad / drill");
+        click(&mut h, "0.8 / 0.4 mm");
+        assert_eq!(pair(&h), [800_000, 400_000]);
+        let saved = h.state().routing_presets.storage_text();
+        click(&mut h, "Via pad / drill");
+        click(&mut h, "Custom…");
+        set(&mut h, "Pad diameter", "0.7");
+        set(&mut h, "Drill diameter", "0.8");
+        click(&mut h, "Use");
+        assert!(matches!(h.state().dialog, Dialog::RoutingSize(_)));
+        assert_eq!(pair(&h), [800_000, 400_000]);
+        assert_eq!(h.state().routing_presets.storage_text(), saved);
+        h.key_press(Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert_eq!(pair(&h), [800_000, 400_000]);
+        click(&mut h, "Via pad / drill");
+        click(&mut h, "Custom…");
+        set(&mut h, "Pad diameter", "30 mil");
+        set(&mut h, "Drill diameter", "12 mil");
+        click(&mut h, "Use");
+        assert_eq!(pair(&h), [762_000, 304_800]);
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert_ne!(h.state().routing_presets.storage_text(), saved);
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        click(&mut h, "Via pad / drill");
+        click(&mut h, "Custom…");
+        set(&mut h, "Pad diameter", "1.2");
+        h.state_mut().session.apply("project.new", &json!({"create_board":true})).unwrap();
+        h.run();
+        let saved = h.state().routing_presets.storage_text();
+        click(&mut h, "Use");
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert_eq!(h.state().routing_presets.storage_text(), saved);
+        assert!(h.state().message.as_ref().is_some_and(|message| message.contains("View or project changed")));
     }
 }

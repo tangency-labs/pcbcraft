@@ -19,6 +19,7 @@ mod board_drc;
 mod board_measure;
 mod board_outputs;
 mod board_panels;
+mod board_presets;
 mod board_reference;
 mod board_setup;
 mod board_tracks;
@@ -180,6 +181,8 @@ enum Dialog {
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
     LayerColor(board_appearance::Edit),
+    /// Custom tool dimensions and optional reusable presets, independent of board setup.
+    RoutingSize(board_presets::Edit),
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     /// Expanded selection properties retain their originating view and revision.
@@ -229,6 +232,7 @@ pub struct PcbApp {
     preferences: Preferences,
     board_appearance: board_appearance::Appearance,
     board_profile_files: board_setup::profile_io::Files,
+    routing_presets: board_presets::Presets,
     /// The one fabrication export that may be saving at a time.
     fabrication_exports: board_outputs::Exports,
     net_inspector: net_inspector::NetInspector,
@@ -346,6 +350,7 @@ impl PcbApp {
             board_appearance: board_appearance::Appearance::from_storage(
                 cc.storage.and_then(|storage| storage.get_string(board_appearance::STORAGE_KEY)),
             ),
+            routing_presets: board_presets::Presets::from_storage(cc.storage.and_then(|storage| storage.get_string(board_presets::STORAGE_KEY))),
             views,
             #[cfg(not(target_arch = "wasm32"))]
             files: project_files::ProjectFiles::with_recent(cc.storage.and_then(|storage| storage.get_string(RECENT_PROJECTS_KEY)).as_deref()),
@@ -878,6 +883,7 @@ impl PcbApp {
                 workspaces: workspace::Workspaces { entries: &entries, ..WORKSPACES },
                 quick: &quick,
                 pinned_fields: if board { 3 } else { 0 },
+                controls_label: "Layer & sizes",
             },
             |ui, section| match section {
                 workspace::RibbonSection::Commands(shown) => {
@@ -2035,6 +2041,7 @@ impl PcbApp {
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
+            Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
@@ -2452,7 +2459,7 @@ impl eframe::App for PcbApp {
             // Release the native surface after the frame; surviving host/window IDs stay put.
             frame.retire_root_window();
         }
-        let changed = self.preferences != before || self.board_appearance.dirty;
+        let changed = self.preferences != before || self.board_appearance.dirty || self.routing_presets.dirty;
         #[cfg(not(target_arch = "wasm32"))]
         let changed = self.assistant.take_settings_changed() || changed;
         #[cfg(not(target_arch = "wasm32"))]
@@ -2478,6 +2485,10 @@ impl eframe::App for PcbApp {
             storage.set_string(arrangements::STORAGE_KEY, text);
         }
         storage.set_string(PREFERENCES_KEY, self.preferences.to_text());
+        if let Some(text) = self.routing_presets.storage_text() {
+            storage.set_string(board_presets::STORAGE_KEY, text);
+            self.routing_presets.dirty = false;
+        }
         if let Some(text) = self.board_appearance.storage_text() {
             storage.set_string(board_appearance::STORAGE_KEY, text);
         }

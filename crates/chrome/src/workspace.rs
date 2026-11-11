@@ -239,7 +239,7 @@ pub fn ribbon(
     add: impl FnOnce(&mut Ui, usize),
 ) -> RibbonResponse {
     let mut add = Some(add);
-    ribbon_with_controls(ui, workspace, tabs, tab, RibbonLayout { workspaces, quick, pinned_fields: 0 }, |ui, section| {
+    ribbon_with_controls(ui, workspace, tabs, tab, RibbonLayout { workspaces, quick, pinned_fields: 0, controls_label: "" }, |ui, section| {
         if let RibbonSection::Commands(shown) = section
             && let Some(add) = add.take()
         {
@@ -254,6 +254,8 @@ pub struct RibbonLayout<'a> {
     pub quick: &'a [RibbonTool<'a>],
     /// Number of standard-width fields kept outside the tab's scrolling commands.
     pub pinned_fields: usize,
+    /// Noninteractive section caption for the persistent editing fields; empty hides it.
+    pub controls_label: &'a str,
 }
 
 /// The command strip changes with its tab; editing fields keep their own identity and position.
@@ -275,7 +277,7 @@ pub fn ribbon_with_controls(
     layout: RibbonLayout<'_>,
     mut add: impl FnMut(&mut Ui, RibbonSection),
 ) -> RibbonResponse {
-    let RibbonLayout { workspaces, quick, pinned_fields } = layout;
+    let RibbonLayout { workspaces, quick, pinned_fields, controls_label } = layout;
     let t = Tokens::get();
     let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
     let tab_gap = if wide { t.space_6 } else { t.space_2 };
@@ -405,6 +407,18 @@ pub fn ribbon_with_controls(
                             controls_ui.set_clip_rect(ui.clip_rect().intersect(controls));
                             controls_ui.spacing_mut().item_spacing.x = t.space_8;
                             add(&mut controls_ui, RibbonSection::Controls { compact: !side_controls });
+                            if !controls_label.is_empty() {
+                                let fields = controls_ui.min_rect();
+                                let top =
+                                    if side_controls { row.top() + RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP } else { fields.bottom() + t.space_4 };
+                                ui.painter().text(
+                                    pos2(fields.center().x, top),
+                                    Align2::CENTER_TOP,
+                                    controls_label,
+                                    FontId::proportional(t.font_small),
+                                    t.text_dim,
+                                );
+                            }
                         }
                     });
                 });
@@ -931,11 +945,12 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
 
 /// Standard themed layer dropdown with a color patch in its closed field and every popup row.
 /// Labels and color targets stay independent; selecting a row changes only the supplied value.
-pub fn layer_choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T, options: &[(T, &str, Color32)]) -> bool {
+/// The returned response carries the trigger bounds and reports whether its value changed.
+pub fn layer_choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T, options: &[(T, &str, Color32)]) -> Response {
     let before = *value;
     let selected = options.iter().find(|(option, _, _)| option == value);
     let selected_name = selected.map_or("Layer", |(_, name, _)| *name);
-    let response = solidcraft_ui_kit::bounded_dropdown_menu(ui, label, "", ui.available_width(), |ui| {
+    let mut response = solidcraft_ui_kit::bounded_dropdown_menu(ui, label, "", ui.available_width(), |ui| {
         for (option, name, color) in options {
             let text = layer_choice_label(ui, name);
             let response = ui.selectable_value(value, *option, text);
@@ -957,7 +972,10 @@ pub fn layer_choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T
         info.current_text_value = Some(selected_name.to_owned());
         info
     });
-    before != *value
+    if before != *value {
+        response.mark_changed();
+    }
+    response
 }
 
 /// Reserve actual layout space for a swatch rather than padding the visible or accessible text.
@@ -982,7 +1000,8 @@ fn layer_choice_patch(ui: &Ui, rect: Rect, color: Color32) {
 /// Place a standard themed field in the ribbon using the existing group height and caption.
 /// Its own control opens any menu; the caption adds no second popup or interaction target.
 /// Compact fields place the caption above the control for a wrapping persistent settings row.
-pub fn ribbon_field<R>(ui: &mut Ui, title: &str, compact: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+/// The caption uses the rendered control's center, including any host-imposed size constraints.
+pub fn ribbon_field(ui: &mut Ui, title: &str, compact: bool, add: impl FnOnce(&mut Ui) -> Response) -> Response {
     let t = Tokens::get();
     let width = t.control_height * if compact { 5.5 } else { 6.0 };
     let height =
@@ -999,7 +1018,7 @@ pub fn ribbon_field<R>(ui: &mut Ui, title: &str, compact: bool, add: impl FnOnce
     let mut field_ui = ui.new_child(egui::UiBuilder::new().id_salt(("ribbon_field", title)).max_rect(field).layout(Layout::top_down(Align::Center)));
     let result = add(&mut field_ui);
     ui.painter().text(
-        pos2(rect.center().x, rect.top() + if compact { 0.0 } else { RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP }),
+        pos2(result.rect.center().x, if compact { rect.top() } else { result.rect.bottom() + RIBBON_CAPTION_GAP }),
         Align2::CENTER_TOP,
         title,
         FontId::proportional(t.font_small),
@@ -1207,25 +1226,34 @@ fn card_header(ui: &mut Ui, title: &str, collapsed: bool) -> Response {
     response.on_hover_text(if collapsed { "Expand panel" } else { "Collapse panel" })
 }
 
-/// Shared header presentation with host-owned identity and drag/collapse policy.
+/// Shared header interaction with host-owned identity and drag/collapse policy. Movable cards
+/// use the compact catalog's grip spacing and a neutral hover, without a tab-selection tint.
 pub(super) fn panel_header_control(ui: &mut Ui, id: egui::Id, rect: Rect, title: &str, drag: bool) -> Response {
-    solidcraft_ui_kit::panel_host_control(
+    let response = solidcraft_ui_kit::panel_host_control(
         ui,
         id,
         rect,
         solidcraft_ui_kit::HostChrome {
-            label: title,
+            label: if drag { "" } else { title },
             icon: None,
             icon_only: false,
             attention: false,
             selected: false,
             enabled: ui.is_enabled(),
             drag,
-            title: drag,
+            title: false,
             grip_only: false,
             rtl: false,
         },
-    )
+    );
+    if drag {
+        drag_grip(ui, rect);
+        let t = Tokens::get();
+        let label = Rect::from_min_max(pos2((rect.left() + 18.0).min(rect.right()), rect.top()), rect.max);
+        let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(label));
+        painter.text(label.left_center(), Align2::LEFT_CENTER, title, fonts::interface_heading(ui, t.font_body), t.text);
+    }
+    response.on_hover_text(title)
 }
 
 /// A card's header, with its title and optional named Close button, over a body that scrolls

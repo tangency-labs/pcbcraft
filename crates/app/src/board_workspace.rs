@@ -10,91 +10,6 @@ use pcbcraft_chrome::{
 };
 use pcbcraft_engine::AlignMode;
 
-/// A ribbon length field shown and edited in the display units, holding whole nanometers in
-/// `value`, clamped to `range`. Returns whether the person changed it.
-fn length_field(
-    ui: &mut Ui,
-    title: &str,
-    value: &mut i64,
-    range: std::ops::RangeInclusive<i64>,
-    unit: pcbcraft_chrome::units::Unit,
-    enabled: bool,
-    compact: bool,
-) -> bool {
-    let per_unit = match unit {
-        pcbcraft_chrome::units::Unit::Mm => pcbcraft_chrome::units::NM_PER_MM,
-        pcbcraft_chrome::units::Unit::Mil => pcbcraft_chrome::units::NM_PER_MIL,
-    } as f64;
-    let mut shown = *value as f64 / per_unit;
-    let changed = workspace::ribbon_field(ui, title, compact, |ui| {
-        ui.add_enabled(
-            enabled,
-            egui::DragValue::new(&mut shown)
-                .range(*range.start() as f64 / per_unit..=*range.end() as f64 / per_unit)
-                .speed(if unit == pcbcraft_chrome::units::Unit::Mm { 0.01 } else { 0.5 })
-                .max_decimals(3)
-                .clip_text(true)
-                .suffix(format!(" {}", unit.symbol())),
-        )
-        .accessible_name(title)
-        .changed()
-    });
-    if changed {
-        *value = ((shown * per_unit).round() as i64).clamp(*range.start(), *range.end());
-    }
-    changed
-}
-
-/// One ribbon field for the next via's pad diameter and drill, in the display units. The drill
-/// stays smaller than the pad; both hold whole nanometers. Returns whether either changed.
-fn via_field(ui: &mut Ui, diameter: &mut i64, drill: &mut i64, unit: pcbcraft_chrome::units::Unit, enabled: bool, compact: bool) -> bool {
-    use pcbcraft_engine::board::track::{MAX_VIA_DIAMETER_NM, MIN_VIA_DRILL_NM};
-    let per_unit = match unit {
-        pcbcraft_chrome::units::Unit::Mm => pcbcraft_chrome::units::NM_PER_MM,
-        pcbcraft_chrome::units::Unit::Mil => pcbcraft_chrome::units::NM_PER_MIL,
-    } as f64;
-    let speed = if unit == pcbcraft_chrome::units::Unit::Mm { 0.01 } else { 0.5 };
-    let (mut pad, mut hole) = (*diameter as f64 / per_unit, *drill as f64 / per_unit);
-    let changed = workspace::ribbon_field(ui, "Via pad / drill", compact, |ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            let pad_changed = ui
-                .add_enabled(
-                    enabled,
-                    egui::DragValue::new(&mut pad)
-                        .range((MIN_VIA_DRILL_NM + 1) as f64 / per_unit..=MAX_VIA_DIAMETER_NM as f64 / per_unit)
-                        .speed(speed)
-                        .max_decimals(3)
-                        .clip_text(true),
-                )
-                .accessible_name("Via pad diameter")
-                .on_hover_text("Via pad diameter")
-                .changed();
-            ui.label("/");
-            let hole_changed = ui
-                .add_enabled(
-                    enabled,
-                    egui::DragValue::new(&mut hole)
-                        .range(MIN_VIA_DRILL_NM as f64 / per_unit..=(MAX_VIA_DIAMETER_NM - 1) as f64 / per_unit)
-                        .speed(speed)
-                        .max_decimals(3)
-                        .clip_text(true)
-                        .suffix(format!(" {}", unit.symbol())),
-                )
-                .accessible_name("Via drill diameter")
-                .on_hover_text("Via drill diameter")
-                .changed();
-            pad_changed || hole_changed
-        })
-        .inner
-    });
-    if changed {
-        *diameter = ((pad * per_unit).round() as i64).clamp(MIN_VIA_DRILL_NM + 1, MAX_VIA_DIAMETER_NM);
-        *drill = ((hole * per_unit).round() as i64).clamp(MIN_VIA_DRILL_NM, *diameter - 1);
-    }
-    changed
-}
-
 /// Modify menu alignments: the label and the engine mode each runs.
 const ALIGNMENTS: [(&str, AlignMode); 8] = [
     ("Align to Left", AlignMode::Left),
@@ -410,11 +325,7 @@ impl PcbApp {
     pub(super) fn board_ribbon_controls(&mut self, ui: &mut Ui, compact: bool) {
         let enabled = self.session.project().and_then(|project| project.board_target()).is_some();
         self.active_layer_field(ui, compact);
-        use pcbcraft_engine::board::track::{MAX_WIDTH_NM, MIN_WIDTH_NM};
-        let unit = self.preferences.units;
-        let tracks = &mut self.views.active.board.tracks;
-        length_field(ui, "Track / line width", &mut tracks.width_nm, MIN_WIDTH_NM..=MAX_WIDTH_NM, unit, enabled, compact);
-        via_field(ui, &mut tracks.via_diameter_nm, &mut tracks.via_drill_nm, unit, enabled, compact);
+        self.board_size_controls(ui, enabled, compact);
     }
 
     /// Analysis opens existing DRC, measurement and counterpart tools without editing the board.
@@ -493,9 +404,8 @@ impl PcbApp {
         else {
             workspace::ribbon_field(ui, "Active layer", compact, |ui| {
                 let mut empty = 0usize;
-                ui.add_enabled_ui(false, |ui| {
-                    workspace::layer_choice(ui, "Active layer", &mut empty, &[(0, "No board", egui::Color32::TRANSPARENT)])
-                });
+                ui.add_enabled_ui(false, |ui| workspace::layer_choice(ui, "Active layer", &mut empty, &[(0, "No board", egui::Color32::TRANSPARENT)]))
+                    .inner
             });
             return;
         };
@@ -516,7 +426,9 @@ impl PcbApp {
         let mut selected =
             layers.iter().position(|layer| self.views.active.board.active_layer.as_deref() == Some(layer.id.to_string().as_str())).unwrap_or(0);
         let changed = workspace::ribbon_field(ui, "Active layer", compact, |ui| workspace::layer_choice(ui, "Active layer", &mut selected, &options));
-        if changed && let Some(layer) = layers.get(selected) {
+        if changed.changed()
+            && let Some(layer) = layers.get(selected)
+        {
             self.views.active.board.set_layer(&layer.id.to_string(), true, None);
         }
     }

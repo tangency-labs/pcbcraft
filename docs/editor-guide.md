@@ -504,7 +504,11 @@ panels, navigation, Flip view and window layout.
 **Active layer**, **Track / line width** and **Via pad / drill** stay visible as
 you switch PCB tabs. They sit at the right of a wide ribbon and wrap below the
 commands on narrow windows, while each tab's commands scroll independently.
-Click a numeric value to type in the display units, or drag it to adjust it.
+Choose a width or paired via size from its dropdown, or choose **Custom…** to
+enter a value in the display units (explicit units such as `20 mil` also work).
+**Save as preset** remembers a custom choice in local application settings.
+These choices are separate from Board Setup profiles; shareable or project-pinned
+routing profiles are not implemented yet.
 
 Left-drag empty canvas or right-drag to select footprints with the same Window/Crossing
 box used in the schematic. Only visible footprint geometry contributes to selection;

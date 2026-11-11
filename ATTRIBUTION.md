@@ -981,3 +981,11 @@ The persistent PCB ribbon controls, Draw tab and physical technical-layer graphi
 are original PCBcraft work using the existing shared chrome, drawing and conductive
 segment commands. Board format 16 extends the upstream format 15 reference-label
 work; no external EDA implementation, asset or dependency was introduced.
+
+The PCB width/via dropdowns, custom-size drafts and local reusable numeric presets
+are original PCBcraft code using the already qualified Craft dropdowns and modal
+controls. No dependency, external source, asset or project-format change was added.
+
+The contextual-card header spacing and neutral hover reuse the existing compact
+Parts Catalog composition and shared panel host/grip controls. This adaptation
+adds no external source or dependency.
