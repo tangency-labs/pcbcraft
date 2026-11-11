@@ -184,6 +184,13 @@ window commands. Assistant uses the shared drawer frame, status badges,
 composer and message bubbles. Its protocol, permissions, input limits and
 save/close lifecycle remain in PCBcraft.
 
+Ribbon command groups use the shared ribbon renderer and its button metrics;
+PCBcraft supplies qualified electronics glyphs, enabled/selected state and menu
+actions. The host retains horizontal scrolling and per-workspace tab contents.
+Inline ribbon fields align with the shared group height. App-bar quick actions
+and arrangement tabs use shared button presentation within PCBcraft's existing
+native title-bar placement.
+
 ## Ribbon background
 
 The outer ribbon strip is transparent, exposing each top pane's grid through

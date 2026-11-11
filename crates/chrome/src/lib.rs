@@ -41,7 +41,7 @@ pub mod board_setup;
 
 /// Install the shared icon set and PCBcraft's interface fonts before drawing the application.
 pub fn install(ctx: &egui::Context) {
-    solidcraft_look::icons::install();
+    ribbon_icons::install();
     fonts::install(ctx);
 }
 

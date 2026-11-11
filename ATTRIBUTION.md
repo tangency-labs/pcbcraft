@@ -947,6 +947,12 @@ platform providers. Fonts are data, and no egui 0.36 code dependency is retained
 Shared Preferences dropdowns draw their chevron from `solidcraft-look`'s
 embedded icon set at the same pinned revision, under the licence recorded above.
 
+The shared ribbon reserves icon slots through a registered transparent host
+master in the extended icon set. PCBcraft paints its existing qualified
+electronics glyphs into those slots, preserving their sources and notices from
+the ribbon asset record above. This avoids the toolkit's unknown-icon artwork
+without duplicating its command button rendering.
+
 The pinned SolidCraft source also supplies its `egui-wgpu` 0.37.0 patch
 (MIT OR Apache-2.0, Emil Ernerfeldt and contributors) and winit 0.30.13 patch
 (Apache-2.0, the winit contributors). Their original notices remain in the

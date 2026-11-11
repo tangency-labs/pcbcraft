@@ -11,7 +11,7 @@ pub mod catalog;
 pub mod panels;
 
 /// The card is tall enough for the tabs, the groups and PCBcraft Next's 5 point gutter under them.
-const RIBBON_HEIGHT: f32 = 121.0;
+const RIBBON_HEIGHT: f32 = 135.0;
 const WORKSPACE_WIDTH: f32 = 88.0;
 const RIBBON_COMPACT_WIDTH: f32 = 1000.0;
 
@@ -19,19 +19,13 @@ const RIBBON_COMPACT_WIDTH: f32 = 1000.0;
 pub fn ribbon_is_compact(ui: &Ui) -> bool {
     ui.clip_rect().width() < RIBBON_COMPACT_WIDTH
 }
-/// PCBcraft Next's ribbon metrics (`src/desktop/theme.rs`, `RibbonMetrics`): 56 by 52 point
-/// buttons 2 points apart, a 24 point icon centered 17 points down and the label centered 10
-/// points above the bottom, 6 points of padding on each side of a group, a 12 point slot for the
-/// rule between groups, and the group's caption 10 points under its buttons.
+/// Shared ribbon height with PCBcraft's qualified command glyphs and inline field widths.
 const RIBBON_TOOL_WIDTH: f32 = 56.0;
-const RIBBON_TOOL_HEIGHT: f32 = 52.0;
-const RIBBON_TOOL_GAP: f32 = 2.0;
+const RIBBON_TOOL_HEIGHT: f32 = solidcraft_ui_kit::ribbon::BUTTON_HEIGHT;
 const RIBBON_TOOL_ICON: f32 = 24.0;
-const RIBBON_TOOL_ICON_CENTER: f32 = 17.0;
-const RIBBON_TOOL_LABEL_CENTER: f32 = 10.0;
 const RIBBON_GROUP_PADDING: f32 = 6.0;
 const RIBBON_SEPARATOR_WIDTH: f32 = 12.0;
-const RIBBON_CAPTION_GAP: f32 = 10.0;
+const RIBBON_CAPTION_GAP: f32 = 5.0;
 const RIBBON_SCROLL_GUTTER: f32 = 5.0;
 
 /// The glyphs used by the schematic ribbon actions and Browser rows.
@@ -301,16 +295,18 @@ pub fn ribbon(
                                 let show_quick = tabs.get(*tab) != Some(&"View")
                                     && ui.available_width() >= quick.len() as f32 * (t.space_24 + ui.spacing().item_spacing.x);
                                 for (index, tool) in quick.iter().enumerate().rev().filter(|_| show_quick) {
-                                    let (rect, response) = ui.allocate_exact_size(
-                                        vec2(t.space_24, t.space_24),
-                                        if tool.enabled { Sense::click() } else { Sense::hover() },
+                                    let (_, rect) = ui.allocate_space(vec2(t.space_24, t.space_24));
+                                    let response = crate::controls::glyph_target(
+                                        ui,
+                                        ui.scope_id().with(("ribbon_quick", tool.description)),
+                                        rect,
+                                        tool.description,
+                                        tool.enabled,
+                                        tool.active,
                                     );
-                                    response.widget_info(|| WidgetInfo::selected(Role::Button, tool.enabled, tool.active, tool.description));
-                                    if tool.active {
-                                        ui.painter().rect_filled(rect, t.control_radius, t.accent_soft);
-                                    } else if response.hovered() {
-                                        ui.painter().rect_filled(rect, t.control_radius, t.hover);
-                                    }
+                                    response.widget_info(|| {
+                                        WidgetInfo::selected(Role::Button, tool.enabled && ui.is_enabled(), tool.active, tool.description)
+                                    });
                                     paint_icon(ui.painter(), tool.icon, rect.center(), t.space_16, t, tool.enabled);
                                     if response.on_hover_text(tool.description).clicked() {
                                         quick_pick = Some(index);
@@ -574,14 +570,17 @@ fn ribbon_tab(ui: &mut Ui, title: &str, selected: bool, wide: bool) -> Response 
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, title));
     if ui.is_rect_visible(rect) {
+        let shared = solidcraft_theme::Tokens::get();
+        let style = solidcraft_ui_kit::ribbon::tab_style(
+            &shared,
+            solidcraft_theme::TabAccent::current(ui.ctx()),
+            false,
+            selected,
+            response.hovered() || response.has_focus(),
+        );
         let p = ui.painter();
-        if selected {
-            p.rect_filled(rect, t.radius_sm, t.accent_soft);
-        } else if response.hovered() || response.has_focus() {
-            p.rect_filled(rect, t.radius_sm, t.hover);
-        }
-        let ink = if selected { t.ribbon_tab_text } else { t.text };
-        p.galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, ink);
+        p.rect_filled(rect, t.radius_sm, style.fill);
+        p.galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, style.ink);
     }
     response
 }
@@ -734,58 +733,112 @@ pub fn ribbon_control(ui: &mut Ui, title: &str, width: f32, add: impl FnOnce(&mu
 /// Draw a ribbon group with additional menu-only options after a separator. Returned indices
 /// address the visible tools first, then the extra entries; checked rows use their declared semantics.
 pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>], menu_tools: &[RibbonTool<'_>]) -> Option<usize> {
+    use solidcraft_ui_kit::ribbon as shared;
     let t = Tokens::get();
-    let font = FontId::proportional(t.font_body);
-    let widths: Vec<f32> = tools
+    let widths: Vec<_> = tools
         .iter()
-        .map(|tool| (ui.painter().layout_no_wrap(tool.label.to_owned(), font.clone(), t.text).size().x + t.space_8).max(RIBBON_TOOL_WIDTH))
+        .map(|tool| {
+            (ui.painter().layout_no_wrap(tool.label.to_owned(), FontId::proportional(t.font_body), t.text).size().x
+                + shared::BUTTON_LABEL_PADDING
+                + t.space_4)
+                .max(RIBBON_TOOL_WIDTH)
+        })
         .collect();
-    let width = (widths.iter().sum::<f32>() + tools.len().saturating_sub(1) as f32 * RIBBON_TOOL_GAP + 2.0 * RIBBON_GROUP_PADDING)
-        .max(ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim).size().x + t.space_24);
-    let caption_height = t.font_small + t.space_4;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP + caption_height), Sense::hover());
-    let mut picked = None;
-    let mut x = rect.left() + RIBBON_GROUP_PADDING;
-    for (index, (tool, tool_width)) in tools.iter().zip(widths).enumerate() {
-        let button = Rect::from_min_size(pos2(x, rect.top()), vec2(tool_width, RIBBON_TOOL_HEIGHT));
-        if tool_button(ui, button, tool).clicked() {
-            picked = Some(index);
-        }
-        x += tool_width + RIBBON_TOOL_GAP;
-    }
-
-    let caption = Rect::from_min_size(pos2(rect.left(), rect.top() + RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP), vec2(width, caption_height));
-    let response = ui.interact(caption, ui.scope_id().with(("ribbon_group", title)), Sense::click());
-    // Named for what it opens, so it never reads as one of the group's actions.
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, format!("{title} menu")));
-    let response = response.on_hover_text(format!("{title} actions"));
-    if ui.is_rect_visible(caption) {
-        let p = ui.painter();
-        if response.hovered() || response.has_focus() {
-            p.rect_filled(caption, 3, t.hover);
-        }
-        let galley = p.layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim);
-        let center = caption.center() - vec2(5.0, 0.0);
-        let arrow = pos2(center.x + galley.size().x / 2.0 + 7.0, center.y);
-        p.galley(center - galley.size() / 2.0, galley, t.text_dim);
-        p.add(Shape::line(vec![arrow + vec2(-2.5, -1.0), arrow + vec2(0.0, 1.5), arrow + vec2(2.5, -1.0)], Stroke::new(1.0, t.text_dim)));
-    }
-    egui::Popup::menu(&response).frame(crate::menu::frame()).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_min_width(t.control_height * 7.0);
-        ui.spacing_mut().item_spacing.y = 0.0;
-        for (index, tool) in tools.iter().chain(menu_tools).enumerate() {
-            if index == tools.len() && index > 0 {
-                ui.separator();
-            }
-            let mut item = crate::MenuItem::new(tool.label).tool_icon(tool.icon).shortcut(tool.shortcut).enabled(tool.enabled);
-            if let Some(kind) = tool.menu_check {
-                item = item.with_check(kind, tool.active);
-            }
-            if item.show(ui) {
-                picked = Some(index);
-            }
-        }
+    let width = shared::panel_width(&widths)
+        .max(ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim).size().x + t.space_24)
+        + 5.0;
+    let (_, rect) = ui.allocate_space(vec2(width, shared::GROUP_HEIGHT));
+    let prefix = format!("pcbcraft:ribbon:{title}:");
+    let group = shared::Group {
+        key: title,
+        name: title,
+        label: title,
+        tip: title,
+        buttons: tools
+            .iter()
+            .zip(&widths)
+            .map(|(tool, &width)| shared::Button {
+                id: tool.description,
+                run: tool.description,
+                label: tool.label,
+                name: tool.description,
+                icon: crate::ribbon_icons::HOST_PAINTED,
+                size: shared::ButtonSize { width, min_width: width },
+                enabled: tool.enabled,
+                pressed: tool.active,
+                exit: false,
+                split: None,
+                app_paints: false,
+                covers: &[],
+            })
+            .collect(),
+        cells: Vec::new(),
+        commands: tools.iter().chain(menu_tools).map(|tool| tool.description).collect(),
+        icon: None,
+        enabled: true,
+        open: false,
+        running: None,
+        more: Vec::new(),
+    };
+    let row = shared::Row {
+        groups: vec![group],
+        labels: true,
+        accent: solidcraft_theme::TabAccent::current(ui.ctx()),
+        exit: false,
+        reveal: None,
+        more_tip: "More tools",
+        handles: shared::Handles {
+            button: &[&format!("{prefix}button:")],
+            button_rect: &format!("{prefix}button_rect:"),
+            split: &format!("{prefix}split:"),
+            cell: &[],
+            collapsed: &format!("{prefix}collapsed:"),
+            section: &format!("{prefix}section:"),
+            section_target: &format!("{prefix}section_target:"),
+            group: &format!("{prefix}group:"),
+            running: &format!("{prefix}running:"),
+            reveal: &format!("{prefix}reveal:"),
+            more: &format!("{prefix}more:"),
+            more_row: &format!("{prefix}more_row:"),
+            collapsed_count: &format!("{prefix}collapsed_count:"),
+            more_count: &format!("{prefix}more_count:"),
+            trimmed_count: &format!("{prefix}trimmed_count:"),
+            drag: &format!("{prefix}drag:"),
+            drag_remove: &format!("{prefix}drag_remove:"),
+        },
+    };
+    let output = ui.push_id(("ribbon_group", title), |ui| shared::show(ui, &row, rect, &mut |_, _| false)).inner;
+    let mut picked = output.actions.iter().find_map(|action| match action {
+        shared::Action::Run { id, .. } => tools.iter().position(|tool| tool.description == id),
+        _ => None,
     });
+    for button in output.buttons {
+        if let Some(tool) = tools.get(button.index) {
+            paint_icon(ui.painter(), tool.icon, pos2(button.whole.center().x, button.whole.top() + 16.0), RIBBON_TOOL_ICON, t, tool.enabled);
+            button.response.widget_info(|| WidgetInfo::selected(Role::Button, tool.enabled && ui.is_enabled(), tool.active, tool.description));
+            button.response.on_hover_text(tool.description);
+        }
+    }
+    if let Some(group) = output.groups.first() {
+        let response = &group.label_response;
+        response.widget_info(|| WidgetInfo::labeled(Role::Button, ui.is_enabled(), format!("{title} menu")));
+        egui::Popup::menu(response).frame(crate::menu::frame()).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            ui.set_min_width(t.control_height * 7.0);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (index, tool) in tools.iter().chain(menu_tools).enumerate() {
+                if index == tools.len() && index > 0 {
+                    ui.separator();
+                }
+                let mut item = crate::MenuItem::new(tool.label).tool_icon(tool.icon).shortcut(tool.shortcut).enabled(tool.enabled);
+                if let Some(kind) = tool.menu_check {
+                    item = item.with_check(kind, tool.active);
+                }
+                if item.show(ui) {
+                    picked = Some(index);
+                }
+            }
+        });
+    }
     picked
 }
 
@@ -885,34 +938,6 @@ pub fn ribbon_separator(ui: &mut Ui) {
     let height = RIBBON_TOOL_HEIGHT + RIBBON_CAPTION_GAP + t.font_small + t.space_4;
     let (rect, _) = ui.allocate_exact_size(vec2(RIBBON_SEPARATOR_WIDTH, height), Sense::hover());
     ui.painter().vline(rect.center().x, rect.top() + t.space_2..=rect.bottom(), Stroke::new(1.0, t.border));
-}
-
-/// Draw one ribbon button in `rect`, as PCBcraft Next's `tool_button`: quiet until hovered or
-/// pressed, the glyph near the top and the label under it. The description labels the button
-/// for assistive technology and is its tooltip.
-fn tool_button(ui: &mut Ui, rect: Rect, tool: &RibbonTool<'_>) -> Response {
-    let t = Tokens::get();
-    let sense = if tool.enabled { Sense::click() } else { Sense::hover() };
-    let response = ui.interact(rect, ui.scope_id().with(("ribbon_tool", tool.description)), sense);
-    response.widget_info(|| WidgetInfo::selected(Role::Button, tool.enabled, tool.active, tool.description));
-    if ui.is_rect_visible(rect) {
-        let p = ui.painter();
-        if tool.active {
-            p.rect_filled(rect, t.control_radius, t.accent_soft);
-        } else if tool.enabled && (response.hovered() || response.has_focus()) {
-            p.rect_filled(rect, t.control_radius, t.hover);
-        }
-        paint_icon(p, tool.icon, pos2(rect.center().x, rect.top() + RIBBON_TOOL_ICON_CENTER), RIBBON_TOOL_ICON, t, tool.enabled);
-        let ink = if tool.enabled { t.text } else { t.text_dim };
-        p.text(
-            pos2(rect.center().x, rect.bottom() - RIBBON_TOOL_LABEL_CENTER),
-            Align2::CENTER_CENTER,
-            tool.label,
-            FontId::proportional(t.font_body),
-            ink,
-        );
-    }
-    response.on_hover_text(tool.description)
 }
 
 /// Paint a ribbon glyph in a menu row's leading column.

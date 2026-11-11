@@ -242,15 +242,8 @@ fn action_button(ui: &mut Ui, action: Action, label: &str, tooltip: &str) -> Opt
 fn icon_target(ui: &mut Ui, label: &str, tooltip: &str, active: bool) -> (Rect, egui::Response) {
     let t = Tokens::get();
     let (_, rect) = ui.allocate_space(vec2(t.control_height, t.control_height));
-    let response = solidcraft_ui_kit::button_at(
-        ui,
-        label,
-        rect,
-        "",
-        if active { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost },
-    )
-    .accessible_name(label)
-    .on_hover_text(tooltip);
+    let response = crate::controls::glyph_target(ui, ui.scope_id().with(("assistant_action", label)), rect, label, ui.is_enabled(), active)
+        .on_hover_text(tooltip);
     (rect, response)
 }
 

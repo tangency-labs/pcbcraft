@@ -35,13 +35,13 @@ pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> 
                     for (id, name) in tabs {
                         ui.push_id(id, |ui| {
                             let selected = *id == active;
-                            let response = ui.selectable_label(selected, name);
+                            let response = solidcraft_ui_kit::button(ui, name, if selected { solidcraft_ui_kit::Button::SmallSelected } else { solidcraft_ui_kit::Button::Ghost });
                             response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, format!("Arrangement {name}")));
                             response.context_menu(|ui| {
                                 for (label, pick) in
                                     [("Rename…", Intent::Rename(*id)), ("Duplicate…", Intent::Duplicate(*id)), ("Delete…", Intent::Remove(*id))]
                                 {
-                                    if ui.add_enabled(!matches!(pick, Intent::Remove(_)) || tabs.len() > 1, egui::Button::new(label)).clicked() {
+                                    if crate::controls::enabled_button(ui, !matches!(pick, Intent::Remove(_)) || tabs.len() > 1, label).clicked() {
                                         intent = Some(pick);
                                         ui.close_kind(egui::UiKind::Menu);
                                     }

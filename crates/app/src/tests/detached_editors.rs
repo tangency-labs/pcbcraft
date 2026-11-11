@@ -186,6 +186,20 @@ fn detached_browser_navigation_and_selection_stay_in_the_child_host() {
     h.run_steps(3);
     let at = child_rect(&peer, "Open in PCB layout").center();
     child_click_at(&mut h, &peer, at);
+    // Shared ribbon metrics leave less vertical room in this 760 pt child. Reveal the
+    // footprint row through the child's Browser, retaining its independent input stream.
+    let at = child_rect(&peer, "Board Board").center();
+    peer.borrow_mut().events.extend([
+        Event::PointerMoved(at),
+        Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -52.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        },
+    ]);
+    h.run_steps(5);
     let at = child_rect(&peer, "Footprint R1  R").center();
     child_click_at(&mut h, &peer, at);
     let child = h.state().views.hosts[&HostId(1)].focused;

@@ -33,6 +33,28 @@ pub fn search(ui: &mut Ui, id: egui::Id, value: &mut String, hint: &str, name: &
     kit::search_field(ui, id, value, hint).accessible_name(name)
 }
 
+/// Shared quiet hit target for caller-painted command glyphs. The host owns its bounds,
+/// identity and action; toolkit hover/focus/selected chrome preserves disabled behavior.
+pub fn glyph_target(ui: &mut Ui, id: egui::Id, bounds: egui::Rect, label: &str, enabled: bool, selected: bool) -> Response {
+    kit::panel_host_control(
+        ui,
+        id,
+        bounds,
+        kit::HostChrome {
+            label,
+            icon: None,
+            icon_only: true,
+            attention: false,
+            selected,
+            enabled,
+            drag: false,
+            title: false,
+            grip_only: false,
+            rtl: false,
+        },
+    )
+}
+
 /// A host-identified choice menu rendered by the shared dropdown. The app supplies typed rows
 /// and owns their changes; the adapter preserves native response and popup-result handling.
 pub struct Choice {
