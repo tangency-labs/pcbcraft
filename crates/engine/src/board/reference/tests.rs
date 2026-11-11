@@ -162,3 +162,42 @@ fn visibility_and_local_size_resolve_without_freezing_other_placements() {
     assert_eq!(selected.reference_appearance.size.height_nm, 1_500_000);
     assert_eq!(view(&session).footprints().find(|f| f.id != id).unwrap().reference_appearance.size.height_nm, 2_000_000);
 }
+
+/// Nonphysical overrides retain the editor annotation; only explicitly enabled ink replaces it.
+#[test]
+fn fontless_footprints_keep_editor_labels_until_local_ink_is_enabled() {
+    let mut session = routed_fixture();
+    // Model a valid pinned native definition from before generated references were enabled.
+    // All placements, mappings and connectivity come from the command-built fixture.
+    let mut project = (*session.snapshot().unwrap()).clone();
+    let key = project.board.footprints()[0].key().unwrap();
+    let board = Arc::make_mut(&mut project.board);
+    Arc::make_mut(board.definitions.get_mut(&key).unwrap()).reference = None;
+    session.open_snapshot(Arc::new(project));
+    let initial = view(&session).footprints().next().unwrap();
+    let id = initial.id.clone();
+    let pads = initial.pads.clone();
+    let reference = initial.reference.to_owned();
+    assert!(!initial.physical_reference);
+    for appearance in [
+        json!({"text":"Local words"}),
+        json!({"font":"pcbcraft-technical-1"}),
+        json!({"visible":false}),
+        json!({"text":"Local words","visible":true}),
+        json!({"text":"Local words","visible":false}),
+        Value::Null,
+    ] {
+        let ink = appearance["visible"] == true;
+        set(&mut session, &id, appearance).unwrap();
+        let footprint = view(&session).footprints().find(|f| f.id == id).unwrap();
+        assert_eq!(footprint.physical_reference, ink, "Nonphysical changes must leave the editor label available");
+        assert_eq!(footprint.graphics.iter().any(|graphic| graphic.reference), ink);
+        assert_eq!(footprint.reference, reference);
+        assert_eq!(footprint.pads, pads);
+        let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+        let reopened = decode_documents(&saved).unwrap();
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
+        let loaded = reopened.board_view(reopened.board_target().unwrap()).unwrap().footprints().find(|f| f.id == id).unwrap();
+        assert_eq!(loaded.physical_reference, ink);
+    }
+}

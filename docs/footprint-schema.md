@@ -181,6 +181,10 @@ hidden. Text selection never grants physical-footprint edit authority.
 Board canvas rendering and Gerber silkscreen export use the same generated and
 clipped paths. The editor-only fallback label on a retained marker footprint
 continues to use its placement offset through the legacy rendering path.
+Native definitions without a generated reference also retain an editor-only
+label when local overrides do not enable ink. An explicit `visible: true`
+switches to physical reference paths. Hiding a definition-owned reference keeps
+its physical mode and does not restore an editor-only label.
 
 ## Physical placement fields
 

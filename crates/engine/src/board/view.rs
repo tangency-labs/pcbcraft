@@ -116,6 +116,8 @@ pub struct FootprintView<'a> {
     pub rotation: u16,
     pub pads: Vec<PadView>,
     pub graphics: Vec<GraphicView>,
+    /// Use generated silk rather than an editor-only label. A definition-owned reference
+    /// retains this mode while hidden; definitions without one require explicitly enabled local ink.
     pub physical_reference: bool,
     /// Additional local displacement from the library reference default, before rotation or side mirroring.
     pub reference_offset: Point,
@@ -260,7 +262,7 @@ impl<'a> BoardView<'a> {
                     .project
                     .board
                     .definition_for(footprint)
-                    .is_some_and(|d| d.reference.is_some() || footprint.reference_text.is_some()),
+                    .is_some_and(|d| d.reference.is_some() || footprint.reference_text.as_ref().is_some_and(|text| text.visible == Some(true))),
                 reference_offset: footprint.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET),
                 reference_text: footprint.reference_text.clone(),
                 reference_appearance: super::reference::Resolved::new(
