@@ -165,6 +165,8 @@ the live preference interface, while opacity and the PCB's dot/line style are
 retained when hidden. Showing a grid from older opacity-zero settings restores
 default opacity for that workspace; showing a PCB grid set to Off starts with
 dots. The renderer applies these choices to the canvas and ribbon margins.
+Preferences shows Off when the PCB grid is hidden; selecting Dots or Lines also
+turns its visibility back on, including when it was hidden from the ribbon.
 
 ## Source and licence record
 

@@ -360,6 +360,7 @@ fn schematic(ui: &mut Ui, data: &mut PageData<'_>) {
 }
 
 /// Theme, interface scale, PCB grid display, shared grid opacity and display units.
+/// The PCB style reflects effective visibility; choosing dots or lines restores a hidden grid.
 fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     settings::heading(ui, "Appearance", "How PCBCraft looks. Cancel restores your previous settings.");
     let preferences = &mut *data.preferences;
@@ -388,11 +389,11 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
     });
     settings::section(ui, "Canvas", |ui| {
         settings::row_with_keywords(ui, "PCB grid", &["board", "layout", "grid", "dots", "lines", "hide"], |ui| {
-            settings::segmented(
-                ui,
-                &mut preferences.board_grid_style,
-                &[(grid::Style::Off, "Off"), (grid::Style::Dots, "Dots"), (grid::Style::Lines, "Lines")],
-            );
+            let mut style = if preferences.grid_visible(true) { preferences.board_grid_style } else { grid::Style::Off };
+            if settings::segmented(ui, &mut style, &[(grid::Style::Off, "Off"), (grid::Style::Dots, "Dots"), (grid::Style::Lines, "Lines")]) {
+                preferences.board_grid_style = style;
+                preferences.set_grid_visible(true, style != grid::Style::Off);
+            }
         });
         settings::row_with_keywords(ui, "Grid opacity", &["transparency", "fade", "dots"], |ui| {
             grid::opacity_control(ui, &mut preferences.grid_opacity_percent);

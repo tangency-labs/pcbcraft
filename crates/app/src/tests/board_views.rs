@@ -535,6 +535,43 @@ fn pcb_grid_preferences_are_shared_display_settings() {
     click(&mut h, "OK");
 }
 
+/// Choosing a visible PCB style in Preferences restores a ribbon-hidden grid, including
+/// legacy zero opacity. Cancel restores the hidden state and OK preserves the chosen style.
+#[test]
+fn pcb_grid_preferences_restore_hidden_grid() {
+    use pcbcraft_chrome::grid::Style;
+    for opacity in [0, 100] {
+        let mut h = board_harness();
+        choose(&mut h, "Choose workspace", "PCB layout");
+        h.state_mut().preferences.board_grid_style = Style::Dots;
+        h.state_mut().preferences.board_grid_visible = false;
+        h.state_mut().preferences.grid_opacity_percent = opacity;
+        h.run();
+        let hidden = h.state().preferences;
+        let before = h.state().session.snapshot().unwrap();
+        let canvas = h.get_by_label("PCB canvas").rect();
+        assert!(super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        click(&mut h, "Preferences");
+        click(&mut h, "Dots");
+        assert!(h.state().preferences.grid_visible(true));
+        click(&mut h, "Cancel");
+        assert_eq!(h.state().preferences, hidden);
+        assert!(super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        click(&mut h, "Preferences");
+        click(&mut h, "Dots");
+        click(&mut h, "OK");
+        assert!(h.state().preferences.grid_visible(true));
+        assert!(!super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        click(&mut h, "View");
+        click(&mut h, "Show grid");
+        assert!(!h.state().preferences.grid_visible(true));
+        click(&mut h, "Show grid");
+        assert!(h.state().preferences.grid_visible(true));
+        assert!(!super::split_editors::painted_grid_dots(&h, canvas).is_empty());
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+}
+
 /// Open a board with its origin unobstructed, retaining the real layers/properties panels.
 fn editable_board() -> Harness<'static, PcbApp> {
     let mut h = board_harness();
