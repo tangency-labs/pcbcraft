@@ -468,7 +468,8 @@ fn mixed_pane_close_buttons_preserve_the_surviving_view() {
 }
 
 /// PCB grid preferences change only board drawing, survive serialization, and preserve snapping
-/// and project state. Cancel restores the previous style and page defaults restore Off.
+/// and project state. Off retains the previous style, Cancel restores visibility as well,
+/// and page defaults restore the legacy Off style.
 #[test]
 fn pcb_grid_preferences_are_shared_display_settings() {
     use pcbcraft_chrome::grid::Style;
@@ -500,8 +501,10 @@ fn pcb_grid_preferences_are_shared_display_settings() {
         h.get_by_label("PCB grid");
         click(&mut h, label);
         click(&mut h, "OK");
-        assert_eq!(h.state().preferences.board_grid_style, style);
-        assert_eq!(crate::preferences::Preferences::parse(&h.state().preferences.to_text()).board_grid_style, style);
+        let remembered = if style == Style::Off { Style::Lines } else { style };
+        assert_eq!(h.state().preferences.board_grid_style, remembered);
+        assert_eq!(h.state().preferences.grid_visible(true), style != Style::Off);
+        assert_eq!(crate::preferences::Preferences::parse(&h.state().preferences.to_text()), h.state().preferences);
         let (dots, lines) = marks(&h, Tokens::get().board_grid);
         match style {
             Style::Dots => {
@@ -528,7 +531,8 @@ fn pcb_grid_preferences_are_shared_display_settings() {
     click(&mut h, "Preferences");
     click(&mut h, "Dots");
     click(&mut h, "Cancel");
-    assert_eq!(h.state().preferences.board_grid_style, Style::Off);
+    assert_eq!(h.state().preferences.board_grid_style, Style::Lines);
+    assert!(!h.state().preferences.grid_visible(true));
     click(&mut h, "Preferences");
     click(&mut h, "Lines");
     click(&mut h, "Restore page defaults");

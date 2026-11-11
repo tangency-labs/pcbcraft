@@ -134,7 +134,16 @@ impl Edit {
             Size::Width(width) => (width, 0),
             Size::Via([pad, drill]) => (pad, drill),
         };
-        Self { source, current, unit, first: units::label(first, unit), second: units::label(second, unit), save: true, focused: false, error: None }
+        Self {
+            source,
+            current,
+            unit,
+            first: units::edit_label(first, unit),
+            second: units::edit_label(second, unit),
+            save: true,
+            focused: false,
+            error: None,
+        }
     }
 
     /// Explicit units override the captured display unit. Invalid pairs remain editable as a draft.
@@ -275,6 +284,19 @@ fn set_size(tracks: &mut crate::board_tracks::State, value: Size) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Opening Custom and accepting unchanged mil values preserves every stored nanometre.
+    #[test]
+    fn unchanged_custom_mil_values_round_trip_exactly() {
+        let mut h = crate::tests::harness();
+        h.state_mut().run("project.new", &serde_json::json!({}));
+        h.run();
+        let source = h.state().views.active.input(h.state().session()).unwrap();
+        for current in [Size::Width(300_000), Size::Width(254_001), Size::Via([600_000, 300_000]), Size::Via([762_001, 304_801])] {
+            let edit = Edit::new(source, current, Unit::Mil);
+            assert_eq!(edit.value().unwrap(), current);
+        }
+    }
 
     /// Saved custom choices round-trip exactly and cannot bypass engine bounds or grow unbounded.
     #[test]

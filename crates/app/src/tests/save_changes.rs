@@ -59,6 +59,29 @@ fn shared_save_prompt_keeps_each_decision_available() {
     }
 }
 
+/// Enter activates the focused action while an unowned Enter leaves the prompt open.
+#[test]
+fn shared_save_prompt_supports_focused_keyboard_actions() {
+    use pcbcraft_chrome::shell::{self, SaveDecision};
+    for (label, expected) in [("Save", SaveDecision::Save), ("Don't Save", SaveDecision::Discard), ("Cancel", SaveDecision::Cancel)] {
+        let mut h = Harness::builder().with_size(egui::vec2(600., 650.)).with_context_setup(pcbcraft_chrome::install).build_ui_state(
+            |ui, decision: &mut Option<SaveDecision>| {
+                if let Some(answer) = shell::save_changes(ui.ctx(), "Save changes?", "Unsaved work", true, true) {
+                    *decision = Some(answer);
+                }
+            },
+            None,
+        );
+        h.run();
+        h.get_by_label(label).focus();
+        h.run();
+        assert!(h.get_by_label(label).is_focused());
+        h.key_press(Key::Enter);
+        h.run();
+        assert!(*h.state() == Some(expected), "{label} must accept Enter");
+    }
+}
+
 /// Whether the last frame sent the root viewport a command matching `command`.
 fn sent(h: &Harness<'_, PcbApp>, command: impl Fn(&ViewportCommand) -> bool) -> bool {
     h.output().viewport_output.get(&ViewportId::ROOT).is_some_and(|output| output.commands.iter().any(command))

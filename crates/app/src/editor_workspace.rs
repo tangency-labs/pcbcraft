@@ -780,7 +780,9 @@ impl PcbApp {
                 }
                 let (camera, fill, ink, opacity, style) = if let Some(definition) = view.definition {
                     let Some(camera) = self.library_editors.view_camera(definition, *id) else { continue };
-                    (camera, t.canvas, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
+                    let fill =
+                        if self.library_kind(definition) == Some(pcbcraft_engine::authoring::Kind::Footprint) { t.board_canvas } else { t.canvas };
+                    (camera, fill, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
                 } else if view.workspace == Workspace::Board {
                     (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity(true), self.preferences.board_grid_style)
                 } else {

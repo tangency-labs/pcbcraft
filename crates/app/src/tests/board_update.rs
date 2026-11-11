@@ -369,6 +369,30 @@ fn legacy_assignment_handoff_preserves_initialization_phase() {
     h.get_by_label("1 footprint ready to place");
 }
 
+/// Initialization has a bounded, scrollable body even when many assignments are missing.
+/// The last action remains reachable while the header and footer stay fixed.
+#[test]
+fn legacy_initialization_scrolls_to_last_missing_assignment() {
+    let mut h = fixture(true);
+    place_first(&mut h, 0, 0);
+    for index in 0..20 {
+        edit(&mut h, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":index*10_000_000,"y_nm":10_000_000}));
+    }
+    open(&mut h);
+    h.set_size(egui::vec2(620., 650.));
+    h.run();
+    let header = h.get_by_label("Close Update PCB from Schematic").rect();
+    let footer = h.get_by_label("Use current state").rect();
+    h.get_by_label("Assign footprint to R21").scroll_to_me();
+    h.run();
+    let last = h.get_by_label("Assign footprint to R21").rect();
+    assert!(last.top() > header.bottom() && last.bottom() < footer.top());
+    assert_eq!(h.get_by_label("Use current state").rect(), footer);
+    h.get_by_label("Assign footprint to R21").click();
+    h.run();
+    h.get_by_label("starter / Resistor 0402 (1005 metric) · r4");
+}
+
 /// Reviewed removal remains visible, but retained excluded package intent is never a placement handoff.
 #[test]
 fn excluded_accepted_unplaced_part_is_reviewed_then_removed_from_handoff() {

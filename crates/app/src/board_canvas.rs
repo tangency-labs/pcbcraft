@@ -972,7 +972,7 @@ fn segment_in_box(a: egui::Pos2, b: egui::Pos2, window: egui::Rect) -> bool {
     true
 }
 
-/// Copper and outline marquee hits follow real strokes and via circles, respecting hidden layers
+/// Copper and graphic marquee hits follow physical strokes and via circles, respecting hidden layers
 /// and category filters. A containment box requires the complete object; crossing needs one contact.
 #[allow(clippy::too_many_arguments)]
 fn geometry_for_box(
@@ -1000,7 +1000,7 @@ fn geometry_for_box(
         .drawings()
         .into_iter()
         .filter(|d| filters.graphics && !state.hidden_layers.contains(&d.layer.to_string()))
-        .filter(|d| stroke(d.points.iter().map(|p| camera.screen(*p, rect)).collect(), d.closed, 0.))
+        .filter(|d| stroke(d.points.iter().map(|p| camera.screen(*p, rect)).collect(), d.closed, d.stroke_nm.map_or(0., radius)))
         .map(|d| d.id)
         .collect();
     let tracks = project
@@ -1099,6 +1099,32 @@ mod clipboard_geometry_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Crossing includes the visible edge of a physical graphic, while enclosure requires
+    /// its full width rather than only its centerline.
+    #[test]
+    fn graphic_marquee_accounts_for_physical_stroke() {
+        let mut h = crate::tests::harness();
+        h.state_mut().run("project.new", &serde_json::json!({"create_board":true}));
+        h.run();
+        let view = h.state().session().project().unwrap().boards().next().unwrap();
+        let layer = view.layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+        let revision = h.state().session().revision();
+        h.state_mut().run(pcbcraft_engine::ADD_DRAWING, &serde_json::json!({"layer":layer,"points":[{"x_nm":0,"y_nm":0},{"x_nm":10_000_000,"y_nm":0}],"closed":false,"stroke_nm":2_540_000,"expected_revision":revision}));
+        let view = h.state().session().project().unwrap().boards().next().unwrap();
+        let camera = &h.state().views.active.camera;
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000., 700.));
+        let a = camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+        let b = camera.screen(Point { x_nm: 10_000_000, y_nm: 0 }, rect);
+        let half = 2_540_000. * camera.unit_step() / pcbcraft_engine::schematic::GRID_NM as f32 / 2.;
+        let state = BoardState::default();
+        let filters = crate::selection_filters::Filters::default();
+        let crossing = egui::Rect::from_min_max(egui::pos2(a.x + 1., a.y + half - 1.), egui::pos2(b.x - 1., a.y + half + 1.));
+        assert_eq!(geometry_for_box(view, camera, rect, &state, filters, crossing, true).drawings.len(), 1);
+        let narrow = egui::Rect::from_min_max(a - egui::vec2(half + 1., half - 1.), b + egui::vec2(half + 1., half - 1.));
+        assert!(geometry_for_box(view, camera, rect, &state, filters, narrow, false).drawings.is_empty());
+        assert_eq!(geometry_for_box(view, camera, rect, &state, filters, narrow.expand(2.), false).drawings.len(), 1);
+    }
 
     /// Whole-degree source poses move without changing their resolved offsets; side changes and
     /// rotations agree with canonical engine geometry within its nanometer rounding precision.

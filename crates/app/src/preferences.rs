@@ -391,7 +391,9 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
         settings::row_with_keywords(ui, "PCB grid", &["board", "layout", "grid", "dots", "lines", "hide"], |ui| {
             let mut style = if preferences.grid_visible(true) { preferences.board_grid_style } else { grid::Style::Off };
             if settings::segmented(ui, &mut style, &[(grid::Style::Off, "Off"), (grid::Style::Dots, "Dots"), (grid::Style::Lines, "Lines")]) {
-                preferences.board_grid_style = style;
+                if style != grid::Style::Off {
+                    preferences.board_grid_style = style;
+                }
                 preferences.set_grid_visible(true, style != grid::Style::Off);
             }
         });

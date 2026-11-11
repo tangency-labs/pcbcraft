@@ -790,6 +790,23 @@ fn preferences_change_the_palette_and_the_scale_and_the_about_box_opens() {
     assert!(harness.query_by_label("Close").is_none());
 }
 
+/// Hiding Lines through Preferences retains that choice for the ribbon's next Show Grid.
+#[test]
+fn preferences_grid_off_retains_previous_line_style() {
+    use pcbcraft_chrome::grid;
+    let mut h = harness();
+    click(&mut h, "Preferences");
+    click(&mut h, "Lines");
+    assert!(h.state().preferences.grid_visible(true));
+    click(&mut h, "Off");
+    assert!(!h.state().preferences.grid_visible(true));
+    assert_eq!(h.state().preferences.board_grid_style, grid::Style::Lines);
+    click(&mut h, "OK");
+    h.state_mut().preferences.set_grid_visible(true, true);
+    assert!(h.state().preferences.grid_visible(true));
+    assert_eq!(h.state().preferences.board_grid_style, grid::Style::Lines);
+}
+
 /// Scale edits keep the slider's geometry stable until the pointer is released or the typed
 /// number is confirmed. Cancel can still restore a scale that was previewed in the app.
 #[test]
@@ -1953,6 +1970,39 @@ mod live_mcp {
         assert_eq!(document(&harness), untouched);
     }
 
+    /// Explicit visibility restores legacy hidden grids and takes precedence over accompanying
+    /// Off/zero values; style and opacity alone still preserve intentional hiding.
+    #[test]
+    fn live_grid_visibility_resolves_style_and_opacity_before_showing() {
+        use pcbcraft_chrome::grid;
+        let mut h = harness();
+        wiring_project(&mut h);
+        let (port, token) = connect(&mut h);
+        let connection = (port, token.as_str());
+        let original = document(&h);
+        for params in [json!({"board_grid_style":"off","grid_opacity_percent":0}), json!({"board_grid_style":"lines","grid_opacity_percent":0})] {
+            window(&mut h, connection, "app.set_preferences", params.clone());
+            assert!(!h.state().preferences.grid_visible(true));
+            window(&mut h, connection, "app.set_preferences", json!({"board_grid_visible":true}));
+            assert!(h.state().preferences.grid_visible(true));
+            assert!(!h.state().preferences.grid_visible(false));
+            let style = if params["board_grid_style"] == "lines" { grid::Style::Lines } else { grid::Style::Dots };
+            assert_eq!(h.state().preferences.board_grid_style, style);
+        }
+        window(
+            &mut h,
+            connection,
+            "app.set_preferences",
+            json!({"board_grid_style":"off","grid_opacity_percent":0,"board_grid_visible":true,"schematic_grid_visible":true}),
+        );
+        assert!(h.state().preferences.grid_visible(true) && h.state().preferences.grid_visible(false));
+        window(&mut h, connection, "app.set_preferences", json!({"board_grid_style":"lines","grid_opacity_percent":35,"board_grid_visible":false}));
+        assert!(!h.state().preferences.grid_visible(true));
+        assert_eq!(h.state().preferences.board_grid_style, grid::Style::Lines);
+        assert_eq!(h.state().preferences.grid_opacity_percent, 35);
+        assert_eq!(document(&h), original);
+    }
+
     /// Live clients address each task tab, retain the Manage alias, and reject tabs from
     /// the other workspace before changing any host state or authored content.
     #[test]
@@ -1967,7 +2017,7 @@ mod live_mcp {
             h.run();
             assert_eq!(result["windows"][0]["ribbon_tab"], if tab == "manage" { "sheets" } else { tab });
         }
-        for tab in ["route", "draw", "manufacture"] {
+        for tab in ["layout", "route", "draw", "manufacture"] {
             let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
             let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
             assert_eq!(error["isError"], true);
@@ -1980,7 +2030,7 @@ mod live_mcp {
             h.run();
             assert_eq!(result["windows"][0]["ribbon_tab"], if tab == "route" { "layout" } else { tab });
         }
-        for tab in ["sheets", "manage"] {
+        for tab in ["capture", "sheets", "manage"] {
             let before = payload(tool(&mut h, connection, "inspect_editor", json!({})));
             let error = tool(&mut h, connection, "execute", json!({"command":"window.set_ribbon_tab","params":{"window":0,"tab":tab}}));
             assert_eq!(error["isError"], true);

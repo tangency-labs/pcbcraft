@@ -752,8 +752,8 @@ mod live {
                 setting("scale_percent", "The interface scale", Kind::Integer { min: 75, max: 200, step: 5 }),
                 setting("units", "The unit lengths and coordinates are shown in", Kind::Choice(UNITS)),
                 setting("grid_opacity_percent", "How strongly the grid shows; 0 hides it", Kind::Integer { min: 0, max: 100, step: 5 }),
-                setting("schematic_grid_visible", "Show the schematic grid", Kind::Bool),
-                setting("board_grid_visible", "Show the PCB grid", Kind::Bool),
+                setting("schematic_grid_visible", "Show the schematic grid; true restores zero opacity", Kind::Bool),
+                setting("board_grid_visible", "Show the PCB grid; true overrides Off and zero opacity", Kind::Bool),
                 setting("board_grid_style", "How PCB views draw their grid", Kind::Choice(BOARD_GRIDS)),
                 setting("selection_follow", "Which views pan to reveal another view's selection", Kind::Choice(FOLLOW)),
                 setting("scroll", "What the mouse wheel does on the canvas", Kind::Choice(SCROLL)),
@@ -822,7 +822,9 @@ mod live {
         })
     }
 
-    /// The settings with the given (already validated) changes applied; the rest are kept.
+    /// Apply validated settings, then explicit visibility requests. Visibility wins over an
+    /// accompanying Off style or zero opacity, restoring dots/default opacity when needed.
+    /// Without a visibility request, explicit style and opacity remain unchanged.
     fn updated_preferences(mut preferences: Preferences, params: &Value) -> Preferences {
         let text = |key: &str| params.get(key).and_then(Value::as_str);
         let number = |key: &str| params.get(key).and_then(Value::as_u64);
@@ -842,18 +844,17 @@ mod live {
         if let Some(opacity) = number("grid_opacity_percent").and_then(|n| u8::try_from(n).ok()) {
             preferences.grid_opacity_percent = opacity;
         }
-        if let Some(visible) = params.get("schematic_grid_visible").and_then(Value::as_bool) {
-            preferences.schematic_grid_visible = visible;
-        }
-        if let Some(visible) = params.get("board_grid_visible").and_then(Value::as_bool) {
-            preferences.board_grid_visible = visible;
-        }
         if let Some(style) = text("board_grid_style") {
             preferences.board_grid_style = match style {
                 "dots" => grid::Style::Dots,
                 "lines" => grid::Style::Lines,
                 _ => grid::Style::Off,
             };
+        }
+        for (key, board) in [("board_grid_visible", true), ("schematic_grid_visible", false)] {
+            if let Some(visible) = params.get(key).and_then(Value::as_bool) {
+                preferences.set_grid_visible(board, visible);
+            }
         }
         if let Some(follow) = text("selection_follow") {
             preferences.selection_follow = match follow {
@@ -1386,7 +1387,8 @@ mod live {
                     if self.views.hosts.get(&host).and_then(|host| self.views.view(host.focused)).is_some_and(|view| view.definition.is_some()) {
                         return Err("Use app.library_view to select the authoring ribbon tab.".into());
                     }
-                    let tab = crate::ribbon::tab_slot(params["tab"].as_str().unwrap_or_default());
+                    let name = params["tab"].as_str().unwrap_or_default();
+                    let tab = crate::ribbon::tab_slot(name);
                     let board = self
                         .views
                         .hosts
@@ -1394,7 +1396,7 @@ mod live {
                         .and_then(|host| self.views.view(host.focused))
                         .is_some_and(|view| view.workspace == Workspace::Board);
                     let allowed: &[usize] = if board { &crate::ribbon::BOARD_TAB_ORDER } else { &crate::ribbon::TAB_ORDER };
-                    if !allowed.contains(&tab) || (!board && params["tab"] == "route") {
+                    if !allowed.contains(&tab) || (board && name == "capture") || (!board && matches!(name, "layout" | "route")) {
                         return Err(format!("This ribbon tab is available in the {} workspace.", if board { "schematic" } else { "PCB" }));
                     }
                     self.in_window(host, |app| app.ribbon_tab = tab);

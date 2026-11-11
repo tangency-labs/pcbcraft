@@ -60,7 +60,7 @@ pub struct ReportAction {
     pub copy: bool,
 }
 
-/// Keep Close and the primary action fixed while the inner report scrolls. Lifecycle-only
+/// Keep the header, Close and primary action fixed while the bounded body scrolls. Lifecycle-only
 /// prompts use a shorter body; normal review has room for options, messages and filter controls.
 pub fn form(ctx: &egui::Context, primary: &str, enabled: bool, report: bool, add: impl FnOnce(&mut Ui)) -> catalog::FormAction {
     let t = Tokens::get();
@@ -83,8 +83,16 @@ pub fn form(ctx: &egui::Context, primary: &str, enabled: bool, report: bool, add
             let mut content = ui.new_child(UiBuilder::new().id_salt("update_body").max_rect(inner));
             content.set_clip_rect(ui.clip_rect().intersect(inner));
             content.set_style(field_style);
-            add(&mut content);
-            ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            egui::ScrollArea::vertical().id_salt("update_body_scroll").max_height(inner.height()).auto_shrink([false, false]).show(
+                &mut content,
+                |ui| {
+                    crate::workspace::describe_scroll_viewport(ui);
+                    add(ui);
+                },
+            );
+            if ui.ctx().memory(|memory| memory.focused().is_none()) {
+                ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            }
             kit::footer(ui, primary, "Close", enabled, kit::Footer::default())
         })
     });

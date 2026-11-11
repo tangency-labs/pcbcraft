@@ -153,15 +153,19 @@ fn command(source: ViewInput, id: &'static str, mut params: Value) -> Command {
 
 /// Choose the existing typed command for the active material. Copper paths become atomic
 /// track segments, including closure; other layers retain a graphic with its physical stroke.
-fn create_path(source: ViewInput, view: BoardView<'_>, layer: &str, points: &[Point], closed: bool, width_nm: i64) -> Command {
+/// An over-limit copper closure returns None so the caller retains the editable draft.
+fn create_path(source: ViewInput, view: BoardView<'_>, layer: &str, points: &[Point], closed: bool, width_nm: i64) -> Option<Command> {
     if view.layers().iter().any(|record| record.id.to_string() == layer && record.purpose == LayerPurpose::Copper) {
+        if points.len() + usize::from(closed) > pcbcraft_engine::board::track::MAX_PATH_POINTS {
+            return None;
+        }
         let mut path = points.to_vec();
         if closed && let Some(first) = points.first() {
             path.push(*first);
         }
-        command(source, pcbcraft_engine::ADD_TRACKS, json!({"layer":layer,"points":path,"width_nm":width_nm}))
+        Some(command(source, pcbcraft_engine::ADD_TRACKS, json!({"layer":layer,"points":path,"width_nm":width_nm})))
     } else {
-        command(source, pcbcraft_engine::ADD_DRAWING, json!({"layer":layer,"points":points,"closed":closed,"stroke_nm":width_nm}))
+        Some(command(source, pcbcraft_engine::ADD_DRAWING, json!({"layer":layer,"points":points,"closed":closed,"stroke_nm":width_nm})))
     }
 }
 
@@ -231,8 +235,10 @@ pub(super) fn interact(
         }
         if std::mem::take(&mut state.finish_requested) {
             if let Some(draft) = state.draft.as_ref().filter(|draft| draft.points.len() >= 2) {
-                out.command = Some(create_path(draft.source, view, &draft.layer, &draft.points, false, width_nm));
-                state.draft = None;
+                out.command = create_path(draft.source, view, &draft.layer, &draft.points, false, width_nm);
+                if out.command.is_some() {
+                    state.draft = None;
+                }
             }
             return out;
         }
@@ -242,8 +248,10 @@ pub(super) fn interact(
             if let Some(draft) = &mut state.draft {
                 if tool == Tool::Rectangle {
                     if let Some(points) = rectangle(draft.points[0], at) {
-                        out.command = Some(create_path(draft.source, view, &draft.layer, &points, true, width_nm));
-                        state.draft = None;
+                        out.command = create_path(draft.source, view, &draft.layer, &points, true, width_nm);
+                        if out.command.is_some() {
+                            state.draft = None;
+                        }
                     }
                 } else {
                     let close = draft.points.len() >= 3 && camera.screen(draft.points[0], rect).distance(pointer) <= 8.;
@@ -251,8 +259,10 @@ pub(super) fn interact(
                         draft.points.push(at);
                     }
                     if (close || response.double_clicked()) && draft.points.len() >= 2 {
-                        out.command = Some(create_path(draft.source, view, &draft.layer, &draft.points, close, width_nm));
-                        state.draft = None;
+                        out.command = create_path(draft.source, view, &draft.layer, &draft.points, close, width_nm);
+                        if out.command.is_some() {
+                            state.draft = None;
+                        }
                     }
                 }
             } else if response.clicked() {
@@ -392,5 +402,58 @@ pub(super) fn paint(
                 .map_or(pcbcraft_chrome::Tokens::get().board_ink, |layer| appearance.color(view, layer)),
         );
         pcbcraft_chrome::board::drawing_target(painter, camera.screen(at, rect));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{click, click_canvas_at, harness};
+    use egui_kittest::kittest::Queryable;
+
+    /// A full copper draft cannot close past the engine limit, but remains editable and can
+    /// still finish as an open 256-point path without losing the user's geometry.
+    #[test]
+    fn max_length_copper_closure_retains_draft_until_open_finish() {
+        let mut h = harness();
+        h.set_size(egui::vec2(1400., 900.));
+        h.state_mut().run("project.new", &json!({"create_board":true}));
+        h.run();
+        let revision = h.state().session().revision();
+        h.state_mut().run(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":revision}));
+        h.run();
+        click(&mut h, "Choose workspace");
+        click(&mut h, "PCB layout");
+        let layer = h
+            .state()
+            .session()
+            .project()
+            .unwrap()
+            .boards()
+            .next()
+            .unwrap()
+            .layers()
+            .into_iter()
+            .find(|layer| layer.purpose == LayerPurpose::Copper)
+            .unwrap()
+            .id
+            .to_string();
+        h.state_mut().views.active.board.set_layer(&layer, true, None);
+        h.run();
+        click(&mut h, "Draw");
+        click(&mut h, "Draw lines on active layer");
+        let source = h.state().views.active.input(h.state().session()).unwrap();
+        let points: Vec<_> = (0..256).map(|index| Point { x_nm: index * 100_000, y_nm: if index == 0 { 0 } else { 10_000_000 } }).collect();
+        let first = h.state().views.active.camera.screen(points[0], h.get_by_label("PCB canvas").rect());
+        h.state_mut().views.active.board.drawing.draft = Some(Draft { source, layer, points: points.clone() });
+        let revision = h.state().session().revision();
+        click_canvas_at(&mut h, first);
+        assert_eq!(h.state().session().revision(), revision);
+        assert_eq!(h.state().views.active.board.drawing.draft.as_ref().unwrap().points, points);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(h.state().views.active.board.drawing.draft.is_none());
+        assert_eq!(h.state().session().project().unwrap().boards().next().unwrap().tracks().len(), 255);
+        assert_eq!(h.state().session().revision(), revision + 1);
     }
 }

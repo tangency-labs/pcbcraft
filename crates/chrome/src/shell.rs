@@ -265,7 +265,9 @@ pub fn save_changes(ctx: &egui::Context, title: &str, message: &str, offer_save:
                 ui.add(Label::new(message).wrap());
             });
             // Opening a save prompt must not implicitly approve a choice on an unowned Enter.
-            ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            if ui.ctx().memory(|memory| memory.focused().is_none()) {
+                ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            }
             kit::footer(
                 ui,
                 if offer_save { "Save" } else { "" },
