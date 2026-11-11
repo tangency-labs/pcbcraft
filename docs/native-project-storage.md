@@ -338,6 +338,11 @@ and technical graphics use the back layers. Flipping the last footprint back to 
 returns the board to the format its other data requires, with the same bytes as before.
 Legacy single-file export refuses bottom-side footprints.
 
+The [footprint format specification](footprint-schema.md) defines the next board
+format, `pcbcraft-board/15`, for local reference-position overrides and supplies
+a machine-readable schema for physical placement records. Implementation follows
+the specification as a separate change.
+
 The earlier local format 8 rectangle remains readable and byte-stable on no-op
 save. Its first actual geometry edit materializes a layer-addressed drawing in
 format 9. Versions 1–7 keep their encoding until new data is authored; they reject

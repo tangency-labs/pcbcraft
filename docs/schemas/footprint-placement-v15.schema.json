@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:footprint-placement:15",
+  "title": "PCBcraft canonical physical footprint placement in board format 15",
+  "description": "One physical placement record. The enclosing board must use pcbcraft-board/15 and contain at least one nonzero reference offset. Register the footprint schema locally to resolve its URN.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "component",
+    "definition",
+    "definition_revision",
+    "library",
+    "mapping",
+    "x_nm",
+    "y_nm"
+  ],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "component": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "library": {
+      "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/library_id"
+    },
+    "definition": {
+      "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/library_id"
+    },
+    "definition_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4294967295
+    },
+    "mapping": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 128,
+      "propertyNames": {
+        "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/terminal_id"
+      },
+      "additionalProperties": {
+        "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/terminal_id"
+      }
+    },
+    "x_nm": {
+      "type": "integer",
+      "minimum": -987300000,
+      "maximum": 987300000
+    },
+    "y_nm": {
+      "type": "integer",
+      "minimum": -987300000,
+      "maximum": 987300000
+    },
+    "rotation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 359
+    },
+    "bottom": {
+      "const": true
+    },
+    "reference_offset": {
+      "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/reference_offset"
+    }
+  }
+}
