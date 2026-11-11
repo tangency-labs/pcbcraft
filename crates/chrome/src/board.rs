@@ -40,6 +40,17 @@ pub fn reference_outline(p: &Painter, bounds: Rect, selected: bool, color: Color
     }
 }
 
+/// Connect selected or moving reference ink to its physical owner with a view-only dashed leader.
+/// Suppress the leader when ink is hidden or overlaps the owner; canvas clipping remains the painter's responsibility.
+pub fn reference_owner_link(p: &Painter, bounds: Rect, owner: Pos2, color: Color32) {
+    if !bounds.is_finite() || !bounds.is_positive() || bounds.contains(owner) {
+        return;
+    }
+    let stroke = Stroke::new(1., copper_emphasis(color, Some(true)).gamma_multiply(0.65));
+    p.extend(egui::Shape::dashed_line(&[bounds.clamp(owner), owner], stroke, 4., 3.));
+    p.circle_stroke(owner, 3., stroke);
+}
+
 /// The ratsnest is a view overlay, separate from physical drawing layers.
 pub fn ratsnest_visibility(ui: &mut egui::Ui, visible: &mut bool) -> egui::Response {
     ui.checkbox(visible, "Ratsnest")

@@ -557,7 +557,9 @@ Drag a reference designator or hover over it and press **M**, then click to
 place it. The reference position is stored on that footprint and follows its
 rotation and side. The board view and silkscreen export use the moved position.
 Clicking the lettering selects the text, highlights its owning footprint and
-shows remaining airwires and text Properties. Pad, silkscreen and reference highlights lighten their existing layer colors. **R** rotates the selected text;
+shows remaining airwires and text Properties. A dashed leader connects selected
+or moving lettering to its footprint even when the board is fully routed. Pad,
+silkscreen and reference highlights lighten their existing layer colors. **R** rotates the selected text;
 **Delete** hides it. Local printed words, font, paired height/stroke, rotation,
 alignment, visibility and offsets are undoable placement edits. Clear **Use
 component reference** to enter literal printed words; **Rename…** explicitly

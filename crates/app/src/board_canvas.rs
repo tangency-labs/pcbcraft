@@ -530,6 +530,9 @@ pub(super) fn show(
             .iter()
             .find(|graphic| graphic.reference)
             .map_or_else(|| pcbcraft_chrome::Tokens::get().board_ink, |graphic| graphic.color.unwrap_or_else(|| board::graphic_color(graphic.style)));
+        if selected {
+            board::reference_owner_link(&p, reference_bounds, center, reference_color);
+        }
         board::footprint(
             &p,
             &pads,

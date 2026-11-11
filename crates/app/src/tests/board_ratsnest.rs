@@ -379,6 +379,46 @@ fn ratsnest_controls_and_counts_are_unavailable_before_acceptance() {
     assert_eq!(h.state().session.inspect(), before);
 }
 
+/// The owner leader is independent of electrical airwires and follows a disposable text move.
+#[test]
+fn reference_owner_link_follows_moving_text_without_a_ratsnest() {
+    let mut h = board(false);
+    h.state_mut().browser.open = false;
+    let snapshot = h.state().session.snapshot().unwrap();
+    let target = snapshot.board_target().unwrap();
+    let footprint = snapshot.board_view(target).unwrap().footprints().next().unwrap();
+    let id = footprint.id;
+    let position = footprint.position;
+    let policy = h.state().preferences.selection_follow;
+    let app = h.state_mut();
+    app.views.select_board_reference(id, &app.session, policy);
+    h.run();
+    assert!(h.state().views.active.board.ratsnest_cache.is_none());
+    let canvas = h.get_by_label("PCB canvas").rect();
+    let owner = h.state().views.active.camera.screen(position, canvas);
+    let marker = |h: &Harness<'_, PcbApp>| {
+        h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::Circle(circle) if circle.center.distance(owner) < 0.01 && circle.radius==3. && circle.fill==egui::Color32::TRANSPARENT)
+    })
+    };
+    assert!(marker(&h), "Selected ink links to the physical footprint without electrical airwires");
+    let text = footprint.graphics.iter().find(|graphic| graphic.reference).unwrap().points[0];
+    let at = h.state().views.active.camera.screen(text, canvas);
+    h.hover_at(at);
+    h.run();
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.key_press(Key::M);
+    h.run();
+    h.hover_at(at + egui::vec2(80., -30.));
+    h.run();
+    assert!(h.state().views.active.board.reference_drag.is_some());
+    assert!(marker(&h), "The owner endpoint stays on the footprint during a text move");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    h.key_press(Key::Escape);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+}
+
 /// Compact forms align labels and controls and retain their actions below the scrolling fields.
 #[test]
 fn reference_properties_align_controls_and_keep_actions_visible_in_short_hosts() {

@@ -390,8 +390,8 @@ next reviewed update. See the
 mapping constraints and source limits.
 
 Click a placed reference designator to select its text and open **Properties**.
-The owning footprint highlights in lighter layer colors, and its remaining
-airwires appear. Drag the
+The owning footprint highlights in lighter layer colors, and a dashed leader
+connects the lettering to its footprint. Remaining airwires also appear. Drag the
 lettering, or press **M** and click, to move it; **R** rotates the text and
 **Delete** hides it. Properties offers local printed words, the bundled fonts,
 size/stroke, rotation, alignment, visibility and offsets. Clear **Use component

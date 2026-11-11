@@ -172,6 +172,8 @@ The Properties card shows the component reference alongside local print controls
 appearance settings. **Reset silkscreen** removes all local print overrides and
 the placement offset. Reference selection has its own edit target and uses the
 owner only for correspondence, layer-colored emphasis and existing unrouted connections.
+A dashed view-only leader links selected or moving lettering to the physical
+footprint without changing its geometry or electrical connectivity.
 Delete hides the selected reference's ink, and R rotates its local text. Selecting
 the footprint body provides **Edit silkscreen text** for references whose ink is
 hidden. Text selection never grants physical-footprint edit authority.
