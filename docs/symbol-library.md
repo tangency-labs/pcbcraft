@@ -118,14 +118,17 @@ the file and the reason; the rest of the library still loads.
 
 ## What this build supports
 
-The format leaves room for more than the engine places today:
+The native parser and placement commands support:
 
-- **Any number of terminals**, each placed by exactly one pin of the unit. The
+- **1 to 128 logical terminals**, each appearing in at least one unit. The
   legacy two-pad footprint only maps symbols with exactly pins `"1"` and `"2"`.
   [Physical footprints](footprint-library.md) validate an explicit bijection
   between the symbol terminals and the definition's pad identifiers;
   the starter NPN uses three SOT-23 pads.
-- **One unit.** Multi-unit symbols, such as a dual op-amp, are planned (issue #28).
+- **1 to 32 units in format 4**, including shared supply-terminal appearances.
+  Each unit is placed once per part, and units on different sheets retain one
+  reference, Value and physical package. Formats 1–3 retain one unit. See the
+  [multi-unit contract](symbol-schema.md#multiple-schematic-units).
 - **Pins** on the 1.27 mm grid, at most 12.7 mm from the center on each axis,
   each at its own position. Symbol centers stay 12.7 mm inside the sheet edge so
   every pin stays on the sheet.

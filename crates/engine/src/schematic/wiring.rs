@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::{SymbolDefinition, SymbolPlacement, parse_symbol_id, symbol_id};
+use super::{SymbolPlacement, SymbolUnit, parse_symbol_id, symbol_id};
 
 pub(crate) const MAX_WIRES: usize = 4096;
 
@@ -43,7 +43,7 @@ pub struct Terminal {
 
 impl Terminal {
     /// Return a placed symbol's terminals, one per pin of its definition, in pin order.
-    pub(super) fn for_symbol(symbol: u64, definition: &SymbolDefinition) -> Vec<Self> {
+    pub(super) fn for_symbol(symbol: u64, definition: &SymbolUnit) -> Vec<Self> {
         definition.pins.iter().filter_map(|pin| Some(Self { symbol, number: PinNumber::new(&pin.number)? })).collect()
     }
 
@@ -66,7 +66,7 @@ impl Terminal {
     }
 
     /// Resolve a stored pin number on a placed symbol, or `None` when its definition has no such pin.
-    pub(crate) fn from_number(symbol: u64, definition: &SymbolDefinition, number: &str) -> Option<Self> {
+    pub(crate) fn from_number(symbol: u64, definition: &SymbolUnit, number: &str) -> Option<Self> {
         definition.pins.iter().find(|pin| pin.number == number)?;
         Some(Self { symbol, number: PinNumber::new(number)? })
     }
@@ -245,6 +245,24 @@ impl Connectivity {
         for [from, to] in links {
             adjacency.entry(from).or_default().push(to);
             adjacency.entry(to).or_default().push(from);
+        }
+        // Repeated appearances of the same logical terminal are electrical aliases, including
+        // shared supply pins. Unit IDs and coordinates never establish separate physical pins.
+        let mut logical = BTreeMap::<_, Vec<Terminal>>::new();
+        for symbol in symbols.iter().filter(|symbol| symbol.definition.units.len() > 1) {
+            for terminal in symbol.terminals() {
+                logical.entry((symbol.component, terminal.number().to_owned())).or_default().push(terminal);
+            }
+        }
+        for terminals in logical.values() {
+            // Multiple drawings of an otherwise bare pin do not make it connected.
+            if terminals.iter().any(|pin| adjacency.contains_key(&WireEndpoint::Terminal(*pin))) {
+                for pair in terminals.windows(2) {
+                    let (from, to) = (WireEndpoint::Terminal(pair[0]), WireEndpoint::Terminal(pair[1]));
+                    adjacency.entry(from).or_default().push(to);
+                    adjacency.entry(to).or_default().push(from);
+                }
+            }
         }
         let unconnected = symbols
             .iter()

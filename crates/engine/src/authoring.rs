@@ -15,6 +15,7 @@ use std::{collections::BTreeMap, sync::Arc};
 /// Maximum editor document size, including metadata and stable primitive identities.
 pub const MAX_BYTES: usize = 1 << 20;
 const FORMAT: &str = "pcbcraft-library-item/1";
+const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
 const HISTORY: usize = 64;
 
 /// A definition editor is distinct from schematic-sheet and board-placement editors.
@@ -195,6 +196,9 @@ pub struct Item {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<library::parts::CategoryBinding>,
     pub unit: String,
+    /// Inactive symbol units retain their stable primitive IDs and complete editable geometry.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "unique_units")]
+    pub other_units: BTreeMap<String, BTreeMap<u64, Primitive>>,
     pub reference_font: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset: Option<Point>,
@@ -239,10 +243,45 @@ fn unique_objects<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<B
     deserializer.deserialize_map(Objects)
 }
 
+/// Decode inactive drawings without discarding duplicate unit names or primitive identities.
+fn unique_units<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<String, BTreeMap<u64, Primitive>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(transparent)]
+    struct Objects(#[serde(deserialize_with = "unique_objects")] BTreeMap<u64, Primitive>);
+    struct Units;
+    impl<'de> serde::de::Visitor<'de> for Units {
+        type Value = BTreeMap<String, BTreeMap<u64, Primitive>>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("unique bounded inactive symbol units")
+        }
+        /// Validate names and the bounded primitive maps before retaining each drawing.
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            use serde::de::Error as _;
+            let mut units = BTreeMap::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if !footprint::valid_id(&key) || units.len() >= 31 || units.contains_key(&key) {
+                    return Err(A::Error::custom("Duplicate, invalid or excessive unit identity."));
+                }
+                units.insert(key, map.next_value::<Objects>()?.0);
+            }
+            Ok(units)
+        }
+    }
+    deserializer.deserialize_map(Units)
+}
+
 /// Validated transactions shared by forms, canvas tools and live MCP.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    /// Select a drawing without changing the identities of its primitives or logical terminals.
+    SelectUnit {
+        unit: String,
+    },
+    /// Add an empty draft drawing under a new stable identity and select it.
+    AddUnit {
+        unit: String,
+    },
     Insert {
         primitive: Primitive,
     },
@@ -328,6 +367,7 @@ impl Item {
             defaults: None,
             category: None,
             unit: "main".into(),
+            other_units: BTreeMap::new(),
             reference_font: None,
             reference_offset: None,
             original_source: None,
@@ -417,34 +457,42 @@ impl Item {
         item.behavior = definition.behavior.clone();
         item.defaults = definition.defaults.clone();
         item.category = definition.category.clone();
-        let mut consumed = std::collections::BTreeSet::new();
-        for pin in definition.pins() {
-            item.objects.insert(
-                item.objects.len() as u64 + 1,
-                Primitive::Pin {
-                    number: pin.number.clone(),
-                    name: pin.name.clone(),
-                    electrical_type: pin.electrical_type,
-                    at: pin.offset,
-                    appearance: pin.appearance.clone().or_else(|| operations::legacy_pin(definition, pin, &mut consumed)),
-                },
-            );
-        }
-        for (index, shape) in definition.drawing.iter().enumerate() {
-            if consumed.contains(&index) {
-                continue;
+        item.allocation.object = 0;
+        for unit in &definition.units {
+            let mut consumed = std::collections::BTreeSet::new();
+            for pin in unit.pins() {
+                item.objects.insert(
+                    item.allocation.object + item.objects.len() as u64 + 1,
+                    Primitive::Pin {
+                        number: pin.number.clone(),
+                        name: pin.name.clone(),
+                        electrical_type: pin.electrical_type,
+                        at: pin.offset,
+                        appearance: pin.appearance.clone().or_else(|| operations::legacy_pin(unit, pin, &mut consumed)),
+                    },
+                );
             }
-            let primitive = match shape {
-                Shape::Graphic(graphic) => Primitive::Graphic { graphic: graphic.clone() },
-                Shape::Line(a, b) => Primitive::Line { from: *a, to: *b },
-                Shape::Rect(a, b) => Primitive::Rectangle { min: *a, max: *b },
-                Shape::Circle(at, r) => Primitive::Circle { center: *at, radius_nm: *r },
-                Shape::Polyline(points) => Primitive::Polyline { points: points.clone() },
-                Shape::Text(at, text, align) => Primitive::Text { at: *at, text: text.clone(), align: *align },
-            };
-            item.objects.insert(item.objects.len() as u64 + 1, primitive);
+            for (index, shape) in unit.drawing.iter().enumerate() {
+                if consumed.contains(&index) {
+                    continue;
+                }
+                let primitive = match shape {
+                    Shape::Graphic(graphic) => Primitive::Graphic { graphic: graphic.clone() },
+                    Shape::Line(a, b) => Primitive::Line { from: *a, to: *b },
+                    Shape::Rect(a, b) => Primitive::Rectangle { min: *a, max: *b },
+                    Shape::Circle(at, r) => Primitive::Circle { center: *at, radius_nm: *r },
+                    Shape::Polyline(points) => Primitive::Polyline { points: points.clone() },
+                    Shape::Text(at, text, align) => Primitive::Text { at: *at, text: text.clone(), align: *align },
+                };
+                item.objects.insert(item.allocation.object + item.objects.len() as u64 + 1, primitive);
+            }
+            item.allocation.object = item.objects.keys().next_back().copied().unwrap_or(item.allocation.object);
+            item.other_units.insert(unit.unit_id().to_owned(), std::mem::take(&mut item.objects));
         }
-        item.allocation.object = item.objects.keys().next_back().copied().unwrap_or(0);
+        item.objects = item.other_units.remove(&item.unit).ok_or("Missing default symbol unit.")?;
+        if !item.other_units.is_empty() {
+            item.format = MULTI_UNIT_FORMAT.into();
+        }
         item.validate()?;
         Ok(item)
     }
@@ -484,33 +532,47 @@ impl Item {
     fn native_mode(&self, draft: bool) -> Result<Value, String> {
         let at = |point: Point| json!([point.x_nm, point.y_nm]);
         if self.kind == Kind::Symbol {
-            let mut terminals = Vec::new();
-            let mut pins = Vec::new();
-            let mut drawing = Vec::new();
-            for object in self.objects.values() {
-                drawing.extend(match object {
-                    Primitive::Pin { number, name, electrical_type, at: point, appearance } => {
-                        terminals.push(json!({"id":number,"name":name,"electrical_type":electrical_type}));
-                        let mut pin = json!({"terminal":number,"at_nm":at(*point)});
-                        if let Some(appearance) = appearance {
-                            pin["appearance"] = serde_json::to_value(appearance).map_err(|e| e.to_string())?;
+            let mut terminal_map = BTreeMap::new();
+            let mut terminal_order = Vec::new();
+            let mut units = Vec::new();
+            let drawings: BTreeMap<_, _> = std::iter::once((&self.unit, &self.objects)).chain(self.other_units.iter()).collect();
+            for (id, objects) in drawings {
+                let mut pins = Vec::new();
+                let mut drawing = Vec::new();
+                for object in objects.values() {
+                    drawing.extend(match object {
+                        Primitive::Pin { number, name, electrical_type, at: point, appearance } => {
+                            let terminal = json!({"id":number,"name":name,"electrical_type":electrical_type});
+                            if let Some(previous) = terminal_map.insert(number.clone(), terminal.clone()) {
+                                if previous != terminal {
+                                    return Err("Shared terminal metadata must agree across units.".into());
+                                }
+                            } else {
+                                terminal_order.push(number.clone());
+                            }
+                            let mut pin = json!({"terminal":number,"at_nm":at(*point)});
+                            if let Some(appearance) = appearance {
+                                pin["appearance"] = serde_json::to_value(appearance).map_err(|e| e.to_string())?;
+                            }
+                            pins.push(pin);
+                            None
                         }
-                        pins.push(pin);
-                        None
-                    }
-                    Primitive::Graphic { graphic } => Some(json!({"type":"graphic","graphic":graphic})),
-                    Primitive::Line { from, to } => Some(json!({"type":"line","from_nm":at(*from),"to_nm":at(*to)})),
-                    Primitive::Rectangle { min, max } => Some(json!({"type":"rect","min_nm":at(*min),"max_nm":at(*max)})),
-                    Primitive::Circle { center, radius_nm } => Some(json!({"type":"circle","center_nm":at(*center),"radius_nm":radius_nm})),
-                    Primitive::Text { at: point, text, align } => Some(json!({"type":"text","at_nm":at(*point),"text":text,"align":align})),
-                    Primitive::Polyline { points } => {
-                        Some(json!({"type":"polyline","points_nm":points.iter().map(|point|at(*point)).collect::<Vec<_>>()}))
-                    }
-                    _ => return Err("A symbol cannot contain footprint primitives.".into()),
-                });
+                        Primitive::Graphic { graphic } => Some(json!({"type":"graphic","graphic":graphic})),
+                        Primitive::Line { from, to } => Some(json!({"type":"line","from_nm":at(*from),"to_nm":at(*to)})),
+                        Primitive::Rectangle { min, max } => Some(json!({"type":"rect","min_nm":at(*min),"max_nm":at(*max)})),
+                        Primitive::Circle { center, radius_nm } => Some(json!({"type":"circle","center_nm":at(*center),"radius_nm":radius_nm})),
+                        Primitive::Text { at: point, text, align } => Some(json!({"type":"text","at_nm":at(*point),"text":text,"align":align})),
+                        Primitive::Polyline { points } => {
+                            Some(json!({"type":"polyline","points_nm":points.iter().map(|point|at(*point)).collect::<Vec<_>>()}))
+                        }
+                        _ => return Err("A symbol cannot contain footprint primitives.".into()),
+                    });
+                }
+                units.push(json!({"id":id,"drawing":drawing,"pins":pins}));
             }
-            let mut value = json!({"format":if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
-                "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":[{"id":self.unit,"drawing":drawing,"pins":pins}]});
+            let terminals: Vec<_> = terminal_order.iter().map(|id| &terminal_map[id]).collect();
+            let mut value = json!({"format":if !self.other_units.is_empty() { library::SYMBOL_FORMAT_V4 } else if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+                "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":units});
             if let Some(behavior) = &self.behavior {
                 value["behavior"] = json!(behavior);
             }
@@ -566,7 +628,15 @@ impl Item {
 
     /// Bound the editor envelope as well as the derived native geometry and electrical metadata.
     pub fn validate(&self) -> Result<(), String> {
-        if self.format != FORMAT
+        let all_objects: Vec<_> = self.objects.iter().chain(self.other_units.values().flat_map(|objects| objects.iter())).collect();
+        let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
+        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT)
+            || (!self.other_units.is_empty() && (self.format != MULTI_UNIT_FORMAT || self.kind != Kind::Symbol))
+            || self.other_units.contains_key(&self.unit)
+            || self.other_units.len() >= 32
+            || unique.len() != all_objects.len()
+            || all_objects.iter().any(|(id, _)| **id == 0 || **id > self.allocation.object)
+            || self.other_units.values().any(|objects| objects.len() > 512)
             || self.objects.len() > 512
             || self.objects.contains_key(&0)
             || self.objects.keys().any(|id| *id > self.allocation.object)
@@ -691,6 +761,17 @@ impl Session {
                 let mut next = (*self.item).clone();
                 let mut cursor = self.next_id;
                 match action {
+                    Action::SelectUnit { unit } => {
+                        let objects = next.other_units.remove(&unit).ok_or("Unknown symbol unit.")?;
+                        next.other_units.insert(std::mem::replace(&mut next.unit, unit), std::mem::replace(&mut next.objects, objects));
+                    }
+                    Action::AddUnit { unit } => {
+                        if next.kind != Kind::Symbol || !footprint::valid_id(&unit) || unit == next.unit || next.other_units.contains_key(&unit) {
+                            return Err("A new symbol unit needs an unused portable identity.".into());
+                        }
+                        next.format = MULTI_UNIT_FORMAT.into();
+                        next.other_units.insert(std::mem::replace(&mut next.unit, unit), std::mem::take(&mut next.objects));
+                    }
                     Action::Insert { primitive } => {
                         next.objects.insert(cursor, primitive);
                         cursor = cursor.checked_add(1).ok_or("Primitive ID limit reached.")?;
@@ -781,6 +862,22 @@ impl Session {
                 }
                 if next == *self.item {
                     return Ok(self.revision);
+                }
+                let metadata: BTreeMap<_, _> = next
+                    .objects
+                    .values()
+                    .filter_map(|object| match object {
+                        Primitive::Pin { number, name, electrical_type, .. } => Some((number.clone(), (name.clone(), *electrical_type))),
+                        _ => None,
+                    })
+                    .collect();
+                for object in next.other_units.values_mut().flat_map(|objects| objects.values_mut()) {
+                    if let Primitive::Pin { number, name, electrical_type, .. } = object
+                        && let Some((shared_name, shared_type)) = metadata.get(number)
+                    {
+                        *name = shared_name.clone();
+                        *electrical_type = *shared_type;
+                    }
                 }
                 next.revision = self.next_content_revision;
                 next.allocation = Allocation { object: cursor - 1, revision: self.next_content_revision };

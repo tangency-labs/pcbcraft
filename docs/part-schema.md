@@ -2,7 +2,8 @@
 
 A **part definition** is reusable library data for a resistor, IC, connector or
 another electrical part. It references one symbol and zero or more package
-variants. A **part instance** is one use in a project, such as R1 or U1, with its
+variants. That symbol may contain several schematic units, all belonging to
+the same physical part and complete terminal-to-pad mapping. A **part instance** is one use in a project, such as R1 or U1, with its
 own stable identity, reference, value and requirements. A **manufacturer part**
 identifies a particular manufacturer's MPN and its specifications for one part
 definition and package variant. Several instances or manufacturer parts can

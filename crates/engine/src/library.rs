@@ -15,7 +15,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::schematic::{ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, TextAlign, check_value};
+use crate::schematic::{
+    ElectricalType, GRID_NM, MAX_PIN_OFFSET_NM, PinDefinition, Point, Shape, SymbolDefinition, SymbolUnit, TextAlign, check_value,
+};
 
 #[cfg(test)]
 mod bundled_tests;
@@ -54,6 +56,9 @@ pub const SYMBOL_FORMAT: &str = "pcbcraft-symbol/1";
 pub const SYMBOL_FORMAT_V2: &str = "pcbcraft-symbol/2";
 /// Native symbols with an explicit default typed category/primary-value binding.
 pub const SYMBOL_FORMAT_V3: &str = "pcbcraft-symbol/3";
+
+/// Native symbols with independently placeable units sharing one logical terminal table.
+pub const SYMBOL_FORMAT_V4: &str = "pcbcraft-symbol/4";
 
 /// Electrical roles survive copying and never follow from an item or library name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,10 +253,10 @@ struct PinFile {
 
 /// Parse and check one symbol file.
 ///
-/// The file must be [`SYMBOL_FORMAT`], [`SYMBOL_FORMAT_V2`] or [`SYMBOL_FORMAT_V3`] with no unknown fields.
+/// The file must use one of formats 1–4 with no unknown fields.
 /// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding. Terminals, 1 to 128 of them, have
-/// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. This build places symbols with one unit
-/// that has exactly one pin per terminal. Pins sit on the 1.27 mm grid, at most 12.7 mm from the
+/// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. Formats 1–3 contain one unit; format 4 supports up to 32 units
+/// sharing a complete logical terminal table, with at most one appearance per terminal per unit. Pins sit on the 1.27 mm grid, at most 12.7 mm from the
 /// center on each axis and apart from each other. Drawings have at most 256 strokes within
 /// 100 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
@@ -271,6 +276,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         Some(SYMBOL_FORMAT) => 1,
         Some(SYMBOL_FORMAT_V2) => 2,
         Some(SYMBOL_FORMAT_V3) => 3,
+        Some(SYMBOL_FORMAT_V4) => 4,
         _ => return Err("unsupported symbol format".into()),
     };
     if format_version == 1 && (value.get("behavior").is_some() || value.get("defaults").is_some()) {
@@ -317,41 +323,69 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
             check_text("terminal name", name, 32)?;
         }
     }
-    let [unit] = <[UnitFile; 1]>::try_from(file.units).map_err(|_| "this build places symbols with exactly one unit".to_owned())?;
-    check_id(&unit.id).map_err(|error| format!("unit {error}"))?;
-    if let Some(pin) = unit.pins.iter().find(|pin| !numbers.contains(pin.terminal.as_str())) {
-        return Err(format!("pin {} names no terminal", pin.terminal));
+    if file.units.is_empty() || file.units.len() > 32 || (format_version < 4 && file.units.len() != 1) {
+        return Err("formats 1–3 require one unit; format 4 supports 1 to 32 units".into());
     }
-    let mut positions = BTreeSet::new();
-    let mut pins = Vec::with_capacity(file.terminals.len());
-    for terminal in file.terminals {
-        let mut placed = unit.pins.iter().filter(|pin| pin.terminal == terminal.id);
-        let (Some(pin), None) = (placed.next(), placed.next()) else {
-            return Err(format!("terminal {} needs exactly one pin", terminal.id));
-        };
-        let [x_nm, y_nm] = pin.at_nm;
-        let reach = -MAX_PIN_OFFSET_NM..=MAX_PIN_OFFSET_NM;
-        if !reach.contains(&x_nm) || !reach.contains(&y_nm) || x_nm % GRID_NM != 0 || y_nm % GRID_NM != 0 {
-            return Err(format!("pin {} must sit on the 1.27 mm grid within 12.7 mm of the center", terminal.id));
+    let mut unit_ids = BTreeSet::new();
+    let mut units = Vec::new();
+    for unit in file.units {
+        check_id(&unit.id).map_err(|error| format!("unit {error}"))?;
+        if !unit_ids.insert(unit.id.clone()) {
+            return Err("unit identity appears twice".into());
         }
-        if !positions.insert((x_nm, y_nm)) {
-            return Err(format!("pin {} shares a position with another pin", terminal.id));
+        if let Some(pin) = unit.pins.iter().find(|pin| !numbers.contains(pin.terminal.as_str())) {
+            return Err(format!("pin {} names no terminal", pin.terminal));
         }
-        if let Some(appearance) = &pin.appearance {
-            appearance.validate(Point { x_nm, y_nm })?;
+        let mut positions = BTreeSet::new();
+        let mut pins = Vec::new();
+        for terminal in &file.terminals {
+            let mut placed = unit.pins.iter().filter(|pin| pin.terminal == terminal.id);
+            let Some(pin) = placed.next() else {
+                continue;
+            };
+            if placed.next().is_some() {
+                return Err(format!("terminal {} needs exactly one pin per unit", terminal.id));
+            }
+            let [x_nm, y_nm] = pin.at_nm;
+            let reach = -MAX_PIN_OFFSET_NM..=MAX_PIN_OFFSET_NM;
+            if !reach.contains(&x_nm) || !reach.contains(&y_nm) || x_nm % GRID_NM != 0 || y_nm % GRID_NM != 0 {
+                return Err(format!("pin {} must sit on the 1.27 mm grid within 12.7 mm of the center", terminal.id));
+            }
+            if !positions.insert((x_nm, y_nm)) {
+                return Err(format!("pin {} shares a position with another pin", terminal.id));
+            }
+            if let Some(appearance) = &pin.appearance {
+                appearance.validate(Point { x_nm, y_nm })?;
+            }
+            pins.push(PinDefinition {
+                appearance: pin.appearance.clone(),
+                number: terminal.id.clone(),
+                offset: Point { x_nm, y_nm },
+                name: terminal.name.clone(),
+                electrical_type: terminal.electrical_type,
+            });
         }
-        pins.push(PinDefinition {
-            appearance: pin.appearance.clone(),
-            number: terminal.id,
-            offset: Point { x_nm, y_nm },
-            name: terminal.name,
-            electrical_type: terminal.electrical_type,
-        });
+        if unit.drawing.len() > MAX_SHAPES {
+            return Err(format!("a drawing has at most {MAX_SHAPES} strokes"));
+        }
+        let drawing = unit.drawing.into_iter().map(shape).collect::<Result<Vec<_>, _>>()?;
+        if pins.is_empty() && !draft {
+            return Err("a unit must contain at least one terminal appearance".into());
+        }
+        units.push(SymbolUnit { unit: unit.id, pins, drawing });
     }
-    if unit.drawing.len() > MAX_SHAPES {
-        return Err(format!("a drawing has at most {MAX_SHAPES} strokes"));
-    }
-    let drawing = unit.drawing.into_iter().map(shape).collect::<Result<Vec<_>, _>>()?;
+    let pins = file
+        .terminals
+        .iter()
+        .map(|terminal| {
+            units
+                .iter()
+                .flat_map(|unit| unit.pins.iter())
+                .find(|pin| pin.number == terminal.id)
+                .cloned()
+                .ok_or_else(|| format!("terminal {} needs exactly one pin in at least one unit", terminal.id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(SymbolDefinition {
         format_version,
         behavior: file.behavior,
@@ -364,9 +398,8 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         revision: file.revision,
         reference_prefix: file.reference_prefix,
         value: file.default_value,
-        unit: unit.id,
         pins,
-        drawing,
+        units,
     })
 }
 
@@ -504,26 +537,30 @@ pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
             .iter()
             .map(|pin| SavedTerminal { id: &pin.number, name: pin.name.as_deref(), electrical_type: pin.electrical_type })
             .collect(),
-        units: [SavedUnit {
-            id: &definition.unit,
-            drawing: definition
-                .drawing
-                .iter()
-                .map(|shape| match shape {
-                    Shape::Graphic(graphic) => SavedShape::Graphic { graphic: graphic.clone() },
-                    Shape::Line(from, to) => SavedShape::Line { from_nm: point(from), to_nm: point(to) },
-                    Shape::Polyline(points) => SavedShape::Polyline { points_nm: points.iter().map(point).collect() },
-                    Shape::Rect(min, max) => SavedShape::Rect { min_nm: point(min), max_nm: point(max) },
-                    Shape::Circle(center, radius) => SavedShape::Circle { center_nm: point(center), radius_nm: *radius },
-                    Shape::Text(at, text, align) => SavedShape::Text { at_nm: point(at), text, align: *align },
-                })
-                .collect(),
-            pins: definition
-                .pins
-                .iter()
-                .map(|pin| SavedPin { terminal: &pin.number, at_nm: point(&pin.offset), appearance: pin.appearance.as_ref() })
-                .collect(),
-        }],
+        units: definition
+            .units
+            .iter()
+            .map(|unit| SavedUnit {
+                id: &unit.unit,
+                drawing: unit
+                    .drawing
+                    .iter()
+                    .map(|shape| match shape {
+                        Shape::Graphic(graphic) => SavedShape::Graphic { graphic: graphic.clone() },
+                        Shape::Line(from, to) => SavedShape::Line { from_nm: point(from), to_nm: point(to) },
+                        Shape::Polyline(points) => SavedShape::Polyline { points_nm: points.iter().map(point).collect() },
+                        Shape::Rect(min, max) => SavedShape::Rect { min_nm: point(min), max_nm: point(max) },
+                        Shape::Circle(center, radius) => SavedShape::Circle { center_nm: point(center), radius_nm: *radius },
+                        Shape::Text(at, text, align) => SavedShape::Text { at_nm: point(at), text, align: *align },
+                    })
+                    .collect(),
+                pins: unit
+                    .pins
+                    .iter()
+                    .map(|pin| SavedPin { terminal: &pin.number, at_nm: point(&pin.offset), appearance: pin.appearance.as_ref() })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 
@@ -545,7 +582,7 @@ pub(crate) struct SavedSymbol<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     category: Option<&'a parts::CategoryBinding>,
     terminals: Vec<SavedTerminal<'a>>,
-    units: [SavedUnit<'a>; 1],
+    units: Vec<SavedUnit<'a>>,
 }
 
 #[derive(Serialize)]
@@ -735,7 +772,7 @@ mod tests {
         let pins: Vec<_> = header.pins().iter().map(|pin| (pin.number.as_str(), pin.offset.y_nm, pin.electrical_type)).collect();
         let row = |number, y_nm| (number, y_nm, ElectricalType::Passive);
         assert_eq!(pins, [row("1", -3_810_000), row("2", -1_270_000), row("3", 1_270_000), row("4", 3_810_000)]);
-        assert!(header.drawing.iter().any(|shape| matches!(shape, Shape::Text(_, text, TextAlign::Middle) if text == "4")));
+        assert!(header.default_unit().drawing.iter().any(|shape| matches!(shape, Shape::Text(_, text, TextAlign::Middle) if text == "4")));
         assert!(!header.fits_two_pad_footprint());
         assert!(starter().symbol("resistor").unwrap().fits_two_pad_footprint());
     }

@@ -34,6 +34,8 @@ pub(super) struct Edit {
     symbol: String,
     component: String,
     definition: Arc<SymbolDefinition>,
+    unit: String,
+    available_units: Vec<String>,
     reference: String,
     value: String,
     metadata: pcbcraft_engine::schematic::fields::Metadata,
@@ -134,6 +136,8 @@ impl PcbApp {
             symbol: id.to_owned(),
             component: component.id(),
             definition: symbol.definition.clone(),
+            unit: symbol.unit_id().to_owned(),
+            available_units: project.available_units(&component.id()).iter().map(|unit| unit.unit_id().to_owned()).collect(),
             original: (reference.clone(), value.clone(), rotation),
             metadata: component.metadata.clone(),
             original_metadata: component.metadata.clone(),
@@ -209,6 +213,7 @@ impl PcbApp {
         };
         let mut apply = false;
         let mut more = false;
+        let mut place_unit = None;
         let mut choose = false;
         let can_choose = !edit.changed();
         edit.set_units(units);
@@ -242,7 +247,12 @@ impl PcbApp {
                     }
                 }
                 ui.separator();
-                ui.label(shell::dim(format!("{} pins", edit.definition.pins().len())));
+                ui.label(shell::dim(format!("Unit {} · {} pins", edit.unit, edit.definition.unit(&edit.unit).map_or(0, |unit| unit.pins().len()))));
+                for unit in &edit.available_units {
+                    if pcbcraft_chrome::controls::enabled_button(ui, !edit.changed(), format!("Place unit {unit}")).clicked() {
+                        place_unit = Some(unit.clone());
+                    }
+                }
                 more = pcbcraft_chrome::controls::button(ui, "More properties ↗").clicked();
             },
         );
@@ -264,6 +274,16 @@ impl PcbApp {
         }
         if choose {
             self.begin_footprint_assignment(Some(edit.component.clone()));
+        }
+        if let Some(unit) = place_unit {
+            self.views.active.schematic.tool = Some(crate::schematic_canvas::Tool::PlaceSymbol {
+                definition: edit.definition.clone(),
+                unit,
+                component: Some(edit.component.clone()),
+                value: edit.value.clone(),
+                revision: self.session.revision(),
+                turns: 0,
+            });
         }
         self.views.active.schematic.properties.draft = Some(edit);
         self.views.active.schematic.properties.rect = rect;
@@ -329,7 +349,7 @@ impl PcbApp {
                         if column == 0 {
                             chrome::group(ui, "Placement", |ui| {
                                 chrome::field(ui, "Unit", |ui| {
-                                    ui.label(edit.definition.unit_id());
+                                    ui.label(edit.unit.as_str());
                                 });
                                 chrome::rotation(ui, &mut edit.rotation);
                                 position_apply = Edit::position_fields(ui, &mut edit.x, &mut edit.y);
@@ -346,7 +366,7 @@ impl PcbApp {
                         ui.strong("Name");
                         ui.strong("Electrical type");
                         ui.end_row();
-                        for pin in edit.definition.pins() {
+                        for pin in edit.definition.unit(&edit.unit).into_iter().flat_map(|unit| unit.pins()) {
                             ui.label(&pin.number);
                             ui.label(pin.name.as_deref().unwrap_or("—"));
                             ui.label(format!("{:?}", pin.electrical_type));

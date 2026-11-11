@@ -57,6 +57,19 @@ class LibrarySchemaTests(unittest.TestCase):
             del old["category"]
             self.checks[checker.FORMATS[old["format"]]].validate(old)
 
+    def test_multiunit_extension_is_versioned_and_bounded(self):
+        symbol = checker.read_json(ROOT / "examples/native-parts/symbols/dual-amplifier.json")
+        self.checks[checker.FORMATS["pcbcraft-symbol/4"]].validate(symbol)
+        self.checks["urn:pcbcraft:schema:symbol"].validate(symbol)
+        for version in (1, 2, 3):
+            changed = copy.deepcopy(symbol)
+            changed["format"] = f"pcbcraft-symbol/{version}"
+            self.assertFalse(self.checks[checker.FORMATS[changed["format"]]].is_valid(changed))
+        for count in (0, 33):
+            changed = copy.deepcopy(symbol)
+            changed["units"] = [symbol["units"][0]] * count
+            self.assertFalse(self.checks[checker.FORMATS["pcbcraft-symbol/4"]].is_valid(changed))
+
     def test_units_are_canonical_and_bound_to_the_declared_quantity(self):
         validator = self.checks[checker.FORMATS["pcbcraft-category/1"]]
         for unit in ["mOhm", "Ω", "V", "ohms"]:

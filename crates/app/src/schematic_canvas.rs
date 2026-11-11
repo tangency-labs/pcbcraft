@@ -53,6 +53,8 @@ pub(crate) enum Tool {
     },
     PlaceSymbol {
         definition: Arc<SymbolDefinition>,
+        unit: String,
+        component: Option<String>,
         value: String,
         revision: u64,
         turns: u8,
@@ -163,11 +165,11 @@ pub(crate) struct PartDrag {
 /// is drawn unrotated and without labels. A shared minimum preview extent keeps small symbols
 /// from growing disproportionately large across the catalog.
 pub(crate) fn paint_preview(painter: &Painter, definition: &SymbolDefinition, rect: Rect, color: egui::Color32) {
-    let bounds = grid_bounds(definition, 0);
+    let bounds = grid_bounds(definition.default_unit(), 0);
     let extent = bounds.size().max(theme::SCHEMATIC_PREVIEW_EXTENT);
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP);
     let center = rect.center() - bounds.center().to_vec2() * step;
-    paint_symbol(painter, definition, center, step, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color));
+    paint_symbol(painter, definition.default_unit(), center, step, 0, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, color));
 }
 
 /// What a wire's context menu asks for.
@@ -407,7 +409,7 @@ pub(crate) fn show(
             } else {
                 tokens.text
             };
-            paint_symbol(&painter, &symbol.definition, center, unit_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+            paint_symbol(&painter, symbol.unit_definition(), center, unit_step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
         }
     }
 
@@ -439,10 +441,15 @@ pub(crate) fn show(
         && let Some(popup) = menu::context(&response, |ui| tool_menu::active(ui, tool.as_ref(), repeat))
     {
         let anchor = egui::Popup::position_of_id(ui.ctx(), egui::Popup::default_response_id(&response));
-        if let (Some(Tool::PlaceSymbol { definition, value, turns, .. }), Some(at)) = (&tool, anchor) {
-            let at = wires::symbol_position(project, definition, *turns, camera, rect, at, draft, revision);
-            if valid_position(at) {
-                paint_template(&painter, definition, value, screen(at), unit_step, *turns, tokens.accent);
+        if let (Some(Tool::PlaceSymbol { definition, unit, value, turns, .. }), Some(at)) = (&tool, anchor)
+            && let Some(drawing) = definition.unit(unit)
+        {
+            let at = wires::symbol_position(project, drawing, *turns, camera, rect, at, draft, revision);
+            if valid_position(at)
+                && let Some(preview) =
+                    SymbolPlacement::preview_unit(definition.clone(), unit, *turns, definition.defaults.clone().unwrap_or_default().field_layout)
+            {
+                paint_unit_template(&painter, &preview, value, screen(at), unit_step, tokens.accent);
             }
         }
         if let Some(Tool::Wire { start, .. }) = tool {
@@ -464,7 +471,7 @@ pub(crate) fn show(
         && let Some(drag) = response.dnd_hover_payload::<PartDrag>()
         && let Some(pointer) = drag_pointer
     {
-        let point = wires::symbol_position(project, &drag.placement.definition, 0, camera, rect, pointer, draft, revision);
+        let point = wires::symbol_position(project, drag.placement.definition.default_unit(), 0, camera, rect, pointer, draft, revision);
         if valid_position(point) {
             paint_template(&painter, &drag.placement.definition, &drag.placement.value, screen(point), unit_step, 0, tokens.accent);
         }
@@ -472,7 +479,7 @@ pub(crate) fn show(
     if let Some(drag) = response.dnd_release_payload::<PartDrag>()
         && let Some(pointer) = drag_pointer
     {
-        let point = wires::symbol_position(project, &drag.placement.definition, 0, camera, rect, pointer, draft, revision);
+        let point = wires::symbol_position(project, drag.placement.definition.default_unit(), 0, camera, rect, pointer, draft, revision);
         return (input_enabled && valid_position(point)).then(|| Click::Drop(PartDrag::clone(&drag), point));
     }
 
@@ -802,8 +809,8 @@ pub(crate) fn show(
         return Some(Click::SelectItems(selected.combine(&hit, modifiers.shift, modifiers.ctrl || modifiers.command)));
     }
     match tool? {
-        Tool::PlaceSymbol { definition, value, turns, .. } => {
-            placement_preview(&painter, rect, response, camera, tokens, &definition, &value, turns, project, draft, revision).map(Click::Place)
+        Tool::PlaceSymbol { definition, unit, value, turns, .. } => {
+            placement_preview(&painter, rect, response, camera, tokens, &definition, &unit, &value, turns, project, draft, revision).map(Click::Place)
         }
         Tool::Wire { start, .. } => wires::pick(&painter, rect, &response, project, camera, start, draft, auto_heal, revision)
             .map(|(anchor, finish)| Click::WirePoint(anchor, finish)),
@@ -863,7 +870,7 @@ pub(super) fn symbol_at<'a>(project: &'a Project, camera: &Camera, rect: Rect, p
         .rev()
         .map(|symbol| (symbol, camera.screen(symbol.position, rect)))
         .filter(|(symbol, center)| {
-            body(&symbol.definition, symbol.turns())
+            body(symbol.unit_definition(), symbol.turns())
                 .translate(center.to_vec2() / camera.unit_step())
                 .contains((pointer.to_vec2() / camera.unit_step()).to_pos2())
         })
@@ -902,6 +909,7 @@ fn placement_preview(
     camera: &Camera,
     tokens: Tokens,
     definition: &Arc<SymbolDefinition>,
+    unit: &str,
     value: &str,
     turns: u8,
     project: &Project,
@@ -910,11 +918,12 @@ fn placement_preview(
 ) -> Option<Point> {
     let screen = |point| camera.screen(point, rect);
     let pointer = response.hover_pos().or_else(|| response.interact_pointer_pos())?;
-    let point = wires::symbol_position(project, definition, turns, camera, rect, pointer, draft, revision);
+    let point = wires::symbol_position(project, definition.unit(unit)?, turns, camera, rect, pointer, draft, revision);
     if !valid_position(point) {
         return None;
     }
-    paint_template(painter, definition, value, screen(point), camera.unit_step(), turns, tokens.accent);
+    let preview = SymbolPlacement::preview_unit(definition.clone(), unit, turns, definition.defaults.clone().unwrap_or_default().field_layout)?;
+    paint_unit_template(painter, &preview, value, screen(point), camera.unit_step(), tokens.accent);
     let pressed = response.contains_pointer() && response.ctx.input(|input| input.pointer.primary_pressed());
     if pressed && response.ctx.input(|input| input.pointer.primary_down()) {
         response.ctx.data_mut(|data| data.insert_temp(response.id.with("placed_on_press"), true));
@@ -925,11 +934,16 @@ fn placement_preview(
 
 /// Preview ordinary drawing and instance fields from the same native defaults as placement.
 fn paint_template(painter: &Painter, definition: &Arc<SymbolDefinition>, value: &str, center: Pos2, step: f32, turns: u8, color: egui::Color32) {
-    paint_symbol(painter, definition, center, step, turns, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
-    let fallback = pcbcraft_engine::library::Defaults::default();
-    let defaults = definition.defaults.as_ref().unwrap_or(&fallback);
-    let symbol = SymbolPlacement::preview(definition.clone(), turns, defaults.field_layout.clone());
-    fields::paint_labels(painter, &symbol, fields::Content { reference: "", value, metadata: &defaults.metadata }, center, step, color);
+    let defaults = definition.defaults.clone().unwrap_or_default();
+    let symbol = SymbolPlacement::preview(definition.clone(), turns, defaults.field_layout);
+    paint_unit_template(painter, &symbol, value, center, step, color);
+}
+
+/// Preview the selected drawing with the same fields and geometry as its committed placement.
+fn paint_unit_template(painter: &Painter, symbol: &SymbolPlacement, value: &str, center: Pos2, step: f32, color: egui::Color32) {
+    paint_symbol(painter, symbol.unit_definition(), center, step, symbol.turns(), Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+    let defaults = symbol.definition.defaults.clone().unwrap_or_default();
+    fields::paint_labels(painter, symbol, fields::Content { reference: "", value, metadata: &defaults.metadata }, center, step, color);
 }
 
 /// One schematic grid step in nanometers, for converting library drawings to grid steps.
@@ -948,19 +962,19 @@ fn grid_pos(point: Point) -> Pos2 {
 
 /// The area a symbol's drawing covers around its center, in grid steps, after its turns: its
 /// pins and every stroke. Fit uses it so every part stays in view.
-pub(super) fn grid_bounds(definition: &SymbolDefinition, turns: u8) -> Rect {
+pub(super) fn grid_bounds(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8) -> Rect {
     turn_rect(unturned_bounds(definition), turns)
 }
 
 /// [`grid_bounds`] before rotation.
-fn unturned_bounds(definition: &SymbolDefinition) -> Rect {
+fn unturned_bounds(definition: &pcbcraft_engine::schematic::SymbolUnit) -> Rect {
     let pins = definition.pins().iter().map(|pin| Rect::from_pos(grid_pos(pin.offset)));
     pins.fold(shape_bounds(definition.graphics().iter()), Rect::union)
 }
 
 /// The bounds of a symbol's strokes alone, in grid steps before rotation, or nothing when it
 /// has none.
-fn drawing_bounds(definition: &SymbolDefinition) -> Rect {
+fn drawing_bounds(definition: &pcbcraft_engine::schematic::SymbolUnit) -> Rect {
     shape_bounds(definition.drawing.iter())
 }
 
@@ -991,7 +1005,7 @@ fn text_anchor(align: TextAlign, turns: u8) -> Align2 {
 /// The grabbable area of a symbol in grid steps around its center, after its turns: a 5 by 4
 /// step box at the center, grown to the drawing's strokes so a large part can be picked by its
 /// body. Pins stay outside it unless a stroke reaches them.
-fn body(definition: &SymbolDefinition, turns: u8) -> Rect {
+fn body(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8) -> Rect {
     let core = Rect::from_center_size(Pos2::ZERO, vec2(5.0, 4.0));
     let drawing = drawing_bounds(definition);
     let unturned = if drawing.is_positive() { core.union(drawing.shrink2(vec2(1.0, 0.0)).intersect(drawing)) } else { core };
@@ -1001,7 +1015,7 @@ fn body(definition: &SymbolDefinition, turns: u8) -> Rect {
 /// Draw the symbol's library strokes around its center, with one grid step of `step` points,
 /// turned with the symbol.
 /// Part instance fields are drawn separately so their layout never changes the body or pins.
-fn paint_symbol(painter: &Painter, definition: &SymbolDefinition, center: Pos2, step: f32, turns: u8, stroke: Stroke) {
+fn paint_symbol(painter: &Painter, definition: &pcbcraft_engine::schematic::SymbolUnit, center: Pos2, step: f32, turns: u8, stroke: Stroke) {
     let color = stroke.color;
     let xy = |point: &Point| {
         let (x, y) = grid(*point);

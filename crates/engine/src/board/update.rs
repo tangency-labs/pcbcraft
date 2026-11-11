@@ -236,8 +236,9 @@ impl Baseline {
             let mut terminals: Vec<_> = component.definition.pins().iter().map(|pin| pin.number.as_str().to_owned()).collect();
             terminals.sort();
             for pin in &terminals {
-                let terminal = project.component_terminal(id, pin).ok_or("component terminal has no schematic unit")?;
-                terminal_keys.insert(terminal, TerminalKey { component: id, terminal: pin.clone() });
+                for terminal in project.component_terminals(id, pin) {
+                    terminal_keys.insert(terminal, TerminalKey { component: id, terminal: pin.clone() });
+                }
             }
             components.insert(
                 id,

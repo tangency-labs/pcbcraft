@@ -1,0 +1,88 @@
+{
+  "format": "pcbcraft-footprint/1",
+  "library": "parts-demo",
+  "id": "illustrative-six-pad",
+  "revision": 1,
+  "name": "Illustrative six-pad package",
+  "license": "MIT OR Apache-2.0",
+  "source": {
+    "kind": "original",
+    "reference": "PCBcraft native multi-unit example",
+    "locator": "Original illustrative surface-mount geometry; no manufacturing qualification"
+  },
+  "pads": [
+    {
+      "number": "1",
+      "center": {
+        "x_nm": -2000000,
+        "y_nm": -2000000
+      },
+      "width_nm": 1000000,
+      "height_nm": 1000000,
+      "rotation": 0,
+      "shape": "rectangle",
+      "copper": "component_side"
+    },
+    {
+      "number": "2",
+      "center": {
+        "x_nm": -2000000,
+        "y_nm": 0
+      },
+      "width_nm": 1000000,
+      "height_nm": 1000000,
+      "rotation": 0,
+      "shape": "rectangle",
+      "copper": "component_side"
+    },
+    {
+      "number": "3",
+      "center": {
+        "x_nm": -2000000,
+        "y_nm": 2000000
+      },
+      "width_nm": 1000000,
+      "height_nm": 1000000,
+      "rotation": 0,
+      "shape": "rectangle",
+      "copper": "component_side"
+    },
+    {
+      "number": "4",
+      "center": {
+        "x_nm": 2000000,
+        "y_nm": -2000000
+      },
+      "width_nm": 1000000,
+      "height_nm": 1000000,
+      "rotation": 0,
+      "shape": "rectangle",
+      "copper": "component_side"
+    },
+    {
+      "number": "5",
+      "center": {
+        "x_nm": 2000000,
+        "y_nm": 0
+      },
+      "width_nm": 1000000,
+      "height_nm": 1000000,
+      "rotation": 0,
+      "shape": "rectangle",
+      "copper": "component_side"
+    },
+    {
+      "number": "6",
+      "center": {
+        "x_nm": 2000000,
+        "y_nm": 2000000
+      },
+      "width_nm": 1000000,
+      "height_nm": 1000000,
+      "rotation": 0,
+      "shape": "rectangle",
+      "copper": "component_side"
+    }
+  ],
+  "graphics": []
+}

@@ -225,6 +225,16 @@ impl Fragment {
             }
         }
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
+        let mut shared_parts = BTreeMap::new();
+        if options.reuse_sheets {
+            for source in sources.iter().skip(1) {
+                for symbol in source.symbols.iter() {
+                    if destination.components.contains_key(&symbol.component) {
+                        shared_parts.insert(symbol.component, symbol.component);
+                    }
+                }
+            }
+        }
         let mut selected = Selection::default();
         for (index, source) in sources.iter().enumerate() {
             if index != 0 && options.reuse_sheets {
@@ -250,7 +260,7 @@ impl Fragment {
                 policy.quarter_turns = 0;
             }
             let position = if index == 0 { transformed(flat.anchor(), self.anchor, at, options.quarter_turns)? } else { flat.anchor() };
-            let (mut candidate, added) = flat.placed(&destination, position, cursor, &policy)?;
+            let (mut candidate, added) = flat.placed_with_parts(&destination, position, cursor, &policy, &mut shared_parts)?;
             for (offset, source) in source.wires.iter().enumerate() {
                 for (end, original) in source.endpoints.iter().enumerate() {
                     let replacement = match original {
@@ -359,7 +369,9 @@ impl Session {
         Arc::make_mut(&mut sheet.subsheets).retain(|b| !block_ids.contains(&b.id));
         Arc::make_mut(&mut next.units).retain(|_, id| !symbols.contains(id));
         for component in project.symbols().iter().filter(|s| symbols.contains(&s.ordinal)).map(|s| s.component) {
-            next.retire_component(component);
+            if !next.all_symbols().any(|symbol| symbol.component == component) {
+                next.retire_component(component);
+            }
         }
         for index in 0..next.sheets.len() {
             next.sheet_index = index;

@@ -1000,5 +1000,8 @@ are original PCBcraft work based on this repository's library-model document.
 0603 land pattern from the existing original starter definitions at
 `0ed4f13986a4b08364b963f8b3dde4303166b6f1`, retaining MIT OR Apache-2.0 and the
 footprint's recorded dimensional provenance. The IC example is an original
-illustrative definition with no claimed manufacturer qualification. No external
+illustrative definition with no claimed manufacturer qualification. The format-4
+dual-amplifier symbol, linked part, illustrative six-pad package and multi-unit
+runtime/authoring extension are original PCBcraft work following the repository's
+circuit-instance and library contracts. No external
 EDA implementation, library data, artwork or new runtime dependency was introduced.

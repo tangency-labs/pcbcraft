@@ -12,6 +12,7 @@ The machine-readable schemas describe canonical standalone library files:
 | `pcbcraft-symbol/1` | [Version 1](schemas/symbol-v1.schema.json) | Existing drawings, terminals and one schematic unit |
 | `pcbcraft-symbol/2` | [Version 2](schemas/symbol-v2.schema.json) | Optional explicit electrical behavior and instance defaults |
 | `pcbcraft-symbol/3` | [Version 3](schemas/symbol-v3.schema.json) | An explicit default category binding |
+| `pcbcraft-symbol/4` | [Version 4](schemas/symbol-v4.schema.json) | Up to 32 independently placed units sharing logical terminals; category remains optional |
 
 [The dispatcher](schemas/symbol.schema.json) accepts these versions. All schemas
 use JSON Schema Draft 2020-12 and registered URNs; validation needs no network
@@ -37,9 +38,9 @@ Version 1 refuses electrical behavior/default fields, and versions 1–2 refuse
 older definitions retain their existing format and saved bytes.
 
 The [symbol guide](symbol-library.md) defines the existing geometry, pin
-appearance, defaults and power behavior. These schemas retain the current
-one-unit, 128-terminal and drawing bounds; they do not introduce multi-unit or
-high-pin-count support. The schema and engine validate the declared supported
+appearance, defaults and power behavior. Formats 1–3 retain their one-unit limit. Format 4 supports multiple units
+within the existing 128-terminal and per-unit drawing bounds; higher pin counts
+remain separate work under #251. The schema and engine validate the declared supported
 fields rather than accepting arbitrary extension properties.
 
 ## Explicit category defaults
@@ -71,7 +72,8 @@ Value editor already enforces it.
 ## Validation beyond JSON Schema
 
 The engine also checks relationships: terminal IDs are unique; every terminal
-has exactly one pin and every pin names a terminal; pin positions are distinct;
+appears in at least one unit and every pin names a terminal; terminal appearances
+and pin positions are distinct within each unit; unit IDs are unique;
 integrated leads and parameterized drawing extents remain within bounds; power
 behavior names an existing terminal; and default field appearances reference
 valid metadata. Filled polygons must be convex and nonintersecting. Category
@@ -82,3 +84,43 @@ The canonical schemas omit absent optional fields. Some retained Rust decoders
 also accept null or empty optional compatibility inputs and canonicalize them on
 export; those inputs are not additional canonical spellings. No project format
 or existing footprint/pad geometry is changed by publishing these symbol schemas.
+
+## Multiple schematic units
+
+A part still references one symbol definition, which can now contain several
+units. Each unit has a stable `id`, its own drawing and a subset of the global
+`terminals` table. A terminal may appear once in each of several units, as with
+shared supplies. Those appearances refer to one logical terminal; they cannot
+have different names or electrical types. Every declared terminal must appear
+somewhere in the definition, though a project may place only some units.
+The [original dual-amplifier example](../examples/native-parts/symbols/dual-amplifier.json)
+shows two units with shared supplies and one complete six-terminal package map.
+
+`schematic.place_symbol` creates a new part and places its first unit, or the
+explicit optional `unit`. `schematic.place_unit` places another unit of an
+existing `component-…` instance from its pinned definition. It requires `unit`,
+position, `expected_revision` and an explicit `sheet` in a multi-sheet project.
+A unit can be placed only once per part, across all sheets. Inspection reports
+its unit, part ID, base reference, display reference and remaining available units.
+The inspector's **Place unit** actions and the Parts Catalog's **Existing part
+units** menu use that same command; the catalog menu can place units on another
+sheet without requiring a unit to be present there already.
+
+U1A and U1B have independent symbol IDs and positions but share U1's reference,
+Value, metadata, package assignment and physical footprint. Renaming through
+either unit updates that part. Repeated appearances of a terminal join the
+project-wide electrical graph by part/terminal identity, including across sheets;
+board updates collapse those appearances into one physical terminal. Deleting a
+unit, cutting it, or deleting its sheet preserves the part while another unit
+remains. Removing the last unit follows the existing reviewed board-removal rule.
+Ordinary copy allocates a new part; copying several units together, including in
+a hierarchy subtree, allocates that part only once.
+
+The symbol editor can add and select units through the shared authoring actions.
+It retains inactive drawings and globally unique primitive IDs in
+`pcbcraft-library-item/2`; single-unit items keep format 1. Shared terminal
+name/type edits propagate to the other appearances. Native export emits format 4
+when several units exist. This does not add pin/gate swapping, alternative symbol
+definitions for a part, repeated circuit occurrences, high-pin-count geometry,
+or a new BOM/ERC subsystem. Existing single-unit files keep their original
+symbol formats and no-op serialization.

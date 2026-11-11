@@ -782,10 +782,13 @@ fn validate_with_hierarchy(
     for record in sheet.symbols {
         validate_id(&mut ids, record.id)?;
         let component = components.get(&record.component).ok_or_else(|| "symbol points to a missing component".to_owned())?;
-        let unit = component.definition.unit_id();
-        if record.unit != unit {
-            return Err(format!("unavailable unit {} on component {}", record.unit, record.component));
-        }
+        let unit = record.unit.as_ref();
+        let unit_index = component
+            .definition
+            .units
+            .iter()
+            .position(|drawing| drawing.unit_id() == unit)
+            .ok_or_else(|| format!("unavailable unit {} on component {}", record.unit, record.component))?;
         if units.insert((record.component, unit.to_owned()), record.id).is_some() {
             return Err("component unit is placed more than once".to_owned());
         }
@@ -803,12 +806,14 @@ fn validate_with_hierarchy(
             ordinal: record.id,
             component: record.component,
             unit: unit.to_owned(),
+            unit_index,
             position: Point { x_nm: record.x_nm, y_nm: record.y_nm },
             field_layout,
             rotation,
         });
     }
-    if components.len() != units.len() {
+    let placed_components: BTreeSet<_> = units.keys().map(|(component, _)| component).collect();
+    if components.keys().any(|id| !placed_components.contains(id)) {
         return Err("component has no placed unit".to_owned());
     }
     symbols.sort_unstable_by_key(|symbol| symbol.ordinal);
@@ -841,7 +846,7 @@ fn validate_with_hierarchy(
         Endpoint::Pin { symbol, pin } => symbols
             .binary_search_by_key(&symbol, |placed| placed.ordinal)
             .ok()
-            .and_then(|index| Terminal::from_number(symbol, &symbols[index].definition, &pin))
+            .and_then(|index| Terminal::from_number(symbol, symbols[index].unit_definition(), &pin))
             .map(WireEndpoint::Terminal)
             .ok_or_else(|| format!("wire points to missing pin {pin} on symbol {symbol}")),
         Endpoint::Junction { junction } => junctions

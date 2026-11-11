@@ -191,9 +191,13 @@ pub struct Item {
 impl Item {
     /// Inspect explicit identities and provenance without embedding large geometry in search results.
     pub fn inspect(&self) -> Value {
-        json!({"key":self.key,"name":self.name,"license":self.license,"file":self.file,
+        let mut value = json!({"key":self.key,"name":self.name,"license":self.license,"file":self.file,
             "digest":format!("{:x}",Sha256::digest(self.canonical.to_string().as_bytes())),
-            "format":self.canonical["format"]})
+            "format":self.canonical["format"]});
+        if let Definition::Symbol(symbol) = &self.definition {
+            value["units"] = json!(symbol.units.iter().map(|unit| unit.unit_id()).collect::<Vec<_>>());
+        }
+        value
     }
     /// Return symbol geometry for preview or validated placement; footprints return None.
     pub fn symbol(&self) -> Option<Arc<SymbolDefinition>> {

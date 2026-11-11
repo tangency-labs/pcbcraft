@@ -11,6 +11,9 @@
     },
     {
       "$ref": "urn:pcbcraft:schema:symbol:3"
+    },
+    {
+      "$ref": "urn:pcbcraft:schema:symbol:4"
     }
   ]
 }

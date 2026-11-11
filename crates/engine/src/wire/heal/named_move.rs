@@ -9,7 +9,7 @@ impl Edit {
         let contact = self.project.power_terminals().find(|(end, _, from)| {
             let WireEndpoint::Terminal(pin) = end else { return false };
             pin.symbol == symbol.ordinal
-                && symbol.definition.pin_index(pin.number()).is_some_and(|i| symbol.definition.pin_positions(to, rotation)[i] != *from)
+                && symbol.unit_definition().pin_index(pin.number()).is_some_and(|i| symbol.unit_definition().pin_positions(to, rotation)[i] != *from)
         });
         let captured = match contact {
             Some((end, _, from)) => Some((end, from, self.capture_named_contact(end, from)?)),

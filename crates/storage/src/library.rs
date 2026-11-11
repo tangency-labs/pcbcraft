@@ -87,13 +87,13 @@ fn read_file(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    /// All three electrical part categories resolve through the real bounded folder adapter.
+    /// Categorized parts and a multi-unit part resolve through the real bounded folder adapter.
     #[test]
     fn native_part_examples_resolve_exact_dependencies_from_a_folder() {
         use pcbcraft_engine::library::{parts::Reference, sources::Catalog};
         use std::sync::Arc;
         let source = load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-parts"))).unwrap();
-        assert_eq!(source.items().len(), 10);
+        assert_eq!(source.items().len(), 13);
         assert!(source.problems().is_empty(), "{:?}", source.problems());
         let mut catalog = Catalog::default();
         catalog.install("demo", Arc::new(source)).unwrap();
@@ -103,6 +103,10 @@ mod tests {
             assert!(result.category.is_some());
             assert_eq!(result.footprints.is_empty(), id != "resistor");
         }
+        let reference = Reference { library: "parts-demo".into(), id: "dual-amplifier".into(), revision: 1 };
+        let result = catalog.resolve_part(&reference).unwrap();
+        assert_eq!(result.symbol.units().len(), 2);
+        assert_eq!(result.footprints.len(), 1);
     }
 
     /// The documented original fixture is an actual loadable symbol-and-footprint source.

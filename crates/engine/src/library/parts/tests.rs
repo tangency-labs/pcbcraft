@@ -236,3 +236,26 @@ fn quantity_input_normalizes_prefixes_units_and_precision_without_floats() {
     }
     assert_eq!(Quantity::Resistance.parse("-0.000 Ω").unwrap(), Value::Quantity { value: "0".into(), unit: "Ohm".into() });
 }
+
+/// A part's single exact symbol reference includes every unit and its complete physical map.
+#[test]
+fn multiunit_part_resolves_one_symbol_and_whole_package_map() {
+    let mut documents = documents();
+    documents.insert("symbols/dual-amplifier.json".into(), include_str!("../../../../../examples/native-parts/symbols/dual-amplifier.json").into());
+    documents.insert("parts/dual-amplifier.json".into(), include_str!("../../../../../examples/native-parts/parts/dual-amplifier.json").into());
+    documents.insert(
+        "footprints/illustrative-six-pad.json".into(),
+        include_str!("../../../../../examples/native-parts/footprints/illustrative-six-pad.json").into(),
+    );
+    let mut catalog = Catalog::default();
+    let source = Arc::new(NativeSource::load(&documents).unwrap());
+    assert!(source.problems().is_empty(), "{:?}", source.problems());
+    catalog.install("multiunit", source).unwrap();
+    let reference = Reference { library: "parts-demo".into(), id: "dual-amplifier".into(), revision: 1 };
+    let resolved = catalog.resolve_part(&reference).unwrap();
+    assert_eq!(resolved.symbol.units().len(), 2);
+    assert_eq!(resolved.symbol.pins().len(), 6);
+    assert_eq!(resolved.definition.packages["six-pad"].mapping.len(), 6);
+    assert_eq!(resolved.footprints.len(), 1);
+    assert_eq!(resolved.inspect()["symbol"]["format"], "pcbcraft-symbol/4");
+}

@@ -215,7 +215,7 @@ impl Project {
     /// Resolve all sheets through explicit parent/child pins and scoped named anchors.
     /// Hierarchical names alone do not join unrelated sheets; global/power labels do.
     pub fn electrical_connectivity(&self) -> Connectivity {
-        if self.has_named_nets() {
+        if self.requires_project_graph() {
             return self.named_connectivity(true);
         }
         let symbols: Vec<_> = self.all_symbols().cloned().collect();

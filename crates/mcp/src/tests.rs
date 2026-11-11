@@ -1125,3 +1125,45 @@ fn hierarchical_clipboard_commands_preserve_payload_and_child_identity() {
     assert_eq!(s.project().unwrap().parent_sheet(child), Some(root));
     assert_eq!(s.project().unwrap().sheets().len(), 2);
 }
+
+/// MCP advertises explicit pinned unit placement and shares one part instance across drawings.
+#[test]
+fn multiunit_placement_uses_shared_commands_and_part_identity() {
+    let mut s = server();
+    let schema = body(&call(&mut s, "describe_command", json!({"command":pcbcraft_engine::PLACE_UNIT})));
+    assert_eq!(schema["params"]["properties"]["unit"]["type"], "string");
+    let opened = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
+    let loaded = call(
+        &mut s,
+        "execute",
+        json!({"command":"library.load_source","params":{"source":"units","documents":{
+            "library.json":include_str!("../../../examples/native-parts/library.json"),
+            "symbols/dual.json":include_str!("../../../examples/native-parts/symbols/dual-amplifier.json")
+        }}}),
+    );
+    assert_ne!(loaded["isError"], true);
+    let found = body(&call(&mut s, "execute", json!({"command":"library.search","params":{"query":"dual-amplifier","kind":"symbol"}})));
+    assert_eq!(found[0]["units"], json!(["a", "b"]));
+    let first = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":PLACE_SYMBOL,"params":{
+            "library":"parts-demo","definition":"dual-amplifier","definition_revision":1,"definition_digest":found[0]["digest"],
+            "unit":"b","x_nm":0,"y_nm":0,"expected_revision":opened["revision"]
+        }}),
+    ));
+    let symbol = &first["project"]["schematic"]["symbols"][0];
+    assert_eq!(symbol["display_reference"], "U1B");
+    assert_eq!(symbol["available_units"], json!(["a"]));
+    let second = body(&call(
+        &mut s,
+        "execute",
+        json!({"command":pcbcraft_engine::PLACE_UNIT,"params":{
+            "component":symbol["component_id"],"unit":"a","x_nm":30_480_000,"y_nm":0,"expected_revision":first["revision"]
+        }}),
+    ));
+    assert_eq!(second["project"]["components"].as_array().unwrap().len(), 1);
+    let symbols = second["project"]["schematic"]["symbols"].as_array().unwrap();
+    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols[0]["component_id"], symbols[1]["component_id"]);
+}

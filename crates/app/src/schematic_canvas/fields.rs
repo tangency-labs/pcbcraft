@@ -53,11 +53,12 @@ fn ink(painter: &Painter, symbol: &SymbolPlacement, content: Content<'_>, center
     if step < theme::SCHEMATIC_MIN_GRID_SPACING {
         return Vec::new();
     }
-    let drawing = drawing_bounds(&symbol.definition);
+    let drawing = drawing_bounds(symbol.unit_definition());
     let bounds = if drawing.is_positive() { turn_rect(drawing, symbol.turns()) } else { Rect::from_center_size(Pos2::ZERO, vec2(2., 2.)) };
     let t = Tokens::get();
     let metadata = content.metadata;
-    let mut content = vec![("reference", "Reference", content.reference), ("value", "Value", content.value)];
+    let reference = symbol.display_reference(content.reference);
+    let mut content = vec![("reference", "Reference", reference.as_str()), ("value", "Value", content.value)];
     content.extend(metadata.fields.iter().map(|(id, f)| (id.as_str(), f.name.as_str(), f.value.as_str())));
     content
         .into_iter()

@@ -275,3 +275,12 @@ example, resistance `100 mΩ` produces
 and work without an open project. [The native contracts](part-schema.md)
 distinguish part definitions from placed part instances and describe remaining
 project-selection/pinning integration.
+
+`schematic.place_symbol` accepts an optional `unit` for a new part, while
+`schematic.place_unit` adds an unplaced unit to an existing `component-…` part
+using its project-pinned definition. Supply `component`, `unit`, `x_nm`, `y_nm`,
+`expected_revision` and `sheet` when the project contains multiple sheets.
+Schematic inspection reports `available_units` and `display_reference`; the
+base `reference` stays shared by the part. The library authoring transaction
+accepts `select_unit` and `add_unit` actions. See the
+[multi-unit contract](symbol-schema.md#multiple-schematic-units).

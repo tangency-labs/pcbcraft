@@ -216,3 +216,11 @@ file workers. Reading the callers confirmed that transforms/clipboard/arrays
 perform no new blocking I/O, validate temporary candidates before publication
 and leave stale field drafts with their original revision. Native tests exercise
 close cancellation and continued definition editing after the original host closes.
+
+Multi-unit symbols use the unit selector above symbol properties. **Add unit** creates
+an empty drawing under a new stable unit ID; selecting a unit retains the other
+drawings and their primitive IDs. Shared terminal names and electrical types
+remain part-wide. Multi-unit editor documents use `pcbcraft-library-item/2`,
+while existing single-unit documents retain version 1. See the
+[symbol contract](symbol-schema.md#multiple-schematic-units) for placement and
+physical mapping behavior.

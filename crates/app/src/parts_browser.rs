@@ -49,6 +49,7 @@ impl Entry {
 /// The host owns the placement tool or source manager; compact catalogs can remain visible.
 pub(crate) enum Pick {
     Place(Placement),
+    Unit { definition: Arc<SymbolDefinition>, component: String, unit: String, value: String },
     Libraries,
     Stale,
 }
@@ -305,7 +306,15 @@ impl PartsBrowser {
 
     /// Share catalog state across the expanded chooser and compact dock. Modal choices retain
     /// their opening view/revision; nonmodal placement gestures capture the current view.
-    pub(crate) fn show(&mut self, ui: &Ui, canvas: Rect, browser: Rect, source: ViewInput, libraries: &library::sources::Catalog) -> Option<Pick> {
+    pub(crate) fn show(
+        &mut self,
+        ui: &Ui,
+        canvas: Rect,
+        browser: Rect,
+        source: ViewInput,
+        libraries: &library::sources::Catalog,
+        project: Option<&pcbcraft_engine::Project>,
+    ) -> Option<Pick> {
         if !self.open {
             return None;
         }
@@ -322,6 +331,7 @@ impl PartsBrowser {
         self.focus_ids.clear();
         let enabled = entries.iter().any(|e| Some(e.key()) == self.selected) && valid_value(&self.value);
         let mut choices = Choices::default();
+        let mut picked_unit = None;
         let mut action = if expanded {
             chrome::parts_form(ui.ctx(), enabled, ui.is_enabled(), |ui| {
                 chrome::toolbar(ui, if ui.available_width() < 900. { 3 } else { 2 }, |ui| {
@@ -330,6 +340,7 @@ impl PartsBrowser {
                         self.library_selector(ui, &sources);
                     }
                     self.placement_options(ui);
+                    picked_unit = existing_units(ui, project);
                 });
                 chrome::panes(ui, |ui, region| match region {
                     chrome::Region::Libraries => {
@@ -351,6 +362,7 @@ impl PartsBrowser {
                 self.search(ui);
                 self.library_selector(ui, &sources);
                 self.placement_options(ui);
+                picked_unit = existing_units(ui, project);
                 let field = properties::text(ui, "Value", &mut self.value);
                 self.focus_ids.push(field.id);
                 choices = self.results(ui, &entries, owner, short);
@@ -377,6 +389,10 @@ impl PartsBrowser {
         };
         if !ui.is_enabled() {
             return None;
+        }
+        if let Some(pick) = picked_unit {
+            self.close(ui.ctx());
+            return Some(if owner == source { pick } else { Pick::Stale });
         }
         if action.compact {
             self.set_compact(ui.ctx(), true);
@@ -579,3 +595,28 @@ fn matches_sources(query: &str, catalog: &library::sources::Catalog) -> Vec<Arc<
 
 #[cfg(test)]
 mod tests;
+
+/// Offer unplaced units of pinned project parts on whichever sheet owns this chooser.
+fn existing_units(ui: &mut Ui, project: Option<&pcbcraft_engine::Project>) -> Option<Pick> {
+    let project = project?;
+    let available: Vec<_> =
+        project.components().flat_map(|part| project.available_units(&part.id()).into_iter().map(move |unit| (part, unit))).collect();
+    if available.is_empty() {
+        return None;
+    }
+    let mut picked = None;
+    ui.menu_button("Existing part units", |ui| {
+        for (part, unit) in &available {
+            if ui.button(format!("{}{} · {}", part.reference(), unit.unit_id().to_uppercase(), part.definition.name)).clicked() {
+                picked = Some(Pick::Unit {
+                    definition: part.definition.clone(),
+                    component: part.id(),
+                    unit: unit.unit_id().to_owned(),
+                    value: part.value().to_owned(),
+                });
+                ui.close();
+            }
+        }
+    });
+    picked
+}

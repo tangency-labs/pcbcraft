@@ -407,8 +407,14 @@ impl PcbApp {
         }
         self.views.sync(&self.session);
         self.message = None;
-        self.views.active.schematic.tool =
-            Some(Tool::PlaceSymbol { value: definition.default_value().to_owned(), definition, revision: self.session.revision(), turns: 0 });
+        self.views.active.schematic.tool = Some(Tool::PlaceSymbol {
+            unit: definition.unit_id().to_owned(),
+            component: None,
+            value: definition.default_value().to_owned(),
+            definition,
+            revision: self.session.revision(),
+            turns: 0,
+        });
     }
 
     /// Arm the ordinary placement tool with an instance Value captured by any catalog gesture.
@@ -1522,14 +1528,20 @@ impl PcbApp {
             (Some(Tool::Hierarchy { kind, id, .. }), Click::HierarchyPlace(at)) => self.hierarchy_place(source, kind, id, at),
             (None, Click::HierarchyAction(kind, id, action)) => self.hierarchy_action(source, kind, id, action),
             (None, Click::HierarchyClipboard(kind, id, action, ctx)) => self.hierarchy_clipboard_action(&ctx, kind, id, action),
-            (Some(Tool::PlaceSymbol { definition, value, revision, turns }), Click::Place(point)) => {
+            (Some(Tool::PlaceSymbol { definition, unit, component, value, revision, turns }), Click::Place(point)) => {
                 self.views.active.schematic.tool = None;
-                self.place_catalog_symbol(
-                    &definition,
-                    json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90, "value":value}),
-                );
-                if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
-                    self.views.active.schematic.tool = Some(Tool::PlaceSymbol { definition, value, revision: self.session.revision(), turns });
+                let mut params =
+                    json!({"x_nm": point.x_nm, "y_nm": point.y_nm, "expected_revision": revision, "rotation": u16::from(turns) * 90, "unit":unit});
+                if let Some(component) = component {
+                    params["component"] = json!(component);
+                    self.run(pcbcraft_engine::PLACE_UNIT, &params);
+                } else {
+                    params["value"] = json!(value);
+                    self.place_catalog_symbol(&definition, params);
+                    if self.parts.repeats() && self.message.is_none() && self.session.revision() > revision {
+                        self.views.active.schematic.tool =
+                            Some(Tool::PlaceSymbol { definition, unit, component: None, value, revision: self.session.revision(), turns });
+                    }
                 }
             }
             (Some(Tool::Wire { revision, start: None }), Click::WirePoint(anchor, _)) => {

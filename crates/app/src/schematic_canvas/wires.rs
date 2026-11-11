@@ -259,7 +259,7 @@ pub(super) fn paint(
     highlighted: &std::collections::BTreeSet<String>,
 ) {
     let tokens = Tokens::get();
-    let preview = moved.map(|(symbol, point)| (symbol.terminals(), symbol.definition.pin_positions(point, symbol.turns())));
+    let preview = moved.map(|(symbol, point)| (symbol.terminals(), symbol.unit_definition().pin_positions(point, symbol.turns())));
     let position = |endpoint| {
         if let WireEndpoint::Terminal(pin) = endpoint {
             preview
@@ -553,7 +553,7 @@ pub(super) fn label_position(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn symbol_position(
     project: &Project,
-    definition: &pcbcraft_engine::schematic::SymbolDefinition,
+    definition: &pcbcraft_engine::schematic::SymbolUnit,
     turns: u8,
     camera: &Camera,
     rect: Rect,

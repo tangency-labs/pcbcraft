@@ -25,6 +25,7 @@ mod grab;
 mod grid_spacing;
 mod hierarchy;
 mod multiple_sheets;
+mod multiunit;
 mod net_labels;
 mod optional_board;
 mod panel_docking;
