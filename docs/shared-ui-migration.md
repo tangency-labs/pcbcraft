@@ -271,6 +271,21 @@ dots. The renderer applies these choices to the canvas and ribbon margins.
 Preferences shows Off when the PCB grid is hidden; selecting Dots or Lines also
 turns its visibility back on, including when it was hidden from the ribbon.
 
+## Smooth canvas navigation
+
+Wheel input now drives a short (140 ms) camera transition through intermediate
+logarithmic scales, with a fixed pointer or center anchor. Each camera owns its
+pending movement; it is excluded from saved arrangements and split views.
+Reversing direction replaces the old target immediately. Pinches and pan gestures
+stay direct, while clicks, focus/host changes, blocked canvas input, Fit and
+explicit centering discard outstanding motion. The camera advances once per
+native viewport frame and requests repaint only until the target is reached.
+
+Dots and line grids fade their fine marks as their density limit approaches.
+Every fifth mark stays visible, matching the next coarser grid at the transition.
+Canvas and ribbon backgrounds use the same geometry and fade; actual snap spacing
+and all authored dimensions remain unchanged.
+
 ## Source and licence record
 
 The shared UI kit, look and theme retain the SolidCraft Brand and Interface
@@ -288,6 +303,17 @@ revisions. The retained licence texts are available in About; exact provenance
 and hashes are in [ATTRIBUTION.md](../ATTRIBUTION.md).
 
 ## Validation
+
+The smooth-navigation follow-up passed 1,297 workspace tests with eight ignored,
+formatting, Clippy with warnings denied, WebAssembly compilation, Trunk packaging
+and dependency license/source/ban checks. Tests sample intermediate camera scales
+at 30/60/144 Hz, pointer/center anchoring, reversal, bounds, transient-state
+isolation, immediate pinch input and cancellation on input-owner changes. Dot
+and line grid tests cover fading and continuity at density boundaries. Native
+wheel replays captured intermediate frames in both workspaces, and browser
+wheel replays were checked in dark/light themes without captured console errors
+or uncaught exceptions. These checks verify the implemented motion behavior,
+not a comparative frame-rate benchmark against SolidCraft.
 
 The task-oriented ribbon follow-up passed 1,291 workspace tests with eight
 ignored, formatting, Clippy with warnings denied, WebAssembly compilation,

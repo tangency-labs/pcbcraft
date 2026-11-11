@@ -164,8 +164,10 @@ the same `VCC` net name, which can be changed before placement.
 
 The status bar shows the grid point under the pointer; click its unit, or press
 **Ctrl+U**, to read coordinates and the grid in mm instead of mil. The wheel zooms
-and a middle-button drag pans by default. Preferences can change
-wheel behavior, zoom direction/speed, theme and UI scale. Browser and Net Inspector
+smoothly around the pointer and a middle-button drag pans by default. Pinch
+gestures follow your fingers directly, and grid density fades between scales.
+Preferences can change wheel behavior, zoom direction/speed, theme and UI scale.
+Browser and Net Inspector
 use collapsible cards over the canvas; **View** restores a hidden card and opens
 the Parts Catalog in its last presentation. **Help → Keyboard Shortcuts**
 shows the current bindings. Keyboard editing shortcuts apply to the canvas when

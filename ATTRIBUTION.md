@@ -966,3 +966,13 @@ The task-oriented ribbon regrouping, tab compatibility aliases and compact
 header wrapping are original PCBcraft changes using these existing shared
 components and qualified glyphs. No external implementation or artwork was
 introduced.
+
+## Smooth canvas zoom and adaptive grid
+
+The per-camera timed zoom transition, input cancellation and grid-density fade
+are original PCBcraft work under MIT OR Apache-2.0. The wheel-smoothing and direct
+pinch behavior in SolidCraft's `crates/ui-egui/src/navigation.rs` at the pinned
+`f56114219b2d7f6d16de8dd58700479646948f8a` revision was reviewed as a behavioral
+reference (MIT OR Apache-2.0, SolidCraft contributors). No SolidCraft application
+engine or camera implementation was imported; the existing shared egui renderer
+and PCBcraft's 2D camera remain the rendering path. No dependency or asset was added.

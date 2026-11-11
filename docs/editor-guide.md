@@ -42,6 +42,13 @@ aliases, shared commands and limits.
 
 ## Preferences and grid
 
+Wheel zoom moves through intermediate scales over a short transition in schematic,
+PCB and library editor canvases. Pinch gestures and panning remain direct. The
+chosen pointer or center anchor stays fixed during the transition, while the
+snap spacing stays unchanged. Clicking, leaving the canvas, losing focus, or
+using Fit or an explicit view command stops pending wheel movement. Fine grid
+marks fade near density changes while the coarser marks remain visible.
+
 The app bar shows the project name and an unsaved marker beside **Undo**, **Redo**, and **Save** (**Download** in the
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
 pages for Appearance (theme, interface scale, PCB grid, grid opacity, units), Navigation (whether the wheel

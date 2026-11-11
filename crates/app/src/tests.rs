@@ -35,6 +35,7 @@ mod save_changes;
 mod selection_filters;
 mod split_editors;
 mod tool_modes;
+mod zoom;
 
 /// Compare restored authored state while preserving the allocation metadata retained by Undo.
 /// Rejected commands, cancelled gestures and no-ops must still use exact snapshot comparisons.
