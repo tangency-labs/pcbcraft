@@ -151,7 +151,7 @@ impl Edit {
         ui.collapsing("Technical properties", |ui| {
             form::text(ui, "Tg (°C)", &mut self.tg);
             form::field(ui, "Tg method", |ui| {
-                egui::ComboBox::from_id_salt("tg_method")
+                pcbcraft_chrome::controls::Choice::from_id_salt("tg_method")
                     .selected_text(match self.tg_method {
                         Some(TgMethod::Dsc) => "DSC",
                         Some(TgMethod::Tma) => "TMA",
@@ -170,7 +170,7 @@ impl Edit {
             form::text(ui, "Df", &mut self.df);
             form::text(ui, "Frequency (Hz)", &mut self.frequency);
             form::field(ui, "Basis", |ui| {
-                egui::ComboBox::from_id_salt("report_basis")
+                pcbcraft_chrome::controls::Choice::from_id_salt("report_basis")
                     .selected_text(self.basis.map(|b| format!("{b:?}")).unwrap_or_else(|| "Choose basis".into()))
                     .show_ui(ui, |ui| {
                         for value in [ReportBasis::Typical, ReportBasis::Minimum, ReportBasis::Maximum, ReportBasis::Measured] {
@@ -190,7 +190,7 @@ impl Edit {
                 form::text(ui, "Specimen resin (%)", &mut self.resin);
                 form::text(ui, "Specimen thickness (mm)", &mut self.specimen_thickness);
                 form::field(ui, "Dk/Df value", |ui| {
-                    egui::ComboBox::from_id_salt("value_kind")
+                    pcbcraft_chrome::controls::Choice::from_id_salt("value_kind")
                         .selected_text(match self.value_kind {
                             Some(DielectricValueKind::Design) => "Design",
                             Some(DielectricValueKind::Test) => "Test",
@@ -203,7 +203,7 @@ impl Edit {
                         });
                 });
                 form::field(ui, "Axis", |ui| {
-                    egui::ComboBox::from_id_salt("report_axis")
+                    pcbcraft_chrome::controls::Choice::from_id_salt("report_axis")
                         .selected_text(self.axis.map(|a| format!("{a:?}")).unwrap_or_else(|| "Unspecified".into()))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut self.axis, None, "Unspecified");

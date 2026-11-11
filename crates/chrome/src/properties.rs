@@ -104,7 +104,7 @@ pub fn mapping_choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String
         ui.spacing_mut().interact_size.y = t.control_height;
         let label = field_name(ui, label, label_width, false);
         let selected = options.iter().find(|(key, _)| *key == value.as_str()).map(|(_, text)| text.as_str()).unwrap_or(value.as_str());
-        egui::ComboBox::from_id_salt(id)
+        crate::controls::Choice::from_id_salt(id)
             .width(ui.available_width())
             .selected_text(selected)
             .show_ui(ui, |ui| {
@@ -128,7 +128,7 @@ pub fn rotation(ui: &mut Ui, degrees: &mut u16) {
     let t = Tokens::get();
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new("Rotation").halign(Align::Min));
-        egui::ComboBox::from_id_salt("property_rotation")
+        crate::controls::Choice::from_id_salt("property_rotation")
             .selected_text(format!("{degrees}°"))
             .show_ui(ui, |ui| {
                 for rotation in [0, 90, 180, 270] {

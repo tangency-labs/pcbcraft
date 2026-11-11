@@ -523,7 +523,7 @@ impl PcbApp {
             },
             |ui| {
                 if tabs.len() > 1 {
-                    egui::ComboBox::from_id_salt("library_documents").selected_text("Documents").show_ui(ui, |ui| {
+                    pcbcraft_chrome::controls::Choice::from_id_salt("library_documents").selected_text("Documents").show_ui(ui, |ui| {
                         for (id, name) in &tabs {
                             if ui.selectable_label(active == Some(*id), name).clicked() {
                                 intents.borrow_mut().push(Intent::Focus(*id));

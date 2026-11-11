@@ -231,7 +231,7 @@ impl Assistant {
             }
             let own = self.settings.agents.agent_permissions.get(&entry.id).copied();
             let shown = own.map_or("Use the global mode", Mode::label);
-            egui::ComboBox::from_id_salt("agent_mode")
+            pcbcraft_chrome::controls::Choice::from_id_salt("agent_mode")
                 .selected_text(shown)
                 .show_ui(ui, |ui| {
                     let mut chosen = own;

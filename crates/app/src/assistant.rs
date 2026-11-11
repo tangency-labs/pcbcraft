@@ -762,7 +762,7 @@ impl Assistant {
                 if self.chat.config.is_empty() {
                     if let Some((current, models)) = &self.chat.models {
                         let shown = models.iter().find(|m| &m.id == current).map_or(current.as_str(), |m| m.name.as_str());
-                        egui::ComboBox::from_id_salt("assistant_model")
+                        pcbcraft_chrome::controls::Choice::from_id_salt("assistant_model")
                             .selected_text(format!("Model: {shown}"))
                             .show_ui(ui, |ui| {
                                 for m in models {
@@ -776,7 +776,7 @@ impl Assistant {
                     }
                     if let Some((current, modes)) = &self.chat.modes {
                         let shown = modes.iter().find(|(id, _)| id == current).map_or(current.as_str(), |(_, name)| name.as_str());
-                        egui::ComboBox::from_id_salt("assistant_mode")
+                        pcbcraft_chrome::controls::Choice::from_id_salt("assistant_mode")
                             .selected_text(format!("Mode: {shown}"))
                             .show_ui(ui, |ui| {
                                 for (id, name) in modes {
@@ -795,7 +795,7 @@ impl Assistant {
                         .iter()
                         .find(|choice| choice.value == option.current_value)
                         .map_or(option.current_value.as_str(), |choice| choice.name.as_str());
-                    egui::ComboBox::from_id_salt(("assistant_option", &option.id))
+                    pcbcraft_chrome::controls::Choice::from_id_salt(("assistant_option", &option.id))
                         .selected_text(format!("{}: {shown}", option.name))
                         .show_ui(ui, |ui| {
                             for choice in &option.options {

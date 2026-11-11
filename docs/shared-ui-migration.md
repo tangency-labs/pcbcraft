@@ -168,6 +168,12 @@ authoring, Board Setup and clipboard options. Enabled and sized action layouts
 retain their caller-owned availability. Net Inspector uses the shared search
 field while keeping connectivity resolution and filtering in the app.
 
+The remaining choice fields use the shared bounded dropdown, including board
+materials/stackup, pin mapping, field appearance, library authoring and Assistant
+model/mode selection. Typed option values remain with their existing callers.
+The active-layer selector retains its colour swatch and full accessible value
+while using shared dropdown chrome. Escape closes a dropdown before its modal.
+
 ## Ribbon background
 
 The outer ribbon strip is transparent, exposing each top pane's grid through

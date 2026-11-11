@@ -69,7 +69,7 @@ pub fn pages(ui: &mut Ui, page: &mut Page, error: Option<&str>, add: impl FnOnce
     } else {
         let bar = Rect::from_min_size(body.min, vec2(body.width(), t.form_header_height));
         let mut nav = ui.new_child(UiBuilder::new().max_rect(bar.shrink2(vec2(t.space_16, t.space_6))));
-        egui::ComboBox::from_id_salt("setup_page")
+        crate::controls::Choice::from_id_salt("setup_page")
             .selected_text(page.title())
             .width(nav.available_width())
             .show_ui(&mut nav, |ui| {

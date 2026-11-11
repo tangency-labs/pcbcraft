@@ -566,7 +566,7 @@ impl PcbApp {
         let closing =
             shell::dialog(ctx, "hierarchy_dialog", if edit.kind == Kind::Sheet { "Hierarchical Sheet" } else { "Hierarchical Label" }, |ui| {
                 if edit.kind == Kind::Sheet {
-                    egui::ComboBox::from_label("Child sheet")
+                    pcbcraft_chrome::controls::Choice::from_label("Child sheet")
                         .selected_text(edit.child.and_then(|t| project.sheets().find(|s| s.target == t).map(|s| s.name)).unwrap_or("New sheet"))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut edit.child, None, "New sheet");
@@ -586,7 +586,7 @@ impl PcbApp {
                     submit = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                 }
                 if edit.kind == Kind::Label {
-                    egui::ComboBox::from_label("Direction").selected_text(direction_name(edit.direction)).show_ui(ui, |ui| {
+                    pcbcraft_chrome::controls::Choice::from_label("Direction").selected_text(direction_name(edit.direction)).show_ui(ui, |ui| {
                         for direction in Direction::ALL {
                             ui.selectable_value(&mut edit.direction, direction, direction_name(direction));
                         }

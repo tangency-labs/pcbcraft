@@ -32,3 +32,54 @@ pub fn checkbox(ui: &mut Ui, value: &mut bool, label: impl AsRef<str>) -> Respon
 pub fn search(ui: &mut Ui, id: egui::Id, value: &mut String, hint: &str, name: &str) -> Response {
     kit::search_field(ui, id, value, hint).accessible_name(name)
 }
+
+/// A host-identified choice menu rendered by the shared dropdown. The app supplies typed rows
+/// and owns their changes; the adapter preserves native response and popup-result handling.
+pub struct Choice {
+    id: egui::IdSalt,
+    selected: String,
+    width: Option<f32>,
+    label: Option<String>,
+}
+
+impl Choice {
+    /// Identify the menu within its UI scope, independently of the selected display text.
+    pub fn from_id_salt(id: impl egui::AsIdSalt) -> Self {
+        Self { id: egui::IdSalt::new(id), selected: String::new(), width: None, label: None }
+    }
+
+    /// Identify and label a menu using its field name.
+    pub fn from_label(label: &str) -> Self {
+        Self { label: Some(label.to_owned()), ..Self::from_id_salt(label) }
+    }
+
+    /// Display the current value while preserving full text for accessibility.
+    pub fn selected_text(mut self, text: impl Into<WidgetText>) -> Self {
+        self.selected = text.into().text().to_owned();
+        self
+    }
+
+    /// Bound the trigger and popup to the requested nonnegative width and available UI space.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width.max(0.0));
+        self
+    }
+
+    /// Draw shared dropdown chrome and run the host's rows only while its popup is open.
+    /// Escape closes the popup before it can dismiss an enclosing modal.
+    pub fn show_ui<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+        let width = self.width.unwrap_or(ui.spacing().combo_width).min(ui.available_width().max(0.0));
+        let mut inner = None;
+        let draw = |ui: &mut Ui| kit::bounded_dropdown_menu(ui, self.id, &self.selected, width, |ui| inner = Some(add(ui)));
+        let response = if let Some(label) = &self.label {
+            ui.horizontal(|ui| {
+                let label = ui.label(label);
+                draw(ui).labelled_by(label.id)
+            })
+            .inner
+        } else {
+            draw(ui)
+        };
+        egui::InnerResponse { inner, response }
+    }
+}

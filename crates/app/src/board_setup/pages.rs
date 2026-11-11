@@ -5,7 +5,7 @@ use super::*;
 fn copper_count(ui: &mut Ui, count: &mut u64) -> bool {
     let previous = *count;
     form::field(ui, "Copper layers", |ui| {
-        egui::ComboBox::from_id_salt("copper_count")
+        pcbcraft_chrome::controls::Choice::from_id_salt("copper_count")
             .selected_text(format!("{count} copper layers"))
             .show_ui(ui, |ui| {
                 for n in (2..=64).step_by(2) {
@@ -24,7 +24,7 @@ fn material_choice(ui: &mut Ui, id: impl egui::AsIdSalt, reference: &mut Option<
         .and_then(|r| materials.iter().find(|m| m.reference() == r))
         .map(|m| format!("{} · r{}", m.name, m.revision))
         .unwrap_or_else(|| "Unspecified".into());
-    egui::ComboBox::from_id_salt(id)
+    pcbcraft_chrome::controls::Choice::from_id_salt(id)
         .selected_text(text)
         .show_ui(ui, |ui| {
             ui.selectable_value(reference, None, "Unspecified");
@@ -140,7 +140,7 @@ impl Edit {
         form::card(ui, |ui| {
             form::text(ui, "Layer name", &mut self.new_name);
             form::field(ui, "Purpose", |ui| {
-                egui::ComboBox::from_id_salt("new_purpose")
+                pcbcraft_chrome::controls::Choice::from_id_salt("new_purpose")
                     .selected_text(purpose_name(self.new_purpose))
                     .show_ui(ui, |ui| {
                         for purpose in [
@@ -168,7 +168,7 @@ impl Edit {
             });
             if self.new_purpose != LayerPurpose::Outline {
                 form::field(ui, "Side", |ui| {
-                    egui::ComboBox::from_id_salt("new_side")
+                    pcbcraft_chrome::controls::Choice::from_id_salt("new_side")
                         .selected_text(match self.new_side {
                             Some(Side::Front) => "Front",
                             Some(Side::Back) => "Back",
@@ -228,7 +228,7 @@ impl Edit {
         let mut preset = None;
         form::field(ui, "Starting stackup", |ui| {
             ui.add_enabled_ui(self.candidate.setup.stackup().strata.len() == 3, |ui| {
-                egui::ComboBox::from_id_salt("starting_stackup")
+                pcbcraft_chrome::controls::Choice::from_id_salt("starting_stackup")
                     .selected_text("Choose preset…")
                     .show_ui(ui, |ui| {
                         for value in pcbcraft_engine::board::setup::StackupPreset::ALL {
@@ -402,7 +402,7 @@ impl Edit {
                         };
                         let before = kind;
                         form::field(ui, "Construction", |ui| {
-                            egui::ComboBox::from_id_salt("construction")
+                            pcbcraft_chrome::controls::Choice::from_id_salt("construction")
                                 .selected_text(["Unspecified", "Core", "Prepreg"][kind])
                                 .show_ui(ui, |ui| {
                                     for (n, label) in ["Unspecified", "Core", "Prepreg"].iter().enumerate() {

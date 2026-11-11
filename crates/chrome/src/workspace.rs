@@ -796,18 +796,28 @@ pub fn layer_choice<T: Copy + PartialEq>(ui: &mut Ui, label: &str, value: &mut T
     let before = *value;
     let selected = options.iter().find(|(option, _, _)| option == value);
     let selected_name = selected.map_or("Layer", |(_, name, _)| *name);
-    let result =
-        egui::ComboBox::from_id_salt(label).selected_text(layer_choice_label(ui, selected_name)).width(ui.available_width()).show_ui(ui, |ui| {
-            for (option, name, color) in options {
-                let text = layer_choice_label(ui, name);
-                let response = ui.selectable_value(value, *option, text);
-                layer_choice_patch(ui, response.rect, *color);
-            }
-        });
+    let response = solidcraft_ui_kit::bounded_dropdown_menu(ui, label, "", ui.available_width(), |ui| {
+        for (option, name, color) in options {
+            let text = layer_choice_label(ui, name);
+            let response = ui.selectable_value(value, *option, text);
+            layer_choice_patch(ui, response.rect, *color);
+        }
+    });
+    let t = Tokens::get();
+    let text_rect = response.rect.shrink2(ui.spacing().button_padding);
+    let mut text = layer_choice_label(ui, selected_name);
+    text.wrap.max_width = (text_rect.width() - t.space_24).max(0.0);
+    text.wrap.max_rows = 1;
+    let galley = ui.painter().layout_job(text);
+    ui.painter().with_clip_rect(text_rect).galley(pos2(text_rect.left(), text_rect.center().y - galley.size().y / 2.0), galley, t.text);
     if let Some((_, _, color)) = selected {
-        layer_choice_patch(ui, result.response.rect, *color);
+        layer_choice_patch(ui, response.rect, *color);
     }
-    result.response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, ui.is_enabled(), label));
+    response.widget_info(|| {
+        let mut info = WidgetInfo::labeled(Role::ComboBox, ui.is_enabled(), label);
+        info.current_text_value = Some(selected_name.to_owned());
+        info
+    });
     before != *value
 }
 

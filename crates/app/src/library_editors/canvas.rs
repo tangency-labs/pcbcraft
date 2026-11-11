@@ -279,7 +279,7 @@ impl Document {
                         GraphicPurpose::Silkscreen => "Silkscreen",
                         GraphicPurpose::Courtyard => "Courtyard",
                     };
-                    egui::ComboBox::from_id_salt("drawing_layer")
+                    pcbcraft_chrome::controls::Choice::from_id_salt("drawing_layer")
                         .selected_text(title)
                         .show_ui(ui, |ui| {
                             for (value, label) in [
@@ -294,7 +294,7 @@ impl Document {
                         .accessible_name("Drawing layer");
                 } else {
                     use pcbcraft_engine::library_graphics::Fill;
-                    egui::ComboBox::from_id_salt("drawing_fill")
+                    pcbcraft_chrome::controls::Choice::from_id_salt("drawing_fill")
                         .selected_text(match self.drawing_fill {
                             Fill::None => "Unfilled",
                             Fill::Solid => "Solid fill",
@@ -340,7 +340,7 @@ impl Document {
         }
         workspace::ribbon_separator(ui);
         workspace::ribbon_control(ui, "Grid", Tokens::get().space_24 * 5.0, |ui| {
-            egui::ComboBox::from_id_salt("library_grid")
+            pcbcraft_chrome::controls::Choice::from_id_salt("library_grid")
                 .selected_text(format!("Grid {} mm", self.camera.snap_nm() as f64 / 1_000_000.0))
                 .show_ui(ui, |ui| {
                     let spacings: &[i64] = if self.session.snapshot().kind == Kind::Symbol {

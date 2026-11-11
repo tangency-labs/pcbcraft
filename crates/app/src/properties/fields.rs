@@ -69,7 +69,7 @@ impl Appearance {
         }
         chrome::text(ui, "Text height", &mut self.height);
         chrome::field(ui, "Text rotation", |ui| {
-            egui::ComboBox::from_id_salt("field_rotation")
+            pcbcraft_chrome::controls::Choice::from_id_salt("field_rotation")
                 .selected_text(format!("{}°", self.layout.rotation))
                 .show_ui(ui, |ui| {
                     for rotation in [0, 90, 180, 270] {
@@ -80,7 +80,7 @@ impl Appearance {
                 .accessible_name("Field rotation");
         });
         chrome::field(ui, "Align", |ui| {
-            egui::ComboBox::from_id_salt("text_align")
+            pcbcraft_chrome::controls::Choice::from_id_salt("text_align")
                 .selected_text(match self.layout.align {
                     TextAlign::Start => "Left",
                     TextAlign::Middle => "Center",
@@ -212,7 +212,7 @@ impl Edit {
         }
         chrome::field(ui, "Field", |ui| {
             let current = names.iter().find(|(id, _)| id == &self.appearance_field).map(|(_, name)| name.as_str()).unwrap_or("Reference");
-            egui::ComboBox::from_id_salt("appearance_field")
+            pcbcraft_chrome::controls::Choice::from_id_salt("appearance_field")
                 .selected_text(current)
                 .show_ui(ui, |ui| {
                     for (id, name) in &names {

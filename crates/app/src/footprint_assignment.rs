@@ -239,7 +239,7 @@ impl PcbApp {
                                 .labelled_by(label.id);
                             ui.horizontal_wrapped(|ui| {
                                 pcbcraft_chrome::controls::checkbox(ui, &mut edit.compatible, "Match pin count");
-                                egui::ComboBox::from_id_salt("mounting_filter")
+                                pcbcraft_chrome::controls::Choice::from_id_salt("mounting_filter")
                                     .selected_text(match edit.mounting {
                                         Mounting::All => "All mounting types",
                                         Mounting::Surface => "Surface mount",

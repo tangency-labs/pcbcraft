@@ -299,16 +299,10 @@ fn chevron(painter: &egui::Painter, center: Pos2, direction: f32, ink: egui::Col
 
 /// Draw the agent switcher. The caller supplies the available agents and handles selection.
 pub fn agent_switcher(ui: &mut Ui, label: &str, enabled: bool, add: impl FnOnce(&mut Ui)) {
-    let t = Tokens::get();
     ui.add_enabled_ui(enabled, |ui| {
-        let inactive = &mut ui.visuals_mut().widgets.inactive;
-        inactive.weak_bg_fill = t.field;
-        inactive.bg_stroke = Stroke::new(1.0, t.border);
-        inactive.corner_radius = egui::CornerRadius::same(t.control_radius);
-        egui::ComboBox::from_id_salt("assistant_agent")
+        crate::controls::Choice::from_id_salt("assistant_agent")
             .selected_text(label)
             .width(ui.available_width().min(260.0))
-            .icon(move |ui, rect, _, open| chevron(ui.painter(), rect.center(), if open { -1.0 } else { 1.0 }, t.text_dim))
             .show_ui(ui, add)
             .response
             .on_hover_text("Choose an agent");
