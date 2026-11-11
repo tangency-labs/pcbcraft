@@ -240,7 +240,7 @@ impl super::Edit {
         let candidate = &mut self.candidate;
         if let Some(edit) = &mut self.material_edit {
             form::card(ui, |ui| edit.show(ui));
-            if ui.button("Discard material edits").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "Discard material edits").clicked() {
                 self.material_edit = None;
             }
             return;
@@ -265,7 +265,7 @@ impl super::Edit {
             }
         }
         properties::section(ui, "Board materials");
-        if ui.button("Add material").clicked() {
+        if pcbcraft_chrome::controls::button(ui, "Add material").clicked() {
             match Material::new("New material".into()).map_err(|e| e.to_string()).and_then(|m| Edit::new(m, false)) {
                 Ok(edit) => self.material_edit = Some(edit),
                 Err(error) => self.error = Some(error),
@@ -284,7 +284,7 @@ impl super::Edit {
                         _ => false,
                     });
                     form::material_heading(ui, &material.name, material.family.as_deref(), used);
-                    if !used && can_use && ui.button("Use for stackup").clicked() {
+                    if !used && can_use && pcbcraft_chrome::controls::button(ui, "Use for stackup").clicked() {
                         use_material = Some(material.reference());
                     }
                     ui.collapsing("Technical details", |ui| {
@@ -313,7 +313,7 @@ impl super::Edit {
                             ));
                             ui.label(&report.source.document);
                         }
-                        if ui.button("Add specification…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Add specification…").clicked() {
                             match Edit::new(material.clone(), true) {
                                 Ok(edit) => self.material_edit = Some(edit),
                                 Err(error) => self.error = Some(error),

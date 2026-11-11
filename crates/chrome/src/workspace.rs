@@ -296,7 +296,7 @@ pub fn ribbon(
                                 }
                             }
                             if wide {
-                                ui.add_enabled(false, egui::Button::new("+")).on_disabled_hover_text("Ribbon customization is not available yet.");
+                                crate::controls::enabled_button(ui, false, "+").on_disabled_hover_text("Ribbon customization is not available yet.");
                             }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 let show_quick = tabs.get(*tab) != Some(&"View")

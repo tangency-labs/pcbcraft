@@ -162,6 +162,12 @@ colour, library-editor and Assistant configuration dialogs inherit this host.
 Long bodies scroll within the viewport below the fixed title. Each caller
 retains its validation, focus, actions and document or connection lifecycle.
 
+Ordinary command buttons and checkboxes use the shared toolkit through the
+chrome control adapter, including Assistant permissions/configuration, library
+authoring, Board Setup and clipboard options. Enabled and sized action layouts
+retain their caller-owned availability. Net Inspector uses the shared search
+field while keeping connectivity resolution and filtering in the app.
+
 ## Ribbon background
 
 The outer ribbon strip is transparent, exposing each top pane's grid through

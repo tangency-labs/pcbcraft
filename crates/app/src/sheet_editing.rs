@@ -70,8 +70,8 @@ impl PcbApp {
                 ui.label(shell::error(error.as_str()));
             }
             ui.horizontal(|ui| {
-                submit |= ui.button(if deletion { "Delete Sheet" } else { "OK" }).clicked();
-                cancel = ui.button("Cancel").clicked();
+                submit |= pcbcraft_chrome::controls::button(ui, if deletion { "Delete Sheet" } else { "OK" }).clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if submit {

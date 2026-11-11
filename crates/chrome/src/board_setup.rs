@@ -188,9 +188,9 @@ pub fn material_heading(ui: &mut Ui, name: &str, family: Option<&str>, used: boo
 /// A compact material choice exposes its family without a characterization form.
 pub fn material_choice(ui: &mut Ui, name: &str, assign: bool) -> bool {
     let t = Tokens::get();
-    ui.add(
-        crate::catalog::button(&format!("{} {name}", if assign { "Use" } else { "Add" }), false)
-            .min_size(vec2(ui.available_width(), t.control_height + t.space_8)),
+    ui.add_sized(
+        vec2(ui.available_width(), t.control_height + t.space_8),
+        crate::catalog::button(&format!("{} {name}", if assign { "Use" } else { "Add" }), false),
     )
     .clicked()
 }

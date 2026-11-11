@@ -53,7 +53,7 @@ pub fn reference_owner_link(p: &Painter, bounds: Rect, owner: Pos2, color: Color
 
 /// The ratsnest is a view overlay, separate from physical drawing layers.
 pub fn ratsnest_visibility(ui: &mut egui::Ui, visible: &mut bool) -> egui::Response {
-    ui.checkbox(visible, "Ratsnest")
+    crate::controls::checkbox(ui, visible, "Ratsnest")
 }
 
 /// Paint a layer graphic in its effective color; selection, previews and handles use the shared accent.
@@ -474,13 +474,13 @@ pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], he
             ui.label(crate::shell::error(error));
         }
         ui.horizontal(|ui| {
-            if ui.button("Apply color").clicked() {
+            if crate::controls::button(ui, "Apply color").clicked() {
                 action = LayerColorAction::Apply;
             }
-            if ui.button("Reset to default").clicked() {
+            if crate::controls::button(ui, "Reset to default").clicked() {
                 action = LayerColorAction::Reset;
             }
-            if ui.button("Cancel").clicked() {
+            if crate::controls::button(ui, "Cancel").clicked() {
                 action = LayerColorAction::Cancel;
             }
         });

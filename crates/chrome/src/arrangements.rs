@@ -59,7 +59,7 @@ pub fn tabs(ui: &mut Ui, tabs: &[(u64, String)], active: u64) -> Option<Intent> 
                     }
                 });
             });
-        let create = ui.button(label);
+        let create = crate::controls::button(ui, label);
         create.widget_info(|| WidgetInfo::labeled(Role::Button, true, "New arrangement"));
         if create.on_hover_text("New arrangement").clicked() {
             intent = Some(Intent::New);
@@ -135,8 +135,8 @@ impl Form {
                 }
             }
             ui.horizontal(|ui| {
-                submit |= ui.button(submit_label).clicked();
-                cancel = ui.button("Cancel").clicked();
+                submit |= crate::controls::button(ui, submit_label).clicked();
+                cancel = crate::controls::button(ui, "Cancel").clicked();
             });
         });
         if cancel || dismissed {

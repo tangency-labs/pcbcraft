@@ -308,7 +308,7 @@ pub fn empty_recents(ui: &mut Ui) {
 /// Forget all history, without deleting project files.
 pub fn clear_recents(ui: &mut Ui) -> Response {
     ui.add_space(Tokens::get().space_8);
-    ui.button("Clear recent projects")
+    crate::controls::button(ui, "Clear recent projects")
 }
 
 #[cfg(test)]

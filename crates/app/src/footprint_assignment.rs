@@ -238,7 +238,7 @@ impl PcbApp {
                             ui.add(form::input(&mut edit.query).desired_width(ui.available_width()).hint_text("Name or package"))
                                 .labelled_by(label.id);
                             ui.horizontal_wrapped(|ui| {
-                                ui.checkbox(&mut edit.compatible, "Match pin count");
+                                pcbcraft_chrome::controls::checkbox(ui, &mut edit.compatible, "Match pin count");
                                 egui::ComboBox::from_id_salt("mounting_filter")
                                     .selected_text(match edit.mounting {
                                         Mounting::All => "All mounting types",
@@ -260,7 +260,7 @@ impl PcbApp {
                             egui::ScrollArea::vertical().id_salt("package_results").max_height(height).show(ui, |ui| {
                                 if matches.is_empty() {
                                     ui.label("No footprints match");
-                                    if ui.button("Clear filters").clicked() {
+                                    if pcbcraft_chrome::controls::button(ui, "Clear filters").clicked() {
                                         edit.query.clear();
                                         edit.library.clear();
                                         edit.compatible = false;

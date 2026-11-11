@@ -596,8 +596,8 @@ impl PcbApp {
                     ui.label(shell::error(error));
                 }
                 ui.horizontal(|ui| {
-                    submit |= ui.button("OK").clicked();
-                    cancel = ui.button("Cancel").clicked();
+                    submit |= pcbcraft_chrome::controls::button(ui, "OK").clicked();
+                    cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
                 });
             });
         if submit {

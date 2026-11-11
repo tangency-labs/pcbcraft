@@ -429,7 +429,7 @@ impl PcbApp {
             let mut cancel = false;
             let dismissed = pcbcraft_chrome::shell::dialog(ctx, "close_wait", "Close Project", |ui| {
                 ui.label("Waiting for the current file operation before closing.");
-                cancel = ui.button("Cancel close").clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel close").clicked();
             });
             if cancel || dismissed {
                 // Keep the worker and its immutable snapshot; only withdraw the quit request.

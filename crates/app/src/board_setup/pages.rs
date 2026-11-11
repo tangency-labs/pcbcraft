@@ -114,7 +114,7 @@ impl Edit {
                     let Some(index) = candidate.setup.layers().iter().position(|l| l.id == layer.id) else { continue };
                     let required = matches!(layer.purpose, LayerPurpose::Copper | LayerPurpose::Outline | LayerPurpose::Courtyard);
                     ui.add_enabled_ui(!required, |ui| {
-                        ui.checkbox(&mut candidate.enabled[index], "")
+                        pcbcraft_chrome::controls::checkbox(ui, &mut candidate.enabled[index], "")
                             .on_hover_text(if required { "Required layer" } else { "Remove this layer from the board catalog" })
                             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::CheckBox, !required, format!("Use layer {}", layer.name)))
                     });
@@ -185,7 +185,7 @@ impl Edit {
                         .accessible_name("Technical layer side");
                 });
             }
-            if ui.button("Add layer").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "Add layer").clicked() {
                 let result = candidate
                     .value(self.unit)
                     .and_then(|s| s.with_added_technical_layer(self.new_name.clone(), self.new_purpose, self.new_side).map_err(|e| e.to_string()));
@@ -285,7 +285,7 @@ impl Edit {
         properties::section(ui, "Adjust dielectric thickness");
         form::card(ui, |ui| {
             form::text(ui, "Target thickness", &mut self.target_thickness);
-            if ui.button("Fit unlocked dielectrics").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "Fit unlocked dielectrics").clicked() {
                 self.error = self.fit().err();
             }
         });
@@ -446,7 +446,7 @@ impl Edit {
                                         let fields = candidate.plies.entry(ply.id.to_string()).or_insert_with(|| PlyFields::new(ply, unit));
                                         form::text(ui, "Resin content (%)", &mut fields.resin);
                                         form::text(ui, "Nominal stock thickness", &mut fields.nominal.text);
-                                        if ui.button("Remove ply").clicked() {
+                                        if pcbcraft_chrome::controls::button(ui, "Remove ply").clicked() {
                                             remove = Some(n);
                                         }
                                     });
@@ -454,7 +454,7 @@ impl Edit {
                                 if let Some(n) = remove {
                                     plies.remove(n);
                                 }
-                                if ui.button("Add ply").clicked() {
+                                if pcbcraft_chrome::controls::button(ui, "Add ply").clicked() {
                                     match PrepregPly::new() {
                                         Ok(ply) => plies.push(ply),
                                         Err(e) => error = Some(e.to_string()),

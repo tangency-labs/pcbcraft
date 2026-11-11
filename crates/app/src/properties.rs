@@ -234,14 +234,14 @@ impl PcbApp {
                     ui.label(shell::error(error));
                 }
                 if edit.changed() {
-                    apply |= ui.button("Apply changes").clicked();
-                    if ui.button("Reset changes").clicked() {
+                    apply |= pcbcraft_chrome::controls::button(ui, "Apply changes").clicked();
+                    if pcbcraft_chrome::controls::button(ui, "Reset changes").clicked() {
                         edit = current.clone();
                     }
                 }
                 ui.separator();
                 ui.label(shell::dim(format!("{} pins", edit.definition.pins().len())));
-                more = ui.button("More properties ↗").clicked();
+                more = pcbcraft_chrome::controls::button(ui, "More properties ↗").clicked();
             },
         );
         if collapse {
@@ -366,10 +366,12 @@ impl PcbApp {
                     });
                     chrome::group(ui, "Library actions", |ui| {
                         let pending = "Apply or cancel pending property changes before opening library actions.";
-                        if ui.add_enabled(can_choose, egui::Button::new("Edit symbol copy…")).on_disabled_hover_text(pending).clicked() {
+                        if pcbcraft_chrome::controls::enabled_button(ui, can_choose, "Edit symbol copy…").on_disabled_hover_text(pending).clicked()
+                        {
                             library_action = Some(LibraryAction::EditCopy);
                         }
-                        if ui.add_enabled(can_choose, egui::Button::new("Manage libraries…")).on_disabled_hover_text(pending).clicked() {
+                        if pcbcraft_chrome::controls::enabled_button(ui, can_choose, "Manage libraries…").on_disabled_hover_text(pending).clicked()
+                        {
                             library_action = Some(LibraryAction::Sources);
                         }
                         ui.label(shell::dim(

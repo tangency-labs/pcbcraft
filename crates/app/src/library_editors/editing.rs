@@ -136,8 +136,8 @@ impl PcbApp {
                 ui.label(shell::error(error));
             }
             ui.horizontal(|ui| {
-                apply = ui.button("Create").clicked();
-                cancel = ui.button("Cancel").clicked();
+                apply = pcbcraft_chrome::controls::button(ui, "Create").clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if apply {

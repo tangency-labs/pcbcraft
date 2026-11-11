@@ -92,9 +92,9 @@ impl PcbApp {
                         &mut draft.units,
                         &[("mm", "mm".into()), ("mil", "mil".into())],
                     );
-                    ui.checkbox(&mut draft.closed, "Close outline");
-                    ui.checkbox(&mut draft.invert_y, "Invert Y axis");
-                    ui.checkbox(&mut draft.original, "Keep source coordinates");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.closed, "Close outline");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.invert_y, "Invert Y axis");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.original, "Keep source coordinates");
                     outline_size(ui, &draft);
                 }
             }
@@ -111,8 +111,9 @@ impl PcbApp {
                 ui.label(shell::error(error));
             }
             ui.horizontal(|ui| {
-                apply = ui.button(if draft.workspace == Workspace::Schematic { "Paste labels" } else { "Paste outline" }).clicked();
-                cancel = ui.button("Cancel").clicked();
+                apply = pcbcraft_chrome::controls::button(ui, if draft.workspace == Workspace::Schematic { "Paste labels" } else { "Paste outline" })
+                    .clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if apply {

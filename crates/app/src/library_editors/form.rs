@@ -36,7 +36,7 @@ impl Draft {
     }
     /// Use human-readable fields rather than exposing serialization keys or a JSON text editor.
     pub(super) fn show(&mut self, ui: &mut Ui, expanded: bool) {
-        if self.value["type"] == "pin" && self.value.get("appearance").is_none() && ui.button("Add pin lead").clicked() {
+        if self.value["type"] == "pin" && self.value.get("appearance").is_none() && pcbcraft_chrome::controls::button(ui, "Add pin lead").clicked() {
             self.value["appearance"] = serde_json::to_value(pcbcraft_engine::schematic::PinAppearance::default()).unwrap_or(Value::Null);
         }
         let pad = self.value["type"] == "pad";
@@ -213,7 +213,7 @@ fn fields(ui: &mut Ui, value: &mut Value, numbers: &mut BTreeMap<String, (String
             }
         }
         Value::Bool(value) => {
-            ui.checkbox(value, label(path));
+            pcbcraft_chrome::controls::checkbox(ui, value, label(path));
         }
         Value::Number(number) => {
             let length = path.ends_with("_nm");

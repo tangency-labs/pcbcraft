@@ -114,7 +114,7 @@ impl Assistant {
         }
         ui.heading("AI");
         ui.separator();
-        if ui.checkbox(&mut self.settings.show_features, "Show AI features").changed() {
+        if pcbcraft_chrome::controls::checkbox(ui, &mut self.settings.show_features, "Show AI features").changed() {
             self.settings_changed = true;
             if !self.settings.show_features {
                 self.hide(ui.ctx(), Visibility::Hidden);
@@ -123,7 +123,8 @@ impl Assistant {
         }
 
         ui.add_enabled_ui(self.settings.show_features, |ui| {
-            self.settings_changed |= ui.checkbox(&mut self.settings.toolbar, "Show Assistant button in application bar").changed();
+            self.settings_changed |=
+                pcbcraft_chrome::controls::checkbox(ui, &mut self.settings.toolbar, "Show Assistant button in application bar").changed();
             ui.separator();
             ui.strong("Permissions");
             ui.label(dim("What agents may do without asking. Reading the project always runs."));
@@ -146,10 +147,13 @@ impl Assistant {
             ui.separator();
             ui.horizontal(|ui| {
                 ui.strong("Agents");
-                if ui.add_enabled(self.settings.agents.agents.len() < MAX_AGENTS, egui::Button::new("Add agent…")).clicked() {
+                if pcbcraft_chrome::controls::enabled_button(ui, self.settings.agents.agents.len() < MAX_AGENTS, "Add agent…").clicked() {
                     request = Some(Request::Add(Box::default()));
                 }
-                if ui.add_enabled(self.detecting.is_none(), egui::Button::new("Refresh")).on_hover_text("Look for installed agents again").clicked() {
+                if pcbcraft_chrome::controls::enabled_button(ui, self.detecting.is_none(), "Refresh")
+                    .on_hover_text("Look for installed agents again")
+                    .clicked()
+                {
                     self.detect(ui.ctx());
                 }
             });
@@ -196,8 +200,9 @@ impl Assistant {
             });
             ui.separator();
             ui.strong("Startup");
-            self.settings_changed |= ui.checkbox(&mut self.settings.connect_at_start, "Connect the default agent at startup").changed();
-            self.settings_changed |= ui.checkbox(&mut self.settings.open_at_start, "Open Assistant at startup").changed();
+            self.settings_changed |=
+                pcbcraft_chrome::controls::checkbox(ui, &mut self.settings.connect_at_start, "Connect the default agent at startup").changed();
+            self.settings_changed |= pcbcraft_chrome::controls::checkbox(ui, &mut self.settings.open_at_start, "Open Assistant at startup").changed();
         });
         request
     }
@@ -215,12 +220,12 @@ impl Assistant {
         ui.label(dim(format!("{}{login}", entry.detail())));
         ui.horizontal_wrapped(|ui| {
             let testing = self.tests.iter().any(|(id, _)| *id == entry.id);
-            if ui.add_enabled(!testing, egui::Button::new("Test")).on_hover_text("Start the agent and check that it answers").clicked() {
+            if pcbcraft_chrome::controls::enabled_button(ui, !testing, "Test").on_hover_text("Start the agent and check that it answers").clicked() {
                 self.test_agent(ui.ctx(), entry);
             }
             if self.settings.agents.agent_default == entry.id {
                 ui.label(dim("Default"));
-            } else if ui.button("Make default").clicked() {
+            } else if pcbcraft_chrome::controls::button(ui, "Make default").clicked() {
                 self.settings.agents.agent_default.clone_from(&entry.id);
                 self.settings_changed = true;
             }
@@ -245,12 +250,12 @@ impl Assistant {
                 .response
                 .accessible_name("Agent permission mode");
             let remembered = self.settings.agents.agent_always_allow.get(&entry.id).map_or(0, Vec::len);
-            if remembered > 0 && ui.button(format!("Forget {remembered} always-allowed")).clicked() {
+            if remembered > 0 && pcbcraft_chrome::controls::button(ui, format!("Forget {remembered} always-allowed")).clicked() {
                 self.settings.agents.agent_always_allow.remove(&entry.id);
                 self.settings_changed = true;
             }
             if !entry.found {
-                if ui.button("Edit").clicked()
+                if pcbcraft_chrome::controls::button(ui, "Edit").clicked()
                     && let Some(agent) = self.settings.agents.agents.iter().find(|agent| agent.id == entry.id)
                 {
                     *request = Some(Request::Add(Box::new(Form {
@@ -266,7 +271,7 @@ impl Assistant {
                         ..Form::default()
                     })));
                 }
-                if ui.button("Remove").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Remove").clicked() {
                     self.remove_agent(&entry.id);
                 }
             }
@@ -407,16 +412,16 @@ impl Assistant {
                     "PCBCraft runs the conversation itself and gives the model the project tools. A key is kept in the system keychain and only sent over HTTPS or to this computer.",
                 ));
                 if form.key_stored {
-                    ui.checkbox(&mut form.forget_key, "Remove the stored key");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut form.forget_key, "Remove the stored key");
                 }
             }
             if let Some(error) = &form.error {
                 ui.label(shell::error(error));
             }
             ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Cancel").clicked() {
                     done = true;
-                } else if ui.button(if form.editing.is_some() { "Save" } else { "Add" }).clicked() {
+                } else if pcbcraft_chrome::controls::button(ui, if form.editing.is_some() { "Save" } else { "Add" }).clicked() {
                     match self.save_agent(form) {
                         Ok(()) => done = true,
                         Err(error) => form.error = Some(error),

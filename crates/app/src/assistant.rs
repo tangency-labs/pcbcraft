@@ -578,9 +578,9 @@ impl Assistant {
         if self.confirm_new {
             ui.label("Start a new chat? This clears the conversation and draft.");
             ui.horizontal(|ui| {
-                if ui.button("Start new chat").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Start new chat").clicked() {
                     self.new_chat();
-                } else if ui.button("Keep chat").clicked() {
+                } else if pcbcraft_chrome::controls::button(ui, "Keep chat").clicked() {
                     self.confirm_new = false;
                 }
             });
@@ -619,23 +619,26 @@ impl Assistant {
                 }
                 ui.horizontal_wrapped(|ui| match &approval.source {
                     chat::Source::Tool { .. } => {
-                        if ui.button("Allow").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Allow").clicked() {
                             answered = Some((approval.id, Answer::Allow));
                         }
-                        if ui.button("Always allow").on_hover_text("Allow this command for this agent from now on").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Always allow")
+                            .on_hover_text("Allow this command for this agent from now on")
+                            .clicked()
+                        {
                             answered = Some((approval.id, Answer::AlwaysAllow));
                         }
-                        if ui.button("Deny").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Deny").clicked() {
                             answered = Some((approval.id, Answer::Deny));
                         }
                     }
                     chat::Source::Agent { options, .. } => {
                         for option in options {
-                            if ui.button(&option.name).clicked() {
+                            if pcbcraft_chrome::controls::button(ui, &option.name).clicked() {
                                 answered = Some((approval.id, Answer::Option(option.id.clone())));
                             }
                         }
-                        if ui.button("Cancel").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Cancel").clicked() {
                             answered = Some((approval.id, Answer::Deny));
                         }
                     }
@@ -682,11 +685,11 @@ impl Assistant {
                     .on_disabled_hover_text(format!("Install with: {install}"));
             }
             ui.separator();
-            if ui.button("Add agent…").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "Add agent…").clicked() {
                 self.settings_request = Some(SettingsRequest::Add(Box::default()));
                 ui.close();
             }
-            if ui.button("AI settings…").clicked() {
+            if pcbcraft_chrome::controls::button(ui, "AI settings…").clicked() {
                 self.settings_request = Some(SettingsRequest::Settings);
                 ui.close();
             }
@@ -700,12 +703,12 @@ impl Assistant {
         }
         ui.horizontal_wrapped(|ui| {
             if self.chat.connected() {
-                if ui.button("Disconnect").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Disconnect").clicked() {
                     self.chat.disconnect();
                 }
             } else {
                 let label = if matches!(self.chat.state, State::Failed(_)) { "Retry" } else { "Connect" };
-                if ui.add_enabled(current.is_some(), egui::Button::new(label)).clicked() {
+                if pcbcraft_chrome::controls::enabled_button(ui, current.is_some(), label).clicked() {
                     self.connect(ui.ctx());
                 }
             }
@@ -721,7 +724,7 @@ impl Assistant {
                 ui.horizontal(|ui| {
                     ui.label("Sign in to continue.");
                     // A terminal or environment sign-in happens outside; the agent restarts to see it.
-                    if ui.button("Retry").on_hover_text("Restart the agent after signing in elsewhere").clicked() {
+                    if pcbcraft_chrome::controls::button(ui, "Retry").on_hover_text("Restart the agent after signing in elsewhere").clicked() {
                         self.connect(ui.ctx());
                     }
                 });
@@ -729,7 +732,7 @@ impl Assistant {
                     for method in methods {
                         match &method.kind {
                             craft_agents::acp::AuthKind::Agent => {
-                                if ui.button(&method.name).on_hover_text(&method.description).clicked() {
+                                if pcbcraft_chrome::controls::button(ui, &method.name).on_hover_text(&method.description).clicked() {
                                     self.chat.sign_in(&method.id);
                                 }
                             }
@@ -844,11 +847,11 @@ impl Assistant {
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if running {
-                if ui.button("Stop").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Stop").clicked() {
                     self.chat.stop();
                 }
                 ui.spinner();
-            } else if ui.add_enabled(can_send, egui::Button::new("Send")).on_hover_text("Send (Enter)").clicked() || enter {
+            } else if pcbcraft_chrome::controls::enabled_button(ui, can_send, "Send").on_hover_text("Send (Enter)").clicked() || enter {
                 let text = self.draft.trim().to_owned();
                 if self.chat.send(&text) {
                     self.draft.clear();

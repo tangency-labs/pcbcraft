@@ -405,20 +405,20 @@ impl PcbApp {
                     ui.label(pcbcraft_chrome::shell::dim("Relocation retains the child sheets' current content, references and net names."));
                 }
             }
-            ui.checkbox(&mut draft.placement.options.preserve_references, "Keep original references");
+            pcbcraft_chrome::controls::checkbox(ui, &mut draft.placement.options.preserve_references, "Keep original references");
             ui.add_enabled_ui(!draft.placement.options.reuse_sheets, |ui| {
                 pcbcraft_chrome::properties::text(ui, "Net-name suffix", &mut draft.placement.options.net_name_suffix);
             });
             ui.label(pcbcraft_chrome::shell::dim(
                 "Named nets retain their names and may join existing nets. Add a suffix to keep the copied circuit separate.",
             ));
-            ui.checkbox(&mut draft.original, "Paste at original position");
+            pcbcraft_chrome::controls::checkbox(ui, &mut draft.original, "Paste at original position");
             if let Some(error) = &draft.error {
                 ui.label(pcbcraft_chrome::shell::error(error));
             }
             ui.horizontal(|ui| {
-                apply = ui.button("Paste").clicked();
-                cancel = ui.button("Cancel").clicked();
+                apply = pcbcraft_chrome::controls::button(ui, "Paste").clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if apply {

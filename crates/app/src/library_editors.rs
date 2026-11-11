@@ -303,8 +303,8 @@ impl Document {
         }
         let (mut apply, mut reset) = (false, false);
         ui.horizontal(|ui| {
-            apply = ui.add_enabled(draft.dirty(), egui::Button::new("Apply")).clicked();
-            reset = ui.button("Reset").clicked();
+            apply = pcbcraft_chrome::controls::enabled_button(ui, draft.dirty(), "Apply").clicked();
+            reset = pcbcraft_chrome::controls::button(ui, "Reset").clicked();
         });
         if apply {
             let result = draft.action().and_then(|action| self.session.execute(draft.revision, action));
@@ -377,7 +377,7 @@ impl Document {
             authoring::Region::Browser => self.browser(ui),
             authoring::Region::Properties => {
                 self.properties(ui, false);
-                expanded = ui.button("More properties…").clicked();
+                expanded = pcbcraft_chrome::controls::button(ui, "More properties…").clicked();
             }
             authoring::Region::Canvas { area, covered } => self.canvas(ui, area, covered, navigation, active),
         });
@@ -745,9 +745,9 @@ impl PcbApp {
         let dismissed = shell::dialog(ctx, "library_close", if id.is_some() { "Close library item?" } else { "Unsaved library items" }, |ui| {
             ui.label(if busy { "Finish the library file operation before closing." } else { "Unsaved library edits will be lost." });
             ui.horizontal(|ui| {
-                review = ui.button("Review edits").clicked();
-                discard = ui.add_enabled(!busy, egui::Button::new("Discard library edits")).clicked();
-                cancel = ui.button("Cancel").clicked();
+                review = pcbcraft_chrome::controls::button(ui, "Review edits").clicked();
+                discard = pcbcraft_chrome::controls::enabled_button(ui, !busy, "Discard library edits").clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if discard {
@@ -773,7 +773,7 @@ impl PcbApp {
         let mut close = false;
         let dismissed = shell::scrolling_dialog_width(ctx, &format!("library_details_{id}"), "Library Properties", 760.0, |ui| {
             doc.properties(ui, true);
-            close = ui.button("Close").clicked();
+            close = pcbcraft_chrome::controls::button(ui, "Close").clicked();
         });
         if !(close || dismissed) {
             self.dialog = Dialog::LibraryProperties(id, view);

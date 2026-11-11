@@ -198,7 +198,7 @@ pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: b
 }
 
 /// Consistent action surfaces match the library source manager and Preferences.
-pub fn button(label: &str, primary: bool) -> egui::Button<'_> {
+pub fn button(label: &str, primary: bool) -> impl egui::Widget + '_ {
     crate::settings::action_button(label, primary)
 }
 /// Draw a shared divider without introducing a second border palette.

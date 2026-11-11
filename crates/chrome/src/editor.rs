@@ -160,7 +160,7 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
         }
         choices.push(("Close view", PaneAction::Close));
         for (label, choice) in choices {
-            if ui.button(label).clicked() {
+            if crate::controls::button(ui, label).clicked() {
                 action = Some(choice);
                 ui.close();
             }

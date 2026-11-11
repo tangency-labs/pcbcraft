@@ -358,11 +358,11 @@ impl PartsBrowser {
                     && (choices.focused || self.focused(ui.ctx()))
                     && !egui::Popup::is_any_open(ui.ctx());
                 ui.horizontal(|ui| {
-                    let response = ui.button("Libraries…");
+                    let response = pcbcraft_chrome::controls::button(ui, "Libraries…");
                     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Manage libraries…"));
                     action.libraries = response.clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        action.primary = ui.add_enabled(enabled, egui::Button::new("Place")).clicked();
+                        action.primary = pcbcraft_chrome::controls::enabled_button(ui, enabled, "Place").clicked();
                     });
                 });
             });

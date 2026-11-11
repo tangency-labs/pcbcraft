@@ -1974,8 +1974,8 @@ impl PcbApp {
                         ui.label(shell::error(error.as_str()));
                     }
                     ui.horizontal(|ui| {
-                        submit |= ui.button("OK").clicked();
-                        cancel = ui.button("Cancel").clicked();
+                        submit |= pcbcraft_chrome::controls::button(ui, "OK").clicked();
+                        cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
                     });
                 });
                 if submit {
@@ -2014,13 +2014,13 @@ impl PcbApp {
                 let mut cancel = false;
                 let closing = shell::dialog(ctx, "open_location", "Open Project", |ui| {
                     ui.vertical(|ui| {
-                        if ui.button("Project file or archive…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Project file or archive…").clicked() {
                             selected = Some(false);
                         }
-                        if ui.button("Project folder…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Project folder…").clicked() {
                             selected = Some(true);
                         }
-                        cancel = ui.button("Cancel").clicked();
+                        cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
                     });
                 });
                 if let Some(folder) = selected {
@@ -2035,13 +2035,13 @@ impl PcbApp {
                 let title = if IN_BROWSER { "Download Project" } else { "Save Project As" };
                 let closing = shell::dialog(ctx, "save_encoding", title, |ui| {
                     ui.vertical(|ui| {
-                        if !IN_BROWSER && ui.button("Project folder…").clicked() {
+                        if !IN_BROWSER && pcbcraft_chrome::controls::button(ui, "Project folder…").clicked() {
                             selected = Some(SaveFormat::Folder);
                         }
-                        if ui.button("Packed project (.pc.zip)…").clicked() {
+                        if pcbcraft_chrome::controls::button(ui, "Packed project (.pc.zip)…").clicked() {
                             selected = Some(SaveFormat::Archive);
                         }
-                        cancel = ui.button("Cancel").clicked();
+                        cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
                     });
                 });
                 if let Some(encoding) = selected {
@@ -2088,7 +2088,7 @@ impl PcbApp {
                     workspace::ribbon_licenses(ui);
                     pcbcraft_chrome::fonts::licenses(ui);
                     ui.hyperlink_to("Report a bug", BUG_REPORT_URL);
-                    close = ui.button("Close").clicked();
+                    close = pcbcraft_chrome::controls::button(ui, "Close").clicked();
                 });
                 if !(closing || close) {
                     self.dialog = Dialog::About;
@@ -2119,11 +2119,11 @@ impl PcbApp {
                 ui.label("Clients with this configuration can inspect and edit this project and control its editor windows.");
                 let disable = ui
                     .horizontal(|ui| {
-                        if ui.button(if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
+                        if pcbcraft_chrome::controls::button(ui, if copied { "Configuration copied" } else { "Copy configuration" }).clicked() {
                             ctx.copy_text(control.client_configuration());
                             copied = true;
                         }
-                        ui.button("Disable connection").clicked()
+                        pcbcraft_chrome::controls::button(ui, "Disable connection").clicked()
                     })
                     .inner;
                 if disable {
@@ -2132,7 +2132,7 @@ impl PcbApp {
                 }
             } else {
                 ui.label("Let a local MCP client inspect and edit this project and control its editor windows.");
-                if ui.button("Enable local connection").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Enable local connection").clicked() {
                     match live_control::LiveControl::start(ctx) {
                         Ok(control) => {
                             self.live_control = Some(control);
@@ -2145,7 +2145,7 @@ impl PcbApp {
             if let Some(error) = &error {
                 ui.label(shell::error(error.as_str()));
             }
-            close = ui.button("Close").clicked();
+            close = pcbcraft_chrome::controls::button(ui, "Close").clicked();
         });
         if !(close || dismissed) {
             self.dialog = Dialog::LocalMcp { error, copied };

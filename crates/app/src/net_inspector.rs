@@ -74,8 +74,13 @@ impl NetInspector {
         let (rect, collapse) =
             workspace::floating_card_width(ui, ui.scope_id().with("net_inspector"), "Net Inspector", area, self.collapsed, true, width, |ui| {
                 properties::inspector_body(ui);
-                let search = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search nets or pins").desired_width(ui.available_width()));
-                search.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Search nets or pins"));
+                pcbcraft_chrome::controls::search(
+                    ui,
+                    ui.make_persistent_id("net_search"),
+                    &mut self.query,
+                    "Search nets or pins",
+                    "Search nets or pins",
+                );
                 let Some(snapshot) = &self.snapshot else {
                     ui.label(shell::dim("No project open"));
                     return;

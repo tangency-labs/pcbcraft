@@ -249,7 +249,7 @@ pub fn spacing_menu(ui: &mut Ui, spacing_nm: &mut i64, presets: &[i64], default_
                     if field.changed() {
                         error = None;
                     }
-                    if ui.button(RichText::new("Apply").size(t.font_label)).clicked() || entered {
+                    if crate::controls::button(ui, RichText::new("Apply").size(t.font_label)).clicked() || entered {
                         match parse_spacing(&draft, unit) {
                             Ok(nm) => {
                                 *spacing_nm = nm;

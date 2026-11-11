@@ -256,7 +256,7 @@ impl PcbApp {
                 ui.add_enabled(original, egui::Checkbox::new(&mut draft.options.reuse_components, "Reuse original unplaced components"));
                 if !draft.options.reuse_components {
                     ui.label(shell::dim("Duplication creates linked schematic components and physical placements in one edit. Matching net names can join existing nets within their scope; add a suffix to keep the copied circuit separate."));
-                    ui.checkbox(&mut draft.options.items.preserve_references, "Keep original references");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.options.items.preserve_references, "Keep original references");
                     properties::text(ui, "Net-name suffix", &mut draft.options.items.net_name_suffix);
                     for target in &mut draft.targets {
                         ui.push_id(target.source, |ui| {
@@ -280,13 +280,13 @@ impl PcbApp {
                     properties::mapping_choice(ui, &layer.name, ui.scope_id().with(layer.id), draft.layers.entry(layer.id).or_default(), &choices);
                 }
             }
-            ui.checkbox(&mut draft.original, "Paste at original board position");
+            pcbcraft_chrome::controls::checkbox(ui, &mut draft.original, "Paste at original board position");
             if let Some(error) = &draft.error {
                 ui.label(shell::error(error));
             }
             ui.horizontal(|ui| {
-                apply = ui.button("Paste").clicked();
-                cancel = ui.button("Cancel").clicked();
+                apply = pcbcraft_chrome::controls::button(ui, "Paste").clicked();
+                cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
             });
         });
         if apply {

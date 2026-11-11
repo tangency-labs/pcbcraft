@@ -376,13 +376,8 @@ pub fn form_section<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui) -> R)
 }
 
 /// Dialog actions share the Preferences palette, corner radius and minimum control size.
-pub fn action_button(label: &str, primary: bool) -> egui::Button<'_> {
-    let t = Tokens::get();
-    egui::Button::new(RichText::new(label).size(t.font_label).color(if primary { t.form_primary } else { t.text }))
-        .fill(if primary { t.selected_bg } else { t.panel_header })
-        .stroke(Stroke::new(1., if primary { t.form_primary } else { t.border }))
-        .corner_radius(t.radius_sm)
-        .min_size(vec2(t.space_24 * 3., t.control_height))
+pub fn action_button(label: &str, primary: bool) -> impl egui::Widget + '_ {
+    crate::controls::action(label, primary)
 }
 
 /// A label and its control. See [`row_with_keywords`].

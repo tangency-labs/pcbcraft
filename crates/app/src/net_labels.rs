@@ -522,12 +522,12 @@ impl PcbApp {
                     ui.label(shell::error(error));
                 }
                 if edit.read().as_ref() != Ok(&current.label) {
-                    apply |= ui.button("Apply changes").clicked();
-                    if ui.button("Reset changes").clicked() {
+                    apply |= pcbcraft_chrome::controls::button(ui, "Apply changes").clicked();
+                    if pcbcraft_chrome::controls::button(ui, "Reset changes").clicked() {
                         edit = current.clone();
                     }
                 }
-                more = ui.button("More properties ↗").clicked();
+                more = pcbcraft_chrome::controls::button(ui, "More properties ↗").clicked();
             },
         );
         if collapse {

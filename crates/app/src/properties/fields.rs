@@ -57,11 +57,11 @@ impl Appearance {
     /// Show the shared physical text controls; the caller owns default/reset policy.
     pub(crate) fn controls(&mut self, ui: &mut Ui, visibility: bool) -> bool {
         if visibility {
-            ui.checkbox(&mut self.layout.visible, "Show net name");
+            pcbcraft_chrome::controls::checkbox(ui, &mut self.layout.visible, "Show net name");
         }
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.layout.show_name, "Show name");
-            ui.checkbox(&mut self.automatic, "Automatic position");
+            pcbcraft_chrome::controls::checkbox(ui, &mut self.layout.show_name, "Show name");
+            pcbcraft_chrome::controls::checkbox(ui, &mut self.automatic, "Automatic position");
         });
         if !self.automatic {
             chrome::text(ui, "Text X", &mut self.x);
@@ -94,7 +94,7 @@ impl Appearance {
                 .response
                 .accessible_name("Field text alignment");
         });
-        ui.button("Reset appearance").clicked()
+        pcbcraft_chrome::controls::button(ui, "Reset appearance").clicked()
     }
 }
 
@@ -164,7 +164,7 @@ impl Edit {
                 ui.separator();
                 chrome::text(ui, "Field name", &mut field.name);
                 row(ui, &field.name, &mut field.value, self.appearance.get_mut(id), Some(&field.name));
-                if ui.button("Remove field").clicked() {
+                if pcbcraft_chrome::controls::button(ui, "Remove field").clicked() {
                     remove = Some(id.clone());
                 }
             });
@@ -176,10 +176,10 @@ impl Edit {
         let mut added = None;
         ui.horizontal(|ui| {
             let enabled = self.metadata.fields.len() < 64;
-            if ui.add_enabled(enabled, egui::Button::new("Add field")).clicked() {
+            if pcbcraft_chrome::controls::enabled_button(ui, enabled, "Add field").clicked() {
                 added = Some("Field");
             }
-            if ui.add_enabled(enabled, egui::Button::new("Add link")).clicked() {
+            if pcbcraft_chrome::controls::enabled_button(ui, enabled, "Add link").clicked() {
                 added = Some("Link");
             }
         });
@@ -238,11 +238,11 @@ impl Edit {
     /// same flags through the engine. Unsupported exporters do not fabricate output from them.
     pub(super) fn attributes(&mut self, ui: &mut Ui) {
         let a = &mut self.metadata.attributes;
-        ui.checkbox(&mut a.do_not_populate, "Do not populate");
-        ui.checkbox(&mut a.exclude_from_bom, "Exclude from bill of materials");
-        ui.checkbox(&mut a.exclude_from_board, "Exclude from board");
-        ui.checkbox(&mut a.exclude_from_simulation, "Exclude from simulation");
-        ui.checkbox(&mut a.exclude_from_position_files, "Exclude from pick-and-place files")
+        pcbcraft_chrome::controls::checkbox(ui, &mut a.do_not_populate, "Do not populate");
+        pcbcraft_chrome::controls::checkbox(ui, &mut a.exclude_from_bom, "Exclude from bill of materials");
+        pcbcraft_chrome::controls::checkbox(ui, &mut a.exclude_from_board, "Exclude from board");
+        pcbcraft_chrome::controls::checkbox(ui, &mut a.exclude_from_simulation, "Exclude from simulation");
+        pcbcraft_chrome::controls::checkbox(ui, &mut a.exclude_from_position_files, "Exclude from pick-and-place files")
             .on_hover_text("Omit from assembly position exports. PCBcraft stores this setting; export generation is not implemented yet.");
     }
 }
