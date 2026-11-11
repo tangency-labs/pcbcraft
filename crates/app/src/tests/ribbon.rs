@@ -262,6 +262,29 @@ fn all_pcb_tabs_fit_compact_headers() {
     assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
 
+/// Wide windows leave spare room outside the command groups. Board stays beside Modify
+/// instead of centering its two tools in all the space before the pinned editing fields.
+#[test]
+fn board_group_stays_beside_modify_when_the_window_widens() {
+    let mut app = PcbApp::default();
+    app.start_new_project_in(Workspace::Board);
+    let mut h = Harness::builder().with_size(egui::vec2(1700., 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let mut initial = None;
+    for width in [1700., 2100., 2600.] {
+        h.set_size(egui::vec2(width, 900.));
+        h.run();
+        let tools = h.get_by_label("Update PCB from schematic").rect().union(h.get_by_label("Board setup").rect());
+        let previous = h.get_by_label("Modify menu").rect();
+        assert!(tools.left() - previous.right() <= 64., "{width}: Board must stay adjacent to Modify");
+        if let Some(initial) = initial {
+            assert_eq!(tools, initial, "{width}: wider windows must not move the Board buttons");
+        } else {
+            initial = Some(tools);
+        }
+    }
+}
+
 /// Layer and physical-size controls stay visible, in the same place and with the same
 /// widget identities on each PCB tab; changing tabs cannot clear their values.
 #[test]

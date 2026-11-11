@@ -437,10 +437,10 @@ checks covered both ribbon widths; Chrome confirmed that a custom width remained
 available after an immediate reload, with no observed JavaScript or console errors.
 
 The persistent section now uses the toolkit's caption font, row center and pixel
-rounding, matching the Board caption baseline. The final Board command group
-centers its tool pair in the remaining visible strip before the pinned fields;
-compact ribbons retain natural sizing and scrolling. Focused ribbon regressions
-cover the shared baseline and the two-button group with trailing space.
+rounding, matching the Board caption baseline. The Board command group retains
+its natural width beside Modify, with the two buttons centered inside it; spare
+window width stays outside the group. Compact ribbons retain natural sizing and
+scrolling. Focused regressions cover the shared baseline and compact group sizing.
 
 The alignment follow-up passed the focused app/chrome ribbon regressions,
 formatting, Clippy and a packaged WebAssembly build. Native X11 screenshots
@@ -456,3 +456,8 @@ The panel-tooltip and setup-choice follow-up passed all 1,335 workspace tests
 native desktop check showed a single Collapse Browser tooltip with no title
 hover fill. Rendered-galley regressions verified that the stackup prompt and
 built-in preset names are not elided at 1200- and 700-point viewport widths.
+
+The compact Board-group correction passed the focused app/chrome ribbon tests,
+formatting, Clippy and WebAssembly compilation. Native X11 captures checked
+1920×850 and 760×650 layouts. The wide-window regression verifies that Board's
+button positions remain unchanged as the viewport grows from 1700 to 2600 points.
