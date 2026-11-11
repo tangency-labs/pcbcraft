@@ -19,6 +19,33 @@ fn layer(h: &Harness<'_, PcbApp>, name: &str) -> String {
     h.state().session.project().unwrap().boards().next().unwrap().layers().into_iter().find(|layer| layer.name == name).unwrap().id.to_string()
 }
 
+/// Each disclosure remains independently addressable and toggles only its own persisted
+/// section. Reusing the toolkit's default arrow ID loses nodes and paints clash warnings.
+#[test]
+fn layer_disclosures_have_independent_identities_and_state() {
+    let mut h = board();
+    h.state_mut().browser.open = false;
+    h.run();
+    let before = h.state().session.inspect();
+    h.get_by_label("Collapse Copper");
+    h.get_by_label("Collapse Board");
+    h.get_by_label("Expand Component details");
+    h.get_by_label("Expand Manufacturing");
+    click(&mut h, "Collapse Copper");
+    h.get_by_label("Expand Copper");
+    h.get_by_label("Collapse Board");
+    assert!(h.query_by_label("Activate layer Top").is_none());
+    click(&mut h, "Expand Component details");
+    h.get_by_label("Collapse Component details");
+    h.get_by_label("Expand Copper");
+    click(&mut h, "Expand Copper");
+    h.get_by_label("Collapse Copper");
+    h.get_by_label("Activate layer Top");
+    h.get_by_label("Collapse Board");
+    h.get_by_label("Expand Manufacturing");
+    assert_eq!(h.state().session.inspect(), before);
+}
+
 /// Old default names display consistently after reopening, without rewriting layer identities,
 /// drawings or saved bytes. Custom names remain visible as authored.
 #[test]

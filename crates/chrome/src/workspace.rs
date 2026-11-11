@@ -20,7 +20,7 @@ pub fn ribbon_is_compact(ui: &Ui) -> bool {
     ui.clip_rect().width() < RIBBON_COMPACT_WIDTH
 }
 /// Shared ribbon height with PCBcraft's qualified command glyphs and inline field widths.
-const RIBBON_TOOL_WIDTH: f32 = 56.0;
+const RIBBON_TOOL_WIDTH: f32 = solidcraft_ui_kit::ribbon::BUTTON_MAX_WIDTH;
 const RIBBON_TOOL_HEIGHT: f32 = solidcraft_ui_kit::ribbon::BUTTON_HEIGHT;
 const RIBBON_TOOL_ICON: f32 = 24.0;
 const RIBBON_GROUP_PADDING: f32 = 6.0;
@@ -731,23 +731,23 @@ pub fn ribbon_control(ui: &mut Ui, title: &str, width: f32, add: impl FnOnce(&mu
 }
 
 /// Draw a ribbon group with additional menu-only options after a separator. Returned indices
-/// address the visible tools first, then the extra entries; checked rows use their declared semantics.
+/// address the visible tools first, then the extra entries; toggles use the shared checked row.
+/// Buttons share a standard width and wrap labels; a wider caption grows its group evenly.
+/// PCBcraft's surrounding layout supplies the separators between these individual groups.
 pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>], menu_tools: &[RibbonTool<'_>]) -> Option<usize> {
     use solidcraft_ui_kit::ribbon as shared;
     let t = Tokens::get();
-    let widths: Vec<_> = tools
-        .iter()
-        .map(|tool| {
-            (ui.painter().layout_no_wrap(tool.label.to_owned(), FontId::proportional(t.font_body), t.text).size().x
-                + shared::BUTTON_LABEL_PADDING
-                + t.space_4)
-                .max(RIBBON_TOOL_WIDTH)
-        })
-        .collect();
-    let width = shared::panel_width(&widths)
-        .max(ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim).size().x + t.space_24)
-        + 5.0;
+    let caption_width = ui.painter().layout_no_wrap(title.to_owned(), FontId::proportional(t.font_small), t.text_dim).size().x + t.space_24;
+    let count = tools.len().max(1) as f32;
+    let button_width = RIBBON_TOOL_WIDTH.max((caption_width - 8.0 - tools.len().saturating_sub(1) as f32 * shared::BUTTON_GAP) / count);
+    let widths = vec![button_width; tools.len()];
+    let content_width = shared::panel_width(&widths);
+    let width = content_width.max(caption_width) + 5.0;
     let (_, rect) = ui.allocate_space(vec2(width, shared::GROUP_HEIGHT));
+    // The shared row reserves four trailing points plus its separator. Keep that fitting
+    // room outside the centered content, and clip its separator in this host composition.
+    let content_left = rect.left() + (width - content_width) / 2.0;
+    let shared_rect = Rect::from_min_size(pos2(content_left, rect.top()), vec2(content_width + 5.0, rect.height()));
     let prefix = format!("pcbcraft:ribbon:{title}:");
     let group = shared::Group {
         key: title,
@@ -807,7 +807,11 @@ pub fn ribbon_group_with_menu(ui: &mut Ui, title: &str, tools: &[RibbonTool<'_>]
             drag_remove: &format!("{prefix}drag_remove:"),
         },
     };
-    let output = ui.push_id(("ribbon_group", title), |ui| shared::show(ui, &row, rect, &mut |_, _| false)).inner;
+    let mut group_ui = ui.new_child(egui::UiBuilder::new().id_salt(("ribbon_group", title)).max_rect(shared_rect));
+    let mut clip = ui.clip_rect();
+    clip.max.x = clip.max.x.min(content_left + content_width - 0.5);
+    group_ui.set_clip_rect(clip);
+    let output = shared::show(&mut group_ui, &row, shared_rect, &mut |_, _| false);
     let mut picked = output.actions.iter().find_map(|action| match action {
         shared::Action::Run { id, .. } => tools.iter().position(|tool| tool.description == id),
         _ => None,
@@ -1444,4 +1448,41 @@ pub fn ribbon_licenses(ui: &mut Ui) {
             ui.label(crate::ribbon_icons::NOTICES);
         });
     });
+}
+
+#[cfg(test)]
+mod ribbon_tests {
+    use super::*;
+
+    /// The toolkit's fitting reserve belongs outside the visible group. A single button
+    /// and its caption must be centered in the host allocation, even for a long caption.
+    #[test]
+    fn single_button_groups_are_centered_in_their_allocated_space() {
+        let ctx = egui::Context::default();
+        crate::install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (title, label) in [("PCB", "Update PCB"), ("Navigate", "Fit"), ("Selected definition", "Edit copy")] {
+                        let tools = [RibbonTool {
+                            icon: ToolIcon::Fit,
+                            label,
+                            description: label,
+                            shortcut: "",
+                            enabled: true,
+                            active: false,
+                            menu_check: None,
+                        }];
+                        let response = ui.scope(|ui| ribbon_group(ui, title, &tools)).response;
+                        let prefix = format!("pcbcraft:ribbon:{title}:");
+                        let button = solidcraft_ui_registry::rect_of(&format!("{prefix}button_rect:{label}")).unwrap();
+                        let caption = solidcraft_ui_registry::rect_of(&format!("{prefix}section_target:{title}")).unwrap();
+                        assert!((button.center().x - response.rect.center().x).abs() <= 1.0, "{title}: {button:?}, {:?}", response.rect);
+                        assert!((button.center().x - caption.center().x).abs() <= 1.0, "{title}");
+                    }
+                });
+            });
+        });
+        output.textures_delta.clear();
+    }
 }

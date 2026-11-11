@@ -198,10 +198,18 @@ Inline ribbon fields align with the shared group height. App-bar quick actions
 and arrangement tabs use shared button presentation within PCBcraft's existing
 native title-bar placement.
 
+Ribbon buttons use the toolkit's standard 76-point width, wrapping longer
+labels onto two lines. A group grows evenly when its caption needs more room.
+The host centers each shared group in its allocated space and supplies one
+separator between groups, keeping single actions such as Update PCB and Fit
+centered within their group.
+
 Common labelled plain-text fields and property tabs use shared field and
 segmented controls. Layer groups, text appearance and Assistant tool details
 use shared disclosures over native persisted collapse state. Compact command
 actions and source-category choices also use shared controls.
+Each disclosure has its own identity scope, so sections can coexist and retain
+independent collapse state without widget-ID collisions.
 
 ## Adoption boundary
 
@@ -263,6 +271,14 @@ revisions. The retained licence texts are available in About; exact provenance
 and hashes are in [ATTRIBUTION.md](../ATTRIBUTION.md).
 
 ## Validation
+
+The ribbon alignment and disclosure follow-up passed 1,289 workspace tests
+with eight ignored, formatting, Clippy with warnings denied, WebAssembly
+compilation and dependency license/source/ban checks. Regression tests cover
+single-button group centering, matching View button sizes at wide and compact
+widths in both workspaces, and independent Layers section toggles. Native
+captures were inspected in dark/light themes, including a compact window,
+schematic Update PCB and a configured two-copper-layer board without ID warnings.
 
 After rebasing onto `6895130`, the same formatting, Clippy, WebAssembly and
 dependency checks passed again, and the workspace suite passed 1,286 tests with

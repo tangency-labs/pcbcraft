@@ -19,6 +19,7 @@ pub fn text(ui: &mut Ui, value: &mut String) -> Response {
 
 /// Shared section disclosure with native persisted collapse state and an indented body.
 /// `open` forces the state for a reveal; ordinary clicks toggle it without editing documents.
+/// Sibling sections must supply distinct `id` salts; each arrow inherits that identity.
 pub fn collapsing<R>(
     ui: &mut Ui,
     id: impl egui::AsIdSalt,
@@ -56,7 +57,8 @@ pub fn collapsing<R>(
     let expanded = state.is_open();
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), expanded, title));
     let action = format!("{} {title}", if expanded { "Collapse" } else { "Expand" });
-    let disclosure = kit::panel_disclosure_button_at(ui, arrow, expanded, &action);
+    let mut arrow_ui = ui.new_child(egui::UiBuilder::new().id_salt(id.with("disclosure")).max_rect(arrow));
+    let disclosure = kit::panel_disclosure_button_at(&mut arrow_ui, arrow, expanded, &action);
     if response.clicked() || disclosure.clicked() {
         state.toggle(ui);
     }

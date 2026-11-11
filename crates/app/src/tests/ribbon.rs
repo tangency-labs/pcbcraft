@@ -1,6 +1,33 @@
 //! Acceptance for the ported toolbar's command routing and compact presentation.
 use super::*;
 
+/// Short and long labels retain matching targets, including disabled panel commands and
+/// controls scrolled into view on compact windows in either workspace.
+#[test]
+fn view_ribbon_buttons_have_consistent_sizes() {
+    for workspace in [Workspace::Schematic, Workspace::Board] {
+        for width in [1400.0, 420.0] {
+            let mut app = PcbApp::default();
+            app.start_new_project_in(workspace);
+            let mut h = Harness::builder().with_size(egui::vec2(width, 850.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            click(&mut h, "View");
+            let expected = h.get_by_label("Show grid").rect().size();
+            for name in ["Toggle Browser", "Open Parts Catalog", "Toggle Net Inspector", "Toggle Properties", "Toggle Selection filters"] {
+                h.get_by_label(name).scroll_to_me();
+                h.run();
+                assert_eq!(h.get_by_label(name).rect().size(), expected, "{workspace:?} {width}: {name}");
+            }
+            let fit = if workspace == Workspace::Schematic { "Fit schematic" } else { "Fit board" };
+            h.get_by_label(fit).scroll_to_me();
+            h.run();
+            let button = h.get_by_label(fit).rect();
+            assert_eq!(button.size(), expected);
+            assert!((button.center().x - h.get_by_label("Navigate menu").rect().center().x).abs() <= 1.0);
+        }
+    }
+}
+
 /// Schematic and PCB grid controls work in both ribbon layouts without changing project history,
 /// snap spacing, opacity or the PCB's chosen line style. Menu actions share the same visibility.
 #[test]
