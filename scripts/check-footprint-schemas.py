@@ -1,17 +1,30 @@
 #!/usr/bin/env python3
 """Validate footprint schemas and canonical records without opening project files.
 
-Requires the Python jsonschema package. The engine performs the additional
-semantic checks documented in docs/footprint-schema.md.
+Requires Python 3.10 or later and jsonschema 4.18 or later, with its referencing
+support. The engine performs the additional semantic checks documented in
+docs/footprint-schema.md.
 """
 
 import argparse
 import json
+import sys
+from importlib.metadata import version
 from pathlib import Path
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError, ValidationError
-from referencing import Registry, Resource
+if sys.version_info < (3, 10):
+    raise SystemExit("Use Python 3.10 or later to run this checker.")
+
+try:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import SchemaError, ValidationError
+    from referencing import Registry, Resource
+except ImportError:
+    raise SystemExit('Install the checker dependency with python3 -m pip install "jsonschema>=4.18".') from None
+
+installed_version = version("jsonschema").split(".")
+if (int(installed_version[0]), int(installed_version[1])) < (4, 18):
+    raise SystemExit('This checker requires jsonschema 4.18 or later. Run python3 -m pip install "jsonschema>=4.18".')
 
 
 def validate(definitions: list[Path], placements: list[Path]) -> None:

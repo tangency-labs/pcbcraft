@@ -24,13 +24,22 @@ Application validation belongs in the shared command and storage codecs. These
 schema documents are also available to library tooling independently of the
 application.
 
-With Python's `jsonschema` package installed, run the schema check from the
-repository root. It checks both schemas and the bundled footprint definitions.
+With Python 3.10 or later and `jsonschema` 4.18 or later installed, run the schema
+check from the repository root. Version 4.18 introduced the registry API used for
+offline reference resolution. It checks both schemas and the bundled footprint
+definitions.
 Additional arguments accept standalone native definitions, and `--placement`
 accepts one physical placement record.
 
 ```sh
 python3 scripts/check-footprint-schemas.py
+```
+
+Run the focused checker regressions with the following command. The cross-runtime
+pattern check also uses Node.js when available.
+
+```sh
+python3 -B -m unittest discover -s scripts -p 'test_footprint_schemas.py'
 ```
 
 ## Ownership and identity
@@ -142,8 +151,11 @@ from −987,300,000 to 987,300,000 nm on each axis.
 
 The containing board supplies its stable board identity and format. Format 15
 requires at least one footprint with a nonzero `reference_offset`; the other
-placements may omit it. Removing the last override restores the format required
-by the board's other data. Earlier board formats reject this field. The
+placements may omit it. Format 15 extends format 14 and retains every field
+permitted by format 14, including optional tracks and vias inherited from
+formats 12–13. Bottom-side placements are accepted in both formats 14 and 15.
+Removing the last override restores the format required by the board's other
+data. Earlier board formats reject this field. The
 [native storage contract](native-project-storage.md) defines the remaining board
 envelope and its legacy encodings. The physical placement schema covers the
 library-backed representation; retained marker placements have their existing

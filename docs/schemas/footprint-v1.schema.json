@@ -35,13 +35,13 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 200,
-      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
     },
     "license": {
       "type": "string",
       "minLength": 1,
       "maxLength": 200,
-      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
     },
     "source": {
       "type": "object",
@@ -56,19 +56,19 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 64,
-          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
         },
         "reference": {
           "type": "string",
           "minLength": 1,
           "maxLength": 2048,
-          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
         },
         "locator": {
           "type": "string",
           "minLength": 1,
           "maxLength": 1024,
-          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+          "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
         }
       }
     },
@@ -124,13 +124,13 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 64,
-      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+      "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\\s\\S])"
     },
     "terminal_id": {
       "type": "string",
       "minLength": 1,
       "maxLength": 8,
-      "pattern": "^[A-Za-z0-9+_-]+$"
+      "pattern": "^[A-Za-z0-9+_-]+(?![\\s\\S])"
     },
     "point": {
       "type": "object",
@@ -549,7 +549,7 @@
                       "type": "string",
                       "minLength": 1,
                       "maxLength": 128,
-                      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+                      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
                     },
                     "height_nm": {
                       "type": "integer",
