@@ -7,7 +7,7 @@ fn main() -> eframe::Result {
     let integrated_titlebar = cfg!(target_os = "linux");
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("PCBCraft")
+            .with_title(pcbcraft_app::APP_TITLE)
             .with_decorations(!integrated_titlebar)
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([640.0, 400.0]),

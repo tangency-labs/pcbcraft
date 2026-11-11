@@ -75,6 +75,7 @@ use pcbcraft_engine::selection::Selection;
 use pcbcraft_engine::{CONNECT_PINS, DELETE_SYMBOL, MOVE_SYMBOL, PLACE_SYMBOL, ROTATE_SYMBOL, Session, command, schematic::SymbolDefinition};
 use serde_json::{Value, json};
 
+pub use editor_windows::APP_TITLE;
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
 use project_files::SaveFormat;
 
@@ -2200,6 +2201,8 @@ impl PcbApp {
         if self.views.hosts.contains_key(&editor_layout::HostId::ROOT) {
             self.editor_host_frame(ui, self.integrated_titlebar);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.root_window_title(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         self.detached_editor(&ctx);
         self.finish_editor_drag(&ctx);

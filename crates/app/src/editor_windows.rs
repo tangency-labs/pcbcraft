@@ -22,6 +22,20 @@ pub(super) struct EditorWindows {
     panels: BTreeMap<HostId, Panels>,
     pending: Vec<(ViewInput, ViewAction)>,
     pub(super) quit_requested: bool,
+    /// The title last sent to the main native window. `None` while that window's host is gone,
+    /// so a recreated window, which starts with the startup title, is titled again.
+    #[cfg(not(target_arch = "wasm32"))]
+    root_title: Option<String>,
+}
+
+/// The application name in native window titles, shown alone or after the window's document.
+pub const APP_TITLE: &str = "PCBCraft";
+
+/// The native title for a window showing `document`, the same for the main and detached
+/// windows. An empty document (Home, or no project open) gives the application name alone.
+#[cfg(not(target_arch = "wasm32"))]
+fn window_title(document: &str) -> String {
+    if document.is_empty() { APP_TITLE.to_owned() } else { format!("{document} — {APP_TITLE}") }
 }
 
 /// Presentation actions address an existing view, independently of its current render slot.
@@ -425,6 +439,25 @@ impl PcbApp {
         }
     }
 
+    /// Keep the main window's OS title on its focused document, as detached windows do, so
+    /// taskbars and window switchers tell projects apart (#220). Home on the main window shows
+    /// the application name alone. The title is sent only when it changes. While the root host
+    /// is gone (its window released) the remembered title is cleared, so a window recreated by
+    /// an arrangement is titled again; its command waits in eframe until the window exists.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn root_window_title(&mut self, ctx: &Context) {
+        let Some(focused) = self.views.hosts.get(&HostId::ROOT).map(|host| host.focused) else {
+            self.windows.root_title = None;
+            return;
+        };
+        let document = if self.home && self.views.main == HostId::ROOT { String::new() } else { self.view_title(focused) };
+        let title = window_title(&document);
+        if self.windows.root_title.as_deref() != Some(title.as_str()) {
+            ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Title(title.clone()));
+            self.windows.root_title = Some(title);
+        }
+    }
+
     /// Render every non-root native host once, restoring the main host's controls afterwards.
     /// Close dismisses that host while another survives, or starts the last-window save decision.
     #[cfg(not(target_arch = "wasm32"))]
@@ -434,13 +467,11 @@ impl PcbApp {
             let Some(id) = self.views.hosts.get(&host).map(|host| host.focused) else {
                 continue;
             };
-            let path = self.view_title(id);
+            let title = window_title(&self.view_title(id));
             let integrated_titlebar = self.integrated_titlebar;
             let panels = self.windows.panels.entry(host).or_default();
-            let mut builder = egui::ViewportBuilder::default()
-                .with_title(format!("{path} — PCBCraft"))
-                .with_decorations(!integrated_titlebar)
-                .with_min_inner_size([480.0, 400.0]);
+            let mut builder =
+                egui::ViewportBuilder::default().with_title(title).with_decorations(!integrated_titlebar).with_min_inner_size([480.0, 400.0]);
             if !panels.placed {
                 builder = builder.with_inner_size([1100.0, 760.0]);
                 if let Some(position) = self.windows.spawn_positions.remove(&host) {
