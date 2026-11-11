@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(project.wire_path(&project.wires()[0]).len(), 3);
         for encoding in [Encoding::Json, Encoding::Zip] {
             let bytes = persistence::encode_file(project.clone(), encoding).unwrap();
-            let (loaded, detected) = persistence::decode_file(&bytes).unwrap();
+            let (loaded, detected) = persistence::decode_diagnostic_file(&bytes).unwrap();
             assert_eq!(detected, encoding);
             assert_eq!(persistence::encode_file(loaded.clone(), encoding).unwrap(), bytes);
             assert_eq!(loaded.inspect_schematic(), state["project"]["schematic"]);

@@ -22,7 +22,8 @@ The registry is therefore the next step for both #57 and #77.
 - **Board registry.** `pcbcraft-project/9` and its successors (12, 13) hold a
   required `boards` array with zero or one registration: a board UUID, a name and
   the transitional root `board.json` (see [single-board-storage.md](single-board-storage.md)).
-  Legacy projects keep a deterministic compatibility board ID, derived from the
+  Supported split schemas with implicit board ownership keep a deterministic
+  compatibility board ID, derived from the
   project UUID with a domain-separated SHA-256 and UUID v8.
 - **Numeric watermark.** `numeric_id_high_water` keeps numeric design-object IDs
   from being reused within the saved lineage.
@@ -68,7 +69,11 @@ occurrence identities and those two homes.
 Follow [multiboard-storage.md](multiboard-storage.md#migration-and-implementation-order),
 taking from each step only what the registry needs. Each slice is its own
 reviewed format change with its own migration tests, and each lands before the
-next starts.
+next starts. These migrations start from a `project.json` folder or a
+container-v3 `.pc` package, including the supported older split document schemas
+within that layout. They do not restore support for `project.pc` folders,
+container-v1/v2 archives or standalone project files; see the
+[compatibility boundary](native-project-storage.md#compatibility-and-fixtures).
 
 ### Slice 1: board folders ([#228](https://github.com/tangency-labs/pcbcraft/issues/228))
 
@@ -81,16 +86,16 @@ next starts.
   against Windows reserved names (with the existing document-path check),
   case-only collisions and non-ASCII names.
 - **Containers.** The packed `.pc` (`pcbcraft-container/3`) stores the split
-  documents with their paths, so it carries the new layout. The single-document
-  encodings (`pcbcraft-container/1`, `pcbcraft-project/10`) have no folders and
-  are unaffected.
+  documents with their paths, so it carries the new layout. Single-document
+  encodings (including `pcbcraft-container/1` and `pcbcraft-project/10`) have no
+  folders and remain diagnostic-only inputs; normal app/CLI opens refuse them.
 - **Where the code changes.** The split-document codec in the engine, the folder
   reader and recovery in `pcbcraft-storage`, and the app's native and web
   open/save paths. Board commands already resolve the board by its ID, so they
   don't change.
 - **Migration.**
-  - A legacy or `project/9`–`13` project keeps its encoding on an unchanged
-    open and save.
+  - A project in any supported split schema keeps its encoding on an unchanged
+    open and save within the current `project.json`/container-v3 layout.
   - The first operation needing the new format migrates the whole project in
     one journaled save. It writes the board folder's `board.json` and removes
     the root one together, and the second save produces no diff.
@@ -194,8 +199,9 @@ Each has a proposed answer. Review can change any of them before slice 1 starts.
 ## Acceptance
 
 **Slice 1**
-- A legacy project and one at each of `project/9`, 12 and 13 open and save
-  unchanged.
+- An implicit-board project in a supported split schema and one at each of
+  `project/9`, 12 and 13 open and save unchanged in a `project.json` folder or
+  container-v3 `.pc` package.
 - The first migrating save moves `board.json` into its folder, keeps the board ID,
   name, placements, setup, outline, copper and baseline, and the second save has
   no diff.
@@ -205,8 +211,9 @@ Each has a proposed answer. Review can change any of them before slice 1 starts.
   untouched.
 - Folder names are checked for `con`, `aux`, case-only collisions and non-ASCII
   names.
-- A packed `.pc` round-trips through the new layout. Single-document files
-  are unchanged.
+- A container-v3 `.pc` round-trips through the new layout. Historical
+  single-document fixtures stay unchanged in diagnostic codec tests and remain
+  refused by normal app/CLI opens.
 - A project folder opened by an older build after migration is refused with a
   format message, not partly read.
 

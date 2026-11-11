@@ -7,7 +7,7 @@ use std::{
 
 use pcbcraft_engine::{
     CONNECT_PINS, MOVE_SYMBOL, PLACE_FOOTPRINT, PLACE_SYMBOL, Session,
-    persistence::{ArchiveEncoder, Encoding, decode, decode_file, encode, encode_file},
+    persistence::{ArchiveEncoder, Encoding, decode, decode_diagnostic_file, encode, encode_file},
 };
 use serde_json::json;
 
@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     })?;
-    measure("unpack and validate project", |_| timed(|| Ok(black_box(decode_file(&archive)?))))?;
+    measure("unpack and validate project", |_| timed(|| Ok(black_box(decode_diagnostic_file(&archive)?))))?;
     Ok(())
 }
 

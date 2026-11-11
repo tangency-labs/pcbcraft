@@ -56,9 +56,10 @@ impl Encoding {
     }
 }
 
-/// Read a diagnostic single-document fixture or current packed project.
-/// App and CLI loaders accept only folders with `project.json` and current ZIP packages.
-pub fn decode_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
+/// Read a diagnostic single-document fixture or current packed project, including legacy
+/// inputs refused by normal app/CLI opens. Use [`decode_packed`] for current archives or
+/// [`decode_documents`] after folder I/O; this compatibility helper is for tests and benchmarks.
+pub fn decode_diagnostic_file(bytes: &[u8]) -> Result<(Arc<Project>, Encoding), String> {
     let encoding = Encoding::detect(bytes);
     if bytes.len() > encoding.input_limit() {
         return Err("project exceeds the native file size limit".to_owned());
@@ -1435,7 +1436,7 @@ mod tests {
         assert_eq!(pad.inspect(), json!({"board":migrated.board_target().unwrap().board,"footprint": "footprint-5", "pad": "2"}));
         for encoding in [Encoding::Json, Encoding::Zip] {
             let bytes = encode_file(migrated.clone(), encoding).unwrap();
-            let (project, detected) = decode_file(&bytes).unwrap();
+            let (project, detected) = decode_diagnostic_file(&bytes).unwrap();
             assert_eq!(detected, encoding);
             assert_eq!(project.terminal_for_pad(pad), Some(terminal));
             assert_eq!(project.wires()[0].terminals(), migrated.wires()[0].terminals());

@@ -153,7 +153,7 @@ fn pin_routes_keep_their_terminals() {
     let snapshot = session.snapshot().unwrap();
     for encoding in [Encoding::Json, Encoding::Zip] {
         let bytes = persistence::encode_file(snapshot.clone(), encoding).unwrap();
-        let (loaded, _) = persistence::decode_file(&bytes).unwrap();
+        let (loaded, _) = persistence::decode_diagnostic_file(&bytes).unwrap();
         assert_eq!(loaded.wire_path(&loaded.wires()[0]), moved);
     }
 

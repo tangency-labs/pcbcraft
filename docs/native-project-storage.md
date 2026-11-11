@@ -616,8 +616,9 @@ still be opened through an explicit path with another extension.
 
 The original `two-resistors-format-1.pc`, `two-resistors-format-2.pc` and
 `two-resistors.pc` fixtures remain historical diagnostic inputs. The low-level
-single-document codecs and container-v1 fixture writer remain available for
-codec tests and benchmarks; they are not supported app/CLI import paths.
+single-document codecs, explicitly named `decode_diagnostic_file` compatibility
+reader and container-v1 fixture writer remain available for codec tests and
+benchmarks; they are not supported app/CLI import paths.
 Split inputs under `crates/app/tests/fixtures/split/` now use `project.json`
 and `.pc` packages, retaining their original document bytes. The checked-in
 version-5 document still exercises no-op preservation and later schema adoption
