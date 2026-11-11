@@ -181,10 +181,13 @@ fn changed_project_cannot_receive_stale_catalog_choice() {
     assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
 }
 
-/// Library management opens its existing merged form; it does not create a duplicate source UI.
+/// Library management stays available when a search has no matches and placement is disabled.
 #[test]
 fn catalog_reaches_existing_library_manager() {
     let mut h = editor(1400.);
+    h.get_by_label("Search parts").type_text("missing-catalog-item");
+    h.run();
+    assert!(h.get_by_label("Place").accesskit_node().is_disabled());
     click(&mut h, "Manage libraries…");
     assert!(!h.state().parts.open);
     assert!(matches!(h.state().dialog, crate::Dialog::LibrarySources));

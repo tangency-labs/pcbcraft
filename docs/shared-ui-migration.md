@@ -109,6 +109,12 @@ selector uses the shared dropdown through PCBcraft's labelled choice adapter,
 which also serves property forms. The app owns query changes, library keys,
 selected definitions, focus and placement authority.
 
+The expanded catalog uses the shared modal frame, named close control, Dock
+button and action footer. Manage libraries occupies the footer's independent
+left action slot, including when Place is disabled. The bounded browsing area
+hosts the catalog's toolbar and responsive panes, and the app handles Enter
+confirmation and switching between expanded and docked presentations.
+
 ## Shared property dialogs
 
 Symbol Properties and the net label forms use the kit's modal host, window

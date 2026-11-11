@@ -1,6 +1,6 @@
 //! Craft catalog and property forms share the source manager's header, body and footer rhythm.
-use crate::{Tokens, fonts, menu::MenuIcon};
-use egui::{Align, Frame, Layout, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
+use crate::{Tokens, fonts};
+use egui::{Align, Layout, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
 use solidcraft_ui_kit::{self as kit, Container, Surface, Window};
 
 /// A shared explicit placement choice keeps compact and expanded catalogs in agreement.
@@ -19,22 +19,65 @@ pub struct FormAction {
     pub compact: bool,
 }
 
-/// A wide catalog or bounded properties form with a fixed action footer and clipped body.
-/// The supplied primary label distinguishes Place from Apply; only catalogs expose library management.
-/// `active` inherits input blocking from the owning editor, including another native host's dialog.
-#[allow(clippy::too_many_arguments)]
-pub fn form(
-    ctx: &egui::Context,
-    id: &'static str,
-    title: &str,
-    width: f32,
-    primary: &str,
-    enabled: bool,
-    libraries: bool,
-    active: bool,
-    add: impl FnOnce(&mut Ui),
-) -> FormAction {
-    form_body(ctx, id, title, width, primary, enabled, libraries, active, if libraries { 18. } else { 8. }, "Cancel", add)
+/// Show the Parts Catalog with a bounded browsing area and shared modal actions. Dock switches
+/// presentation; Manage libraries remains available independently of placement validity.
+/// Inactive hosts paint disabled controls and cannot dispatch actions.
+pub fn parts_form(ctx: &egui::Context, enabled: bool, active: bool, add: impl FnOnce(&mut Ui)) -> FormAction {
+    let t = Tokens::get();
+    let id = egui::Id::unique("parts_catalog");
+    let frame = kit::navigation_popup_frame().inner_margin(0);
+    let mut closed = false;
+    let mut compact = false;
+    let modal = Container::new(ctx, Surface::Window).modal(id).frame(frame).show(ctx, |ui| {
+        if !active {
+            ui.disable();
+        }
+        let width = 1108.0_f32.min((ctx.content_rect().width() - 2.0 * t.space_16).max(0.0));
+        ui.set_width(width);
+        let field_style = ui.style().clone();
+        kit::scope(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (header, close) = form_header(ui, "Parts Catalog");
+            closed = close;
+            let dock = Rect::from_center_size(
+                header.right_center() - vec2(t.space_24 + t.control_height / 2.0 + t.space_8 + t.space_24, 0.0),
+                vec2(t.space_24 * 2.0, t.control_height),
+            );
+            compact = kit::button_at(ui, "dock_parts_catalog", dock, "Dock", kit::Button::Normal)
+                .accessible_name("Dock Parts Catalog")
+                .on_hover_text("Show compact catalog")
+                .clicked();
+            let footer_height = t.form_footer_height + t.space_4;
+            let height = (ctx.content_rect().height() - header.height() - footer_height - t.space_24 * 2.0).clamp(0.0, t.control_height * 18.0);
+            let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+            let mut content = ui.new_child(UiBuilder::new().id_salt("parts_catalog_body").max_rect(body));
+            content.set_clip_rect(ui.clip_rect().intersect(body));
+            content.set_style(field_style);
+            content.spacing_mut().item_spacing = vec2(t.space_8, t.space_8);
+            add(&mut content);
+            // The catalog owns Enter confirmation, including its search and popup focus rules.
+            ui.ctx().input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            kit::footer(
+                ui,
+                "Place",
+                "Cancel",
+                enabled,
+                kit::Footer { apply: Some("Manage libraries…"), confirm: true, secondary_left: true, ..Default::default() },
+            )
+        })
+    });
+    let cancelled = modal.inner == kit::Action::Cancel && !ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    if active {
+        FormAction {
+            close: closed || cancelled || modal.should_close(),
+            primary: modal.inner == kit::Action::Ok,
+            libraries: modal.inner == kit::Action::Apply,
+            compact,
+            ..Default::default()
+        }
+    } else {
+        FormAction::default()
+    }
 }
 
 /// Keep the shared property actions visible while fields scroll. The caller handles field
@@ -152,94 +195,6 @@ pub fn settings_form(ctx: &egui::Context, title: &str, primary: &str, enabled: b
     });
     let cancelled = modal.inner == kit::Action::Cancel && !ctx.input(|input| input.key_pressed(egui::Key::Escape));
     FormAction { close: closed || cancelled || modal.should_close(), primary: modal.inner == kit::Action::Ok, ..Default::default() }
-}
-
-/// Render the common shell with a bounded body, preserving modal input and dismissal behavior.
-#[allow(clippy::too_many_arguments)]
-fn form_body(
-    ctx: &egui::Context,
-    id: &'static str,
-    title: &str,
-    width: f32,
-    primary: &str,
-    enabled: bool,
-    libraries: bool,
-    active: bool,
-    rows: f32,
-    dismiss: &str,
-    add: impl FnOnce(&mut Ui),
-) -> FormAction {
-    let t = Tokens::get();
-    let mut action = FormAction::default();
-    let frame = Frame::new().fill(t.dialog_body).stroke(Stroke::new(1.0, t.border)).corner_radius(if libraries { t.radius_lg } else { t.radius_md });
-    let modal = egui::Modal::new(egui::Id::unique(id)).frame(frame).show(ctx, |ui| {
-        if !active {
-            ui.disable();
-        }
-        let width = width.min((ctx.content_rect().width() - 2. * t.space_16).max(0.));
-        ui.set_width(width);
-        ui.spacing_mut().item_spacing = vec2(0., 0.);
-        let (header, header_response) =
-            ui.allocate_exact_size(vec2(width, t.form_header_height + if libraries { t.space_8 } else { 0. }), Sense::hover());
-        header_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, title));
-        if libraries {
-            MenuIcon::Open.paint_sized(ui.painter(), header.left_center() + vec2(t.space_24, 0.), t.space_16, t, true);
-        }
-        ui.painter().text(
-            header.left_center() + vec2(if libraries { 2. * t.space_24 } else { t.space_24 }, 0.),
-            egui::Align2::LEFT_CENTER,
-            title,
-            fonts::interface_heading(ui, if libraries { t.font_intro } else { t.font_button }),
-            t.text,
-        );
-        let close = Rect::from_center_size(header.right_center() - vec2(t.space_24, 0.), vec2(t.control_height, t.control_height));
-        let response = ui.interact(close, ui.scope_id().with("close"), Sense::click());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Close {title}")));
-        if response.hovered() {
-            ui.painter().rect_filled(close, t.radius_sm, t.hover);
-        }
-        MenuIcon::Close.paint_sized(ui.painter(), close.center(), t.space_16, t, true);
-        if libraries {
-            let dock = Rect::from_min_max(close.left_top() - vec2(56., 0.), close.left_bottom() - vec2(t.space_8, 0.));
-            let response = ui.put(dock, egui::Button::new("Dock").small()).on_hover_text("Show compact catalog");
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Dock Parts Catalog"));
-            action.compact = response.clicked();
-        }
-        action.close = response.clicked();
-        rule(ui, header.bottom(), header.x_range());
-        let height = rows * t.control_height;
-        let height = height.min((ctx.content_rect().height() - 2. * t.space_24 - header.height() - t.form_footer_height).max(0.));
-        let (body, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-        let mut child = ui.new_child(UiBuilder::new().max_rect(body));
-        child.set_clip_rect(ui.clip_rect().intersect(body));
-        child.spacing_mut().item_spacing = vec2(t.space_8, t.space_8);
-        add(&mut child);
-        let (footer, _) = ui.allocate_exact_size(vec2(width, t.form_footer_height), Sense::hover());
-        ui.painter().rect_filled(
-            footer,
-            egui::CornerRadius {
-                nw: 0,
-                ne: 0,
-                sw: if libraries { t.radius_lg } else { t.radius_md },
-                se: if libraries { t.radius_lg } else { t.radius_md },
-            },
-            t.dialog_footer,
-        );
-        rule(ui, footer.top(), footer.x_range());
-        let inner = footer.shrink2(vec2(t.space_16, t.space_8));
-        ui.scope_builder(UiBuilder::new().max_rect(inner).layout(Layout::right_to_left(Align::Center)), |ui| {
-            ui.spacing_mut().item_spacing.x = t.space_8;
-            action.primary = ui.add_enabled(enabled, button(primary, true)).clicked();
-            action.close |= ui.add(button(dismiss, false)).clicked();
-            if libraries {
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    action.libraries = ui.add(button("Manage libraries…", false)).clicked();
-                });
-            }
-        });
-    });
-    action.close |= active && modal.should_close();
-    if active { action } else { FormAction::default() }
 }
 
 /// Consistent action surfaces match the library source manager and Preferences.

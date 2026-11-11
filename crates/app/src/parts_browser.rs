@@ -323,7 +323,7 @@ impl PartsBrowser {
         let enabled = entries.iter().any(|e| Some(e.key()) == self.selected) && valid_value(&self.value);
         let mut choices = Choices::default();
         let mut action = if expanded {
-            chrome::form(ui.ctx(), "parts_catalog", "Parts Catalog", 1108., "Place", enabled, true, ui.is_enabled(), |ui| {
+            chrome::parts_form(ui.ctx(), enabled, ui.is_enabled(), |ui| {
                 chrome::toolbar(ui, if ui.available_width() < 900. { 3 } else { 2 }, |ui| {
                     self.search(ui);
                     if ui.available_width() < 900. {
