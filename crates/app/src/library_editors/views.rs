@@ -3,6 +3,15 @@ use super::*;
 use crate::ViewId;
 use pcbcraft_chrome::workspace::Placement;
 
+impl Editors {
+    /// Read the camera belonging to this definition view, including presentations parked while
+    /// another pane of the same document renders. The backdrop must not borrow another view's grid.
+    pub(crate) fn view_camera(&self, definition: u64, view: ViewId) -> Option<&crate::canvas_camera::Camera> {
+        let doc = self.documents.get(&definition)?;
+        if doc.bound_view == Some(view) { Some(&doc.camera) } else { doc.presentations.get(&view).map(|presentation| &presentation.camera) }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct Presentation {
     selected: Option<u64>,

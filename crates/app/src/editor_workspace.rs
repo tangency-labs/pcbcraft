@@ -765,6 +765,41 @@ impl EditorViews {
 }
 
 impl PcbApp {
+    /// Extend the top row's actual pane grids through the ribbon's exposed margins after camera
+    /// navigation settles. Each segment uses its own view, palette and grid visibility settings.
+    pub(super) fn paint_ribbon_background(&self, ribbon: Option<workspace::RibbonBackground>) {
+        let Some(ribbon) = ribbon else { return };
+        let t = pcbcraft_chrome::Tokens::get();
+        let mut shapes = vec![egui::Shape::rect_filled(ribbon.area, 0, t.canvas)];
+        if let Some(host) = self.views.hosts.get(&self.views.host) {
+            let top = host.rects.iter().map(|(_, pane)| pane.top()).fold(f32::INFINITY, f32::min);
+            for (id, pane) in host.rects.iter().filter(|(_, pane)| (pane.top() - top).abs() < 0.5) {
+                let Some(view) = self.views.view(*id) else { continue };
+                if view.unavailable() {
+                    continue;
+                }
+                let (camera, fill, ink, opacity, style) = if let Some(definition) = view.definition {
+                    let Some(camera) = self.library_editors.view_camera(definition, *id) else { continue };
+                    (camera, t.canvas, t.canvas_grid, pcbcraft_chrome::authoring::GRID_OPACITY, grid::Style::Dots)
+                } else if view.workspace == Workspace::Board {
+                    (&view.camera, t.board_canvas, t.board_grid, self.preferences.grid_opacity_percent, self.preferences.board_grid_style)
+                } else {
+                    (&view.camera, t.canvas, t.canvas_grid, self.preferences.grid_opacity_percent, grid::Style::Dots)
+                };
+                let area = Rect::from_min_max(egui::pos2(pane.left(), ribbon.area.top()), egui::pos2(pane.right(), ribbon.area.bottom()))
+                    .intersect(ribbon.area);
+                shapes.push(egui::Shape::rect_filled(area, 0, fill));
+                if let Some(canvas) = camera.schematic_rect()
+                    && let Some(color) = grid::color(ink, opacity)
+                {
+                    let origin = camera.screen(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 }, canvas);
+                    shapes.extend(grid::shapes(area, origin, camera.snap_step(), color, style));
+                }
+            }
+        }
+        ribbon.paint(shapes);
+    }
+
     /// Route explicit selection through the coordinator with the current follow policy.
     pub(super) fn select(&mut self, selection: Selection) {
         self.views.active.schematic.selected_leg = None;

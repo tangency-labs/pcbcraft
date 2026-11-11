@@ -136,11 +136,18 @@ pub fn paint(painter: &Painter, rect: Rect, origin: Pos2, step: f32, opacity_per
 /// Draw dots or lines using the supplied workspace color. Off paints nothing, and both
 /// visible styles use the same origin and zoom thinning without changing the snap interval.
 pub fn paint_style(painter: &Painter, rect: Rect, origin: Pos2, step: f32, color: Color32, style: Style) {
+    painter.extend(shapes(rect, origin, step, color, style));
+}
+
+/// Build the same bounded grid for a deferred background paint slot. Off and invalid spacing
+/// return no shapes; visible styles share the canvas renderer's zoom thinning and origin.
+pub fn shapes(rect: Rect, origin: Pos2, step: f32, color: Color32, style: Style) -> Vec<egui::Shape> {
+    let mut shapes = Vec::new();
     if style == Style::Off {
-        return;
+        return shapes;
     }
     let Some(every) = shown_every(step) else {
-        return;
+        return shapes;
     };
     let step = step * every as f32;
     let first_x = ((rect.left() - origin.x) / step).ceil() as i32;
@@ -149,19 +156,26 @@ pub fn paint_style(painter: &Painter, rect: Rect, origin: Pos2, step: f32, color
     let last_y = ((rect.bottom() - origin.y) / step).floor() as i32;
     if style == Style::Lines {
         for x in first_x..=last_x {
-            painter.vline(origin.x + x as f32 * step, rect.y_range(), Stroke::new(1.0, color));
+            shapes.push(egui::Shape::line_segment(
+                [pos2(origin.x + x as f32 * step, rect.top()), pos2(origin.x + x as f32 * step, rect.bottom())],
+                Stroke::new(1.0, color),
+            ));
         }
         for y in first_y..=last_y {
-            painter.hline(rect.x_range(), origin.y + y as f32 * step, Stroke::new(1.0, color));
+            shapes.push(egui::Shape::line_segment(
+                [pos2(rect.left(), origin.y + y as f32 * step), pos2(rect.right(), origin.y + y as f32 * step)],
+                Stroke::new(1.0, color),
+            ));
         }
-        return;
+        return shapes;
     }
     for x in first_x..=last_x {
         for y in first_y..=last_y {
             let center = pos2(origin.x + x as f32 * step, origin.y + y as f32 * step);
-            painter.circle_filled(center, theme::SCHEMATIC_GRID_DOT_RADIUS, color);
+            shapes.push(egui::Shape::circle_filled(center, theme::SCHEMATIC_GRID_DOT_RADIUS, color));
         }
     }
+    shapes
 }
 
 /// A percentage slider for grid opacity and a Reset button that returns it to

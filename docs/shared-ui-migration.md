@@ -146,6 +146,19 @@ a mixed state when some categories are hidden, while warning and error totals
 count the complete report. The application controls review validity, update
 approval and placement handoffs.
 
+## Ribbon background
+
+The outer ribbon strip is transparent, exposing each top pane's grid through
+the margins around the workspace and ribbon cards. A deferred paint slot uses
+the cameras after this frame's navigation, including independent split and
+definition views. The background uses the same spacing, origin, opacity and
+board grid style as the corresponding canvas. Drawing and selection operate
+within the editor panes below the ribbon.
+
+This follows the visual composition of SolidCraft's floating shell at the
+pinned revision, whose viewport is painted before its ribbon cards. This slice
+extends PCBcraft's grid background into those margins.
+
 ## Source and licence record
 
 The shared UI kit, look and theme retain the SolidCraft Brand and Interface

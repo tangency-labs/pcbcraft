@@ -836,7 +836,7 @@ impl PcbApp {
 
     /// Render the workspace toolbar using ported schematic groups and upstream PCB/View controls.
     /// Saved tab slots stay stable while visual ordering follows Next; quick actions use the focused view.
-    fn ribbon(&mut self, ui: &mut Ui) {
+    fn ribbon(&mut self, ui: &mut Ui) -> Option<workspace::RibbonBackground> {
         use workspace::{RibbonTool, ToolIcon};
         let current = self.views.active.workspace;
         let board = current == Workspace::Board;
@@ -892,6 +892,7 @@ impl PcbApp {
         if let Some(pick) = response.workspace {
             self.pick_workspace(ui.ctx(), pick);
         }
+        response.background
     }
 
     /// The View tab: show or hide contextual panels, fit the active view, and toggle the split.
@@ -2265,7 +2266,7 @@ impl PcbApp {
                 self.home_page(ui);
                 None
             } else {
-                self.ribbon(ui);
+                let ribbon = self.ribbon(ui);
                 self.views.sync(&self.session);
                 if !matches!(self.dialog, Dialog::None) {
                     self.views.cancel_gestures();
@@ -2276,6 +2277,7 @@ impl PcbApp {
                 self.status(ui);
                 let workspace = ui.available_rect_before_wrap();
                 self.editor_workspace(ui, workspace);
+                self.paint_ribbon_background(ribbon);
                 Some(workspace)
             };
             #[cfg(not(target_arch = "wasm32"))]

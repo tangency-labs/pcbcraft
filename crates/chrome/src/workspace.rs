@@ -1,8 +1,8 @@
 //! Shared workspace surfaces and tool buttons. Command state stays with the caller.
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Frame, Label, Layout, Margin, Panel, Pos2, Rect, Response, RichText, Role, ScrollArea, Sense,
-    Shape, Stroke, Ui, WidgetInfo, pos2, vec2,
+    Align, Align2, Color32, FontId, Frame, Label, Layout, Margin, Panel, Pos2, Rect, Response, RichText, Role, ScrollArea, Sense, Shape, Stroke, Ui,
+    WidgetInfo, pos2, vec2,
 };
 
 use crate::{Tokens, fonts, menu::CheckKind};
@@ -205,6 +205,24 @@ pub struct WorkspacePick {
 pub struct RibbonResponse {
     pub workspace: Option<WorkspacePick>,
     pub quick: Option<usize>,
+    /// Paint slot the host completes with the current pane grids after drawing the workspace.
+    pub background: Option<RibbonBackground>,
+}
+
+/// A reserved paint slot below the ribbon cards. The host completes it after the pane cameras
+/// have processed this frame's navigation, keeping the exposed grid aligned with each canvas.
+pub struct RibbonBackground {
+    /// The whole ribbon band, including the exposed margins around its cards.
+    pub area: Rect,
+    painter: egui::Painter,
+    shape: egui::layers::ShapeIdx,
+}
+
+impl RibbonBackground {
+    /// Complete the backdrop beneath the existing ribbon controls without registering input.
+    pub fn paint(self, shapes: Vec<Shape>) {
+        self.painter.set(self.shape, Shape::Vec(shapes));
+    }
 }
 
 /// Put a tabbed command strip above the viewport. `tabs` names the ribbon tabs and `tab` is the
@@ -227,19 +245,13 @@ pub fn ribbon(
     let t = Tokens::get();
     let wide = ui.available_width() >= if tabs.len() > 2 { 600.0 } else { 480.0 };
     let height = RIBBON_HEIGHT + if wide { 0.0 } else { t.space_24 };
-    // Let the app bar color show behind the two rounded workspace corners.
-    let top = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(Rect::from_min_size(top.min, vec2(top.width(), f32::from(t.radius_lg))), 0, t.app_bar);
-    Panel::top("workspace_ribbon")
+    let painter = ui.painter().clone();
+    let background = painter.add(Shape::Noop);
+    let panel = Panel::top("workspace_ribbon")
         .exact_size(height + 2.0 * t.space_6)
         .resizable(false)
         .show_separator_line(false)
-        .frame(
-            Frame::new()
-                .fill(t.canvas)
-                .corner_radius(CornerRadius { nw: t.radius_lg, ne: t.radius_lg, sw: 0, se: 0 })
-                .inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)),
-        )
+        .frame(Frame::new().fill(Color32::TRANSPARENT).inner_margin(Margin::symmetric(t.space_8 as i8, t.space_6 as i8)))
         .show(ui, |ui| {
             let mut picked = None;
             let mut quick_pick = None;
@@ -317,9 +329,13 @@ pub fn ribbon(
                     });
                 });
             });
-            RibbonResponse { workspace: picked, quick: quick_pick }
-        })
-        .inner
+            (picked, quick_pick)
+        });
+    RibbonResponse {
+        workspace: panel.inner.0,
+        quick: panel.inner.1,
+        background: Some(RibbonBackground { area: panel.response.rect, painter, shape: background }),
+    }
 }
 
 /// Draw the workspace tile: the accent rule, icon, workspace name and a "Workspace" caption with
