@@ -9,14 +9,15 @@ use std::collections::BTreeMap;
 fn source(root: &Path) -> Documents {
     let mut session = Session::default();
     session.apply("project.new", &serde_json::json!({"name":"Conversion fixture","create_board":true})).unwrap();
-    let expected = encode_documents(session.snapshot().unwrap()).unwrap();
+    let flat = pcbcraft_engine::persistence::decode(&pcbcraft_engine::persistence::encode(session.snapshot().unwrap()).unwrap()).unwrap();
+    let expected = encode_documents(flat).unwrap();
     fs::create_dir(root).unwrap();
     for (path, bytes) in &expected {
         let path = root.join(if path == ENTRY_POINT { "project.pc" } else { path });
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
     }
-    expected
+    pcbcraft_engine::persistence::migrate_board_layout(expected, ".").unwrap()
 }
 
 /// Fingerprint all source payloads independently from the conversion implementation.

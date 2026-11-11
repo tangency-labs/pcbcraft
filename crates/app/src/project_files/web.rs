@@ -103,7 +103,7 @@ pub(super) struct Download {
 }
 
 enum DownloadSource {
-    Encode(DocumentsEncoder),
+    Encode(DocumentsEncoder, Option<Arc<Documents>>, Option<String>),
     Archive(PackedEncoder),
     Unchanged(Arc<[u8]>),
     Documents(Arc<Documents>),
@@ -125,9 +125,20 @@ impl Download {
         result: Sender<Result<Outcome, String>>,
     ) -> Result<Self, String> {
         let name = super::download_file_name(&snapshot.name);
-        let source = match unchanged {
-            Some(bytes) => DownloadSource::Unchanged(bytes),
-            None => documents.map(DownloadSource::Documents).unwrap_or_else(|| DownloadSource::Encode(DocumentsEncoder::new(snapshot))),
+        // A download cannot confirm durable publication or adopt session metadata. Its copy
+        // nevertheless uses the current layout, including an unchanged uploaded flat project.
+        let migrating = snapshot.layout_root().is_none();
+        let old_board = snapshot.board_document_path();
+        let snapshot = if migrating { Arc::new(snapshot.with_board_folders(".")?) } else { snapshot };
+        let source = if migrating {
+            DownloadSource::Encode(DocumentsEncoder::new(snapshot), documents, old_board)
+        } else {
+            match unchanged {
+                Some(bytes) => DownloadSource::Unchanged(bytes),
+                None => {
+                    documents.map(DownloadSource::Documents).unwrap_or_else(|| DownloadSource::Encode(DocumentsEncoder::new(snapshot), None, None))
+                }
+            }
         };
         Ok(Self { source, name, result })
     }
@@ -143,14 +154,37 @@ impl Download {
                 Err(error) => Err(error),
             },
             DownloadSource::Unchanged(bytes) => send_download(bytes, &self.name),
-            DownloadSource::Encode(encoder) => match encoder.step(256) {
-                Ok(Some(documents)) => match PackedEncoder::new(documents) {
-                    Ok(archive) => {
-                        self.source = DownloadSource::Archive(archive);
-                        return;
+            DownloadSource::Encode(encoder, original, old_board) => match encoder.step(256) {
+                Ok(Some(mut documents)) => {
+                    if let Some(original) = original {
+                        // The retained documents belong to this unchanged uploaded snapshot.
+                        // Reuse all payload bytes; only the entry point and board path change.
+                        let new_board = pcbcraft_engine::persistence::project_board_path(&documents[pcbcraft_engine::persistence::ENTRY_POINT]);
+                        let new_board = match new_board {
+                            Ok(path) => path,
+                            Err(error) => {
+                                let _ = self.result.send(Err(error));
+                                return;
+                            }
+                        };
+                        for (path, bytes) in &mut documents {
+                            if path == pcbcraft_engine::persistence::ENTRY_POINT {
+                                continue;
+                            }
+                            let source = if Some(path.as_str()) == new_board.as_deref() { old_board.as_deref().unwrap_or(path) } else { path };
+                            if let Some(retained) = original.get(source) {
+                                bytes.clone_from(retained);
+                            }
+                        }
                     }
-                    Err(error) => Err(error),
-                },
+                    match PackedEncoder::new(documents) {
+                        Ok(archive) => {
+                            self.source = DownloadSource::Archive(archive);
+                            return;
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
                 Ok(None) => return,
                 Err(error) => Err(error),
             },

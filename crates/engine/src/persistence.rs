@@ -18,9 +18,10 @@ use crate::{
 mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
+pub mod layout;
 pub use documents::{
     Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
-    encode_documents, is_document_path,
+    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_layout_root, project_registered_board_id,
 };
 mod packed;
 pub use packed::{PackedEncoder, PackedProject, decode_legacy_packed, decode_packed, encode_packed, encode_packed_documents};
@@ -948,6 +949,7 @@ fn validate_with_hierarchy(
         board: Arc::new(layout),
         named_graph: Arc::default(),
         upgraded_from,
+        layout: None,
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;
@@ -971,6 +973,12 @@ pub(crate) fn validate_id(ids: &mut BTreeSet<u64>, id: u64) -> Result<(), String
         return Err(format!("invalid or duplicate object ID {id}"));
     }
     Ok(())
+}
+
+/// Resolve the physical payload in either supported layout for codec regression tests.
+#[cfg(test)]
+pub(crate) fn test_board_path(documents: &Documents) -> String {
+    project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()
 }
 
 #[cfg(test)]

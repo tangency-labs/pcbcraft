@@ -32,7 +32,10 @@ package layout, first create a converted copy with
 `./target/debug/pcbcraft-cli convert /path/to/old-project /path/to/new-project`.
 The destination must not exist; a `.pc` destination creates a portable package.
 The [conversion guide](native-project-storage.md#convert-a-previous-split-project)
-explains supported old inputs and failure behavior.
+explains supported old inputs and failure behavior. Converted copies and new
+projects store each board under its registered `boards/<folder>/board.json` path.
+Supported flat `project.json` projects open unchanged and migrate on their first
+Save, even without design edits; later unchanged saves produce no diff.
 
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.

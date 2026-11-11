@@ -31,7 +31,7 @@ fn assignment_and_placement_are_independent_offline_transactions() {
     s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
     assert!(s.project().unwrap().board.footprints().is_empty());
     let assigned = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&assigned["board.json"]).unwrap().contains("pcbcraft-board/7"));
+    assert!(std::str::from_utf8(&assigned[&crate::persistence::test_board_path(&assigned)]).unwrap().contains("pcbcraft-board/7"));
     assert_eq!(encode_documents(decode_documents(&assigned).unwrap()).unwrap(), assigned);
     let mut encoder = crate::persistence::DocumentsEncoder::new(s.snapshot().unwrap());
     let mut steps = 0;
@@ -97,13 +97,13 @@ fn assignment_failures_are_atomic_and_placed_remaps_require_review() {
     params["mapping"] = json!({"1":"1","2":"2"});
     assert!(s.apply(ASSIGN_FOOTPRINT, &params).is_err());
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), placed);
-    let mut corrupt: Value = serde_json::from_slice(&placed["board.json"]).unwrap();
+    let mut corrupt: Value = serde_json::from_slice(&placed[&crate::persistence::test_board_path(&placed)]).unwrap();
     corrupt["assignments"][0]["mapping"] = params["mapping"].clone();
     let mut invalid = placed.clone();
-    invalid.insert("board.json".into(), serde_json::to_vec(&corrupt).unwrap());
+    invalid.insert(crate::persistence::test_board_path(&invalid), serde_json::to_vec(&corrupt).unwrap());
     assert!(decode_documents(&invalid).is_err());
     corrupt["format"] = json!("pcbcraft-board/6");
-    invalid.insert("board.json".into(), serde_json::to_vec(&corrupt).unwrap());
+    invalid.insert(crate::persistence::test_board_path(&invalid), serde_json::to_vec(&corrupt).unwrap());
     assert!(decode_documents(&invalid).is_err());
 }
 
@@ -160,7 +160,7 @@ fn child_sheet_assignment_round_trips_and_deletes_with_its_component() {
     s.apply(ASSIGN_FOOTPRINT, &params).unwrap();
     let assigned = encode_documents(s.snapshot().unwrap()).unwrap();
     for (path, bytes) in &before {
-        if path != "board.json" {
+        if !path.ends_with("board.json") {
             assert_eq!(assigned.get(path), Some(bytes), "{path}");
         }
     }

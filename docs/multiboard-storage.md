@@ -462,9 +462,10 @@ choices and terminal mappings exactly. No synthetic visible parent sheet is
 created. Existing values become defaults for those initially single-use component
 definitions, without creating unnecessary instance overrides.
 
-Opening an old project does not rewrite it. Continue preserving its old encoding
-until an explicit format upgrade or an operation requiring the new format; the
-first save after that operation migrates the project atomically. New projects
+Opening a supported flat project does not rewrite it. Its first Save migrates
+the board-folder layout atomically, even without design edits; subsequent
+unchanged saves have no diff. Successful adoption remains across Undo/Redo,
+which restore design content without returning storage to the flat layout. New projects
 use the new split-document form with zero boards by default after the feature
 ships; board folders appear only when explicitly created. Preserve the original
 board's compatibility ID and retain its current display name `Board`, without

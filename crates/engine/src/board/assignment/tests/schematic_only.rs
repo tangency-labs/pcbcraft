@@ -25,7 +25,7 @@ fn choices_roundtrip_without_a_board_and_follow_explicit_creation() {
     assert!(!assigned.contains_key("board.json"));
     assert!(assigned.keys().any(|path| path.starts_with("library/footprints/")));
     let entry: Value = serde_json::from_slice(&assigned["project.json"]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/13");
+    assert_eq!(entry["format"], "pcbcraft-project/14");
     assert_eq!(entry["boards"], json!([]));
     assert_eq!(entry["footprint_choices"][0]["mapping"], params["mapping"]);
     assert!(crate::persistence::encode(s.snapshot().unwrap()).is_err(), "Legacy export must not lose the choices");
@@ -71,7 +71,7 @@ fn choices_roundtrip_without_a_board_and_follow_explicit_creation() {
     s.apply(crate::board::identity::CREATE_BOARD, &json!({"expected_revision":s.revision()})).unwrap();
     let target = s.project().unwrap().board_target().unwrap();
     let created = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(created.contains_key("board.json"));
+    assert!(created.contains_key(&crate::persistence::test_board_path(&created)));
     assert!(s.project().unwrap().schematic_packages.assignments.is_empty());
     assert_eq!(s.project().unwrap().board.assignments.len(), 1);
     assert_eq!(s.project().unwrap().board.definitions.values().next().unwrap().as_ref(), pinned.as_ref());
@@ -143,7 +143,7 @@ fn retiring_schematic_components_releases_only_unused_packages() {
     let empty = encode_documents(s.snapshot().unwrap()).unwrap();
     assert!(s.project().unwrap().footprint_assignments().is_empty());
     assert!(!empty.keys().any(|path| path.starts_with("library/footprints/")));
-    assert_eq!(serde_json::from_slice::<Value>(&empty["project.json"]).unwrap()["format"], "pcbcraft-project/9");
+    assert_eq!(serde_json::from_slice::<Value>(&empty["project.json"]).unwrap()["format"], "pcbcraft-project/14");
     s.apply("edit.undo", &json!({})).unwrap();
     crate::assert_same_content(&decode_documents(&one).unwrap(), &s.snapshot().unwrap());
 }
@@ -170,7 +170,7 @@ fn schematic_choice_codec_rejects_invalid_or_lossy_documents() {
         invalid.insert("project.json".into(), serde_json::to_vec(&changed).unwrap());
         assert!(decode_documents(&invalid).is_err(), "{changed}");
     }
-    for field in ["footprint_choices", "numeric_id_high_water", "boards"] {
+    for field in ["numeric_id_high_water", "boards", "layout_root"] {
         let mut invalid = documents.clone();
         let mut changed = entry.clone();
         changed.as_object_mut().unwrap().remove(field);

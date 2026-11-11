@@ -999,3 +999,9 @@ folder publication. It introduces no external implementation, dependency, artwor
 or library data. Regression inputs are generated through native commands and
 encoders. User-provided project copies used for local verification remain outside
 the repository and are not distributed with the code.
+
+The project/14 board-folder codec, namespace selection, first-save migration and
+save-metadata adoption across Undo/Redo are original PCBcraft work over the
+existing native model and journaled publication. Regression circuits use shared
+commands and original repository fixtures. No external implementation, data,
+dependency or asset was added.

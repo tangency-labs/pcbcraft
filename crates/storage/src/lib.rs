@@ -12,6 +12,7 @@ use std::{
 
 pub mod conversion;
 mod folder;
+pub mod layout;
 pub mod library;
 pub use folder::{load, save};
 
@@ -131,17 +132,23 @@ mod tests {
         let target = session.project().unwrap().board_target().unwrap();
         let created = encode_documents(session.snapshot().unwrap()).unwrap();
         save(&root, Some(&empty), &created, &mut |_| Ok(())).unwrap();
-        assert!(root.join("board.json").exists());
+        let board_path = session.project().unwrap().board_document_path().unwrap();
+        assert!(root.join(&board_path).exists());
         assert_eq!(open(&root).unwrap().board_target(), Some(target));
         assert_eq!(preview(&root.join(ENTRY_POINT)).unwrap().board_target(), Some(target));
         session.apply("edit.undo", &serde_json::json!({})).unwrap();
         let undone = encode_documents(session.snapshot().unwrap()).unwrap();
         save(&root, Some(&created), &undone, &mut |_| Ok(())).unwrap();
-        assert!(!root.join("board.json").exists());
+        assert!(!root.join(&board_path).exists());
         assert!(open(&root).unwrap().board_target().is_none());
         assert_eq!(fs::read(root.join("README.md")).unwrap(), b"User notes");
         session.apply("edit.redo", &serde_json::json!({})).unwrap();
         assert_eq!(session.project().unwrap().board_target(), Some(target));
+        let prepared = crate::layout::prepare(session.snapshot().unwrap(), Some(&root), Some(&undone)).unwrap();
+        assert_eq!(prepared.board_document_path().as_deref(), Some(board_path.as_str()));
+        let redone = encode_documents(prepared).unwrap();
+        save(&root, Some(&undone), &redone, &mut |_| Ok(())).unwrap();
+        assert_eq!(load(&root).unwrap(), created);
     }
 
     /// Capture every name and file byte so previews cannot silently create locks or recover data.

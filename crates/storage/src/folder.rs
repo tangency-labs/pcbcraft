@@ -170,6 +170,7 @@ pub fn save(
     if &baseline == documents {
         return Ok(());
     }
+    crate::layout::preflight_ownership(root, &baseline, documents)?;
     let stage = tempfile::Builder::new().prefix(".pcbcraft-stage-").tempdir_in(root).map_err(error)?;
     let mut changes = Vec::new();
     let paths: BTreeSet<_> = baseline.keys().chain(documents.keys()).collect();
@@ -201,6 +202,7 @@ pub fn save(
     if read_documents(root, false)? != baseline {
         return Err("Project folder changed while saving.".to_owned());
     }
+    crate::layout::preflight_ownership(root, &baseline, documents)?;
     fs::rename(stage.path(), root.join(TRANSACTION)).map_err(error)?;
     sync_dir(root)?;
     checkpoint("journal")?;
@@ -266,6 +268,7 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
     decode_documents(&result)?;
     for (relative, after) in replacements {
         let path = safe_path(root, &relative, true)?;
+        let removed_board = after.is_none() && relative.ends_with("/board.json");
         if existing(&path)? != after {
             if let Some(bytes) = after {
                 let parent = path.parent().ok_or("missing document parent")?;
@@ -281,6 +284,15 @@ fn recover(root: &Path, checkpoint: &mut impl FnMut(&str) -> Result<(), String>)
                 fs::remove_file(&path).map_err(error)?;
                 sync_dir(path.parent().ok_or("missing document parent")?)?;
             }
+        }
+        // An undone board creation should not leave an empty folder that looks foreign on
+        // Redo. Only an actually empty board directory is removed; related user files survive.
+        // Retry this cleanup even when recovery finds the payload already deleted.
+        if removed_board
+            && let Some(parent) = path.parent()
+            && fs::remove_dir(parent).is_ok()
+        {
+            sync_dir(parent.parent().ok_or("missing board area")?)?;
         }
         checkpoint(&format!("published:{relative}"))?;
     }
@@ -338,6 +350,13 @@ fn read_documents_at(root: &Path, recovering: bool, entry_point: &str) -> Result
         if let Some(bytes) = existing(&root.join(name))? {
             documents.insert(name.to_owned(), bytes);
         }
+    }
+    if let Some(entry) = documents.get(entry_point)
+        && let Some(path) = pcbcraft_engine::persistence::project_board_path(entry)?
+        && path != "board.json"
+        && let Some(bytes) = existing(&safe_path(root, &path, false)?)?
+    {
+        documents.insert(path, bytes);
     }
     for name in ["sheets", "library", "assets"] {
         let path = root.join(name);

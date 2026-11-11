@@ -54,7 +54,7 @@ fn documents(session: &Session) -> Documents {
 /// Inspect exact persisted accepted membership through the production baseline type;
 /// neither array position nor net names establish the electrical group identity.
 fn accepted_groups(session: &Session) -> BTreeSet<BTreeSet<(String, String)>> {
-    let board: Value = serde_json::from_slice(&documents(session)["board.json"]).unwrap();
+    let board: Value = serde_json::from_slice(&documents(session)[&session.project().unwrap().board_document_path().unwrap()]).unwrap();
     let baseline: Baseline = serde_json::from_value(board["baseline"].clone()).unwrap();
     baseline
         .nets

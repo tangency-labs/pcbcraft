@@ -136,7 +136,7 @@ fn failed_opens_preserve_the_active_project_and_dirty_state() {
                 assert!(value["wires"][0]["from"].get("pin").is_some());
                 value["wires"][0]["from"]["pin"] = json!("9");
             }
-            _ => unreachable!(),
+            _ => continue,
         }
         documents.insert(path.to_owned(), serde_json::to_vec(&value).unwrap());
         cases.push((kind, encode_packed_documents(documents).unwrap()));

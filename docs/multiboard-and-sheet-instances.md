@@ -59,7 +59,7 @@ Intended behavior is distinguished from current capabilities below.
 | Board setup | One setup on the sole board; the dialog already captures a board target | Independent layers, stackup, materials and output settings for each board |
 | Named connections | Global, power and ground names resolve across the current project | Resolve globals within the board; resolve ordinary local names within the sheet occurrence |
 | Cross-probing | Identity-based correspondence with board addresses; reveal across sheets is still planned | Include sheet occurrence and circuit-use context and navigate to the exact physical instance |
-| Storage | `project.json`, `sheets/`, optional root `board.json` and pinned libraries | Shared sheet definitions plus a folder for each board; explicit associated-file policies |
+| Storage | `project.json`, `sheets/`, a registered board folder when present, and pinned libraries | Shared sheet definitions plus a folder for each board; explicit associated-file policies |
 
 The [representation plan](pcb-representation.md#board-addresses-and-multiboard-migration),
 [storage contract](native-project-storage.md),

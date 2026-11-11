@@ -43,19 +43,19 @@ fn edge_geometry_is_layer_addressed_persistent_and_atomic() {
         for placed in [false, true] {
             let mut s = session(configured, placed);
             let before = encode_documents(s.snapshot().unwrap()).unwrap();
-            let old: Value = serde_json::from_slice(&before["board.json"]).unwrap();
+            let old: Value = serde_json::from_slice(&before[&crate::persistence::test_board_path(&before)]).unwrap();
             let layer = edge(&s);
             s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points(),"closed":false,"expected_revision":s.revision()})).unwrap();
             let graphic = s.project().unwrap().boards().next().unwrap().drawings()[0].clone();
             assert_eq!(graphic.layer, layer);
             assert_eq!(s.project().unwrap().boards().next().unwrap().setup().is_some(), configured);
             let after = encode_documents(s.snapshot().unwrap()).unwrap();
-            let board: Value = serde_json::from_slice(&after["board.json"]).unwrap();
+            let board: Value = serde_json::from_slice(&after[&crate::persistence::test_board_path(&after)]).unwrap();
             assert_eq!(board["format"], "pcbcraft-board/9");
             assert_eq!(board["assignments"], old["assignments"]);
             assert_eq!(board["footprints"], old["footprints"]);
             for (path, bytes) in &before {
-                if path != "board.json" {
+                if !path.ends_with("board.json") {
                     assert_eq!(&after[path], bytes);
                 }
             }
@@ -103,13 +103,13 @@ fn invalid_geometry_and_storage_are_rejected() {
     let original = encode_documents(s.snapshot().unwrap()).unwrap();
     for wrong_format in [false, true] {
         let mut changed = original.clone();
-        let mut board: Value = serde_json::from_slice(&changed["board.json"]).unwrap();
+        let mut board: Value = serde_json::from_slice(&changed[&crate::persistence::test_board_path(&changed)]).unwrap();
         if wrong_format {
             board["format"] = json!("pcbcraft-board/7");
         } else {
             board["graphics"]["items"][0]["layer"] = json!(Uuid::from_u128(1));
         }
-        changed.insert("board.json".into(), serde_json::to_vec(&board).unwrap());
+        changed.insert(crate::persistence::test_board_path(&changed), serde_json::to_vec(&board).unwrap());
         assert!(decode_documents(&changed).is_err());
     }
 }
@@ -143,7 +143,7 @@ fn physical_graphics_preserve_widths_reference_overrides_and_history() {
     )
     .unwrap();
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&before["board.json"]).unwrap()["format"], "pcbcraft-board/15");
+    assert_eq!(serde_json::from_slice::<Value>(&before[&crate::persistence::test_board_path(&before)]).unwrap()["format"], "pcbcraft-board/15");
     for width in [0, 9_999, 10_000_001] {
         assert!(
             s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points(),"closed":false,"stroke_nm":width,"expected_revision":s.revision()}))
@@ -153,7 +153,7 @@ fn physical_graphics_preserve_widths_reference_overrides_and_history() {
     }
     s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points(),"closed":false,"stroke_nm":250_000,"expected_revision":s.revision()})).unwrap();
     let after = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&after["board.json"]).unwrap()["format"], "pcbcraft-board/16");
+    assert_eq!(serde_json::from_slice::<Value>(&after[&crate::persistence::test_board_path(&after)]).unwrap()["format"], "pcbcraft-board/16");
     assert_eq!(encode_documents(decode_documents(&after).unwrap()).unwrap(), after);
     let view = s.project().unwrap().boards().next().unwrap();
     let id = view.drawings()[0].id;
@@ -169,9 +169,9 @@ fn physical_graphics_preserve_widths_reference_overrides_and_history() {
     assert_eq!(value["drawings"][0]["stroke_nm"], 250_000);
     assert_eq!(crate::board::clipboard::BoardFragment::from_text(&text).unwrap().to_text().unwrap(), text);
     let mut malformed = after.clone();
-    let mut value: Value = serde_json::from_slice(&malformed["board.json"]).unwrap();
+    let mut value: Value = serde_json::from_slice(&malformed[&crate::persistence::test_board_path(&malformed)]).unwrap();
     value["format"] = json!("pcbcraft-board/15");
-    malformed.insert("board.json".into(), serde_json::to_vec(&value).unwrap());
+    malformed.insert(crate::persistence::test_board_path(&malformed), serde_json::to_vec(&value).unwrap());
     assert!(decode_documents(&malformed).is_err());
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);

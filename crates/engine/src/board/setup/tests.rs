@@ -155,9 +155,12 @@ fn exact_lengths_rename_and_one_record_diffs() {
     layer(&mut candidate, "Top")["name"] = json!("Signal");
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
     let after = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
-    assert_eq!(before.iter().filter(|(path, bytes)| after.get(*path) != Some(*bytes)).map(|(p, _)| p.as_str()).collect::<Vec<_>>(), ["board.json"]);
-    let before_lines = std::str::from_utf8(&before["board.json"]).unwrap().lines();
-    let after_lines = std::str::from_utf8(&after["board.json"]).unwrap().lines();
+    assert_eq!(
+        before.iter().filter(|(path, bytes)| after.get(*path) != Some(*bytes)).map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+        [crate::persistence::test_board_path(&before)]
+    );
+    let before_lines = std::str::from_utf8(&before[&crate::persistence::test_board_path(&before)]).unwrap().lines();
+    let after_lines = std::str::from_utf8(&after[&crate::persistence::test_board_path(&after)]).unwrap().lines();
     assert_eq!(before_lines.zip(after_lines).filter(|(a, b)| a != b).count(), 1);
     let mut candidate = setup(&s);
     for (i, stratum) in candidate["stackup"]["strata"].as_array_mut().unwrap().iter_mut().enumerate() {
@@ -301,7 +304,7 @@ fn versioned_storage_round_trips_without_silent_loss() {
     let s = session(4);
     let snapshot = s.snapshot().unwrap();
     let documents = persistence::encode_documents(snapshot.clone()).unwrap();
-    let board: Value = serde_json::from_slice(&documents["board.json"]).unwrap();
+    let board: Value = serde_json::from_slice(&documents[&crate::persistence::test_board_path(&documents)]).unwrap();
     assert_eq!(board["format"], "pcbcraft-board/2");
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&documents).unwrap()).unwrap(), documents);
     let packed = persistence::encode_packed(snapshot.clone()).unwrap();
@@ -329,7 +332,7 @@ fn versioned_storage_round_trips_without_silent_loss() {
     invalid.push(b);
     for board in invalid {
         let mut bad = documents.clone();
-        bad.insert("board.json".to_owned(), serde_json::to_vec(&board).unwrap());
+        bad.insert(crate::persistence::test_board_path(&bad), serde_json::to_vec(&board).unwrap());
         assert!(persistence::decode_documents(&bad).unwrap_err().contains("board.json"));
     }
 }
@@ -375,7 +378,7 @@ fn populated_initialization_explicitly_resolves_existing_copper_bindings() {
         let after = s.inspect();
         assert_eq!(after["project"]["schematic"], before["project"]["schematic"]);
         let footprint_records = |bytes: &std::collections::BTreeMap<String, Vec<u8>>| {
-            serde_json::from_slice::<Value>(&bytes["board.json"]).unwrap()["footprints"].clone()
+            serde_json::from_slice::<Value>(&bytes[&crate::persistence::test_board_path(bytes)]).unwrap()["footprints"].clone()
         };
         let adopted = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
         assert_eq!(footprint_records(&adopted), footprint_records(&bytes));

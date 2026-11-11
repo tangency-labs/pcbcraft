@@ -409,6 +409,7 @@ fn explicit_conversion_preserves_old_split_packages_and_validates_integrity() {
     use sha2::{Digest, Sha256};
     let expected = documents(&session());
     let mut old = expected.clone();
+    let expected = migrate_board_layout(expected, ".").unwrap();
     let entry = old.remove(ENTRY_POINT).unwrap();
     old.insert("project.pc".to_owned(), entry);
     let parts: Vec<_> =

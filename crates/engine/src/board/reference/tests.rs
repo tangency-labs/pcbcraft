@@ -67,16 +67,16 @@ fn printed_words_and_style_are_local_and_reset_restores_inheritance() {
     assert_eq!(changed_files.len(), 1);
     assert!(changed_files[0].ends_with("-Silkscreen_Top.gbr"));
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&saved["board.json"]).unwrap()["format"], "pcbcraft-board/15");
+    assert_eq!(serde_json::from_slice::<Value>(&saved[&crate::persistence::test_board_path(&saved)]).unwrap()["format"], "pcbcraft-board/15");
     assert_eq!(
         saved.iter().filter(|(path, bytes)| original.get(*path) != Some(*bytes)).map(|(path, _)| path.as_str()).collect::<Vec<_>>(),
-        ["board.json"]
+        [crate::persistence::test_board_path(&saved)]
     );
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     let mut older = saved.clone();
-    let mut document: Value = serde_json::from_slice(&older["board.json"]).unwrap();
+    let mut document: Value = serde_json::from_slice(&older[&crate::persistence::test_board_path(&older)]).unwrap();
     document["format"] = json!("pcbcraft-board/14");
-    older.insert("board.json".into(), serde_json::to_vec(&document).unwrap());
+    older.insert(crate::persistence::test_board_path(&older), serde_json::to_vec(&document).unwrap());
     assert!(decode_documents(&older).is_err());
     set(&mut session, &id, Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);

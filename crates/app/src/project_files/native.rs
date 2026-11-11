@@ -134,7 +134,8 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
 /// Publish to a destination the person chose, which must not exist yet, adding `.pc` to an
 /// archive name without it. An Untitled project saved for the first time takes the destination's
 /// name (see [`name_for`]); the outcome then carries the snapshot it renamed. A failure leaves no
-/// name change behind, since only a successful outcome is adopted.
+/// metadata change behind, since only a successful outcome is adopted. The same outcome
+/// adopts a prepared board-folder layout across the captured document's history.
 pub(super) fn save_new(
     snapshot: Arc<Project>,
     previous: Option<&(Arc<Project>, Target)>,
@@ -147,6 +148,7 @@ pub(super) fn save_new(
         path.set_file_name(name);
     }
     let path = normalize(&path)?;
+    let original = snapshot.clone();
     let (snapshot, renamed) = match name_for(&snapshot, previous.is_some(), &path) {
         Some(named) => (Arc::new(named), Some(snapshot)),
         None => (snapshot, None),
@@ -159,6 +161,8 @@ pub(super) fn save_new(
         needs_manifest: false,
         added_manifest: false,
     };
+    let snapshot = folder::layout::prepare(snapshot, (target.encoding == Encoding::Json).then_some(target.path.as_path()), None)?;
+    let renamed = renamed.or_else(|| (!Arc::ptr_eq(&original, &snapshot)).then_some(original));
     let documents = working_documents(&snapshot, previous.map(|(old, _)| old), previous.and_then(|(_, target)| target.documents.as_deref()))?;
     if target.encoding == Encoding::Zip {
         target.bytes = encode_packed_documents(documents.clone())?.into();
@@ -195,9 +199,12 @@ fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, o
     let mut documents = encode_documents(snapshot.clone())?;
     if let (Some(old), Some(original)) = (previous, original) {
         let canonical = encode_documents(old.clone())?;
+        let old_board = old.board_document_path();
+        let new_board = snapshot.board_document_path();
         for (path, bytes) in &mut documents {
-            if canonical.get(path) == Some(bytes)
-                && let Some(original) = original.get(path)
+            let source = if Some(path.as_str()) == new_board.as_deref() { old_board.as_deref().unwrap_or(path) } else { path };
+            if canonical.get(source) == Some(bytes)
+                && let Some(original) = original.get(source)
             {
                 bytes.clone_from(original);
             }
@@ -208,12 +215,18 @@ fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, o
 
 /// Publish a folder or v3 archive while retaining unchanged input bytes. Comparing each old
 /// canonical document preserves custom formatting in files unaffected by the current edit.
+/// The first save prepares a board-folder migration even for an unchanged flat snapshot;
+/// session metadata is returned for adoption only after successful publication.
 fn save_target(
     snapshot: Arc<Project>,
     previous: Option<&Arc<Project>>,
     mut target: Target,
     checkpoint: &mut impl FnMut(&str) -> Result<(), String>,
 ) -> Result<Outcome, String> {
+    let original = snapshot.clone();
+    let snapshot =
+        folder::layout::prepare(snapshot, (target.encoding == Encoding::Json).then_some(target.path.as_path()), target.documents.as_deref())?;
+    let adopted = (!Arc::ptr_eq(&original, &snapshot)).then_some(original);
     let unchanged = previous.is_some_and(|old| Arc::ptr_eq(old, &snapshot));
     if target.encoding == Encoding::Zip {
         let bytes = if unchanged && !target.needs_manifest {
@@ -233,7 +246,7 @@ fn save_target(
         folder::save(&target.path, target.documents.as_deref(), &documents, checkpoint)?;
         target.documents = Some(Arc::new(documents));
     }
-    Ok(Outcome::Saved(Saved { snapshot, target }, None))
+    Ok(Outcome::Saved(Saved { snapshot, target }, adopted))
 }
 
 /// Canonicalize the parent directory so application instances use the same lock for the destination.

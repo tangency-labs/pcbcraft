@@ -127,13 +127,13 @@ fn desired_package_roundtrip_then_atomic_apply_preserves_placement_pose() {
     assert_eq!(session.project().unwrap().board.footprints()[0].definition, original.definition);
     assert_eq!(session.inspect()["project"]["board"]["assignments"][0]["pending_update"], true);
     let pending = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&pending["board.json"]).unwrap().contains("pcbcraft-board/11"));
+    assert!(std::str::from_utf8(&pending[&crate::persistence::test_board_path(&pending)]).unwrap().contains("pcbcraft-board/11"));
     let reopened = decode_documents(&pending).unwrap();
     assert_eq!(encode_documents(reopened.clone()).unwrap(), pending);
     assert_eq!(encode_documents(decode_packed(&encode_packed(reopened.clone()).unwrap()).unwrap().project).unwrap(), pending);
     let mut bad = pending.clone();
-    let old_header = std::str::from_utf8(&bad["board.json"]).unwrap().replace("pcbcraft-board/11", "pcbcraft-board/10");
-    bad.insert("board.json".into(), old_header.into_bytes());
+    let old_header = std::str::from_utf8(&bad[&crate::persistence::test_board_path(&bad)]).unwrap().replace("pcbcraft-board/11", "pcbcraft-board/10");
+    bad.insert(crate::persistence::test_board_path(&bad), old_header.into_bytes());
     assert!(decode_documents(&bad).is_err());
     session.open_snapshot(reopened);
     assert!(session.board_update_report().is_none());
@@ -149,7 +149,7 @@ fn desired_package_roundtrip_then_atomic_apply_preserves_placement_pose() {
     assert_eq!(changed.mapping.as_ref().unwrap()["1"], "2");
     assert_eq!(session.project().unwrap().board.baseline.as_ref().unwrap().source.capture_id.to_string(), report["source"]["capture_id"]);
     let applied = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&applied["board.json"]).unwrap().contains("pcbcraft-board/10"));
+    assert!(std::str::from_utf8(&applied[&crate::persistence::test_board_path(&applied)]).unwrap().contains("pcbcraft-board/10"));
     session.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), encode_documents(before_apply).unwrap());
     session.apply("edit.redo", &json!({})).unwrap();

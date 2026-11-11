@@ -20,7 +20,8 @@ The registry is therefore the next step for both #57 and #77.
 
 - **Project identity.** Every project has a saved project UUID.
 - **Board registry.** `pcbcraft-project/9` and its successors (12, 13) hold a
-  required `boards` array with zero or one registration: a board UUID, a name and
+  required `boards` array with zero or one registration: a board UUID and name.
+  Project/14 adds `layout_root` and its portable board-folder segment in place of
   the transitional root `board.json` (see [single-board-storage.md](single-board-storage.md)).
   Supported split schemas with implicit board ownership keep a deterministic
   compatibility board ID, derived from the
@@ -39,7 +40,6 @@ The registry is therefore the next step for both #57 and #77.
   Document paths that Windows reads as devices are already refused.
 
 Not built yet:
-- `layout_root` and per-board folders;
 - `instances.json` and `schematic_instances`;
 - circuit uses and sheet occurrence identities;
 - any persistent net ID.
@@ -94,14 +94,17 @@ container-v1/v2 archives or standalone project files; see the
   open/save paths. Board commands already resolve the board by its ID, so they
   don't change.
 - **Migration.**
-  - A project in any supported split schema keeps its encoding on an unchanged
-    open and save within the current `project.json`/container-v3 layout.
-  - The first operation needing the new format migrates the whole project in
-    one journaled save. It writes the board folder's `board.json` and removes
-    the root one together, and the second save produces no diff.
+  - Opening a supported flat `project.json`/container-v3 project leaves its files
+    untouched. Its first Save migrates the layout even without design edits.
+  - One journaled save writes the registered board folder's `board.json`, updates
+    the project entry point and removes the root board together. The second save
+    produces no diff. New and explicitly converted projects use board folders
+    from their first save, including single-board projects.
+  - Successful adoption persists across Undo/Redo without an electrical edit;
+    failed/cancelled saves do not adopt metadata.
   - Existing `boards/`, `builds/`, `documents/` or `outputs/` directories that
     the project doesn't own are never claimed. A
-    `pcbcraft-data-<project-id-prefix>/` root is chosen instead, previewed, and
+    `pcbcraft-data-<project-id-prefix>/` root is chosen instead and
     saved once.
 - **Out of scope:** relocating a board folder, retired-board areas, variants,
   builds, outputs and associated documents. None exists yet, and each keeps the
@@ -200,8 +203,8 @@ Each has a proposed answer. Review can change any of them before slice 1 starts.
 
 **Slice 1**
 - An implicit-board project in a supported split schema and one at each of
-  `project/9`, 12 and 13 open and save unchanged in a `project.json` folder or
-  container-v3 `.pc` package.
+  `project/9`, 12 and 13 open without rewriting in a `project.json` folder or
+  container-v3 `.pc` package; first Save migrates even without design edits.
 - The first migrating save moves `board.json` into its folder, keeps the board ID,
   name, placements, setup, outline, copper and baseline, and the second save has
   no diff.

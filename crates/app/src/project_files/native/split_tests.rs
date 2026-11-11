@@ -15,7 +15,7 @@ use std::{
 /// Start from the checked-in migration fixture so comparisons retain stable UUIDs.
 fn session() -> Session {
     let mut s = Session::default();
-    s.open_snapshot(decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap());
+    s.open_snapshot(Arc::new(decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap().with_board_folders(".").unwrap()));
     s
 }
 
@@ -108,7 +108,7 @@ fn component_metadata_opens_and_saves_through_every_native_entry_path() {
         let snapshot = s.snapshot().unwrap();
         let documents = encode_documents(snapshot.clone()).unwrap();
         let entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], if explicit.is_some() { "pcbcraft-project/12" } else { "pcbcraft-project/11" });
+        assert_eq!(entry["format"], "pcbcraft-project/14");
         let root = dir.path().join("metadata");
         let archive = dir.path().join("metadata.pc");
         folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
@@ -247,31 +247,35 @@ fn unchanged_documents_are_never_rewritten() {
     assert_eq!(fs::read(root.join("sheets/.DS_Store")).unwrap(), b"OS metadata");
 }
 
-/// Version-5 input stays byte-for-byte intact on no-op and geometry saves. The first sheet
-/// lifecycle change upgrades only the entry point and affected documents, then opens via CLI too.
+/// Opening flat version-5 input preserves bytes; its first save migrates even without edits.
+/// Later geometry and sheet-lifecycle changes retain all unaffected payload bytes.
 #[test]
-fn version_five_no_op_and_sheet_upgrade_preserve_unaffected_bytes() {
+fn version_five_first_save_migrates_and_sheet_edits_preserve_unaffected_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
-    let original = pcbcraft_engine::persistence::decode_packed(include_bytes!("../../../tests/fixtures/split/two-resistors.pc")).unwrap().documents;
+    let original = decode_packed(include_bytes!("../../../tests/fixtures/split/two-resistors.pc")).unwrap().documents;
     folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
     let loaded = load(&root.join(ENTRY_POINT)).unwrap();
-    let old = loaded.snapshot.clone();
-    save_target(old.clone(), Some(&old), loaded.target.clone(), &mut |_| panic!("no-op must not stage")).unwrap();
     assert_eq!(folder::load(&root).unwrap(), original);
+    save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
+    let migrated = pcbcraft_engine::persistence::migrate_board_layout(original.clone(), ".").unwrap();
+    assert_eq!(folder::load(&root).unwrap(), migrated);
+    let loaded = load(&root).unwrap();
+    let old = loaded.snapshot.clone();
+    save_target(old.clone(), Some(&old), loaded.target.clone(), &mut |_| panic!("second save must not stage")).unwrap();
     let mut s = Session::default();
     s.open_snapshot(old.clone());
     apply(&mut s, MOVE_SYMBOL, json!({"symbol":"symbol-2","x_nm":1_270_000,"y_nm":0}));
     save_target(s.snapshot().unwrap(), Some(&old), loaded.target, &mut |_| Ok(())).unwrap();
-    assert_eq!(fs::read(root.join(ENTRY_POINT)).unwrap(), original[ENTRY_POINT]);
+    assert_eq!(fs::read(root.join(ENTRY_POINT)).unwrap(), migrated[ENTRY_POINT]);
     let loaded = load(&root).unwrap();
     apply(&mut s, pcbcraft_engine::sheets::CREATE_SHEET, json!({"name":"Power"}));
     save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
     let after = folder::load(&root).unwrap();
     let header: serde_json::Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
-    assert_eq!(header["format"], "pcbcraft-project/6");
+    assert_eq!(header["format"], "pcbcraft-project/14");
     assert_eq!(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap().sheets().len(), 2);
-    for (path, bytes) in original.iter().filter(|(path, _)| path.as_str() != ENTRY_POINT && !path.starts_with("sheets/")) {
+    for (path, bytes) in migrated.iter().filter(|(path, _)| path.as_str() != ENTRY_POINT && !path.starts_with("sheets/")) {
         assert_eq!(&after[path], bytes);
     }
 }
@@ -408,6 +412,7 @@ fn corrupt_recovery_payload_and_external_changes_are_not_overwritten() {
     let root = dir.path().join("project");
     let mut s = session();
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let board_path = s.project().unwrap().board_document_path().unwrap();
     folder::save(&root, None, &before, &mut |_| Ok(())).unwrap();
     replacement(&mut s);
     let after = encode_documents(s.snapshot().unwrap()).unwrap();
@@ -418,10 +423,10 @@ fn corrupt_recovery_payload_and_external_changes_are_not_overwritten() {
     assert!(folder::load(&root).is_err());
     assert_eq!(fs::read(root.join(ENTRY_POINT)).unwrap(), before[ENTRY_POINT]);
     fs::write(&path, payload).unwrap();
-    fs::write(root.join("board.json"), b"external").unwrap();
+    fs::write(root.join(&board_path), b"external").unwrap();
     assert!(folder::load(&root).is_err());
-    assert_eq!(fs::read(root.join("board.json")).unwrap(), b"external");
-    fs::write(root.join("board.json"), &before["board.json"]).unwrap();
+    assert_eq!(fs::read(root.join(&board_path)).unwrap(), b"external");
+    fs::write(root.join(&board_path), &before[&board_path]).unwrap();
     assert_eq!(folder::load(&root).unwrap(), after);
 }
 
@@ -431,6 +436,7 @@ fn unknown_owned_files_and_symlinks_are_refused() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("project");
     let d = encode_documents(session().snapshot().unwrap()).unwrap();
+    let board_path = pcbcraft_engine::persistence::project_board_path(&d[ENTRY_POINT]).unwrap().unwrap();
     folder::save(&root, None, &d, &mut |_| Ok(())).unwrap();
     fs::write(root.join("README.md"), b"notes").unwrap();
     assert!(load(&root).is_ok());
@@ -444,13 +450,13 @@ fn unknown_owned_files_and_symlinks_are_refused() {
         assert!(load(&root).is_err());
         assert!(folder::save(&root, Some(&d), &d, &mut |_| Ok(())).is_err());
         fs::remove_file(hidden).unwrap();
-        fs::remove_file(root.join("board.json")).unwrap();
+        fs::remove_file(root.join(&board_path)).unwrap();
         let outside = dir.path().join("outside");
-        fs::write(&outside, &d["board.json"]).unwrap();
-        std::os::unix::fs::symlink(&outside, root.join("board.json")).unwrap();
+        fs::write(&outside, &d[&board_path]).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join(&board_path)).unwrap();
         assert!(load(&root).is_err());
         assert!(folder::save(&root, Some(&d), &d, &mut |_| Ok(())).is_err());
-        assert_eq!(fs::read(outside).unwrap(), d["board.json"]);
+        assert_eq!(fs::read(outside).unwrap(), d[&board_path]);
     }
 }
 
@@ -634,7 +640,8 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     assert!(saved.target.added_manifest());
     let reopened = load(&path).unwrap();
     assert!(!reopened.target.needs_manifest);
-    assert_eq!(reopened.target.documents.as_deref(), Some(documents.as_ref()));
+    let migrated = pcbcraft_engine::persistence::migrate_board_layout((*documents).clone(), ".").unwrap();
+    assert_eq!(reopened.target.documents.as_deref(), Some(&migrated));
     let mut custom = (*documents).clone();
     custom.get_mut(ENTRY_POINT).unwrap().extend_from_slice(b"\n  ");
     let root = dir.path().join("custom");
@@ -656,7 +663,10 @@ fn headless_and_desktop_read_the_same_split_project() {
         fixture.join("two-resistors.pc"),
         fixture.join("two-resistors-no-manifest.pc"),
     ] {
-        assert_eq!(encode_documents(pcbcraft_storage::open(&path).unwrap()).unwrap(), expected);
+        assert_eq!(
+            pcbcraft_engine::persistence::migrate_board_layout(encode_documents(pcbcraft_storage::open(&path).unwrap()).unwrap(), ".").unwrap(),
+            expected
+        );
     }
 }
 
@@ -891,4 +901,72 @@ fn footprint_transform_saves_offline_in_folders_and_archives() {
         );
         assert_eq!(encode_documents(load(path).unwrap().snapshot).unwrap(), documents);
     }
+}
+
+/// A failed migration leaves session metadata unchanged; success adopts one root across Undo/Redo
+/// without changing electrical revision, and an unchanged second save does not stage any bytes.
+#[test]
+fn first_save_adopts_layout_only_on_success_and_keeps_it_through_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let mut s = Session::default();
+    s.open_snapshot(decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap());
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    folder::save(&root, None, &before, &mut |_| Ok(())).unwrap();
+    fs::create_dir(root.join("boards")).unwrap();
+    fs::write(root.join("boards/notes.txt"), b"keep").unwrap();
+    let mut files = ProjectFiles::default();
+    complete(&mut files, &mut s, load(&root).map(Outcome::Opened));
+    apply(&mut s, MOVE_SYMBOL, json!({"symbol":"symbol-2","x_nm":1_270_000,"y_nm":0}));
+    let current = s.snapshot().unwrap();
+    let revision = s.revision();
+    let old = files.saved.as_ref().unwrap();
+    let failed = save_target(current.clone(), Some(&old.snapshot), old.target.clone(), &mut |_| Err("before publication".into()));
+    assert!(failed.is_err());
+    complete(&mut files, &mut s, failed);
+    assert!(Arc::ptr_eq(&current, &s.snapshot().unwrap()));
+    assert!(s.project().unwrap().layout_root().is_none());
+    assert_eq!(folder::load(&root).unwrap(), before);
+    let old = files.saved.as_ref().unwrap();
+    let saved = save_target(current, Some(&old.snapshot), old.target.clone(), &mut |_| Ok(()));
+    complete(&mut files, &mut s, saved);
+    assert!(!files.dirty(&s));
+    assert_eq!(s.revision(), revision);
+    let adopted = s.project().unwrap().layout_root().unwrap().to_owned();
+    let board_id = s.project().unwrap().board_target();
+    assert!(adopted.starts_with("pcbcraft-data-"));
+    assert!(!root.join("board.json").exists());
+    for command in ["edit.undo", "edit.redo"] {
+        s.apply(command, &json!({})).unwrap();
+        assert_eq!(s.project().unwrap().layout_root(), Some(adopted.as_str()));
+        assert_eq!(s.project().unwrap().board_target(), board_id);
+        let old = files.saved.as_ref().unwrap();
+        let result = save_target(s.snapshot().unwrap(), Some(&old.snapshot), old.target.clone(), &mut |_| Ok(()));
+        complete(&mut files, &mut s, result);
+        assert!(!root.join("board.json").exists());
+    }
+    let old = files.saved.as_ref().unwrap();
+    save_target(s.snapshot().unwrap(), Some(&old.snapshot), old.target.clone(), &mut |_| Err("no-op must not stage".into())).unwrap();
+    assert_eq!(fs::read(root.join("boards/notes.txt")).unwrap(), b"keep");
+}
+
+/// Intervening edits remain dirty after migration; undo reaches the exact saved snapshot.
+#[test]
+fn migration_adoption_preserves_edits_made_while_the_worker_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let mut s = Session::default();
+    s.open_snapshot(decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap());
+    let captured = s.snapshot().unwrap();
+    folder::save(&root, None, &encode_documents(captured.clone()).unwrap(), &mut |_| Ok(())).unwrap();
+    let loaded = load(&root).unwrap();
+    let result = save_target(captured.clone(), Some(&captured), loaded.target, &mut |_| Ok(()));
+    apply(&mut s, MOVE_SYMBOL, json!({"symbol":"symbol-2","x_nm":1_270_000,"y_nm":0}));
+    let mut files = ProjectFiles::default();
+    complete(&mut files, &mut s, result);
+    assert!(files.dirty(&s));
+    assert_eq!(s.project().unwrap().layout_root(), Some("."));
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert!(!files.dirty(&s));
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &files.saved.as_ref().unwrap().snapshot));
 }

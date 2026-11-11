@@ -92,7 +92,7 @@ fn invalid_registration_never_adopts_foreign_or_hidden_physical_data() {
         assert!(persistence::decode_documents(&documents).is_err(), "mutation {mutation}");
     }
     let mut missing = original;
-    missing.remove("board.json");
+    missing.remove(&crate::persistence::test_board_path(&missing));
     assert!(persistence::decode_documents(&missing).is_err());
 }
 
@@ -188,9 +188,9 @@ fn metadata_and_optional_board_ownership_round_trip_with_strict_combined_schema(
             .unwrap();
         let documents = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
         let header: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/12");
+        assert_eq!(header["format"], "pcbcraft-project/14");
         assert_eq!(header["boards"].as_array().unwrap().len(), usize::from(create_board));
-        assert_eq!(documents.contains_key("board.json"), create_board);
+        assert_eq!(crate::persistence::project_board_path(&documents["project.json"]).unwrap().is_some(), create_board);
         let loaded = persistence::decode_documents(&documents).unwrap();
         assert_eq!(loaded.board_target(), target);
         assert_eq!(persistence::encode_documents(loaded.clone()).unwrap(), documents);

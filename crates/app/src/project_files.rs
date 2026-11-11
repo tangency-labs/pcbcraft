@@ -310,7 +310,7 @@ impl ProjectFiles {
             #[cfg(not(target_arch = "wasm32"))]
             Ok(Outcome::Saved(saved, renamed)) => {
                 if let Some(original) = renamed {
-                    session.adopt_saved_name(&original, &saved.snapshot);
+                    session.adopt_saved_metadata(&original, &saved.snapshot);
                 }
                 self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));

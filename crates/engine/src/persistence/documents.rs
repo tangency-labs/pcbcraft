@@ -5,14 +5,31 @@ use super::*;
 /// The fixed, plain-text entry point inside a project folder.
 pub const ENTRY_POINT: &str = "project.json";
 
-/// Convert only the previous split entry-point name, retaining every document's exact bytes.
-/// Mixed layouts, standalone JSON and unsupported document schemas are refused before adoption.
+/// Convert the previous entry-point name and board placement into the current folder layout.
+/// The project registry changes, while physical board, sheet and library payload bytes survive.
+/// Mixed layouts, standalone JSON and unsupported schemas are refused before adoption.
 pub fn convert_legacy_documents(mut documents: Documents) -> Result<Documents, String> {
     if documents.contains_key(ENTRY_POINT) {
         return Err("Conversion requires the previous project.pc layout, without project.json.".to_owned());
     }
     let entry = documents.remove("project.pc").ok_or("project.pc: missing previous split entry point")?;
     documents.insert(ENTRY_POINT.to_owned(), entry);
+    migrate_board_layout(documents, ".")
+}
+
+/// Rewrite only project-level storage metadata and move the board payload without re-encoding it.
+/// Validation covers the entire old and new document sets; no identity is derived from the path.
+pub fn migrate_board_layout(mut documents: Documents, root: &str) -> Result<Documents, String> {
+    let original = decode_documents(&documents)?;
+    let migrated = Arc::new(original.with_board_folders(root)?);
+    let mut canonical = encode_documents(migrated.clone())?;
+    documents.insert(ENTRY_POINT.to_owned(), canonical.remove(ENTRY_POINT).ok_or("missing encoded entry point")?);
+    if let (Some(before), Some(after)) = (original.board_document_path(), migrated.board_document_path())
+        && before != after
+    {
+        let board = documents.remove(&before).ok_or("missing original board document")?;
+        documents.insert(after, board);
+    }
     decode_documents(&documents)?;
     Ok(documents)
 }
@@ -22,6 +39,7 @@ pub const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
+const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
@@ -69,13 +87,102 @@ struct ProjectDocument {
     #[serde(default, deserialize_with = "present")]
     footprint_choices: Option<Vec<crate::board::assignment::Assignment>>,
     #[serde(default, deserialize_with = "present")]
-    boards: Option<Vec<crate::board::identity::Registration>>,
+    boards: Option<Vec<BoardReference>>,
+    #[serde(default, deserialize_with = "present")]
+    layout_root: Option<String>,
     id: Uuid,
     name: String,
     #[serde(default, deserialize_with = "present")]
     numeric_id_high_water: Option<u64>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,
+}
+
+/// Storage-version-specific board registrations never become independent physical identities.
+#[derive(Clone, Deserialize)]
+#[serde(untagged)]
+enum BoardReference {
+    Flat(crate::board::identity::Registration),
+    Folder(FolderReference),
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FolderReference {
+    id: Uuid,
+    name: String,
+    folder: String,
+}
+
+impl ProjectDocument {
+    /// Resolve only registered storage paths, refusing mixed vocabularies and unsafe roots.
+    fn registry(&self) -> Result<(Option<Vec<crate::board::identity::Registration>>, Option<layout::Layout>), String> {
+        let foldered = self.format == FOLDER_PROJECT_FORMAT;
+        if foldered != self.layout_root.is_some() {
+            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14"));
+        }
+        if foldered && self.boards.is_none() {
+            return Err(format!("{ENTRY_POINT}: project format 14 requires a board registry"));
+        }
+        let mut folder = None;
+        let records = self
+            .boards
+            .as_ref()
+            .map(|records| {
+                if records.len() > 1 {
+                    return Err("this format supports zero or one physical board".to_owned());
+                }
+                records
+                    .iter()
+                    .map(|record| match record {
+                        BoardReference::Flat(record) if !foldered => Ok(record.clone()),
+                        BoardReference::Folder(record) if foldered && layout::portable_segment(&record.folder) => {
+                            folder = Some(record.folder.clone());
+                            Ok(crate::board::identity::Registration { id: record.id, name: record.name.clone(), file: "board.json".into() })
+                        }
+                        _ => Err(format!("{ENTRY_POINT}: incompatible board registration and project format")),
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?;
+        let layout = self
+            .layout_root
+            .as_ref()
+            .map(|root| {
+                if !layout::valid_root(root) {
+                    return Err(format!("{ENTRY_POINT}: invalid layout_root"));
+                }
+                Ok(layout::Layout { root: root.clone(), folder })
+            })
+            .transpose()?;
+        Ok((records, layout))
+    }
+}
+
+/// Resolve a stored project's sole physical path before bounded filesystem reads.
+/// Full decoding still validates identities, schemas and exact document ownership.
+pub fn project_board_path(entry: &[u8]) -> Result<Option<String>, String> {
+    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    let (records, layout) = project.registry()?;
+    if let Some(layout) = layout {
+        Ok(layout.folder.map(|folder| {
+            if layout.root == "." { format!("boards/{folder}/board.json") } else { format!("{}/boards/{folder}/board.json", layout.root) }
+        }))
+    } else {
+        Ok((!records.is_some_and(|records| records.is_empty())).then(|| "board.json".into()))
+    }
+}
+
+/// Read an explicit board identity from the typed project registry without using a path as identity.
+pub fn project_registered_board_id(entry: &[u8]) -> Result<Option<Uuid>, String> {
+    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    Ok(project.registry()?.0.and_then(|records| records.first().map(|record| record.id)))
+}
+
+/// Read the declared storage namespace without guessing ownership from directory contents.
+pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
+    let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
+    Ok(project.registry()?.1.map(|layout| layout.root))
 }
 
 #[derive(Deserialize)]
@@ -119,7 +226,7 @@ struct BoardDocument {
 
 /// Accept only paths owned by this format. Pinned item identities must match their files on decode.
 pub fn is_document_path(path: &str) -> bool {
-    if path == ENTRY_POINT || path == "board.json" {
+    if path == ENTRY_POINT || path == "board.json" || layout::is_board_path(path) {
         return true;
     }
     let pieces: Vec<_> = path.split('/').collect();
@@ -147,10 +254,18 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let registered =
-        matches!(project.format.as_str(), OPTIONAL_BOARD_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT);
-    let fields = matches!(project.format.as_str(), FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT);
-    let schematic_packages = project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT;
+    let foldered = project.format == FOLDER_PROJECT_FORMAT;
+    let (mut registrations, storage_layout) = project.registry()?;
+    let board_path = project_board_path(&documents[ENTRY_POINT])?;
+    let registered = matches!(
+        project.format.as_str(),
+        OPTIONAL_BOARD_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT | FOLDER_PROJECT_FORMAT
+    );
+    let fields = matches!(
+        project.format.as_str(),
+        FIELDS_PROJECT_FORMAT | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT | SCHEMATIC_PACKAGES_PROJECT_FORMAT | FOLDER_PROJECT_FORMAT
+    );
+    let schematic_packages = project.footprint_choices.is_some();
     if !matches!(
         project.format.as_str(),
         PROJECT_FORMAT
@@ -160,18 +275,19 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | FIELDS_PROJECT_FORMAT
             | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
             | SCHEMATIC_PACKAGES_PROJECT_FORMAT
+            | FOLDER_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
-    if schematic_packages != project.footprint_choices.is_some()
+    if (!foldered && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(Vec::is_empty))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
-        return Err("project footprint choices require format 13, no board and a nonempty bounded list".into());
+        return Err("project footprint choices require format 13 or 14, no board and a nonempty bounded list".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12 or 13".into());
+        return Err("component metadata requires project format 11, 12, 13 or 14".into());
     }
     if matches!(
         project.format.as_str(),
@@ -180,9 +296,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | FIELDS_PROJECT_FORMAT
             | OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT
             | SCHEMATIC_PACKAGES_PROJECT_FORMAT
+            | FOLDER_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12 or 13"));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13 or 14"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -247,6 +364,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         board: Arc::default(),
         named_graph: Arc::default(),
         upgraded_from: None,
+        layout: None,
     };
     metadata.validate_hierarchy()?;
     metadata.validate_net_labels()?;
@@ -300,11 +418,24 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         combined.junctions.get_or_insert_with(Vec::new).extend(sheet.junctions);
         combined.wires.extend(sheet.wires);
     }
-    let ownership = crate::board::identity::Ownership::decode(project.boards.clone(), &metadata)?;
+    // Older typed board addresses could equal a sheet UUID. Folder migration preserves that
+    // exact compatibility identity and ordinary legacy name rather than inventing a new ID.
+    if foldered
+        && registrations.as_ref().is_some_and(|records| {
+            records.len() == 1
+                && records[0].id_collides(&metadata)
+                && records[0].name == "Board"
+                && metadata.board_target().is_some_and(|target| target.board == records[0].id)
+        })
+    {
+        registrations = None;
+    }
+    let ownership = crate::board::identity::Ownership::decode(registrations.clone(), &metadata)?;
     let has_board = !matches!(ownership, crate::board::identity::Ownership::Explicit(None));
     let board: BoardDocument = if has_board {
-        used.insert("board.json".into());
-        parse(documents, "board.json")?
+        let path = board_path.as_deref().ok_or("missing registered board document path")?;
+        used.insert(path.to_owned());
+        parse(documents, path)?
     } else {
         BoardDocument {
             format: BOARD_FORMAT.into(),
@@ -530,11 +661,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let numeric_id_high_water = project.numeric_id_high_water;
     let footprint_choices = project.footprint_choices;
     let document = Document {
-        format: if project.boards.is_some() { super::OPTIONAL_BOARD_FORMAT } else { super::FORMAT }.to_owned(),
-        boards: project.boards.clone(),
+        format: if registrations.is_some() { super::OPTIONAL_BOARD_FORMAT } else { super::FORMAT }.to_owned(),
+        boards: registrations.clone(),
         id: project.id,
         name: project.name,
-        numeric_id_high_water: if project.boards.is_some() { numeric_id_high_water } else { None },
+        numeric_id_high_water: if registrations.is_some() { numeric_id_high_water } else { None },
         symbol_definitions: definitions,
         components: project.components,
         sheet: combined,
@@ -547,6 +678,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         Arc::make_mut(&mut project_data.schematic_packages).definitions = std::mem::take(&mut Arc::make_mut(&mut project_data.board).definitions);
     }
     project_data.numeric_id_high_water = numeric_id_high_water;
+    project_data.layout = storage_layout;
     let sheets = layouts
         .into_iter()
         .map(|(reference, symbols, junctions, wires)| {
@@ -724,7 +856,9 @@ impl DocumentsEncoder {
                     if has_packages && (p.board_target().is_some() || p.numeric_id_high_water.is_none()) {
                         return Err("schematic package choices require no board and an allocation watermark".into());
                     }
-                    let format = if has_packages {
+                    let format = if p.layout.is_some() {
+                        FOLDER_PROJECT_FORMAT
+                    } else if has_packages {
                         SCHEMATIC_PACKAGES_PROJECT_FORMAT
                     } else {
                         match (registrations.is_some(), has_metadata) {
@@ -742,7 +876,20 @@ impl DocumentsEncoder {
                     if let Some(high_water) = p.numeric_id_high_water {
                         writeln!(self.bytes, "  \"numeric_id_high_water\": {high_water},").map_err(|e| e.to_string())?;
                     }
-                    if let Some(registrations) = registrations {
+                    if let Some(layout) = &p.layout {
+                        let records = p
+                            .boards()
+                            .map(|board| {
+                                Ok(FolderReference {
+                                    id: board.target.board,
+                                    name: board.name().into(),
+                                    folder: layout.folder.clone().ok_or("missing board folder")?,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, String>>()?;
+                        writeln!(self.bytes, "  \"layout_root\": {},", json(&layout.root)?).map_err(|e| e.to_string())?;
+                        writeln!(self.bytes, "  \"boards\": {},", json(&records)?).map_err(|e| e.to_string())?;
+                    } else if let Some(registrations) = registrations {
                         writeln!(self.bytes, "  \"boards\": {},", json(&registrations)?).map_err(|e| e.to_string())?;
                     }
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
@@ -907,7 +1054,7 @@ impl DocumentsEncoder {
                         record(&mut self.bytes, &mut self.first, f)?;
                         self.cursor += 1;
                     } else {
-                        self.finish_document("board.json".to_owned())?;
+                        self.finish_document(self.project.board_document_path().ok_or("missing board document path")?)?;
                         self.next();
                     }
                 }
