@@ -45,6 +45,24 @@ fn tracks(h: &Harness<'_, PcbApp>) -> Vec<Track> {
     h.state().session.project().unwrap().boards().next().unwrap().tracks().to_vec()
 }
 
+/// Find a preview segment of the given copper color ending at the expected screen point.
+fn preview_ends_at(h: &Harness<'_, PcbApp>, color: egui::Color32, end: egui::Pos2) -> bool {
+    let tint = color.lerp_to_gamma(egui::Color32::WHITE, 0.35);
+    h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+        if stroke.color == tint && points[1].distance(end) < 0.001)
+    })
+}
+
+/// Whether the real canvas drew the specified track stroke in its effective color.
+fn track_has_color(h: &Harness<'_, PcbApp>, [a, b]: [Point; 2], color: egui::Color32) -> bool {
+    let [a, b] = [at(h, a), at(h, b)];
+    h.output().shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+        if stroke.color == color && points[0].distance(a) < 0.001 && points[1].distance(b) < 0.001)
+    })
+}
+
 fn airwires(h: &Harness<'_, PcbApp>) -> Vec<Airwire> {
     h.state().session.project().unwrap().boards().next().unwrap().ratsnest().unwrap().lines
 }
@@ -58,6 +76,17 @@ fn click_route(h: &mut Harness<'_, PcbApp>, point: Point) {
     let pos = at(h, point);
     click_canvas_at(h, pos);
     h.run_steps(20);
+}
+
+/// Open the route menu using a complete right-click at the requested board point.
+fn right_click_route(h: &mut Harness<'_, PcbApp>, point: Point) {
+    let pos = at(h, point);
+    h.hover_at(pos);
+    h.run();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
 }
 
 /// Route around the pads: up from the first pad, across, and down into the second.
@@ -100,7 +129,125 @@ fn x_routes_between_pads_in_one_undoable_command() {
     assert_eq!(airwires(&h).len(), 1);
 }
 
-/// Escape and right-click drop an unfinished route without editing; Enter finishes an open-ended
+/// The crosshair follows the mouse while the preview and click target snap only within reach.
+/// The preview's clearance extends past the track by the design-rule distance.
+#[test]
+fn routing_crosshair_follows_the_mouse_between_grid_points() {
+    use pcbcraft_chrome::theme::{WIRE_CURSOR_GAP, WIRE_CURSOR_SNAP_RADIUS};
+
+    let mut h = routable();
+    h.key_press(Key::X);
+    h.run();
+    let grid = Point { x_nm: 5_080_000, y_nm: 2_540_000 };
+    let grid_screen = at(&h, grid);
+    let ink = pcbcraft_chrome::Tokens::get().accent;
+    for started in [false, true] {
+        if started {
+            click_route(&mut h, Point { x_nm: 2_540_000, y_nm: grid.y_nm });
+        }
+        for distance in [2.0, 6.0] {
+            let pointer = grid_screen + egui::vec2(distance, 0.0);
+            let right_arm = pointer + egui::vec2(WIRE_CURSOR_GAP, 0.0);
+            h.hover_at(pointer);
+            h.run();
+            assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+            let shapes = &h.output().shapes;
+            assert!(shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+                if stroke.color == ink && points[0].distance(right_arm) < 0.001)));
+            assert!(shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Circle(circle)
+                if circle.radius == WIRE_CURSOR_SNAP_RADIUS && circle.center.distance(grid_screen) < 0.001)));
+            assert_eq!(started, preview_ends_at(&h, pcbcraft_chrome::Tokens::get().board_front, grid_screen));
+        }
+    }
+    let step = h.state().views.active.camera.snap_step();
+    let off_grid = grid_screen + egui::vec2(step * 0.4, step * 0.4);
+    assert!(off_grid.distance(grid_screen) > 8.0);
+    h.hover_at(off_grid);
+    h.run();
+    let front = pcbcraft_chrome::Tokens::get().board_front;
+    assert!(preview_ends_at(&h, front, off_grid));
+    let halo_color = pcbcraft_chrome::Tokens::get().board_ink.gamma_multiply(0.19);
+    let thickness = h.state().views.active.board.tracks.width_nm / 2 + pcbcraft_engine::board::drc::DEFAULT_CLEARANCE_NM;
+    let radius = at(&h, Point { x_nm: thickness, y_nm: 0 }).distance(at(&h, Point { x_nm: 0, y_nm: 0 }));
+    h.hover_at(grid_screen);
+    h.run();
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Path(path)
+        if path.fill == halo_color && path.points.iter().any(|point| point.distance(grid_screen + egui::vec2(radius, 0.0)) < 0.001))));
+    h.get_by_label("Route tracks on the active copper layer").hover();
+    h.run();
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+    assert!(tracks(&h).is_empty());
+}
+
+/// Held Ctrl updates the preview without pointer movement, places free vertices and vias off-grid,
+/// and still attaches exactly to a nearby pad. Releasing Ctrl restores the current view grid.
+#[test]
+fn ctrl_bypasses_the_routing_grid_but_keeps_copper_contacts() {
+    let mut h = routable();
+    let before = h.state().session.snapshot().unwrap();
+    let pad = airwires(&h)[0].from.position;
+    let rect = h.get_by_label("PCB canvas").rect();
+    let grid = Point { x_nm: 3_810_000, y_nm: 2_540_000 };
+    let grid_screen = at(&h, grid);
+    let corner_screen = grid_screen + egui::vec2(4.0, 3.0);
+    let via_screen = at(&h, Point { x_nm: 5_080_000, y_nm: 3_810_000 }) + egui::vec2(5.0, 4.0);
+    let camera = &h.state().views.active.camera;
+    let corner = camera.unsnapped(corner_screen, rect);
+    let via = camera.unsnapped(via_screen, rect);
+    let spacing = camera.snap_nm();
+    assert_eq!(camera.snap(corner_screen, rect), grid);
+    assert_ne!(corner.x_nm % spacing, 0);
+    assert_ne!(via.x_nm % spacing, 0);
+
+    let click_ctrl = |h: &mut Harness<'_, PcbApp>, pos| {
+        h.hover_at(pos);
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::CTRL });
+            h.run();
+        }
+        h.run_steps(20);
+    };
+    let copper = pcbcraft_chrome::Tokens::get().board_front;
+
+    h.key_press(Key::X);
+    h.run();
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    let pad_screen = at(&h, pad);
+    let near_pad = pad_screen + egui::vec2(3.0, 2.0);
+    h.hover_at(near_pad);
+    h.run();
+    assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Circle(circle)
+        if circle.radius == pcbcraft_chrome::theme::WIRE_CURSOR_TARGET_RADIUS && circle.center.distance(pad_screen) < 0.001)));
+    click_ctrl(&mut h, near_pad);
+    h.hover_at(corner_screen);
+    h.run();
+    assert!(preview_ends_at(&h, copper, corner_screen));
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run();
+    assert!(preview_ends_at(&h, copper, grid_screen));
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    h.run();
+    assert!(preview_ends_at(&h, copper, corner_screen));
+    click_ctrl(&mut h, corner_screen);
+    h.hover_at(via_screen);
+    h.run();
+    h.key_press_modifiers(Modifiers::CTRL, Key::PageDown);
+    h.run();
+    let bottom = layer_named(&h, "Bottom");
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.key_press_modifiers(Modifiers::CTRL, Key::Enter);
+    h.run();
+
+    assert_eq!(h.state().message, None);
+    let ends: Vec<_> = tracks(&h).iter().flat_map(|track| [track.start, track.end]).collect();
+    assert!(ends.contains(&pad) && ends.contains(&corner) && ends.contains(&via), "the route uses the exact pad and previewed free points");
+    assert_eq!(vias(&h).iter().map(|via| via.at).collect::<Vec<_>>(), [via]);
+    assert_eq!(h.state().views.active.camera.snap_nm(), spacing);
+}
+
+/// Escape and the menu's Cancel drop an unfinished route without editing; Enter finishes an open-ended
 /// route; Backspace removes the last vertex. The width field sets the next route's width.
 #[test]
 fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
@@ -114,8 +261,8 @@ fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     h.run();
     assert!(h.state().views.active.board.tracks.tool, "Escape drops the route but keeps the tool");
     click_route(&mut h, start);
-    h.event(egui::Event::PointerButton { pos: at(&h, start), button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
-    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Cancel");
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "cancelled routes edit nothing");
 
     h.state_mut().views.active.board.tracks.width_nm = 500_000;
@@ -130,6 +277,38 @@ fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     let routed = tracks(&h);
     assert_eq!(routed.len(), 1, "Backspace removed the last vertex: {routed:?}");
     assert_eq!(routed[0].width_nm, 500_000);
+}
+
+/// The routing popup keeps the draft through dismissal. Via placement uses its opening point,
+/// and Finish commits through the same track transaction as Enter.
+#[test]
+fn route_menu_owns_input_and_places_a_via_at_its_opening_point() {
+    let mut h = routable();
+    let before = h.state().session.snapshot().unwrap();
+    let bottom = layer_named(&h, "Bottom");
+    let start = Point { x_nm: 2_540_000, y_nm: 2_540_000 };
+    let via = Point { x_nm: 5_080_000, y_nm: 2_540_000 };
+    let end = Point { x_nm: 7_620_000, y_nm: 2_540_000 };
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, start);
+    right_click_route(&mut h, via);
+    let close = at(&h, Point { x_nm: 7_620_000, y_nm: -2_540_000 });
+    click_canvas_at(&mut h, close);
+    assert!(h.query_by_label("Place through via").is_none());
+    assert!(h.state().views.active.board.tracks.routing());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    right_click_route(&mut h, via);
+    click(&mut h, "Place through via");
+    assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()));
+    click_route(&mut h, end);
+    right_click_route(&mut h, end);
+    click(&mut h, "Finish track");
+    assert_eq!(h.state().message, None);
+    assert_eq!(vias(&h).iter().map(|via| via.at).collect::<Vec<_>>(), [via]);
+    let ends: Vec<_> = tracks(&h).iter().flat_map(|track| [track.start, track.end]).collect();
+    assert!(ends.contains(&start) && ends.contains(&end));
+    assert!(!ends.contains(&Point { x_nm: 7_620_000, y_nm: -2_540_000 }));
 }
 
 /// Without a tool, clicking a track selects it and Delete removes it through the shared command.
@@ -203,11 +382,15 @@ fn via_at(h: &mut Harness<'_, PcbApp>, point: Point) {
 
 /// V drops a via at the pointer and continues on the other copper layer; the view's active
 /// layer follows. A second V comes back up, and finishing on the pad commits tracks on both
-/// layers with both vias in one undoable command that clears the airwire.
+/// layers with both vias in one undoable command that clears the airwire. The preview retains
+/// the front layer's tint and picks up the back layer's custom color after the first via.
 #[test]
 fn v_places_vias_and_switches_layers_mid_route() {
     let mut h = routable();
     let (top, bottom) = (layer_named(&h, "Top"), layer_named(&h, "Bottom"));
+    let view = h.state().views.active.id();
+    let custom_rgb = [35, 180, 130];
+    h.state_mut().set_layer_color(view, &bottom, Some(custom_rgb)).unwrap();
     let line = airwires(&h)[0].clone();
     let (a, b) = (line.from.position, line.to.position);
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
@@ -215,9 +398,16 @@ fn v_places_vias_and_switches_layers_mid_route() {
     h.key_press(Key::X);
     h.run();
     click_route(&mut h, a);
-    click_route(&mut h, Point { x_nm: a.x_nm, y_nm: -2_540_000 });
-    via_at(&mut h, Point { x_nm: a.x_nm, y_nm: -2_540_000 });
+    let near = at(&h, Point { x_nm: a.x_nm, y_nm: -2_540_000 });
+    let via = h.state().views.active.camera.snap(near, h.get_by_label("PCB canvas").rect());
+    click_route(&mut h, via);
+    via_at(&mut h, via);
     assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(bottom.as_str()), "the view follows the via");
+    let tail = at(&h, Point { x_nm: 5_080_000, y_nm: -2_540_000 });
+    h.hover_at(tail);
+    h.run();
+    assert!(preview_ends_at(&h, pcbcraft_chrome::Tokens::get().board_front, at(&h, via)));
+    assert!(preview_ends_at(&h, egui::Color32::from_rgb(custom_rgb[0], custom_rgb[1], custom_rgb[2]), tail));
     click_route(&mut h, Point { x_nm: b.x_nm, y_nm: -2_540_000 });
     via_at(&mut h, Point { x_nm: b.x_nm, y_nm: -2_540_000 });
     assert_eq!(h.state().views.active.board.active_layer.as_deref(), Some(top.as_str()));
@@ -831,6 +1021,9 @@ fn backtick_highlights_the_net_under_the_pointer() {
     let revision = h.state().session.revision();
     let path = [a, Point { x_nm: a.x_nm, y_nm: -2_540_000 }, Point { x_nm: b.x_nm, y_nm: -2_540_000 }, b];
     h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    let other = [Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 }];
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":other,"expected_revision":revision}));
     h.run();
     let revision = h.state().session.revision();
     h.hover_at(at(&h, a));
@@ -839,12 +1032,12 @@ fn backtick_highlights_the_net_under_the_pointer() {
     h.run();
     assert_eq!(h.state().views.active.board.highlight_net.as_deref(), Some(net.as_str()));
     assert!(h.query_by_label_contains(&format!("Net {net} highlighted")).is_some());
-    let highlight = pcbcraft_chrome::Tokens::get().board_highlight;
-    let outlined = h.output().shapes.iter().filter(|shape| match &shape.shape {
-        egui::Shape::Path(path) => path.stroke.color == egui::epaint::ColorMode::Solid(highlight),
-        _ => false,
-    });
-    assert!(outlined.count() >= 2, "both pads and the route are outlined");
+    let front = pcbcraft_chrome::Tokens::get().board_front;
+    let bright = pcbcraft_chrome::board::copper_emphasis(front, Some(true));
+    let dim = pcbcraft_chrome::board::copper_emphasis(front, Some(false));
+    assert!(track_has_color(&h, [path[1], path[2]], bright));
+    assert!(track_has_color(&h, other, dim));
+    assert_eq!(h.output().shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Path(path) if path.fill == bright)).count(), 2);
     h.hover_at(at(&h, Point { x_nm: (a.x_nm + b.x_nm) / 2, y_nm: 1_270_000 }));
     h.run();
     h.key_press(Key::Backtick);
@@ -860,10 +1053,11 @@ fn backtick_highlights_the_net_under_the_pointer() {
     h.key_press(Key::Backtick);
     h.run();
     assert_eq!(h.state().views.active.board.highlight_net, None);
+    assert!(track_has_color(&h, other, front));
     assert_eq!(h.state().session.revision(), revision);
 }
 
-/// Net overlays hide surface pads and tracks with their layers while retaining visible-layer
+/// Net emphasis hides surface pads and tracks with their layers while retaining visible-layer
 /// copper and the ordinary renderer's layer-independent via policy.
 #[test]
 fn net_highlight_respects_copper_layer_visibility() {
@@ -889,27 +1083,69 @@ fn net_highlight_respects_copper_layer_visibility() {
     let revision = h.state().session.revision();
     let highlighted = h.state().views.active.board.highlight_net.clone();
     assert!(highlighted.is_some());
-    let outlines = |h: &Harness<'_, PcbApp>| {
-        let highlight = pcbcraft_chrome::Tokens::get().board_highlight;
+    let emphasized = |h: &Harness<'_, PcbApp>| {
+        let tokens = pcbcraft_chrome::Tokens::get();
+        let layer_colors = [tokens.board_front, tokens.board_back].map(|color| pcbcraft_chrome::board::copper_emphasis(color, Some(true)));
+        let via_color = pcbcraft_chrome::board::copper_emphasis(tokens.board_through, Some(true));
         let canvas = h.get_by_label("PCB canvas").rect();
-        h.output().shapes.iter().filter(|shape| shape.clip_rect == canvas).fold((0, 0), |(paths, vias), shape| match &shape.shape {
-            egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(highlight) => (paths + 1, vias),
-            egui::Shape::Circle(circle) if circle.stroke.color == highlight => (paths, vias + 1),
-            _ => (paths, vias),
+        h.output().shapes.iter().filter(|shape| shape.clip_rect == canvas).fold((0, 0, 0), |(pads, tracks, vias), shape| match &shape.shape {
+            egui::Shape::Path(path) if layer_colors.contains(&path.fill) => (pads + 1, tracks, vias),
+            egui::Shape::LineSegment { stroke, .. } if layer_colors.contains(&stroke.color) => (pads, tracks + 1, vias),
+            egui::Shape::Circle(circle) if circle.fill == via_color => (pads, tracks, vias + 1),
+            _ => (pads, tracks, vias),
         })
     };
-    assert_eq!(outlines(&h), (4, 1), "two pads, both tracks and the via");
+    assert_eq!(emphasized(&h), (2, 2, 1), "two pads, both tracks and the via");
     h.state_mut().views.active.board.set_layer(&top, false, Some(false));
     h.run();
-    assert_eq!(outlines(&h), (1, 1), "only the bottom track and via remain visible");
+    assert_eq!(emphasized(&h), (0, 1, 1), "only the bottom track and via remain visible");
     h.state_mut().views.active.board.set_layer(&bottom, false, Some(false));
     h.run();
-    assert_eq!(outlines(&h), (0, 1), "vias retain the normal renderer's policy even with all copper layers hidden");
+    assert_eq!(emphasized(&h), (0, 0, 1), "vias retain the normal renderer's policy even with all copper layers hidden");
     h.state_mut().views.active.board.set_layer(&top, false, Some(true));
     h.run();
-    assert_eq!(outlines(&h), (3, 1), "restoring Top restores its pads and track");
+    assert_eq!(emphasized(&h), (2, 1, 1), "restoring Top restores its pads and track");
     assert_eq!(h.state().views.active.board.highlight_net, highlighted);
     assert_eq!(h.state().session.revision(), revision);
+}
+
+/// Routing from a track body joins it at the projected point. An island without a named net
+/// stays bright through the draft and unrelated copper returns to normal after cancellation.
+#[test]
+fn routing_from_an_unassigned_track_emphasizes_its_island() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let points = |y_nm| [Point { x_nm: 2_540_000, y_nm }, Point { x_nm: 7_620_000, y_nm }];
+    let start = points(2_540_000);
+    let other = points(-2_540_000);
+    for path in [start, other] {
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":top,"width_nm":250_000,"points":path,"expected_revision":revision}));
+    }
+    assert_eq!(h.state().message, None);
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let contact = Point { x_nm: 5_080_000, y_nm: start[0].y_nm };
+    let pointer = at(&h, contact) + egui::vec2(0.0, 3.0);
+    let front = pcbcraft_chrome::Tokens::get().board_front;
+    h.key_press(Key::X);
+    h.run();
+    click_canvas_at(&mut h, pointer);
+    h.run_steps(20);
+    assert!(track_has_color(&h, start, pcbcraft_chrome::board::copper_emphasis(front, Some(true))));
+    assert!(track_has_color(&h, other, pcbcraft_chrome::board::copper_emphasis(front, Some(false))));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(track_has_color(&h, start, front) && track_has_color(&h, other, front));
+    click_canvas_at(&mut h, pointer);
+    h.run_steps(20);
+    let end = Point { x_nm: contact.x_nm, y_nm: 5_080_000 };
+    click_route(&mut h, end);
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(tracks(&h).iter().any(|track| track.start == contact && track.end == end));
+    assert!(track_has_color(&h, other, front));
 }
 
 /// Backtick over a hidden surface pad clears the highlight; showing its layer makes it pickable.
@@ -972,11 +1208,11 @@ fn a_vanished_highlight_net_clears() {
 #[test]
 fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
     /// Borrow a snapshot independently of the UI state so the cache can retain only derived data.
-    fn cached(h: &mut Harness<'_, PcbApp>) -> std::sync::Arc<std::collections::BTreeMap<uuid::Uuid, String>> {
+    fn cached(h: &mut Harness<'_, PcbApp>) -> std::sync::Arc<crate::board_appearance::Connectivity> {
         let source = h.state().views.active.input(&h.state().session);
         let project = h.state().session.snapshot().unwrap();
         let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-        h.state_mut().views.active.board.copper_nets(board, source)
+        h.state_mut().views.active.board.copper_connectivity(board, source)
     }
     let mut h = routable();
     let line = airwires(&h)[0].clone();
@@ -988,8 +1224,8 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
     h.run();
     let saved = h.state().session.snapshot().unwrap();
     let first = cached(&mut h);
-    assert_eq!(first.len(), tracks(&h).len());
-    assert!(!first.is_empty());
+    assert_eq!(first.nets.len(), tracks(&h).len());
+    assert!(!first.nets.is_empty());
     h.run();
     assert!(std::sync::Arc::ptr_eq(&first, &cached(&mut h)));
     h.state_mut().views.active.camera.center_on(a);
@@ -1003,7 +1239,7 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
     h.run();
     let edited = cached(&mut h);
     assert!(!std::sync::Arc::ptr_eq(&first, &edited));
-    assert!(edited.is_empty(), "deleted copper cannot keep stale net assignments");
+    assert!(edited.nets.is_empty(), "deleted copper cannot keep stale net assignments");
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     let undone = cached(&mut h);
@@ -1012,8 +1248,8 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
 
     let project = h.state().session.snapshot().unwrap();
     let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-    let uncached = h.state_mut().views.active.board.copper_nets(board, None);
-    let another = h.state_mut().views.active.board.copper_nets(board, None);
+    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None);
+    let another = h.state_mut().views.active.board.copper_connectivity(board, None);
     assert_eq!(uncached, first);
     assert!(!std::sync::Arc::ptr_eq(&uncached, &another), "missing authority never caches a preview");
     let before_open = cached(&mut h);

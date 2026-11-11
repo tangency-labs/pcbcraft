@@ -627,7 +627,7 @@ impl PcbApp {
                         &highlighted,
                         view.filters,
                         &self.board_appearance,
-                        enabled,
+                        owner_enabled,
                         self.preferences.navigation,
                         self.preferences.grid_opacity_percent,
                         self.preferences.board_grid_style,
@@ -645,7 +645,7 @@ impl PcbApp {
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
-            && (enabled || pick.clipboard.is_some() && owner_enabled)
+            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some()))
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some(action) = pick.clipboard {

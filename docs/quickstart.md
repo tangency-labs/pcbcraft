@@ -424,8 +424,16 @@ Saving retains drawing and layer identities without moving footprints or creatin
 a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.
 
-Arcs, slots, routing, individual pad selection and Flip view still need
-implementation. After reviewed updates are initialized, removing the last
+To route a track, activate a copper layer and press **X**. The crosshair follows
+the pointer, and the target marker shows nearby grid points and copper contacts.
+The preview uses a lighter shade of the layer color and shows the default
+clearance around it. Starting on a trace brightens its copper and dims the rest
+of the board while you route. Hold **Ctrl** to bypass the grid. Click a pad,
+track end or via to finish on copper, or press **Enter** after placing the last
+corner in free space. Right-click opens the route menu, which includes **Cancel**.
+Zoom in with the wheel to inspect copper, then use **Fit board** to frame the board again.
+
+After reviewed updates are initialized, removing the last
 schematic unit retains its footprint until an update accepts the removal. A
 legacy board retains its prior deletion behavior until explicit current-state
 adoption, so establish that starting point before editing its schematic.

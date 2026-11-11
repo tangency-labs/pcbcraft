@@ -1,8 +1,19 @@
 //! Copper track and via routing and selection. Previews are view-local; every completed edit is an engine command.
-use crate::{board_drawing::Command, canvas_camera::Camera, editor_view::ViewInput};
+use crate::{
+    board_appearance::{Appearance, CopperFocus, RouteContact},
+    board_drawing::Command,
+    canvas_camera::Camera,
+    editor_view::ViewInput,
+};
 use egui::{PointerButton, Pos2, Rect, Response, Ui};
+use pcbcraft_chrome::{
+    MenuItem,
+    menu::{self, MenuIcon},
+    workspace::ToolIcon,
+};
 use pcbcraft_engine::{
     board::{
+        drc::DEFAULT_CLEARANCE_NM,
         setup::{LayerPurpose, Side},
         track::{DEFAULT_VIA_DIAMETER_NM, DEFAULT_VIA_DRILL_NM, DEFAULT_WIDTH_NM, MAX_PATH_POINTS, Track, Via},
         view::{BoardView, CopperLayers},
@@ -15,6 +26,8 @@ use uuid::Uuid;
 
 /// Screen distance within which the pointer snaps to a pad center, track end or via.
 const SNAP_PX: f32 = 8.;
+/// A free routing point follows the pointer when the nearest grid point is farther away.
+const GRID_SNAP_PX: f32 = 8.;
 /// Minimum screen half-width used to pick a thin track or small via.
 const PICK_PX: f32 = 4.;
 
@@ -23,6 +36,8 @@ const PICK_PX: f32 = 4.;
 #[derive(Clone, Debug)]
 struct Draft {
     source: ViewInput,
+    /// Existing copper that stays emphasized until the draft ends.
+    contact: Option<RouteContact>,
     /// The layer the first segment runs on.
     start: String,
     /// The layer the next segment will run on.
@@ -196,6 +211,11 @@ impl State {
     pub(super) fn routing(&self) -> bool {
         self.draft.is_some()
     }
+
+    /// The contact at the start of the unfinished route, if it started on copper.
+    pub(super) fn route_contact(&self) -> Option<&RouteContact> {
+        self.draft.as_ref()?.contact.as_ref()
+    }
     /// Whether a tool or an unfinished route owns canvas input.
     pub(super) fn busy(&self) -> bool {
         self.tool || self.via_tool || self.draft.is_some() || self.moving.is_some() || self.segment.is_some()
@@ -352,28 +372,49 @@ fn side_layer(view: BoardView<'_>, side: Side, hidden: &BTreeSet<String>) -> Opt
         .filter(|id| !hidden.contains(id))
 }
 
-/// Snap to a pad center, track end or via when the pointer is over or near it, otherwise to this
-/// view's grid. Pads and track ends count only on the routing layer; vias reach every layer.
-/// The flag reports a copper target, which finishes a route.
-fn snapped(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, layer: &str) -> (Point, bool) {
-    let on_layer = |layers: &Option<CopperLayers>| matches!(layers, Some(CopperLayers::Resolved { layers, .. }) if layers.iter().any(|id| id.to_string() == layer));
+/// Resolve the click target for a route. Nearby pads and track ends on its layer and through
+/// vias keep their exact positions. A new route can also start along the body of a track.
+/// Free points use a nearby grid point unless Ctrl is held.
+fn route_target(
+    pointer: Pos2,
+    camera: &Camera,
+    rect: Rect,
+    view: BoardView<'_>,
+    layer: &str,
+    snap_to_grid: bool,
+    starting: bool,
+) -> (Point, Option<RouteContact>) {
+    let layer = Uuid::try_parse(layer).ok();
+    let on_layer = |layers: &Option<CopperLayers>| matches!((layer, layers), (Some(layer), Some(CopperLayers::Resolved { layers, .. })) if layers.contains(&layer));
     let pads = view.footprints().flat_map(|footprint| footprint.pads).filter(|pad| on_layer(&pad.copper_layers)).filter_map(|pad| {
         let land = pad.copper?.map(|corner| camera.screen(corner, rect));
         let over = egui::Rect::from_points(&land).contains(pointer);
         let distance = camera.screen(pad.center, rect).distance(pointer);
-        (over || distance <= SNAP_PX).then_some((if over { 0. } else { distance }, pad.center))
+        (over || distance <= SNAP_PX).then_some((if over { 0. } else { distance }, pad.center, RouteContact::Pad(pad.net)))
     });
-    let ends = view
-        .tracks()
-        .iter()
-        .filter(|track| track.layer.to_string() == layer)
-        .flat_map(|track| [track.start, track.end])
-        .chain(view.vias().iter().map(|via| via.at))
-        .filter_map(|point| {
+    let tracks = view.tracks().iter().filter(|track| Some(track.layer) == layer);
+    let ends = tracks
+        .clone()
+        .flat_map(|track| [(track.start, track.id), (track.end, track.id)])
+        .chain(view.vias().iter().map(|via| (via.at, via.id)))
+        .filter_map(|(point, id)| {
             let distance = camera.screen(point, rect).distance(pointer);
-            (distance <= SNAP_PX).then_some((distance, point))
+            (distance <= SNAP_PX).then_some((distance, point, RouteContact::Copper(id)))
         });
-    pads.chain(ends).min_by(|a, b| a.0.total_cmp(&b.0)).map_or_else(|| (camera.snap(pointer, rect), false), |(_, point)| (point, true))
+    if let Some((_, point, contact)) = pads.chain(ends).min_by(|a, b| a.0.total_cmp(&b.0)) {
+        return (point, Some(contact));
+    }
+    let free = camera.unsnapped(pointer, rect);
+    if starting && let Some(track) = tracks.rev().find(|track| hit(pointer, camera, rect, track)) {
+        let (along, _) = projection(free, track);
+        let at = |a: i64, b: i64| a + ((b - a) as f64 * along).round() as i64;
+        return (
+            Point { x_nm: at(track.start.x_nm, track.end.x_nm), y_nm: at(track.start.y_nm, track.end.y_nm) },
+            Some(RouteContact::Copper(track.id)),
+        );
+    }
+    let grid = camera.snap(pointer, rect);
+    (if snap_to_grid && camera.screen(grid, rect).distance(pointer) <= GRID_SNAP_PX { grid } else { free }, None)
 }
 
 /// The KiCad-style two-leg posture from `a` to `b`: one straight run along the major axis and one
@@ -444,12 +485,52 @@ fn add(state: &mut State, draft: Draft) -> Option<Command> {
     Some(Command { source: draft.source, id: pcbcraft_engine::ADD_TRACKS, params })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RouteAction {
+    Finish,
+    Back,
+    Via,
+    Posture,
+    Cancel,
+}
+
+/// Present the route's existing commands. Escape cancels the same step as the canvas shortcut.
+fn route_menu(ui: &mut Ui, draft: Option<&Draft>, via: bool) -> Option<RouteAction> {
+    let keys = egui::Modifiers { ctrl: ui.input(|input| input.modifiers.ctrl), ..egui::Modifiers::NONE };
+    if ui.input_mut(|input| input.consume_key(keys, egui::Key::Escape)) {
+        ui.close();
+        return Some(RouteAction::Cancel);
+    }
+    if MenuItem::new("Finish track").tool_icon(ToolIcon::Track).shortcut("Enter").enabled(draft.is_some_and(|draft| draft.points.len() >= 2)).show(ui)
+    {
+        return Some(RouteAction::Finish);
+    }
+    if MenuItem::new("Remove last vertex").icon(MenuIcon::Undo).shortcut("Backspace").enabled(draft.is_some()).show(ui) {
+        return Some(RouteAction::Back);
+    }
+    if MenuItem::new("Place through via").tool_icon(ToolIcon::Via).shortcut("V").enabled(draft.is_some() && via).show(ui) {
+        return Some(RouteAction::Via);
+    }
+    if MenuItem::new("Flip track posture").tool_icon(ToolIcon::Track).shortcut("/").show(ui) {
+        return Some(RouteAction::Posture);
+    }
+    menu::separator(ui);
+    MenuItem::new("Cancel").icon(MenuIcon::Close).shortcut("Esc").show(ui).then_some(RouteAction::Cancel)
+}
+
+/// Where the routing popup opened, in the same screen coordinates as the canvas response.
+fn menu_anchor(response: &Response) -> Option<Pos2> {
+    let pointer = egui::Popup::position_of_id(&response.ctx, egui::Popup::default_response_id(response))?;
+    Some(response.ctx.layer_transform_from_global(response.layer_id).map_or(pointer, |transform| transform * pointer))
+}
+
 /// Route on the active copper layer, or select tracks and vias when no tool owns input. V drops a
 /// via at the pointer and continues on the paired layer, reported through `switch_layer`.
-/// Release over chrome, right-click, stale input, disabled input or a hidden/changed layer never
+/// Release over chrome, stale input, disabled input or a hidden/changed layer never
 /// commits an unfinished route. Key requests (Delete, Enter, Backspace, `/`, V) are consumed every
 /// frame and ignored while input is disabled. `over_footprint` gives footprints priority for picks.
 /// Selection and connected copper selection honor `kinds`; routing uses the full board geometry.
+/// The route popup owns input through dismissal and uses its opening point for via placement.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn interact(
     ui: &mut Ui,
@@ -474,10 +555,15 @@ pub(super) fn interact(
         (kinds.tracks && visible.iter().any(|track| track.id == *id)) || (kinds.vias && vias_visible && vias.iter().any(|via| via.id == *id))
     };
     state.selected.retain(selectable);
-    if !enabled || state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active) {
+    let stale_route = state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active);
+    let route_available = !state.tool || can_route(view, active, hidden);
+    if state.tool && (!enabled || source.is_none() || stale_route || !route_available) && response.context_menu_opened() {
+        egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(response));
+    }
+    if !enabled || stale_route {
         state.draft = None;
     }
-    if state.tool && !can_route(view, active, hidden) {
+    if !route_available {
         state.cancel();
     }
     // Key requests apply to this frame only. Taking them before the disabled-input return keeps
@@ -500,10 +586,8 @@ pub(super) fn interact(
         state.moving = None;
     }
     let Some(source) = source.filter(|_| enabled) else { return out };
-    if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) && state.busy() {
-        // Right-click ends the innermost gesture: a route, a copper move or a segment drag, else the tool.
-        if state.draft.take().is_none() && state.moving.take().is_none() && state.segment.take().is_none() {
-            state.tool = false;
+    if !state.tool && state.busy() && ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+        if state.moving.take().is_none() && state.segment.take().is_none() {
             state.via_tool = false;
         }
         out.consumed = true;
@@ -552,10 +636,32 @@ pub(super) fn interact(
     if state.tool {
         out.consumed = true;
         let Some(layer) = active else { return out };
-        if posture {
+        let menu_open = response.context_menu_opened();
+        let anchor = menu_anchor(response);
+        let action = menu::context(response, |ui| route_menu(ui, state.draft.as_ref(), paired_layer(view, layer, hidden).is_some()))
+            .and_then(|menu| menu.inner);
+        if action == Some(RouteAction::Cancel) {
+            state.escape();
+            return out;
+        }
+        if action.is_none() && (menu_open || response.secondary_clicked()) {
+            return out;
+        }
+        let pointer = if action == Some(RouteAction::Via) {
+            anchor
+        } else if response.clicked() {
+            response.interact_pointer_pos()
+        } else {
+            response.hover_pos()
+        };
+        let pointer = pointer.filter(|point| rect.contains(*point));
+        let snap_to_grid = !ui.input(|input| input.modifiers.ctrl);
+        if posture || action == Some(RouteAction::Posture) {
             state.diagonal_first = !state.diagonal_first;
         }
-        if backspace && let Some(draft) = &mut state.draft {
+        if (backspace || action == Some(RouteAction::Back))
+            && let Some(draft) = &mut state.draft
+        {
             // Undo the most recent step: a via at the last vertex first, then the vertex itself.
             if draft.changes.last().is_some_and(|(at, _)| *at + 1 == draft.points.len()) {
                 draft.changes.pop();
@@ -568,13 +674,13 @@ pub(super) fn interact(
                 }
             }
         }
-        if (via || via_side.is_some())
+        if (via || via_side.is_some() || action == Some(RouteAction::Via))
             && let Some(pointer) = pointer
             && let Some(draft) = &mut state.draft
             && let Some(next) = via_side.map_or_else(|| paired_layer(view, &draft.layer, hidden), |side| side_layer(view, side, hidden))
             && next != draft.layer
         {
-            let (at, _) = snapped(pointer, camera, rect, view, &draft.layer);
+            let (at, _) = route_target(pointer, camera, rect, view, &draft.layer, snap_to_grid, false);
             let path = extended(&draft.points, at, state.diagonal_first);
             let index = path.len() - 1;
             if index > 0 && path.len() <= MAX_PATH_POINTS && !draft.changes.iter().any(|(existing, _)| *existing == index) {
@@ -585,25 +691,27 @@ pub(super) fn interact(
             }
             return out;
         }
-        if finish {
+        if finish || action == Some(RouteAction::Finish) {
             if let Some(draft) = state.draft.take() {
                 out.command = add(state, draft);
             }
             return out;
         }
         let Some(pointer) = pointer else { return out };
-        if !response.clicked() {
+        if action.is_some() || !response.clicked() {
             return out;
         }
-        let (at, copper) = snapped(pointer, camera, rect, view, layer);
+        let (at, contact) = route_target(pointer, camera, rect, view, layer, snap_to_grid, state.draft.is_none());
         match state.draft.take() {
-            None => state.draft = Some(Draft { source, start: layer.to_owned(), layer: layer.to_owned(), points: vec![at], changes: Vec::new() }),
+            None => {
+                state.draft = Some(Draft { source, contact, start: layer.to_owned(), layer: layer.to_owned(), points: vec![at], changes: Vec::new() })
+            }
             Some(mut draft) => {
                 let path = extended(&draft.points, at, state.diagonal_first);
                 if path.len() <= MAX_PATH_POINTS {
                     draft.points = path;
                 }
-                if (copper || response.double_clicked()) && draft.points.len() >= 2 {
+                if (contact.is_some() || response.double_clicked()) && draft.points.len() >= 2 {
                     out.command = add(state, draft);
                 } else {
                     state.draft = Some(draft);
@@ -726,6 +834,14 @@ pub(super) fn interact(
     out
 }
 
+/// Resolve the layer's personal or default color, falling back to board ink for unknown IDs.
+fn layer_color(view: BoardView<'_>, appearance: &Appearance, layer: &str) -> egui::Color32 {
+    Uuid::try_parse(layer)
+        .ok()
+        .and_then(|id| view.setup()?.layers().iter().find(|record| record.id == id))
+        .map_or_else(|| pcbcraft_chrome::Tokens::get().board_ink, |record| appearance.color(view, record))
+}
+
 /// Paint visible tracks with round ends at their physical width, inactive copper first so the
 /// active layer reads on top, then vias above all copper. A route committed this frame is
 /// painted where it will land, and `carried` tracks (stretched by a footprint move preview)
@@ -739,25 +855,19 @@ pub(super) fn paint(
     state: &State,
     active: Option<&str>,
     hidden: &BTreeSet<String>,
-    appearance: &crate::board_appearance::Appearance,
+    appearance: &Appearance,
+    focus: Option<CopperFocus<'_>>,
     carried: &[Track],
 ) {
     let painter = ui.painter().with_clip_rect(rect);
-    let layers = view.layers();
-    let color = |layer: &str| {
-        layers
-            .iter()
-            .find(|record| record.id.to_string() == layer)
-            .map_or(pcbcraft_chrome::Tokens::get().board_ink, |record| appearance.color(view, record))
-    };
     let mut tracks: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
     tracks.sort_by_key(|track| active == Some(track.layer.to_string().as_str()));
-    let segment = |layer: &str, a: Point, b: Point, width_nm: i64, selected: bool| {
+    let segment = |layer: &str, a: Point, b: Point, width_nm: i64, selected: bool, emphasized| {
         pcbcraft_chrome::board::track(
             &painter,
             [camera.screen(a, rect), camera.screen(b, rect)],
             width_px(camera, rect, width_nm),
-            color(layer),
+            pcbcraft_chrome::board::copper_emphasis(layer_color(view, appearance, layer), emphasized),
             selected,
             false,
         );
@@ -777,78 +887,92 @@ pub(super) fn paint(
             .iter()
             .find(|(id, _, _)| *id == track.id)
             .map_or((moved(track.start, selected), moved(track.end, selected)), |(_, start, end)| (*start, *end));
-        segment(&track.layer.to_string(), start, end, track.width_nm, selected);
+        segment(&track.layer.to_string(), start, end, track.width_nm, selected, focus.map(|focus| focus.contains_copper(&track.id)));
     }
-    let via = |at: Point, diameter_nm: i64, drill_nm: i64, selected: bool, preview: bool| {
+    let via = |at: Point, diameter_nm: i64, drill_nm: i64, selected: bool, emphasized| {
         pcbcraft_chrome::board::via(
             &painter,
             camera.screen(at, rect),
             width_px(camera, rect, diameter_nm) / 2.,
             width_px(camera, rect, drill_nm) / 2.,
             selected,
-            preview,
+            false,
+            emphasized,
         );
     };
     if let Some(committed) = &state.committed {
         for (layer, a, b) in &committed.segments {
             if !hidden.contains(layer) {
-                segment(layer, *a, *b, committed.width_nm, false);
+                segment(layer, *a, *b, committed.width_nm, false, None);
             }
         }
         for at in &committed.vias {
-            via(*at, committed.via_diameter_nm, committed.via_drill_nm, false, false);
+            via(*at, committed.via_diameter_nm, committed.via_drill_nm, false, None);
         }
     }
     for item in view.vias() {
         let selected = state.selected.contains(&item.id);
-        via(moved(item.at, selected), item.diameter_nm, item.drill_nm, selected, false);
+        via(moved(item.at, selected), item.diameter_nm, item.drill_nm, selected, focus.map(|focus| focus.contains_copper(&item.id)));
     }
 }
 
-/// Paint the unfinished route above footprints: fixed vertices on their layers, vias, the posture
-/// leg to the snapped pointer, and a target marker. The preview implies no clearance check.
-pub(super) fn paint_draft(ui: &Ui, rect: Rect, camera: &Camera, view: BoardView<'_>, state: &State, active: Option<&str>) {
-    let painter = ui.painter().with_clip_rect(rect);
-    let Some(pointer) = ui.input(|input| input.pointer.hover_pos()).filter(|point| rect.contains(*point)) else { return };
+/// Preview routing or standalone via placement while the tool owns the hovered canvas. Routing
+/// replaces the system pointer with a live crosshair and marks the target used by the route leg.
+/// While the menu is open the preview stays at its opening point and the system pointer returns.
+/// Paint the clearance envelope behind the draft copper at the same width used by DRC.
+pub(super) fn paint_draft(
+    painter: &egui::Painter,
+    response: &Response,
+    camera: &Camera,
+    view: BoardView<'_>,
+    state: &State,
+    active: Option<&str>,
+    appearance: &Appearance,
+) {
+    let rect = response.rect;
+    let menu_anchor = menu_anchor(response);
+    let Some(pointer) = menu_anchor.or_else(|| response.hover_pos()).filter(|point| rect.contains(*point)) else { return };
     if state.via_tool {
         let at = camera.screen(copper_target(pointer, camera, rect, view), rect);
         pcbcraft_chrome::board::via(
-            &painter,
+            painter,
             at,
             width_px(camera, rect, state.via_diameter_nm) / 2.,
             width_px(camera, rect, state.via_drill_nm) / 2.,
             false,
             true,
+            None,
         );
-        pcbcraft_chrome::board::drawing_target(&painter, at);
+        pcbcraft_chrome::board::drawing_target(painter, at);
         return;
     }
     let Some(layer) = state.draft.as_ref().map(|draft| draft.layer.as_str()).or(active.filter(|_| state.tool)) else { return };
-    let (at, _) = snapped(pointer, camera, rect, view, layer);
+    let snap_to_grid = !painter.ctx().input(|input| input.modifiers.ctrl);
+    let (at, contact) = route_target(pointer, camera, rect, view, layer, snap_to_grid, state.draft.is_none());
     if let Some(draft) = &state.draft {
         let path = extended(&draft.points, at, state.diagonal_first);
+        let layers = segment_layers(&draft.start, &draft.changes, path.len());
+        let path: Vec<_> = path.into_iter().map(|point| camera.screen(point, rect)).collect();
+        let width = width_px(camera, rect, state.width_nm);
+        let clearance = width_px(camera, rect, DEFAULT_CLEARANCE_NM);
+        let via_width = width_px(camera, rect, state.via_diameter_nm);
         for pair in path.windows(2) {
-            pcbcraft_chrome::board::track(
-                &painter,
-                [camera.screen(pair[0], rect), camera.screen(pair[1], rect)],
-                width_px(camera, rect, state.width_nm),
-                pcbcraft_chrome::Tokens::get().accent,
-                false,
-                true,
-            );
+            pcbcraft_chrome::board::routing_clearance(painter, [pair[0], pair[1]], width, clearance);
         }
         for (index, _) in &draft.changes {
-            pcbcraft_chrome::board::via(
-                &painter,
-                camera.screen(draft.points[*index], rect),
-                width_px(camera, rect, state.via_diameter_nm) / 2.,
-                width_px(camera, rect, state.via_drill_nm) / 2.,
-                false,
-                true,
-            );
+            pcbcraft_chrome::board::routing_clearance(painter, [path[*index]; 2], via_width.max(4.0), clearance);
+        }
+        for (pair, layer) in path.windows(2).zip(layers) {
+            pcbcraft_chrome::board::track(painter, [pair[0], pair[1]], width, layer_color(view, appearance, layer), false, true);
+        }
+        for (index, _) in &draft.changes {
+            pcbcraft_chrome::board::via(painter, path[*index], via_width / 2., width_px(camera, rect, state.via_drill_nm) / 2., false, true, None);
         }
     }
-    pcbcraft_chrome::board::drawing_target(&painter, camera.screen(at, rect));
+    if menu_anchor.is_none() {
+        painter.ctx().set_cursor_icon(egui::CursorIcon::None);
+        pcbcraft_chrome::cursor::track(painter, pointer, camera.screen(at, rect), contact.is_some());
+    }
 }
 
 #[cfg(test)]

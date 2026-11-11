@@ -117,6 +117,7 @@ mod live {
     use crate::{
         Dialog, PcbApp, ViewId, Workspace,
         arrangements::{Action, Start},
+        canvas_camera::MAX_BOARD_ZOOM,
         editor_layout::HostId,
         editor_windows::ViewAction,
         preferences::{Preferences, ScrollAction, SelectionFollow, ThemeChoice, ZoomAround},
@@ -525,10 +526,15 @@ mod live {
         WindowCommand {
             id: "view.zoom",
             title: "Zoom",
-            summary: "Zoom the view about its center. 100 shows the schematic at its default size.",
+            summary: "Zoom about the view center. The limit is 6400% in PCB layout and 800% in the schematic.",
             params: &[
                 VIEW,
-                Param { name: "zoom_percent", summary: "The zoom in percent", required: true, kind: Kind::Integer { min: 1, max: 800, step: 1 } },
+                Param {
+                    name: "zoom_percent",
+                    summary: "The zoom in percent",
+                    required: true,
+                    kind: Kind::Integer { min: 1, max: (MAX_BOARD_ZOOM * 100.0) as i64, step: 1 },
+                },
             ],
         },
         WindowCommand {
@@ -1172,7 +1178,12 @@ mod live {
                 ("view.zoom", Some((view, _)), _) => {
                     let percent = params["zoom_percent"].as_u64().unwrap_or(100);
                     if let Some(view) = self.views.view_mut(view) {
-                        view.camera.set_zoom(percent as f32 / 100.0);
+                        let max_zoom = view.workspace.max_zoom();
+                        let max_percent = (max_zoom * 100.0) as u64;
+                        if percent > max_percent {
+                            return Err(format!("`zoom_percent` must be at most {max_percent} for this workspace."));
+                        }
+                        view.camera.set_zoom_with_limit(percent as f32 / 100.0, max_zoom);
                     }
                 }
                 ("view.navigate_layer", Some((view, _)), _) => self.navigate_board_layer(view, params["direction"].as_str().unwrap_or_default())?,

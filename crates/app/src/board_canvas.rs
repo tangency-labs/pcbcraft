@@ -1,5 +1,6 @@
 //! Board selection and transform previews over resolved engine geometry; commands own edits.
 use crate::{
+    board_appearance::CopperFocus,
     canvas_camera::Camera,
     editor_view::{BoardState, ViewInput},
     preferences::Navigation,
@@ -89,7 +90,7 @@ pub(super) fn show(
     highlighted: &BTreeSet<String>,
     filters: crate::selection_filters::Filters,
     appearance: &crate::board_appearance::Appearance,
-    enabled: bool,
+    owner_enabled: bool,
     navigation: Navigation,
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
@@ -100,6 +101,8 @@ pub(super) fn show(
     let idle = !crate::board_clipboard::busy(state);
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
+    let enabled = owner_enabled && !egui::Popup::is_any_open(ui.ctx());
+    let route_menu_open = state.tracks.tool && response.context_menu_opened();
     if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
         state.context_menu_allowed = idle;
     }
@@ -165,7 +168,7 @@ pub(super) fn show(
         state.active_layer.as_deref(),
         &state.hidden_layers,
         source,
-        enabled
+        (enabled || owner_enabled && route_menu_open)
             && state.draft.is_none()
             && state.box_drag.is_none()
             && !footprint_drag
@@ -327,15 +330,35 @@ pub(super) fn show(
     }
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
-    crate::board_drawing::paint(ui, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
+    let ratsnest = state.ratsnest(project, source);
+    let requested = std::mem::take(&mut state.net_highlight_requested);
+    let connectivity =
+        (requested || state.highlight_net.is_some() || state.tracks.route_contact().is_some()).then(|| state.copper_connectivity(project, source));
+    if requested && let Some(connectivity) = &connectivity {
+        state.highlight_net =
+            response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
+    }
+    let focus = connectivity.as_deref().and_then(|data| CopperFocus::new(data, state.tracks.route_contact(), state.highlight_net.as_deref()));
+    let context = board::context_painter(&p, focus.is_some());
+    crate::board_drawing::paint(&context, rect, camera, project, &state.drawing, &state.hidden_layers, appearance);
     // A transform committed in this frame is painted at its new pose. The engine applies it after
     // this pass, so painting the stored pose here would make the footprint spring back for a frame.
     // Tracks on its pads are painted where the move carries them.
     let shown = state.draft.clone().or_else(|| out.edit.clone());
     let shown = shown.as_ref();
     let carried = shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).unwrap_or_default();
-    crate::board_tracks::paint(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref(), &state.hidden_layers, appearance, &carried);
-    let ratsnest = state.ratsnest(project, source);
+    crate::board_tracks::paint(
+        ui,
+        rect,
+        camera,
+        project,
+        &state.tracks,
+        state.active_layer.as_deref(),
+        &state.hidden_layers,
+        appearance,
+        focus,
+        &carried,
+    );
     if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
         && let Some(ratsnest) = ratsnest
     {
@@ -350,7 +373,7 @@ pub(super) fn show(
                 };
                 camera.screen(point, rect)
             };
-            board::airwire(&p, at(&line.from), at(&line.to));
+            board::airwire(&context, at(&line.from), at(&line.to));
         }
     }
     for mut footprint in footprints {
@@ -358,9 +381,15 @@ pub(super) fn show(
             preview(&mut footprint, draft);
         }
         let center = camera.screen(footprint.position, rect);
-        let (pads, graphics) = drawing(&footprint, camera, rect, project, state, visible, appearance);
+        let (mut pads, graphics) = drawing(&footprint, camera, rect, project, state, visible, appearance);
         if (pads.is_empty() && graphics.is_empty()) || !rect.intersects(board::footprint_bounds(&pads, &graphics, center)) {
             continue;
+        }
+        if let Some(focus) = focus {
+            for pad in &mut pads {
+                let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
+                pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+            }
         }
         board::footprint(
             &p,
@@ -371,16 +400,8 @@ pub(super) fn show(
             color,
             state.selection.contains(&footprint.id) || shown.is_some_and(|d| d.footprint == footprint.id),
             highlighted.contains(&footprint.id),
+            focus.is_some(),
         );
-    }
-    if state.net_highlight_requested || state.highlight_net.is_some() {
-        let nets = state.copper_nets(project, source);
-        if std::mem::take(&mut state.net_highlight_requested) {
-            state.highlight_net = response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &nets));
-        }
-        if let Some(net) = &state.highlight_net {
-            paint_net(&p, camera, rect, project, net, &nets, &state.hidden_layers);
-        }
     }
     for (at, focused) in markers {
         let at = camera.screen(*at, rect);
@@ -406,7 +427,9 @@ pub(super) fn show(
             state.box_drag = None;
         }
     }
-    crate::board_tracks::paint_draft(ui, rect, camera, project, &state.tracks, state.active_layer.as_deref());
+    if route.consumed {
+        crate::board_tracks::paint_draft(&p, &response, camera, project, &state.tracks, state.active_layer.as_deref(), appearance);
+    }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
     if project.footprints().next().is_none()
         && project.drawings().is_empty()
@@ -523,6 +546,7 @@ fn place_group(
                 color,
                 true,
                 false,
+                false,
             );
         }
     }
@@ -576,33 +600,6 @@ fn net_under(
         .or_else(|| {
             crate::board_tracks::copper_at(pointer, camera, rect, view, hidden, crate::board_tracks::Kinds::ALL).and_then(|id| nets.get(&id).cloned())
         })
-}
-
-/// Outline visible pads and tracks assigned to `net`, reusing cached copper assignments.
-/// Vias retain normal rendering's layer-independent visibility policy.
-fn paint_net(
-    p: &egui::Painter,
-    camera: &Camera,
-    rect: egui::Rect,
-    view: BoardView<'_>,
-    net: &str,
-    nets: &BTreeMap<uuid::Uuid, String>,
-    hidden: &BTreeSet<String>,
-) {
-    let width = |nm: i64| (camera.screen(Point { x_nm: nm, y_nm: 0 }, rect) - camera.screen(Point { x_nm: 0, y_nm: 0 }, rect)).length();
-    for pad in view.footprints().flat_map(|footprint| footprint.pads).filter(|pad| pad.net.as_deref() == Some(net) && pad_visible(pad, view, hidden))
-    {
-        match pad.copper {
-            Some(land) => board::net_highlight(p, &land.map(|corner| camera.screen(corner, rect)), true, 2.),
-            None => board::net_highlight(p, &[camera.screen(pad.center, rect)], false, 6.),
-        }
-    }
-    for track in view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string()) && nets.get(&track.id).is_some_and(|n| n == net)) {
-        board::net_highlight(p, &[camera.screen(track.start, rect), camera.screen(track.end, rect)], false, width(track.width_nm) * 0.4);
-    }
-    for via in view.vias().iter().filter(|via| nets.get(&via.id).is_some_and(|n| n == net)) {
-        board::net_highlight(p, &[camera.screen(via.at, rect)], false, width(via.diameter_nm) / 2.);
-    }
 }
 
 /// Transform resolved pad offsets only for painting; pad identities and authored snapshots stay intact.

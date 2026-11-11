@@ -895,6 +895,7 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
             board::copper_color(Some(true)),
             selected,
             false,
+            false,
         ),
         Primitive::Outline { graphic } => board::footprint(
             painter,
@@ -915,6 +916,7 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
             board::copper_color(Some(true)),
             selected,
             false,
+            false,
         ),
         Primitive::Silkscreen { path } => board::footprint(
             painter,
@@ -930,6 +932,7 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
             at(primitive.anchor()),
             board::copper_color(Some(true)),
             selected,
+            false,
             false,
         ),
     }

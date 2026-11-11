@@ -130,5 +130,5 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
             });
         }
     }
-    board::footprint(painter, &pads, &graphics, "", rect.center() + pan, board::copper_color(Some(true)), false, false);
+    board::footprint(painter, &pads, &graphics, "", rect.center() + pan, board::copper_color(Some(true)), false, false, false);
 }

@@ -281,12 +281,18 @@ impl<'a> BoardView<'a> {
     /// The net each track and via carries: the net of the first pad in its copper island. Copper
     /// that reaches no netted pad is absent. Nets are derived, never stored on the copper.
     pub fn copper_nets(self) -> BTreeMap<Uuid, String> {
+        self.copper_with_nets().1
+    }
+
+    /// Resolve physical islands and the net of each netted track or via in one connectivity pass.
+    pub fn copper_with_nets(self) -> (Copper, BTreeMap<Uuid, String>) {
         let lands = lands(self);
         let (tracks, vias) = (self.tracks(), self.vias());
         let (copper, members) = islands(&lands, tracks, vias);
         let island_net: Vec<Option<String>> =
             members.iter().map(|island| island.iter().find_map(|node| lands.get(*node).and_then(|land| land.net.clone()))).collect();
-        copper.tracks.iter().chain(&copper.vias).filter_map(|(id, island)| island_net[*island].clone().map(|net| (*id, net))).collect()
+        let nets = copper.tracks.iter().chain(&copper.vias).filter_map(|(id, island)| island_net[*island].clone().map(|net| (*id, net))).collect();
+        (copper, nets)
     }
 }
 

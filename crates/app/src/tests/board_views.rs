@@ -58,6 +58,65 @@ fn switching_workspaces_restores_navigation_and_rejects_stale_schematic_input() 
     assert_eq!(h.state().session.inspect(), before);
 }
 
+/// Close PCB zoom holds the point under the mouse, survives arrangement restoration in either
+/// workspace, and works through the addressed window command. Fit returns to a board overview.
+#[test]
+fn pcb_zoom_reaches_copper_detail_and_round_trips_in_arrangements() {
+    let mut h = board_harness();
+    let before = h.state().session.snapshot().unwrap();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    let rect = h.get_by_label("PCB canvas").rect();
+    let pointer = rect.center() + egui::vec2(31.0, -27.0);
+    let anchor = h.state().views.active.camera.unsnapped(pointer, rect);
+    h.hover_at(pointer);
+    h.run();
+    for _ in 0..8 {
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 8.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+    }
+    assert_eq!(h.state().views.active.camera.zoom(), 64.0);
+    assert!(h.state().views.active.camera.screen(anchor, rect).distance(pointer) < 0.01);
+
+    let restore = |view: &crate::editor_view::EditorView, session: &pcbcraft_engine::Session| {
+        let saved = view.saved_state(session).unwrap();
+        let decoded: crate::editor_view::ViewState = serde_json::from_value(serde_json::to_value(&saved).unwrap()).unwrap();
+        assert!(decoded.valid());
+        crate::editor_view::EditorView::from_state(ViewId(900), &decoded, session)
+    };
+    let restored = restore(&h.state().views.active, &h.state().session);
+    assert_eq!(restored.camera.zoom(), 64.0);
+    assert!(restored.camera.screen(anchor, rect).distance(pointer) < 0.01);
+
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    let zoom = json!({"view":view,"zoom_percent":3200});
+    h.state_mut().run_window_command(&ctx, "view.zoom", &zoom).unwrap();
+    assert_eq!(h.state().views.active.camera.zoom(), 32.0);
+    let mut parked = restore(&h.state().views.active, &h.state().session);
+    parked.switch(Workspace::Schematic, &h.state().session);
+    let mut restored = restore(&parked, &h.state().session);
+    restored.switch(Workspace::Board, &h.state().session);
+    assert_eq!(restored.camera.zoom(), 32.0);
+
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Schematic");
+    let view = h.state().views.active.id().0;
+    assert!(h.state_mut().run_window_command(&ctx, "view.zoom", &json!({"view":view,"zoom_percent":3200})).is_err());
+
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB layout");
+    h.query_all_by_label("Fit board").next().unwrap().click();
+    h.run();
+    assert!(h.state().views.active.camera.zoom() <= 8.0);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
 /// Opening the board beside a schematic retains both targets. Selection paints actual counterpart
 /// ink in each direction; receiver edit selections and camera transforms remain independent.
 #[test]
